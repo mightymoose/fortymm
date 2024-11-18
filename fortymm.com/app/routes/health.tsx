@@ -1,20 +1,35 @@
 import { useLoaderData } from "@remix-run/react";
 import { cva } from "class-variance-authority";
 import { twMerge } from "tailwind-merge";
+import db from "~/db.server";
 
-type HealthStatus = "healthy" | "unhealthy";
+export enum HealthStatus {
+  Healthy = "healthy",
+  Unhealthy = "unhealthy",
+}
 
-export const loader = () => {
-  return {
-    result: "healthy" as HealthStatus,
-  };
+export const loader = async () => {
+  try {
+    const result = await db.execute(`SELECT 1 as database_health`);
+    const [{ database_health }] = result.rows;
+
+    return {
+      result: database_health
+        ? HealthStatus.Healthy
+        : HealthStatus.Unhealthy,
+    };
+  } catch (error) {
+    return {
+      result: HealthStatus.Unhealthy,
+    };
+  }
 };
 
 const backgroundVariants = cva("h-screen w-screen", {
   variants: {
     status: {
-      healthy: "bg-green-700",
-      unhealthy: "bg-red-700",
+      [HealthStatus.Healthy]: "bg-green-700",
+      [HealthStatus.Unhealthy]: "bg-red-700",
     },
   },
 });
@@ -22,25 +37,14 @@ const backgroundVariants = cva("h-screen w-screen", {
 const textVariants = cva("text-4xl font-bold capitalize", {
   variants: {
     status: {
-      healthy: "text-green-200",
-      unhealthy: "text-red-200",
+      [HealthStatus.Healthy]: "text-green-200",
+      [HealthStatus.Unhealthy]: "text-red-200",
     },
   },
 });
 
 export default function Health() {
   const { result } = useLoaderData<typeof loader>();
-
-  const styles = {
-    healthy: {
-      bg: "bg-green-700",
-      text: "text-green-200",
-    },
-    unhealthy: {
-      bg: "bg-red-700",
-      text: "text-red-200",
-    },
-  };
 
   return (
     <div className={twMerge(backgroundVariants({ status: result }))}>
