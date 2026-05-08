@@ -1,0 +1,33 @@
+name: web-client
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - 'web-client/**'
+      - '.github/workflows/web-client.yml'
+
+defaults:
+  run:
+    working-directory: web-client
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '26.1.0'
+          cache: npm
+          cache-dependency-path: web-client/package-lock.json
+
+      - run: npm ci
+
+      - run: npm run lint
+
+      - run: npm run build
+
+      - run: npm run test:run
