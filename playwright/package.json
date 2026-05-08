@@ -1,0 +1,16 @@
+{
+  "name": "fortymm-playwright",
+  "version": "0.0.0",
+  "private": true,
+  "description": "End-to-end tests for fortymm",
+  "scripts": {
+    "test": "playwright test",
+    "test:ui": "playwright test --ui",
+    "test:headed": "playwright test --headed",
+    "report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0",
+    "@types/node": "^22.0.0"
+  }
+}
