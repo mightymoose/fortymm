@@ -1,3 +1,4 @@
+@import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=JetBrains+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap');
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
@@ -261,3 +262,164 @@ code {
     @apply bg-background text-foreground;}
   html {
     @apply font-sans;}}
+
+/* =========================================================================
+   FortyMM theme — dark-mode-first arena/broadcast system
+   Scoped to .fortymm-theme so it doesn't bleed into other routes.
+   ========================================================================= */
+.fortymm-theme {
+  --ink-950: #0b0d12;
+  --ink-900: #11141b;
+  --ink-800: #171b24;
+  --ink-700: #1f2430;
+  --ink-600: #2a3040;
+  --ink-500: #3a4152;
+  --ink-400: #535b6e;
+
+  --chalk-50: #f7f8fb;
+  --chalk-100: #e4e7ef;
+  --chalk-300: #a9b0c2;
+  --chalk-500: #6b7283;
+
+  --ball-50: #fff4ed;
+  --ball-200: #ffcfa8;
+  --ball-400: #ff9a4a;
+  --ball-500: #ff7a1a;
+  --ball-600: #e85e00;
+  --ball-700: #b94700;
+
+  --serve-300: #8cffd4;
+  --serve-500: #00e29a;
+  --serve-700: #009968;
+
+  --win: #00e29a;
+  --loss: #ff4d6d;
+  --warn: #ffc43d;
+  --info: #6fb5ff;
+
+  --fg-1: var(--chalk-50);
+  --fg-2: var(--chalk-100);
+  --fg-3: var(--chalk-300);
+  --fg-muted: var(--chalk-500);
+  --fg-disabled: var(--ink-400);
+
+  --bg-app: var(--ink-950);
+  --bg-panel: var(--ink-900);
+  --bg-card: var(--ink-800);
+  --bg-raised: var(--ink-700);
+  --bg-hover: rgba(255, 255, 255, 0.04);
+  --bg-accent-soft: rgba(255, 122, 26, 0.12);
+  --bg-live-soft: rgba(0, 226, 154, 0.14);
+
+  --border-subtle: var(--ink-600);
+  --border-default: var(--ink-500);
+
+  --shadow-glow: 0 0 0 1px rgba(255, 122, 26, 0.35),
+    0 8px 24px rgba(255, 122, 26, 0.25);
+  --shadow-live-glow: 0 0 0 1px rgba(0, 226, 154, 0.4),
+    0 0 24px rgba(0, 226, 154, 0.3);
+
+  --font-ui: 'Space Grotesk', ui-sans-serif, system-ui, sans-serif;
+  --font-display: 'Bebas Neue', 'Space Grotesk', sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+
+  /* Map shadcn tokens to FortyMM palette (dark theme) */
+  --background: var(--ink-950);
+  --foreground: var(--chalk-50);
+  --card: var(--ink-800);
+  --card-foreground: var(--chalk-50);
+  --popover: var(--ink-800);
+  --popover-foreground: var(--chalk-50);
+  --primary: var(--ball-500);
+  --primary-foreground: var(--ink-950);
+  --secondary: var(--ink-700);
+  --secondary-foreground: var(--chalk-50);
+  --muted: var(--ink-700);
+  --muted-foreground: var(--chalk-300);
+  --accent: var(--ink-700);
+  --accent-foreground: var(--chalk-50);
+  --destructive: var(--loss);
+  --border: var(--ink-600);
+  --input: var(--ink-500);
+  --ring: var(--ball-500);
+  --radius: 0.625rem;
+
+  --color-sidebar: var(--ink-900);
+  --sidebar: var(--ink-900);
+  --sidebar-foreground: var(--chalk-50);
+  --sidebar-primary: var(--ball-500);
+  --sidebar-primary-foreground: var(--ink-950);
+  --sidebar-accent: var(--ink-700);
+  --sidebar-accent-foreground: var(--chalk-50);
+  --sidebar-border: var(--ink-600);
+  --sidebar-ring: var(--ball-500);
+
+  background: var(--bg-app);
+  color: var(--fg-1);
+  font-family: var(--font-ui);
+}
+
+/* Bring the design-system route into shadcn's "dark" rendering mode without
+   needing the theme toggle wired up. */
+.fortymm-theme,
+.fortymm-theme * {
+  border-color: var(--border);
+}
+
+.fortymm-theme .ball-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--ball-500);
+  box-shadow: 0 0 10px rgba(255, 122, 26, 0.55);
+  flex-shrink: 0;
+}
+
+.fortymm-theme .ball-dot--live {
+  background: var(--serve-500);
+  box-shadow: 0 0 10px rgba(0, 226, 154, 0.65);
+  animation: ball-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes ball-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.6; transform: scale(0.88); }
+}
+
+.fortymm-theme .fortymm-grid-bg {
+  background-image: radial-gradient(
+    circle at center,
+    rgba(255, 122, 26, 0.14) 1.5px,
+    transparent 2px
+  );
+  background-size: 40px 40px;
+}
+
+.fortymm-theme .font-display {
+  font-family: var(--font-display);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.fortymm-theme .font-mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.fortymm-theme .ds-sub {
+  font-family: var(--font-mono);
+  color: var(--fg-3);
+  font-size: 13px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.fortymm-theme .ds-overline {
+  font-family: var(--font-ui);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+}
