@@ -430,7 +430,8 @@ code {
 
 /* The landing page (#root) is constrained to 1126px wide. The app shell
    needs the full viewport, so reset #root when it contains a shell. */
-#root:has(.app-shell) {
+#root:has(.app-shell),
+#root:has(.fortymm-landing) {
   width: 100%;
   max-width: none;
   margin: 0;

@@ -4,22 +4,25 @@ import { describe, expect, it } from 'vitest'
 import App from './App'
 
 describe('App', () => {
-  it('renders the heading', () => {
+  it('renders the FortyMM hero', () => {
     render(<App />)
     expect(
-      screen.getByRole('heading', { name: /get started/i }),
+      screen.getByRole('heading', { level: 1, name: /play more\.\s*pay never\./i }),
     ).toBeInTheDocument()
   })
 
-  it('increments the counter when clicked', async () => {
+  it('switches the active product feature when a tab is clicked', async () => {
     const user = userEvent.setup()
     render(<App />)
 
-    const button = screen.getByRole('button', { name: /count is 0/i })
-    await user.click(button)
+    expect(
+      screen.getByRole('heading', { name: /scores in, history out\./i }),
+    ).toBeInTheDocument()
+
+    await user.click(screen.getByRole('tab', { name: /run tournaments/i }))
 
     expect(
-      screen.getByRole('button', { name: /count is 1/i }),
+      screen.getByRole('heading', { name: /the schedule, solved\./i }),
     ).toBeInTheDocument()
   })
 })
