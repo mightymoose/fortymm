@@ -24,7 +24,17 @@ export interface paths {
 }
 export type webhooks = Record<string, never>;
 export interface components {
-    schemas: never;
+    schemas: {
+        /** HealthResponse */
+        HealthResponse: {
+            solver: components["schemas"]["SolverHealth"];
+        };
+        /** SolverHealth */
+        SolverHealth: {
+            /** Healthy */
+            healthy: boolean;
+        };
+    };
     responses: never;
     parameters: never;
     requestBodies: never;
@@ -48,9 +58,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["HealthResponse"];
                 };
             };
         };
