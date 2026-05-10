@@ -15,6 +15,7 @@ defaults:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -32,10 +33,26 @@ jobs:
 
       - run: npm run test:run
 
-      - name: Install Playwright browsers
-        run: npx playwright install --with-deps
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
 
-      - run: npm run test:e2e
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '26.1.0'
+          cache: npm
+          cache-dependency-path: web-client/package-lock.json
+
+      - run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - run: npm run build
+
+      - run: npm run test:e2e -- --project=chromium
 
       - name: Upload Playwright report
         if: ${{ !cancelled() }}
@@ -44,3 +61,4 @@ jobs:
           name: playwright-report
           path: web-client/playwright-report
           retention-days: 7
+          if-no-files-found: ignore
