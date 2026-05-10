@@ -1,0 +1,15 @@
+{
+  "name": "fortymm-e2e",
+  "private": true,
+  "version": "0.0.0",
+  "description": "End-to-end smoke tests that exercise the full FortyMM stack (Redis, RQ worker, FastAPI, web client).",
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "test:ui": "playwright test --ui"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0",
+    "@types/node": "^22.10.0"
+  }
+}
