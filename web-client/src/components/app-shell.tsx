@@ -20,7 +20,7 @@ const NAV_SECTIONS: NavSection[] = [
     items: [
       {
         label: 'Dashboard',
-        active: true,
+        to: '/dashboard',
         icon: (
           <svg
             width="18"
