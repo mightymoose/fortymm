@@ -1,10 +1,12 @@
 import { useEffect, useState, type ReactNode } from 'react'
+import { Link, useRouterState } from '@tanstack/react-router'
 
 type NavItem = {
   label: string
   icon: ReactNode
   badge?: { label: string; live?: boolean }
   active?: boolean
+  to?: string
 }
 
 type NavSection = {
@@ -231,6 +233,25 @@ const NAV_SECTIONS: NavSection[] = [
           </svg>
         ),
       },
+      {
+        label: 'Administration',
+        to: '/admin',
+        icon: (
+          <svg
+            width="18"
+            height="18"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="M12 2l9 4v6c0 5-3.5 9-9 10-5.5-1-9-5-9-10V6l9-4z" />
+            <path d="M9 12l2 2 4-4" />
+          </svg>
+        ),
+      },
     ],
   },
 ]
@@ -241,6 +262,7 @@ interface AppShellProps {
 
 export function AppShell({ children }: AppShellProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const pathname = useRouterState({ select: (s) => s.location.pathname })
   const [activeLabel, setActiveLabel] = useState(
     () =>
       NAV_SECTIONS.flatMap((s) => s.items).find((i) => i.active)?.label ??
@@ -274,6 +296,13 @@ export function AppShell({ children }: AppShellProps) {
 
   function handleNavClick(e: React.MouseEvent<HTMLAnchorElement>, label: string) {
     e.preventDefault()
+    setActiveLabel(label)
+    if (window.matchMedia('(max-width: 960px)').matches) {
+      setSidebarOpen(false)
+    }
+  }
+
+  function handleRouteNavClick(label: string) {
     setActiveLabel(label)
     if (window.matchMedia('(max-width: 960px)').matches) {
       setSidebarOpen(false)
@@ -318,26 +347,44 @@ export function AppShell({ children }: AppShellProps) {
               <div className="app-shell__nav-label">{section.label}</div>
               <ul className="app-shell__nav-list">
                 {section.items.map((item) => {
-                  const isActive = activeLabel === item.label
+                  const isActive = item.to
+                    ? pathname === item.to
+                    : activeLabel === item.label
+                  const linkClassName = `app-shell__nav-link${isActive ? ' is-active' : ''}`
+                  const inner = (
+                    <>
+                      <span className="app-shell__nav-icon">{item.icon}</span>
+                      {item.label}
+                      {item.badge ? (
+                        <span
+                          className={`app-shell__nav-badge${
+                            item.badge.live ? ' app-shell__nav-badge--live' : ''
+                          }`}
+                        >
+                          {item.badge.label}
+                        </span>
+                      ) : null}
+                    </>
+                  )
                   return (
                     <li key={item.label}>
-                      <a
-                        href="#"
-                        className={`app-shell__nav-link${isActive ? ' is-active' : ''}`}
-                        onClick={(e) => handleNavClick(e, item.label)}
-                      >
-                        <span className="app-shell__nav-icon">{item.icon}</span>
-                        {item.label}
-                        {item.badge ? (
-                          <span
-                            className={`app-shell__nav-badge${
-                              item.badge.live ? ' app-shell__nav-badge--live' : ''
-                            }`}
-                          >
-                            {item.badge.label}
-                          </span>
-                        ) : null}
-                      </a>
+                      {item.to ? (
+                        <Link
+                          to={item.to}
+                          className={linkClassName}
+                          onClick={() => handleRouteNavClick(item.label)}
+                        >
+                          {inner}
+                        </Link>
+                      ) : (
+                        <a
+                          href="#"
+                          className={linkClassName}
+                          onClick={(e) => handleNavClick(e, item.label)}
+                        >
+                          {inner}
+                        </a>
+                      )}
                     </li>
                   )
                 })}
