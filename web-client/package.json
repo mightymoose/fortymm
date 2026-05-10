@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "test": "vitest",
     "test:run": "vitest run",
-    "test:ui": "vitest --ui"
+    "test:ui": "vitest --ui",
+    "gen:api": "openapi-typescript ${API_URL:-http://localhost:8000}/openapi.json -o ./src/api/schema.d.ts"
   },
   "dependencies": {
     "@fontsource-variable/geist": "^5.2.8",
@@ -25,6 +26,7 @@
     "input-otp": "^1.4.2",
     "lucide-react": "^1.14.0",
     "next-themes": "^0.4.6",
+    "openapi-fetch": "^0.17.0",
     "radix-ui": "^1.4.3",
     "react": "^19.2.5",
     "react-day-picker": "^10.0.0",
@@ -42,6 +44,7 @@
     "@tanstack/react-query-devtools": "^5.100.9",
     "@tanstack/react-router-devtools": "^1.166.13",
     "@tanstack/router-plugin": "^1.167.35",
+    "@testing-library/dom": "^10.4.1",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.1",
@@ -56,6 +59,7 @@
     "globals": "^17.5.0",
     "jsdom": "^29.1.1",
     "msw": "^2.14.5",
+    "openapi-typescript": "^7.13.0",
     "typescript": "~6.0.2",
     "typescript-eslint": "^8.58.2",
     "vite": "^8.0.10",
