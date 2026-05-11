@@ -33,7 +33,19 @@ jobs:
       - run: npm run test:run
 
       - name: Install Playwright browser
-        run: npx playwright install --with-deps chromium
+        env:
+          NEEDRESTART_MODE: a
+          NEEDRESTART_SUSPEND: '1'
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          # The ubuntu-latest runner (Noble) ships needrestart, whose apt
+          # hook prompts interactively after package installs and hangs CI.
+          # Force it into automatic mode globally so the sudo apt-get call
+          # that --with-deps performs can't get stuck waiting for input.
+          if [ -f /etc/needrestart/needrestart.conf ]; then
+            sudo sed -i "s/^#\\?\\\$nrconf{restart} = .*/\$nrconf{restart} = 'a';/" /etc/needrestart/needrestart.conf
+          fi
+          npx playwright install --with-deps chromium
 
       - run: npm run test:e2e
 
