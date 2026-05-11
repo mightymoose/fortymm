@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { Link, useRouterState } from '@tanstack/react-router'
+import { UserMenu } from './user-menu'
 
 type NavItem = {
   label: string
@@ -451,28 +452,7 @@ export function AppShell({ children }: AppShellProps) {
           <div className="app-shell__spacer" />
 
           <div className="app-shell__actions">
-            <button
-              type="button"
-              className="app-shell__user-menu"
-              aria-label="User menu"
-            >
-              <div className="app-shell__user-avatar">RK</div>
-              <div className="app-shell__user-name">Rita Kovač</div>
-              <span className="app-shell__user-chev">
-                <svg
-                  width="14"
-                  height="14"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <path d="M6 9l6 6 6-6" />
-                </svg>
-              </span>
-            </button>
+            <UserMenu />
           </div>
         </header>
 

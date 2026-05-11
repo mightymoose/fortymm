@@ -556,10 +556,60 @@ code {
   font-size: 13px;
   font-weight: 500;
 }
+.app-shell__user-name--truncate {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .app-shell__user-chev {
   color: var(--fg-3);
   display: grid;
   place-items: center;
+}
+
+.app-shell__user-menu--loading {
+  cursor: default;
+}
+.app-shell__user-menu--loading:hover {
+  background: var(--bg-card);
+  border-color: var(--border-subtle);
+}
+.app-shell__skeleton {
+  position: relative;
+  overflow: hidden;
+  background: var(--bg-raised);
+}
+.app-shell__skeleton::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.06) 50%,
+    transparent 100%
+  );
+  transform: translateX(-100%);
+  animation: app-shell-skeleton-shimmer 1.4s ease-in-out infinite;
+}
+.app-shell__skeleton--avatar {
+  background: var(--bg-raised);
+}
+.app-shell__skeleton--name {
+  width: 96px;
+  height: 12px;
+  border-radius: 4px;
+}
+@keyframes app-shell-skeleton-shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .app-shell__skeleton::after {
+    animation: none;
+  }
 }
 
 /* ---------- Sidebar ---------- */
