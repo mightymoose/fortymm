@@ -4,8 +4,10 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 
 from app import queue
+from app.sessions import router as sessions_router
 
 app = FastAPI(title="FortyMM API")
+app.include_router(sessions_router)
 
 SOLVER_HEALTH_TIMEOUT = 10.0
 

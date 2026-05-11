@@ -1,0 +1,13 @@
+from pydantic import BaseModel
+
+
+class SessionUser(BaseModel):
+    username: str
+
+
+class SessionData(BaseModel):
+    user: SessionUser
+
+
+class SessionResponse(BaseModel):
+    data: SessionData
