@@ -1,8 +1,8 @@
 import { delay, http, HttpResponse } from 'msw'
-import { healthResponse, sessionResponse } from '@/test/factories'
+import { healthCheck, sessionResponse } from '@/test/factories'
 
 export const mockSession = sessionResponse({ user: { username: 'rita.kovac' } })
-export const mockHealthy = healthResponse()
+export const mockHealthy = healthCheck()
 
 export const handlers = [
   http.get('*/v1/health', async () => {

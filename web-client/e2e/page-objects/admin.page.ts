@@ -1,10 +1,10 @@
 import type { Locator, Page, Route } from '@playwright/test'
 import type { components } from '../../src/api/schema'
 import {
-  degradedComponent,
-  downComponent,
-  healthResponse,
+  databaseCheck,
+  healthCheck,
   sessionResponse,
+  solverCheck,
 } from '../../src/test/factories'
 
 type HealthResponse = components['schemas']['HealthResponse']
@@ -13,15 +13,23 @@ export const HEALTH_SCENARIOS: Record<
   'healthy' | 'degraded' | 'failing' | 'serverError',
   (() => HealthResponse) | null
 > = {
-  healthy: () => healthResponse(),
+  healthy: () => healthCheck(),
   degraded: () =>
-    healthResponse({
-      database: degradedComponent({ latency_ms: 1840 }),
+    healthCheck({
+      database: databaseCheck({ latency_ms: 1840 }),
     }),
   failing: () =>
-    healthResponse({
-      database: downComponent({ error: 'connection refused (ECONNREFUSED)' }),
-      solver: downComponent({ error: 'timeout after 5000ms · OOMKilled' }),
+    healthCheck({
+      database: databaseCheck({
+        healthy: false,
+        latency_ms: null,
+        error: 'connection refused (ECONNREFUSED)',
+      }),
+      solver: solverCheck({
+        healthy: false,
+        latency_ms: null,
+        error: 'timeout after 5000ms · OOMKilled',
+      }),
     }),
   serverError: null,
 }

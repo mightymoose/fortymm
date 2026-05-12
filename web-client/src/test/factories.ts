@@ -6,9 +6,7 @@ type HealthResponse = components['schemas']['HealthResponse']
 type SessionUser = components['schemas']['SessionUser']
 type SessionResponse = components['schemas']['SessionResponse']
 
-export function healthyComponent(
-  overrides: Partial<ComponentHealth> = {},
-): ComponentHealth {
+function fastCheck(overrides: Partial<ComponentHealth> = {}): ComponentHealth {
   return {
     healthy: true,
     latency_ms: faker.number.float({ min: 1, max: 80, fractionDigits: 1 }),
@@ -17,46 +15,34 @@ export function healthyComponent(
   }
 }
 
-export function degradedComponent(
+export function redisCheck(
   overrides: Partial<ComponentHealth> = {},
 ): ComponentHealth {
-  return {
-    healthy: true,
-    latency_ms: faker.number.float({
-      min: 1600,
-      max: 3500,
-      fractionDigits: 1,
-    }),
-    error: null,
-    ...overrides,
-  }
+  return fastCheck(overrides)
 }
 
-const DOWN_ERRORS = [
-  'connection refused (ECONNREFUSED)',
-  'timeout after 5000ms',
-  'connection reset by peer',
-  'host unreachable',
-] as const
-
-export function downComponent(
+export function databaseCheck(
   overrides: Partial<ComponentHealth> = {},
 ): ComponentHealth {
-  return {
-    healthy: false,
-    latency_ms: null,
-    error: faker.helpers.arrayElement(DOWN_ERRORS),
-    ...overrides,
-  }
+  return fastCheck(overrides)
 }
 
-export function healthResponse(
+export function solverCheck(
+  overrides: Partial<ComponentHealth> = {},
+): ComponentHealth {
+  return fastCheck({
+    latency_ms: faker.number.float({ min: 30, max: 250, fractionDigits: 1 }),
+    ...overrides,
+  })
+}
+
+export function healthCheck(
   overrides: Partial<HealthResponse> = {},
 ): HealthResponse {
   return {
-    redis: healthyComponent(),
-    database: healthyComponent(),
-    solver: healthyComponent(),
+    redis: redisCheck(),
+    database: databaseCheck(),
+    solver: solverCheck(),
     ...overrides,
   }
 }
