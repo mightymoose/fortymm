@@ -844,7 +844,7 @@ function Manifesto() {
     {
       n: '05',
       t: 'Your data is yours.',
-      d: 'One-click export. Delete anytime. Take your match history, your rating, your photos, and go.',
+      d: "One-click export. One-click anonymize. We can't fully delete — your matches live in other players' histories too — but your name, photo, and email vanish from every record, instantly.",
     },
     {
       n: '06',

@@ -4,6 +4,7 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { tanstackRouter } from '@tanstack/router-plugin/vite'
+import { VitePWA } from 'vite-plugin-pwa'
 
 // https://vite.dev/config/
 export default defineConfig({
@@ -14,6 +15,29 @@ export default defineConfig({
     }),
     react(),
     tailwindcss(),
+    VitePWA({
+      registerType: 'prompt',
+      injectRegister: false,
+      workbox: {
+        globPatterns: ['**/*.{js,css,html,svg,png,ico,woff2}'],
+        navigateFallbackDenylist: [/^\/api/, /^\/mockServiceWorker\.js$/],
+        cleanupOutdatedCaches: true,
+        clientsClaim: true,
+      },
+      manifest: {
+        name: 'FortyMM',
+        short_name: 'FortyMM',
+        description: 'Table tennis match tracker and tournament platform.',
+        theme_color: '#0B0D12',
+        background_color: '#0B0D12',
+        icons: [
+          { src: '/favicon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'any' },
+        ],
+      },
+      devOptions: {
+        enabled: false,
+      },
+    }),
   ],
   resolve: {
     alias: {
