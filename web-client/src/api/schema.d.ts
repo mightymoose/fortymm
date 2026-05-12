@@ -74,6 +74,8 @@ export interface components {
         SessionUser: {
             /** Username */
             username: string;
+            /** Permissions */
+            permissions: string[];
         };
         /** ValidationError */
         ValidationError: {

@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_session
-from app.models import User, UserToken
+from app.models import Permission, Role, RolePermission, User, UserRole, UserToken
 from app.schemas.session import SessionData, SessionResponse, SessionUser
 
 router = APIRouter()
@@ -44,6 +44,19 @@ async def _find_session_user(db: AsyncSession, raw_token: str) -> User | None:
         return None
     user_result = await db.execute(select(User).where(User.id == token.user_id))
     return user_result.scalar_one_or_none()
+
+
+async def _load_permissions(db: AsyncSession, user_id) -> list[str]:
+    result = await db.execute(
+        select(Permission.name)
+        .join(RolePermission, RolePermission.permission_id == Permission.id)
+        .join(Role, Role.id == RolePermission.role_id)
+        .join(UserRole, UserRole.role_id == Role.id)
+        .where(UserRole.user_id == user_id)
+        .distinct()
+        .order_by(Permission.name)
+    )
+    return list(result.scalars().all())
 
 
 async def _create_session(db: AsyncSession) -> tuple[User, str]:
@@ -90,4 +103,9 @@ async def get_session_endpoint(
     if user is None:
         user, raw_token = await _create_session(db)
         _set_session_cookie(response, raw_token)
-    return SessionResponse(data=SessionData(user=SessionUser(username=user.username)))
+    permissions = await _load_permissions(db, user.id)
+    return SessionResponse(
+        data=SessionData(
+            user=SessionUser(username=user.username, permissions=permissions)
+        )
+    )

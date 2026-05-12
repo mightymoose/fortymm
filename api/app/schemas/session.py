@@ -3,6 +3,7 @@ from pydantic import BaseModel
 
 class SessionUser(BaseModel):
     username: str
+    permissions: list[str]
 
 
 class SessionData(BaseModel):
