@@ -1,19 +1,13 @@
 import { delay, http, HttpResponse } from 'msw'
-import type { components } from '@/api/schema'
+import { healthCheck, sessionResponse } from '@/test/factories'
 
-type SessionResponse = components['schemas']['SessionResponse']
-
-export const mockSession: SessionResponse = {
-  data: {
-    user: {
-      username: 'rita.kovac',
-    },
-  },
-}
+export const mockSession = sessionResponse({ user: { username: 'rita.kovac' } })
+export const mockHealthy = healthCheck()
 
 export const handlers = [
-  http.get('/api/health', () => {
-    return HttpResponse.json({ status: 'ok' })
+  http.get('*/v1/health', async () => {
+    await delay(400)
+    return HttpResponse.json(mockHealthy)
   }),
 
   http.get('*/v1/session', async () => {
