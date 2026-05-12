@@ -32,5 +32,9 @@ export default defineConfig({
     stdout: 'pipe',
     stderr: 'pipe',
     timeout: 120_000,
+    env: {
+      // Disable MSW so Playwright's page.route can intercept API calls instead.
+      VITE_ENABLE_MSW: 'false',
+    },
   },
 })

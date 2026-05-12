@@ -2,8 +2,9 @@ import time
 
 from fastapi import FastAPI
 from pydantic import BaseModel
+from sqlalchemy import text
 
-from app import queue
+from app import db, queue
 from app.sessions import router as sessions_router
 
 app = FastAPI(title="FortyMM API")
@@ -12,36 +13,86 @@ app.include_router(sessions_router)
 SOLVER_HEALTH_TIMEOUT = 10.0
 
 
-class SolverHealth(BaseModel):
+class ComponentHealth(BaseModel):
     healthy: bool
+    latency_ms: float | None = None
+    error: str | None = None
 
 
 class HealthResponse(BaseModel):
-    solver: SolverHealth
+    redis: ComponentHealth
+    database: ComponentHealth
+    solver: ComponentHealth
 
 
 @app.get("/v1/health")
-def health() -> HealthResponse:
-    return HealthResponse(solver=_check_solver())
+async def health() -> HealthResponse:
+    return HealthResponse(
+        redis=_check_redis(),
+        database=await _check_database(),
+        solver=_check_solver(),
+    )
 
 
-def _check_solver() -> SolverHealth:
+def _check_redis() -> ComponentHealth:
+    started = time.monotonic()
+    try:
+        connection = queue.get_queue().connection
+        if not connection.ping():
+            return ComponentHealth(healthy=False, error="redis ping returned falsy")
+    except Exception as exc:
+        return ComponentHealth(healthy=False, error=str(exc) or exc.__class__.__name__)
+    return ComponentHealth(healthy=True, latency_ms=_elapsed_ms(started))
+
+
+async def _check_database() -> ComponentHealth:
+    started = time.monotonic()
+    try:
+        engine = db.get_engine()
+        async with engine.connect() as conn:
+            await conn.execute(text("SELECT 1"))
+    except Exception as exc:
+        return ComponentHealth(healthy=False, error=str(exc) or exc.__class__.__name__)
+    return ComponentHealth(healthy=True, latency_ms=_elapsed_ms(started))
+
+
+def _check_solver() -> ComponentHealth:
+    started = time.monotonic()
     try:
         job = queue.get_queue().enqueue(
             "app.solver.solve_hello_world", job_timeout=10
         )
-    except Exception:
-        return SolverHealth(healthy=False)
+    except Exception as exc:
+        return ComponentHealth(healthy=False, error=str(exc) or exc.__class__.__name__)
 
     deadline = time.monotonic() + SOLVER_HEALTH_TIMEOUT
     while time.monotonic() < deadline:
         try:
             job.refresh()
-        except Exception:
-            return SolverHealth(healthy=False)
+        except Exception as exc:
+            return ComponentHealth(
+                healthy=False, error=str(exc) or exc.__class__.__name__
+            )
         if job.is_finished:
-            return SolverHealth(healthy=bool(job.return_value()))
+            healthy = bool(job.return_value())
+            return ComponentHealth(
+                healthy=healthy,
+                latency_ms=_elapsed_ms(started),
+                error=None if healthy else "solver returned an unsatisfiable result",
+            )
         if job.is_failed:
-            return SolverHealth(healthy=False)
+            return ComponentHealth(
+                healthy=False,
+                latency_ms=_elapsed_ms(started),
+                error="solver job failed",
+            )
         time.sleep(0.1)
-    return SolverHealth(healthy=False)
+    return ComponentHealth(
+        healthy=False,
+        latency_ms=_elapsed_ms(started),
+        error=f"timeout after {SOLVER_HEALTH_TIMEOUT * 1000:.0f}ms",
+    )
+
+
+def _elapsed_ms(started: float) -> float:
+    return round((time.monotonic() - started) * 1000, 1)

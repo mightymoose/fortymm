@@ -42,6 +42,15 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** ComponentHealth */
+        ComponentHealth: {
+            /** Healthy */
+            healthy: boolean;
+            /** Latency Ms */
+            latency_ms?: number | null;
+            /** Error */
+            error?: string | null;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -49,7 +58,9 @@ export interface components {
         };
         /** HealthResponse */
         HealthResponse: {
-            solver: components["schemas"]["SolverHealth"];
+            redis: components["schemas"]["ComponentHealth"];
+            database: components["schemas"]["ComponentHealth"];
+            solver: components["schemas"]["ComponentHealth"];
         };
         /** SessionData */
         SessionData: {
@@ -63,11 +74,6 @@ export interface components {
         SessionUser: {
             /** Username */
             username: string;
-        };
-        /** SolverHealth */
-        SolverHealth: {
-            /** Healthy */
-            healthy: boolean;
         };
         /** ValidationError */
         ValidationError: {
