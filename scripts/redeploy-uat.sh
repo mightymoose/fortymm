@@ -38,6 +38,13 @@ echo
 echo "==> Building images and (re)starting containers"
 "${COMPOSE[@]}" up -d --build
 
+# Nginx caches resolved upstream IPs at startup. When `up` recreates api or
+# web-client but leaves nginx alone, those IPs become stale and nginx returns
+# 502 until restarted. Force a restart so we always pick up fresh upstreams.
+echo
+echo "==> Restarting nginx to refresh upstream IPs"
+"${COMPOSE[@]}" restart nginx
+
 echo
 echo "==> Waiting for api to finish migrations and report healthy"
 deadline=$(( $(date +%s) + 90 ))
