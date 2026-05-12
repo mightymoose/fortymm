@@ -66,6 +66,7 @@ services:
       dockerfile: Dockerfile.dev
     environment:
       CHOKIDAR_USEPOLLING: "true"
+      VITE_ENABLE_MSW: "false"
     volumes:
       - ./web-client:/app
       - web-client-node-modules:/app/node_modules
