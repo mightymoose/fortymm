@@ -216,13 +216,13 @@ function Showcase({
   children: React.ReactNode
 }) {
   return (
-    <div className="rounded-xl border border-[color:var(--border-subtle)] bg-card p-8">
+    <section className="rounded-xl border border-[color:var(--border-subtle)] bg-card p-8" aria-label={title}>
       <div className="mb-6 flex items-baseline justify-between gap-4">
         <h3 className="text-lg font-semibold text-foreground">{title}</h3>
         <span className="ds-overline">{tag}</span>
       </div>
       {children}
-    </div>
+    </section>
   )
 }
 
@@ -273,7 +273,7 @@ function FormsSection() {
       title="Forms & Input"
       lead="Buttons, inputs, selectors. The interactive surface of every form. Hero color is reserved for the single primary action per screen."
     >
-      <Showcase title="Button" tag="6 variants · 4 sizes">
+      <Showcase title="Button" tag="7 variants · 4 sizes">
         <div className="flex flex-col gap-3">
           <div className="flex flex-wrap items-center gap-3">
             <Button>Log a match</Button>

@@ -23,7 +23,7 @@
   --heading: system-ui, 'Segoe UI', Roboto, sans-serif;
   --mono: ui-monospace, Consolas, monospace;
 
-  font: 18px/145% var(--sans);
+  font: 16px/1.5 var(--sans);
   letter-spacing: 0.18px;
   color-scheme: light dark;
   color: var(--text);
@@ -360,10 +360,25 @@ code {
 }
 
 /* Bring the design-system route into shadcn's "dark" rendering mode without
-   needing the theme toggle wired up. */
-.fortymm-theme,
-.fortymm-theme * {
-  border-color: var(--border);
+   needing the theme toggle wired up.  Scope into @layer base so Tailwind
+   utilities like `border-transparent` continue to win. */
+@layer base {
+  .fortymm-theme,
+  .fortymm-theme * {
+    border-color: var(--border);
+  }
+}
+
+/* The design-system showcase page leans on Tailwind's spacing scale; reset
+   h1/h2 line-height so the showcase rows sit on integer pixel boundaries
+   instead of inheriting the global 118%/145% rules. Load-bearing for the
+   button screenshot assertions in e2e/design-system.spec.ts — fractional
+   line-heights would let AA bleed +1px into the captured bbox. */
+.dark.fortymm-theme h1,
+.dark.fortymm-theme h2 {
+  line-height: 1;
+  letter-spacing: 0;
+  margin: 0;
 }
 
 .fortymm-theme .ball-dot {
