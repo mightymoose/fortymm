@@ -1,0 +1,87 @@
+# UAT stack — built artifacts, no dev server, isolated volumes.
+#
+# Runs alongside the dev stack: project name `fortymm-uat` keeps networks,
+# containers, and volumes namespaced. `nginx` is the only service with a
+# host port; everything else is reachable only on the internal docker
+# network. Use `docker exec` for ad-hoc psql/redis-cli access.
+#
+# Bring up:    docker compose -f docker-compose.uat.yml up -d --build
+# Bring down:  docker compose -f docker-compose.uat.yml down
+#
+# Host Caddy fronts this stack and serves https://uat.fortymm.com.
+
+name: fortymm-uat
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: fortymm
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d fortymm"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile.dev
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/fortymm
+      REDIS_URL: redis://redis:6379/0
+      SESSION_COOKIE_SECURE: "false"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # Same image as dev but no --reload and no source volume mount —
+    # the image's COPY'd /app is what runs.
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000"
+
+  worker:
+    build:
+      context: ./api
+      dockerfile: Dockerfile.dev
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/fortymm
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: rq worker --url redis://redis:6379/0 solver
+
+  web-client:
+    build:
+      context: ./web-client
+      dockerfile: Dockerfile.uat
+    depends_on:
+      - api
+
+  nginx:
+    image: nginx:1.27-alpine
+    ports:
+      - "8084:80"
+    volumes:
+      - ./nginx/uat.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - api
+      - web-client
+
+volumes:
+  postgres-data:
