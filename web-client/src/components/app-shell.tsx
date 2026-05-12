@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { Link, useRouterState } from '@tanstack/react-router'
+import { Key, Shield, Users } from 'lucide-react'
 import { UserMenu } from './user-menu'
 
 type NavItem = {
@@ -8,6 +9,7 @@ type NavItem = {
   badge?: { label: string; live?: boolean }
   active?: boolean
   to?: string
+  children?: Array<{ label: string; to: string; icon: ReactNode }>
 }
 
 type NavSection = {
@@ -252,6 +254,11 @@ const NAV_SECTIONS: NavSection[] = [
             <path d="M9 12l2 2 4-4" />
           </svg>
         ),
+        children: [
+          { label: 'Roles', to: '/admin/roles', icon: <Shield size={15} strokeWidth={1.75} /> },
+          { label: 'Permissions', to: '/admin/permissions', icon: <Key size={15} strokeWidth={1.75} /> },
+          { label: 'Users', to: '/admin/users', icon: <Users size={15} strokeWidth={1.75} /> },
+        ],
       },
     ],
   },
@@ -348,10 +355,11 @@ export function AppShell({ children }: AppShellProps) {
               <div className="app-shell__nav-label">{section.label}</div>
               <ul className="app-shell__nav-list">
                 {section.items.map((item) => {
+                  const childActive = item.children?.some((c) => pathname === c.to) ?? false
                   const isActive = item.to
-                    ? pathname === item.to
+                    ? pathname === item.to || childActive
                     : activeLabel === item.label
-                  const linkClassName = `app-shell__nav-link${isActive ? ' is-active' : ''}`
+                  const linkClassName = `app-shell__nav-link${isActive && !item.children ? ' is-active' : ''}${item.children && childActive ? ' is-parent-active' : ''}`
                   const inner = (
                     <>
                       <span className="app-shell__nav-icon">{item.icon}</span>
@@ -363,6 +371,26 @@ export function AppShell({ children }: AppShellProps) {
                           }`}
                         >
                           {item.badge.label}
+                        </span>
+                      ) : null}
+                      {item.children ? (
+                        <span
+                          className="app-shell__nav-chev"
+                          aria-hidden="true"
+                          style={{ marginLeft: 'auto', display: 'inline-flex' }}
+                        >
+                          <svg
+                            width="14"
+                            height="14"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          >
+                            <path d="M6 9l6 6 6-6" />
+                          </svg>
                         </span>
                       ) : null}
                     </>
@@ -386,6 +414,25 @@ export function AppShell({ children }: AppShellProps) {
                           {inner}
                         </a>
                       )}
+                      {item.children && (isActive || childActive) ? (
+                        <ul className="app-shell__sub-nav-list">
+                          {item.children.map((child) => {
+                            const childIsActive = pathname === child.to
+                            return (
+                              <li key={child.label}>
+                                <Link
+                                  to={child.to}
+                                  className={`app-shell__sub-nav-link${childIsActive ? ' is-active' : ''}`}
+                                  onClick={() => handleRouteNavClick(child.label)}
+                                >
+                                  <span className="app-shell__nav-icon">{child.icon}</span>
+                                  {child.label}
+                                </Link>
+                              </li>
+                            )
+                          })}
+                        </ul>
+                      ) : null}
                     </li>
                   )
                 })}
