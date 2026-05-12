@@ -50,6 +50,7 @@ export function healthCheck(
 export function sessionUser(overrides: Partial<SessionUser> = {}): SessionUser {
   return {
     username: faker.internet.username().toLowerCase(),
+    permissions: [],
     ...overrides,
   }
 }

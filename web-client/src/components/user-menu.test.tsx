@@ -51,7 +51,7 @@ describe('UserMenu', () => {
 
   it('renders avatar initials derived from the username', async () => {
     const typed: SessionResponse = {
-      data: { user: { username: 'maria.rossi' } },
+      data: { user: { username: 'maria.rossi', permissions: [] } },
     }
     server.use(
       http.get('*/v1/session', () => HttpResponse.json(typed)),
@@ -66,7 +66,7 @@ describe('UserMenu', () => {
   it('truncates very long usernames via class and exposes full name as a tooltip', async () => {
     const longName = 'a-really-extraordinarily-long-username-that-should-truncate'
     const typed: SessionResponse = {
-      data: { user: { username: longName } },
+      data: { user: { username: longName, permissions: [] } },
     }
     server.use(
       http.get('*/v1/session', () => HttpResponse.json(typed)),
