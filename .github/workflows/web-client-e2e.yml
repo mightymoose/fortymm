@@ -29,6 +29,9 @@ jobs:
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
 
+      - name: Build production bundle for preview server
+        run: npm run build
+
       - run: npm run test:e2e
 
       - uses: actions/upload-artifact@v4
