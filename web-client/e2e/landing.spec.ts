@@ -1,11 +1,8 @@
 import { expect, test } from '@playwright/test'
+import { LandingPage } from './page-objects/landing.page'
 
 test('landing page renders the hero heading', async ({ page }) => {
-  await page.goto('/')
+  const landingPage = await LandingPage.navigateTo(page)
 
-  const heading = page.getByRole('heading', {
-    level: 1,
-    name: /play more\.\s*pay never\./i,
-  })
-  await expect(heading).toBeVisible()
+  await expect(landingPage.heroHeading).toBeVisible()
 })
