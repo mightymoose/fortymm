@@ -159,8 +159,10 @@ h2 {
     font-size: 20px;
   }
 }
-p {
-  margin: 0;
+@layer base {
+  p {
+    margin: 0;
+  }
 }
 
 code,
@@ -449,9 +451,11 @@ code {
    ========================================================================= */
 
 /* The landing page (#root) is constrained to 1126px wide. The app shell
-   needs the full viewport, so reset #root when it contains a shell. */
+   and any FortyMM-themed route need the full viewport, so reset #root
+   when it contains one. */
 #root:has(.app-shell),
-#root:has(.fortymm-landing) {
+#root:has(.fortymm-landing),
+#root:has(.fortymm-theme) {
   width: 100%;
   max-width: none;
   margin: 0;

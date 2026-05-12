@@ -297,29 +297,42 @@ function FormsSection() {
 
       <Showcase title="Input · Label · Form Field" tag="composite">
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-          <div>
-            <Label className="mb-1.5 block text-sm">Player tag</Label>
-            <Input placeholder="@yourname" defaultValue="@nguyen.t" />
-            <p className="mt-1.5 text-xs text-[color:var(--fg-3)]">
+          <div className="mb-[18px]">
+            <Label htmlFor="ds-player-tag" className="mb-1.5 block text-sm">
+              Player tag
+            </Label>
+            <Input
+              id="ds-player-tag"
+              placeholder="@yourname"
+              defaultValue="@nguyen.t"
+            />
+            <p className="mt-1.5 text-xs leading-normal text-[color:var(--fg-3)]">
               Visible to opponents in match invites.
             </p>
           </div>
-          <div>
-            <Label className="mb-1.5 block text-sm">
+          <div className="mb-[18px]">
+            <Label htmlFor="ds-email" className="mb-1.5 block text-sm">
               Email <span className="text-[color:var(--loss)]">*</span>
             </Label>
-            <Input aria-invalid defaultValue="not-an-email" />
-            <p className="mt-1.5 text-xs text-[color:var(--loss)]">
+            <Input id="ds-email" aria-invalid defaultValue="not-an-email" />
+            <p className="mt-1.5 text-xs leading-normal text-[color:var(--loss)]">
               Enter a valid email address.
             </p>
           </div>
-          <div>
-            <Label className="mb-1.5 block text-sm">Disabled</Label>
-            <Input disabled defaultValue="Locked field" />
+          <div className="mb-[18px]">
+            <Label htmlFor="ds-locked" className="mb-1.5 block text-sm">
+              Disabled
+            </Label>
+            <Input id="ds-locked" disabled defaultValue="Locked field" />
           </div>
-          <div>
-            <Label className="mb-1.5 block text-sm">Search</Label>
-            <Input placeholder="Search clubs, players, tournaments…" />
+          <div className="mb-[18px]">
+            <Label htmlFor="ds-search" className="mb-1.5 block text-sm">
+              Search
+            </Label>
+            <Input
+              id="ds-search"
+              placeholder="Search clubs, players, tournaments…"
+            />
           </div>
         </div>
       </Showcase>

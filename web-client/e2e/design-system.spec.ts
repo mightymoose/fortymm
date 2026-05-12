@@ -17,4 +17,13 @@ test.describe('Design System', () => {
     await expect(designSystemPage.buttonShowcase.largeButton).toHaveScreenshot('large-button.png');
     await expect(designSystemPage.buttonShowcase.iconButton).toHaveScreenshot('icon-button.png');
   });
+
+  test('should style the inputs correctly', async ({ page }) => {
+    const designSystemPage = await DesignSystemPage.navigateTo(page);
+
+    await expect(designSystemPage.inputShowcase.playerTagInput).toHaveScreenshot('player-tag-input.png');
+    await expect(designSystemPage.inputShowcase.emailInput).toHaveScreenshot('email-input.png');
+    await expect(designSystemPage.inputShowcase.disabledInput).toHaveScreenshot('disabled-input.png');
+    await expect(designSystemPage.inputShowcase.searchInput).toHaveScreenshot('search-input.png');
+  });
 });
