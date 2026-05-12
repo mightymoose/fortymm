@@ -11,6 +11,7 @@
     "test": "vitest",
     "test:run": "vitest run",
     "test:ui": "vitest --ui",
+    "test:e2e": "playwright test",
     "gen:api": "openapi-typescript ${API_URL:-http://localhost:8000}/openapi.json -o ./src/api/schema.d.ts"
   },
   "dependencies": {
@@ -41,6 +42,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.60.0",
     "@tanstack/react-query-devtools": "^5.100.9",
     "@tanstack/react-router-devtools": "^1.166.13",
     "@tanstack/router-plugin": "^1.167.35",
