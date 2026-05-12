@@ -1,0 +1,16 @@
+# Overrides docker-compose.dev.yml for end-to-end tests.
+# The dev file publishes ports for local developer convenience; for e2e we
+# only need nginx reachable from the host, on a port that won't collide with
+# anything the developer is already running (including the dev nginx on 8080).
+services:
+  postgres:
+    ports: !reset []
+  redis:
+    ports: !reset []
+  api:
+    ports: !reset []
+  web-client:
+    ports: !reset []
+  nginx:
+    ports: !override
+      - "${E2E_NGINX_PORT:-18080}:80"

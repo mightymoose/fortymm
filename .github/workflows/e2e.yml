@@ -7,12 +7,16 @@ on:
     paths:
       - 'e2e/**'
       - 'web-client/**'
+      - 'api/**'
+      - 'nginx/**'
+      - 'docker-compose.dev.yml'
+      - 'docker-compose.e2e.yml'
       - '.github/workflows/e2e.yml'
 
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -20,13 +24,7 @@ jobs:
         with:
           node-version: '26.1.0'
           cache: npm
-          cache-dependency-path: |
-            e2e/package-lock.json
-            web-client/package-lock.json
-
-      - name: Install web-client dependencies
-        run: npm ci
-        working-directory: web-client
+          cache-dependency-path: e2e/package-lock.json
 
       - name: Install e2e dependencies
         run: npm ci
@@ -39,6 +37,10 @@ jobs:
       - name: Run Playwright tests
         run: npx playwright test
         working-directory: e2e
+
+      - name: Dump docker compose logs on failure
+        if: ${{ failure() }}
+        run: docker compose -f docker-compose.dev.yml -f docker-compose.e2e.yml logs --no-color
 
       - name: Upload Playwright report
         if: ${{ !cancelled() }}
