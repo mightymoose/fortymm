@@ -1,51 +1,34 @@
 import type { Locator, Page, Route } from '@playwright/test'
+import type { components } from '../../src/api/schema'
+import {
+  degradedComponent,
+  downComponent,
+  healthResponse,
+  sessionResponse,
+} from '../../src/test/factories'
 
-export type HealthScenario = {
-  redis: { healthy: boolean; latency_ms?: number | null; error?: string | null }
-  database: { healthy: boolean; latency_ms?: number | null; error?: string | null }
-  solver: { healthy: boolean; latency_ms?: number | null; error?: string | null }
-}
+type HealthResponse = components['schemas']['HealthResponse']
 
-export const HEALTH_SCENARIOS = {
-  healthy: {
-    redis: { healthy: true, latency_ms: 4 },
-    database: { healthy: true, latency_ms: 12 },
-    solver: { healthy: true, latency_ms: 38 },
-  },
-  degraded: {
-    redis: { healthy: true, latency_ms: 6 },
-    database: {
-      healthy: true,
-      latency_ms: 1840,
-      error: null,
-    },
-    solver: { healthy: true, latency_ms: 42 },
-  },
-  failing: {
-    redis: { healthy: true, latency_ms: 5 },
-    database: {
-      healthy: false,
-      latency_ms: null,
-      error: 'connection refused (ECONNREFUSED)',
-    },
-    solver: {
-      healthy: false,
-      latency_ms: null,
-      error: 'timeout after 5000ms · OOMKilled',
-    },
-  },
+export const HEALTH_SCENARIOS: Record<
+  'healthy' | 'degraded' | 'failing' | 'serverError',
+  (() => HealthResponse) | null
+> = {
+  healthy: () => healthResponse(),
+  degraded: () =>
+    healthResponse({
+      database: degradedComponent({ latency_ms: 1840 }),
+    }),
+  failing: () =>
+    healthResponse({
+      database: downComponent({ error: 'connection refused (ECONNREFUSED)' }),
+      solver: downComponent({ error: 'timeout after 5000ms · OOMKilled' }),
+    }),
   serverError: null,
-} as const satisfies Record<string, HealthScenario | null>
+}
 
 export type ScenarioName = keyof typeof HEALTH_SCENARIOS
 
-type SessionResponse = {
-  data: { user: { username: string } }
-}
-
-const SESSION_RESPONSE: SessionResponse = {
-  data: { user: { username: 'rita.kovac' } },
-}
+const SESSION_RESPONSE = sessionResponse({ user: { username: 'rita.kovac' } })
 
 export class AdminPage {
   static async navigateTo(
@@ -90,7 +73,8 @@ export class AdminPage {
       if (delayMs > 0) {
         await new Promise((resolve) => setTimeout(resolve, delayMs))
       }
-      if (scenario === 'serverError') {
+      const build = HEALTH_SCENARIOS[scenario]
+      if (build === null) {
         await route.fulfill({
           status: 503,
           contentType: 'application/json',
@@ -98,11 +82,10 @@ export class AdminPage {
         })
         return
       }
-      const payload = HEALTH_SCENARIOS[scenario]
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify(payload),
+        body: JSON.stringify(build()),
       })
     })
   }
