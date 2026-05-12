@@ -5,9 +5,9 @@ function resolveBaseUrl(): string {
   const explicit = import.meta.env.VITE_API_URL
   if (explicit) return explicit
   if (typeof window !== 'undefined' && window.location?.origin) {
-    return window.location.origin
+    return `${window.location.origin}/api`
   }
-  return 'http://localhost'
+  return 'http://localhost/api'
 }
 
 export const api = createClient<paths>({
