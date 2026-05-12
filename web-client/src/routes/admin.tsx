@@ -1,23 +1,30 @@
-import { createFileRoute } from '@tanstack/react-router'
+import { Outlet, createFileRoute } from '@tanstack/react-router'
 import { AppShell } from '@/components/app-shell'
-import { SystemHealth } from '@/components/system-health'
+import { RbacProvider } from '@/components/rbac/rbac-context'
+import { AdminBreadcrumbAndCounts } from '@/components/rbac/admin-layout'
 
 export const Route = createFileRoute('/admin')({
-  component: AdminPage,
+  component: AdminLayout,
 })
 
-function AdminPage() {
+function AdminLayout() {
   return (
-    <AppShell>
-      <div className="mx-auto max-w-[1200px] px-12 pt-16 pb-32">
-        <header className="mb-10">
-          <h1 className="font-display text-4xl text-foreground">Administration</h1>
-        </header>
-
-        <section aria-label="Operations" className="mb-12 max-w-[640px]">
-          <SystemHealth />
-        </section>
-      </div>
-    </AppShell>
+    <RbacProvider>
+      <AppShell>
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            height: 'calc(100vh - 64px)',
+            minHeight: 0,
+          }}
+        >
+          <AdminBreadcrumbAndCounts />
+          <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
+            <Outlet />
+          </div>
+        </div>
+      </AppShell>
+    </RbacProvider>
   )
 }
