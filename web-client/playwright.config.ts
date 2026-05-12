@@ -10,6 +10,11 @@ export default defineConfig({
   retries: process.env.CI ? 2 : 0,
   workers: process.env.CI ? 1 : undefined,
   reporter: process.env.CI ? [['github'], ['html', { open: 'never' }]] : 'list',
+  expect: {
+    // Allow a small ratio of pixels to differ between captures so AA
+    // jitter on text rendering doesn't fail the screenshot tests.
+    toHaveScreenshot: { maxDiffPixelRatio: 0.05 },
+  },
   use: {
     baseURL,
     trace: 'on-first-retry',
