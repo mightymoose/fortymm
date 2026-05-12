@@ -26,7 +26,12 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: `npm run dev -- --host 127.0.0.1 --port ${PORT} --strictPort`,
+    // CI serves the production build via `vite preview` to avoid first-request
+    // JIT-compile latency from the dev server, which causes intermittent
+    // timeouts on cold runners. Local runs keep `vite dev` for fast iteration.
+    command: process.env.CI
+      ? `npx vite preview --host 127.0.0.1 --port ${PORT} --strictPort`
+      : `npm run dev -- --host 127.0.0.1 --port ${PORT} --strictPort`,
     url: baseURL,
     reuseExistingServer: !process.env.CI,
     stdout: 'pipe',
