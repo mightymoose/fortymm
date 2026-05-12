@@ -1,4 +1,4 @@
-import { Locator, Page } from '@playwright/test';
+import { Locator } from '@playwright/test';
 
 export class ButtonShowcasePage {
     public readonly primaryButton: Locator;
