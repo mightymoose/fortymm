@@ -12,7 +12,7 @@ End-to-end "ship it" workflow for the current branch. Run the steps below **in o
 
 1. Confirm you're in a git repository and on a feature branch (not `main`). If on `main`, stop and tell the user.
 2. Run `git status` and `git diff --stat origin/main...HEAD` so you (and the user) can see what's about to ship.
-3. If there are uncommitted changes, surface them. Ask the user whether to commit them first or abort — do **not** auto-commit without acknowledgement.
+3. If there are uncommitted changes unrelated to the branch's work-in-progress, surface them and ask the user whether to commit or abort — do **not** auto-commit pre-existing work without acknowledgement. (Edits produced by Step 1's `simplify` are pre-authorized to commit, since the user invoked this skill expecting that.)
 
 ## Step 1 — Simplify
 
@@ -26,12 +26,14 @@ Apply any fixes it identifies. When `simplify` produces edits, stage and commit 
 
 ## Step 2 — Run all tests
 
-Run each suite the project ships. Use the project root as cwd. Run independent suites in parallel via separate Bash tool calls in one message.
+Run each suite the project ships. Use the project root as cwd. Run independent suites in parallel via separate Bash tool calls in one message. Skip any suite whose directory is absent.
 
-- **API (pytest):** `cd api && uv run pytest` (or whatever the project's standard runner is — check `api/pyproject.toml` / `mise.toml`)
+- **API (pytest):** `cd api && pytest` (matches CI in `.github/workflows/api.yml`; assumes `pip install -e '.[dev]'` has been run in `api/.venv`. If pytest isn't on PATH, use `api/.venv/bin/pytest`.)
 - **Web client unit tests (vitest):** `cd web-client && npm run test:run`
-- **Web client lint/typecheck:** `cd web-client && npm run lint && npm run build`
-- **E2E (Playwright):** `cd e2e && npm test` — remember [[feedback_playwright_port_collision]]; set `PLAYWRIGHT_PORT` if the dev compose is up.
+- **Web client lint + typecheck/build:** `cd web-client && npm run lint && npm run build` (the `build` script is `tsc -b && vite build` — it's the only typecheck.)
+- **Web client e2e (Playwright):** `cd web-client && npm run test:e2e`. Playwright defaults to port 5174 which collides with the dev compose web-client; set `PLAYWRIGHT_PORT` to a free port when the dev compose stack is up.
+- **Root e2e (Playwright + docker stack):** `cd e2e && npm test`. This suite drives the full docker compose stack; ensure it's running first (or skip if not applicable to this branch's changes).
+- **OpenAPI schema drift:** if `api/**` or `web-client/src/api/**` changed, run `mise run regen-api-types` then `git diff --exit-code web-client/src/api/schema.d.ts`. A non-empty diff means the committed schema is stale — commit the regenerated file.
 
 If any suite fails: stop, report the failure, do not push.
 
