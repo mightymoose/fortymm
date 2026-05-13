@@ -388,6 +388,24 @@ code {
   margin: 0;
 }
 
+/* The :root rules above (h2 { font-size: 24px } and global letter-spacing:
+   0.18px) bleed into the FortyMM-themed surface and cause shadcn overlays to
+   render with the wrong type metrics. Reset typography here so utility
+   classes win inside the theme. */
+.dark.fortymm-theme,
+body.dark.fortymm-theme {
+  letter-spacing: normal;
+}
+.dark.fortymm-theme h2,
+.dark.fortymm-theme h3,
+.dark.fortymm-theme h4 {
+  font-family: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+  letter-spacing: inherit;
+  line-height: inherit;
+}
+
 .fortymm-theme .ball-dot {
   display: inline-block;
   width: 10px;
