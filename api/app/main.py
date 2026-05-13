@@ -5,10 +5,12 @@ from pydantic import BaseModel
 from sqlalchemy import text
 
 from app import db, queue
+from app.rbac import router as rbac_router
 from app.sessions import router as sessions_router
 
 app = FastAPI(title="FortyMM API")
 app.include_router(sessions_router)
+app.include_router(rbac_router)
 
 SOLVER_HEALTH_TIMEOUT = 10.0
 

@@ -1,5 +1,5 @@
 import { useMemo, useState, type CSSProperties } from 'react'
-import { ChevronDown, Folder, Info, Pencil, Plus, Search, Trash2 } from 'lucide-react'
+import { ChevronDown, Folder, Info, Key, Pencil, Plus, Search, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -20,19 +20,28 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
-import { useRbacActions, useRbacData } from './use-rbac'
-import { Field, PageHeader, Stat, StatsGrid } from './primitives'
+import { Skeleton } from '@/components/ui/skeleton'
+import {
+  type Permission,
+  type Role,
+  useCreatePermission,
+  useDeletePermission,
+  usePermissions,
+  useRoles,
+  useUpdatePermission,
+} from './queries'
+import { EmptyState, Field, PageHeader, Stat, StatsGrid } from './primitives'
 import { PermissionCode, PrefixLabel } from './roles-page'
 import { colorFor, fmtDate, fmtDateRel, groupPermissions, permPrefix } from './helpers'
-import type { Permission, Role } from './seed'
 
 export function PermissionsPage() {
-  const { permissions, roles } = useRbacData()
-  const actions = useRbacActions()
+  const { data: permissions = [], isLoading: permsLoading } = usePermissions()
+  const { data: roles = [] } = useRoles()
+  const createPermission = useCreatePermission()
+  const updatePermission = useUpdatePermission()
+  const deletePermission = useDeletePermission()
   const [search, setSearch] = useState('')
-  const [expanded, setExpanded] = useState<Set<string>>(
-    () => new Set(groupPermissions(permissions).map((g) => g.prefix)),
-  )
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set())
   const [creating, setCreating] = useState(false)
   const [editing, setEditing] = useState<Permission | null>(null)
   const [confirmDel, setConfirmDel] = useState<Permission | null>(null)
@@ -47,18 +56,18 @@ export function PermissionsPage() {
     return m
   }, [roles])
 
-  const allGroupPrefixes = useMemo(
-    () => groupPermissions(permissions).map((g) => g.prefix),
-    [permissions],
-  )
+  const allGroups = useMemo(() => groupPermissions(permissions), [permissions])
+  const allGroupPrefixes = useMemo(() => allGroups.map((g) => g.prefix), [allGroups])
 
   const grouped = useMemo(() => {
-    if (!search) return groupPermissions(permissions)
+    if (!search) return allGroups
     const q = search.toLowerCase()
     return groupPermissions(
-      permissions.filter((p) => p.name.toLowerCase().includes(q) || (p.description || '').toLowerCase().includes(q)),
+      permissions.filter(
+        (p) => p.name.toLowerCase().includes(q) || (p.description || '').toLowerCase().includes(q),
+      ),
     )
-  }, [permissions, search])
+  }, [allGroups, permissions, search])
 
   const grandTotal = permissions.length
   const assigned = useMemo(
@@ -67,12 +76,53 @@ export function PermissionsPage() {
   )
 
   function toggleGroup(prefix: string) {
-    setExpanded((s) => {
+    setCollapsed((s) => {
       const next = new Set(s)
       if (next.has(prefix)) next.delete(prefix)
       else next.add(prefix)
       return next
     })
+  }
+
+  if (permsLoading) return <PermissionsPageSkeleton />
+
+  if (permissions.length === 0) {
+    return (
+      <div style={{ padding: '24px 32px 40px', maxWidth: 1280, margin: '0 auto' }}>
+        <PageHeader
+          title="Permissions"
+          subtitle={
+            <>
+              Every action a role can grant. Names follow <code style={inlineCode}>resource.action</code>.
+            </>
+          }
+        />
+        <div style={{ marginTop: 24 }}>
+          <EmptyState
+            icon={Key}
+            title="No permissions yet"
+            body="Permissions are the leaf-level actions roles bundle together (e.g. tournament.publish). Create the first one to start defining what your roles can do."
+            action={
+              <Button onClick={() => setCreating(true)}>
+                <Plus size={14} /> New permission
+              </Button>
+            }
+          />
+        </div>
+        {creating && (
+          <PermissionFormModal
+            title="New permission"
+            submitLabel="Create permission"
+            existingNames={[]}
+            onClose={() => setCreating(false)}
+            onSubmit={(data) => {
+              createPermission.mutate(data)
+              setCreating(false)
+            }}
+          />
+        )}
+      </div>
+    )
   }
 
   return (
@@ -115,18 +165,18 @@ export function PermissionsPage() {
           />
         </div>
         <div style={{ flex: 1 }} />
-        <button type="button" onClick={() => setExpanded(new Set(allGroupPrefixes))} style={linkBtn}>
+        <button type="button" onClick={() => setCollapsed(new Set())} style={linkBtn}>
           Expand all
         </button>
         <span style={{ color: 'var(--fg-muted)' }}>·</span>
-        <button type="button" onClick={() => setExpanded(new Set())} style={linkBtn}>
+        <button type="button" onClick={() => setCollapsed(new Set(allGroupPrefixes))} style={linkBtn}>
           Collapse all
         </button>
       </div>
 
       <div style={{ display: 'grid', gap: 10 }}>
         {grouped.map(({ prefix, items }) => {
-          const open = expanded.has(prefix)
+          const open = !collapsed.has(prefix)
           return (
             <div key={prefix} style={groupCardStyle}>
               <div onClick={() => toggleGroup(prefix)} style={groupHeaderStyle(open)}>
@@ -196,9 +246,13 @@ export function PermissionsPage() {
           existingNames={permissions.map((p) => p.name)}
           onClose={() => setCreating(false)}
           onSubmit={(data) => {
-            actions.createPermission(data)
+            createPermission.mutate(data)
             setCreating(false)
-            setExpanded((e) => new Set([...e, permPrefix(data.name)]))
+            setCollapsed((c) => {
+              const next = new Set(c)
+              next.delete(permPrefix(data.name))
+              return next
+            })
           }}
         />
       )}
@@ -210,7 +264,7 @@ export function PermissionsPage() {
           initial={editing}
           onClose={() => setEditing(null)}
           onSubmit={(data) => {
-            actions.updatePermission(editing.id, data)
+            updatePermission.mutate({ id: editing.id, patch: data })
             setEditing(null)
           }}
         />
@@ -221,7 +275,7 @@ export function PermissionsPage() {
           ownerCount={(ownersByPerm.get(confirmDel.id) ?? []).length}
           onCancel={() => setConfirmDel(null)}
           onConfirm={() => {
-            actions.deletePermission(confirmDel.id)
+            deletePermission.mutate(confirmDel.id)
             setConfirmDel(null)
           }}
         />
@@ -504,6 +558,27 @@ const inlineCode: CSSProperties = {
   borderRadius: 3,
   border: '1px solid var(--border-subtle)',
 }
+function PermissionsPageSkeleton() {
+  return (
+    <div style={{ padding: '24px 32px 40px', maxWidth: 1280, margin: '0 auto' }}>
+      <div style={{ marginBottom: 20 }}>
+        <Skeleton className="h-7 w-48 mb-2" />
+        <Skeleton className="h-4 w-96" />
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 18 }}>
+        {[0, 1, 2, 3].map((i) => (
+          <Skeleton key={i} className="h-20 w-full" />
+        ))}
+      </div>
+      <div style={{ display: 'grid', gap: 10 }}>
+        {[0, 1, 2, 3].map((i) => (
+          <Skeleton key={i} className="h-16 w-full" />
+        ))}
+      </div>
+    </div>
+  )
+}
+
 const iconBtnStyle: CSSProperties = {
   width: 28,
   height: 28,

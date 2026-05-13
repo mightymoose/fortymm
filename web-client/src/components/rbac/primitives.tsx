@@ -118,10 +118,12 @@ export function EmptyState({
   icon: IconComponent,
   title,
   body,
+  action,
 }: {
   icon: LucideIcon
   title: string
   body: string
+  action?: ReactNode
 }) {
   return (
     <div
@@ -146,6 +148,7 @@ export function EmptyState({
       </div>
       <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--fg-1)', marginBottom: 6 }}>{title}</div>
       <div style={{ fontSize: 13, color: 'var(--fg-3)', maxWidth: 360, margin: '0 auto 16px' }}>{body}</div>
+      {action && <div style={{ display: 'inline-flex', gap: 8 }}>{action}</div>}
     </div>
   )
 }
