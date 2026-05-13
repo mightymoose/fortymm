@@ -48,9 +48,30 @@ async def test_create_and_list_permissions(
 
 
 async def test_create_permission_rejects_duplicate_name(api_client: AsyncClient):
-    await api_client.post("/v1/permissions", json={"name": "dup"})
-    second = await api_client.post("/v1/permissions", json={"name": "dup"})
+    await api_client.post("/v1/permissions", json={"name": "perm.dup"})
+    second = await api_client.post(
+        "/v1/permissions", json={"name": "perm.dup"}
+    )
     assert second.status_code == 409
+
+
+async def test_create_permission_rejects_undotted_name(api_client: AsyncClient):
+    response = await api_client.post(
+        "/v1/permissions", json={"name": "invalidname"}
+    )
+    assert response.status_code == 422
+
+
+async def test_create_permission_rejects_malformed_name(api_client: AsyncClient):
+    response = await api_client.post(
+        "/v1/permissions", json={"name": "Has Spaces!"}
+    )
+    assert response.status_code == 422
+
+
+async def test_create_permission_rejects_empty_name(api_client: AsyncClient):
+    response = await api_client.post("/v1/permissions", json={"name": ""})
+    assert response.status_code == 422
 
 
 async def test_update_permission(
@@ -58,25 +79,38 @@ async def test_update_permission(
 ):
     created = (
         await api_client.post(
-            "/v1/permissions", json={"name": "before", "description": "old"}
+            "/v1/permissions",
+            json={"name": "perm.before", "description": "old"},
         )
     ).json()
 
     patched = await api_client.patch(
         f"/v1/permissions/{created['id']}",
-        json={"name": "after", "description": "new"},
+        json={"name": "perm.after", "description": "new"},
     )
     assert patched.status_code == 200
     body = patched.json()
-    assert body["name"] == "after"
+    assert body["name"] == "perm.after"
     assert body["description"] == "new"
+
+
+async def test_update_permission_rejects_undotted_name(api_client: AsyncClient):
+    created = (
+        await api_client.post(
+            "/v1/permissions", json={"name": "perm.start"}
+        )
+    ).json()
+    response = await api_client.patch(
+        f"/v1/permissions/{created['id']}", json={"name": "invalidname"}
+    )
+    assert response.status_code == 422
 
 
 async def test_delete_permission(
     api_client: AsyncClient, db_session: AsyncSession
 ):
     created = (
-        await api_client.post("/v1/permissions", json={"name": "doomed"})
+        await api_client.post("/v1/permissions", json={"name": "perm.doomed"})
     ).json()
     deleted = await api_client.delete(f"/v1/permissions/{created['id']}")
     assert deleted.status_code == 204
@@ -97,8 +131,12 @@ async def test_get_permission_not_found(api_client: AsyncClient):
 async def test_create_role_with_explicit_permissions(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    p1 = (await api_client.post("/v1/permissions", json={"name": "a"})).json()
-    p2 = (await api_client.post("/v1/permissions", json={"name": "b"})).json()
+    p1 = (
+        await api_client.post("/v1/permissions", json={"name": "perm.a"})
+    ).json()
+    p2 = (
+        await api_client.post("/v1/permissions", json={"name": "perm.b"})
+    ).json()
 
     role_resp = await api_client.post(
         "/v1/roles",
@@ -121,8 +159,12 @@ async def test_create_role_with_explicit_permissions(
 async def test_create_role_from_template_copies_permissions(
     api_client: AsyncClient,
 ):
-    p1 = (await api_client.post("/v1/permissions", json={"name": "a"})).json()
-    p2 = (await api_client.post("/v1/permissions", json={"name": "b"})).json()
+    p1 = (
+        await api_client.post("/v1/permissions", json={"name": "perm.a"})
+    ).json()
+    p2 = (
+        await api_client.post("/v1/permissions", json={"name": "perm.b"})
+    ).json()
     tmpl = (
         await api_client.post(
             "/v1/roles",
@@ -168,7 +210,9 @@ async def test_create_role_rejects_unknown_permission(api_client: AsyncClient):
 async def test_list_roles_returns_permission_ids(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    p = (await api_client.post("/v1/permissions", json={"name": "a"})).json()
+    p = (
+        await api_client.post("/v1/permissions", json={"name": "perm.a"})
+    ).json()
     await api_client.post(
         "/v1/roles", json={"name": "alpha", "permission_ids": [p["id"]]}
     )
@@ -182,9 +226,15 @@ async def test_list_roles_returns_permission_ids(
 
 
 async def test_update_role_replaces_permissions(api_client: AsyncClient):
-    p1 = (await api_client.post("/v1/permissions", json={"name": "a"})).json()
-    p2 = (await api_client.post("/v1/permissions", json={"name": "b"})).json()
-    p3 = (await api_client.post("/v1/permissions", json={"name": "c"})).json()
+    p1 = (
+        await api_client.post("/v1/permissions", json={"name": "perm.a"})
+    ).json()
+    p2 = (
+        await api_client.post("/v1/permissions", json={"name": "perm.b"})
+    ).json()
+    p3 = (
+        await api_client.post("/v1/permissions", json={"name": "perm.c"})
+    ).json()
     role = (
         await api_client.post(
             "/v1/roles",
@@ -201,7 +251,9 @@ async def test_update_role_replaces_permissions(api_client: AsyncClient):
 
 
 async def test_update_role_clears_permissions(api_client: AsyncClient):
-    p = (await api_client.post("/v1/permissions", json={"name": "a"})).json()
+    p = (
+        await api_client.post("/v1/permissions", json={"name": "perm.a"})
+    ).json()
     role = (
         await api_client.post(
             "/v1/roles", json={"name": "r", "permission_ids": [p["id"]]}
@@ -215,7 +267,9 @@ async def test_update_role_clears_permissions(api_client: AsyncClient):
 
 
 async def test_update_role_partial_keeps_permissions(api_client: AsyncClient):
-    p = (await api_client.post("/v1/permissions", json={"name": "a"})).json()
+    p = (
+        await api_client.post("/v1/permissions", json={"name": "perm.a"})
+    ).json()
     role = (
         await api_client.post(
             "/v1/roles", json={"name": "r", "permission_ids": [p["id"]]}

@@ -1,4 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router'
+import { zodResolver } from '@hookform/resolvers/zod'
+import { useForm } from 'react-hook-form'
+import { z } from 'zod'
 import {
   AlertCircle,
   Calendar as CalendarIcon,
@@ -102,6 +105,15 @@ import {
   HoverCardContent,
   HoverCardTrigger,
 } from '@/components/ui/hover-card'
+import {
+  Form,
+  FormControl,
+  FormDescription,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+} from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
 import {
   InputOTP,
@@ -266,6 +278,108 @@ function DesignSystemPage() {
   )
 }
 
+const playerProfileSchema = z.object({
+  playerTag: z
+    .string()
+    .min(2, { message: 'Player tag must be at least 2 characters.' })
+    .max(20, { message: 'Player tag must be 20 characters or fewer.' })
+    .regex(/^@[a-zA-Z0-9._-]+$/, {
+      message: 'Start with @ and use letters, numbers, dots, dashes, or underscores.',
+    }),
+  email: z.string().email({ message: 'Enter a valid email address.' }),
+  matchNotes: z
+    .string()
+    .max(280, { message: 'Keep notes under 280 characters.' })
+    .optional(),
+})
+
+type PlayerProfileValues = z.infer<typeof playerProfileSchema>
+
+function PlayerProfileForm() {
+  const form = useForm<PlayerProfileValues>({
+    resolver: zodResolver(playerProfileSchema),
+    defaultValues: {
+      playerTag: '@nguyen.t',
+      email: 'not-an-email',
+      matchNotes: '',
+    },
+    mode: 'onTouched',
+  })
+
+  const onSubmit = form.handleSubmit((values) => {
+    console.log('player profile submitted', values)
+  })
+
+  return (
+    <Form {...form}>
+      <form onSubmit={onSubmit} className="grid grid-cols-1 gap-4 md:grid-cols-2" noValidate>
+        <FormField
+          control={form.control}
+          name="playerTag"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>Player tag</FormLabel>
+              <FormControl>
+                <Input placeholder="@yourname" {...field} />
+              </FormControl>
+              <FormDescription>
+                Visible to opponents in match invites.
+              </FormDescription>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+        <FormField
+          control={form.control}
+          name="email"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>
+                Email <span className="text-[color:var(--loss)]">*</span>
+              </FormLabel>
+              <FormControl>
+                <Input type="email" placeholder="you@example.com" {...field} />
+              </FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+        <FormField
+          control={form.control}
+          name="matchNotes"
+          render={({ field }) => (
+            <FormItem className="md:col-span-2">
+              <FormLabel>Match notes</FormLabel>
+              <FormControl>
+                <Textarea
+                  placeholder="Add context — venue, conditions, anything memorable."
+                  className="min-h-24"
+                  {...field}
+                />
+              </FormControl>
+              <FormDescription>Optional · up to 280 characters.</FormDescription>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+        <div className="md:col-span-2 flex items-center gap-3">
+          <Button type="submit" disabled={form.formState.isSubmitting}>
+            Save profile
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={() => form.reset()}
+            disabled={!form.formState.isDirty}
+          >
+            Reset
+          </Button>
+        </div>
+      </form>
+    </Form>
+  )
+}
+
 function FormsSection() {
   return (
     <Section
@@ -335,6 +449,10 @@ function FormsSection() {
             />
           </div>
         </div>
+      </Showcase>
+
+      <Showcase title="Form · Validation" tag="zod + react-hook-form">
+        <PlayerProfileForm />
       </Showcase>
 
       <Showcase title="Textarea" tag="resizable">

@@ -56,6 +56,19 @@ type Body = {
   role_ids?: string[]
 }
 
+// Mirrors PERMISSION_NAME_PATTERN in api/app/schemas/rbac.py.
+const PERMISSION_NAME_RE = /^[a-z0-9_]+(?:\.[a-z0-9_]+)+$/
+
+function invalidPermissionName(name: string | undefined): DispatchResult | null {
+  if (!name || !PERMISSION_NAME_RE.test(name)) {
+    return {
+      status: 422,
+      body: { detail: 'permission name must match resource.action convention' },
+    }
+  }
+  return null
+}
+
 const sortedPermissions = (s: RbacState) =>
   [...s.permissions.values()].sort((a, b) => a.name.localeCompare(b.name))
 const sortedRoles = (s: RbacState) =>
@@ -80,6 +93,8 @@ export function dispatchRbac(
     return { status: 200, body: sortedPermissions(state) }
   }
   if (path === '/v1/permissions' && method === 'POST') {
+    const invalid = invalidPermissionName(body.name)
+    if (invalid) return invalid
     if ([...state.permissions.values()].some((p) => p.name === body.name)) {
       return { status: 409, body: { detail: 'permission name already exists' } }
     }
@@ -94,6 +109,10 @@ export function dispatchRbac(
     if (!existing) return { status: 404, body: { detail: 'permission not found' } }
     if (method === 'GET') return { status: 200, body: existing }
     if (method === 'PATCH') {
+      if (body.name !== undefined) {
+        const invalid = invalidPermissionName(body.name)
+        if (invalid) return invalid
+      }
       if (
         body.name &&
         [...state.permissions.values()].some((p) => p.id !== id && p.name === body.name)

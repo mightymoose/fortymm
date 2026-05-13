@@ -1,6 +1,20 @@
 import { useMemo, useState, type CSSProperties } from 'react'
+import { zodResolver } from '@hookform/resolvers/zod'
+import { useForm } from 'react-hook-form'
+import { toast } from 'sonner'
+import { z } from 'zod'
 import { ChevronDown, Folder, Info, Key, Pencil, Plus, Search, Trash2 } from 'lucide-react'
+import { ApiError } from '@/api/client'
 import { Button } from '@/components/ui/button'
+import {
+  Form,
+  FormControl,
+  FormDescription,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+} from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import {
@@ -30,9 +44,37 @@ import {
   useRoles,
   useUpdatePermission,
 } from './queries'
-import { EmptyState, Field, PageHeader, Stat, StatsGrid } from './primitives'
+import { EmptyState, PageHeader, Stat, StatsGrid } from './primitives'
 import { PermissionCode, PrefixLabel } from './roles-page'
 import { colorFor, fmtDate, fmtDateRel, groupPermissions, permPrefix } from './helpers'
+
+// Mirrors PERMISSION_NAME_PATTERN in api/app/schemas/rbac.py.
+const PERMISSION_NAME_RE = /^[a-z0-9_]+(?:\.[a-z0-9_]+)+$/
+
+function buildPermissionSchema(existingNames: string[]) {
+  const taken = new Set(existingNames.map((n) => n.toLowerCase()))
+  return z.object({
+    name: z
+      .string()
+      .trim()
+      .min(1, { message: 'Name is required.' })
+      .max(255, { message: 'Name must be 255 characters or fewer.' })
+      .refine((v) => PERMISSION_NAME_RE.test(v), {
+        message:
+          'Use lowercase letters, numbers, underscores, and at least one dot (e.g. tournament.publish).',
+      })
+      .refine((v) => !taken.has(v.toLowerCase()), {
+        message: 'A permission with this name already exists.',
+      }),
+    description: z
+      .string()
+      .trim()
+      .max(1024, { message: 'Description must be 1024 characters or fewer.' })
+      .optional(),
+  })
+}
+
+type PermissionFormValues = z.infer<ReturnType<typeof buildPermissionSchema>>
 
 export function PermissionsPage() {
   const { data: permissions = [], isLoading: permsLoading } = usePermissions()
@@ -113,10 +155,11 @@ export function PermissionsPage() {
           <PermissionFormModal
             title="New permission"
             submitLabel="Create permission"
+            verb="create"
             existingNames={[]}
             onClose={() => setCreating(false)}
-            onSubmit={(data) => {
-              createPermission.mutate(data)
+            onSubmit={async (data) => {
+              await createPermission.mutateAsync(data)
               setCreating(false)
             }}
           />
@@ -243,10 +286,11 @@ export function PermissionsPage() {
         <PermissionFormModal
           title="New permission"
           submitLabel="Create permission"
+          verb="create"
           existingNames={permissions.map((p) => p.name)}
           onClose={() => setCreating(false)}
-          onSubmit={(data) => {
-            createPermission.mutate(data)
+          onSubmit={async (data) => {
+            await createPermission.mutateAsync(data)
             setCreating(false)
             setCollapsed((c) => {
               const next = new Set(c)
@@ -260,11 +304,12 @@ export function PermissionsPage() {
         <PermissionFormModal
           title="Edit permission"
           submitLabel="Save changes"
+          verb="update"
           existingNames={permissions.filter((p) => p.id !== editing.id).map((p) => p.name)}
           initial={editing}
           onClose={() => setEditing(null)}
-          onSubmit={(data) => {
-            updatePermission.mutate({ id: editing.id, patch: data })
+          onSubmit={async (data) => {
+            await updatePermission.mutateAsync({ id: editing.id, patch: data })
             setEditing(null)
           }}
         />
@@ -355,6 +400,7 @@ function OwnerPill({ name }: { name: string }) {
 function PermissionFormModal({
   title,
   submitLabel,
+  verb,
   existingNames,
   initial,
   onClose,
@@ -362,18 +408,40 @@ function PermissionFormModal({
 }: {
   title: string
   submitLabel: string
+  verb: 'create' | 'update'
   existingNames: string[]
   initial?: Permission
   onClose: () => void
-  onSubmit: (data: { name: string; description: string }) => void
+  onSubmit: (data: { name: string; description: string }) => Promise<void>
 }) {
-  const [name, setName] = useState(initial?.name || '')
-  const [description, setDescription] = useState(initial?.description || '')
-  const trimmed = name.trim()
-  const taken = existingNames.some((n) => n.toLowerCase() === trimmed.toLowerCase())
-  const validShape = /^[a-z0-9_]+(?:\.[a-z0-9_]+)*$/i.test(trimmed)
-  const valid = trimmed && validShape && !taken
-  const { hint, hintTone } = validateName({ trimmed, taken, validShape })
+  const schema = useMemo(() => buildPermissionSchema(existingNames), [existingNames])
+  const form = useForm<PermissionFormValues>({
+    resolver: zodResolver(schema),
+    defaultValues: {
+      name: initial?.name ?? '',
+      description: initial?.description ?? '',
+    },
+    mode: 'onChange',
+  })
+
+  const handleSubmit = form.handleSubmit(async (values) => {
+    try {
+      await onSubmit({ name: values.name, description: values.description ?? '' })
+    } catch (err) {
+      // 4xx errors that target a field land inline; everything else (5xx,
+      // network) goes to the toast so the user still sees what failed.
+      if (err instanceof ApiError && (err.status === 409 || err.status === 422)) {
+        form.setError('name', {
+          type: 'server',
+          message: err.detail ?? 'Server rejected this name.',
+        })
+        return
+      }
+      toast.error(`Couldn't ${verb} the permission`, {
+        description: err instanceof Error ? err.message : String(err),
+      })
+    }
+  })
 
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
@@ -381,69 +449,79 @@ function PermissionFormModal({
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
         </DialogHeader>
-        <div style={{ display: 'grid', gap: 16 }}>
-          <Field label="Name" hint={hint} hintTone={hintTone}>
-            <Input
-              autoFocus
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="tournament.publish"
-              style={{ fontFamily: 'var(--font-mono)' }}
-            />
-          </Field>
-          <Field label="Description" hint="What does this permission let someone do?">
-            <Textarea
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              placeholder="e.g. Publish a tournament to the spectator view."
-              style={{ minHeight: 80 }}
-            />
-          </Field>
-          {initial && (
-            <div
-              style={{
-                display: 'flex',
-                gap: 24,
-                padding: '12px 14px',
-                background: 'var(--ink-900)',
-                border: '1px solid var(--border-subtle)',
-                borderRadius: 'var(--r-md, 10px)',
-              }}
-            >
-              <Stat label="Created" value={fmtDate(initial.created_at)} />
-              <Stat label="Updated" value={fmtDateRel(initial.updated_at)} />
-              <Stat label="ID" value={initial.id} mono />
+        <Form {...form}>
+          <form onSubmit={handleSubmit} noValidate>
+            <div style={{ display: 'grid', gap: 16 }}>
+              <FormField
+                control={form.control}
+                name="name"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Name</FormLabel>
+                    <FormControl>
+                      <Input
+                        autoFocus
+                        placeholder="tournament.publish"
+                        style={{ fontFamily: 'var(--font-mono)' }}
+                        {...field}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      Convention: resource.action (e.g. courts.score)
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name="description"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Description</FormLabel>
+                    <FormControl>
+                      <Textarea
+                        placeholder="e.g. Publish a tournament to the spectator view."
+                        style={{ minHeight: 80 }}
+                        {...field}
+                        value={field.value ?? ''}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      What does this permission let someone do?
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              {initial && (
+                <div
+                  style={{
+                    display: 'flex',
+                    gap: 24,
+                    padding: '12px 14px',
+                    background: 'var(--ink-900)',
+                    border: '1px solid var(--border-subtle)',
+                    borderRadius: 'var(--r-md, 10px)',
+                  }}
+                >
+                  <Stat label="Created" value={fmtDate(initial.created_at)} />
+                  <Stat label="Updated" value={fmtDateRel(initial.updated_at)} />
+                  <Stat label="ID" value={initial.id} mono />
+                </div>
+              )}
             </div>
-          )}
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose}>Cancel</Button>
-          <Button disabled={!valid} onClick={() => onSubmit({ name: trimmed, description: description.trim() })}>
-            {submitLabel}
-          </Button>
-        </DialogFooter>
+            <DialogFooter style={{ marginTop: 16 }}>
+              <Button variant="outline" type="button" onClick={onClose}>
+                Cancel
+              </Button>
+              <Button type="submit">{submitLabel}</Button>
+            </DialogFooter>
+          </form>
+        </Form>
       </DialogContent>
     </Dialog>
   )
-}
-
-function validateName({
-  trimmed,
-  taken,
-  validShape,
-}: {
-  trimmed: string
-  taken: boolean
-  validShape: boolean
-}): { hint: string; hintTone: 'neutral' | 'loss' } {
-  if (taken) return { hint: 'A permission with this name already exists.', hintTone: 'loss' }
-  if (trimmed && !validShape) {
-    return {
-      hint: 'Use lowercase letters, numbers, underscores, and dots (e.g. tournament.publish).',
-      hintTone: 'loss',
-    }
-  }
-  return { hint: 'Convention: resource.action (e.g. courts.score)', hintTone: 'neutral' }
 }
 
 function DeletePermissionDialog({
