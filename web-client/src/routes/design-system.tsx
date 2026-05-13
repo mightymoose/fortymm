@@ -1,5 +1,4 @@
 import { createFileRoute } from '@tanstack/react-router'
-import { useEffect } from 'react'
 import {
   AlertCircle,
   Calendar as CalendarIcon,
@@ -228,12 +227,6 @@ function Showcase({
 }
 
 function DesignSystemPage() {
-  useEffect(() => {
-    const cls = ['dark', 'fortymm-theme']
-    document.body.classList.add(...cls)
-    return () => document.body.classList.remove(...cls)
-  }, [])
-
   return (
     <TooltipProvider>
       <div className="dark fortymm-theme min-h-screen">
