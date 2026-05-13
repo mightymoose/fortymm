@@ -1,7 +1,6 @@
 import { useMemo, useState, type CSSProperties } from 'react'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useForm } from 'react-hook-form'
-import { toast } from 'sonner'
 import { z } from 'zod'
 import { ChevronDown, Folder, Info, Key, Pencil, Plus, Search, Trash2 } from 'lucide-react'
 import { ApiError } from '@/api/client'
@@ -36,6 +35,7 @@ import {
 } from '@/components/ui/alert-dialog'
 import { Skeleton } from '@/components/ui/skeleton'
 import {
+  notifyError,
   type Permission,
   type Role,
   useCreatePermission,
@@ -46,10 +46,14 @@ import {
 } from './queries'
 import { EmptyState, PageHeader, Stat, StatsGrid } from './primitives'
 import { PermissionCode, PrefixLabel } from './roles-page'
-import { colorFor, fmtDate, fmtDateRel, groupPermissions, permPrefix } from './helpers'
-
-// Mirrors PERMISSION_NAME_PATTERN in api/app/schemas/rbac.py.
-const PERMISSION_NAME_RE = /^[a-z0-9_]+(?:\.[a-z0-9_]+)+$/
+import {
+  colorFor,
+  fmtDate,
+  fmtDateRel,
+  groupPermissions,
+  PERMISSION_NAME_RE,
+  permPrefix,
+} from './helpers'
 
 function buildPermissionSchema(existingNames: string[]) {
   const taken = new Set(existingNames.map((n) => n.toLowerCase()))
@@ -87,6 +91,20 @@ export function PermissionsPage() {
   const [creating, setCreating] = useState(false)
   const [editing, setEditing] = useState<Permission | null>(null)
   const [confirmDel, setConfirmDel] = useState<Permission | null>(null)
+
+  // Stabilized so PermissionFormModal's `useMemo([existingNames])` doesn't
+  // rebuild the zod schema on every parent render.
+  const createExistingNames = useMemo(
+    () => permissions.map((p) => p.name),
+    [permissions],
+  )
+  const editExistingNames = useMemo(
+    () =>
+      editing
+        ? permissions.filter((p) => p.id !== editing.id).map((p) => p.name)
+        : [],
+    [permissions, editing],
+  )
 
   const ownersByPerm = useMemo(() => {
     const m = new Map<string, Role[]>()
@@ -155,7 +173,6 @@ export function PermissionsPage() {
           <PermissionFormModal
             title="New permission"
             submitLabel="Create permission"
-            verb="create"
             existingNames={[]}
             onClose={() => setCreating(false)}
             onSubmit={async (data) => {
@@ -286,8 +303,7 @@ export function PermissionsPage() {
         <PermissionFormModal
           title="New permission"
           submitLabel="Create permission"
-          verb="create"
-          existingNames={permissions.map((p) => p.name)}
+          existingNames={createExistingNames}
           onClose={() => setCreating(false)}
           onSubmit={async (data) => {
             await createPermission.mutateAsync(data)
@@ -304,8 +320,7 @@ export function PermissionsPage() {
         <PermissionFormModal
           title="Edit permission"
           submitLabel="Save changes"
-          verb="update"
-          existingNames={permissions.filter((p) => p.id !== editing.id).map((p) => p.name)}
+          existingNames={editExistingNames}
           initial={editing}
           onClose={() => setEditing(null)}
           onSubmit={async (data) => {
@@ -400,7 +415,6 @@ function OwnerPill({ name }: { name: string }) {
 function PermissionFormModal({
   title,
   submitLabel,
-  verb,
   existingNames,
   initial,
   onClose,
@@ -408,12 +422,12 @@ function PermissionFormModal({
 }: {
   title: string
   submitLabel: string
-  verb: 'create' | 'update'
   existingNames: string[]
   initial?: Permission
   onClose: () => void
   onSubmit: (data: { name: string; description: string }) => Promise<void>
 }) {
+  const verb = initial ? 'update' : 'create'
   const schema = useMemo(() => buildPermissionSchema(existingNames), [existingNames])
   const form = useForm<PermissionFormValues>({
     resolver: zodResolver(schema),
@@ -437,9 +451,7 @@ function PermissionFormModal({
         })
         return
       }
-      toast.error(`Couldn't ${verb} the permission`, {
-        description: err instanceof Error ? err.message : String(err),
-      })
+      notifyError(`${verb} the permission`)(err)
     }
   })
 

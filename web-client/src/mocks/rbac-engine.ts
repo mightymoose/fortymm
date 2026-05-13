@@ -1,4 +1,5 @@
 import type { components } from '@/api/schema'
+import { PERMISSION_NAME_RE } from '@/components/rbac/helpers'
 import {
   permission as makePermission,
   role as makeRole,
@@ -55,9 +56,6 @@ type Body = {
   username?: string
   role_ids?: string[]
 }
-
-// Mirrors PERMISSION_NAME_PATTERN in api/app/schemas/rbac.py.
-const PERMISSION_NAME_RE = /^[a-z0-9_]+(?:\.[a-z0-9_]+)+$/
 
 function invalidPermissionName(name: string | undefined): DispatchResult | null {
   if (!name || !PERMISSION_NAME_RE.test(name)) {

@@ -11,7 +11,7 @@ const PERMISSIONS_KEY = ['permissions'] as const
 const ROLES_KEY = ['roles'] as const
 const USERS_KEY = ['rbac-users'] as const
 
-function notifyError(verb: string) {
+export function notifyError(verb: string) {
   return (error: unknown) => {
     const message = error instanceof Error ? error.message : String(error)
     toast.error(`Couldn't ${verb}`, { description: message })

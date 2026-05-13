@@ -1,6 +1,10 @@
 import { format, formatDistanceToNowStrict } from 'date-fns'
 import type { Permission } from './queries'
 
+// Permission names follow `resource.action`. Mirrored on the backend in
+// api/app/schemas/rbac.py — keep in sync.
+export const PERMISSION_NAME_RE = /^[a-z0-9_]+(?:\.[a-z0-9_]+)+$/
+
 const ROLE_PALETTE = ['#FF7A1A', '#00E29A', '#6FB5FF', '#FFC43D', '#A87BFF', '#FF4D6D', '#8CFFD4']
 
 function hash(s: string): number {
