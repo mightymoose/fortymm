@@ -1,5 +1,5 @@
 import { useMemo, useState, type CSSProperties } from 'react'
-import { ChevronRight, Plus, Search, Trash2 } from 'lucide-react'
+import { ChevronRight, Plus, Search, Trash2, Users } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
@@ -27,19 +27,33 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { useRbacActions, useRbacData } from './use-rbac'
-import { Avatar, Field, PageHeader, Stat, StatsGrid } from './primitives'
+import { Skeleton } from '@/components/ui/skeleton'
+import {
+  type Permission,
+  type RbacUser,
+  type Role,
+  useCreateRbacUser,
+  useDeleteRbacUser,
+  usePermissions,
+  useRbacUsers,
+  useRoles,
+  useSetUserRoles,
+} from './queries'
+import { Avatar, EmptyState, Field, PageHeader, Stat, StatsGrid } from './primitives'
 import { colorFor, fmtDate, fmtDateRel } from './helpers'
-import type { Permission, Role, User } from './seed'
 
 export function UsersPage() {
-  const { users, roles, permissions } = useRbacData()
-  const actions = useRbacActions()
+  const { data: users = [], isLoading: usersLoading } = useRbacUsers()
+  const { data: roles = [] } = useRoles()
+  const { data: permissions = [] } = usePermissions()
+  const createUser = useCreateRbacUser()
+  const deleteUser = useDeleteRbacUser()
+  const setUserRoles = useSetUserRoles()
   const [search, setSearch] = useState('')
   const [roleFilter, setRoleFilter] = useState<string>('all')
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [adding, setAdding] = useState(false)
-  const [confirmRemove, setConfirmRemove] = useState<User | null>(null)
+  const [confirmRemove, setConfirmRemove] = useState<RbacUser | null>(null)
 
   const rolesById = useMemo(() => new Map(roles.map((r) => [r.id, r])), [roles])
   const userCountByRole = useMemo(() => {
@@ -61,6 +75,36 @@ export function UsersPage() {
   }, [users, search, roleFilter])
 
   const selected = users.find((u) => u.id === selectedId) ?? null
+
+  if (usersLoading) return <UsersPageSkeleton />
+
+  if (users.length === 0) {
+    return (
+      <div style={{ padding: '40px 32px', maxWidth: 720, margin: '0 auto' }}>
+        <EmptyState
+          icon={Users}
+          title="No users yet"
+          body="Add a user to grant access to the workspace. After adding, click their row to attach roles."
+          action={
+            <Button onClick={() => setAdding(true)}>
+              <Plus size={14} /> Add user
+            </Button>
+          }
+        />
+        {adding && (
+          <AddUserModal
+            existingUsernames={[]}
+            onClose={() => setAdding(false)}
+            onAdd={async (username) => {
+              const created = await createUser.mutateAsync(username)
+              setAdding(false)
+              setSelectedId(created.id)
+            }}
+          />
+        )}
+      </div>
+    )
+  }
 
   return (
     <div style={{ padding: '24px 32px 40px', maxWidth: 1400, margin: '0 auto' }}>
@@ -135,7 +179,7 @@ export function UsersPage() {
         user={selected}
         roles={roles}
         permissions={permissions}
-        onSave={(next) => selected && actions.setUserRoles(selected.id, next)}
+        onSave={(next) => selected && setUserRoles.mutate({ id: selected.id, roleIds: next })}
         onRemove={() => selected && setConfirmRemove(selected)}
         onClose={() => setSelectedId(null)}
       />
@@ -143,10 +187,10 @@ export function UsersPage() {
         <AddUserModal
           existingUsernames={users.map((u) => u.username)}
           onClose={() => setAdding(false)}
-          onAdd={(username) => {
-            const id = actions.addUser(username)
+          onAdd={async (username) => {
+            const created = await createUser.mutateAsync(username)
             setAdding(false)
-            setSelectedId(id)
+            setSelectedId(created.id)
           }}
         />
       )}
@@ -163,9 +207,10 @@ export function UsersPage() {
               <AlertDialogCancel>Cancel</AlertDialogCancel>
               <AlertDialogAction
                 onClick={() => {
-                  actions.removeUser(confirmRemove.id)
+                  deleteUser.mutate(confirmRemove.id, {
+                    onSuccess: () => setSelectedId(null),
+                  })
                   setConfirmRemove(null)
-                  setSelectedId(null)
                 }}
               >
                 Remove user
@@ -183,7 +228,7 @@ function UserRow({
   rolesById,
   onClick,
 }: {
-  u: User
+  u: RbacUser
   rolesById: Map<string, Role>
   onClick: () => void
 }) {
@@ -262,7 +307,7 @@ function UserDrawer({
   onRemove,
   onClose,
 }: {
-  user: User | null
+  user: RbacUser | null
   roles: Role[]
   permissions: Permission[]
   onSave: (role_ids: string[]) => void
@@ -296,7 +341,7 @@ function UserDrawerBody({
   onRemove,
   onClose,
 }: {
-  user: User
+  user: RbacUser
   roles: Role[]
   permissions: Permission[]
   onSave: (role_ids: string[]) => void
@@ -459,7 +504,11 @@ function RoleAssignRow({ role, on, onToggle }: { role: Role; on: boolean; onTogg
         transition: 'all 120ms cubic-bezier(0.2, 0.8, 0.2, 1)',
       }}
     >
-      <Checkbox checked={on} onCheckedChange={onToggle} />
+      <Checkbox
+        checked={on}
+        onCheckedChange={onToggle}
+        onClick={(e) => e.stopPropagation()}
+      />
       <div
         style={{
           width: 8,
@@ -553,6 +602,27 @@ function validateUsername({
     return { hint: 'Letters, numbers, dots, dashes, underscores. Min 2 characters.', hintTone: 'loss' }
   }
   return { hint: 'Must be unique. After creating, click the row to attach roles.', hintTone: 'neutral' }
+}
+
+function UsersPageSkeleton() {
+  return (
+    <div style={{ padding: '24px 32px 40px', maxWidth: 1400, margin: '0 auto' }}>
+      <div style={{ marginBottom: 20 }}>
+        <Skeleton className="h-7 w-32 mb-2" />
+        <Skeleton className="h-4 w-80" />
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 18 }}>
+        {[0, 1, 2, 3].map((i) => (
+          <Skeleton key={i} className="h-20 w-full" />
+        ))}
+      </div>
+      <div style={{ display: 'grid', gap: 8 }}>
+        {[0, 1, 2, 3, 4, 5].map((i) => (
+          <Skeleton key={i} className="h-16 w-full" />
+        ))}
+      </div>
+    </div>
+  )
 }
 
 const tableHeaderStyle: CSSProperties = {

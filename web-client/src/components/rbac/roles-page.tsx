@@ -21,14 +21,27 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
-import { useRbacActions, useRbacData } from './use-rbac'
+import { Skeleton } from '@/components/ui/skeleton'
+import {
+  type Permission,
+  type RbacUser,
+  type Role,
+  useCreateRole,
+  useDeleteRole,
+  usePermissions,
+  useRbacUsers,
+  useRoles,
+  useSetUserRoles,
+  useUpdateRole,
+} from './queries'
 import { Avatar, EmptyState, Field, Stat } from './primitives'
 import { colorFor, fmtDate, fmtDateRel, groupPermissions } from './helpers'
-import type { Permission, Role, User } from './seed'
 
 export function RolesPage() {
-  const { roles, permissions, users } = useRbacData()
-  const actions = useRbacActions()
+  const { data: roles = [], isLoading: rolesLoading } = useRoles()
+  const { data: permissions = [] } = usePermissions()
+  const { data: users = [] } = useRbacUsers()
+  const createRole = useCreateRole()
   const [search, setSearch] = useState('')
   const [creating, setCreating] = useState(false)
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -48,6 +61,40 @@ export function RolesPage() {
   }, [roles, search])
 
   const selected = roles.find((r) => r.id === selectedId) ?? roles[0] ?? null
+
+  if (rolesLoading) return <RolesPageSkeleton />
+
+  if (roles.length === 0) {
+    return (
+      <div style={{ padding: '40px 32px', maxWidth: 720, margin: '0 auto' }}>
+        <EmptyState
+          icon={Shield}
+          title="No roles yet"
+          body="Roles bundle permissions together so you can hand out access in one click. Create your first role to start assigning it to users."
+          action={
+            <Button onClick={() => setCreating(true)}>
+              <Plus size={14} /> New role
+            </Button>
+          }
+        />
+        {creating && (
+          <NewRoleModal
+            existing={[]}
+            onClose={() => setCreating(false)}
+            onCreate={async (input) => {
+              const created = await createRole.mutateAsync({
+                name: input.name,
+                description: input.description,
+                template_id: input.templateId,
+              })
+              setSelectedId(created.id)
+              setCreating(false)
+            }}
+          />
+        )}
+      </div>
+    )
+  }
 
   return (
     <div style={{ display: 'flex', height: '100%', overflow: 'hidden' }}>
@@ -118,9 +165,13 @@ export function RolesPage() {
         <NewRoleModal
           existing={roles}
           onClose={() => setCreating(false)}
-          onCreate={(input) => {
-            const id = actions.createRole(input)
-            setSelectedId(id)
+          onCreate={async (input) => {
+            const created = await createRole.mutateAsync({
+              name: input.name,
+              description: input.description,
+              template_id: input.templateId,
+            })
+            setSelectedId(created.id)
             setCreating(false)
           }}
         />
@@ -213,10 +264,13 @@ function RoleDetail({
 }: {
   role: Role
   permissions: Permission[]
-  users: User[]
+  users: RbacUser[]
   onSelect: (id: string | null) => void
 }) {
-  const actions = useRbacActions()
+  const updateRole = useUpdateRole()
+  const deleteRole = useDeleteRole()
+  const createRole = useCreateRole()
+  const setUserRoles = useSetUserRoles()
   const [tab, setTab] = useState<'permissions' | 'members'>('permissions')
   const [editingName, setEditingName] = useState(false)
   const [editingDesc, setEditingDesc] = useState(false)
@@ -230,13 +284,21 @@ function RoleDetail({
     const next = permSet.has(id)
       ? role.permission_ids.filter((p) => p !== id)
       : [...role.permission_ids, id]
-    actions.updateRole(role.id, { permission_ids: next })
+    updateRole.mutate({ id: role.id, patch: { permission_ids: next } })
   }
   function toggleGroup(ids: string[], allOn: boolean) {
     const next = allOn
       ? role.permission_ids.filter((p) => !ids.includes(p))
       : [...new Set([...role.permission_ids, ...ids])]
-    actions.updateRole(role.id, { permission_ids: next })
+    updateRole.mutate({ id: role.id, patch: { permission_ids: next } })
+  }
+  function revokeFromUser(userId: string) {
+    const user = users.find((u) => u.id === userId)
+    if (!user) return
+    setUserRoles.mutate({
+      id: userId,
+      roleIds: user.role_ids.filter((rid) => rid !== role.id),
+    })
   }
 
   return (
@@ -264,7 +326,7 @@ function RoleDetail({
                 autoFocus
                 defaultValue={role.name}
                 onBlur={(e) => {
-                  actions.updateRole(role.id, { name: e.target.value.trim() || role.name })
+                  updateRole.mutate({ id: role.id, patch: { name: e.target.value.trim() || role.name } })
                   setEditingName(false)
                 }}
                 onKeyDown={(e) => {
@@ -286,7 +348,7 @@ function RoleDetail({
                 autoFocus
                 defaultValue={role.description || ''}
                 onBlur={(e) => {
-                  actions.updateRole(role.id, { description: e.target.value.trim() })
+                  updateRole.mutate({ id: role.id, patch: { description: e.target.value.trim() } })
                   setEditingDesc(false)
                 }}
                 placeholder="Describe what this role can do…"
@@ -309,9 +371,13 @@ function RoleDetail({
             <Button
               variant="outline"
               size="sm"
-              onClick={() => {
-                const id = actions.duplicateRole(role.id)
-                if (id) onSelect(id)
+              onClick={async () => {
+                const dup = await createRole.mutateAsync({
+                  name: `${role.name} (copy)`,
+                  description: role.description,
+                  template_id: role.id,
+                })
+                onSelect(dup.id)
               }}
             >
               <Copy size={14} /> Duplicate
@@ -353,7 +419,7 @@ function RoleDetail({
           <RoleMembers
             role={role}
             members={members}
-            onRevoke={(uid) => actions.revokeRoleFromUser(uid, role.id)}
+            onRevoke={revokeFromUser}
           />
         )}
       </div>
@@ -368,7 +434,13 @@ function RoleDetail({
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={() => actions.deleteRole(role.id)}>Delete role</AlertDialogAction>
+            <AlertDialogAction
+              onClick={() =>
+                deleteRole.mutate(role.id, { onSuccess: () => onSelect(null) })
+              }
+            >
+              Delete role
+            </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
@@ -483,7 +555,11 @@ function PermRow({ p, on, onToggle }: { p: Permission; on: boolean; onToggle: ()
         borderTop: '1px solid var(--border-subtle)',
       }}
     >
-      <Checkbox checked={on} onCheckedChange={onToggle} />
+      <Checkbox
+        checked={on}
+        onCheckedChange={onToggle}
+        onClick={(e) => e.stopPropagation()}
+      />
       <PermissionCode name={p.name} active={on} />
       <div style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: 'var(--fg-3)', lineHeight: 1.4 }}>
         {p.description || (
@@ -539,7 +615,7 @@ function RoleMembers({
   onRevoke,
 }: {
   role: Role
-  members: User[]
+  members: RbacUser[]
   onRevoke: (uid: string) => void
 }) {
   if (members.length === 0) {
@@ -653,6 +729,43 @@ function NewRoleModal({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  )
+}
+
+function RolesPageSkeleton() {
+  return (
+    <div style={{ display: 'flex', height: '100%', overflow: 'hidden' }}>
+      <div
+        style={{
+          width: 380,
+          borderRight: '1px solid var(--border-subtle)',
+          background: 'var(--bg-panel)',
+          padding: 18,
+          display: 'grid',
+          gap: 12,
+        }}
+      >
+        <Skeleton className="h-7 w-32" />
+        <Skeleton className="h-9 w-full" />
+        {[0, 1, 2, 3, 4, 5].map((i) => (
+          <Skeleton key={i} className="h-16 w-full" />
+        ))}
+      </div>
+      <div style={{ flex: 1, padding: 32, display: 'grid', gap: 16, alignContent: 'start' }}>
+        <Skeleton className="h-10 w-72" />
+        <Skeleton className="h-4 w-96" />
+        <div style={{ display: 'flex', gap: 18, marginTop: 8 }}>
+          {[0, 1, 2, 3].map((i) => (
+            <Skeleton key={i} className="h-10 w-24" />
+          ))}
+        </div>
+        <div style={{ display: 'grid', gap: 8, marginTop: 12 }}>
+          {[0, 1, 2, 3].map((i) => (
+            <Skeleton key={i} className="h-14 w-full" />
+          ))}
+        </div>
+      </div>
+    </div>
   )
 }
 

@@ -1,5 +1,6 @@
 import { useRouterState } from '@tanstack/react-router'
-import { useRbacData } from './use-rbac'
+import { Skeleton } from '@/components/ui/skeleton'
+import { usePermissions, useRbacUsers, useRoles } from './queries'
 
 const TAB_LABELS: Record<string, string> = {
   '/admin/roles': 'Roles',
@@ -8,7 +9,9 @@ const TAB_LABELS: Record<string, string> = {
 }
 
 export function AdminBreadcrumbAndCounts() {
-  const { users, roles, permissions } = useRbacData()
+  const usersQ = useRbacUsers()
+  const rolesQ = useRoles()
+  const permsQ = usePermissions()
   const pathname = useRouterState({ select: (s) => s.location.pathname })
   const current = TAB_LABELS[pathname] ?? 'Overview'
 
@@ -57,18 +60,33 @@ export function AdminBreadcrumbAndCounts() {
             animation: 'ball-pulse 1.4s ease-in-out infinite',
           }}
         />
-        <span>
-          <span style={{ color: 'var(--fg-1)', fontWeight: 600 }}>{users.length}</span> users
-        </span>
+        <CountChip label="users" count={usersQ.data?.length} loading={usersQ.isLoading} />
         <span style={{ color: 'var(--ink-500)' }}>·</span>
-        <span>
-          <span style={{ color: 'var(--fg-1)', fontWeight: 600 }}>{roles.length}</span> roles
-        </span>
+        <CountChip label="roles" count={rolesQ.data?.length} loading={rolesQ.isLoading} />
         <span style={{ color: 'var(--ink-500)' }}>·</span>
-        <span>
-          <span style={{ color: 'var(--fg-1)', fontWeight: 600 }}>{permissions.length}</span> perms
-        </span>
+        <CountChip label="perms" count={permsQ.data?.length} loading={permsQ.isLoading} />
       </div>
     </div>
+  )
+}
+
+function CountChip({
+  label,
+  count,
+  loading,
+}: {
+  label: string
+  count: number | undefined
+  loading: boolean
+}) {
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+      {loading ? (
+        <Skeleton className="h-3 w-5" />
+      ) : (
+        <span style={{ color: 'var(--fg-1)', fontWeight: 600 }}>{count ?? 0}</span>
+      )}
+      <span>{label}</span>
+    </span>
   )
 }

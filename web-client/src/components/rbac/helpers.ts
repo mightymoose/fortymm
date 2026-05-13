@@ -1,5 +1,5 @@
 import { format, formatDistanceToNowStrict } from 'date-fns'
-import type { Permission } from './seed'
+import type { Permission } from './queries'
 
 const ROLE_PALETTE = ['#FF7A1A', '#00E29A', '#6FB5FF', '#FFC43D', '#A87BFF', '#FF4D6D', '#8CFFD4']
 
@@ -18,7 +18,6 @@ export function permPrefix(name: string): string {
   return dot === -1 ? 'other' : name.slice(0, dot)
 }
 
-// Stable order for known resource prefixes; unknown prefixes sort to the end alphabetically.
 const PREFIX_ORDER = ['tournament', 'draws', 'courts', 'players', 'ratings', 'members', 'roles', 'permissions', 'system', 'other']
 
 export function groupPermissions(perms: Permission[]): Array<{ prefix: string; items: Permission[] }> {
@@ -32,7 +31,10 @@ export function groupPermissions(perms: Permission[]): Array<{ prefix: string; i
     .sort(([a], [b]) => {
       const ai = PREFIX_ORDER.indexOf(a)
       const bi = PREFIX_ORDER.indexOf(b)
-      return (ai < 0 ? 99 : ai) - (bi < 0 ? 99 : bi)
+      if (ai !== -1 && bi !== -1) return ai - bi
+      if (ai !== -1) return -1
+      if (bi !== -1) return 1
+      return a.localeCompare(b)
     })
     .map(([prefix, items]) => ({ prefix, items }))
 }
@@ -46,11 +48,6 @@ export function fmtDateRel(iso: string | null | undefined): string {
   if (!iso) return '—'
   return formatDistanceToNowStrict(new Date(iso), { addSuffix: true })
 }
-
-export const newId = (prefix: string) =>
-  prefix + '_' + (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID().slice(0, 8) : Math.random().toString(36).slice(2, 10))
-
-export const nowIso = () => new Date().toISOString()
 
 export function initialsFor(name: string): string {
   return name

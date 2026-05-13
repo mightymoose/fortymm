@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { Link, useRouterState } from '@tanstack/react-router'
-import { Key, Shield, Users } from 'lucide-react'
+import { Gauge, Key, Shield, Users } from 'lucide-react'
 import { UserMenu } from './user-menu'
 
 type NavItem = {
@@ -255,6 +255,7 @@ const NAV_SECTIONS: NavSection[] = [
           </svg>
         ),
         children: [
+          { label: 'Overview', to: '/admin', icon: <Gauge size={15} strokeWidth={1.75} /> },
           { label: 'Roles', to: '/admin/roles', icon: <Shield size={15} strokeWidth={1.75} /> },
           { label: 'Permissions', to: '/admin/permissions', icon: <Key size={15} strokeWidth={1.75} /> },
           { label: 'Users', to: '/admin/users', icon: <Users size={15} strokeWidth={1.75} /> },
@@ -371,26 +372,6 @@ export function AppShell({ children }: AppShellProps) {
                           }`}
                         >
                           {item.badge.label}
-                        </span>
-                      ) : null}
-                      {item.children ? (
-                        <span
-                          className="app-shell__nav-chev"
-                          aria-hidden="true"
-                          style={{ marginLeft: 'auto', display: 'inline-flex' }}
-                        >
-                          <svg
-                            width="14"
-                            height="14"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeWidth="2"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                          >
-                            <path d="M6 9l6 6 6-6" />
-                          </svg>
                         </span>
                       ) : null}
                     </>
