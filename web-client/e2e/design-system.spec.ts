@@ -26,4 +26,25 @@ test.describe('Design System', () => {
     await expect(designSystemPage.inputShowcase.disabledInput).toHaveScreenshot('disabled-input.png');
     await expect(designSystemPage.inputShowcase.searchInput).toHaveScreenshot('search-input.png');
   });
+
+  test('should style the dialog correctly', async ({ page }) => {
+    const designSystemPage = await DesignSystemPage.navigateTo(page);
+
+    const dialog = await designSystemPage.overlayShowcase.openDialog();
+    await expect(dialog).toHaveScreenshot('dialog.png');
+  });
+
+  test('should style the alert dialog correctly', async ({ page }) => {
+    const designSystemPage = await DesignSystemPage.navigateTo(page);
+
+    const alertDialog = await designSystemPage.overlayShowcase.openAlertDialog();
+    await expect(alertDialog).toHaveScreenshot('alert-dialog.png');
+  });
+
+  test('should style the sheet correctly', async ({ page }) => {
+    const designSystemPage = await DesignSystemPage.navigateTo(page);
+
+    const sheet = await designSystemPage.sheetShowcase.openSheet();
+    await expect(sheet).toHaveScreenshot('sheet.png');
+  });
 });

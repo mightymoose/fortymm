@@ -1,4 +1,5 @@
 import { createFileRoute } from '@tanstack/react-router'
+import { useEffect } from 'react'
 import {
   AlertCircle,
   Calendar as CalendarIcon,
@@ -227,6 +228,12 @@ function Showcase({
 }
 
 function DesignSystemPage() {
+  useEffect(() => {
+    const cls = ['dark', 'fortymm-theme']
+    document.body.classList.add(...cls)
+    return () => document.body.classList.remove(...cls)
+  }, [])
+
   return (
     <TooltipProvider>
       <div className="dark fortymm-theme min-h-screen">
@@ -970,7 +977,7 @@ function OverlaysSection() {
             <DialogTrigger asChild>
               <Button variant="outline">Open dialog</Button>
             </DialogTrigger>
-            <DialogContent>
+            <DialogContent showCloseButton={false}>
               <DialogHeader>
                 <DialogTitle>Forfeit this match?</DialogTitle>
                 <DialogDescription>
@@ -978,7 +985,7 @@ function OverlaysSection() {
                   adjusted accordingly. This can't be undone.
                 </DialogDescription>
               </DialogHeader>
-              <label className="flex items-center gap-2.5 text-sm">
+              <label className="mt-5 flex items-center gap-2.5 text-sm">
                 <Checkbox />
                 <span>Send a note to my opponent</span>
               </label>
@@ -993,9 +1000,9 @@ function OverlaysSection() {
             <AlertDialogTrigger asChild>
               <Button variant="destructive">Delete account…</Button>
             </AlertDialogTrigger>
-            <AlertDialogContent>
+            <AlertDialogContent className="w-[380px]">
               <AlertDialogHeader>
-                <AlertDialogTitle className="flex items-center gap-2">
+                <AlertDialogTitle className="flex items-center gap-2.5">
                   <TriangleAlert className="size-5 text-[color:var(--warn)]" />
                   Delete account
                 </AlertDialogTitle>
@@ -1006,7 +1013,7 @@ function OverlaysSection() {
               </AlertDialogHeader>
               <AlertDialogFooter>
                 <AlertDialogCancel>Keep account</AlertDialogCancel>
-                <AlertDialogAction className="bg-[color:var(--loss)] text-white hover:bg-[color:var(--loss)]/80">
+                <AlertDialogAction variant="destructive">
                   Delete
                 </AlertDialogAction>
               </AlertDialogFooter>
@@ -1020,31 +1027,29 @@ function OverlaysSection() {
           <SheetTrigger asChild>
             <Button variant="outline">Open filters</Button>
           </SheetTrigger>
-          <SheetContent side="right">
+          <SheetContent side="right" showCloseButton={false}>
             <SheetHeader>
               <SheetTitle>Filters</SheetTitle>
               <SheetDescription>Narrow the player list.</SheetDescription>
             </SheetHeader>
-            <div className="flex flex-col gap-4 px-4">
-              <div>
-                <Label className="mb-1.5 block text-sm">Club</Label>
-                <Select defaultValue="brooklyn">
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="brooklyn">Brooklyn TT</SelectItem>
-                    <SelectItem value="nyc">NYC Open Hall</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div>
-                <Label className="mb-1.5 block text-sm">Rating range</Label>
-                <Slider defaultValue={[20, 80]} max={100} />
-              </div>
+            <div className="mb-[18px]">
+              <Label className="mb-1.5 block text-sm">Club</Label>
+              <Select defaultValue="brooklyn">
+                <SelectTrigger className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="brooklyn">Brooklyn TT</SelectItem>
+                  <SelectItem value="nyc">NYC Open Hall</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="mb-[18px]">
+              <Label className="mb-1.5 block text-sm">Rating range</Label>
+              <Slider defaultValue={[20, 80]} max={100} />
             </div>
             <SheetFooter>
-              <Button>Apply filters</Button>
+              <Button className="w-full">Apply filters</Button>
             </SheetFooter>
           </SheetContent>
         </Sheet>
