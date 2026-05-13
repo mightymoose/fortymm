@@ -91,19 +91,68 @@ test.describe('Administration · Permissions', () => {
   })
 
   test('rejects a duplicate name in the create form (client-side guard)', async ({ page }) => {
-    const { pom } = await PermissionsPage.navigateTo(page, BASE_SEED)
+    const { pom, store } = await PermissionsPage.navigateTo(page, BASE_SEED)
     await pom.newButton.click()
     await pom.dialogNameInput.fill('tournament.view')
     await expect(page.getByText(/already exists/i)).toBeVisible()
-    await expect(pom.dialogCreateButton).toBeDisabled()
+    await pom.dialogCreateButton.click()
+    await expect(pom.dialogNameInput).toBeVisible()
+    expect(store.listPermissions().filter((p) => p.name === 'tournament.view')).toHaveLength(1)
   })
 
   test('rejects a malformed name (client-side guard)', async ({ page }) => {
-    const { pom } = await PermissionsPage.navigateTo(page, BASE_SEED)
+    const { pom, store } = await PermissionsPage.navigateTo(page, BASE_SEED)
     await pom.newButton.click()
     await pom.dialogNameInput.fill('Has Spaces!')
     await expect(page.getByText(/lowercase letters/i)).toBeVisible()
-    await expect(pom.dialogCreateButton).toBeDisabled()
+    await pom.dialogCreateButton.click()
+    await expect(pom.dialogNameInput).toBeVisible()
+    expect(store.listPermissions()).toHaveLength(3)
+  })
+
+  test('flags an empty name on submit (client-side guard)', async ({ page }) => {
+    const { pom, store } = await PermissionsPage.navigateTo(page, BASE_SEED)
+    await pom.newButton.click()
+    // Submit without typing anything — zod's .min(1) message must surface.
+    await pom.dialogCreateButton.click()
+    await expect(page.getByText('Name is required.')).toBeVisible()
+    await expect(pom.dialogNameInput).toBeVisible()
+    expect(store.listPermissions()).toHaveLength(3)
+  })
+
+  test('flags an undotted name (resource.action convention is required)', async ({ page }) => {
+    const { pom, store } = await PermissionsPage.navigateTo(page, BASE_SEED)
+    await pom.newButton.click()
+    // Passes the character-class check but has no dot — the refine still rejects.
+    await pom.dialogNameInput.fill('invalidname')
+    await expect(page.getByText(/lowercase letters/i)).toBeVisible()
+    await expect(page.getByText(/at least one dot/i)).toBeVisible()
+    await pom.dialogCreateButton.click()
+    await expect(pom.dialogNameInput).toBeVisible()
+    expect(store.listPermissions().some((p) => p.name === 'invalidname')).toBe(false)
+  })
+
+  test('flags a name longer than 255 characters (client-side guard)', async ({ page }) => {
+    const { pom, store } = await PermissionsPage.navigateTo(page, BASE_SEED)
+    await pom.newButton.click()
+    // 'a.' + 254 b's → length 256, passes the regex, fails .max(255).
+    const tooLong = 'a.' + 'b'.repeat(254)
+    await pom.dialogNameInput.fill(tooLong)
+    await expect(page.getByText(/255 characters or fewer/i)).toBeVisible()
+    await pom.dialogCreateButton.click()
+    await expect(pom.dialogNameInput).toBeVisible()
+    expect(store.listPermissions()).toHaveLength(3)
+  })
+
+  test('flags a description longer than 1024 characters (client-side guard)', async ({ page }) => {
+    const { pom, store } = await PermissionsPage.navigateTo(page, BASE_SEED)
+    await pom.newButton.click()
+    await pom.dialogNameInput.fill('courts.score')
+    await pom.dialogDescriptionInput.fill('x'.repeat(1025))
+    await expect(page.getByText(/1024 characters or fewer/i)).toBeVisible()
+    await pom.dialogCreateButton.click()
+    await expect(pom.dialogNameInput).toBeVisible()
+    expect(store.listPermissions().some((p) => p.name === 'courts.score')).toBe(false)
   })
 
   test('surfaces a server 500 on create as a toast (UI does not crash)', async ({ page }) => {
@@ -115,18 +164,75 @@ test.describe('Administration · Permissions', () => {
     await expect(pom.toast()).toBeVisible()
     await expect(pom.toast()).toContainText(/Couldn't create the permission/i)
     await expect(pom.toast()).toContainText('database is down')
-    // List unchanged
-    await expect(page.getByText('courts.score')).toHaveCount(0)
+    // Modal stays open and the store is unchanged.
+    await expect(pom.dialogNameInput).toBeVisible()
+    expect(store.listPermissions().some((p) => p.name === 'courts.score')).toBe(false)
   })
 
-  test('surfaces a 409 conflict from the server as a toast', async ({ page }) => {
+  test('surfaces a 409 conflict from the server inline on the name field', async ({ page }) => {
     const { pom, store } = await PermissionsPage.navigateTo(page, BASE_SEED)
     // Race: someone created the permission between page load and submit.
     store.fail({ pattern: 'POST', status: 409, body: { detail: 'permission name already exists' }, times: 1 })
     await pom.newButton.click()
     await pom.dialogNameInput.fill('courts.brand_new')
     await pom.dialogCreateButton.click()
-    await expect(pom.toast()).toContainText('permission name already exists')
+    await expect(page.getByText('permission name already exists')).toBeVisible()
+    // Modal stays open so the user can correct the name.
+    await expect(pom.dialogNameInput).toBeVisible()
+  })
+
+  test('surfaces a 422 server validation error inline on the name field', async ({ page }) => {
+    const { pom, store } = await PermissionsPage.navigateTo(page, BASE_SEED)
+    // Stricter server pattern than the client (or client/server drift) —
+    // the API rejects with 422 and the detail must surface inline.
+    store.fail({
+      pattern: 'POST',
+      status: 422,
+      body: { detail: 'permission name must match resource.action convention' },
+      times: 1,
+    })
+    await pom.newButton.click()
+    await pom.dialogNameInput.fill('courts.brand_new')
+    await pom.dialogCreateButton.click()
+    await expect(
+      page.getByText('permission name must match resource.action convention'),
+    ).toBeVisible()
+    await expect(pom.dialogNameInput).toBeVisible()
+  })
+
+  test('surfaces a 409 conflict on update inline on the name field', async ({ page }) => {
+    const { pom, store } = await PermissionsPage.navigateTo(page, BASE_SEED)
+    store.fail({
+      pattern: 'PATCH',
+      status: 409,
+      body: { detail: 'permission name already exists' },
+      times: 1,
+    })
+    await pom.permissionRow('tournament.view').getByRole('button', { name: 'Edit' }).click()
+    // Use a name the client-side guard accepts (not in seed) so the request
+    // actually hits the server, where the mock returns 409.
+    await pom.dialogNameInput.fill('courts.score')
+    await pom.dialogSaveButton.click()
+    await expect(page.getByText('permission name already exists')).toBeVisible()
+    await expect(pom.dialogNameInput).toBeVisible()
+  })
+
+  test('surfaces an arbitrary 4xx (e.g. 403) from the server as a toast', async ({ page }) => {
+    const { pom, store } = await PermissionsPage.navigateTo(page, BASE_SEED)
+    // 403 isn't a field-level error — the form should fall through to the toast
+    // path so the user still learns what happened.
+    store.fail({
+      pattern: 'POST',
+      status: 403,
+      body: { detail: 'you do not have permission to create permissions' },
+      times: 1,
+    })
+    await pom.newButton.click()
+    await pom.dialogNameInput.fill('courts.score')
+    await pom.dialogCreateButton.click()
+    await expect(pom.toast()).toContainText(/Couldn't create the permission/i)
+    await expect(pom.toast()).toContainText('you do not have permission to create permissions')
+    await expect(pom.dialogNameInput).toBeVisible()
   })
 
   test('edits a permission description and the row reflects it', async ({ page }) => {
@@ -144,8 +250,10 @@ test.describe('Administration · Permissions', () => {
     await pom.dialogDescriptionInput.fill('Updated description text')
     await pom.dialogSaveButton.click()
     await expect(pom.toast()).toContainText("Couldn't update the permission")
-    await expect(page.getByText('See tournaments.')).toBeVisible()
-    await expect(page.getByText('Updated description text')).toHaveCount(0)
+    // The row in the list still shows the original description (the rollback
+    // is implicit — we never optimistically updated the cache).
+    await expect(pom.permissionRow('tournament.view')).toContainText('See tournaments.')
+    await expect(pom.permissionRow('tournament.view')).not.toContainText('Updated description text')
   })
 
   test('deletes a permission after confirming and removes it from the list', async ({ page }) => {

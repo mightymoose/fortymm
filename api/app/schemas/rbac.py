@@ -3,6 +3,12 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
+# Permission names follow a `resource.action` convention (e.g. `tournament.publish`).
+# Allowed chars per segment: lowercase letters, digits, underscores. At least
+# one dot is required so the UI's prefix grouping doesn't bucket everything as
+# `other.*`.
+PERMISSION_NAME_PATTERN = r"^[a-z0-9_]+(?:\.[a-z0-9_]+)+$"
+
 
 class PermissionBase(BaseModel):
     name: str = Field(min_length=1, max_length=255)
@@ -10,11 +16,20 @@ class PermissionBase(BaseModel):
 
 
 class PermissionCreate(PermissionBase):
-    pass
+    # Pattern is enforced on write only — historical rows that predate this
+    # constraint must still serialize cleanly through PermissionRead.
+    name: str = Field(
+        min_length=1, max_length=255, pattern=PERMISSION_NAME_PATTERN
+    )
 
 
 class PermissionUpdate(BaseModel):
-    name: str | None = Field(default=None, min_length=1, max_length=255)
+    name: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=255,
+        pattern=PERMISSION_NAME_PATTERN,
+    )
     description: str | None = Field(default=None, max_length=1024)
 
 

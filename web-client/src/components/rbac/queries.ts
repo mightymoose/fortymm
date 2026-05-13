@@ -48,13 +48,16 @@ export function useRbacUsers() {
   })
 }
 
+// The permission form awaits these via mutateAsync so it can surface 4xx
+// errors inline on the matching field — that's why neither hook attaches a
+// global onError toast. If a non-form caller is added later, it must handle
+// errors itself or wrap with notifyError at the call site.
 export function useCreatePermission() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: async (input: { name: string; description?: string | null }) =>
       unwrap('create permission', await api.POST('/v1/permissions', { body: input })),
     onSuccess: () => qc.invalidateQueries({ queryKey: PERMISSIONS_KEY }),
-    onError: notifyError('create the permission'),
   })
 }
 
@@ -76,7 +79,6 @@ export function useUpdatePermission() {
     // payloads — no ROLES_KEY invalidation needed (role detail re-renders from
     // the fresh permissions cache).
     onSuccess: () => qc.invalidateQueries({ queryKey: PERMISSIONS_KEY }),
-    onError: notifyError('update the permission'),
   })
 }
 
