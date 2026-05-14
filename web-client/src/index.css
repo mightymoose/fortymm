@@ -316,6 +316,7 @@ code {
   --border-subtle: var(--ink-600);
   --border-default: var(--ink-500);
 
+  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.55);
   --shadow-glow: 0 0 0 1px rgba(255, 122, 26, 0.35),
     0 8px 24px rgba(255, 122, 26, 0.25);
   --shadow-live-glow: 0 0 0 1px rgba(0, 226, 154, 0.4),
@@ -404,6 +405,43 @@ body.dark.fortymm-theme {
   font-weight: inherit;
   letter-spacing: inherit;
   line-height: inherit;
+}
+
+/* Sonner toasts (ui/sonner.tsx) — match the FortyMM kit's `.sonner`: a dark
+   card with a 3px type-colored left accent, not Sonner's rich-color fills.
+   `.cn-toast` is the class wired up via the Toaster's toastOptions. Selectors
+   carry `[data-sonner-toast]` + `[data-styled]`/`[data-type]` so they out-
+   specify Sonner's own runtime-injected stylesheet (same specificity would
+   lose the tie, since Sonner's <style> is appended later). */
+[data-sonner-toast].cn-toast[data-styled='true'] {
+  padding: 14px 16px;
+  box-shadow: var(--shadow-lg);
+}
+[data-sonner-toast].cn-toast[data-type='success'] {
+  border-left: 3px solid var(--serve-500);
+}
+[data-sonner-toast].cn-toast[data-type='error'] {
+  border-left: 3px solid var(--loss);
+}
+[data-sonner-toast].cn-toast[data-type='info'] {
+  border-left: 3px solid var(--info);
+}
+/* The icon and close-button rules below need one more attribute over the
+   rules above: Sonner styles those parts with `[data-sonner-toast]
+   [data-styled='true'] [data-part]` (0,3,0), which would tie — so match
+   `[data-styled='true']` too and land at (0,4,0). */
+
+/* The kit's toast has no leading status icon — drop Sonner's. */
+[data-sonner-toast][data-styled='true'].cn-toast [data-icon] {
+  display: none;
+}
+/* Pull the close button inside the toast at the top-right corner (Sonner
+   defaults it to the top-left, translated outside the card). */
+[data-sonner-toast][data-styled='true'].cn-toast [data-close-button] {
+  left: auto;
+  right: 8px;
+  top: 8px;
+  transform: none;
 }
 
 .fortymm-theme .ball-dot {

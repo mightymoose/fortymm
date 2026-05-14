@@ -5,15 +5,20 @@ import {
     OverlayShowcasePage,
     SheetShowcasePage,
 } from "./design-system-page/overlay-showcase.page";
+import { FeedbackShowcasePage } from "./design-system-page/feedback-showcase.page";
 
 export class DesignSystemPage {
     public readonly buttonShowcase: ButtonShowcasePage;
     public readonly inputShowcase: InputShowcasePage;
     public readonly overlayShowcase: OverlayShowcasePage;
     public readonly sheetShowcase: SheetShowcasePage;
+    public readonly feedbackShowcase: FeedbackShowcasePage;
 
     static async navigateTo(page: Page): Promise<DesignSystemPage> {
-        await page.goto('/design-system');
+        // Set DESIGN_SYSTEM_KIT to a file:// URL of "FortyMM shadcn kit.html"
+        // to point the showcase screenshots at the design kit instead of the
+        // app — used to (re)capture baseline snapshots from the design sheet.
+        await page.goto(process.env.DESIGN_SYSTEM_KIT ?? '/design-system');
         return new DesignSystemPage(page);
     }
 
@@ -36,5 +41,7 @@ export class DesignSystemPage {
 
         const sheetShowcaseContainer = page.getByRole('region', { name: 'Sheet' });
         this.sheetShowcase = new SheetShowcasePage(page, sheetShowcaseContainer);
+
+        this.feedbackShowcase = new FeedbackShowcasePage(page);
     }
 }
