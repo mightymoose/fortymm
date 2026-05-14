@@ -1,8 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { createFileRoute } from '@tanstack/react-router'
+import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { ArrowRight, Search } from 'lucide-react'
+import { z } from 'zod'
 
 import { AppShell } from '@/components/app-shell'
+import { ApiError } from '@/api/client'
+import { useSession } from '@/api/session'
+import { useCreateMatch, usePlayers, type Player } from '@/api/matches'
 import { cn } from '@/lib/utils'
 import './new.css'
 
@@ -11,71 +15,62 @@ export const Route = createFileRoute('/matches/new')({
 })
 
 /* ------------------------------------------------------------------ */
-/*  Mock data — no backend wired up yet, this is UI only.             */
+/*  Opponent model                                                    */
 /* ------------------------------------------------------------------ */
 
-type PlayerKind = 'registered' | 'guest' | 'tbd'
+type OpponentKind = 'registered' | 'guest' | 'tbd'
 
-interface Player {
+interface Opponent {
+  /** A real user id for `registered`; a sentinel string for guest / tbd. */
   id: string
-  kind: PlayerKind
+  kind: OpponentKind
   name: string
-  initials: string
-  rating: number | null
-  club: string
-  lastPlayed: string
-  recent: boolean
 }
 
-const ME = { id: 'me', name: 'You', initials: 'YZ', rating: 1742 }
+const GUEST: Opponent = { id: 'guest', kind: 'guest', name: 'Guest player' }
+const OPPONENT_TBD: Opponent = { id: 'tbd', kind: 'tbd', name: 'Opponent TBD' }
 
-const PLAYERS: Player[] = [
-  { id: 'p1', kind: 'registered', name: 'Nguyen, T.', initials: 'NT', rating: 2145, club: 'Hanoi TT', lastPlayed: '3 days ago', recent: true },
-  { id: 'p2', kind: 'registered', name: 'Okafor, D.', initials: 'OD', rating: 1988, club: 'Lagos Club', lastPlayed: '1 week ago', recent: true },
-  { id: 'p3', kind: 'registered', name: 'Silva, R.', initials: 'SR', rating: 1820, club: 'São Paulo', lastPlayed: 'Yesterday', recent: true },
-  { id: 'p4', kind: 'registered', name: 'Patel, M.', initials: 'PM', rating: 1756, club: 'Hanoi TT', lastPlayed: '2 weeks ago', recent: true },
-  { id: 'p5', kind: 'registered', name: 'Johansen, A.', initials: 'JA', rating: 1912, club: 'Oslo Bat', lastPlayed: '—', recent: false },
-  { id: 'p6', kind: 'registered', name: 'Chen, W.', initials: 'CW', rating: 1680, club: 'Hanoi TT', lastPlayed: '—', recent: false },
-  { id: 'p7', kind: 'registered', name: 'Park, J.', initials: 'PJ', rating: 2041, club: 'Seoul Open', lastPlayed: '—', recent: false },
-  { id: 'p8', kind: 'registered', name: 'Tran, L.', initials: 'TL', rating: 1604, club: 'Hanoi TT', lastPlayed: '—', recent: false },
-  { id: 'p9', kind: 'registered', name: 'Rossi, G.', initials: 'RG', rating: 1845, club: 'Roma TT', lastPlayed: '—', recent: false },
-  { id: 'p10', kind: 'registered', name: 'Dubois, C.', initials: 'DC', rating: 1720, club: 'Paris Smash', lastPlayed: '—', recent: false },
-]
-
-const RECENT_PLAYERS = PLAYERS.filter((p) => p.recent)
-
-const GUEST: Player = {
-  id: 'guest',
-  kind: 'guest',
-  name: 'Guest player',
-  initials: '?',
-  rating: null,
-  club: '',
-  lastPlayed: '',
-  recent: false,
+function registeredOpponent(player: Player): Opponent {
+  return { id: player.id, kind: 'registered', name: player.username }
 }
 
-const OPPONENT_TBD: Player = {
-  id: 'tbd',
-  kind: 'tbd',
-  name: 'Opponent TBD',
-  initials: '?',
-  rating: null,
-  club: '',
-  lastPlayed: '',
-  recent: false,
+/** Two-letter monogram for an avatar bubble. */
+function initialsOf(name: string): string {
+  const parts = name.split(/[^a-zA-Z0-9]+/).filter(Boolean)
+  const letters =
+    parts.length >= 2
+      ? parts[0][0] + parts[1][0]
+      : name.replace(/[^a-zA-Z0-9]/g, '').slice(0, 2)
+  return letters.toUpperCase() || '?'
 }
 
 /** Whether a match against this opponent can count toward ratings. */
-function canRate(opponent: Player | null) {
+function canRate(opponent: Opponent | null) {
   return !opponent || opponent.kind === 'registered'
 }
 
-/** Feel-good Elo-ish swing preview — not a real rating calculation. */
-function estimateDelta(myRating: number, oppRating: number) {
-  const mod = Math.max(-8, Math.min(8, Math.round((oppRating - myRating) / 60)))
-  return 16 + mod
-}
+/* ------------------------------------------------------------------ */
+/*  Validation                                                        */
+/* ------------------------------------------------------------------ */
+
+// The backend independently enforces these rules; the client copy gives
+// immediate, inline feedback before a round-trip. The two refinements are
+// ordered so the rated-specific message wins when both would apply.
+const matchFormSchema = z
+  .object({
+    opponentKind: z.enum(['registered', 'guest', 'tbd']).nullable(),
+    rated: z.boolean(),
+    bestOf: z.number(),
+  })
+  .refine((value) => !(value.rated && value.opponentKind === null), {
+    message:
+      'A rated match needs an opponent — pick one, or switch off Rated to play without one.',
+    path: ['opponent'],
+  })
+  .refine((value) => value.opponentKind !== null, {
+    message: "Choose an opponent, or pick 'Start without opponent'.",
+    path: ['opponent'],
+  })
 
 /* ------------------------------------------------------------------ */
 /*  Page                                                              */
@@ -101,25 +96,56 @@ function NewMatchPage() {
 /* ------------------------------------------------------------------ */
 
 function MatchCard() {
-  const [opponent, setOpponent] = useState<Player | null>(null)
+  const navigate = useNavigate()
+  const { data: session } = useSession()
+  const { data: players = [], isLoading: playersLoading } = usePlayers()
+  const createMatch = useCreateMatch()
+
+  const [opponent, setOpponent] = useState<Opponent | null>(null)
   const [bestOf, setBestOf] = useState(5)
   const [rated, setRated] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  const me = session?.data.user ?? null
+
+  async function handleSubmit() {
+    const parsed = matchFormSchema.safeParse({
+      opponentKind: opponent?.kind ?? null,
+      rated,
+      bestOf,
+    })
+    if (!parsed.success) {
+      setError(parsed.error.issues[0]?.message ?? 'Check the match setup.')
+      return
+    }
+    setError(null)
+
+    // Guest / "start without opponent" matches have a single side, so they
+    // can never be rated regardless of the toggle.
+    const isRegistered = opponent?.kind === 'registered'
+    try {
+      await createMatch.mutateAsync({
+        opponent_user_id: isRegistered ? opponent.id : null,
+        best_of: bestOf,
+        rated: isRegistered && rated,
+      })
+      navigate({ to: '/dashboard' })
+    } catch (err) {
+      setError(
+        err instanceof ApiError
+          ? (err.detail ?? err.message)
+          : 'Could not start the match. Try again.',
+      )
+    }
+  }
 
   return (
     <div className="nm-card">
       <div className="nm-you-strip">
-        <div className="av">{ME.initials}</div>
+        <div className="av">{me ? initialsOf(me.username) : '··'}</div>
         <div className="block">
           <span className="lbl">You</span>
-          <span className="name">{ME.name}</span>
-        </div>
-        <div className="stats">
-          <span>
-            Rating <b>{ME.rating}</b>
-          </span>
-          <span className="streak">
-            Streak <b>W4</b>
-          </span>
+          <span className="name">{me?.username ?? 'Loading…'}</span>
         </div>
       </div>
 
@@ -141,7 +167,11 @@ function MatchCard() {
             onChange={() => setOpponent(null)}
           />
         ) : (
-          <RecentPicker onPick={setOpponent} />
+          <RecentPicker
+            players={players}
+            loading={playersLoading}
+            onPick={(player) => setOpponent(registeredOpponent(player))}
+          />
         )}
 
         {!opponent && (
@@ -162,7 +192,15 @@ function MatchCard() {
         <RatedField rated={rated} setRated={setRated} opponent={opponent} />
       </div>
 
-      <SubmitRow opponent={opponent} bestOf={bestOf} rated={rated} />
+      <SubmitRow
+        opponent={opponent}
+        bestOf={bestOf}
+        rated={rated}
+        error={error}
+        submitting={createMatch.isPending}
+        onSubmit={handleSubmit}
+        onCancel={() => navigate({ to: '/dashboard' })}
+      />
     </div>
   )
 }
@@ -175,24 +213,22 @@ function SelectedOpponent({
   opponent,
   onChange,
 }: {
-  opponent: Player
+  opponent: Opponent
   onChange: () => void
 }) {
   const guest = opponent.kind !== 'registered'
+  const tag =
+    opponent.kind === 'registered'
+      ? 'REGISTERED PLAYER'
+      : opponent.kind === 'guest'
+        ? 'UNRATED GUEST'
+        : 'TO BE DECIDED'
   return (
     <div className={cn('nm-selected', guest && 'guest')}>
-      <div className="av">{opponent.initials}</div>
+      <div className="av">{initialsOf(opponent.name)}</div>
       <div className="info">
         <div className="name">{opponent.name}</div>
-        <div className="rating">
-          {guest ? (
-            'UNRATED GUEST'
-          ) : (
-            <>
-              RATING · <b>{opponent.rating}</b> · {opponent.club}
-            </>
-          )}
-        </div>
+        <div className="rating">{tag}</div>
       </div>
       <button type="button" className="change" onClick={onChange}>
         Change
@@ -202,44 +238,62 @@ function SelectedOpponent({
 }
 
 /* ------------------------------------------------------------------ */
-/*  Opponent — recent grid (default)                                  */
+/*  Opponent — player grid (default)                                  */
 /* ------------------------------------------------------------------ */
 
-function RecentPicker({ onPick }: { onPick: (player: Player) => void }) {
+function RecentPicker({
+  players,
+  loading,
+  onPick,
+}: {
+  players: Player[]
+  loading: boolean
+  onPick: (player: Player) => void
+}) {
   const [showSearch, setShowSearch] = useState(false)
 
-  if (showSearch) return <TypeaheadPicker onPick={onPick} />
+  if (showSearch) return <TypeaheadPicker players={players} onPick={onPick} />
+
+  const featured = players.slice(0, 6)
 
   return (
     <div>
       <div className="nm-recent-label">
-        <span>Recent</span>
-        <button
-          type="button"
-          className="search-btn"
-          onClick={() => setShowSearch(true)}
-        >
-          Search all players
-        </button>
-      </div>
-      <div className="nm-recent-grid">
-        {RECENT_PLAYERS.map((p) => (
+        <span>Players</span>
+        {players.length > featured.length && (
           <button
             type="button"
-            key={p.id}
-            className="nm-chip"
-            onClick={() => onPick(p)}
+            className="search-btn"
+            onClick={() => setShowSearch(true)}
           >
-            <div className="av">{p.initials}</div>
-            <div className="body">
-              <div className="n">{p.name}</div>
-              <div className="m">
-                {p.rating} · {p.lastPlayed.toUpperCase()}
-              </div>
-            </div>
+            Search all players
           </button>
-        ))}
+        )}
       </div>
+      {loading ? (
+        <div className="nm-no-match">Loading players…</div>
+      ) : players.length === 0 ? (
+        <div className="nm-no-match">
+          No other players yet. Add a guest, or start without an opponent.
+        </div>
+      ) : (
+        <div className="nm-recent-grid">
+          {featured.map((p) => (
+            <button
+              type="button"
+              key={p.id}
+              className="nm-chip"
+              onClick={() => onPick(p)}
+            >
+              <div className="av">{initialsOf(p.username)}</div>
+              <div className="body">
+                <div className="n">{p.username}</div>
+                <div className="m">REGISTERED PLAYER</div>
+              </div>
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
@@ -248,22 +302,23 @@ function RecentPicker({ onPick }: { onPick: (player: Player) => void }) {
 /*  Opponent — typeahead search                                       */
 /* ------------------------------------------------------------------ */
 
-function TypeaheadPicker({ onPick }: { onPick: (player: Player) => void }) {
+function TypeaheadPicker({
+  players,
+  onPick,
+}: {
+  players: Player[]
+  onPick: (player: Player) => void
+}) {
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
   const [activeIdx, setActiveIdx] = useState(0)
   const wrapRef = useRef<HTMLDivElement>(null)
 
   const filtered = useMemo(() => {
-    if (!query.trim()) return RECENT_PLAYERS
-    const s = query.toLowerCase()
-    return PLAYERS.filter(
-      (p) =>
-        p.name.toLowerCase().includes(s) || p.club.toLowerCase().includes(s),
-    )
-  }, [query])
-
-  const results = useMemo(() => [...filtered, GUEST], [filtered])
+    const term = query.trim().toLowerCase()
+    if (!term) return players.slice(0, 8)
+    return players.filter((p) => p.username.toLowerCase().includes(term))
+  }, [players, query])
 
   useEffect(() => {
     function onClickOutside(e: MouseEvent) {
@@ -284,21 +339,20 @@ function TypeaheadPicker({ onPick }: { onPick: (player: Player) => void }) {
     if (!open) return
     if (e.key === 'ArrowDown') {
       e.preventDefault()
-      setActiveIdx((i) => Math.min(results.length - 1, i + 1))
+      setActiveIdx((i) => Math.min(filtered.length - 1, i + 1))
     } else if (e.key === 'ArrowUp') {
       e.preventDefault()
       setActiveIdx((i) => Math.max(0, i - 1))
     } else if (e.key === 'Enter') {
       e.preventDefault()
-      const picked = results[activeIdx]
+      const picked = filtered[activeIdx]
       if (picked) onPick(picked)
     } else if (e.key === 'Escape') {
       setOpen(false)
     }
   }
 
-  const showRecentHeader = !query.trim()
-  const guestIdx = results.length - 1
+  const showHeader = !query.trim()
 
   return (
     <div className="nm-search" ref={wrapRef}>
@@ -306,7 +360,7 @@ function TypeaheadPicker({ onPick }: { onPick: (player: Player) => void }) {
         <Search className="search-icon" size={20} strokeWidth={1.75} />
         <input
           className="nm-input"
-          placeholder="Search by name or club"
+          placeholder="Search by username"
           value={query}
           onChange={(e) => {
             changeQuery(e.target.value)
@@ -328,14 +382,16 @@ function TypeaheadPicker({ onPick }: { onPick: (player: Player) => void }) {
       </div>
       {open && (
         <div className="nm-dropdown">
-          {showRecentHeader && (
+          {showHeader && (
             <div className="nm-opt-section">
-              Recent opponents <span className="line" />
+              Players <span className="line" />
             </div>
           )}
-          {filtered.length === 0 && query && (
+          {filtered.length === 0 && (
             <div className="nm-no-match">
-              No one matches &ldquo;{query}&rdquo;. Try a different name.
+              {query
+                ? `No one matches “${query}”. Try a different name.`
+                : 'No other players yet.'}
             </div>
           )}
           {filtered.map((p, i) => (
@@ -346,34 +402,13 @@ function TypeaheadPicker({ onPick }: { onPick: (player: Player) => void }) {
               onMouseEnter={() => setActiveIdx(i)}
               onClick={() => onPick(p)}
             >
-              <div className="av">{p.initials}</div>
+              <div className="av">{initialsOf(p.username)}</div>
               <div className="body">
-                <div className="n">{p.name}</div>
-                <div className="m">
-                  {p.club} · LAST PLAYED {p.lastPlayed.toUpperCase()}
-                </div>
+                <div className="n">{p.username}</div>
+                <div className="m">REGISTERED PLAYER</div>
               </div>
-              <div className="r">{p.rating}</div>
             </button>
           ))}
-          <div className="nm-opt-section">
-            Or <span className="line" />
-          </div>
-          <button
-            type="button"
-            className={cn('nm-item', 'guest', activeIdx === guestIdx && 'active')}
-            onMouseEnter={() => setActiveIdx(guestIdx)}
-            onClick={() => onPick(GUEST)}
-          >
-            <div className="av">?</div>
-            <div className="body">
-              <div className="n">Log as guest</div>
-              <div className="m">NO FORTYMM ACCOUNT · UNRATED</div>
-            </div>
-            <div className="r" style={{ color: 'var(--fg-muted)' }}>
-              —
-            </div>
-          </button>
         </div>
       )}
     </div>
@@ -436,24 +471,16 @@ function RatedField({
 }: {
   rated: boolean
   setRated: (rated: boolean) => void
-  opponent: Player | null
+  opponent: Opponent | null
 }) {
   const ratable = canRate(opponent)
   const effectiveRated = rated && ratable
-  // A registered opponent's rating; null for guest / TBD / no opponent.
-  const opponentRating =
-    opponent && opponent.kind === 'registered' ? opponent.rating : null
-  const delta =
-    opponentRating != null ? estimateDelta(ME.rating, opponentRating) : null
 
   let description: string
   if (effectiveRated) {
-    description =
-      opponentRating != null
-        ? `Result will update both ratings. Based on a ${Math.abs(
-            opponentRating - ME.rating,
-          )}-point gap.`
-        : 'Pick a rated opponent to see the swing.'
+    description = opponent
+      ? 'Result will update both ratings.'
+      : 'Pick a registered opponent for this to count.'
   } else if (ratable) {
     description = opponent
       ? 'No rating change. Still logged to history.'
@@ -481,9 +508,6 @@ function RatedField({
         <div className="nm-rated-info">
           <div className="t">
             {effectiveRated ? 'Counts toward rating' : 'Just for fun'}
-            {effectiveRated && delta != null && (
-              <span className="delta">±{delta}</span>
-            )}
           </div>
           <div className="d">{description}</div>
         </div>
@@ -500,12 +524,20 @@ function SubmitRow({
   opponent,
   bestOf,
   rated,
+  error,
+  submitting,
+  onSubmit,
+  onCancel,
 }: {
-  opponent: Player | null
+  opponent: Opponent | null
   bestOf: number
   rated: boolean
+  error: string | null
+  submitting: boolean
+  onSubmit: () => void
+  onCancel: () => void
 }) {
-  const effectivelyRated = rated && canRate(opponent)
+  const effectivelyRated = rated && opponent?.kind === 'registered'
   const gamesToWin = Math.ceil(bestOf / 2)
   const lengthCopy =
     bestOf === 1 ? 'Single game' : `Best of ${bestOf} · first to ${gamesToWin}`
@@ -514,9 +546,13 @@ function SubmitRow({
     <div className="nm-summary">
       <div className="read">
         <div className="top">
-          {opponent && opponent.kind !== 'tbd' ? (
+          {opponent?.kind === 'registered' ? (
             <>
               Ready: <b>You</b> vs <b>{opponent.name}</b>
+            </>
+          ) : opponent ? (
+            <>
+              You vs <span className="opp-tbd">{opponent.name}</span>
             </>
           ) : (
             <>
@@ -535,15 +571,29 @@ function SubmitRow({
           <span className="dot">·</span>
           games to 11, win by 2
         </div>
+        {error && (
+          <p className="nm-error" role="alert">
+            {error}
+          </p>
+        )}
       </div>
       <div className="actions">
-        {/* No backend yet — these actions are intentionally inert. */}
-        <button type="button" className="nm-btn nm-btn-ghost">
+        <button
+          type="button"
+          className="nm-btn nm-btn-ghost"
+          onClick={onCancel}
+          disabled={submitting}
+        >
           Cancel
         </button>
-        <button type="button" className="nm-btn nm-btn-primary">
-          Start match
-          <ArrowRight size={16} strokeWidth={2.5} />
+        <button
+          type="button"
+          className="nm-btn nm-btn-primary"
+          onClick={onSubmit}
+          disabled={submitting}
+        >
+          {submitting ? 'Starting…' : 'Start match'}
+          {!submitting && <ArrowRight size={16} strokeWidth={2.5} />}
         </button>
       </div>
     </div>

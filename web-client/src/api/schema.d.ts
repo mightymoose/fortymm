@@ -148,6 +148,61 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/matches": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Match */
+        post: operations["create_match_v1_matches_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/matches/{match_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Match */
+        get: operations["get_match_v1_matches__match_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/players": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Players
+         * @description List registered users the caller can pick as an opponent (everyone but
+         *     themselves).
+         */
+        get: operations["list_players_v1_players_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/health": {
         parameters: {
             query?: never;
@@ -189,6 +244,86 @@ export interface components {
             database: components["schemas"]["ComponentHealth"];
             solver: components["schemas"]["ComponentHealth"];
         };
+        /**
+         * MatchCreate
+         * @description Request body for ``POST /v1/matches``.
+         *
+         *     ``opponent_user_id`` is optional: a match created without a registered
+         *     opponent (a guest, or "start without opponent") gets a single side and is
+         *     always unrated, since the rating system needs two registered sides.
+         */
+        MatchCreate: {
+            /** Opponent User Id */
+            opponent_user_id?: string | null;
+            /**
+             * Best Of
+             * @description Total games to play; one of 1, 3, 5, 7.
+             */
+            best_of: number;
+            /**
+             * Rated
+             * @default true
+             */
+            rated: boolean;
+        };
+        /** MatchRead */
+        MatchRead: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            status: components["schemas"]["MatchStatus"];
+            /**
+             * Created By User Id
+             * Format: uuid
+             */
+            created_by_user_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            settings: components["schemas"]["MatchSettingsRead"];
+            /** Sides */
+            sides: components["schemas"]["MatchSideRead"][];
+        };
+        /** MatchSettingsRead */
+        MatchSettingsRead: {
+            /** Team Size */
+            team_size: number;
+            /** Best Of */
+            best_of: number;
+            /** Affects Rating */
+            affects_rating: boolean;
+            verification_policy: components["schemas"]["VerificationPolicy"];
+        };
+        /** MatchSidePlayerRead */
+        MatchSidePlayerRead: {
+            /**
+             * User Id
+             * Format: uuid
+             */
+            user_id: string;
+            /** Username */
+            username: string;
+        };
+        /** MatchSideRead */
+        MatchSideRead: {
+            /** Side Number */
+            side_number: number;
+            /** Score */
+            score: number;
+            /** Won */
+            won: boolean | null;
+            /** Players */
+            players: components["schemas"]["MatchSidePlayerRead"][];
+        };
+        /**
+         * MatchStatus
+         * @enum {string}
+         */
+        MatchStatus: "pending" | "in_progress" | "completed" | "disputed" | "voided";
         /** PermissionCreate */
         PermissionCreate: {
             /** Name */
@@ -224,6 +359,19 @@ export interface components {
             name?: string | null;
             /** Description */
             description?: string | null;
+        };
+        /**
+         * PlayerRead
+         * @description A user the current player can pick as a match opponent.
+         */
+        PlayerRead: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Username */
+            username: string;
         };
         /** RbacUserCreate */
         RbacUserCreate: {
@@ -324,6 +472,11 @@ export interface components {
             /** Context */
             ctx?: Record<string, never>;
         };
+        /**
+         * VerificationPolicy
+         * @enum {string}
+         */
+        VerificationPolicy: "none" | "self_report" | "opponent_confirms" | "all_players_confirm";
     };
     responses: never;
     parameters: never;
@@ -795,6 +948,103 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RbacUserRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_match_v1_matches_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MatchCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MatchRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_match_v1_matches__match_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                match_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MatchRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_players_v1_players_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlayerRead"][];
                 };
             };
             /** @description Validation Error */

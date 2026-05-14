@@ -5,7 +5,7 @@ from datetime import timedelta
 from typing import Annotated
 
 from coolname import generate_slug
-from fastapi import APIRouter, Cookie, Depends, Response
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Response, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -109,3 +109,26 @@ async def get_session_endpoint(
             user=SessionUser(username=user.username, permissions=permissions)
         )
     )
+
+
+async def get_current_user(
+    session_cookie: Annotated[
+        str | None, Cookie(alias=SESSION_COOKIE_NAME)
+    ] = None,
+    db: AsyncSession = Depends(get_session),
+) -> User:
+    """Resolve the authenticated user from the session cookie.
+
+    Unlike ``GET /v1/session``, this dependency never mints a new session —
+    endpoints that create or mutate data require an already-established
+    session and respond ``401`` otherwise.
+    """
+    user = (
+        await _find_session_user(db, session_cookie) if session_cookie else None
+    )
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="authentication required",
+        )
+    return user
