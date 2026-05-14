@@ -3,6 +3,7 @@ import { createFileRoute } from '@tanstack/react-router'
 import { ArrowRight, Search } from 'lucide-react'
 
 import { AppShell } from '@/components/app-shell'
+import { cn } from '@/lib/utils'
 import './new.css'
 
 export const Route = createFileRoute('/matches/new')({
@@ -13,52 +14,61 @@ export const Route = createFileRoute('/matches/new')({
 /*  Mock data — no backend wired up yet, this is UI only.             */
 /* ------------------------------------------------------------------ */
 
+type PlayerKind = 'registered' | 'guest' | 'tbd'
+
 interface Player {
   id: string
+  kind: PlayerKind
   name: string
   initials: string
   rating: number | null
   club: string
   lastPlayed: string
   recent: boolean
-  isGuest?: boolean
 }
 
 const ME = { id: 'me', name: 'You', initials: 'YZ', rating: 1742 }
 
 const PLAYERS: Player[] = [
-  { id: 'p1', name: 'Nguyen, T.', initials: 'NT', rating: 2145, club: 'Hanoi TT', lastPlayed: '3 days ago', recent: true },
-  { id: 'p2', name: 'Okafor, D.', initials: 'OD', rating: 1988, club: 'Lagos Club', lastPlayed: '1 week ago', recent: true },
-  { id: 'p3', name: 'Silva, R.', initials: 'SR', rating: 1820, club: 'São Paulo', lastPlayed: 'Yesterday', recent: true },
-  { id: 'p4', name: 'Patel, M.', initials: 'PM', rating: 1756, club: 'Hanoi TT', lastPlayed: '2 weeks ago', recent: true },
-  { id: 'p5', name: 'Johansen, A.', initials: 'JA', rating: 1912, club: 'Oslo Bat', lastPlayed: '—', recent: false },
-  { id: 'p6', name: 'Chen, W.', initials: 'CW', rating: 1680, club: 'Hanoi TT', lastPlayed: '—', recent: false },
-  { id: 'p7', name: 'Park, J.', initials: 'PJ', rating: 2041, club: 'Seoul Open', lastPlayed: '—', recent: false },
-  { id: 'p8', name: 'Tran, L.', initials: 'TL', rating: 1604, club: 'Hanoi TT', lastPlayed: '—', recent: false },
-  { id: 'p9', name: 'Rossi, G.', initials: 'RG', rating: 1845, club: 'Roma TT', lastPlayed: '—', recent: false },
-  { id: 'p10', name: 'Dubois, C.', initials: 'DC', rating: 1720, club: 'Paris Smash', lastPlayed: '—', recent: false },
+  { id: 'p1', kind: 'registered', name: 'Nguyen, T.', initials: 'NT', rating: 2145, club: 'Hanoi TT', lastPlayed: '3 days ago', recent: true },
+  { id: 'p2', kind: 'registered', name: 'Okafor, D.', initials: 'OD', rating: 1988, club: 'Lagos Club', lastPlayed: '1 week ago', recent: true },
+  { id: 'p3', kind: 'registered', name: 'Silva, R.', initials: 'SR', rating: 1820, club: 'São Paulo', lastPlayed: 'Yesterday', recent: true },
+  { id: 'p4', kind: 'registered', name: 'Patel, M.', initials: 'PM', rating: 1756, club: 'Hanoi TT', lastPlayed: '2 weeks ago', recent: true },
+  { id: 'p5', kind: 'registered', name: 'Johansen, A.', initials: 'JA', rating: 1912, club: 'Oslo Bat', lastPlayed: '—', recent: false },
+  { id: 'p6', kind: 'registered', name: 'Chen, W.', initials: 'CW', rating: 1680, club: 'Hanoi TT', lastPlayed: '—', recent: false },
+  { id: 'p7', kind: 'registered', name: 'Park, J.', initials: 'PJ', rating: 2041, club: 'Seoul Open', lastPlayed: '—', recent: false },
+  { id: 'p8', kind: 'registered', name: 'Tran, L.', initials: 'TL', rating: 1604, club: 'Hanoi TT', lastPlayed: '—', recent: false },
+  { id: 'p9', kind: 'registered', name: 'Rossi, G.', initials: 'RG', rating: 1845, club: 'Roma TT', lastPlayed: '—', recent: false },
+  { id: 'p10', kind: 'registered', name: 'Dubois, C.', initials: 'DC', rating: 1720, club: 'Paris Smash', lastPlayed: '—', recent: false },
 ]
+
+const RECENT_PLAYERS = PLAYERS.filter((p) => p.recent)
 
 const GUEST: Player = {
   id: 'guest',
+  kind: 'guest',
   name: 'Guest player',
   initials: '?',
   rating: null,
   club: '',
   lastPlayed: '',
   recent: false,
-  isGuest: true,
 }
 
 const OPPONENT_TBD: Player = {
   id: 'tbd',
+  kind: 'tbd',
   name: 'Opponent TBD',
   initials: '?',
   rating: null,
   club: '',
   lastPlayed: '',
   recent: false,
-  isGuest: true,
+}
+
+/** Whether a match against this opponent can count toward ratings. */
+function canRate(opponent: Player | null) {
+  return !opponent || opponent.kind === 'registered'
 }
 
 /** Feel-good Elo-ish swing preview — not a real rating calculation. */
@@ -72,10 +82,6 @@ function estimateDelta(myRating: number, oppRating: number) {
 /* ------------------------------------------------------------------ */
 
 function NewMatchPage() {
-  const [opponent, setOpponent] = useState<Player | null>(null)
-  const [bestOf, setBestOf] = useState(5)
-  const [rated, setRated] = useState(true)
-
   return (
     <AppShell>
       <div className="nm-page">
@@ -84,14 +90,7 @@ function NewMatchPage() {
             New match<span className="dot">.</span>
           </h1>
         </div>
-        <MatchCard
-          opponent={opponent}
-          setOpponent={setOpponent}
-          bestOf={bestOf}
-          setBestOf={setBestOf}
-          rated={rated}
-          setRated={setRated}
-        />
+        <MatchCard />
       </div>
     </AppShell>
   )
@@ -101,26 +100,13 @@ function NewMatchPage() {
 /*  Match setup card                                                  */
 /* ------------------------------------------------------------------ */
 
-interface MatchCardProps {
-  opponent: Player | null
-  setOpponent: (player: Player | null) => void
-  bestOf: number
-  setBestOf: (n: number) => void
-  rated: boolean
-  setRated: (rated: boolean) => void
-}
+function MatchCard() {
+  const [opponent, setOpponent] = useState<Player | null>(null)
+  const [bestOf, setBestOf] = useState(5)
+  const [rated, setRated] = useState(true)
 
-function MatchCard({
-  opponent,
-  setOpponent,
-  bestOf,
-  setBestOf,
-  rated,
-  setRated,
-}: MatchCardProps) {
   return (
     <div className="nm-card">
-      {/* Compact "You" strip */}
       <div className="nm-you-strip">
         <div className="av">{ME.initials}</div>
         <div className="block">
@@ -137,13 +123,14 @@ function MatchCard({
         </div>
       </div>
 
-      {/* Primary: opponent */}
       <div className="nm-opp-block">
         <div className="nm-section-head">
           <span className="title">Opponent</span>
           {opponent && (
             <span className="hint">
-              {opponent.isGuest ? 'Guest · unrated' : 'Rated player'}
+              {opponent.kind === 'registered'
+                ? 'Rated player'
+                : 'Guest · unrated'}
             </span>
           )}
         </div>
@@ -191,9 +178,9 @@ function SelectedOpponent({
   opponent: Player
   onChange: () => void
 }) {
-  const guest = !!opponent.isGuest
+  const guest = opponent.kind !== 'registered'
   return (
-    <div className={`nm-selected${guest ? ' guest' : ''}`}>
+    <div className={cn('nm-selected', guest && 'guest')}>
       <div className="av">{opponent.initials}</div>
       <div className="info">
         <div className="name">{opponent.name}</div>
@@ -220,7 +207,6 @@ function SelectedOpponent({
 
 function RecentPicker({ onPick }: { onPick: (player: Player) => void }) {
   const [showSearch, setShowSearch] = useState(false)
-  const recents = PLAYERS.filter((p) => p.recent)
 
   if (showSearch) return <TypeaheadPicker onPick={onPick} />
 
@@ -237,7 +223,7 @@ function RecentPicker({ onPick }: { onPick: (player: Player) => void }) {
         </button>
       </div>
       <div className="nm-recent-grid">
-        {recents.map((p) => (
+        {RECENT_PLAYERS.map((p) => (
           <button
             type="button"
             key={p.id}
@@ -269,7 +255,7 @@ function TypeaheadPicker({ onPick }: { onPick: (player: Player) => void }) {
   const wrapRef = useRef<HTMLDivElement>(null)
 
   const filtered = useMemo(() => {
-    if (!query.trim()) return PLAYERS.filter((p) => p.recent)
+    if (!query.trim()) return RECENT_PLAYERS
     const s = query.toLowerCase()
     return PLAYERS.filter(
       (p) =>
@@ -356,7 +342,7 @@ function TypeaheadPicker({ onPick }: { onPick: (player: Player) => void }) {
             <button
               type="button"
               key={p.id}
-              className={`nm-item${i === activeIdx ? ' active' : ''}`}
+              className={cn('nm-item', i === activeIdx && 'active')}
               onMouseEnter={() => setActiveIdx(i)}
               onClick={() => onPick(p)}
             >
@@ -375,7 +361,7 @@ function TypeaheadPicker({ onPick }: { onPick: (player: Player) => void }) {
           </div>
           <button
             type="button"
-            className={`nm-item guest${activeIdx === guestIdx ? ' active' : ''}`}
+            className={cn('nm-item', 'guest', activeIdx === guestIdx && 'active')}
             onMouseEnter={() => setActiveIdx(guestIdx)}
             onClick={() => onPick(GUEST)}
           >
@@ -420,7 +406,7 @@ function BestOfField({
           <button
             type="button"
             key={o.n}
-            className={`nm-bestof-opt${bestOf === o.n ? ' active' : ''}`}
+            className={cn('nm-bestof-opt', bestOf === o.n && 'active')}
             role="radio"
             aria-checked={bestOf === o.n}
             onClick={() => setBestOf(o.n)}
@@ -452,24 +438,23 @@ function RatedField({
   setRated: (rated: boolean) => void
   opponent: Player | null
 }) {
-  const canRate = !opponent || !opponent.isGuest
-  const effectiveRated = rated && canRate
-  const ratedOpponent =
-    opponent && !opponent.isGuest && opponent.rating != null ? opponent : null
+  const ratable = canRate(opponent)
+  const effectiveRated = rated && ratable
+  // A registered opponent's rating; null for guest / TBD / no opponent.
+  const opponentRating =
+    opponent && opponent.kind === 'registered' ? opponent.rating : null
   const delta =
-    ratedOpponent && ratedOpponent.rating != null
-      ? estimateDelta(ME.rating, ratedOpponent.rating)
-      : null
+    opponentRating != null ? estimateDelta(ME.rating, opponentRating) : null
 
   let description: string
   if (effectiveRated) {
     description =
-      ratedOpponent && ratedOpponent.rating != null
+      opponentRating != null
         ? `Result will update both ratings. Based on a ${Math.abs(
-            ratedOpponent.rating - ME.rating,
+            opponentRating - ME.rating,
           )}-point gap.`
         : 'Pick a rated opponent to see the swing.'
-  } else if (canRate) {
+  } else if (ratable) {
     description = opponent
       ? 'No rating change. Still logged to history.'
       : 'No rating change either way. Still logged to history.'
@@ -481,17 +466,17 @@ function RatedField({
     <div>
       <div className="nm-field-label">
         Rated match
-        {!canRate && <span className="na">Guest · unavailable</span>}
+        {!ratable && <span className="na">Guest · unavailable</span>}
       </div>
       <div className="nm-rated">
         <button
           type="button"
-          className={`nm-switch${effectiveRated ? ' on' : ''}`}
+          className={cn('nm-switch', effectiveRated && 'on')}
           role="switch"
           aria-checked={effectiveRated}
           aria-label="Rated match"
-          disabled={!canRate}
-          onClick={() => canRate && setRated(!rated)}
+          disabled={!ratable}
+          onClick={() => ratable && setRated(!rated)}
         />
         <div className="nm-rated-info">
           <div className="t">
@@ -520,9 +505,7 @@ function SubmitRow({
   bestOf: number
   rated: boolean
 }) {
-  const hasOpponent = !!opponent && opponent.id !== 'tbd'
-  const opponentName = opponent ? opponent.name : 'Opponent TBD'
-  const effectivelyRated = rated && (!opponent || !opponent.isGuest)
+  const effectivelyRated = rated && canRate(opponent)
   const gamesToWin = Math.ceil(bestOf / 2)
   const lengthCopy =
     bestOf === 1 ? 'Single game' : `Best of ${bestOf} · first to ${gamesToWin}`
@@ -531,9 +514,9 @@ function SubmitRow({
     <div className="nm-summary">
       <div className="read">
         <div className="top">
-          {hasOpponent ? (
+          {opponent && opponent.kind !== 'tbd' ? (
             <>
-              Ready: <b>You</b> vs <b>{opponentName}</b>
+              Ready: <b>You</b> vs <b>{opponent.name}</b>
             </>
           ) : (
             <>
