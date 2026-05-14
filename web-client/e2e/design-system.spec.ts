@@ -47,4 +47,12 @@ test.describe('Design System', () => {
     const sheet = await designSystemPage.sheetShowcase.openSheet();
     await expect(sheet).toHaveScreenshot('sheet.png');
   });
+
+  test('should style the toasts correctly', async ({ page }) => {
+    const designSystemPage = await DesignSystemPage.navigateTo(page);
+
+    await expect(designSystemPage.feedbackShowcase.successToast).toHaveScreenshot('toast-success.png');
+    await expect(designSystemPage.feedbackShowcase.errorToast).toHaveScreenshot('toast-error.png');
+    await expect(designSystemPage.feedbackShowcase.infoToast).toHaveScreenshot('toast-info.png');
+  });
 });

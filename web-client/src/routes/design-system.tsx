@@ -1,6 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useForm } from 'react-hook-form'
+import { toast } from 'sonner'
 import { z } from 'zod'
 import {
   AlertCircle,
@@ -1375,22 +1376,60 @@ function FeedbackSection() {
       </Showcase>
 
       <Showcase title="Sonner / Toast" tag="3 variants">
-        <div className="flex max-w-[420px] flex-col gap-3">
-          <ToastCard
-            tone="success"
-            title="Match logged"
-            body="Rating: 1620 (+18)"
-          />
-          <ToastCard
-            tone="error"
-            title="Couldn't save"
-            body="Try again — your changes are still in the editor."
-          />
-          <ToastCard
-            tone="info"
-            title="Reminder"
-            body="You're up next on Court 3."
-          />
+        <div className="flex flex-col gap-5">
+          <div className="flex max-w-[420px] flex-col gap-3">
+            <ToastCard
+              tone="success"
+              title="Match logged"
+              body="Rating: 1620 (+18)"
+            />
+            <ToastCard
+              tone="error"
+              title="Couldn't save"
+              body="Try again — your changes are still in the editor."
+            />
+            <ToastCard
+              tone="info"
+              title="Reminder"
+              body="You're up next on Court 3."
+            />
+          </div>
+          <div className="flex flex-wrap gap-3">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() =>
+                toast.success('Match logged', {
+                  description: 'Rating: 1620 (+18)',
+                })
+              }
+            >
+              Trigger success
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() =>
+                toast.error("Couldn't save", {
+                  description:
+                    'Try again — your changes are still in the editor.',
+                })
+              }
+            >
+              Trigger error
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() =>
+                toast.info('Reminder', {
+                  description: "You're up next on Court 3.",
+                })
+              }
+            >
+              Trigger info
+            </Button>
+          </div>
         </div>
       </Showcase>
     </Section>
@@ -1414,7 +1453,7 @@ function ToastCard({
       : 'var(--info)'
   return (
     <div
-      className="flex items-start gap-3 rounded-md border border-[color:var(--border-subtle)] bg-[color:var(--bg-card)] px-4 py-3.5"
+      className={`sonner sonner-${tone} flex w-[360px] items-start gap-3 rounded-[10px] border border-[color:var(--border-subtle)] bg-[color:var(--bg-card)] px-4 py-3.5`}
       style={{ borderLeft: `3px solid ${accent}`, boxShadow: 'var(--shadow-lg)' }}
     >
       <div className="flex flex-col gap-0.5">
