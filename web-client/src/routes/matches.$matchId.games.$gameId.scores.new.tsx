@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
+import { cn } from '@/lib/utils'
 
 export const Route = createFileRoute(
   '/matches/$matchId/games/$gameId/scores/new',
@@ -10,13 +11,14 @@ export const Route = createFileRoute(
 /**
  * Match context is mocked here. The matches API is not wired up yet, so this
  * mirrors the static stubs used by the dashboard and admin routes — replace
- * MATCH with loader-fed data once the endpoint exists. Saving a game then
- * advances through the match instead of persisting.
+ * MATCH with loader-fed data once the endpoint exists. Nothing entered here is
+ * persisted: saving a game just advances through the match.
  */
 const ME = { name: 'You', initials: 'YZ' } as const
 
 type LoggedGame = { me: number; opp: number }
 type MatchGame = LoggedGame | null
+type Side = 'me' | 'opp'
 
 const MATCH = {
   bestOf: 5,
@@ -24,6 +26,12 @@ const MATCH = {
   opponent: { name: 'Nguyen, T.', initials: 'NT', rating: 2145, isGuest: false },
   // Index = game number - 1. `null` marks a game that has not been played yet.
   games: [{ me: 11, opp: 8 }, { me: 9, opp: 11 }, null, null, null] as MatchGame[],
+}
+
+function gameResult(game: LoggedGame): Side | null {
+  if (game.me > game.opp) return 'me'
+  if (game.opp > game.me) return 'opp'
+  return null
 }
 
 function ScoreEntryRoute() {
@@ -39,13 +47,13 @@ function ScoreEntry({ matchId, gameId }: { matchId: string; gameId: string }) {
   const { bestOf, rated, opponent, games } = MATCH
   const gamesToWin = Math.ceil(bestOf / 2)
   const isGuest = opponent.isGuest
+  const oppName = opponent.name
 
   // The game this route targets (1-based), clamped to the match length.
-  const gameNumber = useMemo(() => {
-    const parsed = Number.parseInt(gameId, 10)
-    if (!Number.isFinite(parsed)) return 1
-    return Math.min(Math.max(parsed, 1), bestOf)
-  }, [gameId, bestOf])
+  const parsedGame = Number.parseInt(gameId, 10)
+  const gameNumber = Number.isFinite(parsedGame)
+    ? Math.min(Math.max(parsedGame, 1), bestOf)
+    : 1
   const activeIdx = gameNumber - 1
 
   const stored = games[activeIdx]
@@ -56,10 +64,10 @@ function ScoreEntry({ matchId, gameId }: { matchId: string; gameId: string }) {
 
   // Game tally so far, counted from every *other* logged game in the match.
   const meWins = games.filter(
-    (g, i) => i !== activeIdx && g != null && g.me > g.opp,
+    (g, i) => i !== activeIdx && g != null && gameResult(g) === 'me',
   ).length
   const oppWins = games.filter(
-    (g, i) => i !== activeIdx && g != null && g.opp > g.me,
+    (g, i) => i !== activeIdx && g != null && gameResult(g) === 'opp',
   ).length
   const matchComplete = meWins >= gamesToWin || oppWins >= gamesToWin
   const winner = meWins > oppWins ? 'me' : oppWins > meWins ? 'opp' : null
@@ -77,8 +85,8 @@ function ScoreEntry({ matchId, gameId }: { matchId: string; gameId: string }) {
 
   function saveGame() {
     if (!canSave) return
-    // No persistence layer yet — advance to the next game's entry screen, or
-    // hand off to the (future) match summary once the match is decided.
+    // Advance to the next game's entry screen, or hand off to the (future)
+    // match summary once the match is decided.
     const meScore = Number(me)
     const oppScore = Number(opp)
     const nextMeWins = meWins + (meScore > oppScore ? 1 : 0)
@@ -91,10 +99,7 @@ function ScoreEntry({ matchId, gameId }: { matchId: string; gameId: string }) {
     }
   }
 
-  function handleKey(
-    e: React.KeyboardEvent<HTMLInputElement>,
-    side: 'me' | 'opp',
-  ) {
+  function handleKey(e: React.KeyboardEvent<HTMLInputElement>, side: Side) {
     if (e.key === 'Enter') {
       e.preventDefault()
       if (side === 'me' && me !== '') {
@@ -114,7 +119,7 @@ function ScoreEntry({ matchId, gameId }: { matchId: string; gameId: string }) {
     }
   }
 
-  // Focus the first score field on arrival.
+  // Defer focus briefly so it lands after the route transition settles.
   useEffect(() => {
     const timer = setTimeout(() => meRef.current?.focus(), 60)
     return () => clearTimeout(timer)
@@ -122,7 +127,6 @@ function ScoreEntry({ matchId, gameId }: { matchId: string; gameId: string }) {
 
   const pad = (n: number) => String(n).padStart(2, '0')
   const gameLabel = `GAME ${pad(gameNumber)} OF ${pad(bestOf)}`
-  const oppName = opponent.name
 
   return (
     <div className="fortymm-theme dark score-entry-screen">
@@ -158,32 +162,18 @@ function ScoreEntry({ matchId, gameId }: { matchId: string; gameId: string }) {
           )}
         </div>
 
-        {/* Big side-by-side entry for the current game */}
-        <div className={`single-entry${matchComplete ? ' complete' : ''}`}>
-          <div className="se-side me">
-            <div className="se-head">
-              <div className="av">{ME.initials}</div>
-              <div>
-                <div className="nm">{ME.name}</div>
-                <div className="rt">
-                  Games won · <b>{meWins}</b>
-                </div>
-              </div>
-            </div>
-            <input
-              ref={meRef}
-              className="big-input"
-              type="text"
-              inputMode="numeric"
-              aria-label={`${ME.name} score`}
-              placeholder="0"
-              value={me}
-              disabled={matchComplete}
-              onFocus={(e) => e.target.select()}
-              onChange={(e) => setMe(sanitize(e.target.value))}
-              onKeyDown={(e) => handleKey(e, 'me')}
-            />
-          </div>
+        <div className={cn('single-entry', matchComplete && 'complete')}>
+          <ScoreSide
+            side="me"
+            name={ME.name}
+            initials={ME.initials}
+            wins={meWins}
+            value={me}
+            inputRef={meRef}
+            disabled={matchComplete}
+            onChange={(value) => setMe(sanitize(value))}
+            onKeyDown={(e) => handleKey(e, 'me')}
+          />
 
           <div className="se-mid">
             <div className="se-vs">VS</div>
@@ -192,106 +182,99 @@ function ScoreEntry({ matchId, gameId }: { matchId: string; gameId: string }) {
             </div>
           </div>
 
-          <div className={`se-side opp${isGuest ? ' guest' : ''}`}>
-            <div className="se-head right">
-              <div>
-                <div className="nm">{oppName}</div>
-                <div className="rt">
-                  Games won · <b>{oppWins}</b>
-                </div>
-              </div>
-              <div className="av">{opponent.initials}</div>
-            </div>
-            <input
-              ref={oppRef}
-              className="big-input"
-              type="text"
-              inputMode="numeric"
-              aria-label={`${oppName} score`}
-              placeholder="0"
-              value={opp}
-              disabled={matchComplete}
-              onFocus={(e) => e.target.select()}
-              onChange={(e) => setOpp(sanitize(e.target.value))}
-              onKeyDown={(e) => handleKey(e, 'opp')}
-            />
-          </div>
+          <ScoreSide
+            side="opp"
+            name={oppName}
+            initials={opponent.initials}
+            wins={oppWins}
+            value={opp}
+            inputRef={oppRef}
+            disabled={matchComplete}
+            isGuest={isGuest}
+            onChange={(value) => setOpp(sanitize(value))}
+            onKeyDown={(e) => handleKey(e, 'opp')}
+          />
         </div>
 
-        {/* Action row */}
         <div className="single-actions">
           {matchComplete ? (
-            <div className="result-line">
-              <span className="trophy">▲</span>
-              <span>
-                {winner === 'me'
-                  ? `${ME.name} won the match`
-                  : `${oppName} won the match`}
-              </span>
-              <span className="dot-sep">·</span>
-              <span className="final">
-                FINAL {meWins}–{oppWins}
-              </span>
-            </div>
+            <>
+              <div className="result-line">
+                <span className="trophy">▲</span>
+                <span>
+                  {winner === 'me'
+                    ? `${ME.name} won the match`
+                    : `${oppName} won the match`}
+                </span>
+                <span className="dot-sep">·</span>
+                <span className="final">
+                  FINAL {meWins}–{oppWins}
+                </span>
+              </div>
+              <div className="action-btns">
+                <button
+                  type="button"
+                  className="btn primary"
+                  onClick={() => navigate({ to: '/dashboard' })}
+                >
+                  Back to match
+                </button>
+              </div>
+            </>
           ) : (
-            <div className="result-line subtle">
-              {gameNumber < bestOf
-                ? `Save this game to continue to game ${gameNumber + 1}.`
-                : 'Final game. Save to finish the match.'}
-            </div>
-          )}
-          <div className="action-btns">
-            {!matchComplete && gameNumber > 1 && (
-              <button
-                type="button"
-                className="btn ghost"
-                onClick={() => goToGame(gameNumber - 1)}
-              >
-                ← Edit game {gameNumber - 1}
-              </button>
-            )}
-            {!matchComplete && (
-              <button
-                type="button"
-                className="btn primary"
-                disabled={!canSave}
-                onClick={saveGame}
-              >
+            <>
+              <div className="result-line subtle">
                 {gameNumber < bestOf
-                  ? 'Save game & next →'
-                  : 'Save final game →'}
-              </button>
-            )}
-            {matchComplete && (
-              <button
-                type="button"
-                className="btn primary"
-                onClick={() => navigate({ to: '/dashboard' })}
-              >
-                Back to match
-              </button>
-            )}
-          </div>
+                  ? `Save this game to continue to game ${gameNumber + 1}.`
+                  : 'Final game. Save to finish the match.'}
+              </div>
+              <div className="action-btns">
+                {gameNumber > 1 && (
+                  <button
+                    type="button"
+                    className="btn ghost"
+                    onClick={() => goToGame(gameNumber - 1)}
+                  >
+                    ← Edit game {gameNumber - 1}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="btn primary"
+                  disabled={!canSave}
+                  onClick={saveGame}
+                >
+                  {gameNumber < bestOf
+                    ? 'Save game & next →'
+                    : 'Save final game →'}
+                </button>
+              </div>
+            </>
+          )}
         </div>
 
-        {/* Scoreline strip — all games in the match */}
         <div className="scoreline">
           <div className="sl-label">SCORELINE</div>
           <div className="sl-cells">
             {games.map((g, i) => {
               const isActive = i === activeIdx
-              const logged = !isActive && g != null
-              const meVal = isActive ? me : g ? String(g.me) : ''
-              const oppVal = isActive ? opp : g ? String(g.opp) : ''
-              const meWon = !isActive && g != null && g.me > g.opp
-              const oppWon = !isActive && g != null && g.opp > g.me
+              const cellGame = isActive ? null : g
+              const result = cellGame ? gameResult(cellGame) : null
+              const meVal = isActive ? me : cellGame ? String(cellGame.me) : ''
+              const oppVal = isActive
+                ? opp
+                : cellGame
+                  ? String(cellGame.opp)
+                  : ''
               return (
                 <button
                   type="button"
                   key={i}
-                  className={`sl-cell ${logged ? 'done' : 'pending'}${
-                    isActive ? ' active' : ''
-                  }`}
+                  className={cn(
+                    'sl-cell',
+                    cellGame ? 'done' : 'pending',
+                    isActive && 'active',
+                  )}
                   aria-current={isActive ? 'step' : undefined}
                   onClick={() => {
                     if (!isActive) goToGame(i + 1)
@@ -299,11 +282,11 @@ function ScoreEntry({ matchId, gameId }: { matchId: string; gameId: string }) {
                 >
                   <div className="sl-n">G{i + 1}</div>
                   <div className="sl-scores">
-                    <span className={`s${meWon ? ' w' : ''}`}>
+                    <span className={cn('s', result === 'me' && 'w')}>
                       {meVal || '—'}
                     </span>
                     <span className="dash">–</span>
-                    <span className={`s${oppWon ? ' w' : ''}`}>
+                    <span className={cn('s', result === 'opp' && 'w')}>
                       {oppVal || '—'}
                     </span>
                   </div>
@@ -313,6 +296,63 @@ function ScoreEntry({ matchId, gameId }: { matchId: string; gameId: string }) {
           </div>
         </div>
       </div>
+    </div>
+  )
+}
+
+function ScoreSide({
+  side,
+  name,
+  initials,
+  wins,
+  value,
+  inputRef,
+  disabled,
+  isGuest,
+  onChange,
+  onKeyDown,
+}: {
+  side: Side
+  name: string
+  initials: string
+  wins: number
+  value: string
+  inputRef: React.RefObject<HTMLInputElement | null>
+  disabled: boolean
+  isGuest?: boolean
+  onChange: (value: string) => void
+  onKeyDown: (e: React.KeyboardEvent<HTMLInputElement>) => void
+}) {
+  const avatar = <div className="av">{initials}</div>
+  const identity = (
+    <div>
+      <div className="nm">{name}</div>
+      <div className="rt">
+        Games won · <b>{wins}</b>
+      </div>
+    </div>
+  )
+
+  return (
+    <div className={cn('se-side', side, side === 'opp' && isGuest && 'guest')}>
+      <div className={cn('se-head', side === 'opp' && 'right')}>
+        {side === 'opp' && identity}
+        {avatar}
+        {side === 'me' && identity}
+      </div>
+      <input
+        ref={inputRef}
+        className="big-input"
+        type="text"
+        inputMode="numeric"
+        aria-label={`${name} score`}
+        placeholder="0"
+        value={value}
+        disabled={disabled}
+        onFocus={(e) => e.target.select()}
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={onKeyDown}
+      />
     </div>
   )
 }
