@@ -14,6 +14,7 @@ import { Route as DashboardRouteImport } from './routes/dashboard'
 import { Route as AdminRouteImport } from './routes/admin'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AdminIndexRouteImport } from './routes/admin.index'
+import { Route as MatchesNewRouteImport } from './routes/matches/new'
 import { Route as AdminUsersRouteImport } from './routes/admin.users'
 import { Route as AdminRolesRouteImport } from './routes/admin.roles'
 import { Route as AdminPermissionsRouteImport } from './routes/admin.permissions'
@@ -43,6 +44,11 @@ const AdminIndexRoute = AdminIndexRouteImport.update({
   path: '/',
   getParentRoute: () => AdminRoute,
 } as any)
+const MatchesNewRoute = MatchesNewRouteImport.update({
+  id: '/matches/new',
+  path: '/matches/new',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AdminUsersRoute = AdminUsersRouteImport.update({
   id: '/users',
   path: '/users',
@@ -67,6 +73,7 @@ export interface FileRoutesByFullPath {
   '/admin/permissions': typeof AdminPermissionsRoute
   '/admin/roles': typeof AdminRolesRoute
   '/admin/users': typeof AdminUsersRoute
+  '/matches/new': typeof MatchesNewRoute
   '/admin/': typeof AdminIndexRoute
 }
 export interface FileRoutesByTo {
@@ -76,6 +83,7 @@ export interface FileRoutesByTo {
   '/admin/permissions': typeof AdminPermissionsRoute
   '/admin/roles': typeof AdminRolesRoute
   '/admin/users': typeof AdminUsersRoute
+  '/matches/new': typeof MatchesNewRoute
   '/admin': typeof AdminIndexRoute
 }
 export interface FileRoutesById {
@@ -87,6 +95,7 @@ export interface FileRoutesById {
   '/admin/permissions': typeof AdminPermissionsRoute
   '/admin/roles': typeof AdminRolesRoute
   '/admin/users': typeof AdminUsersRoute
+  '/matches/new': typeof MatchesNewRoute
   '/admin/': typeof AdminIndexRoute
 }
 export interface FileRouteTypes {
@@ -99,6 +108,7 @@ export interface FileRouteTypes {
     | '/admin/permissions'
     | '/admin/roles'
     | '/admin/users'
+    | '/matches/new'
     | '/admin/'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -108,6 +118,7 @@ export interface FileRouteTypes {
     | '/admin/permissions'
     | '/admin/roles'
     | '/admin/users'
+    | '/matches/new'
     | '/admin'
   id:
     | '__root__'
@@ -118,6 +129,7 @@ export interface FileRouteTypes {
     | '/admin/permissions'
     | '/admin/roles'
     | '/admin/users'
+    | '/matches/new'
     | '/admin/'
   fileRoutesById: FileRoutesById
 }
@@ -126,6 +138,7 @@ export interface RootRouteChildren {
   AdminRoute: typeof AdminRouteWithChildren
   DashboardRoute: typeof DashboardRoute
   DesignSystemRoute: typeof DesignSystemRoute
+  MatchesNewRoute: typeof MatchesNewRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -164,6 +177,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/admin/'
       preLoaderRoute: typeof AdminIndexRouteImport
       parentRoute: typeof AdminRoute
+    }
+    '/matches/new': {
+      id: '/matches/new'
+      path: '/matches/new'
+      fullPath: '/matches/new'
+      preLoaderRoute: typeof MatchesNewRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/admin/users': {
       id: '/admin/users'
@@ -210,6 +230,7 @@ const rootRouteChildren: RootRouteChildren = {
   AdminRoute: AdminRouteWithChildren,
   DashboardRoute: DashboardRoute,
   DesignSystemRoute: DesignSystemRoute,
+  MatchesNewRoute: MatchesNewRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
