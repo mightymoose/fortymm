@@ -689,9 +689,8 @@ function NewRoleModal({
   const [submitAttempted, setSubmitAttempted] = useState(false)
   const trimmed = name.trim()
   const taken = existing.some((r) => r.name.toLowerCase() === trimmed.toLowerCase())
-  // A missing name surfaces only once the user tries to submit; a duplicate
-  // name is flagged live. Mirrors the Permissions dialog's inline feedback so
-  // an empty submit is never a silent no-op.
+  // Surface a missing name only after a submit attempt — an empty submit must
+  // never be a silent no-op.
   const nameError = !trimmed
     ? submitAttempted
       ? 'Name is required.'

@@ -39,6 +39,8 @@ export function groupPermissions(perms: Permission[]): Array<{ prefix: string; i
     .map(([prefix, items]) => ({ prefix, items }))
 }
 
+const TZ_DESIGNATOR_RE = /(?:Z|[+-]\d{2}:?\d{2})$/
+
 /**
  * Parses an ISO timestamp from the API. The API emits UTC timestamps, but some
  * arrive without an explicit zone designator — `new Date()` then parses them in
@@ -46,7 +48,7 @@ export function groupPermissions(perms: Permission[]): Array<{ prefix: string; i
  * future (e.g. "in 5 hours"). Treat a designator-less datetime as UTC.
  */
 function parseApiDate(iso: string): Date {
-  const needsUtc = iso.includes('T') && !/(?:Z|[+-]\d{2}:?\d{2})$/.test(iso)
+  const needsUtc = iso.includes('T') && !TZ_DESIGNATOR_RE.test(iso)
   return new Date(needsUtc ? `${iso}Z` : iso)
 }
 

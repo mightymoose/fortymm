@@ -49,8 +49,6 @@ export function UsersPage() {
   const { data: users = [], isLoading: usersLoading } = useRbacUsers()
   const { data: roles = [] } = useRoles()
   const { data: permissions = [] } = usePermissions()
-  const { data: session } = useSession()
-  const currentUsername = session?.data?.user?.username ?? null
   const createUser = useCreateRbacUser()
   const deleteUser = useDeleteRbacUser()
   const setUserRoles = useSetUserRoles()
@@ -184,7 +182,6 @@ export function UsersPage() {
         user={selected}
         roles={roles}
         permissions={permissions}
-        currentUsername={currentUsername}
         onSave={(next) => selected && setUserRoles.mutate({ id: selected.id, roleIds: next })}
         onRemove={() => selected && setConfirmRemove(selected)}
         onClose={() => setSelectedId(null)}
@@ -309,7 +306,6 @@ function UserDrawer({
   user,
   roles,
   permissions,
-  currentUsername,
   onSave,
   onRemove,
   onClose,
@@ -317,7 +313,6 @@ function UserDrawer({
   user: RbacUser | null
   roles: Role[]
   permissions: Permission[]
-  currentUsername: string | null
   onSave: (role_ids: string[]) => void
   onRemove: () => void
   onClose: () => void
@@ -331,7 +326,6 @@ function UserDrawer({
             user={user}
             roles={roles}
             permissions={permissions}
-            currentUsername={currentUsername}
             onSave={onSave}
             onRemove={onRemove}
             onClose={onClose}
@@ -346,7 +340,6 @@ function UserDrawerBody({
   user,
   roles,
   permissions,
-  currentUsername,
   onSave,
   onRemove,
   onClose,
@@ -354,14 +347,14 @@ function UserDrawerBody({
   user: RbacUser
   roles: Role[]
   permissions: Permission[]
-  currentUsername: string | null
   onSave: (role_ids: string[]) => void
   onRemove: () => void
   onClose: () => void
 }) {
   // Guard against removing your own account — that could lock the workspace
   // out (e.g. the last admin deleting themselves).
-  const isSelf = currentUsername !== null && user.username === currentUsername
+  const { data: session } = useSession()
+  const isSelf = user.username === session?.data?.user?.username
   const [selected, setSelected] = useState<Set<string>>(() => new Set(user.role_ids))
   const dirty = useMemo(() => {
     if (selected.size !== user.role_ids.length) return true
