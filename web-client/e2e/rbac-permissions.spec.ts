@@ -126,7 +126,7 @@ test.describe('Administration · Permissions', () => {
     // Passes the character-class check but has no dot — the refine still rejects.
     await pom.dialogNameInput.fill('invalidname')
     await expect(page.getByText(/lowercase letters/i)).toBeVisible()
-    await expect(page.getByText(/at least one dot/i)).toBeVisible()
+    await expect(page.getByText(/exactly one dot/i)).toBeVisible()
     await pom.dialogCreateButton.click()
     await expect(pom.dialogNameInput).toBeVisible()
     expect(store.listPermissions().some((p) => p.name === 'invalidname')).toBe(false)

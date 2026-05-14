@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input'
 import {
   Sheet,
   SheetContent,
+  SheetDescription,
   SheetFooter,
   SheetHeader,
   SheetTitle,
@@ -23,11 +24,13 @@ import {
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Skeleton } from '@/components/ui/skeleton'
+import { useSession } from '@/api/session'
 import {
   type Permission,
   type RbacUser,
@@ -348,6 +351,10 @@ function UserDrawerBody({
   onRemove: () => void
   onClose: () => void
 }) {
+  // Guard against removing your own account — that could lock the workspace
+  // out (e.g. the last admin deleting themselves).
+  const { data: session } = useSession()
+  const isSelf = user.username === session?.data?.user?.username
   const [selected, setSelected] = useState<Set<string>>(() => new Set(user.role_ids))
   const dirty = useMemo(() => {
     if (selected.size !== user.role_ids.length) return true
@@ -378,6 +385,9 @@ function UserDrawerBody({
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: 'var(--bg-panel)' }}>
       <SheetHeader className="border-b border-[color:var(--border-subtle)] p-[22px_24px_18px] gap-0">
         <SheetTitle className="sr-only">User {user.username}</SheetTitle>
+        <SheetDescription className="sr-only">
+          Assign roles to {user.username} and review the permissions they grant.
+        </SheetDescription>
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: 14 }}>
           <Avatar name={user.username} size={48} />
           <div style={{ flex: 1, minWidth: 0 }}>
@@ -443,7 +453,9 @@ function UserDrawerBody({
                 borderRadius: 'var(--r-md, 10px)',
               }}
             >
-              This user can't do anything. Attach at least one role.
+              {selected.size === 0
+                ? "This user can't do anything. Attach at least one role."
+                : `The attached role${selected.size === 1 ? ' grants' : 's grant'} no permissions yet — add permissions to ${selected.size === 1 ? 'it' : 'them'} to give this user access.`}
             </div>
           ) : (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
@@ -472,7 +484,12 @@ function UserDrawerBody({
         className="border-t border-[color:var(--border-subtle)] bg-[color:var(--ink-900)]"
         style={{ flexDirection: 'row', justifyContent: 'space-between', padding: '16px 24px' }}
       >
-        <Button variant="destructive" onClick={onRemove}>
+        <Button
+          variant="destructive"
+          onClick={onRemove}
+          disabled={isSelf}
+          title={isSelf ? "You can't remove your own account." : undefined}
+        >
           <Trash2 size={14} /> Remove user
         </Button>
         <div style={{ display: 'flex', gap: 8 }}>
@@ -566,9 +583,12 @@ function AddUserModal({
 
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent>
+      <DialogContent className="max-h-[calc(100vh-2rem)] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Add user</DialogTitle>
+          <DialogDescription>
+            Create a workspace account, then attach roles from its drawer.
+          </DialogDescription>
         </DialogHeader>
         <Field label="Username" hint={hint} hintTone={hintTone}>
           <Input

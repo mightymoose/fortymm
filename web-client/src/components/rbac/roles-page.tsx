@@ -7,6 +7,7 @@ import { Textarea } from '@/components/ui/textarea'
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -60,7 +61,9 @@ export function RolesPage() {
     return roles.filter((r) => r.name.toLowerCase().includes(q) || (r.description || '').toLowerCase().includes(q))
   }, [roles, search])
 
-  const selected = roles.find((r) => r.id === selectedId) ?? roles[0] ?? null
+  // Track selection against the *filtered* list: a role the search has hidden
+  // must not linger in the detail panel. Falls back to the first visible role.
+  const selected = filtered.find((r) => r.id === selectedId) ?? filtered[0] ?? null
 
   if (rolesLoading) return <RolesPageSkeleton />
 
@@ -683,20 +686,36 @@ function NewRoleModal({
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
   const [templateId, setTemplateId] = useState('')
+  const [submitAttempted, setSubmitAttempted] = useState(false)
   const trimmed = name.trim()
   const taken = existing.some((r) => r.name.toLowerCase() === trimmed.toLowerCase())
+  // Surface a missing name only after a submit attempt — an empty submit must
+  // never be a silent no-op.
+  const nameError = !trimmed
+    ? submitAttempted
+      ? 'Name is required.'
+      : null
+    : taken
+      ? 'A role with this name already exists.'
+      : null
+
+  function handleCreate() {
+    setSubmitAttempted(true)
+    if (!trimmed || taken) return
+    onCreate({ name: trimmed, description: description.trim(), templateId: templateId || undefined })
+  }
+
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent>
+      <DialogContent className="max-h-[calc(100vh-2rem)] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>New role</DialogTitle>
+          <DialogDescription>
+            Name the role and optionally copy permissions from an existing one.
+          </DialogDescription>
         </DialogHeader>
         <div style={{ display: 'grid', gap: 16 }}>
-          <Field
-            label="Name"
-            hint={taken ? 'A role with this name already exists.' : null}
-            hintTone={taken ? 'loss' : 'neutral'}
-          >
+          <Field label="Name" hint={nameError} hintTone={nameError ? 'loss' : 'neutral'}>
             <Input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Volunteer scorer" />
           </Field>
           <Field label="Description" hint="Optional. Helps the next admin understand what this role does.">
@@ -720,10 +739,7 @@ function NewRoleModal({
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>Cancel</Button>
-          <Button
-            disabled={!trimmed || taken}
-            onClick={() => onCreate({ name: trimmed, description: description.trim(), templateId: templateId || undefined })}
-          >
+          <Button onClick={handleCreate}>
             <Check size={14} /> Create role
           </Button>
         </DialogFooter>

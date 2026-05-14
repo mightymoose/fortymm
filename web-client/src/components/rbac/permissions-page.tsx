@@ -20,6 +20,7 @@ import { Textarea } from '@/components/ui/textarea'
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -48,8 +49,10 @@ import { EmptyState, PageHeader, Stat, StatsGrid } from './primitives'
 import { PermissionCode, PrefixLabel } from './roles-page'
 import { colorFor, fmtDate, fmtDateRel, groupPermissions, permPrefix } from './helpers'
 
-// Mirrors PERMISSION_NAME_PATTERN in api/app/schemas/rbac.py.
-const PERMISSION_NAME_RE = /^[a-z0-9_]+(?:\.[a-z0-9_]+)+$/
+// Intentionally stricter than the server's PERMISSION_NAME_PATTERN
+// (api/app/schemas/rbac.py): the documented convention is `resource.action`,
+// so the client enforces exactly one dot rather than "one or more".
+const PERMISSION_NAME_RE = /^[a-z0-9_]+\.[a-z0-9_]+$/
 
 function buildPermissionSchema(existingNames: string[]) {
   const taken = new Set(existingNames.map((n) => n.toLowerCase()))
@@ -61,7 +64,7 @@ function buildPermissionSchema(existingNames: string[]) {
       .max(255, { message: 'Name must be 255 characters or fewer.' })
       .refine((v) => PERMISSION_NAME_RE.test(v), {
         message:
-          'Use lowercase letters, numbers, underscores, and at least one dot (e.g. tournament.publish).',
+          'Use lowercase letters, numbers, and underscores in a resource.action shape — exactly one dot (e.g. tournament.publish).',
       })
       .refine((v) => !taken.has(v.toLowerCase()), {
         message: 'A permission with this name already exists.',
@@ -445,9 +448,14 @@ function PermissionFormModal({
 
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent>
+      <DialogContent className="max-h-[calc(100vh-2rem)] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
+          <DialogDescription>
+            {verb === 'create'
+              ? 'Add a leaf-level action that roles can grant.'
+              : 'Rename this permission or update its description.'}
+          </DialogDescription>
         </DialogHeader>
         <Form {...form}>
           <form onSubmit={handleSubmit} noValidate>
