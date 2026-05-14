@@ -100,6 +100,19 @@ export class RbacStore {
     }
 
     const path = new URL(url).pathname.replace(/^\/api/, '')
+
+    // The session endpoint shares the `/api/v1/**` prefix, so it lands here
+    // rather than on the dedicated `**/v1/session` route. Serve it directly
+    // so `useSession()` consumers (user menu, self-removal guard) get a user.
+    if (path === '/v1/session') {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(SESSION),
+      })
+      return
+    }
+
     const body = readJson(request)
     const result = dispatchRbac(this.state, method, path, body)
     if (!result) {

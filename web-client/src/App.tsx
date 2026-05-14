@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Link } from '@tanstack/react-router'
 import './landing.css'
 
 function App() {
@@ -66,10 +67,10 @@ function Nav() {
       </div>
       <div style={{ flex: 1 }} />
       <a className="nav-link" href="#">Sign in</a>
-      <a className="btn btn-primary" href="#play">
+      <Link className="btn btn-primary" to="/matches/new">
         <span className="btn-dot" />
         Start playing
-      </a>
+      </Link>
     </nav>
   )
 }
@@ -102,10 +103,10 @@ function Hero() {
           </p>
 
           <div className="hero-ctas">
-            <a className="btn btn-primary btn-lg" href="#play">
+            <Link className="btn btn-primary btn-lg" to="/matches/new">
               <span className="btn-dot" />
               Start a match in your browser
-            </a>
+            </Link>
             <a className="btn btn-secondary btn-lg" href="#tournaments">
               Run a tournament →
             </a>
@@ -1045,10 +1046,10 @@ function CtaBand() {
           already being tracked. If you ever want to keep it, add an email.
         </p>
         <div className="cta-ctas">
-          <a className="btn btn-primary btn-xl" href="#">
+          <Link className="btn btn-primary btn-xl" to="/matches/new">
             <span className="btn-dot" />
             Start playing now
-          </a>
+          </Link>
           <a className="btn btn-secondary btn-xl" href="#">
             Get the iOS app
           </a>
