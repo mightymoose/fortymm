@@ -39,14 +39,25 @@ export function groupPermissions(perms: Permission[]): Array<{ prefix: string; i
     .map(([prefix, items]) => ({ prefix, items }))
 }
 
+/**
+ * Parses an ISO timestamp from the API. The API emits UTC timestamps, but some
+ * arrive without an explicit zone designator — `new Date()` then parses them in
+ * the browser's local zone, which drifts "just now" hours into the past or
+ * future (e.g. "in 5 hours"). Treat a designator-less datetime as UTC.
+ */
+function parseApiDate(iso: string): Date {
+  const needsUtc = iso.includes('T') && !/(?:Z|[+-]\d{2}:?\d{2})$/.test(iso)
+  return new Date(needsUtc ? `${iso}Z` : iso)
+}
+
 export function fmtDate(iso: string | null | undefined): string {
   if (!iso) return '—'
-  return format(new Date(iso), 'MMM d, yyyy')
+  return format(parseApiDate(iso), 'MMM d, yyyy')
 }
 
 export function fmtDateRel(iso: string | null | undefined): string {
   if (!iso) return '—'
-  return formatDistanceToNowStrict(new Date(iso), { addSuffix: true })
+  return formatDistanceToNowStrict(parseApiDate(iso), { addSuffix: true })
 }
 
 export function initialsFor(name: string): string {
