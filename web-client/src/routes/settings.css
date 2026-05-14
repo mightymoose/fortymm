@@ -1,0 +1,589 @@
+/* =========================================================================
+   User Settings — /settings
+   Ported from the Claude Design "User Settings Page" handoff.
+   Class names are fmm-* prefixed (from the prototype). Design tokens are
+   defined on .fmm-settings; the page renders inside AppShell's .fortymm-theme,
+   so only the prototype-specific tokens / component styles live here.
+   ========================================================================= */
+.fmm-settings {
+  /* Ink (backgrounds) */
+  --ink-950: #0b0d12;
+  --ink-900: #11141b;
+  --ink-800: #171b24;
+  --ink-700: #1f2430;
+  --ink-600: #2a3040;
+  --ink-500: #3a4152;
+  --ink-400: #535b6e;
+
+  /* Chalk (foregrounds) */
+  --chalk-50: #f7f8fb;
+  --chalk-100: #e4e7ef;
+  --chalk-300: #a9b0c2;
+  --chalk-500: #6b7283;
+
+  /* Ball (hero orange) */
+  --ball-50: #fff4ed;
+  --ball-200: #ffcfa8;
+  --ball-400: #ff9a4a;
+  --ball-500: #ff7a1a;
+  --ball-600: #e85e00;
+  --ball-700: #b94700;
+
+  /* Serve (live cyan-green) */
+  --serve-300: #8cffd4;
+  --serve-500: #00e29a;
+  --serve-700: #009968;
+
+  /* Status */
+  --win: #00e29a;
+  --loss: #ff4d6d;
+  --warn: #ffc43d;
+  --info: #6fb5ff;
+
+  /* Foreground tokens */
+  --fg-1: var(--chalk-50);
+  --fg-2: var(--chalk-100);
+  --fg-3: var(--chalk-300);
+  --fg-muted: var(--chalk-500);
+  --fg-disabled: var(--ink-400);
+  --fg-accent: var(--ball-500);
+  --fg-accent-hover: var(--ball-400);
+  --fg-live: var(--serve-500);
+  --fg-inverse: var(--ink-950);
+
+  /* Background tokens */
+  --bg-app: var(--ink-950);
+  --bg-panel: var(--ink-900);
+  --bg-card: var(--ink-800);
+  --bg-raised: var(--ink-700);
+  --bg-hover: rgba(255, 255, 255, 0.04);
+  --bg-press: rgba(255, 255, 255, 0.02);
+  --bg-accent: var(--ball-500);
+  --bg-accent-hover: var(--ball-400);
+  --bg-accent-soft: rgba(255, 122, 26, 0.12);
+  --bg-live-soft: rgba(0, 226, 154, 0.14);
+
+  /* Borders */
+  --border-subtle: var(--ink-600);
+  --border-default: var(--ink-500);
+  --border-strong: var(--chalk-500);
+  --border-accent: var(--ball-500);
+
+  /* Radii */
+  --r-xs: 4px;
+  --r-sm: 6px;
+  --r-md: 10px;
+  --r-lg: 14px;
+  --r-xl: 20px;
+  --r-pill: 999px;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.45);
+  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.55);
+  --shadow-glow: 0 0 0 1px rgba(255, 122, 26, 0.35),
+    0 8px 24px rgba(255, 122, 26, 0.25);
+  --shadow-live-glow: 0 0 0 1px rgba(0, 226, 154, 0.4),
+    0 0 24px rgba(0, 226, 154, 0.3);
+  --shadow-inset: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+
+  /* Motion */
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-snap: cubic-bezier(0.5, 1.6, 0.4, 1);
+  --dur-fast: 120ms;
+  --dur-base: 200ms;
+  --dur-slow: 360ms;
+
+  /* Type stacks */
+  --font-ui: 'Space Grotesk', ui-sans-serif, system-ui, sans-serif;
+  --font-display: 'Bebas Neue', 'Space Grotesk', sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+
+  /* Type scale */
+  --text-xs: 11px;
+  --text-sm: 13px;
+  --text-base: 15px;
+  --text-md: 17px;
+  --text-lg: 20px;
+  --text-xl: 24px;
+  --text-2xl: 32px;
+  --text-3xl: 44px;
+
+  --lh-tight: 1.05;
+  --lh-snug: 1.25;
+  --lh-normal: 1.5;
+
+  color: var(--fg-1);
+  font-family: var(--font-ui);
+  font-size: var(--text-base);
+  line-height: var(--lh-normal);
+}
+
+.fmm-settings ::selection {
+  background: rgba(255, 122, 26, 0.32);
+  color: var(--fg-1);
+}
+
+/* ---------- Page inner ---------- */
+.fmm-main-inner {
+  width: 100%;
+  max-width: 880px;
+  padding: 36px 48px 64px;
+}
+@media (max-width: 860px) {
+  .fmm-main-inner {
+    padding: 24px 16px 48px;
+    max-width: 100%;
+  }
+}
+
+/* ---------- Inputs ---------- */
+.fmm-settings .fmm-input {
+  width: 100%;
+  height: 44px;
+  padding: 0 14px;
+  background: var(--bg-app);
+  border: 1px solid var(--border-default);
+  border-radius: var(--r-md);
+  color: var(--fg-1);
+  font-family: var(--font-ui);
+  font-size: var(--text-base);
+  outline: none;
+  transition: border-color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out);
+}
+.fmm-settings .fmm-input::placeholder {
+  color: var(--fg-muted);
+}
+.fmm-settings .fmm-input:hover {
+  border-color: var(--chalk-500);
+}
+.fmm-settings .fmm-input:focus {
+  border-color: var(--ball-500);
+  box-shadow: 0 0 0 3px rgba(255, 122, 26, 0.18);
+  background: var(--ink-900);
+}
+.fmm-settings .fmm-input--mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+}
+.fmm-settings .fmm-input--err {
+  border-color: var(--loss);
+}
+.fmm-settings .fmm-input--err:focus {
+  border-color: var(--loss);
+  box-shadow: 0 0 0 3px rgba(255, 77, 109, 0.18);
+}
+.fmm-settings .fmm-input--ok {
+  border-color: var(--serve-700);
+}
+.fmm-settings .fmm-input--ok:focus {
+  border-color: var(--serve-500);
+  box-shadow: 0 0 0 3px rgba(0, 226, 154, 0.18);
+}
+.fmm-settings .fmm-input[disabled] {
+  color: var(--fg-disabled);
+  background: var(--bg-panel);
+  cursor: not-allowed;
+}
+
+/* ---------- Buttons ---------- */
+.fmm-settings .fmm-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 40px;
+  padding: 0 18px;
+  border-radius: var(--r-md);
+  border: 1px solid transparent;
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out);
+}
+.fmm-settings .fmm-btn:focus-visible {
+  outline: 2px solid var(--ball-500);
+  outline-offset: 2px;
+}
+.fmm-settings .fmm-btn:active:not([disabled]) {
+  transform: scale(0.97);
+}
+
+.fmm-settings .fmm-btn--primary {
+  background: var(--ball-500);
+  color: var(--ink-950);
+}
+.fmm-settings .fmm-btn--primary:hover:not([disabled]) {
+  background: var(--ball-400);
+  box-shadow: var(--shadow-glow);
+}
+.fmm-settings .fmm-btn--primary[disabled] {
+  background: var(--ink-700);
+  color: var(--fg-disabled);
+  cursor: not-allowed;
+}
+
+.fmm-settings .fmm-btn--ghost {
+  background: transparent;
+  color: var(--fg-2);
+  border-color: var(--border-default);
+}
+.fmm-settings .fmm-btn--ghost:hover:not([disabled]) {
+  background: var(--bg-hover);
+  color: var(--fg-1);
+}
+.fmm-settings .fmm-btn--ghost[disabled] {
+  color: var(--fg-disabled);
+  cursor: not-allowed;
+}
+
+.fmm-settings .fmm-btn--quiet {
+  background: transparent;
+  color: var(--fg-3);
+  padding: 0 8px;
+  height: 32px;
+}
+.fmm-settings .fmm-btn--quiet:hover:not([disabled]) {
+  color: var(--fg-1);
+  background: var(--bg-hover);
+}
+
+.fmm-settings .fmm-btn--danger {
+  background: transparent;
+  color: var(--loss);
+  border-color: rgba(255, 77, 109, 0.4);
+}
+.fmm-settings .fmm-btn--danger:hover:not([disabled]) {
+  background: rgba(255, 77, 109, 0.1);
+  border-color: var(--loss);
+}
+
+.fmm-settings .fmm-btn--sm {
+  height: 32px;
+  padding: 0 12px;
+  font-size: var(--text-xs);
+}
+
+/* ---------- Toggle ---------- */
+.fmm-settings .fmm-toggle {
+  position: relative;
+  width: 40px;
+  height: 24px;
+  background: var(--ink-700);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-pill);
+  cursor: pointer;
+  transition: background var(--dur-base) var(--ease-out),
+    border-color var(--dur-base) var(--ease-out);
+  flex-shrink: 0;
+}
+.fmm-settings .fmm-toggle::before {
+  content: '';
+  position: absolute;
+  left: 2px;
+  top: 50%;
+  width: 18px;
+  height: 18px;
+  background: var(--chalk-300);
+  border-radius: 50%;
+  transform: translateY(-50%);
+  transition: transform var(--dur-base) var(--ease-snap),
+    background var(--dur-base) var(--ease-out);
+}
+.fmm-settings .fmm-toggle[data-on='true'] {
+  background: var(--ball-500);
+  border-color: var(--ball-500);
+}
+.fmm-settings .fmm-toggle[data-on='true']::before {
+  transform: translate(16px, -50%);
+  background: var(--ink-950);
+}
+.fmm-settings .fmm-toggle[data-disabled='true'] {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.fmm-settings .fmm-toggle:focus-visible {
+  outline: 2px solid var(--ball-500);
+  outline-offset: 2px;
+}
+
+/* ---------- Ball dot ---------- */
+.fmm-settings .ball-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ball-500);
+  box-shadow: 0 0 8px rgba(255, 122, 26, 0.55);
+  flex-shrink: 0;
+}
+.fmm-settings .ball-dot.ball-dot--live {
+  background: var(--serve-500);
+  box-shadow: 0 0 8px rgba(0, 226, 154, 0.65);
+  animation: ball-pulse 1.4s ease-in-out infinite;
+}
+.fmm-settings .ball-dot.ball-dot--warn {
+  background: var(--warn);
+  box-shadow: 0 0 8px rgba(255, 196, 61, 0.5);
+}
+
+/* ---------- Card ---------- */
+.fmm-settings .fmm-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-lg);
+  overflow: hidden;
+}
+
+/* ---------- Section number badge ---------- */
+.fmm-settings .fmm-section-num {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  color: var(--ball-500);
+  letter-spacing: 0.12em;
+}
+
+/* ---------- Overline ---------- */
+.fmm-settings .fmm-overline {
+  font-family: var(--font-ui);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+}
+
+/* ---------- Anchor links ---------- */
+.fmm-settings .fmm-link {
+  color: var(--ball-500);
+  text-decoration: none;
+  font-weight: 500;
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-out);
+}
+.fmm-settings .fmm-link:hover {
+  color: var(--ball-400);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+/* ---------- Toast ---------- */
+.fmm-settings .fmm-toast {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px 12px 14px;
+  background: var(--ink-800);
+  border: 1px solid var(--border-default);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-lg);
+  min-width: 280px;
+  animation: fmm-toast-in 280ms var(--ease-snap);
+}
+.fmm-settings .fmm-toast--ok {
+  border-color: rgba(0, 226, 154, 0.4);
+}
+.fmm-settings .fmm-toast--ok::before {
+  content: '';
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--serve-500);
+  box-shadow: 0 0 8px rgba(0, 226, 154, 0.7);
+}
+.fmm-settings .fmm-toast--err {
+  border-color: rgba(255, 77, 109, 0.4);
+}
+.fmm-settings .fmm-toast--err::before {
+  content: '';
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--loss);
+}
+@keyframes fmm-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* ---------- Modal ---------- */
+.fmm-settings .fmm-modal-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(11, 13, 18, 0.75);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  animation: fmm-scrim-in 200ms var(--ease-out);
+}
+@keyframes fmm-scrim-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.fmm-settings .fmm-modal {
+  width: 100%;
+  max-width: 520px;
+  max-height: 80vh;
+  background: var(--ink-900);
+  border: 1px solid var(--border-default);
+  border-radius: var(--r-xl);
+  box-shadow: var(--shadow-lg);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: fmm-modal-in 360ms var(--ease-snap);
+}
+@keyframes fmm-modal-in {
+  from {
+    opacity: 0;
+    transform: translateY(16px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* ---------- Home club picker (empty-state button) ---------- */
+.fmm-settings .fmm-clubpick {
+  background: var(--bg-panel);
+  border: 1px dashed var(--border-default);
+  transition: background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
+}
+.fmm-settings .fmm-clubpick:hover {
+  background: var(--bg-hover);
+  border-color: var(--ball-500);
+}
+
+/* ---------- Club row (in picker) ---------- */
+.fmm-settings .fmm-clubrow {
+  display: grid;
+  grid-template-columns: 36px 1fr auto;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 16px;
+  cursor: pointer;
+  border-radius: var(--r-md);
+  transition: background var(--dur-fast) var(--ease-out);
+}
+.fmm-settings .fmm-clubrow:hover {
+  background: var(--bg-hover);
+}
+.fmm-settings .fmm-clubrow[data-selected='true'] {
+  background: var(--bg-accent-soft);
+}
+.fmm-settings .fmm-clubrow[data-selected='true'] .fmm-clubrow-name {
+  color: var(--ball-500);
+}
+
+/* ---------- Field helper text ---------- */
+.fmm-settings .fmm-help {
+  font-size: var(--text-sm);
+  color: var(--fg-3);
+  line-height: var(--lh-snug);
+  margin-top: 6px;
+}
+.fmm-settings .fmm-help--err {
+  color: var(--loss);
+}
+.fmm-settings .fmm-help--ok {
+  color: var(--serve-500);
+}
+
+/* ---------- Notification row ---------- */
+.fmm-settings .fmm-notif-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 0;
+  border-top: 1px solid var(--border-subtle);
+}
+.fmm-settings .fmm-notif-row:first-child {
+  border-top: none;
+  padding-top: 4px;
+}
+.fmm-settings .fmm-notif-row:last-child {
+  padding-bottom: 4px;
+}
+
+/* ---------- Tag for "REQUIRED" / "VERIFIED" etc ---------- */
+.fmm-settings .fmm-tag {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  padding: 3px 7px 2px;
+  border-radius: var(--r-xs);
+  border: 1px solid var(--border-subtle);
+  color: var(--fg-3);
+  text-transform: uppercase;
+  vertical-align: middle;
+}
+.fmm-settings .fmm-tag--req {
+  color: var(--ball-500);
+  border-color: rgba(255, 122, 26, 0.4);
+}
+.fmm-settings .fmm-tag--ok {
+  color: var(--serve-500);
+  border-color: rgba(0, 226, 154, 0.4);
+}
+.fmm-settings .fmm-tag--soon {
+  color: var(--warn);
+  border-color: rgba(255, 196, 61, 0.35);
+}
+
+/* ---------- Spinner ---------- */
+.fmm-settings .fmm-spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  animation: fmm-spin 720ms linear infinite;
+}
+@keyframes fmm-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fmm-settings .ball-dot.ball-dot--live,
+  .fmm-settings .fmm-spinner {
+    animation: none;
+  }
+  .fmm-settings .fmm-toast,
+  .fmm-settings .fmm-modal-scrim,
+  .fmm-settings .fmm-modal {
+    animation: none;
+  }
+}

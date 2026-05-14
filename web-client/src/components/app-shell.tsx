@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { Link, useRouterState } from '@tanstack/react-router'
-import { Gauge, Key, Shield, Users } from 'lucide-react'
+import { Bell, Gauge, Globe, Key, Mail, MapPin, Shield, User, Users } from 'lucide-react'
 import { UserMenu } from './user-menu'
 
 type NavItem = {
@@ -9,7 +9,7 @@ type NavItem = {
   badge?: { label: string; live?: boolean }
   active?: boolean
   to?: string
-  children?: Array<{ label: string; to: string; icon: ReactNode }>
+  children?: Array<{ label: string; to: string; hash?: string; icon: ReactNode }>
 }
 
 type NavSection = {
@@ -220,6 +220,7 @@ const NAV_SECTIONS: NavSection[] = [
       },
       {
         label: 'Settings',
+        to: '/settings',
         icon: (
           <svg
             width="18"
@@ -235,6 +236,13 @@ const NAV_SECTIONS: NavSection[] = [
             <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
           </svg>
         ),
+        children: [
+          { label: 'Username', to: '/settings', hash: 'sec-username', icon: <User size={15} strokeWidth={1.75} /> },
+          { label: 'Email', to: '/settings', hash: 'sec-email', icon: <Mail size={15} strokeWidth={1.75} /> },
+          { label: 'Home club', to: '/settings', hash: 'sec-club', icon: <MapPin size={15} strokeWidth={1.75} /> },
+          { label: 'Notifications', to: '/settings', hash: 'sec-notifications', icon: <Bell size={15} strokeWidth={1.75} /> },
+          { label: 'Session', to: '/settings', hash: 'sec-session', icon: <Globe size={15} strokeWidth={1.75} /> },
+        ],
       },
       {
         label: 'Administration',
@@ -272,6 +280,9 @@ interface AppShellProps {
 export function AppShell({ children }: AppShellProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const pathname = useRouterState({ select: (s) => s.location.pathname })
+  const activeHash = useRouterState({
+    select: (s) => s.location.hash.replace(/^#/, ''),
+  })
   const [activeLabel, setActiveLabel] = useState(
     () =>
       NAV_SECTIONS.flatMap((s) => s.items).find((i) => i.active)?.label ??
@@ -398,11 +409,14 @@ export function AppShell({ children }: AppShellProps) {
                       {item.children && (isActive || childActive) ? (
                         <ul className="app-shell__sub-nav-list">
                           {item.children.map((child) => {
-                            const childIsActive = pathname === child.to
+                            const childIsActive =
+                              pathname === child.to &&
+                              (!child.hash || activeHash === child.hash)
                             return (
                               <li key={child.label}>
                                 <Link
                                   to={child.to}
+                                  hash={child.hash}
                                   className={`app-shell__sub-nav-link${childIsActive ? ' is-active' : ''}`}
                                   onClick={() => handleRouteNavClick(child.label)}
                                 >
