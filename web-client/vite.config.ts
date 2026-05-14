@@ -12,6 +12,9 @@ export default defineConfig({
     tanstackRouter({
       target: 'react',
       autoCodeSplitting: true,
+      // Test files colocated next to their route (e.g. routes/matches/
+      // new.test.tsx) aren't routes — keep the generator from scanning them.
+      routeFileIgnorePattern: '\\.test\\.[jt]sx?$',
     }),
     react(),
     tailwindcss(),

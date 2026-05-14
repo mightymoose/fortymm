@@ -8,6 +8,8 @@ type SessionResponse = components['schemas']['SessionResponse']
 type Permission = components['schemas']['PermissionRead']
 type Role = components['schemas']['RoleRead']
 type RbacUser = components['schemas']['RbacUserRead']
+type Player = components['schemas']['PlayerRead']
+type MatchRead = components['schemas']['MatchRead']
 
 function fastCheck(overrides: Partial<ComponentHealth> = {}): ComponentHealth {
   return {
@@ -105,5 +107,59 @@ export function rbacUser(overrides: Partial<RbacUser> = {}): RbacUser {
     role_ids: [],
     created_at: ISO,
     ...overrides,
+  }
+}
+
+export function player(overrides: Partial<Player> = {}): Player {
+  return {
+    id: nextId('pl'),
+    username: faker.internet.username().toLowerCase(),
+    ...overrides,
+  }
+}
+
+/**
+ * Builds a `MatchRead` the way the API would for a `POST /v1/matches` body:
+ * the creator always gets side 1, a registered opponent gets side 2, and
+ * guest / no-opponent matches stay single-sided and unrated.
+ */
+export function matchResponse(input: {
+  creatorUsername: string
+  opponent: Player | null
+  bestOf: number
+  rated: boolean
+}): MatchRead {
+  const creatorId = nextId('u')
+  const affectsRating = input.rated && input.opponent !== null
+  const sides: MatchRead['sides'] = [
+    {
+      side_number: 1,
+      score: 0,
+      won: null,
+      players: [{ user_id: creatorId, username: input.creatorUsername }],
+    },
+  ]
+  if (input.opponent) {
+    sides.push({
+      side_number: 2,
+      score: 0,
+      won: null,
+      players: [
+        { user_id: input.opponent.id, username: input.opponent.username },
+      ],
+    })
+  }
+  return {
+    id: nextId('m'),
+    status: 'pending',
+    created_by_user_id: creatorId,
+    created_at: ISO,
+    settings: {
+      team_size: 1,
+      best_of: input.bestOf,
+      affects_rating: affectsRating,
+      verification_policy: 'none',
+    },
+    sides,
   }
 }
