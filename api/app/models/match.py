@@ -1,0 +1,90 @@
+import enum
+import uuid
+from datetime import datetime
+from typing import TYPE_CHECKING
+
+from sqlalchemy import DateTime, Enum, ForeignKey, Index, func, text
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.db import Base
+from app.models.match_settings import MatchSettings
+
+if TYPE_CHECKING:
+    from app.models.match_game import MatchGame
+    from app.models.match_side import MatchSide
+    from app.models.match_side_player import MatchSidePlayer
+    from app.models.user import User
+
+
+class MatchStatus(enum.Enum):
+    pending = "pending"
+    in_progress = "in_progress"
+    completed = "completed"
+    disputed = "disputed"
+    voided = "voided"
+
+
+class Match(Base):
+    """Top-level match record. Thin by design; most data lives in related tables."""
+
+    __tablename__ = "matches"
+    __table_args__ = (
+        Index(
+            "ix_matches_created_by_user_id_created_at",
+            "created_by_user_id",
+            text("created_at DESC"),
+        ),
+        Index("ix_matches_status", "status"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    )
+    match_settings_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("match_settings.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    status: Mapped[MatchStatus] = mapped_column(
+        Enum(MatchStatus, name="match_status"),
+        nullable=False,
+        server_default=MatchStatus.pending.value,
+    )
+    created_by_user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    match_settings: Mapped[MatchSettings] = relationship(back_populates="matches")
+    created_by: Mapped["User"] = relationship("User")
+    sides: Mapped[list["MatchSide"]] = relationship(
+        back_populates="match",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    games: Mapped[list["MatchGame"]] = relationship(
+        back_populates="match",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    # A side player is "owned" by its MatchSide (which carries delete-orphan);
+    # this denormalized convenience collection only needs delete cascade so a
+    # deleted match takes its side players with it via the DB ON DELETE CASCADE.
+    side_players: Mapped[list["MatchSidePlayer"]] = relationship(
+        back_populates="match",
+        cascade="all",
+        passive_deletes=True,
+    )
