@@ -36,8 +36,6 @@ function pendingMatch(): MatchRead {
   }
 }
 
-// NewMatchPage navigates to /dashboard on success, so the test router needs
-// both routes mounted.
 function renderNewMatch() {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -53,8 +51,20 @@ function renderNewMatch() {
     path: '/dashboard',
     component: () => <div>Dashboard route</div>,
   })
+  const scoringRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/matches/$matchId/games/$gameId/scores/new',
+    component: () => {
+      const { matchId, gameId } = scoringRoute.useParams()
+      return <div>Scoring route {matchId} game {gameId}</div>
+    },
+  })
   const router = createRouter({
-    routeTree: rootRoute.addChildren([newMatchRoute, dashboardRoute]),
+    routeTree: rootRoute.addChildren([
+      newMatchRoute,
+      dashboardRoute,
+      scoringRoute,
+    ]),
     history: createMemoryHistory({ initialEntries: ['/matches/new'] }),
   })
   return render(
@@ -106,7 +116,9 @@ describe('NewMatchPage', () => {
     await user.click(screen.getByRole('button', { name: /start match/i }))
 
     await waitFor(() =>
-      expect(screen.getByText('Dashboard route')).toBeInTheDocument(),
+      expect(
+        screen.getByText('Scoring route m-test game 1'),
+      ).toBeInTheDocument(),
     )
     expect(captured).toEqual({
       opponent_user_id: 'pl-1',
@@ -132,7 +144,9 @@ describe('NewMatchPage', () => {
     await user.click(screen.getByRole('button', { name: /start match/i }))
 
     await waitFor(() =>
-      expect(screen.getByText('Dashboard route')).toBeInTheDocument(),
+      expect(
+        screen.getByText('Scoring route m-test game 1'),
+      ).toBeInTheDocument(),
     )
     // Guest / TBD opponents can't be rated, so `rated` is forced false.
     expect(captured).toEqual({

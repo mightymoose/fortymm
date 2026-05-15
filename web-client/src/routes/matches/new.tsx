@@ -130,12 +130,15 @@ function MatchCard() {
     // can never be rated regardless of the toggle.
     const isRegistered = opponent?.kind === 'registered'
     try {
-      await createMatch.mutateAsync({
+      const created = await createMatch.mutateAsync({
         opponent_user_id: isRegistered ? opponent.id : null,
         best_of: bestOf,
         rated: isRegistered && rated,
       })
-      navigate({ to: '/dashboard' })
+      navigate({
+        to: '/matches/$matchId/games/$gameId/scores/new',
+        params: { matchId: created.id, gameId: '1' },
+      })
     } catch (err) {
       setError(
         err instanceof ApiError
