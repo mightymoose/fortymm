@@ -1,10 +1,6 @@
 ---
-name: land-the-plane
-description: Use this skill when the user says "/land-the-plane", "land the plane", or otherwise asks to finish/ship the current branch end-to-end. Runs `/simplify` on the changed code, executes all test suites, pushes the branch, then kicks off a code review via `/review`.
-version: 1.0.0
+description: Ship the current branch end-to-end — run /simplify, all test suites, push, then kick off /review.
 ---
-
-# Land the Plane
 
 End-to-end "ship it" workflow for the current branch. Run the steps below **in order**. If any step fails, stop and report the failure to the user — do not skip ahead.
 
@@ -12,7 +8,7 @@ End-to-end "ship it" workflow for the current branch. Run the steps below **in o
 
 1. Confirm you're in a git repository and on a feature branch (not `main`). If on `main`, stop and tell the user.
 2. Run `git status` and `git diff --stat origin/main...HEAD` so you (and the user) can see what's about to ship.
-3. If there are uncommitted changes unrelated to the branch's work-in-progress, surface them and ask the user whether to commit or abort — do **not** auto-commit pre-existing work without acknowledgement. (Edits produced by Step 1's `simplify` are pre-authorized to commit, since the user invoked this skill expecting that.)
+3. If there are uncommitted changes unrelated to the branch's work-in-progress, surface them and ask the user whether to commit or abort — do **not** auto-commit pre-existing work without acknowledgement. (Edits produced by Step 1's `simplify` are pre-authorized to commit, since the user invoked this command expecting that.)
 
 ## Step 1 — Simplify
 
