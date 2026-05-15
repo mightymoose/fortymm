@@ -189,6 +189,10 @@
 .match-list-page table.matches tbody tr:hover {
   background: var(--bg-hover);
 }
+.match-list-page table.matches tbody tr.is-clickable:focus-visible {
+  outline: 2px solid var(--ball-500);
+  outline-offset: -2px;
+}
 .match-list-page table.matches tbody tr.is-live td:first-child {
   box-shadow: inset 2px 0 0 var(--serve-500);
 }

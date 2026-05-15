@@ -20,6 +20,7 @@ import { Route as MatchesNewRouteImport } from './routes/matches/new'
 import { Route as AdminUsersRouteImport } from './routes/admin.users'
 import { Route as AdminRolesRouteImport } from './routes/admin.roles'
 import { Route as AdminPermissionsRouteImport } from './routes/admin.permissions'
+import { Route as MatchesMatchIdIndexRouteImport } from './routes/matches.$matchId.index'
 import { Route as MatchesMatchIdGamesGameIdScoresNewRouteImport } from './routes/matches.$matchId.games.$gameId.scores.new'
 
 const SettingsRoute = SettingsRouteImport.update({
@@ -77,6 +78,11 @@ const AdminPermissionsRoute = AdminPermissionsRouteImport.update({
   path: '/permissions',
   getParentRoute: () => AdminRoute,
 } as any)
+const MatchesMatchIdIndexRoute = MatchesMatchIdIndexRouteImport.update({
+  id: '/matches/$matchId/',
+  path: '/matches/$matchId/',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const MatchesMatchIdGamesGameIdScoresNewRoute =
   MatchesMatchIdGamesGameIdScoresNewRouteImport.update({
     id: '/matches/$matchId/games/$gameId/scores/new',
@@ -96,6 +102,7 @@ export interface FileRoutesByFullPath {
   '/matches/new': typeof MatchesNewRoute
   '/admin/': typeof AdminIndexRoute
   '/matches/': typeof MatchesIndexRoute
+  '/matches/$matchId/': typeof MatchesMatchIdIndexRoute
   '/matches/$matchId/games/$gameId/scores/new': typeof MatchesMatchIdGamesGameIdScoresNewRoute
 }
 export interface FileRoutesByTo {
@@ -109,6 +116,7 @@ export interface FileRoutesByTo {
   '/matches/new': typeof MatchesNewRoute
   '/admin': typeof AdminIndexRoute
   '/matches': typeof MatchesIndexRoute
+  '/matches/$matchId': typeof MatchesMatchIdIndexRoute
   '/matches/$matchId/games/$gameId/scores/new': typeof MatchesMatchIdGamesGameIdScoresNewRoute
 }
 export interface FileRoutesById {
@@ -124,6 +132,7 @@ export interface FileRoutesById {
   '/matches/new': typeof MatchesNewRoute
   '/admin/': typeof AdminIndexRoute
   '/matches/': typeof MatchesIndexRoute
+  '/matches/$matchId/': typeof MatchesMatchIdIndexRoute
   '/matches/$matchId/games/$gameId/scores/new': typeof MatchesMatchIdGamesGameIdScoresNewRoute
 }
 export interface FileRouteTypes {
@@ -140,6 +149,7 @@ export interface FileRouteTypes {
     | '/matches/new'
     | '/admin/'
     | '/matches/'
+    | '/matches/$matchId/'
     | '/matches/$matchId/games/$gameId/scores/new'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -153,6 +163,7 @@ export interface FileRouteTypes {
     | '/matches/new'
     | '/admin'
     | '/matches'
+    | '/matches/$matchId'
     | '/matches/$matchId/games/$gameId/scores/new'
   id:
     | '__root__'
@@ -167,6 +178,7 @@ export interface FileRouteTypes {
     | '/matches/new'
     | '/admin/'
     | '/matches/'
+    | '/matches/$matchId/'
     | '/matches/$matchId/games/$gameId/scores/new'
   fileRoutesById: FileRoutesById
 }
@@ -178,6 +190,7 @@ export interface RootRouteChildren {
   SettingsRoute: typeof SettingsRoute
   MatchesNewRoute: typeof MatchesNewRoute
   MatchesIndexRoute: typeof MatchesIndexRoute
+  MatchesMatchIdIndexRoute: typeof MatchesMatchIdIndexRoute
   MatchesMatchIdGamesGameIdScoresNewRoute: typeof MatchesMatchIdGamesGameIdScoresNewRoute
 }
 
@@ -260,6 +273,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminPermissionsRouteImport
       parentRoute: typeof AdminRoute
     }
+    '/matches/$matchId/': {
+      id: '/matches/$matchId/'
+      path: '/matches/$matchId'
+      fullPath: '/matches/$matchId/'
+      preLoaderRoute: typeof MatchesMatchIdIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/matches/$matchId/games/$gameId/scores/new': {
       id: '/matches/$matchId/games/$gameId/scores/new'
       path: '/matches/$matchId/games/$gameId/scores/new'
@@ -294,6 +314,7 @@ const rootRouteChildren: RootRouteChildren = {
   SettingsRoute: SettingsRoute,
   MatchesNewRoute: MatchesNewRoute,
   MatchesIndexRoute: MatchesIndexRoute,
+  MatchesMatchIdIndexRoute: MatchesMatchIdIndexRoute,
   MatchesMatchIdGamesGameIdScoresNewRoute:
     MatchesMatchIdGamesGameIdScoresNewRoute,
 }

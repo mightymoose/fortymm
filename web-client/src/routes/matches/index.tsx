@@ -1,5 +1,5 @@
 import { Fragment, useMemo, useState } from 'react'
-import { createFileRoute } from '@tanstack/react-router'
+import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import {
   ChevronLeft,
   ChevronRight,
@@ -12,6 +12,7 @@ import {
 } from 'lucide-react'
 
 import { AppShell } from '@/components/app-shell'
+import { cn } from '@/lib/utils'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -558,6 +559,11 @@ interface MatchTableProps {
 }
 
 function MatchTable({ rows, sort, setSort, onClear }: MatchTableProps) {
+  const navigate = useNavigate()
+  function openMatch(id: number) {
+    void navigate({ to: '/matches/$matchId', params: { matchId: String(id) } })
+  }
+
   if (rows.length === 0) {
     return (
       <div className="empty">
@@ -587,7 +593,20 @@ function MatchTable({ rows, sort, setSort, onClear }: MatchTableProps) {
       </thead>
       <tbody>
         {rows.map((m) => (
-          <tr key={m.id} className={m.status === 'live' ? 'is-live' : ''}>
+          <tr
+            key={m.id}
+            className={cn('is-clickable', m.status === 'live' && 'is-live')}
+            role="link"
+            tabIndex={0}
+            aria-label={`Open match M-${m.id}, ${m.a.name} vs ${m.b.name}`}
+            onClick={() => openMatch(m.id)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault()
+                openMatch(m.id)
+              }
+            }}
+          >
             <td className="id-cell">M-{m.id}</td>
             <td><ContextCell m={m} /></td>
             <td>
