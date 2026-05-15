@@ -1,5 +1,4 @@
 import type { CSSProperties, ReactNode } from 'react'
-import { Fragment } from 'react'
 import {
   ArrowRight,
   Calendar,
@@ -35,9 +34,6 @@ const C = {
 const UI = "'Space Grotesk', ui-sans-serif, system-ui, sans-serif"
 const MONO = "'JetBrains Mono', ui-monospace, monospace"
 
-// =============================================================================
-// Primitives
-// =============================================================================
 
 function Overline({
   children,
@@ -263,6 +259,32 @@ function Sparkline({
 type ButtonKind = 'primary' | 'secondary' | 'ghost'
 type ButtonSize = 'sm' | 'md' | 'lg'
 
+const buttonSizes = {
+  sm: { h: 32, px: 12, font: 13 },
+  md: { h: 40, px: 16, font: 14 },
+  lg: { h: 52, px: 24, font: 16 },
+}
+
+const buttonKinds: Record<ButtonKind, CSSProperties> = {
+  primary: {
+    background: C.ball500,
+    color: C.ink950,
+    border: '1px solid transparent',
+    boxShadow:
+      '0 4px 14px rgba(255,122,26,0.35), inset 0 1px 0 rgba(255,255,255,0.18)',
+  },
+  secondary: {
+    background: 'transparent',
+    color: C.chalk100,
+    border: `1px solid ${C.ink500}`,
+  },
+  ghost: {
+    background: 'transparent',
+    color: C.chalk300,
+    border: '1px solid transparent',
+  },
+}
+
 function Button({
   children,
   kind = 'primary',
@@ -280,31 +302,7 @@ function Button({
   fullWidth?: boolean
   style?: CSSProperties
 }) {
-  const sizes = {
-    sm: { h: 32, px: 12, font: 13 },
-    md: { h: 40, px: 16, font: 14 },
-    lg: { h: 52, px: 24, font: 16 },
-  }
-  const kinds: Record<ButtonKind, CSSProperties> = {
-    primary: {
-      background: C.ball500,
-      color: C.ink950,
-      border: '1px solid transparent',
-      boxShadow:
-        '0 4px 14px rgba(255,122,26,0.35), inset 0 1px 0 rgba(255,255,255,0.18)',
-    },
-    secondary: {
-      background: 'transparent',
-      color: C.chalk100,
-      border: `1px solid ${C.ink500}`,
-    },
-    ghost: {
-      background: 'transparent',
-      color: C.chalk300,
-      border: '1px solid transparent',
-    },
-  }
-  const s = sizes[size]
+  const s = buttonSizes[size]
   return (
     <button
       type="button"
@@ -321,7 +319,7 @@ function Button({
         cursor: 'pointer',
         whiteSpace: 'nowrap',
         width: fullWidth ? '100%' : 'auto',
-        ...kinds[kind],
+        ...buttonKinds[kind],
         ...style,
       }}
     >
@@ -402,9 +400,6 @@ function SectionHeader({
   )
 }
 
-// =============================================================================
-// Page title
-// =============================================================================
 
 function PageTitle({
   greeting,
@@ -447,9 +442,6 @@ function PageTitle({
   )
 }
 
-// =============================================================================
-// Score-pending banner
-// =============================================================================
 
 function PaddleBadge({ accent }: { accent: string }) {
   return (
@@ -728,9 +720,6 @@ function ScoreBanner({
   )
 }
 
-// =============================================================================
-// Up next row
-// =============================================================================
 
 type UpcomingMatch = {
   label: string
@@ -744,7 +733,7 @@ type UpcomingMatch = {
 
 type Deadline = { name: string; detail: string; closes: string; urgent?: boolean }
 
-function NextMatchCard({ m }: { m: UpcomingMatch }) {
+function NextMatchCard({ match }: { match: UpcomingMatch }) {
   return (
     <Card padding={0} style={{ overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
       <div
@@ -755,10 +744,10 @@ function NextMatchCard({ m }: { m: UpcomingMatch }) {
           gap: 10,
         }}
       >
-        <Overline color={C.chalk500}>{m.label}</Overline>
+        <Overline color={C.chalk500}>{match.label}</Overline>
         <div style={{ flex: 1 }} />
         <Pill mono tone="soft">
-          {m.when}
+          {match.when}
         </Pill>
       </div>
       <div
@@ -780,19 +769,19 @@ function NextMatchCard({ m }: { m: UpcomingMatch }) {
         >
           VS
         </div>
-        <Avatar name={m.opponent.name} size={44} />
+        <Avatar name={match.opponent.name} size={44} />
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ font: `600 16px ${UI}`, color: C.chalk50, lineHeight: 1.2 }}>
-            {m.opponent.name}
+            {match.opponent.name}
           </div>
           <div style={{ font: `400 13px ${UI}`, color: C.chalk300, marginTop: 2 }}>
             <Mono size={12} color={C.chalk300}>
-              {m.opponent.rating}
+              {match.opponent.rating}
             </Mono>
             <span style={{ color: C.chalk500, margin: '0 8px' }}>·</span>
             H2H{' '}
             <Mono size={12} color={C.chalk300}>
-              {m.h2h}
+              {match.h2h}
             </Mono>
           </div>
         </div>
@@ -809,13 +798,13 @@ function NextMatchCard({ m }: { m: UpcomingMatch }) {
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <MapPin size={13} color={C.chalk500} strokeWidth={1.75} />
-          <span style={{ font: `500 12px ${UI}`, color: C.chalk100 }}>{m.court}</span>
+          <span style={{ font: `500 12px ${UI}`, color: C.chalk100 }}>{match.court}</span>
         </div>
         <div style={{ width: 1, height: 14, background: C.ink600 }} />
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <Trophy size={13} color={C.chalk500} strokeWidth={1.75} />
           <span style={{ font: `500 12px ${UI}`, color: C.chalk100 }}>
-            {m.event} · {m.round}
+            {match.event} · {match.round}
           </span>
         </div>
         <div style={{ flex: 1 }} />
@@ -952,7 +941,7 @@ function UpNextRow({
           gap: 14,
         }}
       >
-        <NextMatchCard m={match} />
+        <NextMatchCard match={match} />
         <CheckinCard event={checkin.event} closesIn={checkin.closesIn} />
         <DeadlineStack deadlines={deadlines} />
       </div>
@@ -960,9 +949,6 @@ function UpNextRow({
   )
 }
 
-// =============================================================================
-// Your game row
-// =============================================================================
 
 type RecentResult = {
   opp: string
@@ -1223,9 +1209,6 @@ function YourGameRow({
   )
 }
 
-// =============================================================================
-// Around you row
-// =============================================================================
 
 type ClubActivity = { who: string; verb: string; target: string; when: string; live?: boolean }
 type Tournament = {
@@ -1290,9 +1273,9 @@ function ClubActivityCard({
         </div>
       </div>
       <div style={{ padding: '4px 0' }}>
-        {activity.map((a, i) => (
+        {activity.map((a) => (
           <div
-            key={i}
+            key={`${a.who}-${a.when}`}
             style={{
               padding: '8px 18px',
               display: 'flex',
@@ -1495,9 +1478,6 @@ function AroundYouRow({
   )
 }
 
-// =============================================================================
-// Static mock data
-// =============================================================================
 
 const DATA = {
   banner: {
@@ -1593,36 +1573,31 @@ const DATA = {
   } satisfies Suggestion,
 }
 
-// =============================================================================
-// Page
-// =============================================================================
 
 export function DashboardPage() {
   return (
-    <Fragment>
-      <div
-        style={{
-          maxWidth: 1280,
-          margin: '0 auto',
-          padding: '28px 32px 40px',
-          width: '100%',
-          boxSizing: 'border-box',
-        }}
-      >
-        <PageTitle greeting="Hi, Aimee" subtitle="3 things need your attention" />
-        <ScoreBanner {...DATA.banner} />
-        <UpNextRow
-          match={DATA.upcoming}
-          checkin={DATA.checkin}
-          deadlines={DATA.deadlines}
-        />
-        <YourGameRow rating={DATA.rating} recent={DATA.recent} streak={DATA.streak} />
-        <AroundYouRow
-          club={DATA.club}
-          tournaments={DATA.tournaments}
-          suggestion={DATA.suggestion}
-        />
-      </div>
-    </Fragment>
+    <div
+      style={{
+        maxWidth: 1280,
+        margin: '0 auto',
+        padding: '28px 32px 40px',
+        width: '100%',
+        boxSizing: 'border-box',
+      }}
+    >
+      <PageTitle greeting="Hi, Aimee" subtitle="3 things need your attention" />
+      <ScoreBanner {...DATA.banner} />
+      <UpNextRow
+        match={DATA.upcoming}
+        checkin={DATA.checkin}
+        deadlines={DATA.deadlines}
+      />
+      <YourGameRow rating={DATA.rating} recent={DATA.recent} streak={DATA.streak} />
+      <AroundYouRow
+        club={DATA.club}
+        tournaments={DATA.tournaments}
+        suggestion={DATA.suggestion}
+      />
+    </div>
   )
 }
