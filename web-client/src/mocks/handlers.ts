@@ -22,6 +22,10 @@ export const mockPlayers = [
   player({ username: 'park.j' }),
 ]
 
+// The recent-opponents endpoint is capped at six chips; the dev/test mock just
+// serves the first slice in roster order.
+export const mockRecentOpponents = mockPlayers.slice(0, 6)
+
 const state = createRbacState(DEMO_SEED)
 
 async function readJson(request: Request): Promise<unknown> {
@@ -67,9 +71,19 @@ export const handlers = [
     await delay(600)
     return HttpResponse.json(mockSession)
   }),
-  http.get('*/v1/players', async () => {
+  http.get('*/v1/players/recent', async () => {
     await delay(300)
-    return HttpResponse.json(mockPlayers)
+    return HttpResponse.json(mockRecentOpponents)
+  }),
+  http.get('*/v1/players/search', async ({ request }) => {
+    await delay(200)
+    const q = new URL(request.url).searchParams.get('q')?.trim().toLowerCase()
+    if (!q) return HttpResponse.json([])
+    return HttpResponse.json(
+      mockPlayers
+        .filter((p) => p.username.toLowerCase().includes(q))
+        .slice(0, 10),
+    )
   }),
   http.post('*/v1/matches', async ({ request }) => {
     await delay(400)

@@ -182,7 +182,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/players": {
+    "/v1/players/recent": {
         parameters: {
             query?: never;
             header?: never;
@@ -190,11 +190,38 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * List Players
-         * @description List registered users the caller can pick as an opponent (everyone but
-         *     themselves).
+         * List Recent Opponents
+         * @description Opponents to feature in the new-match picker.
+         *
+         *     Ranked by how recently the caller last played them (most recent first).
+         *     A player with little or no match history is backfilled with other
+         *     registered users, alphabetically, so the list is never short or empty.
          */
-        get: operations["list_players_v1_players_get"];
+        get: operations["list_recent_opponents_v1_players_recent_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/players/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Search Players
+         * @description Username substring search backing the opponent typeahead.
+         *
+         *     Case-insensitive, excludes the caller, and caps the result count so the
+         *     client never has to fetch and filter the whole roster. An empty query
+         *     matches nothing.
+         */
+        get: operations["search_players_v1_players_search_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1027,9 +1054,46 @@ export interface operations {
             };
         };
     };
-    list_players_v1_players_get: {
+    list_recent_opponents_v1_players_recent_get: {
         parameters: {
-            query?: never;
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlayerRead"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    search_players_v1_players_search_get: {
+        parameters: {
+            query: {
+                /** @description Username substring to match against. */
+                q: string;
+                limit?: number;
+            };
             header?: never;
             path?: never;
             cookie?: {

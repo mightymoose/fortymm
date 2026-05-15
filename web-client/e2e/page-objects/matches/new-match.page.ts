@@ -25,6 +25,17 @@ export class NewMatchPage {
   readonly summaryTop: Locator
   readonly summarySub: Locator
   readonly emptyPlayers: Locator
+  /** Placeholder grid shown while recent opponents load. */
+  readonly recentSkeleton: Locator
+  /** Inline fallback when a players request fails. */
+  readonly pickerError: Locator
+  /** "Try again" button inside the picker error fallback. */
+  readonly pickerRetry: Locator
+  /** Hint shown in the typeahead before anything is typed. */
+  readonly searchHint: Locator
+  /** "No one matches …" message in the typeahead dropdown. */
+  readonly searchNoMatch: Locator
+  readonly searchAllButton: Locator
 
   static async open(
     page: Page,
@@ -46,12 +57,20 @@ export class NewMatchPage {
     this.youName = page.locator('.nm-you-strip .name')
     this.startButton = page.getByRole('button', { name: /start match/i })
     this.cancelButton = page.getByRole('button', { name: /^cancel$/i })
-    this.error = page.getByRole('alert')
+    this.error = page.locator('.nm-error')
     this.ratedSwitch = page.getByRole('switch', { name: /rated match/i })
     this.selectedOpponentName = page.locator('.nm-selected .name')
     this.summaryTop = page.locator('.nm-summary .top')
     this.summarySub = page.locator('.nm-summary .sub')
     this.emptyPlayers = page.getByText(/no other players yet/i)
+    this.recentSkeleton = page.getByRole('status', { name: /loading players/i })
+    this.pickerError = page.locator('.nm-picker-error')
+    this.pickerRetry = page.getByRole('button', { name: /try again/i })
+    this.searchHint = page.getByText(/start typing to search/i)
+    this.searchNoMatch = page.getByText(/no one matches/i)
+    this.searchAllButton = page.getByRole('button', {
+      name: /search all players/i,
+    })
   }
 
   /** A registered-player chip in the default picker grid. */
@@ -83,9 +102,7 @@ export class NewMatchPage {
   }
 
   async openSearch(): Promise<void> {
-    await this.page
-      .getByRole('button', { name: /search all players/i })
-      .click()
+    await this.searchAllButton.click()
   }
 
   async search(term: string): Promise<void> {

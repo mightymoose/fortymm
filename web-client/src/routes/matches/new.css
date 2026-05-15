@@ -455,6 +455,105 @@
   color: var(--fg-3);
 }
 
+/* --- Recent picker — skeleton --- */
+.nm-chip-skel {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--ink-900);
+  border: 1px solid var(--ink-600);
+  border-radius: 10px;
+}
+.nm-chip-skel .av,
+.nm-chip-skel .line {
+  background: var(--ink-700);
+  animation: nm-skel-pulse 1.4s var(--ease-out) infinite;
+}
+.nm-chip-skel .av {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  border-radius: 999px;
+}
+.nm-chip-skel .lines {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 7px;
+}
+.nm-chip-skel .line {
+  height: 9px;
+  border-radius: 4px;
+}
+.nm-chip-skel .line.short {
+  width: 55%;
+}
+@keyframes nm-skel-pulse {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 0.9;
+  }
+}
+
+/* --- Recent picker — load error --- */
+.nm-picker-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px 14px 16px;
+  background: rgba(255, 77, 109, 0.05);
+  border: 1px solid rgba(255, 77, 109, 0.35);
+  border-radius: 12px;
+}
+.nm-picker-error .icon {
+  flex-shrink: 0;
+  margin-top: 1px;
+  color: var(--loss, #ff4d6d);
+}
+.nm-picker-error .body {
+  flex: 1;
+  min-width: 0;
+}
+.nm-picker-error .t {
+  font: 600 14px var(--font-ui);
+  color: var(--fg-1);
+}
+.nm-picker-error .d {
+  margin-top: 3px;
+  font: 400 12px var(--font-ui);
+  line-height: 1.45;
+  color: var(--fg-3);
+}
+.nm-picker-retry {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  background: transparent;
+  border: 1px solid var(--ink-500);
+  border-radius: 8px;
+  font: 600 12px var(--font-ui);
+  color: var(--fg-2);
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out);
+}
+.nm-picker-retry:hover {
+  background: var(--bg-hover);
+  border-color: var(--ball-500);
+  color: var(--ball-500);
+}
+.nm-picker-retry:focus-visible {
+  outline: 2px solid var(--ball-400);
+  outline-offset: 2px;
+}
+
 /* --- Settings row --- */
 .nm-settings {
   display: grid;
