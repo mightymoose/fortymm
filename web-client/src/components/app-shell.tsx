@@ -43,7 +43,8 @@ const NAV_SECTIONS: NavSection[] = [
         ),
       },
       {
-        label: 'Live Matches',
+        label: 'Matches',
+        to: '/matches',
         badge: { label: '12', live: true },
         icon: (
           <svg
