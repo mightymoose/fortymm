@@ -642,12 +642,6 @@ body.dark.fortymm-theme {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.app-shell__user-chev {
-  color: var(--fg-3);
-  display: grid;
-  place-items: center;
-}
-
 .app-shell__user-menu--loading {
   cursor: default;
 }
@@ -791,35 +785,6 @@ body.dark.fortymm-theme {
   color: var(--fg-2);
 }
 
-.app-shell__nav-badge {
-  margin-left: auto;
-  font-family: var(--font-mono);
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--fg-3);
-  background: var(--bg-card);
-  border: 1px solid var(--border-subtle);
-  padding: 2px 6px;
-  border-radius: 999px;
-  line-height: 1;
-}
-.app-shell__nav-badge--live {
-  color: var(--ink-950);
-  background: var(--serve-500);
-  border-color: transparent;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-.app-shell__nav-badge--live::before {
-  content: '';
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--ink-950);
-  animation: ball-pulse 1.4s ease-in-out infinite;
-}
-
 .app-shell__nav-link.is-active {
   background: var(--bg-accent-soft);
   color: var(--ball-200);
@@ -911,54 +876,6 @@ body.dark.fortymm-theme {
   background: var(--bg-hover);
 }
 
-.app-shell__sidebar-footer {
-  border-top: 1px solid var(--border-subtle);
-  padding: 12px;
-}
-.app-shell__promo {
-  background: linear-gradient(
-    160deg,
-    rgba(255, 122, 26, 0.14),
-    rgba(255, 122, 26, 0.04) 60%,
-    transparent
-  );
-  border: 1px solid rgba(255, 122, 26, 0.25);
-  border-radius: 10px;
-  padding: 16px;
-}
-.app-shell__promo-title {
-  font-family: var(--font-display);
-  font-size: 18px;
-  letter-spacing: 0.04em;
-  color: var(--fg-1);
-  margin-bottom: 4px;
-}
-.app-shell__promo-copy {
-  font-size: 11px;
-  color: var(--fg-3);
-  line-height: 1.25;
-  margin-bottom: 12px;
-}
-.app-shell__promo-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  background: var(--ball-500);
-  color: var(--ink-950);
-  border: none;
-  border-radius: 6px;
-  font-family: var(--font-ui);
-  font-weight: 600;
-  font-size: 12px;
-  padding: 7px 12px;
-  cursor: pointer;
-  text-decoration: none;
-  transition: background 120ms cubic-bezier(0.2, 0.8, 0.2, 1);
-}
-.app-shell__promo-btn:hover {
-  background: var(--ball-400);
-}
-
 /* ---------- Main column ---------- */
 .app-shell__main {
   min-width: 0;
@@ -1041,9 +958,6 @@ body.dark.fortymm-theme {
   .app-shell__nav-link,
   .app-shell__user-menu {
     transition: none !important;
-  }
-  .app-shell__nav-badge--live::before {
-    animation: none !important;
   }
 }
 
