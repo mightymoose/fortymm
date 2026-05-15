@@ -36,8 +36,6 @@ function pendingMatch(): MatchRead {
   }
 }
 
-// NewMatchPage navigates to the scoring route on success and to /dashboard on
-// cancel, so the test router needs all three mounted.
 function renderNewMatch() {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
