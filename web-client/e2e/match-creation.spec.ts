@@ -2,6 +2,10 @@ import { expect, test } from '@playwright/test'
 import { NewMatchPage } from './page-objects/matches/new-match.page'
 import { CREATOR_USERNAME } from './page-objects/matches/match-store'
 
+// Successful match creation lands on the scoring page for game 1 of the new
+// match's id (the factory mints ids like `m-1`).
+const SCORING_URL = /\/matches\/[^/]+\/games\/1\/scores\/new$/
+
 // Stable, explicit ids so request-body assertions can name them.
 const ADA = { id: 'pl-ada', username: 'ada.lovelace' }
 const GRACE = { id: 'pl-grace', username: 'grace.hopper' }
@@ -76,7 +80,7 @@ test.describe('New match — creating a match', () => {
     await expect(nm.summaryTop).toContainText('You vs')
     await nm.start()
 
-    await expect(page).toHaveURL(/\/dashboard$/)
+    await expect(page).toHaveURL(SCORING_URL)
     expect(nm.store.createdMatches).toEqual([
       { opponent_user_id: GRACE.id, best_of: 5, rated: true },
     ])
@@ -91,7 +95,7 @@ test.describe('New match — creating a match', () => {
     await expect(nm.summarySub).toContainText('Best of 7 · first to 4')
     await nm.start()
 
-    await expect(page).toHaveURL(/\/dashboard$/)
+    await expect(page).toHaveURL(SCORING_URL)
     expect(nm.store.createdMatches).toEqual([
       { opponent_user_id: ADA.id, best_of: 7, rated: true },
     ])
@@ -108,7 +112,7 @@ test.describe('New match — creating a match', () => {
     await expect(nm.summarySub).toContainText('Unrated')
     await nm.start()
 
-    await expect(page).toHaveURL(/\/dashboard$/)
+    await expect(page).toHaveURL(SCORING_URL)
     expect(nm.store.createdMatches).toEqual([
       { opponent_user_id: ADA.id, best_of: 5, rated: false },
     ])
@@ -122,7 +126,7 @@ test.describe('New match — creating a match', () => {
     await nm.startWithoutOpponent()
     await nm.start()
 
-    await expect(page).toHaveURL(/\/dashboard$/)
+    await expect(page).toHaveURL(SCORING_URL)
     expect(nm.store.createdMatches).toEqual([
       { opponent_user_id: null, best_of: 5, rated: false },
     ])
@@ -140,7 +144,7 @@ test.describe('New match — creating a match', () => {
     await expect(nm.summarySub).toContainText('Unrated')
     await nm.start()
 
-    await expect(page).toHaveURL(/\/dashboard$/)
+    await expect(page).toHaveURL(SCORING_URL)
     expect(nm.store.createdMatches).toEqual([
       { opponent_user_id: null, best_of: 5, rated: false },
     ])
@@ -159,7 +163,7 @@ test.describe('New match — picking an opponent', () => {
     await expect(nm.selectedOpponentName).toHaveText(LINUS.username)
 
     await nm.start()
-    await expect(page).toHaveURL(/\/dashboard$/)
+    await expect(page).toHaveURL(SCORING_URL)
     expect(nm.store.createdMatches).toEqual([
       { opponent_user_id: LINUS.id, best_of: 5, rated: true },
     ])
@@ -175,7 +179,7 @@ test.describe('New match — picking an opponent', () => {
     await expect(nm.selectedOpponentName).toHaveText(BARBARA.username)
     await nm.start()
 
-    await expect(page).toHaveURL(/\/dashboard$/)
+    await expect(page).toHaveURL(SCORING_URL)
     expect(nm.store.createdMatches).toEqual([
       { opponent_user_id: BARBARA.id, best_of: 5, rated: true },
     ])
@@ -205,7 +209,7 @@ test.describe('New match — error handling', () => {
 
     // Only the first create was queued to fail — the retry goes through.
     await nm.start()
-    await expect(page).toHaveURL(/\/dashboard$/)
+    await expect(page).toHaveURL(SCORING_URL)
     expect(nm.store.createdMatches).toHaveLength(2)
   })
 })
