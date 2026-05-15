@@ -719,11 +719,6 @@ function PaginationFooter(props: PaginationProps) {
                     e.preventDefault()
                     setPage(t)
                   }}
-                  className={
-                    t === page
-                      ? 'bg-primary text-primary-foreground hover:bg-[color:var(--ball-400)] hover:text-primary-foreground'
-                      : undefined
-                  }
                 >
                   {t}
                 </PaginationLink>
