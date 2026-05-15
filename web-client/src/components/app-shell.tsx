@@ -6,8 +6,7 @@ import { UserMenu } from './user-menu'
 type NavItem = {
   label: string
   icon: ReactNode
-  active?: boolean
-  to?: string
+  to: string
   children?: Array<{ label: string; to: string; hash?: string; icon: ReactNode }>
 }
 
@@ -130,11 +129,6 @@ export function AppShell({ children }: AppShellProps) {
   const activeHash = useRouterState({
     select: (s) => s.location.hash.replace(/^#/, ''),
   })
-  const [activeLabel, setActiveLabel] = useState(
-    () =>
-      NAV_SECTIONS.flatMap((s) => s.items).find((i) => i.active)?.label ??
-      'Dashboard',
-  )
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -161,16 +155,7 @@ export function AppShell({ children }: AppShellProps) {
     }
   }, [sidebarOpen])
 
-  function handleNavClick(e: React.MouseEvent<HTMLAnchorElement>, label: string) {
-    e.preventDefault()
-    setActiveLabel(label)
-    if (window.matchMedia('(max-width: 960px)').matches) {
-      setSidebarOpen(false)
-    }
-  }
-
-  function handleRouteNavClick(label: string) {
-    setActiveLabel(label)
+  function closeOnMobile() {
     if (window.matchMedia('(max-width: 960px)').matches) {
       setSidebarOpen(false)
     }
@@ -215,36 +200,19 @@ export function AppShell({ children }: AppShellProps) {
               <ul className="app-shell__nav-list">
                 {section.items.map((item) => {
                   const childActive = item.children?.some((c) => pathname === c.to) ?? false
-                  const isActive = item.to
-                    ? pathname === item.to || childActive
-                    : activeLabel === item.label
+                  const isActive = pathname === item.to || childActive
                   const linkClassName = `app-shell__nav-link${isActive && !item.children ? ' is-active' : ''}${item.children && childActive ? ' is-parent-active' : ''}`
-                  const inner = (
-                    <>
-                      <span className="app-shell__nav-icon">{item.icon}</span>
-                      {item.label}
-                    </>
-                  )
                   return (
                     <li key={item.label}>
-                      {item.to ? (
-                        <Link
-                          to={item.to}
-                          className={linkClassName}
-                          onClick={() => handleRouteNavClick(item.label)}
-                        >
-                          {inner}
-                        </Link>
-                      ) : (
-                        <a
-                          href="#"
-                          className={linkClassName}
-                          onClick={(e) => handleNavClick(e, item.label)}
-                        >
-                          {inner}
-                        </a>
-                      )}
-                      {item.children && (isActive || childActive) ? (
+                      <Link
+                        to={item.to}
+                        className={linkClassName}
+                        onClick={closeOnMobile}
+                      >
+                        <span className="app-shell__nav-icon">{item.icon}</span>
+                        {item.label}
+                      </Link>
+                      {item.children && isActive ? (
                         <ul className="app-shell__sub-nav-list">
                           {item.children.map((child) => {
                             const childIsActive =
@@ -256,7 +224,7 @@ export function AppShell({ children }: AppShellProps) {
                                   to={child.to}
                                   hash={child.hash}
                                   className={`app-shell__sub-nav-link${childIsActive ? ' is-active' : ''}`}
-                                  onClick={() => handleRouteNavClick(child.label)}
+                                  onClick={closeOnMobile}
                                 >
                                   <span className="app-shell__nav-icon">{child.icon}</span>
                                   {child.label}
