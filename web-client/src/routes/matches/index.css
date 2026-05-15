@@ -1,8 +1,3 @@
-/* =========================================================================
-   Match list page — ported from Claude Design "Match list.html".
-   All selectors scoped to .match-list-page so they don't bleed.
-   ========================================================================= */
-
 .match-list-page {
   display: flex;
   flex-direction: column;

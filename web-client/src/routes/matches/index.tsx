@@ -1,5 +1,15 @@
 import { Fragment, useMemo, useState } from 'react'
 import { createFileRoute } from '@tanstack/react-router'
+import {
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
+  Inbox,
+  MoreHorizontal,
+  Search,
+} from 'lucide-react'
 
 import { AppShell } from '@/components/app-shell'
 import './index.css'
@@ -7,11 +17,6 @@ import './index.css'
 export const Route = createFileRoute('/matches/')({
   component: MatchesPage,
 })
-
-/* ------------------------------------------------------------------ */
-/*  Mock data — ported from Claude Design "Match list" handoff.       */
-/*  No backend yet; everything in this file is seeded & client-only.  */
-/* ------------------------------------------------------------------ */
 
 type ContextKey = 'tournament' | 'club' | 'casual' | 'ladder'
 type StatusKey = 'live' | 'final' | 'called' | 'scheduled'
@@ -78,6 +83,8 @@ const CONTEXTS: Record<ContextKey, { label: string; short: string }> = {
 
 const TOURNAMENTS = ['Spring Open', 'City Cup', 'River League']
 const CLUBS = ['Riverside TT', 'East Side Pong', 'Downtown Paddle']
+
+const MOCK_TODAY_MS = new Date('2026-05-16T00:00:00').getTime()
 
 const ROUND_DEFS = [
   { code: 'R64', label: 'Round of 64', order: 1 },
@@ -242,79 +249,6 @@ function buildMatch(input: BuildMatchInput): Match {
   }
 }
 
-/* ------------------------------------------------------------------ */
-/*  Icons                                                             */
-/* ------------------------------------------------------------------ */
-
-function IconSearch() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="11" cy="11" r="7" />
-      <line x1="21" y1="21" x2="16.65" y2="16.65" />
-    </svg>
-  )
-}
-function IconCaret() {
-  return (
-    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-      <polyline points="6 9 12 15 18 9" />
-    </svg>
-  )
-}
-function IconChevL() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-      <polyline points="15 18 9 12 15 6" />
-    </svg>
-  )
-}
-function IconChevR() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-      <polyline points="9 18 15 12 9 6" />
-    </svg>
-  )
-}
-function IconChevLL() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-      <polyline points="11 17 6 12 11 7" />
-      <polyline points="18 17 13 12 18 7" />
-    </svg>
-  )
-}
-function IconChevRR() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-      <polyline points="13 17 18 12 13 7" />
-      <polyline points="6 17 11 12 6 7" />
-    </svg>
-  )
-}
-function IconMore() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="5" cy="12" r="1.4" />
-      <circle cx="12" cy="12" r="1.4" />
-      <circle cx="19" cy="12" r="1.4" />
-    </svg>
-  )
-}
-function IconEmpty() {
-  return (
-    <svg viewBox="0 0 64 64" fill="none" stroke="currentColor" strokeWidth="1.5">
-      <ellipse cx="32" cy="44" rx="22" ry="4" />
-      <path d="M14 44V20l36-4v24" />
-      <line x1="14" y1="20" x2="50" y2="16" />
-      <circle cx="46" cy="14" r="3" fill="currentColor" opacity="0.5" />
-    </svg>
-  )
-}
-
-/* ------------------------------------------------------------------ */
-/*  Sub-components                                                    */
-/* ------------------------------------------------------------------ */
-
 interface Counts {
   total: number
   live: number
@@ -332,7 +266,7 @@ function ActionBar({ liveCount }: { liveCount: number }) {
         <span className="live-dot" />
         {String(liveCount).padStart(2, '0')} LIVE
       </span>
-      <div style={{ flex: 1 }} />
+      <div className="filter-spacer" />
       <button type="button" className="ml-btn ghost">Export CSV</button>
       <button type="button" className="ml-btn primary">+ New match</button>
     </div>
@@ -387,7 +321,7 @@ function FilterRow(props: FilterRowProps) {
   return (
     <div className="filter-row">
       <div className="ml-search">
-        <span className="ml-search-icon"><IconSearch /></span>
+        <span className="ml-search-icon"><Search size={16} strokeWidth={2} /></span>
         <input
           placeholder="Search players or match #…"
           value={q}
@@ -422,7 +356,7 @@ function FilterRow(props: FilterRowProps) {
             <option key={k} value={k}>{v.label}</option>
           ))}
         </select>
-        <span className="select-caret"><IconCaret /></span>
+        <span className="select-caret"><ChevronDown size={12} strokeWidth={2.4} /></span>
       </div>
 
       <span className="filter-label">Round</span>
@@ -433,7 +367,7 @@ function FilterRow(props: FilterRowProps) {
             <option key={r.code} value={r.code}>{r.label}</option>
           ))}
         </select>
-        <span className="select-caret"><IconCaret /></span>
+        <span className="select-caret"><ChevronDown size={12} strokeWidth={2.4} /></span>
       </div>
 
       <span className="filter-label">Court</span>
@@ -444,7 +378,7 @@ function FilterRow(props: FilterRowProps) {
             <option key={c} value={String(c)}>Court {c}</option>
           ))}
         </select>
-        <span className="select-caret"><IconCaret /></span>
+        <span className="select-caret"><ChevronDown size={12} strokeWidth={2.4} /></span>
       </div>
 
       {anyFilter && (
@@ -512,10 +446,11 @@ function ScoreCell({ m }: { m: Match }) {
       </span>
     )
   }
+  const winnerIdx = m.winner === 'a' ? 0 : 1
   return (
     <span className="score-cell games">
       {m.games.map((g, i) => {
-        const lost = m.winner === 'a' ? g[0] <= g[1] : g[1] <= g[0]
+        const lost = g[winnerIdx] < g[1 - winnerIdx]
         return (
           <Fragment key={i}>
             <span className={lost ? 'lost' : ''}>{g[0]}–{g[1]}</span>
@@ -542,10 +477,8 @@ function StatusBadge({ status }: { status: StatusKey }) {
 function TimeCell({ t }: { t: Date }) {
   const hh = String(t.getHours()).padStart(2, '0')
   const mm = String(t.getMinutes()).padStart(2, '0')
-  const today = new Date('2026-05-16T00:00:00')
-  const day = new Date(t)
-  day.setHours(0, 0, 0, 0)
-  const diffDays = Math.round((today.getTime() - day.getTime()) / 86400000)
+  const dayMs = new Date(t.getFullYear(), t.getMonth(), t.getDate()).getTime()
+  const diffDays = Math.round((MOCK_TODAY_MS - dayMs) / 86400000)
   let when: string
   if (diffDays === 0) when = `${hh}:${mm}`
   else if (diffDays === 1) when = `yest ${hh}:${mm}`
@@ -651,7 +584,7 @@ function MatchTable({ rows, sort, setSort, onClear, loading, pageSize }: MatchTa
   if (rows.length === 0) {
     return (
       <div className="empty">
-        <div className="empty-icon"><IconEmpty /></div>
+        <div className="empty-icon"><Inbox size={56} strokeWidth={1.5} /></div>
         <div className="empty-title">No matches match these filters</div>
         <div className="empty-sub">Try widening the context, round, or court — or clear the search.</div>
         <button type="button" className="ml-btn ghost empty-clear" onClick={onClear}>Clear filters</button>
@@ -701,7 +634,7 @@ function MatchTable({ rows, sort, setSort, onClear, loading, pageSize }: MatchTa
                 onClick={(e) => e.stopPropagation()}
                 aria-label="Row actions"
               >
-                <IconMore />
+                <MoreHorizontal size={16} strokeWidth={2} />
               </button>
             </td>
           </tr>
@@ -710,10 +643,6 @@ function MatchTable({ rows, sort, setSort, onClear, loading, pageSize }: MatchTa
     </table>
   )
 }
-
-/* ------------------------------------------------------------------ */
-/*  Pagination                                                        */
-/* ------------------------------------------------------------------ */
 
 function paginationRange(current: number, total: number): (number | 'ell-l' | 'ell-r')[] {
   const delta = 1
@@ -767,7 +696,7 @@ function PaginationFooter(props: PaginationProps) {
               <option key={n} value={n}>{n}</option>
             ))}
           </select>
-          <span className="select-caret"><IconCaret /></span>
+          <span className="select-caret"><ChevronDown size={12} strokeWidth={2.4} /></span>
         </div>
       </div>
       <div className="pagination">
@@ -778,7 +707,7 @@ function PaginationFooter(props: PaginationProps) {
           onClick={() => setPage(1)}
           aria-label="First page"
         >
-          <IconChevLL />
+          <ChevronsLeft size={14} strokeWidth={2.4} />
         </button>
         <button
           type="button"
@@ -787,7 +716,7 @@ function PaginationFooter(props: PaginationProps) {
           onClick={() => setPage(page - 1)}
           aria-label="Previous"
         >
-          <IconChevL />
+          <ChevronLeft size={14} strokeWidth={2.4} />
         </button>
         {tokens.map((t, i) =>
           typeof t === 'number' ? (
@@ -811,7 +740,7 @@ function PaginationFooter(props: PaginationProps) {
           onClick={() => setPage(page + 1)}
           aria-label="Next"
         >
-          <IconChevR />
+          <ChevronRight size={14} strokeWidth={2.4} />
         </button>
         <button
           type="button"
@@ -820,18 +749,33 @@ function PaginationFooter(props: PaginationProps) {
           onClick={() => setPage(total)}
           aria-label="Last page"
         >
-          <IconChevRR />
+          <ChevronsRight size={14} strokeWidth={2.4} />
         </button>
       </div>
     </div>
   )
 }
 
-/* ------------------------------------------------------------------ */
-/*  Page component                                                    */
-/* ------------------------------------------------------------------ */
-
 const ALL_MATCHES = buildMatches()
+
+const STATUS_ORDER: Record<StatusKey, number> = { live: 0, called: 1, scheduled: 2, final: 3 }
+const CONTEXT_ORDER: Record<ContextKey, number> = { tournament: 0, club: 1, ladder: 2, casual: 3 }
+
+const COUNTS: Counts = (() => {
+  const out: Counts = { total: ALL_MATCHES.length, live: 0, called: 0, scheduled: 0, final: 0 }
+  ALL_MATCHES.forEach((m) => {
+    out[m.status]++
+  })
+  return out
+})()
+
+const COURT_OPTIONS = (() => {
+  const s = new Set<number>()
+  ALL_MATCHES.forEach((m) => {
+    if (m.court != null) s.add(m.court)
+  })
+  return [...s].sort((a, b) => a - b)
+})()
 
 function MatchesPage() {
   const [q, setQ] = useState('')
@@ -843,28 +787,12 @@ function MatchesPage() {
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(15)
 
-  const filterSig = `${q}|${status}|${context}|${round}|${court}|${pageSize}`
+  const filterSig = `${q}|${status}|${context}|${round}|${court}`
   const [lastFilterSig, setLastFilterSig] = useState(filterSig)
   if (lastFilterSig !== filterSig) {
     setLastFilterSig(filterSig)
     setPage(1)
   }
-
-  const counts: Counts = useMemo(() => {
-    const out: Counts = { total: ALL_MATCHES.length, live: 0, called: 0, scheduled: 0, final: 0 }
-    ALL_MATCHES.forEach((m) => {
-      out[m.status]++
-    })
-    return out
-  }, [])
-
-  const courtOptions = useMemo(() => {
-    const s = new Set<number>()
-    ALL_MATCHES.forEach((m) => {
-      if (m.court != null) s.add(m.court)
-    })
-    return [...s].sort((a, b) => a - b)
-  }, [])
 
   const filtered = useMemo(() => {
     const ql = q.trim().toLowerCase()
@@ -884,8 +812,6 @@ function MatchesPage() {
   const sorted = useMemo(() => {
     const arr = filtered.slice()
     const dirMul = sort.dir === 'asc' ? 1 : -1
-    const STATUS_ORDER: Record<StatusKey, number> = { live: 0, called: 1, scheduled: 2, final: 3 }
-    const CONTEXT_ORDER: Record<ContextKey, number> = { tournament: 0, club: 1, ladder: 2, casual: 3 }
     arr.sort((a, b) => {
       switch (sort.key) {
         case 'id':
@@ -932,15 +858,15 @@ function MatchesPage() {
   return (
     <AppShell>
       <div className="match-list-page">
-        <ActionBar liveCount={counts.live} />
+        <ActionBar liveCount={COUNTS.live} />
         <FilterRow
           q={q} setQ={setQ}
           status={status} setStatus={setStatus}
           context={context} setContext={setContext}
           round={round} setRound={setRound}
           court={court} setCourt={setCourt}
-          counts={counts}
-          courtOptions={courtOptions}
+          counts={COUNTS}
+          courtOptions={COURT_OPTIONS}
           onClear={onClear}
           anyFilter={anyFilter}
         />
