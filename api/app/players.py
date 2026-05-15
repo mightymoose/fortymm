@@ -1,8 +1,9 @@
 from collections.abc import Iterable
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from app.db import get_session
 from app.models import Match, MatchSidePlayer, User
@@ -40,40 +41,43 @@ async def list_recent_opponents(
     A player with little or no match history is backfilled with other
     registered users, alphabetically, so the list is never short or empty.
     """
-    my_match_ids = select(MatchSidePlayer.match_id).where(
-        MatchSidePlayer.user_id == current_user.id
-    )
-    recent_rows = (
-        await db.execute(
-            select(MatchSidePlayer.user_id)
-            .join(Match, Match.id == MatchSidePlayer.match_id)
-            .where(
-                MatchSidePlayer.match_id.in_(my_match_ids),
-                MatchSidePlayer.user_id != current_user.id,
+    # Join the caller's side and the opponent's side of each shared match so
+    # the database returns hydrated User rows already ordered by recency —
+    # one round trip, no Python re-sort.
+    opp = aliased(MatchSidePlayer)
+    mine = aliased(MatchSidePlayer)
+    opponents = list(
+        (
+            await db.execute(
+                select(User)
+                .join(opp, opp.user_id == User.id)
+                .join(Match, Match.id == opp.match_id)
+                .join(
+                    mine,
+                    and_(
+                        mine.match_id == opp.match_id,
+                        mine.user_id == current_user.id,
+                    ),
+                )
+                .where(User.id != current_user.id)
+                .group_by(User.id)
+                .order_by(func.max(Match.created_at).desc())
+                .limit(limit)
             )
-            .group_by(MatchSidePlayer.user_id)
-            .order_by(func.max(Match.created_at).desc())
-            .limit(limit)
         )
-    ).all()
-    recent_ids = [row.user_id for row in recent_rows]
-
-    users_by_id = {
-        user.id: user
-        for user in (
-            await db.execute(select(User).where(User.id.in_(recent_ids)))
-        ).scalars()
-    }
-    opponents = [users_by_id[user_id] for user_id in recent_ids]
+        .scalars()
+        .all()
+    )
 
     if len(opponents) < limit:
+        played_ids = [user.id for user in opponents]
         backfill = (
             (
                 await db.execute(
                     select(User)
                     .where(
                         User.id != current_user.id,
-                        User.id.notin_(recent_ids),
+                        User.id.notin_(played_ids),
                     )
                     .order_by(User.username)
                     .limit(limit - len(opponents))

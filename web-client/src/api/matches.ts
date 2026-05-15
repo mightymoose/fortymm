@@ -36,20 +36,19 @@ export function useRecentOpponents() {
  * Server-side username search backing the opponent typeahead. The query is
  * disabled until `term` is non-empty, so an empty search box never hits the
  * network and the client never fetches the whole roster to filter locally.
- * Pass an already-debounced term.
+ * Pass an already-trimmed, already-debounced term.
  */
 export function usePlayerSearch(term: string) {
-  const trimmed = term.trim()
   return useQuery({
-    queryKey: playerSearchQueryKey(trimmed),
+    queryKey: playerSearchQueryKey(term),
     queryFn: async (): Promise<Player[]> =>
       unwrap(
         'search players',
         await api.GET('/v1/players/search', {
-          params: { query: { q: trimmed } },
+          params: { query: { q: term } },
         }),
       ),
-    enabled: trimmed.length > 0,
+    enabled: term.length > 0,
     staleTime: 1000 * 60,
     // Keep the previous matches on screen while the next term loads, so the
     // dropdown doesn't flicker empty between keystrokes.

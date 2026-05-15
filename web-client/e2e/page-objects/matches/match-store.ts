@@ -118,25 +118,13 @@ export class MatchStore {
 
   private async handleRecent(route: Route): Promise<void> {
     if (this.recentDelayMs) await wait(this.recentDelayMs)
-    const failure = this.recentFailures.shift()
-    if (failure) {
-      if (failure.delayMs) await wait(failure.delayMs)
-      return this.json(route, failure.status, {
-        detail: failure.detail ?? `mock ${failure.status}`,
-      })
-    }
+    if (await this.consumeFailure(route, this.recentFailures)) return
     return this.json(route, 200, this.recentOpponents)
   }
 
   private async handleSearch(route: Route, request: PWRequest): Promise<void> {
     if (this.searchDelayMs) await wait(this.searchDelayMs)
-    const failure = this.searchFailures.shift()
-    if (failure) {
-      if (failure.delayMs) await wait(failure.delayMs)
-      return this.json(route, failure.status, {
-        detail: failure.detail ?? `mock ${failure.status}`,
-      })
-    }
+    if (await this.consumeFailure(route, this.searchFailures)) return
     const q =
       new URL(request.url()).searchParams.get('q')?.trim().toLowerCase() ?? ''
     this.searchQueries.push(q)
@@ -150,14 +138,7 @@ export class MatchStore {
   private async handleCreate(route: Route, request: PWRequest): Promise<void> {
     const body = readJson(request) as MatchCreate
     this.createdMatches.push(body)
-
-    const failure = this.createFailures.shift()
-    if (failure) {
-      if (failure.delayMs) await wait(failure.delayMs)
-      return this.json(route, failure.status, {
-        detail: failure.detail ?? `mock ${failure.status}`,
-      })
-    }
+    if (await this.consumeFailure(route, this.createFailures)) return
 
     const opponent =
       body.opponent_user_id == null
@@ -174,6 +155,21 @@ export class MatchStore {
         rated: body.rated,
       }),
     )
+  }
+
+  /** Pop the next queued failure (if any) and reply with it; returns whether
+   *  a failure was consumed so callers can early-return. */
+  private async consumeFailure(
+    route: Route,
+    queue: FailureSpec[],
+  ): Promise<boolean> {
+    const failure = queue.shift()
+    if (!failure) return false
+    if (failure.delayMs) await wait(failure.delayMs)
+    await this.json(route, failure.status, {
+      detail: failure.detail ?? `mock ${failure.status}`,
+    })
+    return true
   }
 
   private json(route: Route, status: number, body: unknown): Promise<void> {

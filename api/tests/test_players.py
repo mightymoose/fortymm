@@ -1,13 +1,8 @@
-from collections.abc import AsyncIterator
 from datetime import datetime, timedelta, timezone
 
-import pytest_asyncio
-from httpx import ASGITransport, AsyncClient
-from sqlalchemy import select
+from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db import get_session
-from app.main import app
 from app.models import (
     Match,
     MatchSettings,
@@ -16,43 +11,10 @@ from app.models import (
     MatchStatus,
     User,
 )
+from tests._helpers import make_user, start_session
 
 # A fixed anchor so recency-ordering assertions don't depend on wall-clock time.
 BASE_TIME = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
-
-
-@pytest_asyncio.fixture
-async def api_client(db_session: AsyncSession) -> AsyncIterator[AsyncClient]:
-    async def _override() -> AsyncIterator[AsyncSession]:
-        yield db_session
-
-    app.dependency_overrides[get_session] = _override
-    transport = ASGITransport(app=app)
-    async with AsyncClient(
-        transport=transport, base_url="https://testserver"
-    ) as client:
-        yield client
-    app.dependency_overrides.clear()
-
-
-async def _start_session(
-    api_client: AsyncClient, db_session: AsyncSession
-) -> User:
-    """Establish a session cookie on the client; return the signed-in user."""
-    response = await api_client.get("/v1/session")
-    assert response.status_code == 200
-    username = response.json()["data"]["user"]["username"]
-    return (
-        await db_session.execute(select(User).where(User.username == username))
-    ).scalar_one()
-
-
-async def _make_user(db_session: AsyncSession, username: str) -> User:
-    user = User(username=username)
-    db_session.add(user)
-    await db_session.commit()
-    await db_session.refresh(user)
-    return user
 
 
 async def _record_match(
@@ -92,10 +54,10 @@ async def test_recent_opponents_requires_a_session(api_client: AsyncClient):
 async def test_recent_opponents_orders_by_most_recent_match(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    me = await _start_session(api_client, db_session)
-    ana = await _make_user(db_session, "ana")
-    bo = await _make_user(db_session, "bo")
-    cy = await _make_user(db_session, "cy")
+    me = await start_session(api_client, db_session)
+    ana = await make_user(db_session, "ana")
+    bo = await make_user(db_session, "bo")
+    cy = await make_user(db_session, "cy")
 
     # Played ana longest ago, then cy, then bo most recently.
     await _record_match(db_session, me, ana, created_at=BASE_TIME - timedelta(days=3))
@@ -110,9 +72,9 @@ async def test_recent_opponents_orders_by_most_recent_match(
 async def test_recent_opponents_dedupes_repeated_opponents(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    me = await _start_session(api_client, db_session)
-    ana = await _make_user(db_session, "ana")
-    bo = await _make_user(db_session, "bo")
+    me = await start_session(api_client, db_session)
+    ana = await make_user(db_session, "ana")
+    bo = await make_user(db_session, "bo")
 
     # ana appears twice; her most recent match is newer than the bo match.
     await _record_match(db_session, me, ana, created_at=BASE_TIME - timedelta(days=5))
@@ -127,10 +89,10 @@ async def test_recent_opponents_dedupes_repeated_opponents(
 async def test_recent_opponents_backfills_with_other_players(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    me = await _start_session(api_client, db_session)
-    rival = await _make_user(db_session, "rival")
-    await _make_user(db_session, "zoe")
-    await _make_user(db_session, "amy")
+    me = await start_session(api_client, db_session)
+    rival = await make_user(db_session, "rival")
+    await make_user(db_session, "zoe")
+    await make_user(db_session, "amy")
 
     await _record_match(db_session, me, rival, created_at=BASE_TIME)
 
@@ -143,7 +105,7 @@ async def test_recent_opponents_backfills_with_other_players(
 async def test_recent_opponents_for_a_new_player_is_a_non_empty_default(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    await _start_session(api_client, db_session)
+    await start_session(api_client, db_session)
     db_session.add_all(
         [User(username="charlie"), User(username="alice"), User(username="bob")]
     )
@@ -158,8 +120,8 @@ async def test_recent_opponents_for_a_new_player_is_a_non_empty_default(
 async def test_recent_opponents_excludes_the_current_user(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    me = await _start_session(api_client, db_session)
-    rival = await _make_user(db_session, "rival")
+    me = await start_session(api_client, db_session)
+    rival = await make_user(db_session, "rival")
     await _record_match(db_session, me, rival, created_at=BASE_TIME)
 
     response = await api_client.get("/v1/players/recent")
@@ -170,7 +132,7 @@ async def test_recent_opponents_excludes_the_current_user(
 async def test_recent_opponents_is_empty_without_other_users(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    await _start_session(api_client, db_session)
+    await start_session(api_client, db_session)
 
     response = await api_client.get("/v1/players/recent")
     assert response.status_code == 200
@@ -180,9 +142,9 @@ async def test_recent_opponents_is_empty_without_other_users(
 async def test_recent_opponents_respects_the_limit(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    me = await _start_session(api_client, db_session)
+    me = await start_session(api_client, db_session)
     for name in ("ana", "bo", "cy", "di"):
-        await _make_user(db_session, name)
+        await make_user(db_session, name)
 
     response = await api_client.get("/v1/players/recent", params={"limit": 2})
     assert response.status_code == 200
@@ -208,7 +170,7 @@ async def test_search_requires_a_session(api_client: AsyncClient):
 async def test_search_requires_a_query(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    await _start_session(api_client, db_session)
+    await start_session(api_client, db_session)
     response = await api_client.get("/v1/players/search")
     assert response.status_code == 422
 
@@ -216,9 +178,9 @@ async def test_search_requires_a_query(
 async def test_search_matches_substring_case_insensitively(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    await _start_session(api_client, db_session)
-    await _make_user(db_session, "Ada.Lovelace")
-    await _make_user(db_session, "grace.hopper")
+    await start_session(api_client, db_session)
+    await make_user(db_session, "Ada.Lovelace")
+    await make_user(db_session, "grace.hopper")
 
     response = await api_client.get("/v1/players/search", params={"q": "ADA"})
     assert response.status_code == 200
@@ -231,7 +193,7 @@ async def test_search_matches_substring_case_insensitively(
 async def test_search_excludes_the_current_user(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    me = await _start_session(api_client, db_session)
+    me = await start_session(api_client, db_session)
 
     response = await api_client.get(
         "/v1/players/search", params={"q": me.username}
@@ -243,8 +205,8 @@ async def test_search_excludes_the_current_user(
 async def test_search_with_a_blank_query_matches_nothing(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    await _start_session(api_client, db_session)
-    await _make_user(db_session, "ada.lovelace")
+    await start_session(api_client, db_session)
+    await make_user(db_session, "ada.lovelace")
 
     response = await api_client.get("/v1/players/search", params={"q": "   "})
     assert response.status_code == 200
@@ -254,8 +216,8 @@ async def test_search_with_a_blank_query_matches_nothing(
 async def test_search_with_no_match_returns_empty(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    await _start_session(api_client, db_session)
-    await _make_user(db_session, "ada.lovelace")
+    await start_session(api_client, db_session)
+    await make_user(db_session, "ada.lovelace")
 
     response = await api_client.get(
         "/v1/players/search", params={"q": "nobody-here"}
@@ -267,9 +229,9 @@ async def test_search_with_no_match_returns_empty(
 async def test_search_caps_the_result_count(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    await _start_session(api_client, db_session)
+    await start_session(api_client, db_session)
     for i in range(15):
-        await _make_user(db_session, f"player{i:02d}")
+        await make_user(db_session, f"player{i:02d}")
 
     capped = await api_client.get("/v1/players/search", params={"q": "player"})
     assert capped.status_code == 200
@@ -284,9 +246,9 @@ async def test_search_caps_the_result_count(
 async def test_search_escapes_like_wildcards(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    await _start_session(api_client, db_session)
-    await _make_user(db_session, "alice")
-    await _make_user(db_session, "bob")
+    await start_session(api_client, db_session)
+    await make_user(db_session, "alice")
+    await make_user(db_session, "bob")
 
     # A bare "%" must match a literal percent sign, not every username.
     response = await api_client.get("/v1/players/search", params={"q": "%"})
@@ -297,10 +259,10 @@ async def test_search_escapes_like_wildcards(
 async def test_search_orders_results_alphabetically(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    await _start_session(api_client, db_session)
-    await _make_user(db_session, "match.charlie")
-    await _make_user(db_session, "match.alice")
-    await _make_user(db_session, "match.bob")
+    await start_session(api_client, db_session)
+    await make_user(db_session, "match.charlie")
+    await make_user(db_session, "match.alice")
+    await make_user(db_session, "match.bob")
 
     response = await api_client.get("/v1/players/search", params={"q": "match."})
     assert _usernames(response) == [

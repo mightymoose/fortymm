@@ -247,7 +247,6 @@ function SelectedOpponent({
 /*  Opponent — player grid (default)                                  */
 /* ------------------------------------------------------------------ */
 
-/** Placeholder grid shown while the recent-opponents request is in flight. */
 function RecentSkeleton() {
   return (
     <div className="nm-recent-grid" role="status" aria-label="Loading players">
@@ -266,8 +265,6 @@ function RecentSkeleton() {
 
 function RecentPicker({ onPick }: { onPick: (player: Player) => void }) {
   const [showSearch, setShowSearch] = useState(false)
-  // Recent opponents come from their own endpoint, ordered most-recently-played
-  // first; a failure here throws to the surrounding OpponentPickerBoundary.
   const { data: players = [], isLoading } = useRecentOpponents()
 
   if (showSearch) return <TypeaheadPicker onPick={onPick} />
@@ -324,12 +321,10 @@ function TypeaheadPicker({ onPick }: { onPick: (player: Player) => void }) {
   const [activeIdx, setActiveIdx] = useState(0)
   const wrapRef = useRef<HTMLDivElement>(null)
 
-  // Debounced so the search endpoint is hit once typing settles, not on every
-  // keystroke. The query itself is the React Query key, so each term is cached.
-  const debouncedQuery = useDebouncedValue(query, 250)
-  const term = debouncedQuery.trim()
-  // A failed search throws to the surrounding OpponentPickerBoundary.
-  const { data: results = [], isFetching } = usePlayerSearch(debouncedQuery)
+  // Trimmed and debounced; the (already-trimmed) term is the React Query key,
+  // so each search lands in its own cache slot.
+  const term = useDebouncedValue(query, 250).trim()
+  const { data: results = [], isFetching } = usePlayerSearch(term)
 
   useEffect(() => {
     function onClickOutside(e: MouseEvent) {
@@ -363,9 +358,48 @@ function TypeaheadPicker({ onPick }: { onPick: (player: Player) => void }) {
     }
   }
 
-  // `placeholderData` keeps the prior term's rows on screen while the next term
-  // loads, so an empty list only shows on the very first search.
+  // `placeholderData` on the search query keeps the prior term's rows visible
+  // while the next term loads, so this only fires on the very first search.
   const loadingFirstResults = isFetching && results.length === 0
+
+  function renderBody() {
+    if (!term) {
+      return (
+        <div className="nm-no-match">
+          Start typing to search players by username.
+        </div>
+      )
+    }
+    if (loadingFirstResults) {
+      return (
+        <div className="nm-no-match" role="status">
+          Searching…
+        </div>
+      )
+    }
+    if (results.length === 0) {
+      return (
+        <div className="nm-no-match">
+          No one matches “{term}”. Try a different name.
+        </div>
+      )
+    }
+    return results.map((p, i) => (
+      <button
+        type="button"
+        key={p.id}
+        className={cn('nm-item', i === activeIdx && 'active')}
+        onMouseEnter={() => setActiveIdx(i)}
+        onClick={() => onPick(p)}
+      >
+        <div className="av">{initialsOf(p.username)}</div>
+        <div className="body">
+          <div className="n">{p.username}</div>
+          <div className="m">REGISTERED PLAYER</div>
+        </div>
+      </button>
+    ))
+  }
 
   return (
     <div className="nm-search" ref={wrapRef}>
@@ -394,39 +428,7 @@ function TypeaheadPicker({ onPick }: { onPick: (player: Player) => void }) {
           </button>
         )}
       </div>
-      {open && (
-        <div className="nm-dropdown">
-          {!term ? (
-            <div className="nm-no-match">
-              Start typing to search players by username.
-            </div>
-          ) : loadingFirstResults ? (
-            <div className="nm-no-match" role="status">
-              Searching…
-            </div>
-          ) : results.length === 0 ? (
-            <div className="nm-no-match">
-              No one matches “{term}”. Try a different name.
-            </div>
-          ) : (
-            results.map((p, i) => (
-              <button
-                type="button"
-                key={p.id}
-                className={cn('nm-item', i === activeIdx && 'active')}
-                onMouseEnter={() => setActiveIdx(i)}
-                onClick={() => onPick(p)}
-              >
-                <div className="av">{initialsOf(p.username)}</div>
-                <div className="body">
-                  <div className="n">{p.username}</div>
-                  <div className="m">REGISTERED PLAYER</div>
-                </div>
-              </button>
-            ))
-          )}
-        </div>
-      )}
+      {open && <div className="nm-dropdown">{renderBody()}</div>}
     </div>
   )
 }
