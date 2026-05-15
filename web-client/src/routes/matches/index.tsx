@@ -1,7 +1,6 @@
 import { Fragment, useMemo, useState } from 'react'
 import { createFileRoute } from '@tanstack/react-router'
 import {
-  ChevronDown,
   ChevronLeft,
   ChevronRight,
   ChevronsLeft,
@@ -9,9 +8,29 @@ import {
   Inbox,
   MoreHorizontal,
   Search,
+  X,
 } from 'lucide-react'
 
 import { AppShell } from '@/components/app-shell'
+import { Avatar, AvatarFallback } from '@/components/ui/avatar'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import {
+  Pagination,
+  PaginationContent,
+  PaginationEllipsis,
+  PaginationItem,
+  PaginationLink,
+} from '@/components/ui/pagination'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import './index.css'
 
 export const Route = createFileRoute('/matches/')({
@@ -267,32 +286,9 @@ function ActionBar({ liveCount }: { liveCount: number }) {
         {String(liveCount).padStart(2, '0')} LIVE
       </span>
       <div className="filter-spacer" />
-      <button type="button" className="ml-btn ghost">Export CSV</button>
-      <button type="button" className="ml-btn primary">+ New match</button>
+      <Button variant="ghost" size="sm">Export CSV</Button>
+      <Button variant="default" size="sm">+ New match</Button>
     </div>
-  )
-}
-
-interface StatusTabProps {
-  value: 'all' | StatusKey
-  label: string
-  count: number
-  current: string
-  onClick: (v: 'all' | StatusKey) => void
-  live?: boolean
-}
-
-function StatusTab({ value, label, count, current, onClick, live }: StatusTabProps) {
-  return (
-    <button
-      type="button"
-      className={'seg-btn' + (current === value ? ' is-active' : '')}
-      onClick={() => onClick(value)}
-    >
-      {live && <span className="live-dot" />}
-      {label}
-      <span className="seg-count">{count}</span>
-    </button>
   )
 }
 
@@ -313,87 +309,113 @@ interface FilterRowProps {
   anyFilter: boolean
 }
 
+const STATUS_TABS: { value: 'all' | StatusKey; label: string; live?: boolean }[] = [
+  { value: 'all', label: 'All' },
+  { value: 'live', label: 'Live', live: true },
+  { value: 'called', label: 'Called' },
+  { value: 'scheduled', label: 'Up next' },
+  { value: 'final', label: 'Final' },
+]
+
 function FilterRow(props: FilterRowProps) {
   const {
     q, setQ, status, setStatus, context, setContext, round, setRound, court, setCourt,
     counts, courtOptions, onClear, anyFilter,
   } = props
+  const statusCount = (v: 'all' | StatusKey) => (v === 'all' ? counts.total : counts[v])
   return (
     <div className="filter-row">
       <div className="ml-search">
-        <span className="ml-search-icon"><Search size={16} strokeWidth={2} /></span>
-        <input
+        <Search className="ml-search-icon" size={16} strokeWidth={2} />
+        <Input
+          className="h-9 pl-9 pr-9"
           placeholder="Search players or match #…"
           value={q}
           onChange={(e) => setQ(e.target.value)}
         />
         {q && (
-          <button type="button" className="ml-search-clear" onClick={() => setQ('')} aria-label="Clear search">
-            ×
+          <button
+            type="button"
+            className="ml-search-clear"
+            onClick={() => setQ('')}
+            aria-label="Clear search"
+          >
+            <X size={12} strokeWidth={2.4} />
           </button>
         )}
       </div>
 
-      <div className="seg" role="tablist">
-        <StatusTab value="all" label="All" count={counts.total} current={status} onClick={setStatus} />
-        <StatusTab value="live" label="Live" count={counts.live} current={status} onClick={setStatus} live />
-        <StatusTab value="called" label="Called" count={counts.called} current={status} onClick={setStatus} />
-        <StatusTab value="scheduled" label="Up next" count={counts.scheduled} current={status} onClick={setStatus} />
-        <StatusTab value="final" label="Final" count={counts.final} current={status} onClick={setStatus} />
-      </div>
+      <Tabs value={status} onValueChange={(v) => setStatus(v as 'all' | StatusKey)}>
+        <TabsList>
+          {STATUS_TABS.map((t) => (
+            <TabsTrigger key={t.value} value={t.value} className="gap-1.5">
+              {t.live && <span className="live-dot" />}
+              {t.label}
+              <span className="seg-count">{statusCount(t.value)}</span>
+            </TabsTrigger>
+          ))}
+        </TabsList>
+      </Tabs>
 
       <div className="filter-spacer" />
 
       <span className="filter-label">Context</span>
-      <div className="select-wrap">
-        <select
-          className="ml-select"
-          value={context}
-          onChange={(e) => setContext(e.target.value as 'all' | ContextKey)}
-        >
-          <option value="all">All contexts</option>
+      <Select value={context} onValueChange={(v) => setContext(v as 'all' | ContextKey)}>
+        <SelectTrigger className="h-9 min-w-[140px]">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="all">All contexts</SelectItem>
           {(Object.entries(CONTEXTS) as [ContextKey, { label: string }][]).map(([k, v]) => (
-            <option key={k} value={k}>{v.label}</option>
+            <SelectItem key={k} value={k}>{v.label}</SelectItem>
           ))}
-        </select>
-        <span className="select-caret"><ChevronDown size={12} strokeWidth={2.4} /></span>
-      </div>
+        </SelectContent>
+      </Select>
 
       <span className="filter-label">Round</span>
-      <div className="select-wrap">
-        <select className="ml-select" value={round} onChange={(e) => setRound(e.target.value)}>
-          <option value="all">All rounds</option>
+      <Select value={round} onValueChange={setRound}>
+        <SelectTrigger className="h-9 min-w-[140px]">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="all">All rounds</SelectItem>
           {ROUND_DEFS.map((r) => (
-            <option key={r.code} value={r.code}>{r.label}</option>
+            <SelectItem key={r.code} value={r.code}>{r.label}</SelectItem>
           ))}
-        </select>
-        <span className="select-caret"><ChevronDown size={12} strokeWidth={2.4} /></span>
-      </div>
+        </SelectContent>
+      </Select>
 
       <span className="filter-label">Court</span>
-      <div className="select-wrap">
-        <select className="ml-select" value={court} onChange={(e) => setCourt(e.target.value)}>
-          <option value="all">All courts</option>
+      <Select value={court} onValueChange={setCourt}>
+        <SelectTrigger className="h-9 min-w-[120px]">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="all">All courts</SelectItem>
           {courtOptions.map((c) => (
-            <option key={c} value={String(c)}>Court {c}</option>
+            <SelectItem key={c} value={String(c)}>Court {c}</SelectItem>
           ))}
-        </select>
-        <span className="select-caret"><ChevronDown size={12} strokeWidth={2.4} /></span>
-      </div>
+        </SelectContent>
+      </Select>
 
       {anyFilter && (
-        <button type="button" className="ml-btn ghost" onClick={onClear}>Clear filters</button>
+        <Button variant="ghost" size="sm" onClick={onClear}>Clear filters</Button>
       )}
     </div>
   )
 }
 
-function Avatar({ name, seed }: { name: string; seed: number }) {
+function PlayerAvatar({ name, seed }: { name: string; seed: number }) {
   const [bg, fg] = avatarColors(seed)
   return (
-    <span className="ml-avatar" style={{ background: bg, color: fg }}>
-      {initials(name)}
-    </span>
+    <Avatar className="size-[26px]">
+      <AvatarFallback
+        className="font-mono text-[11px] font-bold"
+        style={{ background: bg, color: fg }}
+      >
+        {initials(name)}
+      </AvatarFallback>
+    </Avatar>
   )
 }
 
@@ -417,13 +439,13 @@ function PlayerCell({ a, b, winner, status }: { a: Player; b: Player; winner: Wi
   return (
     <div style={{ display: 'flex', alignItems: 'center', minWidth: 0 }}>
       <div className="player">
-        <Avatar name={a.name} seed={a.seed} />
+        <PlayerAvatar name={a.name} seed={a.seed} />
         <span className={aClass}>{a.name}</span>
         <span className="seed-tag">#{a.seed}</span>
       </div>
       <span className="vs">vs</span>
       <div className="player">
-        <Avatar name={b.name} seed={b.seed} />
+        <PlayerAvatar name={b.name} seed={b.seed} />
         <span className={bClass}>{b.name}</span>
         <span className="seed-tag">#{b.seed}</span>
       </div>
@@ -462,16 +484,21 @@ function ScoreCell({ m }: { m: Match }) {
   )
 }
 
+const STATUS_BADGE: Record<StatusKey, { label: string; className: string }> = {
+  live: { label: 'Live', className: 'status-tone-live' },
+  final: { label: 'Final', className: 'status-tone-final' },
+  called: { label: 'Called', className: 'status-tone-called' },
+  scheduled: { label: 'Scheduled', className: 'status-tone-scheduled' },
+}
+
 function StatusBadge({ status }: { status: StatusKey }) {
-  if (status === 'live')
-    return (
-      <span className="status is-live">
-        <span className="live-dot" />Live
-      </span>
-    )
-  if (status === 'final') return <span className="status is-final">Final</span>
-  if (status === 'called') return <span className="status is-called">Called</span>
-  return <span className="status is-scheduled">Scheduled</span>
+  const meta = STATUS_BADGE[status]
+  return (
+    <Badge variant="secondary" className={`status-pill ${meta.className}`}>
+      {status === 'live' && <span className="live-dot" />}
+      {meta.label}
+    </Badge>
+  )
 }
 
 function TimeCell({ t }: { t: Date }) {
@@ -523,71 +550,23 @@ function SortHeader({ id, label, sort, setSort, width }: SortHeaderProps) {
   )
 }
 
-function SkeletonRow() {
-  return (
-    <tr className="skeleton-row">
-      <td><span className="skeleton s-text-sm" style={{ width: 50 }} /></td>
-      <td><span className="skeleton s-chip" style={{ width: 84, height: 30, borderRadius: 6 }} /></td>
-      <td><span className="skeleton s-chip" /></td>
-      <td><span className="skeleton s-text-sm" style={{ width: 40 }} /></td>
-      <td>
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-          <span className="skeleton s-avatar" />
-          <span className="skeleton s-text-md" />
-          <span style={{ width: 24, display: 'inline-block' }} />
-          <span className="skeleton s-avatar" />
-          <span className="skeleton s-text-md" />
-        </span>
-      </td>
-      <td><span className="skeleton s-text-lg" /></td>
-      <td><span className="skeleton s-chip" style={{ width: 64 }} /></td>
-      <td><span className="skeleton s-text-sm" /></td>
-      <td />
-    </tr>
-  )
-}
-
 interface MatchTableProps {
   rows: Match[]
   sort: SortState
   setSort: (v: SortState) => void
   onClear: () => void
-  loading: boolean
-  pageSize: number
 }
 
-function MatchTable({ rows, sort, setSort, onClear, loading, pageSize }: MatchTableProps) {
-  if (loading) {
-    return (
-      <table className="matches">
-        <thead>
-          <tr>
-            <th style={{ width: 84 }}>#</th>
-            <th style={{ width: 130 }}>Context</th>
-            <th style={{ width: 90 }}>Round</th>
-            <th style={{ width: 70 }}>Court</th>
-            <th>Players</th>
-            <th style={{ width: 220 }}>Score</th>
-            <th style={{ width: 120 }}>Status</th>
-            <th style={{ width: 100 }}>Time</th>
-            <th style={{ width: 36 }} />
-          </tr>
-        </thead>
-        <tbody>
-          {Array.from({ length: Math.min(pageSize, 10) }).map((_, i) => (
-            <SkeletonRow key={i} />
-          ))}
-        </tbody>
-      </table>
-    )
-  }
+function MatchTable({ rows, sort, setSort, onClear }: MatchTableProps) {
   if (rows.length === 0) {
     return (
       <div className="empty">
         <div className="empty-icon"><Inbox size={56} strokeWidth={1.5} /></div>
         <div className="empty-title">No matches match these filters</div>
         <div className="empty-sub">Try widening the context, round, or court — or clear the search.</div>
-        <button type="button" className="ml-btn ghost empty-clear" onClick={onClear}>Clear filters</button>
+        <Button variant="ghost" size="sm" className="empty-clear" onClick={onClear}>
+          Clear filters
+        </Button>
       </div>
     )
   }
@@ -644,15 +623,17 @@ function MatchTable({ rows, sort, setSort, onClear, loading, pageSize }: MatchTa
   )
 }
 
-function paginationRange(current: number, total: number): (number | 'ell-l' | 'ell-r')[] {
+type PageToken = number | 'ellipsis'
+
+function paginationRange(current: number, total: number): PageToken[] {
   const delta = 1
-  const range: (number | 'ell-l' | 'ell-r')[] = []
+  const range: PageToken[] = []
   const left = Math.max(2, current - delta)
   const right = Math.min(total - 1, current + delta)
   range.push(1)
-  if (left > 2) range.push('ell-l')
+  if (left > 2) range.push('ellipsis')
   for (let i = left; i <= right; i++) range.push(i)
-  if (right < total - 1) range.push('ell-r')
+  if (right < total - 1) range.push('ellipsis')
   if (total > 1) range.push(total)
   return range
 }
@@ -664,14 +645,15 @@ interface PaginationProps {
   pageSize: number
   setPageSize: (n: number) => void
   filteredCount: number
-  disabled: boolean
 }
 
 function PaginationFooter(props: PaginationProps) {
-  const { page, setPage, total, pageSize, setPageSize, filteredCount, disabled } = props
+  const { page, setPage, total, pageSize, setPageSize, filteredCount } = props
   const first = filteredCount === 0 ? 0 : (page - 1) * pageSize + 1
   const last = Math.min(filteredCount, page * pageSize)
   const tokens = paginationRange(page, total || 1)
+  const atFirst = page <= 1
+  const atLast = page >= total
 
   return (
     <div className="footer">
@@ -682,76 +664,96 @@ function PaginationFooter(props: PaginationProps) {
       <div className="footer-spacer" />
       <div className="page-size">
         Rows per page
-        <div className="select-wrap">
-          <select
-            className="ml-select"
-            style={{ minWidth: 0, height: 32, padding: '0 28px 0 10px' }}
-            value={pageSize}
-            onChange={(e) => {
-              setPageSize(Number(e.target.value))
-              setPage(1)
-            }}
-          >
+        <Select
+          value={String(pageSize)}
+          onValueChange={(v) => {
+            setPageSize(Number(v))
+            setPage(1)
+          }}
+        >
+          <SelectTrigger size="sm" className="min-w-[64px]">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
             {[10, 15, 25, 50].map((n) => (
-              <option key={n} value={n}>{n}</option>
+              <SelectItem key={n} value={String(n)}>{n}</SelectItem>
             ))}
-          </select>
-          <span className="select-caret"><ChevronDown size={12} strokeWidth={2.4} /></span>
-        </div>
+          </SelectContent>
+        </Select>
       </div>
-      <div className="pagination">
-        <button
-          type="button"
-          className="page-btn is-nav"
-          disabled={disabled || page <= 1}
-          onClick={() => setPage(1)}
-          aria-label="First page"
-        >
-          <ChevronsLeft size={14} strokeWidth={2.4} />
-        </button>
-        <button
-          type="button"
-          className="page-btn is-nav"
-          disabled={disabled || page <= 1}
-          onClick={() => setPage(page - 1)}
-          aria-label="Previous"
-        >
-          <ChevronLeft size={14} strokeWidth={2.4} />
-        </button>
-        {tokens.map((t, i) =>
-          typeof t === 'number' ? (
-            <button
-              key={i}
-              type="button"
-              disabled={disabled}
-              className={'page-btn' + (t === page ? ' is-current' : '')}
-              onClick={() => setPage(t)}
+      <Pagination className="mx-0 w-auto justify-end">
+        <PaginationContent>
+          <PaginationItem>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              disabled={atFirst}
+              onClick={() => setPage(1)}
+              aria-label="First page"
             >
-              {t}
-            </button>
-          ) : (
-            <span key={i} className="page-btn is-ellipsis">…</span>
-          ),
-        )}
-        <button
-          type="button"
-          className="page-btn is-nav"
-          disabled={disabled || page >= total}
-          onClick={() => setPage(page + 1)}
-          aria-label="Next"
-        >
-          <ChevronRight size={14} strokeWidth={2.4} />
-        </button>
-        <button
-          type="button"
-          className="page-btn is-nav"
-          disabled={disabled || page >= total}
-          onClick={() => setPage(total)}
-          aria-label="Last page"
-        >
-          <ChevronsRight size={14} strokeWidth={2.4} />
-        </button>
-      </div>
+              <ChevronsLeft size={14} strokeWidth={2.4} />
+            </Button>
+          </PaginationItem>
+          <PaginationItem>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              disabled={atFirst}
+              onClick={() => setPage(page - 1)}
+              aria-label="Previous page"
+            >
+              <ChevronLeft size={14} strokeWidth={2.4} />
+            </Button>
+          </PaginationItem>
+          {tokens.map((t, i) =>
+            t === 'ellipsis' ? (
+              <PaginationItem key={i}>
+                <PaginationEllipsis />
+              </PaginationItem>
+            ) : (
+              <PaginationItem key={i}>
+                <PaginationLink
+                  href="#"
+                  isActive={t === page}
+                  onClick={(e) => {
+                    e.preventDefault()
+                    setPage(t)
+                  }}
+                  className={
+                    t === page
+                      ? 'bg-primary text-primary-foreground hover:bg-[color:var(--ball-400)] hover:text-primary-foreground'
+                      : undefined
+                  }
+                >
+                  {t}
+                </PaginationLink>
+              </PaginationItem>
+            ),
+          )}
+          <PaginationItem>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              disabled={atLast}
+              onClick={() => setPage(page + 1)}
+              aria-label="Next page"
+            >
+              <ChevronRight size={14} strokeWidth={2.4} />
+            </Button>
+          </PaginationItem>
+          <PaginationItem>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              disabled={atLast}
+              onClick={() => setPage(total)}
+              aria-label="Last page"
+            >
+              <ChevronsRight size={14} strokeWidth={2.4} />
+            </Button>
+          </PaginationItem>
+        </PaginationContent>
+      </Pagination>
     </div>
   )
 }
@@ -875,8 +877,6 @@ function MatchesPage() {
             rows={pageRows}
             sort={sort} setSort={setSort}
             onClear={onClear}
-            loading={false}
-            pageSize={pageSize}
           />
         </div>
         <PaginationFooter
@@ -884,7 +884,6 @@ function MatchesPage() {
           total={total}
           pageSize={pageSize} setPageSize={setPageSize}
           filteredCount={sorted.length}
-          disabled={false}
         />
       </div>
     </AppShell>
