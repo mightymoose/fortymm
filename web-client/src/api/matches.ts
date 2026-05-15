@@ -6,15 +6,56 @@ export type Player = components['schemas']['PlayerRead']
 export type Match = components['schemas']['MatchRead']
 export type MatchCreate = components['schemas']['MatchCreate']
 
-export const PLAYERS_QUERY_KEY = ['players'] as const
+export const RECENT_OPPONENTS_QUERY_KEY = ['players', 'recent'] as const
 
-/** Registered users the signed-in player can pick as an opponent. */
-export function usePlayers() {
+/** Query key for a player search; the term is part of the key so each query is
+ * cached independently and `enabled` can gate the empty-term case. */
+export function playerSearchQueryKey(term: string) {
+  return ['players', 'search', term] as const
+}
+
+/**
+ * Opponents to feature in the new-match picker, most-recently-played first
+ * (backfilled with other registered players by the API). Errors are thrown so
+ * the surrounding error boundary can render a retry affordance.
+ */
+export function useRecentOpponents() {
   return useQuery({
-    queryKey: PLAYERS_QUERY_KEY,
+    queryKey: RECENT_OPPONENTS_QUERY_KEY,
     queryFn: async (): Promise<Player[]> =>
-      unwrap('load players', await api.GET('/v1/players')),
+      unwrap('load recent opponents', await api.GET('/v1/players/recent')),
     staleTime: 1000 * 60 * 5,
+    // Fail fast to the error boundary's explicit "Try again" button rather
+    // than silently retrying behind the skeleton.
+    retry: false,
+    throwOnError: true,
+  })
+}
+
+/**
+ * Server-side username search backing the opponent typeahead. The query is
+ * disabled until `term` is non-empty, so an empty search box never hits the
+ * network and the client never fetches the whole roster to filter locally.
+ * Pass an already-trimmed, already-debounced term.
+ */
+export function usePlayerSearch(term: string) {
+  return useQuery({
+    queryKey: playerSearchQueryKey(term),
+    queryFn: async (): Promise<Player[]> =>
+      unwrap(
+        'search players',
+        await api.GET('/v1/players/search', {
+          params: { query: { q: term } },
+        }),
+      ),
+    enabled: term.length > 0,
+    staleTime: 1000 * 60,
+    // Keep the previous matches on screen while the next term loads, so the
+    // dropdown doesn't flicker empty between keystrokes.
+    placeholderData: (previous) => previous,
+    // Fail fast to the error boundary's "Try again" rather than retrying.
+    retry: false,
+    throwOnError: true,
   })
 }
 

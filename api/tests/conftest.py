@@ -4,6 +4,7 @@ from collections.abc import AsyncIterator, Iterator
 import fakeredis
 import pytest
 import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
 from rq import Queue
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -13,7 +14,8 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from app import queue as queue_module
-from app.db import Base
+from app.db import Base, get_session
+from app.main import app as fastapi_app
 import app.models  # noqa: F401  -- ensures models register on Base.metadata
 
 
@@ -58,3 +60,20 @@ async def db_session(engine: AsyncEngine) -> AsyncIterator[AsyncSession]:
     async with engine.begin() as conn:
         for table in reversed(Base.metadata.sorted_tables):
             await conn.execute(table.delete())
+
+
+@pytest_asyncio.fixture
+async def api_client(db_session: AsyncSession) -> AsyncIterator[AsyncClient]:
+    """HTTP client bound to the test app, sharing the per-test ``db_session``
+    so commits inside endpoints are visible to assertions in the same test."""
+
+    async def _override() -> AsyncIterator[AsyncSession]:
+        yield db_session
+
+    fastapi_app.dependency_overrides[get_session] = _override
+    transport = ASGITransport(app=fastapi_app)
+    async with AsyncClient(
+        transport=transport, base_url="https://testserver"
+    ) as client:
+        yield client
+    fastapi_app.dependency_overrides.clear()

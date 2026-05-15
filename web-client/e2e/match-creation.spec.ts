@@ -9,8 +9,9 @@ const LINUS = { id: 'pl-linus', username: 'linus.torvalds' }
 
 const ROSTER = [ADA, GRACE, LINUS]
 
-// More than the six players the grid features, so the picker offers its
-// "Search all players" affordance and the typeahead becomes reachable.
+// A roster with one player (Barbara) past the six the recent grid features,
+// so the typeahead test proves search reaches the whole roster server-side,
+// not just the chips already on screen.
 const BARBARA = { id: 'pl-barbara', username: 'barbara.liskov' }
 const BIG_ROSTER = [
   ADA,

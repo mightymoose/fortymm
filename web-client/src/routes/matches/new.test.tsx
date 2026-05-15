@@ -8,7 +8,7 @@ import {
   createRouter,
 } from '@tanstack/react-router'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { http, HttpResponse } from 'msw'
+import { delay, http, HttpResponse } from 'msw'
 import { describe, expect, it } from 'vitest'
 import type { components } from '@/api/schema'
 import { server } from '@/mocks/server'
@@ -87,7 +87,7 @@ describe('NewMatchPage', () => {
     const user = userEvent.setup()
     let captured: unknown = null
     server.use(
-      http.get('*/v1/players', () =>
+      http.get('*/v1/players/recent', () =>
         HttpResponse.json([
           { id: 'pl-1', username: 'ada.lovelace' },
           { id: 'pl-2', username: 'grace.hopper' },
@@ -145,14 +145,11 @@ describe('NewMatchPage', () => {
   it('surfaces the API error detail when match creation fails', async () => {
     const user = userEvent.setup()
     server.use(
-      http.get('*/v1/players', () =>
+      http.get('*/v1/players/recent', () =>
         HttpResponse.json([{ id: 'pl-1', username: 'ada.lovelace' }]),
       ),
       http.post('*/v1/matches', () =>
-        HttpResponse.json(
-          { detail: 'opponent not found' },
-          { status: 404 },
-        ),
+        HttpResponse.json({ detail: 'opponent not found' }, { status: 404 }),
       ),
     )
     renderNewMatch()
@@ -164,6 +161,176 @@ describe('NewMatchPage', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
       /opponent not found/i,
+    )
+  })
+})
+
+describe('NewMatchPage — recent opponents', () => {
+  it('shows a skeleton while recent opponents load, then the chips', async () => {
+    server.use(
+      http.get('*/v1/players/recent', async () => {
+        await delay(80)
+        return HttpResponse.json([{ id: 'pl-1', username: 'ada.lovelace' }])
+      }),
+    )
+    renderNewMatch()
+
+    // The placeholder grid is up while the request is in flight.
+    expect(
+      await screen.findByRole('status', { name: /loading players/i }),
+    ).toBeInTheDocument()
+
+    // ...then the real chip replaces it.
+    expect(
+      await screen.findByRole('button', { name: /ada\.lovelace/i }),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole('status', { name: /loading players/i }),
+    ).not.toBeInTheDocument()
+  })
+
+  it('renders recent opponents in the order the endpoint returns them', async () => {
+    server.use(
+      http.get('*/v1/players/recent', () =>
+        HttpResponse.json([
+          { id: 'pl-3', username: 'carol.recent' },
+          { id: 'pl-1', username: 'alice.older' },
+          { id: 'pl-2', username: 'bob.oldest' },
+        ]),
+      ),
+    )
+    const { container } = renderNewMatch()
+
+    await screen.findByRole('button', { name: /carol\.recent/i })
+    const names = [...container.querySelectorAll('.nm-chip .n')].map(
+      (node) => node.textContent,
+    )
+    // Most-recently-played first — the client preserves the endpoint's order.
+    expect(names).toEqual(['carol.recent', 'alice.older', 'bob.oldest'])
+  })
+
+  it('shows an empty state when there are no other players', async () => {
+    server.use(http.get('*/v1/players/recent', () => HttpResponse.json([])))
+    renderNewMatch()
+
+    expect(
+      await screen.findByText(/no other players yet/i),
+    ).toBeInTheDocument()
+    // With nobody to find, the search affordance is hidden.
+    expect(
+      screen.queryByRole('button', { name: /search all players/i }),
+    ).not.toBeInTheDocument()
+  })
+
+  it('shows a retry button when recent opponents fail to load, and recovers', async () => {
+    const user = userEvent.setup()
+    let calls = 0
+    server.use(
+      http.get('*/v1/players/recent', () => {
+        calls += 1
+        if (calls === 1) {
+          return HttpResponse.json(
+            { detail: 'database unavailable' },
+            { status: 500 },
+          )
+        }
+        return HttpResponse.json([{ id: 'pl-1', username: 'ada.lovelace' }])
+      }),
+    )
+    renderNewMatch()
+
+    // The picker boundary catches the failed load and offers a retry.
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      /couldn.t load players/i,
+    )
+
+    await user.click(screen.getByRole('button', { name: /try again/i }))
+
+    // The retried request succeeds and the picker renders normally.
+    expect(
+      await screen.findByRole('button', { name: /ada\.lovelace/i }),
+    ).toBeInTheDocument()
+  })
+})
+
+describe('NewMatchPage — opponent search', () => {
+  function recentWithOne() {
+    return http.get('*/v1/players/recent', () =>
+      HttpResponse.json([{ id: 'pl-1', username: 'ada.lovelace' }]),
+    )
+  }
+
+  it('hits the dedicated search endpoint as the player types', async () => {
+    const user = userEvent.setup()
+    const queries: string[] = []
+    server.use(
+      recentWithOne(),
+      http.get('*/v1/players/search', ({ request }) => {
+        queries.push(new URL(request.url).searchParams.get('q') ?? '')
+        return HttpResponse.json([
+          { id: 'pl-9', username: 'barbara.liskov' },
+        ])
+      }),
+    )
+    renderNewMatch()
+
+    await user.click(
+      await screen.findByRole('button', { name: /search all players/i }),
+    )
+    await user.type(
+      screen.getByPlaceholderText(/search by username/i),
+      'liskov',
+    )
+
+    // The server-side result is selectable straight from the dropdown.
+    await user.click(
+      await screen.findByRole('button', { name: /barbara\.liskov/i }),
+    )
+    expect(screen.getByText(/registered player/i)).toBeInTheDocument()
+    // The query reached the endpoint — nothing was filtered client-side.
+    expect(queries.at(-1)).toBe('liskov')
+  })
+
+  it('shows a hint before typing and a no-match message for an unknown name', async () => {
+    const user = userEvent.setup()
+    server.use(
+      recentWithOne(),
+      http.get('*/v1/players/search', () => HttpResponse.json([])),
+    )
+    renderNewMatch()
+
+    await user.click(
+      await screen.findByRole('button', { name: /search all players/i }),
+    )
+    expect(screen.getByText(/start typing to search/i)).toBeInTheDocument()
+
+    await user.type(
+      screen.getByPlaceholderText(/search by username/i),
+      'nobody-here',
+    )
+    expect(await screen.findByText(/no one matches/i)).toBeInTheDocument()
+  })
+
+  it('catches a failed search in the picker error boundary', async () => {
+    const user = userEvent.setup()
+    server.use(
+      recentWithOne(),
+      http.get('*/v1/players/search', () =>
+        HttpResponse.json({ detail: 'search unavailable' }, { status: 500 }),
+      ),
+    )
+    renderNewMatch()
+
+    await user.click(
+      await screen.findByRole('button', { name: /search all players/i }),
+    )
+    await user.type(
+      screen.getByPlaceholderText(/search by username/i),
+      'ada',
+    )
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      /couldn.t load players/i,
     )
   })
 })
