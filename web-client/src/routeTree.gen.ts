@@ -17,6 +17,7 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as MatchesIndexRouteImport } from './routes/matches/index'
 import { Route as AdminIndexRouteImport } from './routes/admin.index'
 import { Route as MatchesNewRouteImport } from './routes/matches/new'
+import { Route as MatchesMatchIdRouteImport } from './routes/matches.$matchId'
 import { Route as AdminUsersRouteImport } from './routes/admin.users'
 import { Route as AdminRolesRouteImport } from './routes/admin.roles'
 import { Route as AdminPermissionsRouteImport } from './routes/admin.permissions'
@@ -62,6 +63,11 @@ const MatchesNewRoute = MatchesNewRouteImport.update({
   path: '/matches/new',
   getParentRoute: () => rootRouteImport,
 } as any)
+const MatchesMatchIdRoute = MatchesMatchIdRouteImport.update({
+  id: '/matches/$matchId',
+  path: '/matches/$matchId',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AdminUsersRoute = AdminUsersRouteImport.update({
   id: '/users',
   path: '/users',
@@ -79,9 +85,9 @@ const AdminPermissionsRoute = AdminPermissionsRouteImport.update({
 } as any)
 const MatchesMatchIdGamesGameIdScoresNewRoute =
   MatchesMatchIdGamesGameIdScoresNewRouteImport.update({
-    id: '/matches/$matchId/games/$gameId/scores/new',
-    path: '/matches/$matchId/games/$gameId/scores/new',
-    getParentRoute: () => rootRouteImport,
+    id: '/games/$gameId/scores/new',
+    path: '/games/$gameId/scores/new',
+    getParentRoute: () => MatchesMatchIdRoute,
   } as any)
 
 export interface FileRoutesByFullPath {
@@ -93,6 +99,7 @@ export interface FileRoutesByFullPath {
   '/admin/permissions': typeof AdminPermissionsRoute
   '/admin/roles': typeof AdminRolesRoute
   '/admin/users': typeof AdminUsersRoute
+  '/matches/$matchId': typeof MatchesMatchIdRouteWithChildren
   '/matches/new': typeof MatchesNewRoute
   '/admin/': typeof AdminIndexRoute
   '/matches/': typeof MatchesIndexRoute
@@ -106,6 +113,7 @@ export interface FileRoutesByTo {
   '/admin/permissions': typeof AdminPermissionsRoute
   '/admin/roles': typeof AdminRolesRoute
   '/admin/users': typeof AdminUsersRoute
+  '/matches/$matchId': typeof MatchesMatchIdRouteWithChildren
   '/matches/new': typeof MatchesNewRoute
   '/admin': typeof AdminIndexRoute
   '/matches': typeof MatchesIndexRoute
@@ -121,6 +129,7 @@ export interface FileRoutesById {
   '/admin/permissions': typeof AdminPermissionsRoute
   '/admin/roles': typeof AdminRolesRoute
   '/admin/users': typeof AdminUsersRoute
+  '/matches/$matchId': typeof MatchesMatchIdRouteWithChildren
   '/matches/new': typeof MatchesNewRoute
   '/admin/': typeof AdminIndexRoute
   '/matches/': typeof MatchesIndexRoute
@@ -137,6 +146,7 @@ export interface FileRouteTypes {
     | '/admin/permissions'
     | '/admin/roles'
     | '/admin/users'
+    | '/matches/$matchId'
     | '/matches/new'
     | '/admin/'
     | '/matches/'
@@ -150,6 +160,7 @@ export interface FileRouteTypes {
     | '/admin/permissions'
     | '/admin/roles'
     | '/admin/users'
+    | '/matches/$matchId'
     | '/matches/new'
     | '/admin'
     | '/matches'
@@ -164,6 +175,7 @@ export interface FileRouteTypes {
     | '/admin/permissions'
     | '/admin/roles'
     | '/admin/users'
+    | '/matches/$matchId'
     | '/matches/new'
     | '/admin/'
     | '/matches/'
@@ -176,9 +188,9 @@ export interface RootRouteChildren {
   DashboardRoute: typeof DashboardRoute
   DesignSystemRoute: typeof DesignSystemRoute
   SettingsRoute: typeof SettingsRoute
+  MatchesMatchIdRoute: typeof MatchesMatchIdRouteWithChildren
   MatchesNewRoute: typeof MatchesNewRoute
   MatchesIndexRoute: typeof MatchesIndexRoute
-  MatchesMatchIdGamesGameIdScoresNewRoute: typeof MatchesMatchIdGamesGameIdScoresNewRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -239,6 +251,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof MatchesNewRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/matches/$matchId': {
+      id: '/matches/$matchId'
+      path: '/matches/$matchId'
+      fullPath: '/matches/$matchId'
+      preLoaderRoute: typeof MatchesMatchIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/admin/users': {
       id: '/admin/users'
       path: '/users'
@@ -262,10 +281,10 @@ declare module '@tanstack/react-router' {
     }
     '/matches/$matchId/games/$gameId/scores/new': {
       id: '/matches/$matchId/games/$gameId/scores/new'
-      path: '/matches/$matchId/games/$gameId/scores/new'
+      path: '/games/$gameId/scores/new'
       fullPath: '/matches/$matchId/games/$gameId/scores/new'
       preLoaderRoute: typeof MatchesMatchIdGamesGameIdScoresNewRouteImport
-      parentRoute: typeof rootRouteImport
+      parentRoute: typeof MatchesMatchIdRoute
     }
   }
 }
@@ -286,16 +305,28 @@ const AdminRouteChildren: AdminRouteChildren = {
 
 const AdminRouteWithChildren = AdminRoute._addFileChildren(AdminRouteChildren)
 
+interface MatchesMatchIdRouteChildren {
+  MatchesMatchIdGamesGameIdScoresNewRoute: typeof MatchesMatchIdGamesGameIdScoresNewRoute
+}
+
+const MatchesMatchIdRouteChildren: MatchesMatchIdRouteChildren = {
+  MatchesMatchIdGamesGameIdScoresNewRoute:
+    MatchesMatchIdGamesGameIdScoresNewRoute,
+}
+
+const MatchesMatchIdRouteWithChildren = MatchesMatchIdRoute._addFileChildren(
+  MatchesMatchIdRouteChildren,
+)
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AdminRoute: AdminRouteWithChildren,
   DashboardRoute: DashboardRoute,
   DesignSystemRoute: DesignSystemRoute,
   SettingsRoute: SettingsRoute,
+  MatchesMatchIdRoute: MatchesMatchIdRouteWithChildren,
   MatchesNewRoute: MatchesNewRoute,
   MatchesIndexRoute: MatchesIndexRoute,
-  MatchesMatchIdGamesGameIdScoresNewRoute:
-    MatchesMatchIdGamesGameIdScoresNewRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
