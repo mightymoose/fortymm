@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { createFileRoute } from '@tanstack/react-router'
 import {
   Check,
@@ -13,6 +13,7 @@ import {
 } from 'lucide-react'
 
 import { AppShell } from '@/components/app-shell'
+import { cn } from '@/lib/utils'
 
 export const Route = createFileRoute('/matches/$matchId')({
   component: MatchDetailsPage,
@@ -21,8 +22,7 @@ export const Route = createFileRoute('/matches/$matchId')({
 type MatchState = 'live' | 'final' | 'upcoming'
 type Format = 'singles' | 'doubles'
 type Context = 'tournament' | 'casual'
-
-/* ---------- DATA (hard-coded from the design handoff) -------------------- */
+type Side = 'a' | 'b'
 
 const MATCH = {
   tournament: 'Spring Open 2026',
@@ -45,7 +45,7 @@ interface DoublesMember {
 }
 
 interface BasePlayer {
-  id: 'a' | 'b'
+  id: Side
   initials: string
   seed: number
   club: string
@@ -105,10 +105,10 @@ const DOUBLES_PLAYERS: Record<'a' | 'b', DoublesPlayer> = {
 
 interface Scoreline {
   games: Array<[number, number]>
-  winner: 'a' | 'b' | null
+  winner: Side | null
   summary: [number, number]
   currentGame?: number
-  serving?: 'a' | 'b'
+  serving?: Side
 }
 
 const SCORES_FINAL: Scoreline = { games: [[11, 6], [9, 11], [11, 8], [11, 9]], winner: 'a', summary: [3, 1] }
@@ -118,49 +118,67 @@ const DOUBLES_LIVE: Scoreline = { games: [[11, 9], [8, 11], [11, 7], [7, 5]], wi
 
 interface FormResult { r: 'W' | 'L'; score: string; opp: string; when: string }
 
-const RECENT_FORM: Record<string, FormResult[]> = {
-  a_singles: [
-    { r: 'W', score: '3–0', opp: 'Silva, R.', when: 'May 10 · R32' },
-    { r: 'W', score: '3–1', opp: 'Kim, H.', when: 'May 09 · R64' },
-    { r: 'W', score: '3–2', opp: 'Hansen, M.', when: 'Apr 21 · Cup' },
-    { r: 'L', score: '1–3', opp: 'Tanaka, Y.', when: 'Apr 06 · Reg.' },
-    { r: 'W', score: '3–0', opp: 'Ali, R.', when: 'Mar 29 · Club' },
-  ],
-  b_singles: [
-    { r: 'W', score: '3–2', opp: 'Dubois, C.', when: 'May 10 · R32' },
-    { r: 'W', score: '3–0', opp: 'Ahmed, I.', when: 'May 09 · R64' },
-    { r: 'L', score: '2–3', opp: 'Tran, L.', when: 'Apr 18 · Cup' },
-    { r: 'L', score: '0–3', opp: 'Müller, F.', when: 'Apr 03 · Reg.' },
-    { r: 'W', score: '3–1', opp: 'Park, J.', when: 'Mar 22 · Club' },
-  ],
-  a_doubles: [
-    { r: 'W', score: '3–0', opp: 'Müller/Rossi', when: 'May 10 · R32' },
-    { r: 'W', score: '3–1', opp: 'Ali/Park', when: 'May 09 · R64' },
-    { r: 'W', score: '3–2', opp: 'Hansen/Kim', when: 'Apr 21 · Cup' },
-    { r: 'L', score: '2–3', opp: 'Tanaka/Yoon', when: 'Apr 06 · Reg.' },
-    { r: 'W', score: '3–0', opp: 'Silva/Dubois', when: 'Mar 29 · Club' },
-  ],
-  b_doubles: [
-    { r: 'W', score: '3–2', opp: 'Chen/Wong', when: 'May 10 · R32' },
-    { r: 'L', score: '1–3', opp: 'Patel/Mehta', when: 'May 09 · R64' },
-    { r: 'L', score: '2–3', opp: 'Tran/Le', when: 'Apr 18 · Cup' },
-    { r: 'W', score: '3–0', opp: 'Doe/Roe', when: 'Apr 03 · Reg.' },
-    { r: 'W', score: '3–1', opp: 'Park/Yoon', when: 'Mar 22 · Club' },
-  ],
+const RECENT_FORM: Record<Format, Record<Side, FormResult[]>> = {
+  singles: {
+    a: [
+      { r: 'W', score: '3–0', opp: 'Silva, R.', when: 'May 10 · R32' },
+      { r: 'W', score: '3–1', opp: 'Kim, H.', when: 'May 09 · R64' },
+      { r: 'W', score: '3–2', opp: 'Hansen, M.', when: 'Apr 21 · Cup' },
+      { r: 'L', score: '1–3', opp: 'Tanaka, Y.', when: 'Apr 06 · Reg.' },
+      { r: 'W', score: '3–0', opp: 'Ali, R.', when: 'Mar 29 · Club' },
+    ],
+    b: [
+      { r: 'W', score: '3–2', opp: 'Dubois, C.', when: 'May 10 · R32' },
+      { r: 'W', score: '3–0', opp: 'Ahmed, I.', when: 'May 09 · R64' },
+      { r: 'L', score: '2–3', opp: 'Tran, L.', when: 'Apr 18 · Cup' },
+      { r: 'L', score: '0–3', opp: 'Müller, F.', when: 'Apr 03 · Reg.' },
+      { r: 'W', score: '3–1', opp: 'Park, J.', when: 'Mar 22 · Club' },
+    ],
+  },
+  doubles: {
+    a: [
+      { r: 'W', score: '3–0', opp: 'Müller/Rossi', when: 'May 10 · R32' },
+      { r: 'W', score: '3–1', opp: 'Ali/Park', when: 'May 09 · R64' },
+      { r: 'W', score: '3–2', opp: 'Hansen/Kim', when: 'Apr 21 · Cup' },
+      { r: 'L', score: '2–3', opp: 'Tanaka/Yoon', when: 'Apr 06 · Reg.' },
+      { r: 'W', score: '3–0', opp: 'Silva/Dubois', when: 'Mar 29 · Club' },
+    ],
+    b: [
+      { r: 'W', score: '3–2', opp: 'Chen/Wong', when: 'May 10 · R32' },
+      { r: 'L', score: '1–3', opp: 'Patel/Mehta', when: 'May 09 · R64' },
+      { r: 'L', score: '2–3', opp: 'Tran/Le', when: 'Apr 18 · Cup' },
+      { r: 'W', score: '3–0', opp: 'Doe/Roe', when: 'Apr 03 · Reg.' },
+      { r: 'W', score: '3–1', opp: 'Park/Yoon', when: 'Mar 22 · Club' },
+    ],
+  },
 }
 
-const RATING_HISTORY: Record<string, number[]> = {
-  a_singles: [2098, 2104, 2110, 2118, 2128, 2122, 2120, 2132, 2140, 2145],
-  b_singles: [2080, 2074, 2065, 2050, 2052, 2040, 2018, 2012, 2008, 2002],
-  a_doubles: [2042, 2050, 2058, 2062, 2058, 2068, 2074, 2078, 2084, 2092],
-  b_doubles: [2050, 2048, 2052, 2048, 2044, 2052, 2050, 2042, 2038, 2036],
+const RATING_HISTORY: Record<Format, Record<Side, number[]>> = {
+  singles: {
+    a: [2098, 2104, 2110, 2118, 2128, 2122, 2120, 2132, 2140, 2145],
+    b: [2080, 2074, 2065, 2050, 2052, 2040, 2018, 2012, 2008, 2002],
+  },
+  doubles: {
+    a: [2042, 2050, 2058, 2062, 2058, 2068, 2074, 2078, 2084, 2092],
+    b: [2050, 2048, 2052, 2048, 2044, 2052, 2050, 2042, 2038, 2036],
+  },
 }
 
-const CAREER: Record<string, { matches: number; winPct: number }> = {
-  a_singles: { matches: 184, winPct: 71 },
-  b_singles: { matches: 162, winPct: 62 },
-  a_doubles: { matches: 92, winPct: 68 },
-  b_doubles: { matches: 78, winPct: 55 },
+const CAREER: Record<Format, Record<Side, { matches: number; winPct: number }>> = {
+  singles: {
+    a: { matches: 184, winPct: 71 },
+    b: { matches: 162, winPct: 62 },
+  },
+  doubles: {
+    a: { matches: 92, winPct: 68 },
+    b: { matches: 78, winPct: 55 },
+  },
+}
+
+// Singles-only rating delta (a wins +12, b loses -12). Used by RatingRow.
+const SINGLES_RATING_DELTA: Record<Side, { rating: number; ratingNew: number; delta: number; history: number[] }> = {
+  a: { rating: 2145, ratingNew: 2157, delta: 12, history: [2098, 2110, 2128, 2120, 2145, 2157] },
+  b: { rating: 2002, ratingNew: 1990, delta: -12, history: [2080, 2065, 2050, 2018, 2002, 1990] },
 }
 
 interface H2HMatch {
@@ -168,7 +186,7 @@ interface H2HMatch {
   date: string
   round: string
   score: [number, number]
-  winner: 'a' | 'b'
+  winner: Side
   tonight?: boolean
 }
 
@@ -202,7 +220,6 @@ const COMMENTS_INIT: Comment[] = [
   { who: 'Patel, Meera', initials: 'MP', when: '35 min ago', body: 'Court 3 has the best view in the building. Fight me.', reacts: { ball: 24, fire: 11 }, yours: { ball: false, fire: true } },
 ]
 
-/* ---------- Shared bits --------------------------------------------------- */
 
 function Logo({ size = 26 }: { size?: number }) {
   return (
@@ -244,7 +261,6 @@ function Sparkline({ points, color = 'currentColor', width = 120, height = 32 }:
   )
 }
 
-/* ---------- Breadcrumb + tabs -------------------------------------------- */
 
 function Breadcrumb({ context }: { context: Context }) {
   if (context === 'casual') {
@@ -271,7 +287,6 @@ function Breadcrumb({ context }: { context: Context }) {
   )
 }
 
-/* ---------- Hero scoreboard ---------------------------------------------- */
 
 function PlayerSide({
   player,
@@ -298,7 +313,7 @@ function PlayerSide({
             {doublesPlayer.members.map((m, i) => (
               <div
                 key={i}
-                className={`md-avatar ${win ? 'md-avatar--win' : 'md-avatar--loss'}`}
+                className={cn('md-avatar', win ? 'md-avatar--win' : 'md-avatar--loss')}
                 style={{ zIndex: 2 - i }}
               >
                 {m.initials}
@@ -306,7 +321,7 @@ function PlayerSide({
             ))}
           </div>
         ) : (
-          <div className={`md-avatar md-hero__avatar-singles ${win ? 'md-avatar--win' : 'md-avatar--loss'}`}>
+          <div className={cn('md-avatar md-hero__avatar-singles', win ? 'md-avatar--win' : 'md-avatar--loss')}>
             {player.initials}
           </div>
         )}
@@ -321,7 +336,7 @@ function PlayerSide({
               </span>
             )}
           </div>
-          <div className={`md-hero__name ${win ? 'md-hero__name--win' : ''}`}>
+          <div className={cn('md-hero__name', win && 'md-hero__name--win')}>
             {isDoubles ? player.last : `${(player as SinglesPlayer).last}, ${(player as SinglesPlayer).first}`}
           </div>
           <div className="md-hero__club">{player.club}</div>
@@ -398,9 +413,9 @@ function HeroScoreboard({ state, format, context }: { state: MatchState; format:
           ) : (
             <>
               <div className="md-hero__score-row">
-                <div className={`md-hero__score md-hero__score--l ${winA ? 'md-hero__score--win' : ''}`}>{aTotal}</div>
+                <div className={cn('md-hero__score md-hero__score--l', winA && 'md-hero__score--win')}>{aTotal}</div>
                 <div className="md-hero__score-dash">—</div>
-                <div className={`md-hero__score md-hero__score--r ${winB ? 'md-hero__score--win' : ''}`}>{bTotal}</div>
+                <div className={cn('md-hero__score md-hero__score--r', winB && 'md-hero__score--win')}>{bTotal}</div>
               </div>
               <div className="md-hero__score-caption">
                 {isLive
@@ -418,83 +433,83 @@ function HeroScoreboard({ state, format, context }: { state: MatchState; format:
   )
 }
 
+const GAME_INDEXES = [0, 1, 2, 3, 4] as const
+
 function GameGrid({
   score,
   players,
   state,
 }: {
   score: Scoreline
-  players: Record<'a' | 'b', SinglesPlayer | DoublesPlayer>
+  players: Record<Side, SinglesPlayer | DoublesPlayer>
   state: MatchState
 }) {
-  const games = [0, 1, 2, 3, 4]
-  const isLive = state === 'live'
-
-  function nameOf(p: SinglesPlayer | DoublesPlayer): string {
-    return (p.last || '').split('/')[0].trim()
-  }
-
   return (
     <div className="md-games">
       <div className="md-games__grid">
         <div className="md-games__kicker">GAMES</div>
-        {games.map((i) => (
+        {GAME_INDEXES.map((i) => (
           <div key={`h-${i}`} className="md-games__col-label">G{i + 1}</div>
         ))}
         <div className="md-games__col-label">SETS</div>
 
-        <div className="md-games__player">
-          <span className="md-avatar md-avatar--win">{players.a.initials}</span>
-          <span className="md-games__player-name">{nameOf(players.a)}</span>
-        </div>
-        {games.map((i) => {
-          const g = score.games[i]
-          if (!g) return <div key={`a-${i}`} className="md-games__cell md-games__cell--empty">—</div>
-          const isLiveCell = isLive && score.currentGame === i + 1
-          return (
-            <div
-              key={`a-${i}`}
-              className={`md-games__cell ${g[0] > g[1] ? 'md-games__cell--win' : 'md-games__cell--loss'} ${isLiveCell ? 'md-games__cell--live' : ''}`}
-            >
-              {g[0]}
-            </div>
-          )
-        })}
-        <div className={`md-games__total ${score.winner === 'a' ? 'md-games__total--win' : ''}`}>
-          {score.summary[0]}
-        </div>
-
-        <div className="md-games__player">
-          <span className="md-avatar md-avatar--loss">{players.b.initials}</span>
-          <span className="md-games__player-name">{nameOf(players.b)}</span>
-        </div>
-        {games.map((i) => {
-          const g = score.games[i]
-          if (!g) return <div key={`b-${i}`} className="md-games__cell md-games__cell--empty">—</div>
-          const isLiveCell = isLive && score.currentGame === i + 1
-          return (
-            <div
-              key={`b-${i}`}
-              className={`md-games__cell ${g[1] > g[0] ? 'md-games__cell--win' : 'md-games__cell--loss'} ${isLiveCell ? 'md-games__cell--live' : ''}`}
-            >
-              {g[1]}
-            </div>
-          )
-        })}
-        <div className={`md-games__total ${score.winner === 'b' ? 'md-games__total--win' : ''}`}>
-          {score.summary[1]}
-        </div>
+        <GameGridSide side="a" score={score} player={players.a} state={state} />
+        <GameGridSide side="b" score={score} player={players.b} state={state} />
       </div>
     </div>
   )
 }
 
-/* ---------- Players & form card ----------------------------------------- */
+function GameGridSide({
+  side,
+  score,
+  player,
+  state,
+}: {
+  side: Side
+  score: Scoreline
+  player: SinglesPlayer | DoublesPlayer
+  state: MatchState
+}) {
+  const isLive = state === 'live'
+  const myIdx = side === 'a' ? 0 : 1
+  const oppIdx = side === 'a' ? 1 : 0
+  const name = (player.last || '').split('/')[0].trim()
+  return (
+    <>
+      <div className="md-games__player">
+        <span className={cn('md-avatar', side === 'a' ? 'md-avatar--win' : 'md-avatar--loss')}>
+          {player.initials}
+        </span>
+        <span className="md-games__player-name">{name}</span>
+      </div>
+      {GAME_INDEXES.map((i) => {
+        const g = score.games[i]
+        if (!g) return <div key={`${side}-${i}`} className="md-games__cell md-games__cell--empty">—</div>
+        const isLiveCell = isLive && score.currentGame === i + 1
+        return (
+          <div
+            key={`${side}-${i}`}
+            className={cn(
+              'md-games__cell',
+              g[myIdx] > g[oppIdx] ? 'md-games__cell--win' : 'md-games__cell--loss',
+              isLiveCell && 'md-games__cell--live',
+            )}
+          >
+            {g[myIdx]}
+          </div>
+        )
+      })}
+      <div className={cn('md-games__total', score.winner === side && 'md-games__total--win')}>
+        {score.summary[myIdx]}
+      </div>
+    </>
+  )
+}
+
 
 function PlayersCard({ state, format }: { state: MatchState; format: Format }) {
   const players = format === 'doubles' ? DOUBLES_PLAYERS : SINGLES_PLAYERS
-  const aKey = format === 'doubles' ? 'a_doubles' : 'a_singles'
-  const bKey = format === 'doubles' ? 'b_doubles' : 'b_singles'
 
   return (
     <div className="md-card">
@@ -503,9 +518,9 @@ function PlayersCard({ state, format }: { state: MatchState; format: Format }) {
         <span className="md-modal__preview-sub" style={{ marginTop: 0 }}>LAST 5 RESULTS</span>
       </div>
       <div className="md-players">
-        <PlayerProfile p={players.a} form={RECENT_FORM[aKey]} history={RATING_HISTORY[aKey]} career={CAREER[aKey]} format={format} won={state === 'final'} />
+        <PlayerProfile p={players.a} form={RECENT_FORM[format].a} history={RATING_HISTORY[format].a} career={CAREER[format].a} format={format} won={state === 'final'} />
         <div className="md-players__divider" />
-        <PlayerProfile p={players.b} form={RECENT_FORM[bKey]} history={RATING_HISTORY[bKey]} career={CAREER[bKey]} format={format} won={false} />
+        <PlayerProfile p={players.b} form={RECENT_FORM[format].b} history={RATING_HISTORY[format].b} career={CAREER[format].b} format={format} won={false} />
       </div>
     </div>
   )
@@ -539,7 +554,7 @@ function PlayerProfile({
             {doublesPlayer.members.map((m, i) => (
               <div
                 key={i}
-                className={`md-avatar ${won ? 'md-avatar--win' : 'md-avatar--loss'}`}
+                className={cn('md-avatar', won ? 'md-avatar--win' : 'md-avatar--loss')}
                 style={{ zIndex: 2 - i }}
               >
                 {m.initials}
@@ -547,7 +562,7 @@ function PlayerProfile({
             ))}
           </div>
         ) : (
-          <div className={`md-avatar ${won ? 'md-avatar--win' : 'md-avatar--loss'}`}>
+          <div className={cn('md-avatar', won ? 'md-avatar--win' : 'md-avatar--loss')}>
             {p.initials}
           </div>
         )}
@@ -590,7 +605,7 @@ function PlayerProfile({
                 <div className="md-form-row__opp">{m.opp}</div>
                 <div className="md-form-row__when">{m.when}</div>
               </div>
-              <span className={`md-form-row__score ${m.r === 'L' ? 'md-form-row__score--loss' : ''}`}>
+              <span className={cn('md-form-row__score', m.r === 'L' && 'md-form-row__score--loss')}>
                 {m.score}
               </span>
             </div>
@@ -605,7 +620,7 @@ function PlayerProfile({
         </div>
         <div>
           <div className="md-kicker">Win rate</div>
-          <div className={`md-profile__career-value ${career.winPct >= 60 ? 'md-profile__career-value--good' : ''}`}>
+          <div className={cn('md-profile__career-value', career.winPct >= 60 && 'md-profile__career-value--good')}>
             {career.winPct}%
           </div>
         </div>
@@ -614,7 +629,6 @@ function PlayerProfile({
   )
 }
 
-/* ---------- Sidebar cards ----------------------------------------------- */
 
 function MatchInfoCard({ context, format, state }: { context: Context; format: Format; state: MatchState }) {
   const rows: Array<[string, string]> = []
@@ -683,25 +697,24 @@ function RatingCard({ format, state, context }: { format: Format; state: MatchSt
       </div>
     )
   }
-  const isDoubles = format === 'doubles'
   return (
     <div className="md-card">
       <div className="md-card__hd"><h3>Rating change</h3></div>
       <div className="md-card__body" style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-        <RatingRow p={players.a} win doubles={isDoubles} />
+        <RatingRow p={players.a} win format={format} />
         <hr className="md-rating-divider" />
-        <RatingRow p={players.b} win={false} doubles={isDoubles} />
+        <RatingRow p={players.b} win={false} format={format} />
       </div>
     </div>
   )
 }
 
-function RatingRow({ p, win, doubles }: { p: SinglesPlayer | DoublesPlayer; win: boolean; doubles: boolean }) {
-  if (doubles) {
+function RatingRow({ p, win, format }: { p: SinglesPlayer | DoublesPlayer; win: boolean; format: Format }) {
+  if (format === 'doubles') {
     const dp = p as DoublesPlayer
     return (
       <div className="md-rating-row">
-        <div className={`md-avatar ${win ? 'md-avatar--win' : 'md-avatar--loss'}`} style={{ width: 36, height: 36, fontSize: 12 }}>
+        <div className={cn('md-avatar', win ? 'md-avatar--win' : 'md-avatar--loss')} style={{ width: 36, height: 36, fontSize: 12 }}>
           {dp.initials}
         </div>
         <div className="md-rating-row__text">
@@ -710,23 +723,19 @@ function RatingRow({ p, win, doubles }: { p: SinglesPlayer | DoublesPlayer; win:
             {dp.rating}
           </div>
         </div>
-        <div className={`md-rating-row__delta-num ${dp.delta > 0 ? 'md-delta-up' : 'md-delta-down'}`}>
+        <div className={cn('md-rating-row__delta-num', dp.delta > 0 ? 'md-delta-up' : 'md-delta-down')}>
           {dp.ratingNew}
         </div>
       </div>
     )
   }
 
-  const isA = p.id === 'a'
-  const history = isA ? [2098, 2110, 2128, 2120, 2145, 2157] : [2080, 2065, 2050, 2018, 2002, 1990]
-  const rating = isA ? 2145 : 2002
-  const ratingNew = isA ? 2157 : 1990
-  const delta = isA ? 12 : -12
   const sp = p as SinglesPlayer
+  const { rating, ratingNew, delta, history } = SINGLES_RATING_DELTA[sp.id]
 
   return (
     <div className="md-rating-row">
-      <div className={`md-avatar ${win ? 'md-avatar--win' : 'md-avatar--loss'}`}>
+      <div className={cn('md-avatar', win ? 'md-avatar--win' : 'md-avatar--loss')}>
         {sp.initials}
       </div>
       <div className="md-rating-row__text">
@@ -739,7 +748,7 @@ function RatingRow({ p, win, doubles }: { p: SinglesPlayer | DoublesPlayer; win:
       </div>
       <div className="md-rating-row__delta">
         <Sparkline points={history} color={delta > 0 ? 'var(--serve-500)' : 'var(--loss)'} width={60} height={24} />
-        <span className={`md-rating-row__delta-num ${delta > 0 ? 'md-delta-up' : 'md-delta-down'}`}>
+        <span className={cn('md-rating-row__delta-num', delta > 0 ? 'md-delta-up' : 'md-delta-down')}>
           {delta > 0 ? '+' : ''}{delta}
         </span>
       </div>
@@ -783,10 +792,10 @@ function H2HCard({ format }: { format: Format }) {
             {H2H.matches.slice(0, 5).map((m) => (
               <div key={m.id} className="md-h2h__row">
                 <span className="md-h2h__date">{m.date.slice(2).replace(/-/g, '·')}</span>
-                <span className={`md-h2h__label ${m.tonight ? 'md-h2h__label--tonight' : ''}`}>
+                <span className={cn('md-h2h__label', m.tonight && 'md-h2h__label--tonight')}>
                   {m.tonight ? '● Tonight' : m.round}
                 </span>
-                <span className={`md-h2h__score ${m.winner === 'a' ? 'md-h2h__score--win' : ''}`}>
+                <span className={cn('md-h2h__score', m.winner === 'a' && 'md-h2h__score--win')}>
                   {m.score[0]}–{m.score[1]}
                 </span>
                 <span className={`md-h2h__result md-h2h__result--${m.winner === 'a' ? 'w' : 'l'}`}>
@@ -801,7 +810,6 @@ function H2HCard({ format }: { format: Format }) {
   )
 }
 
-/* ---------- Comments ---------------------------------------------------- */
 
 function CommentsCard({ state }: { state: MatchState }) {
   const [list, setList] = useState<Comment[]>(COMMENTS_INIT)
@@ -854,7 +862,6 @@ function CommentsCard({ state }: { state: MatchState }) {
             type="submit"
             className="md-btn md-btn--primary md-btn--sm"
             disabled={!draft.trim()}
-            style={{ opacity: draft.trim() ? 1 : 0.45 }}
           >
             Post
           </button>
@@ -870,10 +877,10 @@ function CommentsCard({ state }: { state: MatchState }) {
                 </div>
                 <div className="md-comment__body">{c.body}</div>
                 <div className="md-comment__reacts">
-                  <button type="button" className={`md-react ${c.yours.ball ? 'is-on' : ''}`} onClick={() => toggleReact(i, 'ball')}>
+                  <button type="button" className={cn('md-react', c.yours.ball && 'is-on')} onClick={() => toggleReact(i, 'ball')}>
                     <span className="md-react__glyph">●</span> {c.reacts.ball}
                   </button>
-                  <button type="button" className={`md-react ${c.yours.fire ? 'is-on' : ''}`} onClick={() => toggleReact(i, 'fire')}>
+                  <button type="button" className={cn('md-react', c.yours.fire && 'is-on')} onClick={() => toggleReact(i, 'fire')}>
                     <span className="md-react__glyph">★</span> {c.reacts.fire}
                   </button>
                 </div>
@@ -886,7 +893,21 @@ function CommentsCard({ state }: { state: MatchState }) {
   )
 }
 
-/* ---------- Share modal -------------------------------------------------- */
+
+const SHARE_SUMMARY: Record<MatchState, Record<Format, string>> = {
+  final: {
+    singles: 'Final · 3–1 · Nguyen def. Okafor',
+    doubles: 'Final · 3–2 · Nguyen/Patel def. Okafor/Tanaka',
+  },
+  live: {
+    singles: 'Live · 2–1 · G4 · Nguyen vs Okafor',
+    doubles: 'Live · 2–1 · G4 · Nguyen/Patel vs Okafor/Tanaka',
+  },
+  upcoming: {
+    singles: 'Upcoming · Nguyen vs Okafor',
+    doubles: 'Upcoming · Nguyen/Patel vs Okafor/Tanaka',
+  },
+}
 
 function ShareModal({
   open,
@@ -900,6 +921,7 @@ function ShareModal({
   format: Format
 }) {
   const [copied, setCopied] = useState(false)
+  const copyResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const url = `https://fortymm.app/m/spring-open-2026/r16/14${format === 'doubles' ? '-d' : ''}`
 
   useEffect(() => {
@@ -910,6 +932,10 @@ function ShareModal({
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [open, onClose])
+
+  useEffect(() => () => {
+    if (copyResetTimer.current) clearTimeout(copyResetTimer.current)
+  }, [])
 
   if (!open) return null
 
@@ -925,21 +951,11 @@ function ShareModal({
       document.body.removeChild(ta)
     }
     setCopied(true)
-    setTimeout(() => setCopied(false), 2200)
+    if (copyResetTimer.current) clearTimeout(copyResetTimer.current)
+    copyResetTimer.current = setTimeout(() => setCopied(false), 2200)
   }
 
-  const summary =
-    state === 'final'
-      ? format === 'doubles'
-        ? 'Final · 3–2 · Nguyen/Patel def. Okafor/Tanaka'
-        : 'Final · 3–1 · Nguyen def. Okafor'
-      : state === 'live'
-        ? format === 'doubles'
-          ? 'Live · 2–1 · G4 · Nguyen/Patel vs Okafor/Tanaka'
-          : 'Live · 2–1 · G4 · Nguyen vs Okafor'
-        : format === 'doubles'
-          ? 'Upcoming · Nguyen/Patel vs Okafor/Tanaka'
-          : 'Upcoming · Nguyen vs Okafor'
+  const summary = SHARE_SUMMARY[state][format]
 
   return (
     <div className="md-modal-scrim" onClick={onClose}>
@@ -1005,21 +1021,25 @@ function ShareTile({ icon, label, hint }: { icon: React.ReactNode; label: string
   )
 }
 
-/* ---------- Page --------------------------------------------------------- */
+
+// The Live/Final/Upcoming tabs and Preview format/context toggles from the
+// design handoff aren't wired up yet; default the page to a finished singles
+// tournament match. Components downstream still branch on these values, so
+// re-introducing the toggles is a localized change.
+const DEFAULT_STATE: MatchState = 'final'
+const DEFAULT_FORMAT: Format = 'singles'
+const DEFAULT_CONTEXT: Context = 'tournament'
 
 function MatchDetailsPage() {
-  // Variant state is preserved so the components can render any of
-  // live/final/upcoming, singles/doubles, or tournament/casual — but the
-  // demo toggles that switched between them have been removed for now.
-  const [state, _setState] = useState<MatchState>('final')
-  const [format, _setFormat] = useState<Format>('singles')
-  const [context, _setContext] = useState<Context>('tournament')
   const [shareOpen, setShareOpen] = useState(false)
+  const state = DEFAULT_STATE
+  const format = DEFAULT_FORMAT
+  const context = DEFAULT_CONTEXT
 
   return (
     <AppShell>
       <div className="match-details">
-        <main className="md-page" style={{ padding: '32px 32px 80px' }}>
+        <main className="md-page md-page--y">
           <div className="md-header">
             <Breadcrumb context={context} />
             <div className="md-header__right">
@@ -1029,12 +1049,10 @@ function MatchDetailsPage() {
             </div>
           </div>
 
-          <div key={`hero-${state}-${format}-${context}`} className="md-fade-swap">
-            <HeroScoreboard state={state} format={format} context={context} />
-          </div>
+          <HeroScoreboard state={state} format={format} context={context} />
 
           <div className="md-col-2">
-            <div className="md-col-2__main" key={`main-${state}-${format}`}>
+            <div className="md-col-2__main">
               <PlayersCard state={state} format={format} />
               <CommentsCard state={state} />
             </div>

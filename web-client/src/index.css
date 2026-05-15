@@ -2003,9 +2003,7 @@ body.dark.fortymm-theme {
 }
 
 /* =========================================================================
-   Match Details Page
-   (route: /matches/:matchId)
-   Ported from the "Match Details Page" design handoff.
+   Match Details Page (route: /matches/:matchId)
    ========================================================================= */
 .fortymm-theme .match-details {
   --r-xs: 4px;
@@ -2039,14 +2037,15 @@ body.dark.fortymm-theme {
   cursor: pointer;
 }
 
-/* ---------- Page width ---------- */
 .fortymm-theme .md-page {
   max-width: 1180px;
   margin: 0 auto;
   padding: 0 32px;
 }
+.fortymm-theme .md-page--y {
+  padding: 32px 32px 80px;
+}
 
-/* ---------- Brand logo (footer only, now that the top nav lives in AppShell) ---------- */
 .fortymm-theme .md-logo {
   display: flex;
   align-items: center;
@@ -2090,6 +2089,11 @@ body.dark.fortymm-theme {
 }
 .fortymm-theme .md-btn--primary:disabled {
   cursor: not-allowed;
+  opacity: 0.45;
+}
+.fortymm-theme .md-btn--primary:disabled:hover {
+  background: var(--ball-500);
+  box-shadow: none;
 }
 .fortymm-theme .md-btn--ghost {
   background: transparent;
@@ -3196,16 +3200,6 @@ body.dark.fortymm-theme {
   cursor: pointer;
 }
 
-/* ---------- Fade swap ---------- */
-.fortymm-theme .md-fade-swap {
-  animation: md-fade-up 320ms var(--ease-out);
-}
-@keyframes md-fade-up {
-  from { opacity: 0; transform: translateY(6px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-
-/* ---------- Responsive ---------- */
 @media (max-width: 880px) {
   .fortymm-theme .md-col-2 {
     grid-template-columns: 1fr;
@@ -3256,7 +3250,6 @@ body.dark.fortymm-theme {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .fortymm-theme .md-fade-swap,
   .fortymm-theme .md-modal,
   .fortymm-theme .md-modal-scrim {
     animation: none !important;

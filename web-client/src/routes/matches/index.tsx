@@ -12,6 +12,7 @@ import {
 } from 'lucide-react'
 
 import { AppShell } from '@/components/app-shell'
+import { cn } from '@/lib/utils'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -594,7 +595,7 @@ function MatchTable({ rows, sort, setSort, onClear }: MatchTableProps) {
         {rows.map((m) => (
           <tr
             key={m.id}
-            className={'is-clickable' + (m.status === 'live' ? ' is-live' : '')}
+            className={cn('is-clickable', m.status === 'live' && 'is-live')}
             role="link"
             tabIndex={0}
             aria-label={`Open match M-${m.id}, ${m.a.name} vs ${m.b.name}`}
