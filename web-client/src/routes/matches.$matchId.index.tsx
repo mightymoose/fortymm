@@ -15,7 +15,7 @@ import {
 import { AppShell } from '@/components/app-shell'
 import { cn } from '@/lib/utils'
 
-export const Route = createFileRoute('/matches/$matchId')({
+export const Route = createFileRoute('/matches/$matchId/')({
   component: MatchDetailsPage,
 })
 
