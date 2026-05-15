@@ -9,6 +9,10 @@ const MARGARET = { id: 'pl-margaret', username: 'margaret.hamilton' }
 
 const ROSTER = [ADA, GRACE, LINUS, MARGARET]
 
+// Successful match creation lands on the scoring page for game 1 of the new
+// match's id (the factory mints ids like `m-1`).
+const SCORING_URL = /\/matches\/[^/]+\/games\/1\/scores\/new$/
+
 test.describe('Opponent picker — recent opponents', () => {
   test('shows a skeleton while recent opponents load, then the chips', async ({
     page,
@@ -85,7 +89,7 @@ test.describe('Opponent picker — recent opponents', () => {
     await nm.addGuest()
     await nm.start()
 
-    await expect(page).toHaveURL(/\/dashboard$/)
+    await expect(page).toHaveURL(SCORING_URL)
     expect(nm.store.createdMatches).toEqual([
       { opponent_user_id: null, best_of: 5, rated: false },
     ])
@@ -118,7 +122,7 @@ test.describe('Opponent picker — search', () => {
     expect(nm.store.searchQueries).toContain('hamilton')
 
     await nm.start()
-    await expect(page).toHaveURL(/\/dashboard$/)
+    await expect(page).toHaveURL(SCORING_URL)
     expect(nm.store.createdMatches).toEqual([
       { opponent_user_id: MARGARET.id, best_of: 5, rated: true },
     ])
