@@ -1,16 +1,15 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { AppShell } from '@/components/app-shell'
+import { DashboardPage } from '@/components/dashboard/dashboard-page'
 
 export const Route = createFileRoute('/dashboard')({
-  component: DashboardPage,
+  component: DashboardRoute,
 })
 
-function DashboardPage() {
+function DashboardRoute() {
   return (
     <AppShell>
-      <div className="mx-auto max-w-[1200px] px-12 pt-16 pb-32">
-        <h1 className="font-display text-4xl text-foreground">Dashboard</h1>
-      </div>
+      <DashboardPage />
     </AppShell>
   )
 }
