@@ -6,9 +6,7 @@ import { UserMenu } from './user-menu'
 type NavItem = {
   label: string
   icon: ReactNode
-  badge?: { label: string; live?: boolean }
-  active?: boolean
-  to?: string
+  to: string
   children?: Array<{ label: string; to: string; hash?: string; icon: ReactNode }>
 }
 
@@ -45,7 +43,6 @@ const NAV_SECTIONS: NavSection[] = [
       {
         label: 'Matches',
         to: '/matches',
-        badge: { label: '12', live: true },
         icon: (
           <svg
             width="18"
@@ -62,163 +59,11 @@ const NAV_SECTIONS: NavSection[] = [
           </svg>
         ),
       },
-      {
-        label: 'Brackets',
-        icon: (
-          <svg
-            width="18"
-            height="18"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            <path d="M3 6h18M3 12h18M3 18h18" />
-          </svg>
-        ),
-      },
-      {
-        label: 'Schedule',
-        icon: (
-          <svg
-            width="18"
-            height="18"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            <rect x="3" y="4" width="18" height="18" rx="2" />
-            <path d="M16 2v4M8 2v4M3 10h18" />
-          </svg>
-        ),
-      },
-      {
-        label: 'Tournaments',
-        badge: { label: '3' },
-        icon: (
-          <svg
-            width="18"
-            height="18"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            <path d="M6 2h12l-2 7H8z" />
-            <path d="M9 9v6a3 3 0 0 0 6 0V9" />
-            <path d="M5 22h14M10 18h4v4h-4z" />
-          </svg>
-        ),
-      },
-    ],
-  },
-  {
-    label: 'Manage',
-    items: [
-      {
-        label: 'Players',
-        badge: { label: '128' },
-        icon: (
-          <svg
-            width="18"
-            height="18"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
-            <circle cx="9" cy="7" r="4" />
-            <path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" />
-          </svg>
-        ),
-      },
-      {
-        label: 'Courts',
-        icon: (
-          <svg
-            width="18"
-            height="18"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            <rect x="3" y="3" width="18" height="18" rx="2" />
-            <path d="M3 9h18M9 21V9" />
-          </svg>
-        ),
-      },
-      {
-        label: 'Stats & Rankings',
-        icon: (
-          <svg
-            width="18"
-            height="18"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            <path d="M3 3v18h18" />
-            <path d="M7 14l4-4 4 4 5-5" />
-          </svg>
-        ),
-      },
-      {
-        label: 'Achievements',
-        icon: (
-          <svg
-            width="18"
-            height="18"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            <circle cx="12" cy="8" r="6" />
-            <path d="M15.5 13.5L17 22l-5-3-5 3 1.5-8.5" />
-          </svg>
-        ),
-      },
     ],
   },
   {
     label: 'Workspace',
     items: [
-      {
-        label: 'Messages',
-        badge: { label: '5' },
-        icon: (
-          <svg
-            width="18"
-            height="18"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-          </svg>
-        ),
-      },
       {
         label: 'Settings',
         to: '/settings',
@@ -284,11 +129,6 @@ export function AppShell({ children }: AppShellProps) {
   const activeHash = useRouterState({
     select: (s) => s.location.hash.replace(/^#/, ''),
   })
-  const [activeLabel, setActiveLabel] = useState(
-    () =>
-      NAV_SECTIONS.flatMap((s) => s.items).find((i) => i.active)?.label ??
-      'Dashboard',
-  )
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -315,16 +155,7 @@ export function AppShell({ children }: AppShellProps) {
     }
   }, [sidebarOpen])
 
-  function handleNavClick(e: React.MouseEvent<HTMLAnchorElement>, label: string) {
-    e.preventDefault()
-    setActiveLabel(label)
-    if (window.matchMedia('(max-width: 960px)').matches) {
-      setSidebarOpen(false)
-    }
-  }
-
-  function handleRouteNavClick(label: string) {
-    setActiveLabel(label)
+  function closeOnMobile() {
     if (window.matchMedia('(max-width: 960px)').matches) {
       setSidebarOpen(false)
     }
@@ -369,45 +200,19 @@ export function AppShell({ children }: AppShellProps) {
               <ul className="app-shell__nav-list">
                 {section.items.map((item) => {
                   const childActive = item.children?.some((c) => pathname === c.to) ?? false
-                  const isActive = item.to
-                    ? pathname === item.to || childActive
-                    : activeLabel === item.label
+                  const isActive = pathname === item.to || childActive
                   const linkClassName = `app-shell__nav-link${isActive && !item.children ? ' is-active' : ''}${item.children && childActive ? ' is-parent-active' : ''}`
-                  const inner = (
-                    <>
-                      <span className="app-shell__nav-icon">{item.icon}</span>
-                      {item.label}
-                      {item.badge ? (
-                        <span
-                          className={`app-shell__nav-badge${
-                            item.badge.live ? ' app-shell__nav-badge--live' : ''
-                          }`}
-                        >
-                          {item.badge.label}
-                        </span>
-                      ) : null}
-                    </>
-                  )
                   return (
                     <li key={item.label}>
-                      {item.to ? (
-                        <Link
-                          to={item.to}
-                          className={linkClassName}
-                          onClick={() => handleRouteNavClick(item.label)}
-                        >
-                          {inner}
-                        </Link>
-                      ) : (
-                        <a
-                          href="#"
-                          className={linkClassName}
-                          onClick={(e) => handleNavClick(e, item.label)}
-                        >
-                          {inner}
-                        </a>
-                      )}
-                      {item.children && (isActive || childActive) ? (
+                      <Link
+                        to={item.to}
+                        className={linkClassName}
+                        onClick={closeOnMobile}
+                      >
+                        <span className="app-shell__nav-icon">{item.icon}</span>
+                        {item.label}
+                      </Link>
+                      {item.children && isActive ? (
                         <ul className="app-shell__sub-nav-list">
                           {item.children.map((child) => {
                             const childIsActive =
@@ -419,7 +224,7 @@ export function AppShell({ children }: AppShellProps) {
                                   to={child.to}
                                   hash={child.hash}
                                   className={`app-shell__sub-nav-link${childIsActive ? ' is-active' : ''}`}
-                                  onClick={() => handleRouteNavClick(child.label)}
+                                  onClick={closeOnMobile}
                                 >
                                   <span className="app-shell__nav-icon">{child.icon}</span>
                                   {child.label}
@@ -436,30 +241,6 @@ export function AppShell({ children }: AppShellProps) {
             </div>
           ))}
         </nav>
-
-        <div className="app-shell__sidebar-footer">
-          <div className="app-shell__promo">
-            <div className="app-shell__promo-title">SPRING OPEN '26</div>
-            <div className="app-shell__promo-copy">
-              Registration closes in 6 days. 64 spots, double elim.
-            </div>
-            <a href="#" className="app-shell__promo-btn">
-              Register
-              <svg
-                width="12"
-                height="12"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2.5"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <path d="M5 12h14M13 5l7 7-7 7" />
-              </svg>
-            </a>
-          </div>
-        </div>
       </aside>
 
       <div className="app-shell__main">

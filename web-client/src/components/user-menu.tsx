@@ -21,9 +21,6 @@ export function UserMenu() {
       >
         <div className="app-shell__user-avatar app-shell__skeleton app-shell__skeleton--avatar" />
         <div className="app-shell__user-name app-shell__skeleton app-shell__skeleton--name" />
-        <span className="app-shell__user-chev" aria-hidden="true">
-          <Chevron />
-        </span>
       </div>
     )
   }
@@ -44,26 +41,6 @@ export function UserMenu() {
       >
         {username}
       </div>
-      <span className="app-shell__user-chev" aria-hidden="true">
-        <Chevron />
-      </span>
     </button>
-  )
-}
-
-function Chevron() {
-  return (
-    <svg
-      width="14"
-      height="14"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M6 9l6 6 6-6" />
-    </svg>
   )
 }
