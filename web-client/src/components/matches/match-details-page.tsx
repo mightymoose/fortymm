@@ -64,19 +64,19 @@ function projectSide(side: MatchDetailsSide, fallbackLabel: string): SideView {
   }
 }
 
-function projectGame(
-  game: MatchDetailsGame,
-  currentUserSideNumber: 1 | 2,
-): GameView {
+function projectGame(game: MatchDetailsGame): GameView {
   const score = game.score
   if (!score) return { id: game.id, gameNumber: game.game_number, score: null, scoreId: null }
-  const mine = currentUserSideNumber === 1 ? score.my_points : score.opponent_points
-  const opponent =
-    currentUserSideNumber === 1 ? score.opponent_points : score.my_points
+  // `my_points` / `opponent_points` are already current-user-relative — the
+  // API swaps them based on `my_side.side_number` server-side.
   return {
     id: game.id,
     gameNumber: game.game_number,
-    score: { mine, opponent, isMyWin: score.is_my_win },
+    score: {
+      mine: score.my_points,
+      opponent: score.opponent_points,
+      isMyWin: score.is_my_win,
+    },
     scoreId: score.id,
   }
 }
@@ -88,7 +88,6 @@ function projectMatchView(data: MatchDetails, matchId: string): MatchView {
       : data.status === 'completed'
         ? 'final'
         : 'upcoming'
-  const mySideNumber = (data.my_side.side_number === 2 ? 2 : 1) as 1 | 2
   const mySide = projectSide(data.my_side, 'You')
   const opponentSide = data.opponent_side
     ? projectSide(data.opponent_side, 'Opponent')
@@ -96,7 +95,7 @@ function projectMatchView(data: MatchDetails, matchId: string): MatchView {
   const games = data.games
     .slice()
     .sort((a, b) => a.game_number - b.game_number)
-    .map((g) => projectGame(g, mySideNumber))
+    .map(projectGame)
   const scoreCta =
     data.can_score && data.current_game
       ? { matchId, gameId: data.current_game.id }
