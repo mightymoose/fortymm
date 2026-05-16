@@ -403,7 +403,6 @@ def _list_row(match: Match, current_user_id: uuid.UUID) -> MatchListRow:
         ],
         best_of=match.match_settings.best_of,
         created_at=match.created_at,
-        # Only surfaced to participants — spectators have no scoring affordance.
         current_game_id=current_game.id if can_score else None,
         can_score=can_score,
     )

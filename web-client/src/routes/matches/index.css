@@ -242,9 +242,6 @@
   color: var(--serve-500);
   font-weight: 600;
 }
-.match-list-page .player-name.is-loser {
-  color: var(--fg-3);
-}
 .match-list-page .player-name.is-empty {
   color: var(--fg-3);
   font-style: italic;

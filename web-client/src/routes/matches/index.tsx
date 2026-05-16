@@ -415,7 +415,7 @@ function MatchRow({
         <TimeCell iso={row.created_at} />
       </td>
       <td onClick={(e) => e.stopPropagation()}>
-        {row.can_score && row.current_game_id ? (
+        {row.current_game_id ? (
           <Button asChild variant="default" size="sm">
             <Link {...scoringNewRoute(row.id, row.current_game_id)}>
               Score
@@ -436,8 +436,7 @@ function MatchRow({
 }
 
 function sideLabel(side: MatchListRowSide | null): string {
-  if (side === null) return 'No opponent'
-  return side.players.map((p) => p.username).join(' & ') || 'No opponent'
+  return side?.players.map((p) => p.username).join(' & ') || 'No opponent'
 }
 
 function PlayerChip({ side }: { side: MatchListRowSide | null }) {
