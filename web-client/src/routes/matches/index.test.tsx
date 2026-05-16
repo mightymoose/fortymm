@@ -74,6 +74,28 @@ describe('MatchesPage', () => {
     // Seed handler also yields silva.r (final win) and patel.m (final loss).
     expect(screen.getByText('silva.r')).toBeInTheDocument()
     expect(screen.getByText('patel.m')).toBeInTheDocument()
+    // The Players column shows both sides — the current mock user (side 1)
+    // appears alongside the opponent (side 2).
+    expect(screen.getAllByText('rita.kovac').length).toBeGreaterThan(0)
+  })
+
+  it('paints the winning side green on a completed row', async () => {
+    renderMatchesPage()
+    // Seed match m-completed-win-1 has side-1 (rita.kovac) winning vs silva.r.
+    const winner = await screen.findByText('silva.r')
+    // The losing side's name is rendered without is-winner; the winning side
+    // (the seed user) on that row carries it.
+    const rows = screen.getAllByRole('link')
+    const winnerRow = rows.find((r) =>
+      r.getAttribute('aria-label')?.includes('silva.r'),
+    )
+    expect(winnerRow).toBeDefined()
+    // The current user on side 1 won this row, so their name carries the
+    // winner color.
+    const winnerName = winnerRow!.querySelector('.player-name.is-winner')
+    expect(winnerName?.textContent).toBe('rita.kovac')
+    // And the opponent's name stays neutral.
+    expect(winner).not.toHaveClass('is-winner')
   })
 
   it('passes the API status when the player picks a status tab', async () => {
@@ -84,7 +106,7 @@ describe('MatchesPage', () => {
         requests.push(request.url)
         return HttpResponse.json(
           matchListResponse({
-            items: [matchListRow({ opponent_username: 'live.opp' })],
+            items: [matchListRow({ opponent: 'live.opp' })],
             status_counts: { pending: 1, in_progress: 1, completed: 1 },
             total: 1,
           }),
@@ -123,7 +145,7 @@ describe('MatchesPage', () => {
         const items = Array.from({ length: page === 1 ? 25 : 1 }, (_, i) =>
           matchListRow({
             id: `m-${page}-${i}`,
-            opponent_username: `p${page}-${i}`,
+            opponent: `p${page}-${i}`,
           }),
         )
         return HttpResponse.json(
@@ -157,7 +179,7 @@ describe('MatchesPage', () => {
         requests.push(request.url)
         return HttpResponse.json(
           matchListResponse({
-            items: [matchListRow({ opponent_username: 'nguyen.t' })],
+            items: [matchListRow({ opponent: 'nguyen.t' })],
             total: 1,
             status_counts: { pending: 1 },
           }),

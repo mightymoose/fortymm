@@ -197,24 +197,58 @@ export function matchDetails(
 }
 
 /** Row-shaped projection for the /matches list. Defaults mirror a pending
- * 1v1 against a registered opponent with one trailing un-scored game. */
+ * 1v1 against a registered opponent with one trailing un-scored game. Pass
+ * `opponent` as a shorthand to set the side-2 player without spelling out
+ * `sides`. */
 export function matchListRow(
-  overrides: Partial<MatchListRow> = {},
+  overrides: Partial<MatchListRow> & { opponent?: string | null } = {},
 ): MatchListRow {
+  const { opponent, ...rest } = overrides
+  const opponentName =
+    opponent === undefined
+      ? faker.internet.username().toLowerCase()
+      : opponent
+  const sides: MatchDetailsSide[] = [
+    {
+      side_number: 1,
+      players: [
+        {
+          user_id: nextId('u'),
+          username: 'rita.kovac',
+          is_current_user: true,
+        },
+      ],
+      games_won: 0,
+      won: null,
+      is_current_user_side: true,
+    },
+  ]
+  if (opponentName !== null) {
+    sides.push({
+      side_number: 2,
+      players: [
+        {
+          user_id: nextId('u'),
+          username: opponentName,
+          is_current_user: false,
+        },
+      ],
+      games_won: 0,
+      won: null,
+      is_current_user_side: false,
+    })
+  }
   return {
     id: nextId('m'),
     status: 'pending',
     status_label: 'Scheduled',
     league: MOCK_DEFAULT_LEAGUE,
-    opponent_username: faker.internet.username().toLowerCase(),
-    opponent_user_id: nextId('u'),
-    my_games_won: 0,
-    opponent_games_won: 0,
-    is_win: null,
+    sides,
     best_of: 5,
     created_at: ISO,
     current_game_id: nextId('g'),
-    ...overrides,
+    can_score: opponentName !== null,
+    ...rest,
   }
 }
 

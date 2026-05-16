@@ -109,14 +109,11 @@ class MatchListRow(BaseModel):
     status: MatchStatus
     status_label: str
     league: MatchLeague
-    opponent_username: str | None
-    opponent_user_id: uuid.UUID | None
-    my_games_won: int
-    opponent_games_won: int
-    is_win: bool | None
+    sides: list[MatchDetailsSide]
     best_of: int
     created_at: datetime
     current_game_id: uuid.UUID | None
+    can_score: bool
 
 
 class MatchListResponse(BaseModel):

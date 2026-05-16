@@ -181,19 +181,48 @@ export function projectListRow(seed: SeedMatch): MatchListRow {
     (seed.status === 'pending' || seed.status === 'in_progress') &&
     seed.opponent !== null &&
     current !== null
+
+  const sides: MatchDetailsSide[] = [
+    {
+      side_number: 1,
+      players: [
+        {
+          user_id: MOCK_CURRENT_USER.id,
+          username: MOCK_CURRENT_USER.username,
+          is_current_user: true,
+        },
+      ],
+      games_won: side1,
+      won: decided ? side1 > side2 : null,
+      is_current_user_side: true,
+    },
+  ]
+  if (seed.opponent) {
+    sides.push({
+      side_number: 2,
+      players: [
+        {
+          user_id: seed.opponent.id,
+          username: seed.opponent.username,
+          is_current_user: false,
+        },
+      ],
+      games_won: side2,
+      won: decided ? side2 > side1 : null,
+      is_current_user_side: false,
+    })
+  }
+
   return {
     id: seed.id,
     status: seed.status,
     status_label: STATUS_LABELS[seed.status],
     league: MOCK_DEFAULT_LEAGUE,
-    opponent_username: seed.opponent?.username ?? null,
-    opponent_user_id: seed.opponent?.id ?? null,
-    my_games_won: side1,
-    opponent_games_won: side2,
-    is_win: decided && seed.opponent ? side1 > side2 : null,
+    sides,
     best_of: seed.best_of,
     created_at: seed.created_at,
-    current_game_id: scorable && current ? current.id : null,
+    current_game_id: current ? current.id : null,
+    can_score: scorable,
   }
 }
 
