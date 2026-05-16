@@ -1,9 +1,19 @@
 import uuid
 
 from httpx import AsyncClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Match, MatchStatus
+from app.models import (
+    League,
+    LeagueMembership,
+    Match,
+    MatchStatus,
+    RatingHistory,
+    RatingHistorySource,
+    RatingStrategy,
+    UserLeagueRating,
+)
 from tests._helpers import make_client, make_user, start_session
 
 
@@ -34,11 +44,26 @@ async def test_dashboard_empty_when_user_has_no_matches(
     response = await api_client.get("/v1/dashboard")
     assert response.status_code == 200
     body = response.json()
-    assert body == {
-        "score_banner": None,
-        "next_match": None,
-        "recent_results": [],
-    }
+    assert body["score_banner"] is None
+    assert body["next_match"] is None
+    assert body["recent_results"] == []
+    # A fresh signup is auto-joined to the default Glicko-2 league with
+    # initial state, so the rating widget lights up immediately with peak ==
+    # current and a null streak / empty sparkline.
+    rating = body["rating"]
+    assert rating is not None
+    assert rating["league_name"] == "FortyMM"
+    assert rating["strategy_key"] == "glicko2"
+    assert rating["current"] == 1500.0
+    assert rating["delta"] == 0.0
+    assert rating["peak"] == 1500.0
+    assert rating["percentile"] is None  # alone in the league
+    assert rating["spark_data"] == []
+    assert rating["streak"] is None
+    assert rating["stats"] == [
+        {"label": "RD", "value": "350"},
+        {"label": "Volatility", "value": "0.060"},
+    ]
 
 
 async def test_dashboard_returns_score_banner_for_in_progress_match(
@@ -119,8 +144,184 @@ async def test_dashboard_scoped_to_current_user(
         await _create_match(other_client, bystander.id)
 
     body = (await api_client.get("/v1/dashboard")).json()
-    assert body == {
-        "score_banner": None,
-        "next_match": None,
-        "recent_results": [],
-    }
+    assert body["score_banner"] is None
+    assert body["next_match"] is None
+    assert body["recent_results"] == []
+    # Alice has her own seeded league row but no completed matches of her own
+    # — the rating starts at the initial Glicko-2 values, untouched by Bob's
+    # match.
+    assert body["rating"]["current"] == 1500.0
+    assert body["rating"]["streak"] is None
+
+
+async def _play_match(
+    client: AsyncClient,
+    opponent_id,
+    *,
+    i_win: bool,
+    best_of: int = 1,
+) -> dict:
+    match = await _create_match(client, opponent_id, best_of=best_of)
+    s1, s2 = (11, 4) if i_win else (4, 11)
+    await client.post(
+        f"/v1/matches/{match['id']}/games/{match['games'][0]['id']}/scores",
+        json={"side_1_points": s1, "side_2_points": s2},
+    )
+    return match
+
+
+async def test_dashboard_rating_reflects_completed_match(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    await start_session(api_client, db_session)
+    opp = await make_user(db_session, "rival")
+    await _play_match(api_client, opp.id, i_win=True)
+
+    rating = (await api_client.get("/v1/dashboard")).json()["rating"]
+    # Glicko-2 lifts the winner above 1500 and tightens RD.
+    assert rating["current"] > 1500.0
+    assert rating["delta"] > 0
+    assert rating["peak"] == rating["current"]
+    assert rating["spark_data"] == [rating["current"]]
+    assert rating["streak"] == {"kind": "W", "n": 1}
+    rd_stat = next(s for s in rating["stats"] if s["label"] == "RD")
+    assert int(rd_stat["value"]) < 350
+
+
+async def test_dashboard_streak_counts_consecutive_results(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    await start_session(api_client, db_session)
+    opp = await make_user(db_session, "rival")
+    # W, W, L — streak should be the most-recent L of length 1.
+    await _play_match(api_client, opp.id, i_win=True)
+    await _play_match(api_client, opp.id, i_win=True)
+    await _play_match(api_client, opp.id, i_win=False)
+
+    rating = (await api_client.get("/v1/dashboard")).json()["rating"]
+    assert rating["streak"] == {"kind": "L", "n": 1}
+    assert len(rating["spark_data"]) == 3
+
+
+async def test_dashboard_rating_peak_holds_after_loss(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    await start_session(api_client, db_session)
+    opp = await make_user(db_session, "rival")
+    await _play_match(api_client, opp.id, i_win=True)
+    rating_after_win = (await api_client.get("/v1/dashboard")).json()["rating"]
+    peak_after_win = rating_after_win["current"]
+
+    await _play_match(api_client, opp.id, i_win=False)
+    rating_after_loss = (await api_client.get("/v1/dashboard")).json()["rating"]
+
+    assert rating_after_loss["current"] < peak_after_win
+    assert rating_after_loss["peak"] == peak_after_win
+    assert rating_after_loss["delta"] < 0
+
+
+async def test_dashboard_rating_percentile_against_league_peers(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """A user mid-pack against 4 other rated members should land at the
+    bottom of the leaderboard until they actually beat someone."""
+    me = await start_session(api_client, db_session)
+    default_league = (
+        await db_session.execute(
+            select(League).where(League.is_default.is_(True))
+        )
+    ).scalar_one()
+    # Seed 4 peers at varying ratings without playing any matches against me.
+    for name, value in [
+        ("low", 1200.0),
+        ("mid_low", 1400.0),
+        ("mid_high", 1600.0),
+        ("high", 1800.0),
+    ]:
+        peer = await make_user(db_session, name)
+        db_session.add(
+            LeagueMembership(league_id=default_league.id, user_id=peer.id)
+        )
+        db_session.add(
+            UserLeagueRating(
+                league_id=default_league.id,
+                user_id=peer.id,
+                rating_value=value,
+                rating_state={"rating": value, "rd": 200.0, "volatility": 0.06},
+            )
+        )
+    await db_session.commit()
+    _ = me
+
+    rating = (await api_client.get("/v1/dashboard")).json()["rating"]
+    # I'm at 1500 among 1200/1400/1500/1600/1800: 3rd of 5 — 60th percentile.
+    assert rating["percentile"] == 60
+
+
+async def test_dashboard_sparkline_returns_most_recent_points(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """When the user has more rating-history rows than SPARK_MAX_POINTS in
+    the 30-day window, the sparkline should be the *most recent* points in
+    chronological order — not the oldest 30."""
+    from datetime import datetime, timedelta, timezone
+
+    me = await start_session(api_client, db_session)
+    default_league = (
+        await db_session.execute(
+            select(League).where(League.is_default.is_(True))
+        )
+    ).scalar_one()
+    strategy = (
+        await db_session.execute(
+            select(RatingStrategy).where(RatingStrategy.key == "glicko2")
+        )
+    ).scalar_one()
+    # 40 history rows spaced 1 hour apart, all within the 30-day window;
+    # rating climbs monotonically so we can read the order off the values.
+    now = datetime.now(timezone.utc)
+    for i in range(40):
+        db_session.add(
+            RatingHistory(
+                league_id=default_league.id,
+                user_id=me.id,
+                rating_strategy_id=strategy.id,
+                rating_value=1500.0 + i,
+                rating_state={
+                    "rating": 1500.0 + i,
+                    "rd": 200.0,
+                    "volatility": 0.06,
+                },
+                previous_rating_value=1500.0 + i - 1 if i > 0 else None,
+                source=RatingHistorySource.match,
+                created_at=now - timedelta(hours=40 - i),
+            )
+        )
+    await db_session.commit()
+
+    spark = (await api_client.get("/v1/dashboard")).json()["rating"]["spark_data"]
+    # 30 most-recent values (1510..1539), oldest first.
+    assert spark == [float(v) for v in range(1510, 1540)]
+
+
+async def test_dashboard_rating_is_null_for_manual_league(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    # Move the seeded league over to the manual strategy and null the user's
+    # rating row — the widget should disappear instead of showing a stale 1500.
+    manual = (
+        await db_session.execute(
+            select(RatingStrategy).where(RatingStrategy.key == "manual")
+        )
+    ).scalar_one()
+    default = (
+        await db_session.execute(
+            select(League).where(League.is_default.is_(True))
+        )
+    ).scalar_one()
+    default.rating_strategy_id = manual.id
+    await db_session.commit()
+
+    await start_session(api_client, db_session)
+    body = (await api_client.get("/v1/dashboard")).json()
+    assert body["rating"] is None

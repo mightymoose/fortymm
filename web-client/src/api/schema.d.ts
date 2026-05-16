@@ -329,6 +329,51 @@ export interface components {
              */
             created_at: string;
         };
+        /**
+         * DashboardRating
+         * @description Per-league rating snapshot for the dashboard RatingCard.
+         *
+         *     Emitted only when the user has a rated row in an automatic-strategy league
+         *     (Glicko-2 today). Manual leagues and unrated users get ``rating: None``.
+         */
+        DashboardRating: {
+            /**
+             * League Id
+             * Format: uuid
+             */
+            league_id: string;
+            /** League Name */
+            league_name: string;
+            /** Strategy Key */
+            strategy_key: string;
+            /** Current */
+            current: number;
+            /** Delta */
+            delta: number;
+            /** Peak */
+            peak: number;
+            /** Percentile */
+            percentile: number | null;
+            /** Spark Data */
+            spark_data: number[];
+            streak: components["schemas"]["DashboardStreak"] | null;
+            /** Stats */
+            stats: components["schemas"]["DashboardRatingStat"][];
+        };
+        /**
+         * DashboardRatingStat
+         * @description Strategy-specific tile in the rating card's stats grid.
+         *
+         *     Pre-formatted server-side so the frontend doesn't need to know which
+         *     fields a strategy emits (Glicko-2's ``rd``/``volatility`` vs whatever a
+         *     future Elo/TrueSkill row carries).
+         */
+        DashboardRatingStat: {
+            /** Label */
+            label: string;
+            /** Value */
+            value: string;
+        };
         /** DashboardRecentResult */
         DashboardRecentResult: {
             /**
@@ -357,6 +402,7 @@ export interface components {
             next_match: components["schemas"]["DashboardNextMatch"] | null;
             /** Recent Results */
             recent_results: components["schemas"]["DashboardRecentResult"][];
+            rating?: components["schemas"]["DashboardRating"] | null;
         };
         /** DashboardScoreBanner */
         DashboardScoreBanner: {
@@ -372,6 +418,16 @@ export interface components {
              * Format: uuid
              */
             current_game_id: string;
+        };
+        /** DashboardStreak */
+        DashboardStreak: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "W" | "L";
+            /** N */
+            n: number;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
