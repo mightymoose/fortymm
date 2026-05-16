@@ -6,13 +6,19 @@ from typing import Annotated
 
 from coolname import generate_slug
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Response, status
-from sqlalchemy import select
+from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_session
 from app.leagues import add_user_to_default_league
 from app.models import Permission, Role, RolePermission, User, UserRole, UserToken
-from app.schemas.session import SessionData, SessionResponse, SessionUser
+from app.schemas.session import (
+    SessionData,
+    SessionResponse,
+    SessionUser,
+    UpdateCurrentUserRequest,
+)
 
 router = APIRouter()
 
@@ -135,3 +141,45 @@ async def get_current_user(
             detail="authentication required",
         )
     return user
+
+
+@router.patch("/v1/me", response_model=SessionResponse)
+async def update_current_user(
+    payload: UpdateCurrentUserRequest,
+    db: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+) -> SessionResponse:
+    # No-op if the user "changed" their name to what it already is — skip the
+    # uniqueness probe so a user can submit the form unchanged without seeing
+    # their own row trigger a 409.
+    if payload.username != current_user.username:
+        existing = await db.execute(
+            select(User.id).where(
+                func.lower(User.username) == payload.username.lower(),
+                User.id != current_user.id,
+            )
+        )
+        if existing.first() is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Username already taken.",
+            )
+        current_user.username = payload.username
+        try:
+            await db.commit()
+        except IntegrityError:
+            await db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Username already taken.",
+            )
+        await db.refresh(current_user)
+
+    permissions = await _load_permissions(db, current_user.id)
+    return SessionResponse(
+        data=SessionData(
+            user=SessionUser(
+                username=current_user.username, permissions=permissions
+            )
+        )
+    )

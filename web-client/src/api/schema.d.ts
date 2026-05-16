@@ -21,6 +21,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Update Current User */
+        patch: operations["update_current_user_v1_me_patch"];
+        trace?: never;
+    };
     "/v1/permissions": {
         parameters: {
             query?: never;
@@ -860,6 +877,11 @@ export interface components {
             /** Permissions */
             permissions: string[];
         };
+        /** UpdateCurrentUserRequest */
+        UpdateCurrentUserRequest: {
+            /** Username */
+            username: string;
+        };
         /** ValidationError */
         ValidationError: {
             /** Location */
@@ -892,6 +914,41 @@ export interface operations {
             };
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_current_user_v1_me_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateCurrentUserRequest"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
