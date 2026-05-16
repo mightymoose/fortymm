@@ -200,6 +200,20 @@ export function matchDetails(
     games: [firstGame],
     current_game: { id: firstGame.id, game_number: 1 },
     can_score: true,
+    recent_form: (opponentSide ? [mySide, opponentSide] : [mySide]).map(
+      (s) => ({
+        user_id: s.players[0]?.user_id ?? nextId('u'),
+        recent_results: [],
+      }),
+    ),
+    head_to_head: opponentSide
+      ? {
+          total_meetings: 0,
+          side_1_wins: 0,
+          side_2_wins: 0,
+          recent_meetings: [],
+        }
+      : null,
     ...overrides,
   }
 }

@@ -849,3 +849,131 @@ async def test_list_and_get_match_include_league(
 
     listing = (await api_client.get("/v1/matches")).json()
     assert listing["items"][0]["league"]["id"] == str(default_league.id)
+
+
+# ----- recent form + head to head -----------------------------------------
+
+
+async def _play_match_to_completion(
+    client: AsyncClient,
+    opponent_id: uuid.UUID,
+    best_of: int,
+    side_1_wins: bool,
+) -> dict:
+    """Create a match and score it to completion. The chosen side wins the
+    minimum number of games needed to clinch. Returns the final payload."""
+    match = await _create_match(client, opponent_id, best_of=best_of)
+    needed = best_of // 2 + 1
+    body = match
+    for _ in range(needed):
+        current = body["current_game"]
+        assert current is not None
+        s1, s2 = (11, 5) if side_1_wins else (5, 11)
+        body = (
+            await client.post(
+                f"/v1/matches/{body['id']}/games/{current['id']}/scores",
+                json={"side_1_points": s1, "side_2_points": s2},
+            )
+        ).json()
+    assert body["status"] == "completed"
+    return body
+
+
+async def test_details_includes_empty_recent_form_for_first_meeting(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    await start_session(api_client, db_session)
+    opp = await make_user(db_session, "first-rival")
+    created = await _create_match(api_client, opp.id, best_of=3)
+
+    detail = (await api_client.get(f"/v1/matches/{created['id']}")).json()
+    assert detail["head_to_head"] == {
+        "total_meetings": 0,
+        "side_1_wins": 0,
+        "side_2_wins": 0,
+        "recent_meetings": [],
+    }
+    # Both players are in recent_form, both with empty results lists.
+    forms = {f["user_id"]: f for f in detail["recent_form"]}
+    assert len(forms) == 2
+    for f in forms.values():
+        assert f["recent_results"] == []
+
+
+async def test_details_recent_form_lists_each_player_previous_results(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    me = await start_session(api_client, db_session)
+    opp = await make_user(db_session, "form-rival")
+    # Play two finished matches with a third party so each side has its own
+    # prior history that's *not* a head-to-head meeting.
+    other = await make_user(db_session, "third-party")
+    await _play_match_to_completion(api_client, other.id, best_of=3, side_1_wins=True)
+    await _play_match_to_completion(api_client, other.id, best_of=3, side_1_wins=False)
+    # Now start a head-to-head match and ask for its details.
+    current = await _create_match(api_client, opp.id, best_of=3)
+    detail = (await api_client.get(f"/v1/matches/{current['id']}")).json()
+
+    forms = {f["user_id"]: f for f in detail["recent_form"]}
+    # I have 2 prior completed matches (1 W, 1 L) against third-party.
+    mine = forms[str(me.id)]
+    assert {r["is_win"] for r in mine["recent_results"]} == {True, False}
+    assert all(
+        r["opponent_username"] == "third-party" for r in mine["recent_results"]
+    )
+    # Opp shows up in the form list with no prior completed matches.
+    assert forms[str(opp.id)]["recent_results"] == []
+
+
+async def test_details_recent_form_excludes_the_current_match(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    await start_session(api_client, db_session)
+    opp = await make_user(db_session, "exclude-rival")
+    # Play to completion against this opp, then look up that match's detail.
+    finished = await _play_match_to_completion(
+        api_client, opp.id, best_of=3, side_1_wins=True
+    )
+
+    detail = (await api_client.get(f"/v1/matches/{finished['id']}")).json()
+    forms = {f["user_id"]: f for f in detail["recent_form"]}
+    # The finished match itself must not appear in its own recent-form list.
+    for f in forms.values():
+        assert all(r["match_id"] != finished["id"] for r in f["recent_results"])
+
+
+async def test_details_head_to_head_counts_prior_meetings_per_side(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    await start_session(api_client, db_session)
+    rival = await make_user(db_session, "h2h-rival")
+    # Three completed prior meetings: I win two, lose one.
+    await _play_match_to_completion(api_client, rival.id, best_of=3, side_1_wins=True)
+    await _play_match_to_completion(api_client, rival.id, best_of=3, side_1_wins=True)
+    await _play_match_to_completion(api_client, rival.id, best_of=3, side_1_wins=False)
+    # New in-progress match — H2H counts only completed *prior* meetings.
+    current = await _create_match(api_client, rival.id, best_of=5)
+
+    detail = (await api_client.get(f"/v1/matches/{current['id']}")).json()
+    h2h = detail["head_to_head"]
+    assert h2h["total_meetings"] == 3
+    assert h2h["side_1_wins"] == 2  # me, on side 1 of the current match
+    assert h2h["side_2_wins"] == 1
+    # Most-recent meeting is the one I just lost.
+    assert h2h["recent_meetings"][0]["winner_side_number"] == 2
+
+
+async def test_details_head_to_head_is_null_for_solo_match(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    await start_session(api_client, db_session)
+    created = (
+        await api_client.post(
+            "/v1/matches", json={"best_of": 3, "rated": False}
+        )
+    ).json()
+    detail = (await api_client.get(f"/v1/matches/{created['id']}")).json()
+    assert detail["head_to_head"] is None
+    # Only the creator is in recent_form — and they have no prior history.
+    assert len(detail["recent_form"]) == 1
+    assert detail["recent_form"][0]["recent_results"] == []

@@ -324,4 +324,234 @@ describe('MatchDetailsView', () => {
     // Scored cells stay plain divs rather than edit links for spectators.
     expect(screen.queryByRole('link', { name: '11' })).not.toBeInTheDocument()
   })
+
+  it('shows recent form per side and an empty state for first-time players', async () => {
+    const match = matchDetails({
+      id: 'm-form',
+      status: 'in_progress',
+      sides: [
+        {
+          side_number: 1,
+          players: [
+            { user_id: 'u-me', username: 'me', is_current_user: true },
+          ],
+          games_won: 0,
+          won: null,
+          is_current_user_side: true,
+        },
+        {
+          side_number: 2,
+          players: [
+            { user_id: 'u-rookie', username: 'rookie', is_current_user: false },
+          ],
+          games_won: 0,
+          won: null,
+          is_current_user_side: false,
+        },
+      ],
+      games: [],
+      current_game: null,
+      can_score: false,
+      recent_form: [
+        {
+          user_id: 'u-me',
+          recent_results: [
+            {
+              match_id: 'm-prev-1',
+              is_win: true,
+              player_games_won: 3,
+              opponent_games_won: 1,
+              opponent_username: 'silva.r',
+              completed_at: '2026-05-09T18:00:00Z',
+            },
+            {
+              match_id: 'm-prev-2',
+              is_win: false,
+              player_games_won: 1,
+              opponent_games_won: 3,
+              opponent_username: 'tanaka.y',
+              completed_at: '2026-05-07T18:00:00Z',
+            },
+          ],
+        },
+        { user_id: 'u-rookie', recent_results: [] },
+      ],
+    })
+    server.use(http.get('*/v1/matches/m-form', () => HttpResponse.json(match)))
+
+    const { container } = renderDetails('m-form')
+
+    // Wait for the Players & form card title to render.
+    await waitFor(() =>
+      expect(container.querySelector('.md-card__hd h3')).toHaveTextContent(
+        'Players & form',
+      ),
+    )
+    // My side: 1 W and 1 L with the right opponent / score labels.
+    const myForm = screen.getByTestId('form-1')
+    expect(within(myForm).getByText('Recent form · 1–1')).toBeInTheDocument()
+    expect(within(myForm).getByText('silva.r')).toBeInTheDocument()
+    expect(within(myForm).getByText('3–1')).toBeInTheDocument()
+    expect(within(myForm).getByText('tanaka.y')).toBeInTheDocument()
+    expect(within(myForm).getByText('1–3')).toBeInTheDocument()
+    // Rookie shows the empty state, not a result list.
+    const oppForm = screen.getByTestId('form-2')
+    expect(within(oppForm).getByText(/No prior matches yet/)).toBeInTheDocument()
+    expect(
+      within(oppForm).queryByText(/Recent form · /),
+    ).not.toBeInTheDocument()
+  })
+
+  it('shows the head-to-head card with prior meetings counted per side', async () => {
+    const match = matchDetails({
+      id: 'm-h2h',
+      status: 'in_progress',
+      sides: [
+        {
+          side_number: 1,
+          players: [
+            { user_id: 'u-me', username: 'me', is_current_user: true },
+          ],
+          games_won: 0,
+          won: null,
+          is_current_user_side: true,
+        },
+        {
+          side_number: 2,
+          players: [
+            { user_id: 'u-opp', username: 'opp', is_current_user: false },
+          ],
+          games_won: 0,
+          won: null,
+          is_current_user_side: false,
+        },
+      ],
+      games: [],
+      current_game: null,
+      can_score: false,
+      head_to_head: {
+        total_meetings: 3,
+        side_1_wins: 2,
+        side_2_wins: 1,
+        recent_meetings: [
+          {
+            match_id: 'm-h2h-3',
+            completed_at: '2026-05-08T18:00:00Z',
+            side_1_games_won: 1,
+            side_2_games_won: 3,
+            winner_side_number: 2,
+          },
+          {
+            match_id: 'm-h2h-2',
+            completed_at: '2026-04-30T18:00:00Z',
+            side_1_games_won: 3,
+            side_2_games_won: 0,
+            winner_side_number: 1,
+          },
+          {
+            match_id: 'm-h2h-1',
+            completed_at: '2026-04-12T18:00:00Z',
+            side_1_games_won: 3,
+            side_2_games_won: 2,
+            winner_side_number: 1,
+          },
+        ],
+      },
+    })
+    server.use(http.get('*/v1/matches/m-h2h', () => HttpResponse.json(match)))
+
+    const { container } = renderDetails('m-h2h')
+
+    await waitFor(() => {
+      const headings = Array.from(container.querySelectorAll('.md-card__hd h3'))
+      expect(headings.map((h) => h.textContent)).toContain('Head to head')
+    })
+    const h2hCard = container.querySelector('.md-h2h')!
+    expect(screen.getByText('3 MEETINGS')).toBeInTheDocument()
+    // Win counts: left = me = 2, right = opp = 1.
+    const counts = h2hCard.querySelectorAll('.md-h2h__count')
+    expect(counts[0]).toHaveTextContent('2')
+    expect(counts[1]).toHaveTextContent('1')
+    // Three rows, newest first; the loss row gets the L marker.
+    const rows = h2hCard.querySelectorAll('.md-h2h__row')
+    expect(rows).toHaveLength(3)
+    expect(rows[0].querySelector('.md-h2h__result--l')).not.toBeNull()
+    expect(rows[1].querySelector('.md-h2h__result--w')).not.toBeNull()
+  })
+
+  it('shows the rating change card when ratings moved', async () => {
+    const match = matchDetails({
+      id: 'm-rated',
+      status: 'completed',
+      status_label: 'Final',
+      affects_rating: true,
+      sides: [
+        {
+          side_number: 1,
+          players: [
+            { user_id: 'u-me', username: 'me', is_current_user: true },
+          ],
+          games_won: 3,
+          won: true,
+          is_current_user_side: true,
+          rating_change: { before: 1500, after: 1512, delta: 12 },
+        },
+        {
+          side_number: 2,
+          players: [
+            { user_id: 'u-opp', username: 'opp', is_current_user: false },
+          ],
+          games_won: 1,
+          won: false,
+          is_current_user_side: false,
+          rating_change: { before: 1500, after: 1488, delta: -12 },
+        },
+      ],
+      games: [],
+      current_game: null,
+      can_score: false,
+    })
+    server.use(http.get('*/v1/matches/m-rated', () => HttpResponse.json(match)))
+
+    const { container } = renderDetails('m-rated')
+
+    await waitFor(() => {
+      const headings = Array.from(container.querySelectorAll('.md-card__hd h3'))
+      expect(headings.map((h) => h.textContent)).toContain('Rating change')
+    })
+    const rows = container.querySelectorAll('.md-rating-row')
+    expect(rows).toHaveLength(2)
+    const [winnerRow, loserRow] = Array.from(rows)
+    expect(
+      winnerRow.querySelector('.md-rating-row__delta-num'),
+    ).toHaveTextContent('+12')
+    expect(
+      winnerRow.querySelector('.md-rating-row__delta-num'),
+    ).toHaveClass('md-delta-up')
+    expect(
+      loserRow.querySelector('.md-rating-row__delta-num'),
+    ).toHaveTextContent('-12')
+    expect(
+      loserRow.querySelector('.md-rating-row__delta-num'),
+    ).toHaveClass('md-delta-down')
+  })
+
+  it('hides the rating change card when no ratings have moved', async () => {
+    const match = matchDetails({
+      id: 'm-unrated',
+      status: 'completed',
+      affects_rating: false,
+    })
+    server.use(
+      http.get('*/v1/matches/m-unrated', () => HttpResponse.json(match)),
+    )
+
+    const { container } = renderDetails('m-unrated')
+
+    await waitFor(() =>
+      expect(container.querySelector('.md-card__hd h3')).toBeInTheDocument(),
+    )
+    const headings = Array.from(container.querySelectorAll('.md-card__hd h3'))
+    expect(headings.map((h) => h.textContent)).not.toContain('Rating change')
+  })
 })

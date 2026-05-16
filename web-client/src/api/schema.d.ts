@@ -498,6 +498,9 @@ export interface components {
             current_game: components["schemas"]["MatchDetailsCurrentGame"] | null;
             /** Can Score */
             can_score: boolean;
+            /** Recent Form */
+            recent_form?: components["schemas"]["MatchDetailsPlayerForm"][];
+            head_to_head?: components["schemas"]["MatchDetailsH2H"] | null;
         };
         /** MatchDetailsCurrentGame */
         MatchDetailsCurrentGame: {
@@ -508,6 +511,33 @@ export interface components {
             id: string;
             /** Game Number */
             game_number: number;
+        };
+        /**
+         * MatchDetailsFormResult
+         * @description One past completed match for the Players & form recent-results list.
+         *
+         *     Counts are framed from the cited *player's* perspective, not from a
+         *     side number in the past match.
+         */
+        MatchDetailsFormResult: {
+            /**
+             * Match Id
+             * Format: uuid
+             */
+            match_id: string;
+            /** Is Win */
+            is_win: boolean;
+            /** Player Games Won */
+            player_games_won: number;
+            /** Opponent Games Won */
+            opponent_games_won: number;
+            /** Opponent Username */
+            opponent_username: string | null;
+            /**
+             * Completed At
+             * Format: date-time
+             */
+            completed_at: string;
         };
         /** MatchDetailsGame */
         MatchDetailsGame: {
@@ -520,6 +550,46 @@ export interface components {
             game_number: number;
             score: components["schemas"]["MatchDetailsScore"] | null;
         };
+        /**
+         * MatchDetailsH2H
+         * @description Head-to-head between this match's two singles players. Wins are
+         *     counted against this match's side numbers (not the side numbers of the
+         *     historical matches).
+         */
+        MatchDetailsH2H: {
+            /** Total Meetings */
+            total_meetings: number;
+            /** Side 1 Wins */
+            side_1_wins: number;
+            /** Side 2 Wins */
+            side_2_wins: number;
+            /** Recent Meetings */
+            recent_meetings: components["schemas"]["MatchDetailsH2HMeeting"][];
+        };
+        /**
+         * MatchDetailsH2HMeeting
+         * @description One past meeting between the two players in *this* match. Game counts
+         *     are aligned to this match's side numbers so the FE doesn't need to
+         *     re-map per row.
+         */
+        MatchDetailsH2HMeeting: {
+            /**
+             * Match Id
+             * Format: uuid
+             */
+            match_id: string;
+            /**
+             * Completed At
+             * Format: date-time
+             */
+            completed_at: string;
+            /** Side 1 Games Won */
+            side_1_games_won: number;
+            /** Side 2 Games Won */
+            side_2_games_won: number;
+            /** Winner Side Number */
+            winner_side_number: number | null;
+        };
         /** MatchDetailsPlayer */
         MatchDetailsPlayer: {
             /**
@@ -531,6 +601,20 @@ export interface components {
             username: string;
             /** Is Current User */
             is_current_user: boolean;
+        };
+        /**
+         * MatchDetailsPlayerForm
+         * @description A player's previous-5 results, attached by ``user_id`` so the FE can
+         *     map it onto whichever side carries that user.
+         */
+        MatchDetailsPlayerForm: {
+            /**
+             * User Id
+             * Format: uuid
+             */
+            user_id: string;
+            /** Recent Results */
+            recent_results: components["schemas"]["MatchDetailsFormResult"][];
         };
         /** MatchDetailsScore */
         MatchDetailsScore: {
