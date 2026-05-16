@@ -301,7 +301,7 @@ async def create_match(
         match_settings=settings,
         league=league,
         created_by_user_id=current_user.id,
-        status=MatchStatus.pending,
+        status=MatchStatus.in_progress,
     )
     _add_side(match, 1, current_user)
     if opponent is not None:
@@ -462,10 +462,7 @@ def _recompute_match(match: Match) -> None:
         if side_two is not None:
             side_two.won = b_wins > a_wins
     else:
-        has_scored = a_wins > 0 or b_wins > 0
-        match.status = (
-            MatchStatus.in_progress if has_scored else MatchStatus.pending
-        )
+        match.status = MatchStatus.in_progress
         for side in match.sides:
             side.won = None
 
