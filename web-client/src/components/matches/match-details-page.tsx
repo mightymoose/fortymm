@@ -508,7 +508,6 @@ function HeroScoreboard({
 
 function PlayerSide({ side, pos }: { side: SideView; pos: 'l' | 'r' }) {
   const win = side.won === true
-  const change = side.ratingChange
   return (
     <div className={`md-hero__player md-hero__player--${pos}`}>
       <div className="md-hero__player-row">
@@ -524,19 +523,6 @@ function PlayerSide({ side, pos }: { side: SideView; pos: 'l' | 'r' }) {
           <div className={cn('md-hero__name', win && 'md-hero__name--win')}>
             {side.username}
           </div>
-          {change && (
-            <div
-              className={cn(
-                'md-hero__rating-delta',
-                change.delta >= 0
-                  ? 'md-hero__rating-delta--up'
-                  : 'md-hero__rating-delta--down',
-              )}
-              data-testid={`rating-delta-${pos}`}
-            >
-              {formatRatingDelta(change.delta)} rating
-            </div>
-          )}
         </div>
       </div>
     </div>
@@ -554,7 +540,12 @@ function GameGrid({ view, matchId }: { view: MatchView; matchId: string }) {
   const canEdit = view.leftSide.isCurrentUser
   return (
     <div className="md-games">
-      <div className="md-games__grid">
+      <div
+        className="md-games__grid"
+        style={
+          { '--md-games-count': view.bestOf } as React.CSSProperties
+        }
+      >
         <div className="md-games__kicker">GAMES</div>
         {slots.map((_, i) => (
           <div key={`h-${i}`} className="md-games__col-label">
@@ -740,7 +731,7 @@ function RatingBox({ side }: { side: SideView }) {
         </div>
       </div>
       {side.ratingHistory.length >= 2 && (
-        <ProfileSparkline data={side.ratingHistory} />
+        <Sparkline data={side.ratingHistory} />
       )}
     </div>
   )
@@ -748,14 +739,16 @@ function RatingBox({ side }: { side: SideView }) {
 
 // Local copy of the dashboard sparkline — same shape and palette, but the
 // match-details card uses a smaller footprint than the dashboard hero.
-function ProfileSparkline({
+function Sparkline({
   data,
   w = 110,
   h = 36,
+  downColor = 'var(--fg-3)',
 }: {
   data: number[]
   w?: number
   h?: number
+  downColor?: string
 }) {
   const min = Math.min(...data)
   const max = Math.max(...data)
@@ -772,7 +765,7 @@ function ProfileSparkline({
   // The last point's trend picks the colour so a falling rating reads as a
   // loss tone even before the user squints at the y-axis.
   const trendUp = data[data.length - 1] >= data[0]
-  const color = trendUp ? 'var(--serve-500)' : 'var(--fg-3)'
+  const color = trendUp ? 'var(--serve-500)' : downColor
   const last = points[points.length - 1]
   return (
     <svg
@@ -926,6 +919,10 @@ function RatingRow({ side, isFirst }: { side: SideView; isFirst: boolean }) {
         </div>
         {change && (
           <div className="md-rating-row__delta">
+            <RatingRowSparkline
+              history={side.ratingHistory}
+              change={change}
+            />
             <span
               className={cn(
                 'md-rating-row__delta-num',
@@ -939,6 +936,24 @@ function RatingRow({ side, isFirst }: { side: SideView; isFirst: boolean }) {
       </div>
     </>
   )
+}
+
+function RatingRowSparkline({
+  history,
+  change,
+}: {
+  history: number[]
+  change: RatingChange
+}) {
+  // history is anchored "before this match"; append the post-match value so the
+  // line lands on the new rating.
+  const series = [...history]
+  if (series.length === 0 && change.before !== null) {
+    series.push(change.before)
+  }
+  series.push(change.after)
+  if (series.length < 2) return null
+  return <Sparkline data={series} w={80} h={28} downColor="var(--loss)" />
 }
 
 function H2HCard({ view, h2h }: { view: MatchView; h2h: H2HView }) {

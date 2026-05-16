@@ -2315,18 +2315,6 @@ body.dark.fortymm-theme {
   color: var(--fg-3);
   margin-top: 4px;
 }
-.fortymm-theme .md-hero__rating-delta {
-  font: 600 11px var(--font-mono);
-  margin-top: 6px;
-  letter-spacing: 0.04em;
-}
-.fortymm-theme .md-hero__rating-delta--up {
-  color: var(--serve-500);
-}
-.fortymm-theme .md-hero__rating-delta--down {
-  color: var(--loss);
-}
-
 .fortymm-theme .md-hero__doubles-row {
   display: flex;
 }
@@ -2466,7 +2454,10 @@ body.dark.fortymm-theme {
 }
 .fortymm-theme .md-games__grid {
   display: grid;
-  grid-template-columns: 130px repeat(5, 1fr) 90px;
+  grid-template-columns:
+    var(--md-games-kicker, 130px)
+    repeat(var(--md-games-count, 5), 1fr)
+    var(--md-games-total, 90px);
   gap: 8px;
   align-items: center;
 }
@@ -2799,10 +2790,10 @@ body.dark.fortymm-theme {
   display: flex;
   flex-direction: column;
   align-items: flex-end;
-  gap: 2px;
+  gap: 4px;
 }
 .fortymm-theme .md-rating-row__delta-num {
-  font: 700 13px var(--font-mono);
+  font: 700 16px var(--font-mono);
   letter-spacing: 0.04em;
 }
 .fortymm-theme .md-delta-up {
@@ -3204,7 +3195,8 @@ body.dark.fortymm-theme {
     width: auto;
   }
   .fortymm-theme .md-games__grid {
-    grid-template-columns: 96px repeat(5, 1fr) 60px;
+    --md-games-kicker: 96px;
+    --md-games-total: 60px;
   }
   .fortymm-theme .md-hero__score {
     font-size: 84px;
