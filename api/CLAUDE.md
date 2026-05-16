@@ -32,11 +32,6 @@ and re-run alembic against a fresh database to test.
 - **Revision ids (`0001`, `0002`, ...) and `down_revision` chains stay
   frozen.** Filenames carry the revision id as a prefix — keep the prefix,
   only change the descriptive suffix when a migration is renamed.
-- When renaming a table, update everything that references it: the model's
-  `__tablename__`, the migration's `create_table` / `drop_table` /
-  `ForeignKey` / index / constraint names, the migration filename and
-  docstring, and any test or app code that hardcodes the old name as a
-  string.
-
-Once we deploy, this license expires and schema changes go in new
-migrations.
+- Renaming a table touches: the model's `__tablename__`, the migration's
+  create/drop/FK/index/constraint names, the migration filename and
+  docstring, and any hardcoded references in app or test code.
