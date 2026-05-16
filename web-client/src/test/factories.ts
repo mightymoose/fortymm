@@ -1,5 +1,6 @@
 import { faker } from '@faker-js/faker'
 import type { components } from '@/api/schema'
+import { MOCK_DEFAULT_LEAGUE } from '@/mocks/match-store'
 
 type ComponentHealth = components['schemas']['ComponentHealth']
 type HealthResponse = components['schemas']['HealthResponse']
@@ -14,15 +15,9 @@ type MatchDetailsSide = components['schemas']['MatchDetailsSide']
 type MatchDetailsGame = components['schemas']['MatchDetailsGame']
 type MatchDetailsCurrentGame =
   components['schemas']['MatchDetailsCurrentGame']
-type MatchLeague = components['schemas']['MatchLeague']
 type MatchListRow = components['schemas']['MatchListRow']
 type MatchListResponse = components['schemas']['MatchListResponse']
 type MatchStatus = components['schemas']['MatchStatus']
-
-const DEFAULT_MATCH_LEAGUE: MatchLeague = {
-  id: 'lg-fortymm',
-  name: 'FortyMM',
-}
 type DashboardResponse = components['schemas']['DashboardResponse']
 type DashboardScoreBanner = components['schemas']['DashboardScoreBanner']
 type DashboardNextMatch = components['schemas']['DashboardNextMatch']
@@ -186,7 +181,7 @@ export function matchDetails(
     id,
     status: 'pending',
     status_label: 'Scheduled',
-    league: DEFAULT_MATCH_LEAGUE,
+    league: MOCK_DEFAULT_LEAGUE,
     best_of: bestOf,
     games_to_win: Math.ceil(bestOf / 2),
     team_size: 1,
@@ -210,7 +205,7 @@ export function matchListRow(
     id: nextId('m'),
     status: 'pending',
     status_label: 'Scheduled',
-    league: DEFAULT_MATCH_LEAGUE,
+    league: MOCK_DEFAULT_LEAGUE,
     opponent_username: faker.internet.username().toLowerCase(),
     opponent_user_id: nextId('u'),
     my_games_won: 0,

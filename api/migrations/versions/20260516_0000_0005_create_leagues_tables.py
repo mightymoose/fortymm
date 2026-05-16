@@ -4,6 +4,9 @@ Revision ID: 0005
 Revises: 0004
 Create Date: 2026-05-16 00:00:00.000000
 
+Note: adds ``matches.league_id`` as NOT NULL with no backfill, so this only
+applies cleanly against a fresh / empty matches table. Per the pre-deploy
+convention in api/CLAUDE.md, the assumption holds.
 """
 from typing import Sequence, Union
 
