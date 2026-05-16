@@ -542,9 +542,7 @@ function GameGrid({ view, matchId }: { view: MatchView; matchId: string }) {
     <div className="md-games">
       <div
         className="md-games__grid"
-        style={
-          { '--md-games-count': view.bestOf } as React.CSSProperties
-        }
+        style={{ '--md-games-count': view.bestOf } as React.CSSProperties}
       >
         <div className="md-games__kicker">GAMES</div>
         {slots.map((_, i) => (
@@ -737,8 +735,6 @@ function RatingBox({ side }: { side: SideView }) {
   )
 }
 
-// Local copy of the dashboard sparkline — same shape and palette, but the
-// match-details card uses a smaller footprint than the dashboard hero.
 function Sparkline({
   data,
   w = 110,
