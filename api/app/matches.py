@@ -1,6 +1,7 @@
 import math
 import uuid
 from dataclasses import dataclass
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
@@ -52,6 +53,9 @@ router = APIRouter(prefix="/v1")
 MAX_PAGE_SIZE = 100
 RECENT_FORM_LIMIT = 5
 H2H_MEETINGS_LIMIT = 5
+# Cap on the pre-match sparkline so the BFF stays cheap; the dashboard
+# Sparkline already pads single points to 2.
+RATING_HISTORY_LIMIT = 10
 
 
 # ----- helpers -------------------------------------------------------------
@@ -493,7 +497,7 @@ def _history_base_query(current_match_id: uuid.UUID):
 async def _load_recent_form(
     db: AsyncSession,
     user_ids: list[uuid.UUID],
-    current_match_id: uuid.UUID,
+    match: Match,
 ) -> list[MatchDetailsPlayerForm]:
     if not user_ids:
         return []
@@ -503,19 +507,85 @@ async def _load_recent_form(
         rows = (
             await db.execute(
                 participant_filter(
-                    _history_base_query(current_match_id), user_id
+                    _history_base_query(match.id), user_id
                 ).limit(RECENT_FORM_LIMIT)
             )
         ).scalars().all()
+        rating_before, rating_history = await _load_pre_match_rating(
+            db, user_id, match.league_id, match.created_at
+        )
+        matches_before, wins_before = await _load_career_before(
+            db, user_id, match.id, match.created_at
+        )
         result.append(
             MatchDetailsPlayerForm(
                 user_id=user_id,
                 recent_results=[
-                    _build_form_result(match, user_id) for match in rows
+                    _build_form_result(past, user_id) for past in rows
                 ],
+                rating_before=rating_before,
+                rating_history=rating_history,
+                career_matches_before=matches_before,
+                career_wins_before=wins_before,
             )
         )
     return result
+
+
+async def _load_pre_match_rating(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    league_id: uuid.UUID,
+    before: datetime,
+) -> tuple[float | None, list[float]]:
+    """Last N rating values for this user in this league strictly before
+    ``before``, returned as (most-recent-value, chronological-list)."""
+    rows = (
+        await db.execute(
+            select(RatingHistory.rating_value)
+            .where(
+                RatingHistory.user_id == user_id,
+                RatingHistory.league_id == league_id,
+                RatingHistory.created_at < before,
+            )
+            .order_by(RatingHistory.created_at.desc())
+            .limit(RATING_HISTORY_LIMIT)
+        )
+    ).scalars().all()
+    if not rows:
+        return None, []
+    history = list(reversed(rows))
+    return history[-1], history
+
+
+async def _load_career_before(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    current_match_id: uuid.UUID,
+    before: datetime,
+) -> tuple[int, int]:
+    """(career_matches, career_wins) for this user across all leagues, in
+    completed matches that finished before ``before``. Excludes the current
+    match so a just-completed lookup doesn't double-count itself."""
+    side = aliased(MatchSide)
+    player = aliased(MatchSidePlayer)
+    row = (
+        await db.execute(
+            select(
+                func.count(Match.id),
+                func.count(Match.id).filter(side.won.is_(True)),
+            )
+            .join(side, side.match_id == Match.id)
+            .join(player, player.match_side_id == side.id)
+            .where(
+                player.user_id == user_id,
+                Match.status == MatchStatus.completed,
+                Match.id != current_match_id,
+                Match.updated_at < before,
+            )
+        )
+    ).one()
+    return int(row[0]), int(row[1])
 
 
 def _build_form_result(
@@ -624,7 +694,7 @@ async def _load_view_extras(db: AsyncSession, match: Match) -> ViewExtras:
     user_ids = _singles_user_ids(match)
     return ViewExtras(
         rating_changes=await _load_rating_changes(db, match.id),
-        recent_form=await _load_recent_form(db, user_ids, match.id),
+        recent_form=await _load_recent_form(db, user_ids, match),
         head_to_head=await _load_head_to_head(
             db, user_ids if len(user_ids) == 2 else [], match.id
         ),
