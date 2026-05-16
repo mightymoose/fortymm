@@ -43,13 +43,17 @@ services:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/fortymm
       REDIS_URL: redis://redis:6379/0
       SESSION_COOKIE_SECURE: "false"
+    # Image-baked /app is what the api process runs (no source mount, no
+    # --reload). The scripts/ dir is mounted in just so the redeploy hook
+    # can `docker compose exec api python scripts/seed_rbac.py` — the api
+    # itself never touches scripts/.
+    volumes:
+      - ./api/scripts:/app/scripts:ro
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-    # Same image as dev but no --reload and no source volume mount —
-    # the image's COPY'd /app is what runs.
     command: >
       sh -c "alembic upgrade head &&
              uvicorn app.main:app --host 0.0.0.0 --port 8000"
