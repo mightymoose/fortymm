@@ -1,3 +1,6 @@
+import uuid
+from collections.abc import Sequence
+
 from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,13 +14,14 @@ from app.matches import (
     opponent_username,
     side_win_counts,
 )
-from app.models import Match, MatchStatus, User
+from app.models import Match, MatchStatus, RatingHistory, User
 from app.schemas.dashboard import (
     DashboardNextMatch,
     DashboardRecentResult,
     DashboardResponse,
     DashboardScoreBanner,
 )
+from app.schemas.rating import RatingChange
 from app.sessions import get_current_user
 
 router = APIRouter(prefix="/v1")
@@ -60,10 +64,15 @@ async def get_dashboard(
     in_progress = (await db.execute(in_progress_q)).scalars().all()
     completed = (await db.execute(completed_q)).scalars().all()
 
+    rating_changes = await _load_my_rating_changes(
+        db, current_user.id, [m.id for m in completed]
+    )
+
     score_banner = _build_score_banner(in_progress, current_user.id)
     next_match = _build_next_match(pending, current_user.id)
     recent_results = [
-        _build_recent_result(match, current_user.id) for match in completed
+        _build_recent_result(match, current_user.id, rating_changes.get(match.id))
+        for match in completed
     ]
 
     return DashboardResponse(
@@ -73,8 +82,26 @@ async def get_dashboard(
     )
 
 
+async def _load_my_rating_changes(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    match_ids: Sequence[uuid.UUID],
+) -> dict[uuid.UUID, RatingChange]:
+    if not match_ids:
+        return {}
+    rows = (
+        await db.execute(
+            select(RatingHistory).where(
+                RatingHistory.match_id.in_(match_ids),
+                RatingHistory.user_id == user_id,
+            )
+        )
+    ).scalars().all()
+    return {row.match_id: RatingChange.from_history(row) for row in rows}
+
+
 def _build_score_banner(
-    in_progress: list[Match], current_user_id
+    in_progress: list[Match], current_user_id: uuid.UUID
 ) -> DashboardScoreBanner | None:
     if not in_progress:
         return None
@@ -90,7 +117,7 @@ def _build_score_banner(
 
 
 def _build_next_match(
-    pending: list[Match], current_user_id
+    pending: list[Match], current_user_id: uuid.UUID
 ) -> DashboardNextMatch | None:
     if not pending:
         return None
@@ -103,7 +130,11 @@ def _build_next_match(
     )
 
 
-def _build_recent_result(match: Match, current_user_id) -> DashboardRecentResult:
+def _build_recent_result(
+    match: Match,
+    current_user_id: uuid.UUID,
+    my_rating_change: RatingChange | None,
+) -> DashboardRecentResult:
     mine = resolve_my_side(match, current_user_id)
     assert mine is not None  # query filters to participants
     side_wins = side_win_counts(match)
@@ -120,4 +151,5 @@ def _build_recent_result(match: Match, current_user_id) -> DashboardRecentResult
         my_games_won=my_games_won,
         opponent_games_won=opp_games_won,
         completed_at=match.updated_at,
+        my_rating_change=my_rating_change,
     )

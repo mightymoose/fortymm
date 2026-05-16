@@ -7,9 +7,12 @@ from app.models.match_settings import MatchSettings, VerificationPolicy
 from app.models.match_side import MatchSide
 from app.models.match_side_player import MatchSidePlayer
 from app.models.permission import Permission
+from app.models.rating_history import RatingHistory, RatingHistorySource
+from app.models.rating_strategy import RatingStrategy
 from app.models.role import Role
 from app.models.role_permission import RolePermission
 from app.models.user import User
+from app.models.user_league_rating import UserLeagueRating
 from app.models.user_role import UserRole
 from app.models.user_token import UserToken
 
@@ -25,9 +28,13 @@ __all__ = [
     "MatchSidePlayer",
     "MatchStatus",
     "Permission",
+    "RatingHistory",
+    "RatingHistorySource",
+    "RatingStrategy",
     "Role",
     "RolePermission",
     "User",
+    "UserLeagueRating",
     "UserRole",
     "UserToken",
     "VerificationPolicy",

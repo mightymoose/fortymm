@@ -349,6 +349,7 @@ export interface components {
              * Format: date-time
              */
             completed_at: string;
+            my_rating_change?: components["schemas"]["RatingChange"] | null;
         };
         /** DashboardResponse */
         DashboardResponse: {
@@ -501,6 +502,7 @@ export interface components {
             won: boolean | null;
             /** Is Current User Side */
             is_current_user_side: boolean;
+            rating_change?: components["schemas"]["RatingChange"] | null;
         };
         /** MatchGameScoreWrite */
         MatchGameScoreWrite: {
@@ -603,6 +605,11 @@ export interface components {
         /**
          * PlayerRead
          * @description A user the current player can pick as a match opponent.
+         *
+         *     ``rating`` is the player's current ``rating_value`` in the league the
+         *     request was scoped to (defaulting to the default league) — None if they
+         *     haven't yet played a rated match in that league or, for manual-strategy
+         *     leagues, haven't been imported.
          */
         PlayerRead: {
             /**
@@ -612,6 +619,20 @@ export interface components {
             id: string;
             /** Username */
             username: string;
+            /** Rating */
+            rating?: number | null;
+        };
+        /**
+         * RatingChange
+         * @description A user's rating delta on a single completed match.
+         */
+        RatingChange: {
+            /** Before */
+            before: number | null;
+            /** After */
+            after: number;
+            /** Delta */
+            delta: number;
         };
         /** RbacUserCreate */
         RbacUserCreate: {
@@ -1438,6 +1459,7 @@ export interface operations {
         parameters: {
             query?: {
                 limit?: number;
+                league_id?: string | null;
             };
             header?: never;
             path?: never;
@@ -1473,6 +1495,7 @@ export interface operations {
                 /** @description Username substring to match against. */
                 q: string;
                 limit?: number;
+                league_id?: string | null;
             };
             header?: never;
             path?: never;

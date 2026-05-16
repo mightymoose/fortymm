@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, DateTime, Enum, Index, String, Text, func, text
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Index, String, Text, func, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -12,6 +12,7 @@ from app.db import Base
 if TYPE_CHECKING:
     from app.models.league_membership import LeagueMembership
     from app.models.match import Match
+    from app.models.rating_strategy import RatingStrategy
 
 
 class LeagueVisibility(enum.Enum):
@@ -48,6 +49,12 @@ class League(Base):
     is_default: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("false")
     )
+    rating_strategy_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("rating_strategies.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -63,4 +70,7 @@ class League(Base):
         back_populates="league",
         cascade="all, delete-orphan",
         passive_deletes=True,
+    )
+    rating_strategy: Mapped["RatingStrategy"] = relationship(
+        back_populates="leagues"
     )

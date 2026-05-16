@@ -2305,6 +2305,17 @@ body.dark.fortymm-theme {
   color: var(--fg-3);
   margin-top: 4px;
 }
+.fortymm-theme .md-hero__rating-delta {
+  font: 600 11px var(--font-mono);
+  margin-top: 6px;
+  letter-spacing: 0.04em;
+}
+.fortymm-theme .md-hero__rating-delta--up {
+  color: var(--serve-500);
+}
+.fortymm-theme .md-hero__rating-delta--down {
+  color: var(--loss);
+}
 
 .fortymm-theme .md-hero__doubles-row {
   display: flex;

@@ -4,6 +4,7 @@ from datetime import datetime
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.models.match import MatchStatus
+from app.schemas.rating import RatingChange
 
 # Match lengths the client offers. All odd so one side can always reach a
 # strict majority of games; the DB additionally enforces "odd and >= 1".
@@ -64,6 +65,7 @@ class MatchDetailsSide(BaseModel):
     games_won: int
     won: bool | None
     is_current_user_side: bool
+    rating_change: RatingChange | None = None
 
 
 class MatchDetailsScore(BaseModel):

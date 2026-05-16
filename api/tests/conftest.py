@@ -17,7 +17,7 @@ from app import queue as queue_module
 from app.db import Base, get_session
 from app.main import app as fastapi_app
 import app.models  # noqa: F401  -- ensures models register on Base.metadata
-from app.models import League, LeagueVisibility
+from app.models import League, LeagueVisibility, RatingStrategy
 
 
 @pytest.fixture(autouse=True)
@@ -63,8 +63,57 @@ async def db_session(engine: AsyncEngine) -> AsyncIterator[AsyncSession]:
             await conn.execute(table.delete())
 
 
+GLICKO2_STATE_SCHEMA = {
+    "type": "object",
+    "required": ["rating", "rd", "volatility"],
+    "properties": {
+        "rating": {"type": "number"},
+        "rd": {"type": "number"},
+        "volatility": {"type": "number"},
+    },
+    "additionalProperties": False,
+}
+MANUAL_STATE_SCHEMA = {
+    "type": "object",
+    "required": ["rating"],
+    "properties": {"rating": {"type": "number"}},
+    "additionalProperties": False,
+}
+
+
 @pytest_asyncio.fixture(autouse=True)
-async def default_league(db_session: AsyncSession) -> League:
+async def rating_strategies(db_session: AsyncSession) -> dict[str, RatingStrategy]:
+    """Seed the canonical rating strategies. Migration 0005 inserts these in
+    real deployments; tests build via ``Base.metadata.create_all`` so we
+    re-seed here for every test."""
+    glicko2 = RatingStrategy(
+        key="glicko2",
+        name="Glicko-2",
+        description="Glicko-2.",
+        state_schema=GLICKO2_STATE_SCHEMA,
+        initial_state={"rating": 1500.0, "rd": 350.0, "volatility": 0.06},
+        initial_rating_value=1500.0,
+        is_automatic=True,
+    )
+    manual = RatingStrategy(
+        key="manual",
+        name="Manual / external",
+        description="Ratings supplied externally.",
+        state_schema=MANUAL_STATE_SCHEMA,
+        initial_state=None,
+        initial_rating_value=None,
+        is_automatic=False,
+    )
+    db_session.add_all([glicko2, manual])
+    await db_session.commit()
+    return {"glicko2": glicko2, "manual": manual}
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def default_league(
+    db_session: AsyncSession,
+    rating_strategies: dict[str, RatingStrategy],
+) -> League:
     """Seed a default league so user-creation paths can attach memberships.
 
     Autouse so tests don't have to remember to opt in. Tests that want to
@@ -76,6 +125,7 @@ async def default_league(db_session: AsyncSession) -> League:
         description="Test default league.",
         visibility=LeagueVisibility.public,
         is_default=True,
+        rating_strategy_id=rating_strategies["glicko2"].id,
     )
     db_session.add(league)
     await db_session.commit()

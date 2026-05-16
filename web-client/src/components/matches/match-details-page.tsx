@@ -13,6 +13,7 @@ import {
 
 import { AppShell } from '@/components/app-shell'
 import { cn, initialsOf } from '@/lib/utils'
+import { formatRatingDelta } from '@/lib/rating'
 import { scoringEditRoute, scoringNewRoute, useMatch } from '@/api/matches'
 import type { components } from '@/api/schema'
 import { ApiError } from '@/api/client'
@@ -20,6 +21,7 @@ import { ApiError } from '@/api/client'
 type MatchDetails = components['schemas']['MatchDetails']
 type MatchDetailsGame = components['schemas']['MatchDetailsGame']
 type MatchDetailsSide = components['schemas']['MatchDetailsSide']
+type RatingChange = components['schemas']['RatingChange']
 
 type HeroState = 'live' | 'final' | 'upcoming'
 
@@ -28,6 +30,7 @@ type SideView = {
   initials: string
   gamesWon: number
   won: boolean | null
+  ratingChange: RatingChange | null
 }
 
 type GameView = {
@@ -61,6 +64,7 @@ function projectSide(side: MatchDetailsSide, fallbackLabel: string): SideView {
     initials: initialsOf(username),
     gamesWon: side.games_won,
     won: side.won,
+    ratingChange: side.rating_change ?? null,
   }
 }
 
@@ -375,6 +379,7 @@ function HeroScoreboard({
 
 function PlayerSide({ side, pos }: { side: SideView; pos: 'l' | 'r' }) {
   const win = side.won === true
+  const change = side.ratingChange
   return (
     <div className={`md-hero__player md-hero__player--${pos}`}>
       <div className="md-hero__player-row">
@@ -390,6 +395,19 @@ function PlayerSide({ side, pos }: { side: SideView; pos: 'l' | 'r' }) {
           <div className={cn('md-hero__name', win && 'md-hero__name--win')}>
             {side.username}
           </div>
+          {change && (
+            <div
+              className={cn(
+                'md-hero__rating-delta',
+                change.delta >= 0
+                  ? 'md-hero__rating-delta--up'
+                  : 'md-hero__rating-delta--down',
+              )}
+              data-testid={`rating-delta-${pos}`}
+            >
+              {formatRatingDelta(change.delta)} rating
+            </div>
+          )}
         </div>
       </div>
     </div>

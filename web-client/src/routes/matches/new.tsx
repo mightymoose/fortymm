@@ -396,7 +396,11 @@ function TypeaheadPicker({ onPick }: { onPick: (player: Player) => void }) {
         <div className="av">{initialsOf(p.username)}</div>
         <div className="body">
           <div className="n">{p.username}</div>
-          <div className="m">REGISTERED PLAYER</div>
+          <div className="m">
+            {p.rating != null
+              ? `RATING ${Math.round(p.rating)}`
+              : 'REGISTERED PLAYER'}
+          </div>
         </div>
       </button>
     ))
