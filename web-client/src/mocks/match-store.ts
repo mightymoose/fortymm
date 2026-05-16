@@ -76,7 +76,9 @@ export function reconcile(seed: SeedMatch): void {
 
   if (decided) {
     seed.status = 'completed'
-    if (seed.completed_at === null) seed.completed_at = '2026-05-12T09:30:00Z'
+    // Runtime-completed matches need a fresh timestamp so dashboard's
+    // recent-results sort puts them ahead of pre-seeded older matches.
+    if (seed.completed_at === null) seed.completed_at = new Date().toISOString()
     seed.games = seed.games.filter((g) => g.score !== null)
   } else {
     seed.status = anyScored ? 'in_progress' : 'pending'
@@ -345,6 +347,14 @@ export function buildInitialSeeds(): SeedMatch[] {
 /** Module-level store: a fresh snapshot is built on module load. Re-seeding
  * across HMR isn't a goal — Vite will simply rebuild the array. */
 export const mockMatches: SeedMatch[] = buildInitialSeeds()
+
+/** Restore the seed snapshot. Tests call this in `afterEach` so a test that
+ * mutates the store (via `POST /v1/matches` or a score write through the
+ * global handler) can't pollute the next test. */
+export function resetMockMatches(): void {
+  mockMatches.length = 0
+  mockMatches.push(...buildInitialSeeds())
+}
 
 export function findMatch(matchId: string): SeedMatch | undefined {
   return mockMatches.find((m) => m.id === matchId)

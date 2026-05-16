@@ -37,7 +37,6 @@ export function matchListQueryKey(params: MatchListParams) {
   return ['matches', 'list', params] as const
 }
 
-/** Query key for a single match's details (BFF response). */
 export function matchQueryKey(matchId: string) {
   return ['matches', 'detail', matchId] as const
 }
@@ -126,10 +125,7 @@ export function useMatchList(params: MatchListParams) {
   })
 }
 
-/**
- * Single match details (BFF for /matches/$id and the scoring routes).
- * Throws to the surrounding boundary on failure.
- */
+/** Throws on failure so the surrounding boundary can render a retry. */
 export function useMatch(matchId: string) {
   return useQuery({
     queryKey: matchQueryKey(matchId),
@@ -210,8 +206,8 @@ export function useUpdateScore(
   })
 }
 
-// URL helpers used by every scoring CTA so the route shape lives in one place.
-// `as const` preserves the literal `to` for TanStack Router's typed navigation.
+// `as const` on `to` preserves the literal so TanStack Router's typed
+// navigation can validate it against the route tree.
 
 export function scoringNewRoute(matchId: string, gameId: string) {
   return {

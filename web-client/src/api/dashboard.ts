@@ -11,10 +11,7 @@ export type DashboardRecentResult =
 
 export const DASHBOARD_QUERY_KEY = ['dashboard'] as const
 
-/**
- * Dashboard BFF: the score banner, next match, and recent results in one
- * round-trip. Errors are thrown so the route's boundary can render a retry.
- */
+/** Throws on failure so the dashboard route's boundary can render a retry. */
 export function useDashboard() {
   return useQuery({
     queryKey: DASHBOARD_QUERY_KEY,
