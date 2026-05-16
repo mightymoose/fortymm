@@ -94,9 +94,8 @@ class MatchDetails(BaseModel):
     team_size: int
     affects_rating: bool
     created_at: datetime
-    # Sorted by ``side_number`` (1 then 2). Solo matches return a single side.
-    # Per-side ``is_current_user_side`` lets the FE pick a viewing perspective
-    # without the BFF baking one in — non-participants can read this payload.
+    # Perspective-neutral so non-participants can read this payload; the FE
+    # picks a viewing angle from each side's ``is_current_user_side``.
     sides: list[MatchDetailsSide]
     games: list[MatchDetailsGame]
     current_game: MatchDetailsCurrentGame | None

@@ -49,10 +49,10 @@ type MatchView = {
   gamesToWin: number
   rated: boolean
   // Left/right are perspective-relative: when the current user is on a side
-  // they're left; otherwise left = side 1, right = side 2.
+  // they're left (and `leftSide.isCurrentUser` is true); otherwise left = side
+  // 1, right = side 2.
   leftSide: SideView
   rightSide: SideView | null
-  viewerIsParticipant: boolean
   games: GameView[]
   currentGameNumber: number | null
   canScore: boolean
@@ -74,21 +74,18 @@ function projectSide(side: MatchDetailsSide, fallbackLabel: string): SideView {
 function orderSides(sides: MatchDetailsSide[]): {
   leftSide: MatchDetailsSide
   rightSide: MatchDetailsSide | null
-  viewerIsParticipant: boolean
 } {
   const bySideNumber = [...sides].sort(
     (a, b) => a.side_number - b.side_number,
   )
-  const mine = bySideNumber.find((s) => s.is_current_user_side) ?? null
+  const mine = bySideNumber.find((s) => s.is_current_user_side)
   if (mine) {
     const opp = bySideNumber.find((s) => !s.is_current_user_side) ?? null
-    return { leftSide: mine, rightSide: opp, viewerIsParticipant: true }
+    return { leftSide: mine, rightSide: opp }
   }
-  // Spectator: surface side 1 on the left, side 2 on the right.
   return {
     leftSide: bySideNumber[0],
     rightSide: bySideNumber[1] ?? null,
-    viewerIsParticipant: false,
   }
 }
 
@@ -122,7 +119,8 @@ function projectMatchView(data: MatchDetails, matchId: string): MatchView {
       : data.status === 'completed'
         ? 'final'
         : 'upcoming'
-  const { leftSide, rightSide, viewerIsParticipant } = orderSides(data.sides)
+  const { leftSide, rightSide } = orderSides(data.sides)
+  const viewerIsParticipant = leftSide.is_current_user_side
   const leftLabel = viewerIsParticipant ? 'You' : 'Side 1'
   const rightLabel = viewerIsParticipant ? 'Opponent' : 'Side 2'
   const leftView = projectSide(leftSide, leftLabel)
@@ -143,7 +141,6 @@ function projectMatchView(data: MatchDetails, matchId: string): MatchView {
     rated: data.affects_rating,
     leftSide: leftView,
     rightSide: rightView,
-    viewerIsParticipant,
     games,
     currentGameNumber: data.current_game?.game_number ?? null,
     canScore: data.can_score,
@@ -440,7 +437,7 @@ function GameGrid({ view, matchId }: { view: MatchView; matchId: string }) {
   }
   // Per-cell edit links are gated on participation — spectators can't write
   // scores, so the row never wraps cells in `<Link>`s for them.
-  const canEdit = view.viewerIsParticipant
+  const canEdit = view.leftSide.isCurrentUser
   return (
     <div className="md-games">
       <div className="md-games__grid">
