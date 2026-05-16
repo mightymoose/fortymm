@@ -1,5 +1,6 @@
 import { faker } from '@faker-js/faker'
 import type { components } from '@/api/schema'
+import { MOCK_DEFAULT_LEAGUE } from '@/mocks/match-store'
 
 type ComponentHealth = components['schemas']['ComponentHealth']
 type HealthResponse = components['schemas']['HealthResponse']
@@ -180,6 +181,7 @@ export function matchDetails(
     id,
     status: 'pending',
     status_label: 'Scheduled',
+    league: MOCK_DEFAULT_LEAGUE,
     best_of: bestOf,
     games_to_win: Math.ceil(bestOf / 2),
     team_size: 1,
@@ -203,6 +205,7 @@ export function matchListRow(
     id: nextId('m'),
     status: 'pending',
     status_label: 'Scheduled',
+    league: MOCK_DEFAULT_LEAGUE,
     opponent_username: faker.internet.username().toLowerCase(),
     opponent_user_id: nextId('u'),
     my_games_won: 0,

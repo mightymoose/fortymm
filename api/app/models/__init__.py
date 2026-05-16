@@ -1,3 +1,5 @@
+from app.models.league import League, LeagueVisibility
+from app.models.league_membership import LeagueMembership
 from app.models.match import Match, MatchStatus
 from app.models.match_game import MatchGame
 from app.models.match_game_score import MatchGameScore
@@ -12,6 +14,9 @@ from app.models.user_role import UserRole
 from app.models.user_token import UserToken
 
 __all__ = [
+    "League",
+    "LeagueMembership",
+    "LeagueVisibility",
     "Match",
     "MatchGame",
     "MatchGameScore",

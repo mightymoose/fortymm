@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.leagues import get_default_league
 from app.models import (
     Match,
     MatchSettings,
@@ -25,8 +26,10 @@ async def _record_match(
     """Persist a singles match between ``players`` stamped with an explicit
     ``created_at`` so recency-ordering tests stay deterministic."""
     settings = MatchSettings(team_size=1, best_of=5, affects_rating=False)
+    league = await get_default_league(db_session)
     match = Match(
         match_settings=settings,
+        league=league,
         created_by_user_id=players[0].id,
         status=MatchStatus.completed,
         created_at=created_at,

@@ -25,9 +25,13 @@ class MatchCreate(BaseModel):
     ``opponent_user_id`` is optional: a match created without a registered
     opponent (a guest, or "start without opponent") gets a single side and is
     always unrated, since the rating system needs two registered sides.
+
+    ``league_id`` is optional: when omitted the server binds the match to the
+    default league (see ``app.leagues.get_default_league``).
     """
 
     opponent_user_id: uuid.UUID | None = None
+    league_id: uuid.UUID | None = None
     best_of: int = Field(description="Total games to play; one of 1, 3, 5, 7.")
     rated: bool = True
 
@@ -41,6 +45,11 @@ class MatchCreate(BaseModel):
 
 
 # ----- details (BFF for /matches/$id and the scoring routes) ---------------
+
+
+class MatchLeague(BaseModel):
+    id: uuid.UUID
+    name: str
 
 
 class MatchDetailsPlayer(BaseModel):
@@ -79,6 +88,7 @@ class MatchDetails(BaseModel):
     id: uuid.UUID
     status: MatchStatus
     status_label: str
+    league: MatchLeague
     best_of: int
     games_to_win: int
     team_size: int
@@ -98,6 +108,7 @@ class MatchListRow(BaseModel):
     id: uuid.UUID
     status: MatchStatus
     status_label: str
+    league: MatchLeague
     opponent_username: str | None
     opponent_user_id: uuid.UUID | None
     my_games_won: int

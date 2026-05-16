@@ -390,10 +390,15 @@ export interface components {
          *     ``opponent_user_id`` is optional: a match created without a registered
          *     opponent (a guest, or "start without opponent") gets a single side and is
          *     always unrated, since the rating system needs two registered sides.
+         *
+         *     ``league_id`` is optional: when omitted the server binds the match to the
+         *     default league (see ``app.leagues.get_default_league``).
          */
         MatchCreate: {
             /** Opponent User Id */
             opponent_user_id?: string | null;
+            /** League Id */
+            league_id?: string | null;
             /**
              * Best Of
              * @description Total games to play; one of 1, 3, 5, 7.
@@ -415,6 +420,7 @@ export interface components {
             status: components["schemas"]["MatchStatus"];
             /** Status Label */
             status_label: string;
+            league: components["schemas"]["MatchLeague"];
             /** Best Of */
             best_of: number;
             /** Games To Win */
@@ -503,6 +509,16 @@ export interface components {
             /** Side 2 Points */
             side_2_points: number;
         };
+        /** MatchLeague */
+        MatchLeague: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Name */
+            name: string;
+        };
         /** MatchListResponse */
         MatchListResponse: {
             /** Items */
@@ -528,6 +544,7 @@ export interface components {
             status: components["schemas"]["MatchStatus"];
             /** Status Label */
             status_label: string;
+            league: components["schemas"]["MatchLeague"];
             /** Opponent Username */
             opponent_username: string | null;
             /** Opponent User Id */

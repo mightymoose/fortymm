@@ -8,6 +8,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_session
+from app.leagues import add_user_to_default_league
 from app.models import Permission, Role, RolePermission, User, UserRole
 from app.schemas.rbac import (
     PermissionCreate,
@@ -456,6 +457,8 @@ async def create_user(
     user = User(username=payload.username)
     db.add(user)
     try:
+        await db.flush()
+        await add_user_to_default_league(db, user.id)
         await db.commit()
     except IntegrityError:
         await db.rollback()

@@ -11,6 +11,7 @@ from app.db import Base
 from app.models.match_settings import MatchSettings
 
 if TYPE_CHECKING:
+    from app.models.league import League
     from app.models.match_game import MatchGame
     from app.models.match_side import MatchSide
     from app.models.match_side_player import MatchSidePlayer
@@ -45,6 +46,7 @@ class Match(Base):
             "status",
             text("updated_at DESC"),
         ),
+        Index("ix_matches_league_id", "league_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -55,6 +57,11 @@ class Match(Base):
     match_settings_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("match_settings.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    league_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("leagues.id", ondelete="RESTRICT"),
         nullable=False,
     )
     status: Mapped[MatchStatus] = mapped_column(
@@ -78,6 +85,7 @@ class Match(Base):
     )
 
     match_settings: Mapped[MatchSettings] = relationship(back_populates="matches")
+    league: Mapped["League"] = relationship(back_populates="matches")
     created_by: Mapped["User"] = relationship("User")
     sides: Mapped[list["MatchSide"]] = relationship(
         back_populates="match",

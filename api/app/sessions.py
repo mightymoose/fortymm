@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_session
+from app.leagues import add_user_to_default_league
 from app.models import Permission, Role, RolePermission, User, UserRole, UserToken
 from app.schemas.session import SessionData, SessionResponse, SessionUser
 
@@ -63,6 +64,8 @@ async def _create_session(db: AsyncSession) -> tuple[User, str]:
     user = User(username=_generate_username())
     db.add(user)
     await db.flush()
+
+    await add_user_to_default_league(db, user.id)
 
     raw_token = secrets.token_urlsafe(32)
     db.add(
