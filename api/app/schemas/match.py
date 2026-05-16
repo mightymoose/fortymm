@@ -86,6 +86,51 @@ class MatchDetailsCurrentGame(BaseModel):
     game_number: int
 
 
+class MatchDetailsFormResult(BaseModel):
+    """One past completed match for the Players & form recent-results list.
+
+    Counts are framed from the cited *player's* perspective, not from a
+    side number in the past match."""
+
+    match_id: uuid.UUID
+    is_win: bool
+    player_games_won: int
+    opponent_games_won: int
+    opponent_username: str | None
+    completed_at: datetime
+
+
+class MatchDetailsPlayerForm(BaseModel):
+    """A player's previous-5 results, attached by ``user_id`` so the FE can
+    map it onto whichever side carries that user."""
+
+    user_id: uuid.UUID
+    recent_results: list[MatchDetailsFormResult]
+
+
+class MatchDetailsH2HMeeting(BaseModel):
+    """One past meeting between the two players in *this* match. Game counts
+    are aligned to this match's side numbers so the FE doesn't need to
+    re-map per row."""
+
+    match_id: uuid.UUID
+    completed_at: datetime
+    side_1_games_won: int
+    side_2_games_won: int
+    winner_side_number: int | None
+
+
+class MatchDetailsH2H(BaseModel):
+    """Head-to-head between this match's two singles players. Wins are
+    counted against this match's side numbers (not the side numbers of the
+    historical matches)."""
+
+    total_meetings: int
+    side_1_wins: int
+    side_2_wins: int
+    recent_meetings: list[MatchDetailsH2HMeeting]
+
+
 class MatchDetails(BaseModel):
     id: uuid.UUID
     status: MatchStatus
@@ -102,6 +147,8 @@ class MatchDetails(BaseModel):
     games: list[MatchDetailsGame]
     current_game: MatchDetailsCurrentGame | None
     can_score: bool
+    recent_form: list[MatchDetailsPlayerForm] = Field(default_factory=list)
+    head_to_head: MatchDetailsH2H | None = None
 
 
 # ----- list (BFF for /matches) ---------------------------------------------

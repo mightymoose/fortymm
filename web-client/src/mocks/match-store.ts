@@ -4,6 +4,10 @@ type MatchStatus = components['schemas']['MatchStatus']
 type MatchDetails = components['schemas']['MatchDetails']
 type MatchDetailsSide = components['schemas']['MatchDetailsSide']
 type MatchDetailsGame = components['schemas']['MatchDetailsGame']
+type MatchDetailsPlayerForm = components['schemas']['MatchDetailsPlayerForm']
+type MatchDetailsFormResult = components['schemas']['MatchDetailsFormResult']
+type MatchDetailsH2H = components['schemas']['MatchDetailsH2H']
+type MatchDetailsH2HMeeting = components['schemas']['MatchDetailsH2HMeeting']
 type MatchListRow = components['schemas']['MatchListRow']
 type MatchLeague = components['schemas']['MatchLeague']
 type DashboardScoreBanner = components['schemas']['DashboardScoreBanner']
@@ -15,6 +19,8 @@ type RatingChange = components['schemas']['RatingChange']
 
 const MOCK_BASE_RATING = 1500
 const MOCK_RATING_DELTA = 8
+const RECENT_FORM_LIMIT = 5
+const H2H_LIMIT = 5
 
 function ratingChangeFor(seedId: string, won: boolean): RatingChange {
   // Deterministic so re-renders are stable.
@@ -186,6 +192,7 @@ export function projectMatchDetails(seed: SeedMatch): MatchDetails {
     }))
 
   const current = currentUnscored(seed)
+  const priors = priorCompleted(seed)
   return {
     id: seed.id,
     status: seed.status,
@@ -202,6 +209,103 @@ export function projectMatchDetails(seed: SeedMatch): MatchDetails {
       ? { id: current.id, game_number: current.game_number }
       : null,
     can_score: current !== null && opponentSide !== null,
+    recent_form: projectRecentForm(seed, priors),
+    head_to_head: projectHeadToHead(seed, priors),
+  }
+}
+
+function priorCompleted(seed: SeedMatch): SeedMatch[] {
+  return mockMatches
+    .filter(
+      (m): m is SeedMatch & { completed_at: string } =>
+        m.status === 'completed' &&
+        m.completed_at !== null &&
+        m.id !== seed.id,
+    )
+    .sort((a, b) => b.completed_at.localeCompare(a.completed_at))
+}
+
+function winnerOf(seed: SeedMatch): 1 | 2 | null {
+  const { side1, side2 } = sideWinCounts(seed)
+  if (side1 > side2) return 1
+  if (side2 > side1) return 2
+  return null
+}
+
+function seedResultForUser(
+  userId: string,
+  m: SeedMatch,
+): MatchDetailsFormResult | null {
+  // The mock current-user always sits on side 1; everyone else's matches
+  // are inferred from `m.opponent.id`.
+  const onSide1 = userId === MOCK_CURRENT_USER.id
+  const onSide2 = m.opponent !== null && m.opponent.id === userId
+  if (!onSide1 && !onSide2) return null
+  const { side1, side2 } = sideWinCounts(m)
+  return {
+    match_id: m.id,
+    is_win: onSide1 ? side1 > side2 : side2 > side1,
+    player_games_won: onSide1 ? side1 : side2,
+    opponent_games_won: onSide1 ? side2 : side1,
+    opponent_username: onSide1
+      ? (m.opponent?.username ?? null)
+      : MOCK_CURRENT_USER.username,
+    completed_at: m.completed_at ?? m.created_at,
+  }
+}
+
+function projectRecentForm(
+  seed: SeedMatch,
+  priors: SeedMatch[],
+): MatchDetailsPlayerForm[] {
+  const userIds = [
+    MOCK_CURRENT_USER.id,
+    ...(seed.opponent ? [seed.opponent.id] : []),
+  ]
+  return userIds.map((user_id) => {
+    const recent_results: MatchDetailsFormResult[] = []
+    for (const m of priors) {
+      const row = seedResultForUser(user_id, m)
+      if (row) recent_results.push(row)
+      if (recent_results.length === RECENT_FORM_LIMIT) break
+    }
+    return { user_id, recent_results }
+  })
+}
+
+function projectHeadToHead(
+  seed: SeedMatch,
+  priors: SeedMatch[],
+): MatchDetailsH2H | null {
+  if (seed.opponent === null) return null
+  const opponentId = seed.opponent.id
+  const completed = priors.filter(
+    (m) => m.opponent !== null && m.opponent.id === opponentId,
+  )
+  const meetings: MatchDetailsH2HMeeting[] = []
+  let side1Wins = 0
+  let side2Wins = 0
+  // The mock current-user always sits on side 1 of every past match (same
+  // orientation as the current match), so per-row counts align with this
+  // match's side numbers without remapping.
+  for (const m of completed) {
+    const { side1, side2 } = sideWinCounts(m)
+    const winner = winnerOf(m)
+    if (winner === 1) side1Wins += 1
+    if (winner === 2) side2Wins += 1
+    meetings.push({
+      match_id: m.id,
+      completed_at: m.completed_at ?? m.created_at,
+      side_1_games_won: side1,
+      side_2_games_won: side2,
+      winner_side_number: winner,
+    })
+  }
+  return {
+    total_meetings: meetings.length,
+    side_1_wins: side1Wins,
+    side_2_wins: side2Wins,
+    recent_meetings: meetings.slice(0, H2H_LIMIT),
   }
 }
 

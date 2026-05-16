@@ -2155,6 +2155,16 @@ body.dark.fortymm-theme {
 .fortymm-theme .md-card__body {
   padding: 18px;
 }
+.fortymm-theme .md-card__hd-meta {
+  font: 500 11px var(--font-mono);
+  color: var(--fg-3);
+  letter-spacing: 0.12em;
+}
+.fortymm-theme .md-rating-card__body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
 
 /* ---------- Avatar ---------- */
 .fortymm-theme .md-avatar {
@@ -2683,6 +2693,24 @@ body.dark.fortymm-theme {
 .fortymm-theme .md-form-row__score--loss {
   color: var(--fg-3);
 }
+.fortymm-theme .md-profile__form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.fortymm-theme .md-profile__form-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+}
+.fortymm-theme .md-profile__empty {
+  font: 400 13px var(--font-ui);
+  color: var(--fg-3);
+  padding: 8px 0;
+  border-top: 1px dashed var(--border-subtle);
+}
 .fortymm-theme .md-profile__career {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -2796,6 +2824,12 @@ body.dark.fortymm-theme {
   align-items: center;
   gap: 12px;
 }
+.fortymm-theme .md-h2h__count-block--l {
+  text-align: right;
+}
+.fortymm-theme .md-h2h__count-block--r {
+  text-align: left;
+}
 .fortymm-theme .md-h2h__count {
   font: 700 28px var(--font-mono);
   font-variant-numeric: tabular-nums;
@@ -2871,6 +2905,10 @@ body.dark.fortymm-theme {
 }
 .fortymm-theme .md-h2h__result--l {
   color: var(--loss);
+}
+.fortymm-theme .md-h2h__empty {
+  font: 400 13px var(--font-ui);
+  color: var(--fg-3);
 }
 
 /* ---------- Comments ---------- */
