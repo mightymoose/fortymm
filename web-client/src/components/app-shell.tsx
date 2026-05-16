@@ -1,7 +1,19 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { Link, useRouterState } from '@tanstack/react-router'
-import { Bell, Gauge, Globe, Key, Mail, MapPin, Shield, User, Users } from 'lucide-react'
+import {
+  Bell,
+  Gauge,
+  Globe,
+  Key,
+  Mail,
+  MapPin,
+  Settings,
+  Shield,
+  User,
+  Users,
+} from 'lucide-react'
 import { useSession } from '@/api/session'
+import { cn } from '@/lib/utils'
 import { PERM } from '@/lib/permissions'
 import { UserMenu } from './user-menu'
 
@@ -23,21 +35,7 @@ type NavSection = {
 const SETTINGS_ITEM: NavItem = {
   label: 'Settings',
   to: '/settings',
-  icon: (
-    <svg
-      width="18"
-      height="18"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <circle cx="12" cy="12" r="3" />
-      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-    </svg>
-  ),
+  icon: <Settings size={18} strokeWidth={2} />,
   children: [
     { label: 'Username', to: '/settings', hash: 'sec-username', icon: <User size={15} strokeWidth={1.75} /> },
     { label: 'Email', to: '/settings', hash: 'sec-email', icon: <Mail size={15} strokeWidth={1.75} /> },
@@ -162,10 +160,17 @@ function renderNavItem(
 ) {
   const childActive = item.children?.some((c) => pathname === c.to) ?? false
   const isActive = pathname === item.to || childActive
-  const linkClassName = `app-shell__nav-link${isActive && !item.children ? ' is-active' : ''}${item.children && childActive ? ' is-parent-active' : ''}`
   return (
     <li key={item.label}>
-      <Link to={item.to} className={linkClassName} onClick={closeOnMobile}>
+      <Link
+        to={item.to}
+        className={cn(
+          'app-shell__nav-link',
+          isActive && !item.children && 'is-active',
+          item.children && childActive && 'is-parent-active',
+        )}
+        onClick={closeOnMobile}
+      >
         <span className="app-shell__nav-icon">{item.icon}</span>
         {item.label}
       </Link>
@@ -179,7 +184,7 @@ function renderNavItem(
                 <Link
                   to={child.to}
                   hash={child.hash}
-                  className={`app-shell__sub-nav-link${childIsActive ? ' is-active' : ''}`}
+                  className={cn('app-shell__sub-nav-link', childIsActive && 'is-active')}
                   onClick={closeOnMobile}
                 >
                   <span className="app-shell__nav-icon">{child.icon}</span>
@@ -206,14 +211,9 @@ export function AppShell({ children }: AppShellProps) {
   // background refetches when the data is unchanged, so depending on the
   // permissions array (not the whole session) skips the rebuild on no-op
   // refetches.
-  const permissionSet = useMemo(() => new Set(permissions ?? []), [permissions])
   const sections = useMemo(
-    () => filterNavByPermissions(NAV_SECTIONS, permissionSet),
-    [permissionSet],
-  )
-  const footerSection = useMemo(
-    () => filterNavByPermissions([{ items: [SETTINGS_ITEM] }], permissionSet)[0],
-    [permissionSet],
+    () => filterNavByPermissions(NAV_SECTIONS, new Set(permissions ?? [])),
+    [permissions],
   )
   const activeHash = useRouterState({
     select: (s) => s.location.hash.replace(/^#/, ''),
@@ -244,11 +244,11 @@ export function AppShell({ children }: AppShellProps) {
     }
   }, [sidebarOpen])
 
-  function closeOnMobile() {
+  const closeOnMobile = useCallback(() => {
     if (window.matchMedia('(max-width: 960px)').matches) {
       setSidebarOpen(false)
     }
-  }
+  }, [])
 
   return (
     <div className="app-shell dark fortymm-theme">
@@ -296,15 +296,11 @@ export function AppShell({ children }: AppShellProps) {
             </div>
           ))}
         </nav>
-        {footerSection ? (
-          <div className="app-shell__nav-footer">
-            <ul className="app-shell__nav-list">
-              {footerSection.items.map((item) =>
-                renderNavItem(item, pathname, activeHash, closeOnMobile),
-              )}
-            </ul>
-          </div>
-        ) : null}
+        <div className="app-shell__nav-footer">
+          <ul className="app-shell__nav-list">
+            {renderNavItem(SETTINGS_ITEM, pathname, activeHash, closeOnMobile)}
+          </ul>
+        </div>
       </aside>
 
       <div className="app-shell__main">
