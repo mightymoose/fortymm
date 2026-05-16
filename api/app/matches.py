@@ -538,8 +538,8 @@ async def _load_pre_match_rating(
     league_id: uuid.UUID,
     before: datetime,
 ) -> tuple[float | None, list[float]]:
-    """Last N rating values for this user in this league strictly before
-    ``before``, returned as (most-recent-value, chronological-list)."""
+    """Returns ``(most-recent-value, chronological-list)``. Strict ``<`` on
+    ``before`` so this match's own rating row never leaks in."""
     rows = (
         await db.execute(
             select(RatingHistory.rating_value)
@@ -564,9 +564,8 @@ async def _load_career_before(
     current_match_id: uuid.UUID,
     before: datetime,
 ) -> tuple[int, int]:
-    """(career_matches, career_wins) for this user across all leagues, in
-    completed matches that finished before ``before``. Excludes the current
-    match so a just-completed lookup doesn't double-count itself."""
+    """Cross-league ``(matches, wins)``. Excludes ``current_match_id`` so a
+    just-completed match isn't double-counted into its own pre-match record."""
     side = aliased(MatchSide)
     player = aliased(MatchSidePlayer)
     row = (

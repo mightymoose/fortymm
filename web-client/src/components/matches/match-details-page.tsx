@@ -796,10 +796,8 @@ function ProfileSparkline({
 
 function CareerStats({ side }: { side: SideView }) {
   const matches = side.careerMatchesBefore
-  const wins = side.careerWinsBefore
-  const winRate = matches > 0 ? Math.round((wins / matches) * 100) : null
-  const winRateValue =
-    winRate === null ? <span className="dim">—</span> : `${winRate}%`
+  const winRate =
+    matches > 0 ? Math.round((side.careerWinsBefore / matches) * 100) : null
   return (
     <div
       className="md-profile__career"
@@ -819,7 +817,7 @@ function CareerStats({ side }: { side: SideView }) {
               'md-profile__career-value--good',
           )}
         >
-          {winRateValue}
+          {winRate === null ? <span className="dim">—</span> : `${winRate}%`}
         </div>
       </div>
     </div>
