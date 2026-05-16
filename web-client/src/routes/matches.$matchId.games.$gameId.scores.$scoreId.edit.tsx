@@ -1,10 +1,14 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { ScoreEntry } from '@/components/matches/score-entry'
 import { useUpdateScore } from '@/api/matches'
+import { pageTitle } from '@/lib/page-title'
 
 export const Route = createFileRoute(
   '/matches/$matchId/games/$gameId/scores/$scoreId/edit',
 )({
+  head: () => ({
+    meta: [{ title: pageTitle('Edit score') }],
+  }),
   component: ScoreEditRoute,
 })
 

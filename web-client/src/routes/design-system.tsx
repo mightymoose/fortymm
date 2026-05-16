@@ -194,8 +194,12 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import { Calendar } from '@/components/ui/calendar'
+import { pageTitle } from '@/lib/page-title'
 
 export const Route = createFileRoute('/design-system')({
+  head: () => ({
+    meta: [{ title: pageTitle('Design system') }],
+  }),
   component: DesignSystemPage,
 })
 
