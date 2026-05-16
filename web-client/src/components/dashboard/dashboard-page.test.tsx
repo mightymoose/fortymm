@@ -136,7 +136,6 @@ describe('DashboardPage', () => {
     )
     renderDashboard()
 
-    // Wait for the loading skeleton to clear before asserting absence.
     await screen.findByText('No upcoming match yet.')
     expect(screen.queryByTestId('dashboard-score-banner')).not.toBeInTheDocument()
     expect(screen.getByText('No completed matches yet.')).toBeInTheDocument()

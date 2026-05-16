@@ -5,12 +5,9 @@ test.describe('Dashboard match widgets', () => {
     test('renders non-skeleton match widgets after the dashboard query resolves', async ({ page }) => {
         await DashboardPage.navigateTo(page);
 
-        // A first-time visitor has no matches yet, so the three wired
-        // widgets resolve into their empty states rather than skeletons.
         await expect(page.getByText('No upcoming match yet.')).toBeVisible();
         await expect(page.getByText('No completed matches yet.')).toBeVisible();
 
-        // None of the wired-widget skeletons should still be on the page.
         await expect(page.getByRole('status', { name: 'Loading score banner' })).toHaveCount(0);
         await expect(page.getByRole('status', { name: 'Loading next match' })).toHaveCount(0);
         await expect(page.getByRole('status', { name: 'Loading recent matches' })).toHaveCount(0);

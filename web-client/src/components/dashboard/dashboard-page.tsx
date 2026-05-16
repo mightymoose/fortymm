@@ -1,6 +1,5 @@
 import type { CSSProperties, ReactNode } from 'react'
 import { Link } from '@tanstack/react-router'
-import { format, formatDistanceToNowStrict } from 'date-fns'
 import {
   ArrowRight,
   Calendar,
@@ -17,8 +16,11 @@ import type {
   DashboardRecentResult,
   DashboardScoreBanner,
 } from '@/api/dashboard'
-import { scoringNewRoute } from '@/api/matches'
+import { matchDetailRoute, scoringNewRoute } from '@/api/matches'
 import { useSession } from '@/api/session'
+import { fmtDateRel, fmtDateShort } from '@/lib/dates'
+
+const GUEST_OPPONENT = 'guest'
 
 const C = {
   ink950: 'var(--ink-950)',
@@ -303,6 +305,7 @@ type ButtonProps = {
   style?: CSSProperties
   /** When set, renders a TanStack Router Link with the same styling instead of a <button>. */
   to?: string
+  params?: Record<string, string>
 }
 
 function Button({
@@ -314,6 +317,7 @@ function Button({
   fullWidth = false,
   style,
   to,
+  params,
 }: ButtonProps) {
   const s = buttonSizes[size]
   const composed: CSSProperties = {
@@ -342,7 +346,7 @@ function Button({
   )
   if (to) {
     return (
-      <Link to={to} style={composed}>
+      <Link to={to} params={params} style={composed}>
         {body}
       </Link>
     )
@@ -547,7 +551,7 @@ function PaddleBadge({ accent }: { accent: string }) {
 
 function ScoreBanner({ banner }: { banner: DashboardScoreBanner }) {
   const accent = C.ball500
-  const opponent = banner.opponent_username ?? 'guest'
+  const opponent = banner.opponent_username ?? GUEST_OPPONENT
   const scoringRoute = scoringNewRoute(banner.match_id, banner.current_game_id)
   return (
     <div
@@ -653,30 +657,15 @@ function ScoreBanner({ banner }: { banner: DashboardScoreBanner }) {
               flex: '0 0 auto',
             }}
           >
-            <Link
+            <Button
+              kind="primary"
+              size="lg"
+              iconRight={<ArrowRight size={18} strokeWidth={1.75} />}
+              style={{ minWidth: 220 }}
               {...scoringRoute}
-              style={{
-                height: 44,
-                padding: '0 22px',
-                borderRadius: 8,
-                font: `600 15px ${UI}`,
-                letterSpacing: '0.005em',
-                display: 'inline-flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: 8,
-                textDecoration: 'none',
-                minWidth: 220,
-                background: C.ball500,
-                color: C.ink950,
-                border: '1px solid transparent',
-                boxShadow:
-                  '0 4px 14px rgba(255,122,26,0.35), inset 0 1px 0 rgba(255,255,255,0.18)',
-              }}
             >
-              <span>Enter final score</span>
-              <ArrowRight size={18} strokeWidth={1.75} />
-            </Link>
+              Enter final score
+            </Button>
           </div>
         </div>
       </div>
@@ -710,7 +699,7 @@ function ScoreBanner({ banner }: { banner: DashboardScoreBanner }) {
 type Deadline = { name: string; detail: string; closes: string; urgent?: boolean }
 
 function NextMatchCard({ match }: { match: DashboardNextMatch }) {
-  const opponent = match.opponent_username ?? 'guest'
+  const opponent = match.opponent_username ?? GUEST_OPPONENT
   return (
     <Card
       padding={0}
@@ -760,9 +749,7 @@ function NextMatchCard({ match }: { match: DashboardNextMatch }) {
           <div
             style={{ font: `400 13px ${UI}`, color: C.chalk300, marginTop: 2 }}
           >
-            Created {formatDistanceToNowStrict(new Date(match.created_at), {
-              addSuffix: true,
-            })}
+            Created {fmtDateRel(match.created_at)}
           </div>
         </div>
       </div>
@@ -777,28 +764,14 @@ function NextMatchCard({ match }: { match: DashboardNextMatch }) {
         }}
       >
         <div style={{ flex: 1 }} />
-        <Link
-          to="/matches/$matchId"
-          params={{ matchId: match.match_id }}
-          style={{
-            height: 32,
-            padding: '0 14px',
-            borderRadius: 8,
-            font: `600 13px ${UI}`,
-            letterSpacing: '0.005em',
-            display: 'inline-flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: 8,
-            textDecoration: 'none',
-            background: 'transparent',
-            color: C.chalk100,
-            border: `1px solid ${C.ink500}`,
-          }}
+        <Button
+          kind="secondary"
+          size="sm"
+          iconRight={<ChevronRight size={14} strokeWidth={1.75} />}
+          {...matchDetailRoute(match.match_id)}
         >
-          <span>View match</span>
-          <ChevronRight size={14} strokeWidth={1.75} />
-        </Link>
+          View match
+        </Button>
       </div>
     </Card>
   )
@@ -1115,7 +1088,7 @@ function RecentResultsCard({ rows }: { rows: DashboardRecentResult[] }) {
           </thead>
           <tbody>
             {rows.map((r, i) => {
-              const opponent = r.opponent_username ?? 'guest'
+              const opponent = r.opponent_username ?? GUEST_OPPONENT
               const score = `${r.my_games_won}-${r.opponent_games_won}`
               return (
                 <tr
@@ -1152,7 +1125,7 @@ function RecentResultsCard({ rows }: { rows: DashboardRecentResult[] }) {
                   </td>
                   <td style={{ padding: '11px 18px', textAlign: 'right' }}>
                     <Mono size={11} color={C.chalk500}>
-                      {format(new Date(r.completed_at), 'MMM d')}
+                      {fmtDateShort(r.completed_at)}
                     </Mono>
                   </td>
                 </tr>
@@ -1552,11 +1525,9 @@ const DATA = {
 
 
 export function DashboardPage() {
-  // /v1/dashboard requires an established session; wait for /v1/session
-  // (which mints one) to resolve before firing the dashboard query.
   const session = useSession()
   const dashboard = useDashboard({ enabled: session.isSuccess })
-  const isLoading = !session.isSuccess || dashboard.isPending
+  const isLoading = dashboard.isPending
   const data = dashboard.data
   return (
     <div

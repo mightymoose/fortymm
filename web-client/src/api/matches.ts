@@ -209,6 +209,13 @@ export function useUpdateScore(
 // `as const` on `to` preserves the literal so TanStack Router's typed
 // navigation can validate it against the route tree.
 
+export function matchDetailRoute(matchId: string) {
+  return {
+    to: '/matches/$matchId' as const,
+    params: { matchId },
+  }
+}
+
 export function scoringNewRoute(matchId: string, gameId: string) {
   return {
     to: '/matches/$matchId/games/$gameId/scores/new' as const,
