@@ -5,6 +5,9 @@ import { useCreateScore } from '@/api/matches'
 export const Route = createFileRoute(
   '/matches/$matchId/games/$gameId/scores/new',
 )({
+  head: () => ({
+    meta: [{ title: 'Enter score · FortyMM' }],
+  }),
   component: ScoreCreateRoute,
 })
 

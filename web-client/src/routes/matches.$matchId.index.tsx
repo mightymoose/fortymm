@@ -5,6 +5,9 @@ import {
 } from '@/components/matches/match-details-page'
 
 export const Route = createFileRoute('/matches/$matchId/')({
+  head: () => ({
+    meta: [{ title: 'Match · FortyMM' }],
+  }),
   component: MatchDetailsRoute,
   errorComponent: MatchDetailsError,
 })

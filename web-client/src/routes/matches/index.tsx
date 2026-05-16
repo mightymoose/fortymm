@@ -50,6 +50,9 @@ import './index.css'
 type MatchListRowSide = components['schemas']['MatchDetailsSide']
 
 export const Route = createFileRoute('/matches/')({
+  head: () => ({
+    meta: [{ title: 'Matches · FortyMM' }],
+  }),
   component: MatchesPage,
 })
 

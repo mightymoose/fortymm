@@ -196,6 +196,9 @@ import {
 import { Calendar } from '@/components/ui/calendar'
 
 export const Route = createFileRoute('/design-system')({
+  head: () => ({
+    meta: [{ title: 'Design system · FortyMM' }],
+  }),
   component: DesignSystemPage,
 })
 

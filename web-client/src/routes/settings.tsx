@@ -17,6 +17,9 @@ import { AppShell } from '@/components/app-shell'
 import './settings.css'
 
 export const Route = createFileRoute('/settings')({
+  head: () => ({
+    meta: [{ title: 'Settings · FortyMM' }],
+  }),
   component: SettingsPage,
 })
 

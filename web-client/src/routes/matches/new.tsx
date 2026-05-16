@@ -19,6 +19,9 @@ import { cn } from '@/lib/utils'
 import './new.css'
 
 export const Route = createFileRoute('/matches/new')({
+  head: () => ({
+    meta: [{ title: 'New match · FortyMM' }],
+  }),
   component: NewMatchPage,
 })
 
