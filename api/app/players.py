@@ -23,7 +23,7 @@ def _serialize(users: Iterable[User]) -> list[PlayerRead]:
     return [PlayerRead.model_validate(user) for user in users]
 
 
-def _escape_like(term: str) -> str:
+def escape_like(term: str) -> str:
     """Escape LIKE wildcards so a query of ``%`` matches a literal percent
     sign rather than every username."""
     return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
@@ -108,7 +108,7 @@ async def search_players(
     if not term:
         return []
 
-    pattern = f"%{_escape_like(term)}%"
+    pattern = f"%{escape_like(term)}%"
     result = await db.execute(
         select(User)
         .where(

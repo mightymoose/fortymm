@@ -1,5 +1,6 @@
 from app.models.match import Match, MatchStatus
 from app.models.match_game import MatchGame
+from app.models.match_game_score import MatchGameScore
 from app.models.match_settings import MatchSettings, VerificationPolicy
 from app.models.match_side import MatchSide
 from app.models.match_side_player import MatchSidePlayer
@@ -13,6 +14,7 @@ from app.models.user_token import UserToken
 __all__ = [
     "Match",
     "MatchGame",
+    "MatchGameScore",
     "MatchSettings",
     "MatchSide",
     "MatchSidePlayer",

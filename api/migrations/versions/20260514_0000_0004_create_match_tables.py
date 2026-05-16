@@ -131,7 +131,20 @@ def upgrade() -> None:
         "matches",
         ["created_by_user_id", sa.text("created_at DESC")],
     )
-    op.create_index("ix_matches_status", "matches", ["status"])
+    # Supports the /v1/matches list page's status-filtered, recent-first scan
+    # and the dashboard's per-status LIMIT 1 queries (pending/in_progress).
+    op.create_index(
+        "ix_matches_status_created_at",
+        "matches",
+        ["status", sa.text("created_at DESC")],
+    )
+    # Supports the dashboard's "last 5 completed" view, which orders by
+    # updated_at (no dedicated completed_at column).
+    op.create_index(
+        "ix_matches_status_updated_at",
+        "matches",
+        ["status", sa.text("updated_at DESC")],
+    )
 
     op.create_table(
         "match_sides",
@@ -224,23 +237,67 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.Column("game_number", sa.SmallInteger(), nullable=False),
-        sa.Column("side_1_points", sa.SmallInteger(), nullable=False),
-        sa.Column("side_2_points", sa.SmallInteger(), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
         sa.UniqueConstraint(
             "match_id", "game_number", name="uq_match_games_match_id_game_number"
         ),
         sa.CheckConstraint("game_number >= 1", name="ck_match_games_game_number"),
-        sa.CheckConstraint(
-            "side_1_points >= 0", name="ck_match_games_side_1_points"
-        ),
-        sa.CheckConstraint(
-            "side_2_points >= 0", name="ck_match_games_side_2_points"
-        ),
     )
     op.create_index("ix_match_games_match_id", "match_games", ["match_id"])
 
+    op.create_table(
+        "match_game_scores",
+        sa.Column(
+            "id",
+            postgresql.UUID(as_uuid=True),
+            primary_key=True,
+            server_default=sa.text("gen_random_uuid()"),
+        ),
+        sa.Column(
+            "match_game_id",
+            postgresql.UUID(as_uuid=True),
+            sa.ForeignKey("match_games.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
+        sa.Column("side_1_points", sa.SmallInteger(), nullable=False),
+        sa.Column("side_2_points", sa.SmallInteger(), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
+        sa.UniqueConstraint(
+            "match_game_id", name="uq_match_game_scores_match_game_id"
+        ),
+        sa.CheckConstraint(
+            "side_1_points >= 0", name="ck_match_game_scores_side_1_points"
+        ),
+        sa.CheckConstraint(
+            "side_2_points >= 0", name="ck_match_game_scores_side_2_points"
+        ),
+    )
+
 
 def downgrade() -> None:
+    op.drop_table("match_game_scores")
     op.drop_table("match_games")
     op.drop_table("match_side_players")
     op.drop_table("match_sides")
