@@ -11,12 +11,18 @@ export type DashboardRecentResult =
 
 export const DASHBOARD_QUERY_KEY = ['dashboard'] as const
 
-/** Throws on failure so the dashboard route's boundary can render a retry. */
-export function useDashboard() {
+/**
+ * The dashboard endpoint requires an established session (it never mints
+ * one), so callers in components that mount before the session resolves
+ * pass `enabled: session.isSuccess` to avoid a first-visit 401 race.
+ * Throws on failure so the surrounding boundary can render a retry.
+ */
+export function useDashboard(options: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: DASHBOARD_QUERY_KEY,
     queryFn: async (): Promise<DashboardResponse> =>
       unwrap('load dashboard', await api.GET('/v1/dashboard')),
+    enabled: options.enabled ?? true,
     retry: false,
     throwOnError: true,
   })
