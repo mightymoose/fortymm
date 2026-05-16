@@ -4,16 +4,13 @@ on:
   push:
     branches: [main]
   pull_request:
-    paths:
-      - 'web-client/**'
-      - '.github/workflows/web-client.yml'
 
 defaults:
   run:
     working-directory: web-client
 
 jobs:
-  test:
+  checks:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
