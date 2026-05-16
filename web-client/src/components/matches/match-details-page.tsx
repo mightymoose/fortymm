@@ -14,6 +14,7 @@ import {
 
 import { AppShell } from '@/components/app-shell'
 import { cn, initialsOf } from '@/lib/utils'
+import { fmtDateShort } from '@/lib/dates'
 import { formatRatingDelta } from '@/lib/rating'
 import { scoringEditRoute, scoringNewRoute, useMatch } from '@/api/matches'
 import type { components } from '@/api/schema'
@@ -56,8 +57,6 @@ type H2HMeetingView = {
   completedAt: string
   leftGamesWon: number
   rightGamesWon: number
-  // `null` when the prior meeting didn't have a definitive winner; otherwise
-  // the side number in *this* match that took it.
   winnerSideNumber: number | null
 }
 
@@ -162,31 +161,22 @@ function projectHeadToHead(
   leftSideNumber: number,
 ): H2HView | null {
   if (!raw) return null
-  const rightSideNumber = leftSideNumber === 1 ? 2 : 1
-  const leftWins = leftSideNumber === 1 ? raw.side_1_wins : raw.side_2_wins
-  const rightWins = leftSideNumber === 1 ? raw.side_2_wins : raw.side_1_wins
+  const swap = leftSideNumber !== 1
   const recentMeetings: H2HMeetingView[] = raw.recent_meetings.map(
     (m: MatchDetailsH2HMeeting) => ({
       matchId: m.match_id,
       completedAt: m.completed_at,
-      leftGamesWon:
-        leftSideNumber === 1 ? m.side_1_games_won : m.side_2_games_won,
-      rightGamesWon:
-        leftSideNumber === 1 ? m.side_2_games_won : m.side_1_games_won,
-      // Winner side number is already framed against *this* match's sides
-      // by the API; re-map only when the viewer perspective swaps left/right.
-      winnerSideNumber:
-        m.winner_side_number === null
-          ? null
-          : m.winner_side_number === leftSideNumber
-            ? leftSideNumber
-            : rightSideNumber,
+      leftGamesWon: swap ? m.side_2_games_won : m.side_1_games_won,
+      rightGamesWon: swap ? m.side_1_games_won : m.side_2_games_won,
+      // API frames winner_side_number against *this* match's sides, which
+      // are also our left/right anchor — no remap needed.
+      winnerSideNumber: m.winner_side_number,
     }),
   )
   return {
     totalMeetings: raw.total_meetings,
-    leftWins,
-    rightWins,
+    leftWins: swap ? raw.side_2_wins : raw.side_1_wins,
+    rightWins: swap ? raw.side_1_wins : raw.side_2_wins,
     recentMeetings,
   }
 }
@@ -312,9 +302,8 @@ function MatchDetailsPage({ view, matchId }: { view: MatchView; matchId: string 
   // real data behind them yet; gate them off and flip when each lands.
   const showAuxCards = false
   const showRatingCard =
-    view.rated &&
-    (view.leftSide.ratingChange !== null ||
-      (view.rightSide?.ratingChange ?? null) !== null)
+    view.leftSide.ratingChange !== null ||
+    view.rightSide?.ratingChange != null
 
   return (
     <div className="match-details">
@@ -790,7 +779,6 @@ function RatingCard({ view }: { view: MatchView }) {
 function RatingRow({ side, isFirst }: { side: SideView; isFirst: boolean }) {
   const change = side.ratingChange
   const won = side.won === true
-  const isPending = change === null
   return (
     <>
       {!isFirst && <hr className="md-rating-divider" />}
@@ -819,7 +807,7 @@ function RatingRow({ side, isFirst }: { side: SideView; isFirst: boolean }) {
             </div>
           )}
         </div>
-        {change && !isPending && (
+        {change && (
           <div className="md-rating-row__delta">
             <span
               className={cn(
@@ -839,9 +827,6 @@ function RatingRow({ side, isFirst }: { side: SideView; isFirst: boolean }) {
 function H2HCard({ view, h2h }: { view: MatchView; h2h: H2HView }) {
   const leftLabel = view.leftSide.username
   const rightLabel = view.rightSide?.username ?? 'Opponent'
-  const totalDecided = h2h.leftWins + h2h.rightWins
-  const leftPct = totalDecided > 0 ? (h2h.leftWins / totalDecided) * 100 : 0
-  const rightPct = totalDecided > 0 ? (h2h.rightWins / totalDecided) * 100 : 0
   const hasMeetings = h2h.totalMeetings > 0
   return (
     <div className="md-card">
@@ -878,31 +863,7 @@ function H2HCard({ view, h2h }: { view: MatchView; h2h: H2HView }) {
           </div>
         </div>
         {hasMeetings ? (
-          <>
-            <div className="md-h2h__bar" aria-hidden="true">
-              <div
-                style={{
-                  width: `${leftPct}%`,
-                  background: 'var(--serve-500)',
-                }}
-              />
-              <div
-                style={{
-                  width: `${rightPct}%`,
-                  background: 'var(--ink-500)',
-                }}
-              />
-            </div>
-            <div>
-              {h2h.recentMeetings.map((m) => (
-                <H2HRow
-                  key={m.matchId}
-                  meeting={m}
-                  leftSideNumber={view.leftSide.sideNumber}
-                />
-              ))}
-            </div>
-          </>
+          <H2HMeetings h2h={h2h} leftSideNumber={view.leftSide.sideNumber} />
         ) : (
           <div className="md-h2h__empty">
             No prior meetings — this match is the start of the rivalry.
@@ -910,6 +871,31 @@ function H2HCard({ view, h2h }: { view: MatchView; h2h: H2HView }) {
         )}
       </div>
     </div>
+  )
+}
+
+function H2HMeetings({
+  h2h,
+  leftSideNumber,
+}: {
+  h2h: H2HView
+  leftSideNumber: number
+}) {
+  const totalDecided = h2h.leftWins + h2h.rightWins
+  const leftPct = totalDecided > 0 ? (h2h.leftWins / totalDecided) * 100 : 0
+  const rightPct = totalDecided > 0 ? (h2h.rightWins / totalDecided) * 100 : 0
+  return (
+    <>
+      <div className="md-h2h__bar" aria-hidden="true">
+        <div style={{ width: `${leftPct}%`, background: 'var(--serve-500)' }} />
+        <div style={{ width: `${rightPct}%`, background: 'var(--ink-500)' }} />
+      </div>
+      <div>
+        {h2h.recentMeetings.map((m) => (
+          <H2HRow key={m.matchId} meeting={m} leftSideNumber={leftSideNumber} />
+        ))}
+      </div>
+    </>
   )
 }
 
@@ -921,20 +907,14 @@ function H2HRow({
   leftSideNumber: number
 }) {
   const leftWon = meeting.winnerSideNumber === leftSideNumber
-  const scoreLabel = `${meeting.leftGamesWon}–${meeting.rightGamesWon}`
   return (
     <div className="md-h2h__row">
-      <span className="md-h2h__date">
-        {new Date(meeting.completedAt).toISOString().slice(0, 10)}
-      </span>
+      <span className="md-h2h__date">{fmtDateShort(meeting.completedAt)}</span>
       <span className="md-h2h__label">Match</span>
       <span
-        className={cn(
-          'md-h2h__score',
-          leftWon && 'md-h2h__score--win',
-        )}
+        className={cn('md-h2h__score', leftWon && 'md-h2h__score--win')}
       >
-        {scoreLabel}
+        {meeting.leftGamesWon}–{meeting.rightGamesWon}
       </span>
       <span
         className={cn(

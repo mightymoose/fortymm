@@ -1,10 +1,11 @@
 import math
 import uuid
+from dataclasses import dataclass
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import aliased, selectinload
 
 from app.db import get_session
 from app.leagues import resolve_league
@@ -94,6 +95,14 @@ def match_eager_options():
     return (
         selectinload(Match.match_settings),
         selectinload(Match.league).selectinload(League.rating_strategy),
+        *_match_history_options(),
+    )
+
+
+def _match_history_options():
+    """Subset of ``match_eager_options`` for paths that only need sides + scores
+    (recent form, H2H): no match_settings, no league/rating-strategy."""
+    return (
         selectinload(Match.sides)
         .selectinload(MatchSide.players)
         .selectinload(MatchSidePlayer.user),
@@ -165,10 +174,9 @@ def current_unscored_game(match: Match) -> MatchGame | None:
 def _serialize_details(
     match: Match,
     current_user_id: uuid.UUID,
-    rating_changes: dict[uuid.UUID, RatingChange] | None = None,
-    recent_form: list[MatchDetailsPlayerForm] | None = None,
-    head_to_head: MatchDetailsH2H | None = None,
+    extras: "ViewExtras | None" = None,
 ) -> MatchDetails:
+    extras = extras or _EMPTY_EXTRAS
     side_wins = side_win_counts(match)
 
     def _score_schema(score: MatchGameScore) -> MatchDetailsScore:
@@ -212,7 +220,7 @@ def _serialize_details(
         affects_rating=match.match_settings.affects_rating,
         created_at=match.created_at,
         sides=[
-            _side_schema(side, side_wins, current_user_id, rating_changes)
+            _side_schema(side, side_wins, current_user_id, extras.rating_changes)
             for side in sides_sorted
         ],
         games=games,
@@ -222,8 +230,8 @@ def _serialize_details(
         can_score=(
             current_game is not None and len(match.sides) >= 2 and is_participant
         ),
-        recent_form=recent_form or [],
-        head_to_head=head_to_head,
+        recent_form=extras.recent_form,
+        head_to_head=extras.head_to_head,
     )
 
 
@@ -425,8 +433,8 @@ async def get_match(
     match = await _load_match(db, match_id)
     if match is None:
         raise HTTPException(status_code=404, detail="Match not found.")
-    changes, form, h2h = await _load_view_extras(db, match)
-    return _serialize_details(match, current_user.id, changes, form, h2h)
+    extras = await _load_view_extras(db, match)
+    return _serialize_details(match, current_user.id, extras)
 
 
 # ----- score writes --------------------------------------------------------
@@ -458,9 +466,8 @@ async def _load_rating_changes(
 
 
 def _singles_user_ids(match: Match) -> list[uuid.UUID]:
-    """User IDs of singles players on this match, ordered by side number.
-    Skips any side that doesn't have exactly one player (no doubles surface
-    yet). Returns one entry for a solo match, two for a 1v1."""
+    """Singles player IDs, ordered by side number. Sides without exactly one
+    player are skipped — no doubles surface yet."""
     sides_in_order = sorted(match.sides, key=lambda s: s.side_number)
     return [
         side.players[0].user_id
@@ -469,17 +476,18 @@ def _singles_user_ids(match: Match) -> list[uuid.UUID]:
     ]
 
 
-def _both_singles_user_ids(match: Match) -> list[uuid.UUID]:
-    """Only returns IDs when both side 1 and side 2 exist with a single
-    player each — the surface for H2H comparisons."""
-    by_number = {s.side_number: s for s in match.sides}
-    side_one = by_number.get(1)
-    side_two = by_number.get(2)
-    if side_one is None or side_two is None:
-        return []
-    if len(side_one.players) != 1 or len(side_two.players) != 1:
-        return []
-    return [side_one.players[0].user_id, side_two.players[0].user_id]
+def _history_base_query(current_match_id: uuid.UUID):
+    """Foundation for both recent-form and H2H lookups: completed matches
+    other than this one, eagerly loading just the sides + games subtree."""
+    return (
+        select(Match)
+        .where(
+            Match.status == MatchStatus.completed,
+            Match.id != current_match_id,
+        )
+        .options(*_match_history_options())
+        .order_by(Match.updated_at.desc())
+    )
 
 
 async def _load_recent_form(
@@ -487,32 +495,16 @@ async def _load_recent_form(
     user_ids: list[uuid.UUID],
     current_match_id: uuid.UUID,
 ) -> list[MatchDetailsPlayerForm]:
-    """For each user, the last ``RECENT_FORM_LIMIT`` completed matches they
-    were on a side of (excluding the current match)."""
     if not user_ids:
         return []
 
     result: list[MatchDetailsPlayerForm] = []
     for user_id in user_ids:
-        my_in_match = (
-            select(MatchSidePlayer.user_id)
-            .where(
-                MatchSidePlayer.match_id == Match.id,
-                MatchSidePlayer.user_id == user_id,
-            )
-            .exists()
-        )
         rows = (
             await db.execute(
-                select(Match)
-                .where(
-                    Match.status == MatchStatus.completed,
-                    Match.id != current_match_id,
-                    my_in_match,
-                )
-                .options(*match_eager_options())
-                .order_by(Match.updated_at.desc())
-                .limit(RECENT_FORM_LIMIT)
+                participant_filter(
+                    _history_base_query(current_match_id), user_id
+                ).limit(RECENT_FORM_LIMIT)
             )
         ).scalars().all()
         result.append(
@@ -530,19 +522,18 @@ def _build_form_result(
     past_match: Match, user_id: uuid.UUID
 ) -> MatchDetailsFormResult:
     mine = my_side(past_match, user_id)
-    assert mine is not None  # selectinload + filter guarantees membership
+    assert mine is not None  # participant_filter guarantees membership
     side_wins = side_win_counts(past_match)
     player_games = side_wins.get(mine.side_number, 0)
     opp_games = sum(
         wins for n, wins in side_wins.items() if n != mine.side_number
     )
-    opp_user = opponent_username(past_match, user_id)
     return MatchDetailsFormResult(
         match_id=past_match.id,
         is_win=mine.won is True,
         player_games_won=player_games,
         opponent_games_won=opp_games,
-        opponent_username=opp_user,
+        opponent_username=opponent_username(past_match, user_id),
         completed_at=past_match.updated_at,
     )
 
@@ -552,64 +543,28 @@ async def _load_head_to_head(
     user_ids: list[uuid.UUID],
     current_match_id: uuid.UUID,
 ) -> MatchDetailsH2H | None:
-    """Past completed matches that pitted these two users against each other
-    on opposite sides. Counts and per-row games are framed against the
-    *current* match's side numbers (side 1 = ``user_ids[0]``)."""
     if len(user_ids) != 2:
         return None
     user_a, user_b = user_ids
-    a_in_match = (
-        select(MatchSidePlayer.user_id)
-        .where(
-            MatchSidePlayer.match_id == Match.id,
-            MatchSidePlayer.user_id == user_a,
-        )
-        .exists()
-    )
-    b_in_match = (
-        select(MatchSidePlayer.user_id)
-        .where(
-            MatchSidePlayer.match_id == Match.id,
-            MatchSidePlayer.user_id == user_b,
-        )
-        .exists()
+    rows_query = participant_filter(
+        participant_filter(_history_base_query(current_match_id), user_a),
+        user_b,
     )
     rows = (
-        await db.execute(
-            select(Match)
-            .where(
-                Match.status == MatchStatus.completed,
-                Match.id != current_match_id,
-                a_in_match,
-                b_in_match,
-            )
-            .options(*match_eager_options())
-            .order_by(Match.updated_at.desc())
-        )
+        await db.execute(rows_query.limit(H2H_MEETINGS_LIMIT))
     ).scalars().all()
 
     meetings: list[MatchDetailsH2HMeeting] = []
-    a_wins = 0
-    b_wins = 0
     for past in rows:
         past_a = my_side(past, user_a)
         past_b = my_side(past, user_b)
-        if past_a is None or past_b is None:
-            continue
-        # Skip same-side meetings (doubles): the H2H card is a singles concept.
-        if past_a.side_number == past_b.side_number:
-            continue
+        assert past_a is not None and past_b is not None
         side_wins = side_win_counts(past)
         a_games = side_wins.get(past_a.side_number, 0)
         b_games = side_wins.get(past_b.side_number, 0)
-        if past_a.won is True:
-            a_wins += 1
-            winner_side: int | None = 1
-        elif past_b.won is True:
-            b_wins += 1
-            winner_side = 2
-        else:
-            winner_side = None
+        winner_side: int | None = (
+            1 if past_a.won is True else 2 if past_b.won is True else None
+        )
         meetings.append(
             MatchDetailsH2HMeeting(
                 match_id=past.id,
@@ -620,28 +575,60 @@ async def _load_head_to_head(
             )
         )
 
+    # Full-history aggregates so the displayed window doesn't undercount a
+    # long rivalry. Driven from MatchSide.won so a future void/dispute that
+    # leaves `won` null naturally drops out of both totals.
+    a_side = aliased(MatchSide)
+    b_side = aliased(MatchSide)
+    a_player = aliased(MatchSidePlayer)
+    b_player = aliased(MatchSidePlayer)
+    counts_query = (
+        select(
+            func.count(Match.id),
+            func.count(Match.id).filter(a_side.won.is_(True)),
+            func.count(Match.id).filter(b_side.won.is_(True)),
+        )
+        .join(a_side, a_side.match_id == Match.id)
+        .join(a_player, a_player.match_side_id == a_side.id)
+        .join(b_side, b_side.match_id == Match.id)
+        .join(b_player, b_player.match_side_id == b_side.id)
+        .where(
+            Match.status == MatchStatus.completed,
+            Match.id != current_match_id,
+            a_player.user_id == user_a,
+            b_player.user_id == user_b,
+            a_side.id != b_side.id,
+        )
+    )
+    total, a_wins, b_wins = (await db.execute(counts_query)).one()
+
     return MatchDetailsH2H(
-        total_meetings=len(meetings),
+        total_meetings=total,
         side_1_wins=a_wins,
         side_2_wins=b_wins,
-        recent_meetings=meetings[:H2H_MEETINGS_LIMIT],
+        recent_meetings=meetings,
     )
 
 
-async def _load_view_extras(
-    db: AsyncSession, match: Match
-) -> tuple[
-    dict[uuid.UUID, RatingChange],
-    list[MatchDetailsPlayerForm],
-    MatchDetailsH2H | None,
-]:
-    """All the extra rollups the details page needs that don't ride on the
-    match row itself. One call site means consistent payload shape across
-    GET /matches/{id} and the score-write returns."""
-    changes = await _load_rating_changes(db, match.id)
-    form = await _load_recent_form(db, _singles_user_ids(match), match.id)
-    h2h = await _load_head_to_head(db, _both_singles_user_ids(match), match.id)
-    return changes, form, h2h
+@dataclass
+class ViewExtras:
+    rating_changes: dict[uuid.UUID, RatingChange]
+    recent_form: list[MatchDetailsPlayerForm]
+    head_to_head: MatchDetailsH2H | None
+
+
+_EMPTY_EXTRAS = ViewExtras(rating_changes={}, recent_form=[], head_to_head=None)
+
+
+async def _load_view_extras(db: AsyncSession, match: Match) -> ViewExtras:
+    user_ids = _singles_user_ids(match)
+    return ViewExtras(
+        rating_changes=await _load_rating_changes(db, match.id),
+        recent_form=await _load_recent_form(db, user_ids, match.id),
+        head_to_head=await _load_head_to_head(
+            db, user_ids if len(user_ids) == 2 else [], match.id
+        ),
+    )
 
 
 async def _get_or_create_user_league_rating(
@@ -846,8 +833,8 @@ async def create_game_score(
 
     reloaded = await _load_match(db, match.id)
     assert reloaded is not None
-    changes, form, h2h = await _load_view_extras(db, reloaded)
-    return _serialize_details(reloaded, current_user.id, changes, form, h2h)
+    extras = await _load_view_extras(db, reloaded)
+    return _serialize_details(reloaded, current_user.id, extras)
 
 
 @router.put(
@@ -880,5 +867,5 @@ async def update_game_score(
 
     reloaded = await _load_match(db, match.id)
     assert reloaded is not None
-    changes, form, h2h = await _load_view_extras(db, reloaded)
-    return _serialize_details(reloaded, current_user.id, changes, form, h2h)
+    extras = await _load_view_extras(db, reloaded)
+    return _serialize_details(reloaded, current_user.id, extras)

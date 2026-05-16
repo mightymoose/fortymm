@@ -147,12 +147,7 @@ class MatchDetails(BaseModel):
     games: list[MatchDetailsGame]
     current_game: MatchDetailsCurrentGame | None
     can_score: bool
-    # Previous completed matches for each singles player on this match
-    # (excludes the current match). Empty entry means the player has no prior
-    # completed matches.
     recent_form: list[MatchDetailsPlayerForm] = Field(default_factory=list)
-    # Past meetings between the two singles players. Null for solo matches
-    # or anything we can't reduce to two known players.
     head_to_head: MatchDetailsH2H | None = None
 
 
