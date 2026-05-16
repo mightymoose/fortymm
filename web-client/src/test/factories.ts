@@ -168,9 +168,9 @@ function defaultSides(opponentName: string | null): {
 }
 
 /**
- * `MatchDetails` factory. Defaults to a fresh `pending` 1v1 with the current
- * user on side 1, a single opponent on side 2, and game 1 unscored — the
- * shape the BFF returns straight after `POST /v1/matches`.
+ * `MatchDetails` factory. Defaults to a fresh `in_progress` 1v1 with the
+ * current user on side 1, a single opponent on side 2, and game 1 unscored
+ * — the shape the BFF returns straight after `POST /v1/matches`.
  */
 export function matchDetails(
   overrides: Partial<MatchDetails> = {},
@@ -187,8 +187,8 @@ export function matchDetails(
   }
   return {
     id,
-    status: 'pending',
-    status_label: 'Scheduled',
+    status: 'in_progress',
+    status_label: 'Live',
     league: MOCK_DEFAULT_LEAGUE,
     best_of: bestOf,
     games_to_win: Math.ceil(bestOf / 2),
@@ -204,10 +204,10 @@ export function matchDetails(
   }
 }
 
-/** Row-shaped projection for the /matches list. Defaults mirror a pending
- * 1v1 against a registered opponent with one trailing un-scored game. Pass
- * `opponent` as a shorthand to set the side-2 player without spelling out
- * `sides`. */
+/** Row-shaped projection for the /matches list. Defaults mirror an
+ * in_progress 1v1 against a registered opponent with one trailing
+ * un-scored game. Pass `opponent` as a shorthand to set the side-2
+ * player without spelling out `sides`. */
 export function matchListRow(
   overrides: Partial<MatchListRow> & { opponent?: string | null } = {},
 ): MatchListRow {
@@ -219,8 +219,8 @@ export function matchListRow(
   const { mySide, opponentSide } = defaultSides(opponentName)
   return {
     id: nextId('m'),
-    status: 'pending',
-    status_label: 'Scheduled',
+    status: 'in_progress',
+    status_label: 'Live',
     league: MOCK_DEFAULT_LEAGUE,
     sides: opponentSide ? [mySide, opponentSide] : [mySide],
     best_of: 5,

@@ -80,7 +80,6 @@ export function reconcile(seed: SeedMatch): void {
   const { side1, side2 } = sideWinCounts(seed)
   const target = gamesToWin(seed.best_of)
   const decided = side1 >= target || side2 >= target
-  const anyScored = side1 > 0 || side2 > 0
 
   if (decided) {
     seed.status = 'completed'
@@ -89,7 +88,7 @@ export function reconcile(seed: SeedMatch): void {
     if (seed.completed_at === null) seed.completed_at = new Date().toISOString()
     seed.games = seed.games.filter((g) => g.score !== null)
   } else {
-    seed.status = anyScored ? 'in_progress' : 'pending'
+    seed.status = 'in_progress'
     seed.completed_at = null
     if (currentUnscored(seed) === null && seed.opponent !== null) {
       const nextNumber =
@@ -410,7 +409,7 @@ export function newMatchSeed(input: {
   const id = `m-${Date.now().toString(36)}`
   const seed: SeedMatch = {
     id,
-    status: 'pending',
+    status: 'in_progress',
     best_of: input.bestOf,
     // A solo match (no opponent) can never affect ratings, mirroring the API.
     affects_rating: input.rated && input.opponent !== null,

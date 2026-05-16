@@ -40,8 +40,8 @@ async def test_create_rated_match_with_registered_opponent(
     )
     assert response.status_code == 201
     body = response.json()
-    assert body["status"] == "pending"
-    assert body["status_label"] == "Scheduled"
+    assert body["status"] == "in_progress"
+    assert body["status_label"] == "Live"
     assert body["best_of"] == 5
     assert body["games_to_win"] == 3
     assert body["team_size"] == 1
@@ -317,7 +317,7 @@ async def test_list_filter_by_status(
 ):
     await start_session(api_client, db_session)
     opp = await make_user(db_session, "rival")
-    pending = await _create_match(api_client, opp.id, best_of=1)
+    in_progress = await _create_match(api_client, opp.id, best_of=1)
     # Score game 1 to flip a separate match to completed.
     completed_match = await _create_match(api_client, opp.id, best_of=1)
     score_resp = await api_client.post(
@@ -327,10 +327,10 @@ async def test_list_filter_by_status(
     assert score_resp.status_code == 201
 
     listing = (
-        await api_client.get("/v1/matches", params={"status": "pending"})
+        await api_client.get("/v1/matches", params={"status": "in_progress"})
     ).json()
-    assert [row["id"] for row in listing["items"]] == [pending["id"]]
-    assert listing["status_counts"]["pending"] == 1
+    assert [row["id"] for row in listing["items"]] == [in_progress["id"]]
+    assert listing["status_counts"]["in_progress"] == 1
     assert listing["status_counts"]["completed"] == 1
 
 
@@ -456,7 +456,7 @@ async def test_table_tennis_scoring_rules(
 # ----- score lifecycle ----------------------------------------------------
 
 
-async def test_scoring_game_1_flips_pending_to_in_progress_and_adds_game_2(
+async def test_scoring_game_1_keeps_in_progress_and_adds_game_2(
     api_client: AsyncClient, db_session: AsyncSession
 ):
     await start_session(api_client, db_session)
