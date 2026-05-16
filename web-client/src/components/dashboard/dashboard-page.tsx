@@ -986,17 +986,12 @@ function Stat({
 function RatingCard({ rating }: { rating: DashboardRating }) {
   const { current, delta, rd, volatility, peak, percentile, spark_data, streak } =
     rating
-  const roundedCurrent = Math.round(current)
-  const roundedDelta = Math.round(delta)
-  const roundedPeak = Math.round(peak)
   // Sparkline needs ≥2 points to draw a line; pad a single point so the
   // freshly-rated case still shows a level baseline.
   const sparkPoints =
-    spark_data.length === 0
-      ? [current, current]
-      : spark_data.length === 1
-        ? [spark_data[0], spark_data[0]]
-        : spark_data
+    spark_data.length >= 2
+      ? spark_data
+      : [spark_data[0] ?? current, spark_data[0] ?? current]
   return (
     <Card padding={20} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -1011,12 +1006,11 @@ function RatingCard({ rating }: { rating: DashboardRating }) {
       </div>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 12 }}>
         <Mono size={56} weight={700} color={C.chalk50} style={{ lineHeight: 0.9 }}>
-          {roundedCurrent}
+          {Math.round(current)}
         </Mono>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-          <Pill tone={roundedDelta >= 0 ? 'win' : 'loss'} mono>
-            {roundedDelta >= 0 ? '+' : ''}
-            {roundedDelta} last match
+          <Pill tone={delta >= 0 ? 'win' : 'loss'} mono>
+            {formatRatingDelta(delta)} last match
           </Pill>
           {percentile !== null ? (
             <span style={{ font: `400 11px ${UI}`, color: C.chalk500 }}>
@@ -1053,7 +1047,7 @@ function RatingCard({ rating }: { rating: DashboardRating }) {
           }}
         >
           <span>30 days ago</span>
-          <span>Today · peak {roundedPeak}</span>
+          <span>Today · peak {Math.round(peak)}</span>
         </div>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
@@ -1062,7 +1056,7 @@ function RatingCard({ rating }: { rating: DashboardRating }) {
           label="Volatility"
           value={volatility !== null ? volatility.toFixed(3) : '—'}
         />
-        <Stat label="Peak" value={roundedPeak} />
+        <Stat label="Peak" value={Math.round(peak)} />
       </div>
     </Card>
   )

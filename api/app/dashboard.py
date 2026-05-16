@@ -1,6 +1,7 @@
 import uuid
 from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
+from typing import Literal
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import func, select
@@ -19,6 +20,8 @@ from app.matches import (
 from app.models import (
     League,
     Match,
+    MatchSide,
+    MatchSidePlayer,
     MatchStatus,
     RatingHistory,
     User,
@@ -193,12 +196,11 @@ async def _build_rating(
     volatility = _coerce_float(state.get("volatility"))
 
     current = rating_row.rating_value
-    peak = await _league_peak_rating(db, rating_row, current)
-    percentile = await _league_percentile(
-        db, rating_row.league_id, current
-    )
-    spark = await _spark_data(db, user_id, rating_row.league_id)
-    delta = await _last_delta(db, user_id, rating_row.league_id)
+    league_id = rating_row.league_id
+    peak = await _league_peak_rating(db, user_id, league_id, current)
+    percentile = await _league_percentile(db, league_id, current)
+    spark = await _spark_data(db, user_id, league_id)
+    delta = await _last_delta(db, user_id, league_id)
     streak = await _current_streak(db, user_id)
 
     return DashboardRating(
@@ -254,13 +256,16 @@ async def _resolve_user_rating(
 
 
 async def _league_peak_rating(
-    db: AsyncSession, rating_row: UserLeagueRating, current: float
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    league_id: uuid.UUID,
+    current: float,
 ) -> float:
     history_peak = (
         await db.execute(
             select(func.max(RatingHistory.rating_value)).where(
-                RatingHistory.league_id == rating_row.league_id,
-                RatingHistory.user_id == rating_row.user_id,
+                RatingHistory.league_id == league_id,
+                RatingHistory.user_id == user_id,
             )
         )
     ).scalar()
@@ -274,25 +279,21 @@ async def _league_percentile(
 ) -> int | None:
     """Percentile rank within the league: the share of rated members the user
     is at or above. Returns None for leagues of one — nothing to compare to."""
-    total = (
+    total, at_or_below = (
         await db.execute(
-            select(func.count(UserLeagueRating.id)).where(
+            select(
+                func.count(UserLeagueRating.id),
+                func.count(UserLeagueRating.id).filter(
+                    UserLeagueRating.rating_value <= my_rating
+                ),
+            ).where(
                 UserLeagueRating.league_id == league_id,
                 UserLeagueRating.rating_value.is_not(None),
             )
         )
-    ).scalar() or 0
+    ).one()
     if total <= 1:
         return None
-    at_or_below = (
-        await db.execute(
-            select(func.count(UserLeagueRating.id)).where(
-                UserLeagueRating.league_id == league_id,
-                UserLeagueRating.rating_value.is_not(None),
-                UserLeagueRating.rating_value <= my_rating,
-            )
-        )
-    ).scalar() or 0
     return round(at_or_below / total * 100)
 
 
@@ -329,42 +330,44 @@ async def _last_delta(
             .limit(1)
         )
     ).scalar_one_or_none()
-    if latest is None or latest.previous_rating_value is None:
+    if latest is None:
         return 0.0
-    return latest.rating_value - latest.previous_rating_value
+    return RatingChange.from_history(latest).delta
 
 
 async def _current_streak(
     db: AsyncSession, user_id: uuid.UUID
 ) -> DashboardStreak | None:
-    """Walk completed matches newest-first, counting consecutive wins or
-    losses from the top. Returns None if the user has no completed matches."""
+    """Walk the user's completed matches newest-first, counting consecutive
+    wins or losses from the top. Returns None if the user has no completed
+    matches."""
     rows = (
         await db.execute(
-            participant_filter(select(Match), user_id)
-            .where(Match.status == MatchStatus.completed)
-            .options(*match_eager_options())
+            select(MatchSide.won)
+            .join(Match, Match.id == MatchSide.match_id)
+            .join(
+                MatchSidePlayer,
+                MatchSidePlayer.match_side_id == MatchSide.id,
+            )
+            .where(
+                MatchSidePlayer.user_id == user_id,
+                Match.status == MatchStatus.completed,
+                MatchSide.won.is_not(None),
+            )
             .order_by(Match.updated_at.desc())
             .limit(STREAK_SCAN_LIMIT)
         )
     ).scalars().all()
-    streak_kind: str | None = None
-    streak_n = 0
-    for match in rows:
-        mine = resolve_my_side(match, user_id)
-        if mine is None or mine.won is None:
-            break
-        kind = "W" if mine.won else "L"
-        if streak_kind is None:
-            streak_kind = kind
-            streak_n = 1
-        elif kind == streak_kind:
-            streak_n += 1
-        else:
-            break
-    if streak_kind is None:
+    if not rows:
         return None
-    return DashboardStreak(kind=streak_kind, n=streak_n)  # type: ignore[arg-type]
+    head_kind: Literal["W", "L"] = "W" if rows[0] else "L"
+    n = 1
+    for won in rows[1:]:
+        kind: Literal["W", "L"] = "W" if won else "L"
+        if kind != head_kind:
+            break
+        n += 1
+    return DashboardStreak(kind=head_kind, n=n)
 
 
 def _coerce_float(value: object) -> float | None:
