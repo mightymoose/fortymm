@@ -7,7 +7,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.db import get_session
+from app.leagues import get_default_league
 from app.models import (
+    League,
     Match,
     MatchGame,
     MatchGameScore,
@@ -28,6 +30,7 @@ from app.schemas.match import (
     MatchDetailsScore,
     MatchDetailsSide,
     MatchGameScoreWrite,
+    MatchLeague,
     MatchListResponse,
     MatchListRow,
 )
@@ -47,6 +50,7 @@ MAX_PAGE_SIZE = 100
 def match_eager_options():
     return (
         selectinload(Match.match_settings),
+        selectinload(Match.league),
         selectinload(Match.sides)
         .selectinload(MatchSide.players)
         .selectinload(MatchSidePlayer.user),
@@ -59,6 +63,24 @@ async def _load_match(db: AsyncSession, match_id: uuid.UUID) -> Match | None:
         select(Match).where(Match.id == match_id).options(*match_eager_options())
     )
     return result.scalar_one_or_none()
+
+
+async def _resolve_league(
+    db: AsyncSession, league_id: uuid.UUID | None
+) -> League:
+    if league_id is not None:
+        league = (
+            await db.execute(select(League).where(League.id == league_id))
+        ).scalar_one_or_none()
+        if league is None:
+            raise HTTPException(status_code=404, detail="League not found.")
+        return league
+    default = await get_default_league(db)
+    if default is None:
+        raise HTTPException(
+            status_code=500, detail="No default league configured."
+        )
+    return default
 
 
 def my_side(match: Match, user_id: uuid.UUID) -> MatchSide | None:
@@ -176,6 +198,7 @@ def _serialize_details(match: Match, current_user_id: uuid.UUID) -> MatchDetails
         id=match.id,
         status=match.status,
         status_label=STATUS_LABELS[match.status],
+        league=MatchLeague(id=match.league.id, name=match.league.name),
         best_of=match.match_settings.best_of,
         games_to_win=_games_to_win(match.match_settings.best_of),
         team_size=match.match_settings.team_size,
@@ -267,6 +290,8 @@ async def create_match(
     # so they can never affect ratings regardless of the requested flag.
     affects_rating = payload.rated and opponent is not None
 
+    league = await _resolve_league(db, payload.league_id)
+
     settings = MatchSettings(
         team_size=1,
         best_of=payload.best_of,
@@ -274,6 +299,7 @@ async def create_match(
     )
     match = Match(
         match_settings=settings,
+        league=league,
         created_by_user_id=current_user.id,
         status=MatchStatus.pending,
     )
@@ -373,6 +399,7 @@ def _list_row(match: Match, current_user_id: uuid.UUID) -> MatchListRow:
         id=match.id,
         status=match.status,
         status_label=STATUS_LABELS[match.status],
+        league=MatchLeague(id=match.league.id, name=match.league.name),
         opponent_username=opp_player.user.username if opp_player else None,
         opponent_user_id=opp_player.user_id if opp_player else None,
         my_games_won=my_games_won,

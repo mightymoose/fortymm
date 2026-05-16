@@ -4,6 +4,7 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
+    League,
     Match,
     MatchSettings,
     MatchSide,
@@ -19,6 +20,7 @@ BASE_TIME = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
 
 async def _record_match(
     db_session: AsyncSession,
+    league: League,
     *players: User,
     created_at: datetime,
 ) -> Match:
@@ -27,6 +29,7 @@ async def _record_match(
     settings = MatchSettings(team_size=1, best_of=5, affects_rating=False)
     match = Match(
         match_settings=settings,
+        league=league,
         created_by_user_id=players[0].id,
         status=MatchStatus.completed,
         created_at=created_at,
@@ -52,7 +55,7 @@ async def test_recent_opponents_requires_a_session(api_client: AsyncClient):
 
 
 async def test_recent_opponents_orders_by_most_recent_match(
-    api_client: AsyncClient, db_session: AsyncSession
+    api_client: AsyncClient, db_session: AsyncSession, default_league: League
 ):
     me = await start_session(api_client, db_session)
     ana = await make_user(db_session, "ana")
@@ -60,9 +63,9 @@ async def test_recent_opponents_orders_by_most_recent_match(
     cy = await make_user(db_session, "cy")
 
     # Played ana longest ago, then cy, then bo most recently.
-    await _record_match(db_session, me, ana, created_at=BASE_TIME - timedelta(days=3))
-    await _record_match(db_session, me, cy, created_at=BASE_TIME - timedelta(days=2))
-    await _record_match(db_session, me, bo, created_at=BASE_TIME - timedelta(days=1))
+    await _record_match(db_session, default_league, me, ana, created_at=BASE_TIME - timedelta(days=3))
+    await _record_match(db_session, default_league, me, cy, created_at=BASE_TIME - timedelta(days=2))
+    await _record_match(db_session, default_league, me, bo, created_at=BASE_TIME - timedelta(days=1))
 
     response = await api_client.get("/v1/players/recent")
     assert response.status_code == 200
@@ -70,16 +73,16 @@ async def test_recent_opponents_orders_by_most_recent_match(
 
 
 async def test_recent_opponents_dedupes_repeated_opponents(
-    api_client: AsyncClient, db_session: AsyncSession
+    api_client: AsyncClient, db_session: AsyncSession, default_league: League
 ):
     me = await start_session(api_client, db_session)
     ana = await make_user(db_session, "ana")
     bo = await make_user(db_session, "bo")
 
     # ana appears twice; her most recent match is newer than the bo match.
-    await _record_match(db_session, me, ana, created_at=BASE_TIME - timedelta(days=5))
-    await _record_match(db_session, me, bo, created_at=BASE_TIME - timedelta(days=3))
-    await _record_match(db_session, me, ana, created_at=BASE_TIME - timedelta(days=1))
+    await _record_match(db_session, default_league, me, ana, created_at=BASE_TIME - timedelta(days=5))
+    await _record_match(db_session, default_league, me, bo, created_at=BASE_TIME - timedelta(days=3))
+    await _record_match(db_session, default_league, me, ana, created_at=BASE_TIME - timedelta(days=1))
 
     response = await api_client.get("/v1/players/recent")
     assert response.status_code == 200
@@ -87,14 +90,14 @@ async def test_recent_opponents_dedupes_repeated_opponents(
 
 
 async def test_recent_opponents_backfills_with_other_players(
-    api_client: AsyncClient, db_session: AsyncSession
+    api_client: AsyncClient, db_session: AsyncSession, default_league: League
 ):
     me = await start_session(api_client, db_session)
     rival = await make_user(db_session, "rival")
     await make_user(db_session, "zoe")
     await make_user(db_session, "amy")
 
-    await _record_match(db_session, me, rival, created_at=BASE_TIME)
+    await _record_match(db_session, default_league, me, rival, created_at=BASE_TIME)
 
     response = await api_client.get("/v1/players/recent")
     assert response.status_code == 200
@@ -118,11 +121,11 @@ async def test_recent_opponents_for_a_new_player_is_a_non_empty_default(
 
 
 async def test_recent_opponents_excludes_the_current_user(
-    api_client: AsyncClient, db_session: AsyncSession
+    api_client: AsyncClient, db_session: AsyncSession, default_league: League
 ):
     me = await start_session(api_client, db_session)
     rival = await make_user(db_session, "rival")
-    await _record_match(db_session, me, rival, created_at=BASE_TIME)
+    await _record_match(db_session, default_league, me, rival, created_at=BASE_TIME)
 
     response = await api_client.get("/v1/players/recent")
     assert response.status_code == 200

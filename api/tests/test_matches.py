@@ -5,7 +5,14 @@ from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Match, MatchGame, MatchGameScore, MatchSide
+from app.models import (
+    League,
+    LeagueVisibility,
+    Match,
+    MatchGame,
+    MatchGameScore,
+    MatchSide,
+)
 from tests._helpers import make_client, make_user, start_session
 
 
@@ -671,3 +678,107 @@ async def test_cannot_score_match_without_opponent(
     )
     assert response.status_code == 422
     assert "opponent" in response.json()["detail"].lower()
+
+
+# ----- league binding -----------------------------------------------------
+
+
+async def test_create_match_without_league_id_uses_default_league(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    default_league: League,
+):
+    await start_session(api_client, db_session)
+    response = await api_client.post(
+        "/v1/matches", json={"best_of": 3, "rated": False}
+    )
+    assert response.status_code == 201
+    body = response.json()
+    assert body["league"]["id"] == str(default_league.id)
+    assert body["league"]["name"] == default_league.name
+
+
+async def test_create_match_with_explicit_league_id_uses_that_league(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    default_league: League,
+):
+    other = League(
+        name="Side League",
+        description="Not the default.",
+        visibility=LeagueVisibility.private,
+    )
+    db_session.add(other)
+    await db_session.commit()
+    await db_session.refresh(other)
+
+    await start_session(api_client, db_session)
+    response = await api_client.post(
+        "/v1/matches",
+        json={"best_of": 3, "rated": False, "league_id": str(other.id)},
+    )
+    assert response.status_code == 201
+    body = response.json()
+    assert body["league"]["id"] == str(other.id)
+    assert body["league"]["name"] == "Side League"
+
+
+async def test_create_match_with_unknown_league_id_is_404(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    default_league: League,
+):
+    await start_session(api_client, db_session)
+    response = await api_client.post(
+        "/v1/matches",
+        json={
+            "best_of": 3,
+            "rated": False,
+            "league_id": str(uuid.uuid4()),
+        },
+    )
+    assert response.status_code == 404
+    assert "league" in response.json()["detail"].lower()
+
+
+async def test_create_match_with_no_default_seeded_is_500(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    default_league: League,
+):
+    await start_session(api_client, db_session)
+    # Remove the autouse default after the session has already attached a
+    # membership; the create-match call should now have no fallback to land on.
+    await db_session.delete(default_league)
+    await db_session.commit()
+
+    response = await api_client.post(
+        "/v1/matches", json={"best_of": 3, "rated": False}
+    )
+    assert response.status_code == 500
+
+
+async def test_list_and_get_match_include_league(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    default_league: League,
+):
+    await start_session(api_client, db_session)
+    opp = await make_user(db_session, "league-rival")
+    created = (
+        await api_client.post(
+            "/v1/matches",
+            json={
+                "opponent_user_id": str(opp.id),
+                "best_of": 3,
+                "rated": True,
+            },
+        )
+    ).json()
+
+    detail = (await api_client.get(f"/v1/matches/{created['id']}")).json()
+    assert detail["league"]["id"] == str(default_league.id)
+    assert detail["league"]["name"] == default_league.name
+
+    listing = (await api_client.get("/v1/matches")).json()
+    assert listing["items"][0]["league"]["id"] == str(default_league.id)

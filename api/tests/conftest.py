@@ -17,6 +17,7 @@ from app import queue as queue_module
 from app.db import Base, get_session
 from app.main import app as fastapi_app
 import app.models  # noqa: F401  -- ensures models register on Base.metadata
+from app.models import League, LeagueVisibility
 
 
 @pytest.fixture(autouse=True)
@@ -60,6 +61,25 @@ async def db_session(engine: AsyncEngine) -> AsyncIterator[AsyncSession]:
     async with engine.begin() as conn:
         for table in reversed(Base.metadata.sorted_tables):
             await conn.execute(table.delete())
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def default_league(db_session: AsyncSession) -> League:
+    """Seed a default league so user-creation paths can attach memberships.
+
+    Autouse so tests don't have to remember to opt in. Tests that want to
+    exercise the "no default league" branch can ``await db_session.delete(...)``
+    this row before triggering the path under test.
+    """
+    league = League(
+        name="FortyMM",
+        description="Test default league.",
+        visibility=LeagueVisibility.public,
+        is_default=True,
+    )
+    db_session.add(league)
+    await db_session.commit()
+    return league
 
 
 @pytest_asyncio.fixture

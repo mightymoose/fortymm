@@ -5,6 +5,7 @@ type MatchDetails = components['schemas']['MatchDetails']
 type MatchDetailsSide = components['schemas']['MatchDetailsSide']
 type MatchDetailsGame = components['schemas']['MatchDetailsGame']
 type MatchListRow = components['schemas']['MatchListRow']
+type MatchLeague = components['schemas']['MatchLeague']
 type DashboardScoreBanner = components['schemas']['DashboardScoreBanner']
 type DashboardNextMatch = components['schemas']['DashboardNextMatch']
 type DashboardRecentResult = components['schemas']['DashboardRecentResult']
@@ -13,6 +14,13 @@ type DashboardRecentResult = components['schemas']['DashboardRecentResult']
 // is on side 1, so `is_current_user_side` and `my_games_won` line up with
 // what the dev session would actually see.
 export const MOCK_CURRENT_USER = { id: 'u-me', username: 'rita.kovac' }
+
+// The seeded default league every mock match belongs to. Mirrors the
+// FortyMM row scripts/seed_leagues.py inserts on real boot.
+export const MOCK_DEFAULT_LEAGUE: MatchLeague = {
+  id: 'lg-fortymm',
+  name: 'FortyMM',
+}
 
 const STATUS_LABELS: Record<MatchStatus, string> = {
   pending: 'Scheduled',
@@ -149,6 +157,7 @@ export function projectMatchDetails(seed: SeedMatch): MatchDetails {
     id: seed.id,
     status: seed.status,
     status_label: STATUS_LABELS[seed.status],
+    league: MOCK_DEFAULT_LEAGUE,
     best_of: seed.best_of,
     games_to_win: gamesToWin(seed.best_of),
     team_size: 1,
@@ -176,6 +185,7 @@ export function projectListRow(seed: SeedMatch): MatchListRow {
     id: seed.id,
     status: seed.status,
     status_label: STATUS_LABELS[seed.status],
+    league: MOCK_DEFAULT_LEAGUE,
     opponent_username: seed.opponent?.username ?? null,
     opponent_user_id: seed.opponent?.id ?? null,
     my_games_won: side1,
