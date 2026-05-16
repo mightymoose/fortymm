@@ -6,7 +6,7 @@ from typing import Annotated
 
 from coolname import generate_slug
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Response, status
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,6 +19,7 @@ from app.schemas.session import (
     SessionUser,
     UpdateCurrentUserRequest,
 )
+from app.uniqueness import name_taken
 
 router = APIRouter()
 
@@ -149,17 +150,16 @@ async def update_current_user(
     db: AsyncSession = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> SessionResponse:
-    # No-op if the user "changed" their name to what it already is — skip the
-    # uniqueness probe so a user can submit the form unchanged without seeing
-    # their own row trigger a 409.
+    # Skip the uniqueness probe on a no-op submit so the user's own row
+    # doesn't trip a 409 against itself.
     if payload.username != current_user.username:
-        existing = await db.execute(
-            select(User.id).where(
-                func.lower(User.username) == payload.username.lower(),
-                User.id != current_user.id,
-            )
-        )
-        if existing.first() is not None:
+        if await name_taken(
+            db,
+            User.id,
+            User.username,
+            payload.username,
+            exclude_id=current_user.id,
+        ):
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Username already taken.",

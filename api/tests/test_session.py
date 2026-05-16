@@ -268,19 +268,12 @@ async def test_update_username_rejects_taken_name_case_insensitive(
 async def test_update_username_concurrent_collision_returns_409(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    """Two clients claim the same name; the second commit raises IntegrityError
-    and we must translate that to 409 rather than 500."""
+    """Two clients claim the same name back-to-back; the loser must get 409,
+    not a 500 from IntegrityError leaking through."""
     await api_client.get("/v1/session")
 
     async with make_client() as other_client:
         await other_client.get("/v1/session")
-        # Race the rename: client A patches first, then client B tries the
-        # same name. The pre-check on B sees no conflict (A hasn't committed
-        # yet from its own snapshot's perspective, but in practice the commit
-        # has already happened by the time we issue B's PATCH below). What
-        # this exercises is the IntegrityError path: we already verified the
-        # pre-check at unit level, so here we just confirm the second one
-        # gets 409 too.
         ok = await api_client.patch("/v1/me", json={"username": "race-name"})
         assert ok.status_code == 200
         dup = await other_client.patch(
@@ -292,10 +285,10 @@ async def test_update_username_concurrent_collision_returns_409(
 @pytest.mark.parametrize(
     "bad_username",
     [
-        "",  # empty
-        "ab",  # too short
-        "a" * 41,  # too long
-        "Capitalized",  # uppercase
+        "",
+        "ab",
+        "a" * 41,
+        "Capitalized",
         "-leading-dash",
         "trailing-dash-",
         ".dot-start",

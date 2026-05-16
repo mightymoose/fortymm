@@ -31,9 +31,8 @@ export function useHasPermission(name: string): boolean {
   return data?.data.user.permissions.includes(name) ?? false
 }
 
-// The change-username dialog awaits this via mutateAsync so it can surface
-// 4xx errors (409 taken, 422 invalid) inline on the field rather than as a
-// toast. Non-dialog callers must handle errors themselves.
+// Callers that want inline 4xx error handling (e.g. ChangeUsernameDialog)
+// must await this via mutateAsync and catch ApiError themselves.
 export function useUpdateUsername() {
   const qc = useQueryClient()
   return useMutation({
@@ -43,10 +42,7 @@ export function useUpdateUsername() {
         await api.PATCH('/v1/me', { body: { username } }),
       ),
     onSuccess: (session) => {
-      // Seed the cache so the menu re-renders with the new name immediately,
-      // before invalidation triggers a refetch round-trip.
       qc.setQueryData(SESSION_QUERY_KEY, session)
-      qc.invalidateQueries({ queryKey: SESSION_QUERY_KEY })
     },
   })
 }

@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db import get_session
 from app.leagues import add_user_to_default_league
 from app.models import Permission, Role, RolePermission, User, UserRole
+from app.uniqueness import name_taken
 from app.schemas.rbac import (
     PermissionCreate,
     PermissionRead,
@@ -174,22 +175,6 @@ async def _validate_permission_ids(
     return deduped
 
 
-async def _name_taken(
-    db: AsyncSession,
-    id_col,
-    name_col,
-    name: str,
-    *,
-    exclude_id: uuid.UUID | None = None,
-) -> bool:
-    """Case-insensitive uniqueness check. Pass the model's id + name columns
-    (e.g. `Role.id, Role.name` or `User.id, User.username`)."""
-    stmt = select(id_col).where(func.lower(name_col) == name.lower())
-    if exclude_id is not None:
-        stmt = stmt.where(id_col != exclude_id)
-    return (await db.execute(stmt.limit(1))).first() is not None
-
-
 async def _validate_role_ids(
     db: AsyncSession, role_ids: Sequence[uuid.UUID]
 ) -> list[uuid.UUID]:
@@ -227,7 +212,7 @@ async def create_permission(
     payload: PermissionCreate,
     db: AsyncSession = Depends(get_session),
 ) -> PermissionRead:
-    if await _name_taken(db, Permission.id, Permission.name, payload.name):
+    if await name_taken(db, Permission.id, Permission.name, payload.name):
         raise HTTPException(
             status_code=409, detail="Permission name already exists."
         )
@@ -264,7 +249,7 @@ async def update_permission(
     if (
         "name" in data
         and data["name"]
-        and await _name_taken(
+        and await name_taken(
             db, Permission.id, Permission.name, data["name"], exclude_id=perm.id
         )
     ):
@@ -321,7 +306,7 @@ async def create_role(
             detail="Provide either template_id or permission_ids, not both.",
         )
 
-    if await _name_taken(db, Role.id, Role.name, payload.name):
+    if await name_taken(db, Role.id, Role.name, payload.name):
         raise HTTPException(status_code=409, detail="Role name already exists.")
 
     permission_ids: list[uuid.UUID] = []
@@ -387,7 +372,7 @@ async def update_role(
     if (
         "name" in data
         and data["name"]
-        and await _name_taken(
+        and await name_taken(
             db, Role.id, Role.name, data["name"], exclude_id=role.id
         )
     ):
@@ -452,7 +437,7 @@ async def create_user(
     payload: RbacUserCreate,
     db: AsyncSession = Depends(get_session),
 ) -> RbacUserRead:
-    if await _name_taken(db, User.id, User.username, payload.username):
+    if await name_taken(db, User.id, User.username, payload.username):
         raise HTTPException(status_code=409, detail="Username already exists.")
     user = User(username=payload.username)
     db.add(user)
