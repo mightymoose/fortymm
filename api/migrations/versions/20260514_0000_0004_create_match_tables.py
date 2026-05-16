@@ -131,7 +131,20 @@ def upgrade() -> None:
         "matches",
         ["created_by_user_id", sa.text("created_at DESC")],
     )
-    op.create_index("ix_matches_status", "matches", ["status"])
+    # Supports the /v1/matches list page's status-filtered, recent-first scan
+    # and the dashboard's per-status LIMIT 1 queries (pending/in_progress).
+    op.create_index(
+        "ix_matches_status_created_at",
+        "matches",
+        ["status", sa.text("created_at DESC")],
+    )
+    # Supports the dashboard's "last 5 completed" view, which orders by
+    # updated_at (no dedicated completed_at column).
+    op.create_index(
+        "ix_matches_status_updated_at",
+        "matches",
+        ["status", sa.text("updated_at DESC")],
+    )
 
     op.create_table(
         "match_sides",

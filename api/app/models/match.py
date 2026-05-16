@@ -35,7 +35,16 @@ class Match(Base):
             "created_by_user_id",
             text("created_at DESC"),
         ),
-        Index("ix_matches_status", "status"),
+        Index(
+            "ix_matches_status_created_at",
+            "status",
+            text("created_at DESC"),
+        ),
+        Index(
+            "ix_matches_status_updated_at",
+            "status",
+            text("updated_at DESC"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(

@@ -17,7 +17,7 @@ from app.models import (
     MatchStatus,
     User,
 )
-from app.players import _escape_like
+from app.players import escape_like
 from app.schemas.match import (
     STATUS_LABELS,
     MatchCreate,
@@ -41,29 +41,55 @@ MAX_PAGE_SIZE = 100
 # ----- helpers -------------------------------------------------------------
 
 
+# Shared eager-load chain. Used by every read path that returns a hierarchical
+# match — async SQLAlchemy can't lazy-load mid-request, so all four collections
+# are pulled up front.
+def match_eager_options():
+    return (
+        selectinload(Match.match_settings),
+        selectinload(Match.sides)
+        .selectinload(MatchSide.players)
+        .selectinload(MatchSidePlayer.user),
+        selectinload(Match.games).selectinload(MatchGame.score),
+    )
+
+
 async def _load_match(db: AsyncSession, match_id: uuid.UUID) -> Match | None:
-    """Fetch a match with every relationship the BFF serializer touches eagerly
-    loaded — async SQLAlchemy can't lazy-load once the request is in flight."""
     result = await db.execute(
-        select(Match)
-        .where(Match.id == match_id)
-        .options(
-            selectinload(Match.match_settings),
-            selectinload(Match.sides)
-            .selectinload(MatchSide.players)
-            .selectinload(MatchSidePlayer.user),
-            selectinload(Match.games).selectinload(MatchGame.score),
-        )
+        select(Match).where(Match.id == match_id).options(*match_eager_options())
     )
     return result.scalar_one_or_none()
 
 
-def _is_participant(match: Match, user_id: uuid.UUID) -> bool:
-    return any(
-        player.user_id == user_id
-        for side in match.sides
-        for player in side.players
+def my_side(match: Match, user_id: uuid.UUID) -> MatchSide | None:
+    return next(
+        (
+            s
+            for s in match.sides
+            if any(p.user_id == user_id for p in s.players)
+        ),
+        None,
     )
+
+
+def opponent_side(match: Match, user_id: uuid.UUID) -> MatchSide | None:
+    mine = my_side(match, user_id)
+    if mine is None:
+        return None
+    return next(
+        (s for s in match.sides if s.side_number != mine.side_number), None
+    )
+
+
+def opponent_username(match: Match, user_id: uuid.UUID) -> str | None:
+    opp = opponent_side(match, user_id)
+    if opp is None or not opp.players:
+        return None
+    return opp.players[0].user.username
+
+
+def _is_participant(match: Match, user_id: uuid.UUID) -> bool:
+    return my_side(match, user_id) is not None
 
 
 def _games_to_win(best_of: int) -> int:
@@ -71,10 +97,11 @@ def _games_to_win(best_of: int) -> int:
 
 
 def _game_winner_side(score: MatchGameScore) -> int:
+    # Ties are blocked by MatchGameScoreWrite; defensive fallback maps to side 2.
     return 1 if score.side_1_points > score.side_2_points else 2
 
 
-def _side_win_counts(match: Match) -> dict[int, int]:
+def side_win_counts(match: Match) -> dict[int, int]:
     counts = {side.side_number: 0 for side in match.sides}
     for game in match.games:
         if game.score is None:
@@ -84,27 +111,17 @@ def _side_win_counts(match: Match) -> dict[int, int]:
     return counts
 
 
+def current_unscored_game(match: Match) -> MatchGame | None:
+    return next((g for g in match.games if g.score is None), None)
+
+
 def _serialize_details(match: Match, current_user_id: uuid.UUID) -> MatchDetails:
-    sides_sorted = sorted(match.sides, key=lambda s: s.side_number)
-    games_sorted = sorted(match.games, key=lambda g: g.game_number)
-    side_wins = _side_win_counts(match)
-
-    my_side = next(
-        (
-            s
-            for s in sides_sorted
-            if any(p.user_id == current_user_id for p in s.players)
-        ),
-        None,
-    )
-    if my_side is None:
+    mine = my_side(match, current_user_id)
+    if mine is None:
         raise RuntimeError("serialize_details called for non-participant")
-
-    opponent_side = next(
-        (s for s in sides_sorted if s.side_number != my_side.side_number),
-        None,
-    )
-    my_number = my_side.side_number
+    opp = opponent_side(match, current_user_id)
+    side_wins = side_win_counts(match)
+    my_number = mine.side_number
 
     def _side_schema(side: MatchSide) -> MatchDetailsSide:
         return MatchDetailsSide(
@@ -136,6 +153,7 @@ def _serialize_details(match: Match, current_user_id: uuid.UUID) -> MatchDetails
             is_my_win=_game_winner_side(score) == my_number,
         )
 
+    games_sorted = sorted(match.games, key=lambda g: g.game_number)
     games = [
         MatchDetailsGame(
             id=game.id,
@@ -145,9 +163,7 @@ def _serialize_details(match: Match, current_user_id: uuid.UUID) -> MatchDetails
         for game in games_sorted
     ]
 
-    current_game_obj = next(
-        (g for g in games_sorted if g.score is None), None
-    )
+    current_game_obj = current_unscored_game(match)
     current_game = (
         MatchDetailsCurrentGame(
             id=current_game_obj.id, game_number=current_game_obj.game_number
@@ -155,8 +171,6 @@ def _serialize_details(match: Match, current_user_id: uuid.UUID) -> MatchDetails
         if current_game_obj is not None
         else None
     )
-
-    can_score = current_game is not None and opponent_side is not None
 
     return MatchDetails(
         id=match.id,
@@ -167,13 +181,11 @@ def _serialize_details(match: Match, current_user_id: uuid.UUID) -> MatchDetails
         team_size=match.match_settings.team_size,
         affects_rating=match.match_settings.affects_rating,
         created_at=match.created_at,
-        my_side=_side_schema(my_side),
-        opponent_side=(
-            _side_schema(opponent_side) if opponent_side else None
-        ),
+        my_side=_side_schema(mine),
+        opponent_side=_side_schema(opp) if opp else None,
         games=games,
         current_game=current_game,
-        can_score=can_score,
+        can_score=current_game is not None and opp is not None,
     )
 
 
@@ -190,7 +202,7 @@ def _add_side(match: Match, side_number: int, player: User) -> None:
 # ----- list helpers --------------------------------------------------------
 
 
-def _participant_filter(query, current_user_id: uuid.UUID):
+def participant_filter(query, current_user_id: uuid.UUID):
     me_in_match = (
         select(MatchSidePlayer.id)
         .where(
@@ -203,7 +215,7 @@ def _participant_filter(query, current_user_id: uuid.UUID):
 
 
 def _opponent_username_filter(query, current_user_id: uuid.UUID, q: str):
-    pattern = f"%{_escape_like(q.strip())}%"
+    pattern = f"%{escape_like(q.strip())}%"
     has_matching_opponent = (
         select(MatchSidePlayer.id)
         .join(User, User.id == MatchSidePlayer.user_id)
@@ -268,8 +280,8 @@ async def create_match(
     _add_side(match, 1, current_user)
     if opponent is not None:
         _add_side(match, 2, opponent)
-    # Game 1 always exists from the moment a match is created — the FE never
-    # creates a game, it only deep-links into the current one to record a score.
+    # The FE never creates a game — game 1 is written here so scoring routes
+    # always have a real entity to deep-link into.
     match.games.append(MatchGame(game_number=1))
 
     db.add(match)
@@ -289,30 +301,16 @@ async def list_matches(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_session),
 ) -> MatchListResponse:
-    base = _participant_filter(select(Match), current_user.id)
+    base = participant_filter(select(Match), current_user.id)
     if q:
         base = _opponent_username_filter(base, current_user.id, q)
 
-    paged = base
-    if status_ is not None:
-        paged = paged.where(Match.status == status_)
-
-    total = (
-        await db.execute(
-            select(func.count()).select_from(paged.order_by(None).subquery())
-        )
-    ).scalar_one()
+    paged = base if status_ is None else base.where(Match.status == status_)
 
     matches = (
         (
             await db.execute(
-                paged.options(
-                    selectinload(Match.match_settings),
-                    selectinload(Match.sides)
-                    .selectinload(MatchSide.players)
-                    .selectinload(MatchSidePlayer.user),
-                    selectinload(Match.games).selectinload(MatchGame.score),
-                )
+                paged.options(*match_eager_options())
                 .order_by(Match.created_at.desc())
                 .offset((page - 1) * page_size)
                 .limit(page_size)
@@ -322,27 +320,27 @@ async def list_matches(
         .all()
     )
 
-    items: list[MatchListRow] = [
-        _list_row(match, current_user.id) for match in matches
-    ]
-
-    # status_counts honors `q` but ignores the status filter, so build it from
-    # the unpaginated, unstatused query: same WHEREs as `base`, project the
-    # status column, group by it.
-    counts_query = _participant_filter(
+    # status_counts honors `q` and ignores the status filter, so it's built
+    # from `base`. `total` then falls out of the same aggregate — no separate
+    # count round-trip needed.
+    counts_query = participant_filter(
         select(Match.status, func.count(Match.id)), current_user.id
     )
     if q:
         counts_query = _opponent_username_filter(
             counts_query, current_user.id, q
         )
-    counts_query = counts_query.group_by(Match.status)
     status_counts: dict[MatchStatus, int] = {s: 0 for s in MatchStatus}
-    for status_value, count in (await db.execute(counts_query)).all():
+    for status_value, count in (
+        await db.execute(counts_query.group_by(Match.status))
+    ).all():
         status_counts[status_value] = count
+    total = (
+        status_counts[status_] if status_ is not None else sum(status_counts.values())
+    )
 
     return MatchListResponse(
-        items=items,
+        items=[_list_row(match, current_user.id) for match in matches],
         page=page,
         page_size=page_size,
         total=total,
@@ -351,51 +349,32 @@ async def list_matches(
 
 
 def _list_row(match: Match, current_user_id: uuid.UUID) -> MatchListRow:
-    my_side = next(
-        s
-        for s in match.sides
-        if any(p.user_id == current_user_id for p in s.players)
-    )
-    opponent_side = next(
-        (s for s in match.sides if s.side_number != my_side.side_number),
-        None,
-    )
+    mine = my_side(match, current_user_id)
+    assert mine is not None  # list query already filtered to participants
+    opp = opponent_side(match, current_user_id)
 
-    side_wins = _side_win_counts(match)
-    my_games_won = side_wins.get(my_side.side_number, 0)
-    opp_games_won = (
-        side_wins.get(opponent_side.side_number, 0) if opponent_side else 0
-    )
+    side_wins = side_win_counts(match)
+    my_games_won = side_wins.get(mine.side_number, 0)
+    opp_games_won = side_wins.get(opp.side_number, 0) if opp else 0
+    opp_player = opp.players[0] if opp and opp.players else None
 
-    opponent_player = (
-        opponent_side.players[0]
-        if opponent_side and opponent_side.players
-        else None
-    )
-
-    current_game = next(
-        (g for g in match.games if g.score is None), None
-    )
+    current_game = current_unscored_game(match)
     scorable = (
         match.status in {MatchStatus.pending, MatchStatus.in_progress}
-        and opponent_side is not None
+        and opp is not None
         and current_game is not None
     )
 
     is_win: bool | None = None
-    if match.status == MatchStatus.completed and opponent_side is not None:
+    if match.status == MatchStatus.completed and opp is not None:
         is_win = my_games_won > opp_games_won
 
     return MatchListRow(
         id=match.id,
         status=match.status,
         status_label=STATUS_LABELS[match.status],
-        opponent_username=(
-            opponent_player.user.username if opponent_player else None
-        ),
-        opponent_user_id=(
-            opponent_player.user_id if opponent_player else None
-        ),
+        opponent_username=opp_player.user.username if opp_player else None,
+        opponent_user_id=opp_player.user_id if opp_player else None,
         my_games_won=my_games_won,
         opponent_games_won=opp_games_won,
         is_win=is_win,
@@ -433,16 +412,11 @@ def _enforce_scorable(match: Match) -> None:
 
 
 def _recompute_match(match: Match) -> None:
-    """Apply all post-score-write derivations on a single loaded ``match``:
-
-    - side ``score`` (count of games each side has won)
-    - match ``status`` (completed if either side reached games_to_win)
-    - side ``won`` flags (true/false on completion, reset to None on re-open)
-    - game lifecycle reconciliation (delete trailing unscored games when
-      completed; ensure exactly one trailing unscored game otherwise)
-    """
+    """Apply all post-score-write derivations on a loaded ``match``:
+    side ``score``, match ``status``, side ``won`` flags, and the trailing
+    un-scored game (deleted on completion; exactly one otherwise)."""
     sides_by_number = {s.side_number: s for s in match.sides}
-    side_wins = _side_win_counts(match)
+    side_wins = side_win_counts(match)
     target = _games_to_win(match.match_settings.best_of)
     a_wins = side_wins.get(1, 0)
     b_wins = side_wins.get(2, 0)
