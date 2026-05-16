@@ -9,6 +9,26 @@ type MatchLeague = components['schemas']['MatchLeague']
 type DashboardScoreBanner = components['schemas']['DashboardScoreBanner']
 type DashboardNextMatch = components['schemas']['DashboardNextMatch']
 type DashboardRecentResult = components['schemas']['DashboardRecentResult']
+type DashboardRating = components['schemas']['DashboardRating']
+type DashboardStreak = components['schemas']['DashboardStreak']
+type RatingChange = components['schemas']['RatingChange']
+
+const MOCK_BASE_RATING = 1500
+const MOCK_RATING_DELTA = 8
+
+function ratingChangeFor(seedId: string, won: boolean): RatingChange {
+  // Deterministic so re-renders are stable.
+  let h = 0
+  for (let i = 0; i < seedId.length; i += 1) h = (h * 31 + seedId.charCodeAt(i)) | 0
+  const jitter = Math.abs(h) % 7
+  const magnitude = MOCK_RATING_DELTA + jitter
+  const signed = won ? magnitude : -magnitude
+  return {
+    before: MOCK_BASE_RATING,
+    after: MOCK_BASE_RATING + signed,
+    delta: signed,
+  }
+}
 
 // The mock-session user — handlers project every seed match as if this user
 // is on side 1, so `is_current_user_side` and `my_games_won` line up with
@@ -108,6 +128,10 @@ function projectSides(seed: SeedMatch): {
 } {
   const { side1, side2 } = sideWinCounts(seed)
   const decided = seed.status === 'completed'
+
+  const showRatingChange = decided && seed.affects_rating && seed.opponent !== null
+  const myWon = side1 > side2
+
   const mySide: MatchDetailsSide = {
     side_number: 1,
     players: [
@@ -118,8 +142,9 @@ function projectSides(seed: SeedMatch): {
       },
     ],
     games_won: side1,
-    won: decided ? side1 > side2 : null,
+    won: decided ? myWon : null,
     is_current_user_side: true,
+    rating_change: showRatingChange ? ratingChangeFor(seed.id, myWon) : null,
   }
   const opponentSide: MatchDetailsSide | null = seed.opponent
     ? {
@@ -132,8 +157,9 @@ function projectSides(seed: SeedMatch): {
           },
         ],
         games_won: side2,
-        won: decided ? side2 > side1 : null,
+        won: decided ? !myWon : null,
         is_current_user_side: false,
+        rating_change: showRatingChange ? ratingChangeFor(seed.id, !myWon) : null,
       }
     : null
   return { mySide, opponentSide }
@@ -222,14 +248,92 @@ export function projectNextMatch(seed: SeedMatch): DashboardNextMatch | null {
 export function projectRecentResult(seed: SeedMatch): DashboardRecentResult | null {
   if (seed.status !== 'completed' || seed.opponent === null) return null
   const { side1, side2 } = sideWinCounts(seed)
+  const won = side1 > side2
   return {
     match_id: seed.id,
     opponent_username: seed.opponent.username,
-    is_win: side1 > side2,
+    is_win: won,
     my_games_won: side1,
     opponent_games_won: side2,
     completed_at: seed.completed_at ?? seed.created_at,
+    my_rating_change: seed.affects_rating ? ratingChangeFor(seed.id, won) : null,
   }
+}
+
+/** Synthesize the dashboard rating block by walking completed seeds in
+ * chronological order, applying each seed's deterministic delta. The result
+ * mirrors what the real BFF builds out of `rating_history` and
+ * `user_league_ratings`, so the wired RatingCard renders against the same
+ * shape MSW and prod return. */
+export function projectRating(seeds: SeedMatch[]): DashboardRating {
+  const completed = seeds
+    .filter(
+      (s): s is SeedMatch & { completed_at: string } =>
+        s.status === 'completed' &&
+        s.completed_at !== null &&
+        s.opponent !== null &&
+        s.affects_rating,
+    )
+    .sort((a, b) => a.completed_at.localeCompare(b.completed_at))
+
+  let current = MOCK_BASE_RATING
+  let peak = MOCK_BASE_RATING
+  let lastDelta = 0
+  const sparkData: number[] = []
+  for (const seed of completed) {
+    const { side1, side2 } = sideWinCounts(seed)
+    const won = side1 > side2
+    const change = ratingChangeFor(seed.id, won)
+    current += change.delta
+    lastDelta = change.delta
+    peak = Math.max(peak, current)
+    sparkData.push(current)
+  }
+  // Glicko-2-ish gloss: RD tightens with games played, volatility holds.
+  const gamesPlayed = completed.length
+  const rd = Math.max(80, 350 - gamesPlayed * 18)
+  return {
+    league_id: MOCK_DEFAULT_LEAGUE.id,
+    league_name: MOCK_DEFAULT_LEAGUE.name,
+    strategy_key: 'glicko2',
+    current,
+    delta: lastDelta,
+    peak,
+    percentile: gamesPlayed > 0 ? 72 : null,
+    spark_data: sparkData,
+    streak: projectStreak(seeds),
+    stats: [
+      { label: 'RD', value: String(rd) },
+      { label: 'Volatility', value: '0.058' },
+    ],
+  }
+}
+
+export function projectStreak(seeds: SeedMatch[]): DashboardStreak | null {
+  const completed = seeds
+    .filter(
+      (s): s is SeedMatch & { completed_at: string } =>
+        s.status === 'completed' &&
+        s.completed_at !== null &&
+        s.opponent !== null,
+    )
+    .sort((a, b) => b.completed_at.localeCompare(a.completed_at))
+  let kind: 'W' | 'L' | null = null
+  let n = 0
+  for (const seed of completed) {
+    const { side1, side2 } = sideWinCounts(seed)
+    const won = side1 > side2
+    const thisKind: 'W' | 'L' = won ? 'W' : 'L'
+    if (kind === null) {
+      kind = thisKind
+      n = 1
+    } else if (thisKind === kind) {
+      n += 1
+    } else {
+      break
+    }
+  }
+  return kind === null ? null : { kind, n }
 }
 
 /** Single source of truth for the per-status histogram returned alongside

@@ -329,6 +329,51 @@ export interface components {
              */
             created_at: string;
         };
+        /**
+         * DashboardRating
+         * @description Per-league rating snapshot for the dashboard RatingCard.
+         *
+         *     Emitted only when the user has a rated row in an automatic-strategy league
+         *     (Glicko-2 today). Manual leagues and unrated users get ``rating: None``.
+         */
+        DashboardRating: {
+            /**
+             * League Id
+             * Format: uuid
+             */
+            league_id: string;
+            /** League Name */
+            league_name: string;
+            /** Strategy Key */
+            strategy_key: string;
+            /** Current */
+            current: number;
+            /** Delta */
+            delta: number;
+            /** Peak */
+            peak: number;
+            /** Percentile */
+            percentile: number | null;
+            /** Spark Data */
+            spark_data: number[];
+            streak: components["schemas"]["DashboardStreak"] | null;
+            /** Stats */
+            stats: components["schemas"]["DashboardRatingStat"][];
+        };
+        /**
+         * DashboardRatingStat
+         * @description Strategy-specific tile in the rating card's stats grid.
+         *
+         *     Pre-formatted server-side so the frontend doesn't need to know which
+         *     fields a strategy emits (Glicko-2's ``rd``/``volatility`` vs whatever a
+         *     future Elo/TrueSkill row carries).
+         */
+        DashboardRatingStat: {
+            /** Label */
+            label: string;
+            /** Value */
+            value: string;
+        };
         /** DashboardRecentResult */
         DashboardRecentResult: {
             /**
@@ -349,6 +394,7 @@ export interface components {
              * Format: date-time
              */
             completed_at: string;
+            my_rating_change?: components["schemas"]["RatingChange"] | null;
         };
         /** DashboardResponse */
         DashboardResponse: {
@@ -356,6 +402,7 @@ export interface components {
             next_match: components["schemas"]["DashboardNextMatch"] | null;
             /** Recent Results */
             recent_results: components["schemas"]["DashboardRecentResult"][];
+            rating?: components["schemas"]["DashboardRating"] | null;
         };
         /** DashboardScoreBanner */
         DashboardScoreBanner: {
@@ -371,6 +418,16 @@ export interface components {
              * Format: uuid
              */
             current_game_id: string;
+        };
+        /** DashboardStreak */
+        DashboardStreak: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "W" | "L";
+            /** N */
+            n: number;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -501,6 +558,7 @@ export interface components {
             won: boolean | null;
             /** Is Current User Side */
             is_current_user_side: boolean;
+            rating_change?: components["schemas"]["RatingChange"] | null;
         };
         /** MatchGameScoreWrite */
         MatchGameScoreWrite: {
@@ -603,6 +661,11 @@ export interface components {
         /**
          * PlayerRead
          * @description A user the current player can pick as a match opponent.
+         *
+         *     ``rating`` is the player's current ``rating_value`` in the league the
+         *     request was scoped to (defaulting to the default league) — None if they
+         *     haven't yet played a rated match in that league or, for manual-strategy
+         *     leagues, haven't been imported.
          */
         PlayerRead: {
             /**
@@ -612,6 +675,20 @@ export interface components {
             id: string;
             /** Username */
             username: string;
+            /** Rating */
+            rating?: number | null;
+        };
+        /**
+         * RatingChange
+         * @description A user's rating delta on a single completed match.
+         */
+        RatingChange: {
+            /** Before */
+            before: number | null;
+            /** After */
+            after: number;
+            /** Delta */
+            delta: number;
         };
         /** RbacUserCreate */
         RbacUserCreate: {
@@ -1438,6 +1515,7 @@ export interface operations {
         parameters: {
             query?: {
                 limit?: number;
+                league_id?: string | null;
             };
             header?: never;
             path?: never;
@@ -1473,6 +1551,7 @@ export interface operations {
                 /** @description Username substring to match against. */
                 q: string;
                 limit?: number;
+                league_id?: string | null;
             };
             header?: never;
             path?: never;

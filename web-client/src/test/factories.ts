@@ -20,6 +20,7 @@ type DashboardResponse = components['schemas']['DashboardResponse']
 type DashboardScoreBanner = components['schemas']['DashboardScoreBanner']
 type DashboardNextMatch = components['schemas']['DashboardNextMatch']
 type DashboardRecentResult = components['schemas']['DashboardRecentResult']
+type DashboardRating = components['schemas']['DashboardRating']
 
 function fastCheck(overrides: Partial<ComponentHealth> = {}): ComponentHealth {
   return {
@@ -265,6 +266,28 @@ export function dashboardResponse(
     score_banner: null,
     next_match: null,
     recent_results: [],
+    rating: dashboardRating(),
+    ...overrides,
+  }
+}
+
+export function dashboardRating(
+  overrides: Partial<DashboardRating> = {},
+): DashboardRating {
+  return {
+    league_id: nextId('lg'),
+    league_name: 'FortyMM',
+    strategy_key: 'glicko2',
+    current: 1500,
+    delta: 0,
+    peak: 1500,
+    percentile: null,
+    spark_data: [],
+    streak: null,
+    stats: [
+      { label: 'RD', value: '350' },
+      { label: 'Volatility', value: '0.060' },
+    ],
     ...overrides,
   }
 }

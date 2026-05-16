@@ -12,6 +12,7 @@ import { describe, expect, it } from 'vitest'
 import { server } from '@/mocks/server'
 import {
   dashboardNextMatch,
+  dashboardRating,
   dashboardRecentResult,
   dashboardResponse,
   dashboardScoreBanner,
@@ -151,6 +152,52 @@ describe('DashboardPage', () => {
 
     const link = await screen.findByRole('link', { name: /log a match/i })
     expect(link).toHaveAttribute('href', '/matches/new')
+  })
+
+  it('renders the rating card from the dashboard rating payload', async () => {
+    server.use(
+      http.get('*/v1/dashboard', () =>
+        HttpResponse.json(
+          dashboardResponse({
+            rating: dashboardRating({
+              league_name: 'FortyMM',
+              current: 1612,
+              delta: 24,
+              peak: 1620,
+              percentile: 78,
+              spark_data: [1500, 1530, 1560, 1588, 1612],
+              streak: { kind: 'W', n: 3 },
+              stats: [
+                { label: 'RD', value: '142' },
+                { label: 'Volatility', value: '0.054' },
+              ],
+            }),
+          }),
+        ),
+      ),
+    )
+    renderDashboard()
+
+    // The rating is rounded for display.
+    expect(await screen.findByText('1612')).toBeInTheDocument()
+    expect(screen.getByText('+24 last match')).toBeInTheDocument()
+    expect(screen.getByText('W3')).toBeInTheDocument()
+    expect(screen.getByText('78%')).toBeInTheDocument()
+    expect(screen.getByText(/FortyMM/i)).toBeInTheDocument()
+  })
+
+  it('hides the rating card when the user has no rated league', async () => {
+    server.use(
+      http.get('*/v1/dashboard', () =>
+        HttpResponse.json(dashboardResponse({ rating: null })),
+      ),
+    )
+    renderDashboard()
+
+    await screen.findByText('Not in a rated league yet.')
+    // The full rating card renders an "RD" stat tile — its absence confirms
+    // we fell through to the empty state rather than the live card.
+    expect(screen.queryByText('RD')).not.toBeInTheDocument()
   })
 
   it('Enter final score links to the current-game scoring route', async () => {

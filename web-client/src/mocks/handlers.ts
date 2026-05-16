@@ -8,6 +8,7 @@ import {
   projectListRow,
   projectMatchDetails,
   projectNextMatch,
+  projectRating,
   projectRecentResult,
   projectScoreBanner,
   reconcile,
@@ -22,13 +23,13 @@ export const mockSession = sessionResponse({ user: { username: 'rita.kovac' } })
 export const mockHealthy = healthCheck()
 
 export const mockPlayers = [
-  player({ username: 'nguyen.t' }),
-  player({ username: 'okafor.d' }),
-  player({ username: 'silva.r' }),
-  player({ username: 'patel.m' }),
-  player({ username: 'johansen.a' }),
-  player({ username: 'chen.w' }),
-  player({ username: 'park.j' }),
+  player({ username: 'nguyen.t', rating: 1842 }),
+  player({ username: 'okafor.d', rating: 1721 }),
+  player({ username: 'silva.r', rating: 1605 }),
+  player({ username: 'patel.m', rating: 1933 }),
+  player({ username: 'johansen.a', rating: 1488 }),
+  player({ username: 'chen.w', rating: 1547 }),
+  player({ username: 'park.j', rating: null }),
 ]
 
 // The recent-opponents endpoint is capped at six chips; the dev/test mock just
@@ -243,6 +244,7 @@ export const handlers = [
       score_banner: scoreBanner,
       next_match: nextMatch,
       recent_results: recentResults,
+      rating: projectRating(mockMatches),
     })
   }),
 

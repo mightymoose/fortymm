@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.db import get_session
-from app.leagues import get_default_league
+from app.leagues import resolve_league
 from app.models import (
     League,
     Match,
@@ -17,9 +17,14 @@ from app.models import (
     MatchSide,
     MatchSidePlayer,
     MatchStatus,
+    RatingHistory,
+    RatingHistorySource,
+    RatingStrategy,
     User,
+    UserLeagueRating,
 )
 from app.players import escape_like
+from app.ratings import get_calculator, state_rating_value, validate_state
 from app.schemas.match import (
     STATUS_LABELS,
     MatchCreate,
@@ -34,6 +39,7 @@ from app.schemas.match import (
     MatchListResponse,
     MatchListRow,
 )
+from app.schemas.rating import RatingChange
 from app.sessions import get_current_user
 
 router = APIRouter(prefix="/v1")
@@ -48,7 +54,14 @@ def _side_schema(
     side: MatchSide,
     side_wins: dict[int, int],
     current_user_id: uuid.UUID | None,
+    rating_changes: dict[uuid.UUID, RatingChange] | None = None,
 ) -> MatchDetailsSide:
+    # Singles only for v1: each side has at most one rated player.
+    rating_change = (
+        rating_changes.get(side.players[0].user_id)
+        if rating_changes and side.players
+        else None
+    )
     return MatchDetailsSide(
         side_number=side.side_number,
         players=[
@@ -64,6 +77,7 @@ def _side_schema(
         is_current_user_side=any(
             p.user_id == current_user_id for p in side.players
         ),
+        rating_change=rating_change,
     )
 
 
@@ -73,7 +87,7 @@ def _side_schema(
 def match_eager_options():
     return (
         selectinload(Match.match_settings),
-        selectinload(Match.league),
+        selectinload(Match.league).selectinload(League.rating_strategy),
         selectinload(Match.sides)
         .selectinload(MatchSide.players)
         .selectinload(MatchSidePlayer.user),
@@ -86,24 +100,6 @@ async def _load_match(db: AsyncSession, match_id: uuid.UUID) -> Match | None:
         select(Match).where(Match.id == match_id).options(*match_eager_options())
     )
     return result.scalar_one_or_none()
-
-
-async def _resolve_league(
-    db: AsyncSession, league_id: uuid.UUID | None
-) -> League:
-    if league_id is not None:
-        league = (
-            await db.execute(select(League).where(League.id == league_id))
-        ).scalar_one_or_none()
-        if league is None:
-            raise HTTPException(status_code=404, detail="League not found.")
-        return league
-    default = await get_default_league(db)
-    if default is None:
-        raise HTTPException(
-            status_code=500, detail="No default league configured."
-        )
-    return default
 
 
 def my_side(match: Match, user_id: uuid.UUID) -> MatchSide | None:
@@ -160,7 +156,11 @@ def current_unscored_game(match: Match) -> MatchGame | None:
     return next((g for g in match.games if g.score is None), None)
 
 
-def _serialize_details(match: Match, current_user_id: uuid.UUID) -> MatchDetails:
+def _serialize_details(
+    match: Match,
+    current_user_id: uuid.UUID,
+    rating_changes: dict[uuid.UUID, RatingChange] | None = None,
+) -> MatchDetails:
     side_wins = side_win_counts(match)
 
     def _score_schema(score: MatchGameScore) -> MatchDetailsScore:
@@ -204,7 +204,7 @@ def _serialize_details(match: Match, current_user_id: uuid.UUID) -> MatchDetails
         affects_rating=match.match_settings.affects_rating,
         created_at=match.created_at,
         sides=[
-            _side_schema(side, side_wins, current_user_id)
+            _side_schema(side, side_wins, current_user_id, rating_changes)
             for side in sides_sorted
         ],
         games=games,
@@ -295,7 +295,7 @@ async def create_match(
     # so they can never affect ratings regardless of the requested flag.
     affects_rating = payload.rated and opponent is not None
 
-    league = await _resolve_league(db, payload.league_id)
+    league = await resolve_league(db, payload.league_id)
 
     settings = MatchSettings(
         team_size=1,
@@ -415,7 +415,8 @@ async def get_match(
     match = await _load_match(db, match_id)
     if match is None:
         raise HTTPException(status_code=404, detail="Match not found.")
-    return _serialize_details(match, current_user.id)
+    changes = await _load_rating_changes(db, match.id)
+    return _serialize_details(match, current_user.id, changes)
 
 
 # ----- score writes --------------------------------------------------------
@@ -431,6 +432,136 @@ def _enforce_scorable(match: Match) -> None:
         raise HTTPException(
             status_code=409, detail="This match is no longer scorable."
         )
+
+
+async def _load_rating_changes(
+    db: AsyncSession, match_id: uuid.UUID
+) -> dict[uuid.UUID, RatingChange]:
+    """Returns ``user_id -> RatingChange`` for every rating row this match
+    produced. Empty for matches that didn't move ratings."""
+    rows = (
+        await db.execute(
+            select(RatingHistory).where(RatingHistory.match_id == match_id)
+        )
+    ).scalars().all()
+    return {row.user_id: RatingChange.from_history(row) for row in rows}
+
+
+async def _get_or_create_user_league_rating(
+    db: AsyncSession,
+    league_id: uuid.UUID,
+    user_id: uuid.UUID,
+    strategy: RatingStrategy,
+) -> UserLeagueRating:
+    existing = (
+        await db.execute(
+            select(UserLeagueRating).where(
+                UserLeagueRating.league_id == league_id,
+                UserLeagueRating.user_id == user_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        return existing
+    rating = UserLeagueRating.seed_for_strategy(league_id, user_id, strategy)
+    db.add(rating)
+    await db.flush()
+    return rating
+
+
+async def _apply_rating_update(db: AsyncSession, match: Match) -> None:
+    """When ``match`` has just transitioned to completed and its league runs an
+    automatic rating strategy, compute the singles update and persist a
+    ``rating_history`` row + bump ``user_league_ratings`` for each side.
+
+    Idempotent on subsequent score edits: if any history row already exists for
+    this match, we skip. Re-applying ratings after a score correction is its own
+    feature (tied to dispute/void flows, which aren't wired up yet)."""
+    if match.status != MatchStatus.completed:
+        return
+    if not match.match_settings.affects_rating:
+        return
+    if match.match_settings.team_size != 1:
+        return
+
+    league = match.league
+    strategy = league.rating_strategy
+    if not strategy.is_automatic:
+        return
+    calculator = get_calculator(strategy.key)
+    if calculator is None:
+        return
+
+    already_applied = (
+        await db.execute(
+            select(RatingHistory.id)
+            .where(RatingHistory.match_id == match.id)
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if already_applied is not None:
+        return
+
+    winning_side = next((s for s in match.sides if s.won is True), None)
+    losing_side = next((s for s in match.sides if s.won is False), None)
+    if winning_side is None or losing_side is None:
+        return
+    if not winning_side.players or not losing_side.players:
+        return
+
+    winner_player = winning_side.players[0]
+    loser_player = losing_side.players[0]
+
+    winner_rating = await _get_or_create_user_league_rating(
+        db, league.id, winner_player.user_id, strategy
+    )
+    loser_rating = await _get_or_create_user_league_rating(
+        db, league.id, loser_player.user_id, strategy
+    )
+    if winner_rating.rating_state is None or loser_rating.rating_state is None:
+        return
+
+    prev_winner_value = winner_rating.rating_value
+    prev_loser_value = loser_rating.rating_value
+
+    new_winner_state, new_loser_state = calculator.update_singles(
+        winner_rating.rating_state, loser_rating.rating_state
+    )
+    validate_state(new_winner_state, strategy)
+    validate_state(new_loser_state, strategy)
+
+    new_winner_value = state_rating_value(new_winner_state)
+    new_loser_value = state_rating_value(new_loser_state)
+
+    winner_rating.rating_state = new_winner_state
+    winner_rating.rating_value = new_winner_value
+    loser_rating.rating_state = new_loser_state
+    loser_rating.rating_value = new_loser_value
+
+    db.add(
+        RatingHistory(
+            league_id=league.id,
+            user_id=winner_player.user_id,
+            match_id=match.id,
+            rating_strategy_id=strategy.id,
+            rating_value=new_winner_value,
+            rating_state=new_winner_state,
+            previous_rating_value=prev_winner_value,
+            source=RatingHistorySource.match,
+        )
+    )
+    db.add(
+        RatingHistory(
+            league_id=league.id,
+            user_id=loser_player.user_id,
+            match_id=match.id,
+            rating_strategy_id=strategy.id,
+            rating_value=new_loser_value,
+            rating_state=new_loser_state,
+            previous_rating_value=prev_loser_value,
+            source=RatingHistorySource.match,
+        )
+    )
 
 
 def _recompute_match(match: Match) -> None:
@@ -513,11 +644,13 @@ async def create_game_score(
     )
 
     _recompute_match(match)
+    await _apply_rating_update(db, match)
     await db.commit()
 
     reloaded = await _load_match(db, match.id)
     assert reloaded is not None
-    return _serialize_details(reloaded, current_user.id)
+    changes = await _load_rating_changes(db, reloaded.id)
+    return _serialize_details(reloaded, current_user.id, changes)
 
 
 @router.put(
@@ -545,8 +678,10 @@ async def update_game_score(
     game.score.side_2_points = payload.side_2_points
 
     _recompute_match(match)
+    await _apply_rating_update(db, match)
     await db.commit()
 
     reloaded = await _load_match(db, match.id)
     assert reloaded is not None
-    return _serialize_details(reloaded, current_user.id)
+    changes = await _load_rating_changes(db, reloaded.id)
+    return _serialize_details(reloaded, current_user.id, changes)

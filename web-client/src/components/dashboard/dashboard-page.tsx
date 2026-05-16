@@ -13,6 +13,7 @@ import {
 import { useDashboard } from '@/api/dashboard'
 import type {
   DashboardNextMatch,
+  DashboardRating,
   DashboardRecentResult,
   DashboardScoreBanner,
 } from '@/api/dashboard'
@@ -25,6 +26,7 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import { fmtDateRel, fmtDateShort } from '@/lib/dates'
+import { formatRatingDelta } from '@/lib/rating'
 
 const GUEST_OPPONENT = 'guest'
 
@@ -981,51 +983,53 @@ function Stat({
   )
 }
 
-function RatingCard({
-  current,
-  delta,
-  rd,
-  vol,
-  peak,
-  percentile,
-  sparkData,
-  streak,
-}: {
-  current: number
-  delta: number
-  rd: number
-  vol: number
-  peak: number
-  percentile: number
-  sparkData: number[]
-  streak: { kind: 'W' | 'L'; n: number }
-}) {
+function RatingCard({ rating }: { rating: DashboardRating }) {
+  const { current, delta, peak, percentile, spark_data, streak, stats } = rating
+  // Sparkline needs ≥2 points to draw a line; pad a single point so the
+  // freshly-rated case still shows a level baseline.
+  const sparkPoints =
+    spark_data.length >= 2
+      ? spark_data
+      : [spark_data[0] ?? current, spark_data[0] ?? current]
+  // Peak tile + whatever strategy-specific stats the API returned; capped at
+  // three because the grid is 3 columns.
+  const tiles = [
+    { label: 'Peak', value: String(Math.round(peak)) },
+    ...stats,
+  ].slice(0, 3)
   return (
     <Card padding={20} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <Overline color={C.chalk500}>Current rating</Overline>
         <div style={{ flex: 1 }} />
-        <Pill tone={streak.kind === 'W' ? 'win' : 'loss'} mono>
-          {streak.kind}
-          {streak.n}
-        </Pill>
+        {streak ? (
+          <Pill tone={streak.kind === 'W' ? 'win' : 'loss'} mono>
+            {streak.kind}
+            {streak.n}
+          </Pill>
+        ) : null}
       </div>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 12 }}>
         <Mono size={56} weight={700} color={C.chalk50} style={{ lineHeight: 0.9 }}>
-          {current}
+          {Math.round(current)}
         </Mono>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
           <Pill tone={delta >= 0 ? 'win' : 'loss'} mono>
-            {delta >= 0 ? '+' : ''}
-            {delta} last match
+            {formatRatingDelta(delta)} last match
           </Pill>
-          <span style={{ font: `400 11px ${UI}`, color: C.chalk500 }}>
-            Top{' '}
-            <Mono size={11} color={C.chalk300}>
-              {percentile}%
-            </Mono>{' '}
-            in your club
-          </span>
+          {percentile !== null ? (
+            <span style={{ font: `400 11px ${UI}`, color: C.chalk500 }}>
+              Top{' '}
+              <Mono size={11} color={C.chalk300}>
+                {percentile}%
+              </Mono>{' '}
+              in {rating.league_name}
+            </span>
+          ) : (
+            <span style={{ font: `400 11px ${UI}`, color: C.chalk500 }}>
+              {rating.league_name}
+            </span>
+          )}
         </div>
       </div>
       <div
@@ -1036,7 +1040,7 @@ function RatingCard({
           border: `1px solid ${C.ink700}`,
         }}
       >
-        <Sparkline data={sparkData} w={280} h={48} />
+        <Sparkline data={sparkPoints} w={280} h={48} />
         <div
           style={{
             display: 'flex',
@@ -1048,13 +1052,13 @@ function RatingCard({
           }}
         >
           <span>30 days ago</span>
-          <span>Today · peak {peak}</span>
+          <span>Today · peak {Math.round(peak)}</span>
         </div>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
-        <Stat label="RD" value={rd} />
-        <Stat label="Volatility" value={vol.toFixed(3)} />
-        <Stat label="Peak" value={peak} />
+        {tiles.map((tile) => (
+          <Stat key={tile.label} label={tile.label} value={tile.value} />
+        ))}
       </div>
     </Card>
   )
@@ -1117,6 +1121,9 @@ function RecentResultsCard({ rows }: { rows: DashboardRecentResult[] }) {
               <th style={{ textAlign: 'right', padding: '10px 8px 8px', fontWeight: 600 }}>
                 Score
               </th>
+              <th style={{ textAlign: 'right', padding: '10px 8px 8px', fontWeight: 600 }}>
+                Δ
+              </th>
               <th style={{ textAlign: 'right', padding: '10px 18px 8px', fontWeight: 600 }}>
                 When
               </th>
@@ -1159,6 +1166,25 @@ function RecentResultsCard({ rows }: { rows: DashboardRecentResult[] }) {
                       {score}
                     </Mono>
                   </td>
+                  <td style={{ padding: '11px 8px', textAlign: 'right' }}>
+                    {r.my_rating_change ? (
+                      <Mono
+                        size={12}
+                        weight={500}
+                        color={
+                          r.my_rating_change.delta >= 0
+                            ? C.serve500
+                            : C.loss
+                        }
+                      >
+                        {formatRatingDelta(r.my_rating_change.delta)}
+                      </Mono>
+                    ) : (
+                      <Mono size={12} color={C.chalk500}>
+                        —
+                      </Mono>
+                    )}
+                  </td>
                   <td style={{ padding: '11px 18px', textAlign: 'right' }}>
                     <Mono size={11} color={C.chalk500}>
                       {fmtDateShort(r.completed_at)}
@@ -1178,26 +1204,20 @@ function YourGameRow({
   rating,
   recent,
   isLoading,
-  streak,
 }: {
-  rating: {
-    current: number
-    delta: number
-    rd: number
-    vol: number
-    peak: number
-    percentile: number
-    sparkData: number[]
-  }
+  rating: DashboardRating | null
   recent: DashboardRecentResult[]
   isLoading: boolean
-  streak: { kind: 'W' | 'L'; n: number }
 }) {
   return (
     <section style={{ marginBottom: 36 }}>
       <SectionHeader
         title="Your game"
-        subtitle="Glicko-2 · last 30 days"
+        subtitle={
+          rating
+            ? `${ratingStrategyLabel(rating.strategy_key)} · last 30 days`
+            : 'Last 30 days'
+        }
         action="Full history"
       />
       <div
@@ -1207,9 +1227,16 @@ function YourGameRow({
           gap: 14,
         }}
       >
-        <ComingSoon>
-          <RatingCard {...rating} streak={streak} />
-        </ComingSoon>
+        {isLoading ? (
+          <SkeletonCard label="Loading rating" height={260} />
+        ) : rating ? (
+          <RatingCard rating={rating} />
+        ) : (
+          <EmptyCard
+            overline="Current rating"
+            body="Not in a rated league yet."
+          />
+        )}
         {isLoading ? (
           <SkeletonCard label="Loading recent matches" height={260} />
         ) : (
@@ -1218,6 +1245,12 @@ function YourGameRow({
       </div>
     </section>
   )
+}
+
+function ratingStrategyLabel(key: string): string {
+  if (key === 'glicko2') return 'Glicko-2'
+  if (key === 'manual') return 'Manual'
+  return key
 }
 
 
@@ -1508,18 +1541,6 @@ const DATA = {
     { name: 'Bay Area Open', detail: 'Singles · 1700–2100', closes: 'June 1' },
     { name: 'Coastal Smash', detail: 'Doubles · need partner', closes: 'June 14' },
   ] satisfies Deadline[],
-  rating: {
-    current: 1847,
-    delta: 12,
-    rd: 63,
-    vol: 0.058,
-    peak: 1862,
-    percentile: 88,
-    sparkData: [
-      1801, 1795, 1788, 1812, 1808, 1820, 1815, 1827, 1834, 1828, 1842, 1835, 1847,
-    ],
-  },
-  streak: { kind: 'W' as const, n: 2 },
   club: {
     name: 'Westside TTC',
     ladderPos: 4,
@@ -1597,10 +1618,9 @@ export function DashboardPage() {
           deadlines={DATA.deadlines}
         />
         <YourGameRow
-          rating={DATA.rating}
+          rating={data?.rating ?? null}
           recent={data?.recent_results ?? []}
           isLoading={isLoading}
-          streak={DATA.streak}
         />
         <AroundYouRow
           club={DATA.club}

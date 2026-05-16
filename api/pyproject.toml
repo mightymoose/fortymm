@@ -13,6 +13,7 @@ dependencies = [
     "asyncpg>=0.30",
     "alembic>=1.14",
     "coolname>=2.2",
+    "jsonschema>=4.21",
 ]
 
 [project.optional-dependencies]

@@ -8,6 +8,8 @@ export type DashboardScoreBanner =
 export type DashboardNextMatch = components['schemas']['DashboardNextMatch']
 export type DashboardRecentResult =
   components['schemas']['DashboardRecentResult']
+export type DashboardRating = components['schemas']['DashboardRating']
+export type DashboardStreak = components['schemas']['DashboardStreak']
 
 export const DASHBOARD_QUERY_KEY = ['dashboard'] as const
 

@@ -773,6 +773,7 @@ async def test_create_match_with_explicit_league_id_uses_that_league(
         name="Side League",
         description="Not the default.",
         visibility=LeagueVisibility.private,
+        rating_strategy_id=default_league.rating_strategy_id,
     )
     db_session.add(other)
     await db_session.commit()
