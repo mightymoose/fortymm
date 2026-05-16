@@ -8,6 +8,7 @@ import {
   projectListRow,
   projectMatchDetails,
   projectNextMatch,
+  projectRating,
   projectRecentResult,
   projectScoreBanner,
   reconcile,
@@ -243,6 +244,7 @@ export const handlers = [
       score_banner: scoreBanner,
       next_match: nextMatch,
       recent_results: recentResults,
+      rating: projectRating(mockMatches),
     })
   }),
 

@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -29,7 +30,33 @@ class DashboardRecentResult(BaseModel):
     my_rating_change: RatingChange | None = None
 
 
+class DashboardStreak(BaseModel):
+    kind: Literal["W", "L"]
+    n: int
+
+
+class DashboardRating(BaseModel):
+    """Per-league rating snapshot for the dashboard RatingCard.
+
+    Emitted only when the user has a rated row in an automatic-strategy league
+    (Glicko-2 today). Manual leagues and unrated users get ``rating: None``.
+    """
+
+    league_id: uuid.UUID
+    league_name: str
+    strategy_key: str
+    current: float
+    delta: float
+    rd: float | None
+    volatility: float | None
+    peak: float
+    percentile: int | None
+    spark_data: list[float]
+    streak: DashboardStreak | None
+
+
 class DashboardResponse(BaseModel):
     score_banner: DashboardScoreBanner | None
     next_match: DashboardNextMatch | None
     recent_results: list[DashboardRecentResult]
+    rating: DashboardRating | None = None

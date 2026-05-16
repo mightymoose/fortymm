@@ -1,9 +1,11 @@
 import uuid
 from collections.abc import Sequence
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.db import get_session
 from app.matches import (
@@ -14,12 +16,21 @@ from app.matches import (
     opponent_username,
     side_win_counts,
 )
-from app.models import Match, MatchStatus, RatingHistory, User
+from app.models import (
+    League,
+    Match,
+    MatchStatus,
+    RatingHistory,
+    User,
+    UserLeagueRating,
+)
 from app.schemas.dashboard import (
     DashboardNextMatch,
+    DashboardRating,
     DashboardRecentResult,
     DashboardResponse,
     DashboardScoreBanner,
+    DashboardStreak,
 )
 from app.schemas.rating import RatingChange
 from app.sessions import get_current_user
@@ -27,6 +38,9 @@ from app.sessions import get_current_user
 router = APIRouter(prefix="/v1")
 
 RECENT_RESULTS_LIMIT = 5
+SPARK_WINDOW_DAYS = 30
+SPARK_MAX_POINTS = 30
+STREAK_SCAN_LIMIT = 100
 
 
 @router.get("/dashboard", response_model=DashboardResponse)
@@ -74,11 +88,13 @@ async def get_dashboard(
         _build_recent_result(match, current_user.id, rating_changes.get(match.id))
         for match in completed
     ]
+    rating = await _build_rating(db, current_user.id)
 
     return DashboardResponse(
         score_banner=score_banner,
         next_match=next_match,
         recent_results=recent_results,
+        rating=rating,
     )
 
 
@@ -153,3 +169,207 @@ def _build_recent_result(
         completed_at=match.updated_at,
         my_rating_change=my_rating_change,
     )
+
+
+async def _build_rating(
+    db: AsyncSession, user_id: uuid.UUID
+) -> DashboardRating | None:
+    """Resolve the user's headline rating row.
+
+    Picks the default league's rating if there is one, otherwise the oldest
+    rated row. Manual-strategy leagues and unrated rows (rating_value=None)
+    return None — the widget stays hidden until the league is actually scoring
+    you.
+    """
+    rating_row = await _resolve_user_rating(db, user_id)
+    if rating_row is None or rating_row.rating_value is None:
+        return None
+    strategy = rating_row.league.rating_strategy
+    if not strategy.is_automatic:
+        return None
+
+    state = rating_row.rating_state or {}
+    rd = _coerce_float(state.get("rd"))
+    volatility = _coerce_float(state.get("volatility"))
+
+    current = rating_row.rating_value
+    peak = await _league_peak_rating(db, rating_row, current)
+    percentile = await _league_percentile(
+        db, rating_row.league_id, current
+    )
+    spark = await _spark_data(db, user_id, rating_row.league_id)
+    delta = await _last_delta(db, user_id, rating_row.league_id)
+    streak = await _current_streak(db, user_id)
+
+    return DashboardRating(
+        league_id=rating_row.league_id,
+        league_name=rating_row.league.name,
+        strategy_key=strategy.key,
+        current=current,
+        delta=delta,
+        rd=rd,
+        volatility=volatility,
+        peak=peak,
+        percentile=percentile,
+        spark_data=spark,
+        streak=streak,
+    )
+
+
+async def _resolve_user_rating(
+    db: AsyncSession, user_id: uuid.UUID
+) -> UserLeagueRating | None:
+    # Default league first; if the user has no row there, fall back to the
+    # oldest rating row so we still light up something. Eager-load the league
+    # and strategy so the caller can read is_automatic without an extra round
+    # trip.
+    options = (
+        selectinload(UserLeagueRating.league).selectinload(
+            League.rating_strategy
+        ),
+    )
+    default = (
+        await db.execute(
+            select(UserLeagueRating)
+            .join(League, League.id == UserLeagueRating.league_id)
+            .where(
+                UserLeagueRating.user_id == user_id,
+                League.is_default.is_(True),
+            )
+            .options(*options)
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if default is not None:
+        return default
+    return (
+        await db.execute(
+            select(UserLeagueRating)
+            .where(UserLeagueRating.user_id == user_id)
+            .options(*options)
+            .order_by(UserLeagueRating.created_at.asc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+
+async def _league_peak_rating(
+    db: AsyncSession, rating_row: UserLeagueRating, current: float
+) -> float:
+    history_peak = (
+        await db.execute(
+            select(func.max(RatingHistory.rating_value)).where(
+                RatingHistory.league_id == rating_row.league_id,
+                RatingHistory.user_id == rating_row.user_id,
+            )
+        )
+    ).scalar()
+    if history_peak is None:
+        return current
+    return max(current, history_peak)
+
+
+async def _league_percentile(
+    db: AsyncSession, league_id: uuid.UUID, my_rating: float
+) -> int | None:
+    """Percentile rank within the league: the share of rated members the user
+    is at or above. Returns None for leagues of one — nothing to compare to."""
+    total = (
+        await db.execute(
+            select(func.count(UserLeagueRating.id)).where(
+                UserLeagueRating.league_id == league_id,
+                UserLeagueRating.rating_value.is_not(None),
+            )
+        )
+    ).scalar() or 0
+    if total <= 1:
+        return None
+    at_or_below = (
+        await db.execute(
+            select(func.count(UserLeagueRating.id)).where(
+                UserLeagueRating.league_id == league_id,
+                UserLeagueRating.rating_value.is_not(None),
+                UserLeagueRating.rating_value <= my_rating,
+            )
+        )
+    ).scalar() or 0
+    return round(at_or_below / total * 100)
+
+
+async def _spark_data(
+    db: AsyncSession, user_id: uuid.UUID, league_id: uuid.UUID
+) -> list[float]:
+    cutoff = datetime.now(timezone.utc) - timedelta(days=SPARK_WINDOW_DAYS)
+    rows = (
+        await db.execute(
+            select(RatingHistory.rating_value)
+            .where(
+                RatingHistory.user_id == user_id,
+                RatingHistory.league_id == league_id,
+                RatingHistory.created_at >= cutoff,
+            )
+            .order_by(RatingHistory.created_at.asc())
+            .limit(SPARK_MAX_POINTS)
+        )
+    ).scalars().all()
+    return [float(v) for v in rows]
+
+
+async def _last_delta(
+    db: AsyncSession, user_id: uuid.UUID, league_id: uuid.UUID
+) -> float:
+    latest = (
+        await db.execute(
+            select(RatingHistory)
+            .where(
+                RatingHistory.user_id == user_id,
+                RatingHistory.league_id == league_id,
+            )
+            .order_by(RatingHistory.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if latest is None or latest.previous_rating_value is None:
+        return 0.0
+    return latest.rating_value - latest.previous_rating_value
+
+
+async def _current_streak(
+    db: AsyncSession, user_id: uuid.UUID
+) -> DashboardStreak | None:
+    """Walk completed matches newest-first, counting consecutive wins or
+    losses from the top. Returns None if the user has no completed matches."""
+    rows = (
+        await db.execute(
+            participant_filter(select(Match), user_id)
+            .where(Match.status == MatchStatus.completed)
+            .options(*match_eager_options())
+            .order_by(Match.updated_at.desc())
+            .limit(STREAK_SCAN_LIMIT)
+        )
+    ).scalars().all()
+    streak_kind: str | None = None
+    streak_n = 0
+    for match in rows:
+        mine = resolve_my_side(match, user_id)
+        if mine is None or mine.won is None:
+            break
+        kind = "W" if mine.won else "L"
+        if streak_kind is None:
+            streak_kind = kind
+            streak_n = 1
+        elif kind == streak_kind:
+            streak_n += 1
+        else:
+            break
+    if streak_kind is None:
+        return None
+    return DashboardStreak(kind=streak_kind, n=streak_n)  # type: ignore[arg-type]
+
+
+def _coerce_float(value: object) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    return None
