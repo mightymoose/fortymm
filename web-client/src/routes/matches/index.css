@@ -384,6 +384,29 @@
   font-family: var(--font-mono);
 }
 
+.match-list-page table.matches tbody tr.skeleton-row {
+  cursor: default;
+}
+.match-list-page table.matches tbody tr.skeleton-row td {
+  padding: 18px 16px;
+}
+.match-list-page .skeleton-line {
+  height: 14px;
+  border-radius: 4px;
+  background: linear-gradient(
+    90deg,
+    var(--bg-raised) 0%,
+    var(--bg-hover) 50%,
+    var(--bg-raised) 100%
+  );
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.4s ease-in-out infinite;
+}
+@keyframes skeleton-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
 /* ============ Empty state ============ */
 .match-list-page .empty {
   padding: 80px 24px;
