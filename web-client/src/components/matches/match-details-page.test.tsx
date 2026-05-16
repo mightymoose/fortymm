@@ -67,27 +67,31 @@ function renderDetails(matchId: string) {
 }
 
 describe('MatchDetailsView', () => {
-  it('renders the hero scoreline from my_side / opponent_side counts', async () => {
+  it('renders the hero scoreline from the participant sides counts', async () => {
     const match = matchDetails({
       id: 'm-1',
       status: 'completed',
       status_label: 'Final',
-      my_side: {
-        side_number: 1,
-        players: [{ user_id: 'u-me', username: 'me', is_current_user: true }],
-        games_won: 3,
-        won: true,
-        is_current_user_side: true,
-      },
-      opponent_side: {
-        side_number: 2,
-        players: [
-          { user_id: 'u-opp', username: 'nguyen.t', is_current_user: false },
-        ],
-        games_won: 1,
-        won: false,
-        is_current_user_side: false,
-      },
+      sides: [
+        {
+          side_number: 1,
+          players: [
+            { user_id: 'u-me', username: 'me', is_current_user: true },
+          ],
+          games_won: 3,
+          won: true,
+          is_current_user_side: true,
+        },
+        {
+          side_number: 2,
+          players: [
+            { user_id: 'u-opp', username: 'nguyen.t', is_current_user: false },
+          ],
+          games_won: 1,
+          won: false,
+          is_current_user_side: false,
+        },
+      ],
       games: [],
       current_game: null,
       can_score: false,
@@ -98,20 +102,20 @@ describe('MatchDetailsView', () => {
 
     const { container } = renderDetails('m-1')
 
-    // Wait for the hero to render; my_side.games_won and opp.games_won show
-    // up as the headline score numbers.
+    // Wait for the hero to render; each side's games_won shows up as the
+    // headline score number, current-user side on the left.
     await waitFor(() =>
       expect(container.querySelector('.md-hero__name')).toHaveTextContent(
         'me',
       ),
     )
-    const myScore = container.querySelector('.md-hero__score--l')
-    const oppScore = container.querySelector('.md-hero__score--r')
-    expect(myScore).toHaveTextContent('3')
-    expect(oppScore).toHaveTextContent('1')
+    const leftScore = container.querySelector('.md-hero__score--l')
+    const rightScore = container.querySelector('.md-hero__score--r')
+    expect(leftScore).toHaveTextContent('3')
+    expect(rightScore).toHaveTextContent('1')
     // My side won — the win modifier is on the left, not the right.
-    expect(myScore).toHaveClass('md-hero__score--win')
-    expect(oppScore).not.toHaveClass('md-hero__score--win')
+    expect(leftScore).toHaveClass('md-hero__score--win')
+    expect(rightScore).not.toHaveClass('md-hero__score--win')
   })
 
   it('shows a Score CTA only when can_score is true and links to current_game', async () => {
@@ -167,27 +171,36 @@ describe('MatchDetailsView', () => {
       status_label: 'Live',
       best_of: 5,
       games_to_win: 3,
-      my_side: {
-        side_number: 1,
-        players: [{ user_id: 'u-me', username: 'me', is_current_user: true }],
-        games_won: 1,
-        won: null,
-        is_current_user_side: true,
-      },
-      opponent_side: {
-        side_number: 2,
-        players: [
-          { user_id: 'u-opp', username: 'opp', is_current_user: false },
-        ],
-        games_won: 0,
-        won: null,
-        is_current_user_side: false,
-      },
+      sides: [
+        {
+          side_number: 1,
+          players: [
+            { user_id: 'u-me', username: 'me', is_current_user: true },
+          ],
+          games_won: 1,
+          won: null,
+          is_current_user_side: true,
+        },
+        {
+          side_number: 2,
+          players: [
+            { user_id: 'u-opp', username: 'opp', is_current_user: false },
+          ],
+          games_won: 0,
+          won: null,
+          is_current_user_side: false,
+        },
+      ],
       games: [
         {
           id: 'g-1',
           game_number: 1,
-          score: { id: 's-1', my_points: 11, opponent_points: 4, is_my_win: true },
+          score: {
+            id: 's-1',
+            side_1_points: 11,
+            side_2_points: 4,
+            winner_side_number: 1,
+          },
         },
         { id: 'g-2', game_number: 2, score: null },
       ],
@@ -224,7 +237,17 @@ describe('MatchDetailsView', () => {
   it('redirects solo matches (no opponent) back to /matches', async () => {
     const match = matchDetails({
       id: 'm-solo',
-      opponent_side: null,
+      sides: [
+        {
+          side_number: 1,
+          players: [
+            { user_id: 'u-me', username: 'me', is_current_user: true },
+          ],
+          games_won: 0,
+          won: null,
+          is_current_user_side: true,
+        },
+      ],
       games: [],
       current_game: null,
       can_score: false,
@@ -237,5 +260,68 @@ describe('MatchDetailsView', () => {
     await waitFor(() =>
       expect(screen.getByText('matches-list')).toBeInTheDocument(),
     )
+  })
+
+  it('renders for spectators (no current-user side) without a Score CTA', async () => {
+    const match = matchDetails({
+      id: 'm-spec',
+      status: 'in_progress',
+      status_label: 'Live',
+      sides: [
+        {
+          side_number: 1,
+          players: [
+            { user_id: 'u-a', username: 'ada.l', is_current_user: false },
+          ],
+          games_won: 1,
+          won: null,
+          is_current_user_side: false,
+        },
+        {
+          side_number: 2,
+          players: [
+            { user_id: 'u-b', username: 'bo.k', is_current_user: false },
+          ],
+          games_won: 0,
+          won: null,
+          is_current_user_side: false,
+        },
+      ],
+      games: [
+        {
+          id: 'g-1',
+          game_number: 1,
+          score: {
+            id: 's-1',
+            side_1_points: 11,
+            side_2_points: 6,
+            winner_side_number: 1,
+          },
+        },
+        { id: 'g-2', game_number: 2, score: null },
+      ],
+      current_game: { id: 'g-2', game_number: 2 },
+      // BFF returns false for non-participants regardless of game state.
+      can_score: false,
+    })
+    server.use(
+      http.get('*/v1/matches/m-spec', () => HttpResponse.json(match)),
+    )
+
+    const { container } = renderDetails('m-spec')
+
+    // Both player names from the match render — neither is the current user.
+    await waitFor(() =>
+      expect(container.querySelectorAll('.md-hero__name').length).toBe(2),
+    )
+    const names = Array.from(container.querySelectorAll('.md-hero__name')).map(
+      (el) => el.textContent,
+    )
+    expect(names).toEqual(['ada.l', 'bo.k'])
+    expect(
+      screen.queryByRole('link', { name: 'Score' }),
+    ).not.toBeInTheDocument()
+    // Scored cells stay plain divs rather than edit links for spectators.
+    expect(screen.queryByRole('link', { name: '11' })).not.toBeInTheDocument()
   })
 })

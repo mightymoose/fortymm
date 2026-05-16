@@ -70,9 +70,9 @@ class MatchDetailsSide(BaseModel):
 
 class MatchDetailsScore(BaseModel):
     id: uuid.UUID
-    my_points: int
-    opponent_points: int
-    is_my_win: bool
+    side_1_points: int
+    side_2_points: int
+    winner_side_number: int
 
 
 class MatchDetailsGame(BaseModel):
@@ -96,8 +96,9 @@ class MatchDetails(BaseModel):
     team_size: int
     affects_rating: bool
     created_at: datetime
-    my_side: MatchDetailsSide
-    opponent_side: MatchDetailsSide | None
+    # Perspective-neutral so non-participants can read this payload; the FE
+    # picks a viewing angle from each side's ``is_current_user_side``.
+    sides: list[MatchDetailsSide]
     games: list[MatchDetailsGame]
     current_game: MatchDetailsCurrentGame | None
     can_score: bool

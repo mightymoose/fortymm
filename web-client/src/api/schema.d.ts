@@ -491,8 +491,8 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
-            my_side: components["schemas"]["MatchDetailsSide"];
-            opponent_side: components["schemas"]["MatchDetailsSide"] | null;
+            /** Sides */
+            sides: components["schemas"]["MatchDetailsSide"][];
             /** Games */
             games: components["schemas"]["MatchDetailsGame"][];
             current_game: components["schemas"]["MatchDetailsCurrentGame"] | null;
@@ -539,12 +539,12 @@ export interface components {
              * Format: uuid
              */
             id: string;
-            /** My Points */
-            my_points: number;
-            /** Opponent Points */
-            opponent_points: number;
-            /** Is My Win */
-            is_my_win: boolean;
+            /** Side 1 Points */
+            side_1_points: number;
+            /** Side 2 Points */
+            side_2_points: number;
+            /** Winner Side Number */
+            winner_side_number: number;
         };
         /** MatchDetailsSide */
         MatchDetailsSide: {

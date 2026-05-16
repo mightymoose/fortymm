@@ -183,8 +183,10 @@ async def test_match_details_response_carries_rating_change(
     opp = await make_user(db_session, "rival")
     body = await _score_to_completion(api_client, opp.id)
 
-    my_change = body["my_side"]["rating_change"]
-    opp_change = body["opponent_side"]["rating_change"]
+    my_side = next(s for s in body["sides"] if s["is_current_user_side"])
+    opp_side = next(s for s in body["sides"] if not s["is_current_user_side"])
+    my_change = my_side["rating_change"]
+    opp_change = opp_side["rating_change"]
     assert my_change is not None
     assert opp_change is not None
     assert my_change["before"] == 1500.0
@@ -212,8 +214,8 @@ async def test_unrated_match_does_not_move_ratings(
         json={"side_1_points": 11, "side_2_points": 4},
     )
     body = score.json()
-    assert body["my_side"]["rating_change"] is None
-    assert body["opponent_side"]["rating_change"] is None
+    for side in body["sides"]:
+        assert side["rating_change"] is None
 
     rows = (await db_session.execute(select(RatingHistory))).scalars().all()
     assert rows == []
@@ -239,7 +241,8 @@ async def test_manual_strategy_league_skips_rating_updates(
     me = await start_session(api_client, db_session)
     opp = await make_user(db_session, "rival")
     body = await _score_to_completion(api_client, opp.id)
-    assert body["my_side"]["rating_change"] is None
+    my_side = next(s for s in body["sides"] if s["is_current_user_side"])
+    assert my_side["rating_change"] is None
 
     rows = (await db_session.execute(select(RatingHistory))).scalars().all()
     assert rows == []

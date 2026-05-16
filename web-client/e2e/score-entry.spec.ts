@@ -83,9 +83,10 @@ function projectMatchDetails(seed: Seed) {
       score: g.score
         ? {
             id: g.score.id,
-            my_points: g.score.side_1_points,
-            opponent_points: g.score.side_2_points,
-            is_my_win: g.score.side_1_points > g.score.side_2_points,
+            side_1_points: g.score.side_1_points,
+            side_2_points: g.score.side_2_points,
+            winner_side_number:
+              g.score.side_1_points > g.score.side_2_points ? 1 : 2,
           }
         : null,
     }))
@@ -99,24 +100,30 @@ function projectMatchDetails(seed: Seed) {
     team_size: 1,
     affects_rating: seed.affects_rating,
     created_at: '2026-05-12T19:00:00Z',
-    my_side: {
-      side_number: 1,
-      players: [
-        { user_id: 'u-me', username: SEED.meUsername, is_current_user: true },
-      ],
-      games_won: s1,
-      won: decided ? s1 > s2 : null,
-      is_current_user_side: true,
-    },
-    opponent_side: {
-      side_number: 2,
-      players: [
-        { user_id: 'u-opp', username: seed.opponent_username, is_current_user: false },
-      ],
-      games_won: s2,
-      won: decided ? s2 > s1 : null,
-      is_current_user_side: false,
-    },
+    sides: [
+      {
+        side_number: 1,
+        players: [
+          { user_id: 'u-me', username: SEED.meUsername, is_current_user: true },
+        ],
+        games_won: s1,
+        won: decided ? s1 > s2 : null,
+        is_current_user_side: true,
+      },
+      {
+        side_number: 2,
+        players: [
+          {
+            user_id: 'u-opp',
+            username: seed.opponent_username,
+            is_current_user: false,
+          },
+        ],
+        games_won: s2,
+        won: decided ? s2 > s1 : null,
+        is_current_user_side: false,
+      },
+    ],
     games,
     current_game: current
       ? { id: current.id, game_number: current.game_number }
