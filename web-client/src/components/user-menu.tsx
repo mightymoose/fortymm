@@ -1,4 +1,12 @@
+import { useState } from 'react'
 import { useSession } from '@/api/session'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import { ChangeUsernameDialog } from './change-username-dialog'
 
 function getInitials(username: string): string {
   const cleaned = username.replace(/[._-]+/g, ' ').trim()
@@ -10,6 +18,7 @@ function getInitials(username: string): string {
 
 export function UserMenu() {
   const { data, isLoading, isError } = useSession()
+  const [editing, setEditing] = useState(false)
 
   if (isLoading) {
     return (
@@ -27,20 +36,45 @@ export function UserMenu() {
 
   const username = !isError && data ? data.data.user.username : 'Guest'
   const initials = getInitials(username)
+  const signedIn = !isError && !!data
 
   return (
-    <button
-      type="button"
-      className="app-shell__user-menu"
-      aria-label="User menu"
-    >
-      <div className="app-shell__user-avatar">{initials}</div>
-      <div
-        className="app-shell__user-name app-shell__user-name--truncate"
-        title={username}
-      >
-        {username}
-      </div>
-    </button>
+    <>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <button
+            type="button"
+            className="app-shell__user-menu"
+            aria-label="User menu"
+          >
+            <div className="app-shell__user-avatar">{initials}</div>
+            <div
+              className="app-shell__user-name app-shell__user-name--truncate"
+              title={username}
+            >
+              {username}
+            </div>
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-56">
+          <DropdownMenuItem
+            disabled={!signedIn}
+            onSelect={(e) => {
+              e.preventDefault()
+              setEditing(true)
+            }}
+          >
+            Change username
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      {signedIn && (
+        <ChangeUsernameDialog
+          open={editing}
+          onOpenChange={setEditing}
+          currentUsername={username}
+        />
+      )}
+    </>
   )
 }

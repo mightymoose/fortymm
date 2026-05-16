@@ -1,4 +1,9 @@
-import { queryOptions, useQuery } from '@tanstack/react-query'
+import {
+  queryOptions,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query'
 import { api, unwrap } from './client'
 import type { components } from './schema'
 
@@ -24,4 +29,20 @@ export function useSession() {
 export function useHasPermission(name: string): boolean {
   const { data } = useSession()
   return data?.data.user.permissions.includes(name) ?? false
+}
+
+// Callers that want inline 4xx error handling (e.g. ChangeUsernameDialog)
+// must await this via mutateAsync and catch ApiError themselves.
+export function useUpdateUsername() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (username: string): Promise<Session> =>
+      unwrap(
+        'update username',
+        await api.PATCH('/v1/me', { body: { username } }),
+      ),
+    onSuccess: (session) => {
+      qc.setQueryData(SESSION_QUERY_KEY, session)
+    },
+  })
 }
