@@ -134,8 +134,24 @@ export function useUpdateRole() {
           body: input.patch,
         }),
       ),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ROLES_KEY }),
-    onError: notifyError('update the role'),
+    // Optimistic update so permission checkboxes (toggled rapidly) flip
+    // instantly; restore the snapshot on error so the UI doesn't lie.
+    onMutate: async (input) => {
+      await qc.cancelQueries({ queryKey: ROLES_KEY })
+      const previous = qc.getQueryData<Role[]>(ROLES_KEY)
+      if (previous) {
+        qc.setQueryData<Role[]>(
+          ROLES_KEY,
+          previous.map((r) => (r.id === input.id ? { ...r, ...input.patch } : r)),
+        )
+      }
+      return { previous }
+    },
+    onError: (err, _input, ctx) => {
+      if (ctx?.previous) qc.setQueryData(ROLES_KEY, ctx.previous)
+      notifyError('update the role')(err)
+    },
+    onSettled: () => qc.invalidateQueries({ queryKey: ROLES_KEY }),
   })
 }
 
@@ -197,7 +213,26 @@ export function useSetUserRoles() {
           body: { role_ids: input.roleIds },
         }),
       ),
-    onSuccess: () => qc.invalidateQueries({ queryKey: USERS_KEY }),
-    onError: notifyError('save role assignments'),
+    // Optimistic so revoke-from-role-detail doesn't read a stale cached list
+    // when two revokes fire close together — both reads would otherwise see
+    // the pre-revoke role set and one revoke would be lost.
+    onMutate: async (input) => {
+      await qc.cancelQueries({ queryKey: USERS_KEY })
+      const previous = qc.getQueryData<RbacUser[]>(USERS_KEY)
+      if (previous) {
+        qc.setQueryData<RbacUser[]>(
+          USERS_KEY,
+          previous.map((u) =>
+            u.id === input.id ? { ...u, role_ids: input.roleIds } : u,
+          ),
+        )
+      }
+      return { previous }
+    },
+    onError: (err, _input, ctx) => {
+      if (ctx?.previous) qc.setQueryData(USERS_KEY, ctx.previous)
+      notifyError('save role assignments')(err)
+    },
+    onSettled: () => qc.invalidateQueries({ queryKey: USERS_KEY }),
   })
 }

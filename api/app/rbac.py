@@ -1,5 +1,6 @@
 import uuid
 from collections.abc import Sequence
+from typing import Awaitable, Callable
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import delete, func, select
@@ -19,8 +20,47 @@ from app.schemas.rbac import (
     RoleRead,
     RoleUpdate,
 )
+from app.sessions import get_current_user
 
-router = APIRouter(prefix="/v1")
+
+# ----- authorization -------------------------------------------------------
+
+
+# Reads and writes on every endpoint here require this permission. The
+# Administration overview page (which doesn't hit any RBAC route) needs
+# `administration.view` instead, but that gate is enforced client-side —
+# this router has no overview endpoint to protect.
+RBAC_PERMISSION = "authorization.manage"
+
+
+async def _user_has_permission(
+    db: AsyncSession, user_id: uuid.UUID, name: str
+) -> bool:
+    result = await db.execute(
+        select(Permission.id)
+        .join(RolePermission, RolePermission.permission_id == Permission.id)
+        .join(UserRole, UserRole.role_id == RolePermission.role_id)
+        .where(UserRole.user_id == user_id, Permission.name == name)
+        .limit(1)
+    )
+    return result.first() is not None
+
+
+def require_permission(name: str) -> Callable[..., Awaitable[User]]:
+    async def dep(
+        user: User = Depends(get_current_user),
+        db: AsyncSession = Depends(get_session),
+    ) -> User:
+        if not await _user_has_permission(db, user.id, name):
+            raise HTTPException(status_code=403, detail="forbidden")
+        return user
+
+    return dep
+
+
+_require_rbac = require_permission(RBAC_PERMISSION)
+
+router = APIRouter(prefix="/v1", dependencies=[Depends(_require_rbac)])
 
 
 # ----- helpers -------------------------------------------------------------
@@ -31,10 +71,13 @@ async def _load_role_permission_map(
 ) -> dict[uuid.UUID, list[uuid.UUID]]:
     if not role_ids:
         return {}
+    # Order by permission name so response payloads are stable across calls —
+    # tests and the UI assume the array is sorted.
     result = await db.execute(
-        select(RolePermission.role_id, RolePermission.permission_id).where(
-            RolePermission.role_id.in_(role_ids)
-        )
+        select(RolePermission.role_id, RolePermission.permission_id)
+        .join(Permission, Permission.id == RolePermission.permission_id)
+        .where(RolePermission.role_id.in_(role_ids))
+        .order_by(Permission.name)
     )
     grouped: dict[uuid.UUID, list[uuid.UUID]] = {rid: [] for rid in role_ids}
     for role_id, permission_id in result.all():
@@ -48,9 +91,10 @@ async def _load_user_role_map(
     if not user_ids:
         return {}
     result = await db.execute(
-        select(UserRole.user_id, UserRole.role_id).where(
-            UserRole.user_id.in_(user_ids)
-        )
+        select(UserRole.user_id, UserRole.role_id)
+        .join(Role, Role.id == UserRole.role_id)
+        .where(UserRole.user_id.in_(user_ids))
+        .order_by(Role.name)
     )
     grouped: dict[uuid.UUID, list[uuid.UUID]] = {uid: [] for uid in user_ids}
     for user_id, role_id in result.all():
@@ -130,6 +174,21 @@ async def _validate_permission_ids(
     return deduped
 
 
+async def _name_taken(
+    db: AsyncSession,
+    model: type,
+    name: str,
+    *,
+    exclude_id: uuid.UUID | None = None,
+) -> bool:
+    """Case-insensitive uniqueness check for `name` columns on Role/Permission/User."""
+    field = getattr(model, "name", None) or model.username  # type: ignore[attr-defined]
+    stmt = select(model.id).where(func.lower(field) == name.lower())
+    if exclude_id is not None:
+        stmt = stmt.where(model.id != exclude_id)
+    return (await db.execute(stmt.limit(1))).first() is not None
+
+
 async def _validate_role_ids(
     db: AsyncSession, role_ids: Sequence[uuid.UUID]
 ) -> list[uuid.UUID]:
@@ -167,6 +226,10 @@ async def create_permission(
     payload: PermissionCreate,
     db: AsyncSession = Depends(get_session),
 ) -> PermissionRead:
+    if await _name_taken(db, Permission, payload.name):
+        raise HTTPException(
+            status_code=409, detail="permission name already exists"
+        )
     perm = Permission(name=payload.name, description=payload.description)
     db.add(perm)
     try:
@@ -197,6 +260,14 @@ async def update_permission(
 ) -> PermissionRead:
     perm = await _get_permission_or_404(db, permission_id)
     data = payload.model_dump(exclude_unset=True)
+    if (
+        "name" in data
+        and data["name"]
+        and await _name_taken(db, Permission, data["name"], exclude_id=perm.id)
+    ):
+        raise HTTPException(
+            status_code=409, detail="permission name already exists"
+        )
     for key, value in data.items():
         setattr(perm, key, value)
     try:
@@ -246,6 +317,9 @@ async def create_role(
             status_code=400,
             detail="provide either template_id or permission_ids, not both",
         )
+
+    if await _name_taken(db, Role, payload.name):
+        raise HTTPException(status_code=409, detail="role name already exists")
 
     permission_ids: list[uuid.UUID] = []
     if payload.template_id is not None:
@@ -302,8 +376,17 @@ async def update_role(
 
     new_permission_ids: list[uuid.UUID] | None = None
     if "permission_ids" in data:
-        raw = data.pop("permission_ids") or []
-        new_permission_ids = await _validate_permission_ids(db, raw)
+        # Explicit `null` means "no change"; explicit `[]` means "clear all".
+        raw = data.pop("permission_ids")
+        if raw is not None:
+            new_permission_ids = await _validate_permission_ids(db, raw)
+
+    if (
+        "name" in data
+        and data["name"]
+        and await _name_taken(db, Role, data["name"], exclude_id=role.id)
+    ):
+        raise HTTPException(status_code=409, detail="role name already exists")
 
     for key, value in data.items():
         setattr(role, key, value)
@@ -364,6 +447,8 @@ async def create_user(
     payload: RbacUserCreate,
     db: AsyncSession = Depends(get_session),
 ) -> RbacUserRead:
+    if await _name_taken(db, User, payload.username):
+        raise HTTPException(status_code=409, detail="username already exists")
     user = User(username=payload.username)
     db.add(user)
     try:
@@ -408,8 +493,16 @@ async def set_user_roles(
 
 @router.delete("/users/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_user(
-    user_id: uuid.UUID, db: AsyncSession = Depends(get_session)
+    user_id: uuid.UUID,
+    db: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_user),
 ) -> Response:
+    if user_id == current_user.id:
+        # Defense in depth — the UI also disables this button. Without this
+        # guard, the workspace can be locked out by deleting the last admin.
+        raise HTTPException(
+            status_code=400, detail="you cannot delete your own account"
+        )
     user = await _get_user_or_404(db, user_id)
     await db.delete(user)
     await db.commit()

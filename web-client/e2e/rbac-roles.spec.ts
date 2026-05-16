@@ -35,7 +35,7 @@ test.describe('Administration · Roles', () => {
     await expect(page.getByText('Admin').first()).toBeVisible()
     await expect(page.getByText('Scorekeeper').first()).toBeVisible()
     // Detail title for the first (alphabetical) role
-    await expect(page.locator('h1.rbac-inline-edit', { hasText: 'Admin' })).toBeVisible()
+    await expect(page.getByRole('heading', { level: 1, name: 'Admin' })).toBeVisible()
   })
 
   test('shows the empty state with a CTA when no roles exist', async ({ page }) => {
@@ -90,14 +90,15 @@ test.describe('Administration · Roles', () => {
     expect(store.getRole('r_score')!.permission_ids).toEqual(['p_cs'])
   })
 
-  test('inline-renaming a role to an existing name surfaces a 409 toast', async ({ page }) => {
+  test('renaming a role to an existing name surfaces an inline error', async ({ page }) => {
     const { pom, store } = await RolesPage.navigateTo(page, BASE_SEED)
     await pom.roleRow('Scorekeeper').click()
-    await pom.detailTitle('Scorekeeper').click()
-    const input = pom.titleInput('Scorekeeper')
-    await input.fill('Admin')
-    await input.press('Tab')
-    await expect(pom.toast()).toContainText(/role name already exists/i)
+    await pom.editButton.click()
+    await pom.editNameInput.fill('Admin')
+    await pom.editSaveButton.click()
+    // Client-side zod check catches it before any network call — surfaces
+    // under the field per web-client/CLAUDE.md, not as a toast.
+    await expect(page.getByText(/already exists/i)).toBeVisible()
     expect(store.getRole('r_score')!.name).toBe('Scorekeeper')
   })
 
@@ -107,7 +108,7 @@ test.describe('Administration · Roles', () => {
     await pom.newRoleNameInput.fill('Volunteer Scorer')
     await pom.newRoleDescriptionInput.fill('Weekend volunteers.')
     await pom.newRoleSubmit.click()
-    await expect(page.locator('h1.rbac-inline-edit', { hasText: 'Volunteer Scorer' })).toBeVisible()
+    await expect(page.getByRole('heading', { level: 1, name: 'Volunteer Scorer' })).toBeVisible()
     expect(store.listRoles().some((r) => r.name === 'Volunteer Scorer')).toBe(true)
   })
 

@@ -8,14 +8,40 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db import get_session
 from app.main import app
 from app.models import Permission, Role, RolePermission, User, UserRole
+from app.rbac import _require_rbac
+from app.sessions import get_current_user
 
 
 @pytest_asyncio.fixture
-async def api_client(db_session: AsyncSession) -> AsyncIterator[AsyncClient]:
-    async def _override() -> AsyncIterator[AsyncSession]:
+async def admin_user(db_session: AsyncSession) -> User:
+    """A real DB user the rbac routes will see as `current_user`.
+
+    The router's authz gate is bypassed via dependency_overrides[_require_rbac]
+    so this user does NOT need a permission row attached — that keeps existing
+    list-endpoint tests with their "this DB starts empty" assumptions.
+    """
+    user = User(username="rbac-admin")
+    db_session.add(user)
+    await db_session.commit()
+    return user
+
+
+@pytest_asyncio.fixture
+async def api_client(
+    db_session: AsyncSession, admin_user: User
+) -> AsyncIterator[AsyncClient]:
+    async def _override_session() -> AsyncIterator[AsyncSession]:
         yield db_session
 
-    app.dependency_overrides[get_session] = _override
+    async def _override_user() -> User:
+        return admin_user
+
+    async def _bypass_rbac() -> User:
+        return admin_user
+
+    app.dependency_overrides[get_session] = _override_session
+    app.dependency_overrides[get_current_user] = _override_user
+    app.dependency_overrides[_require_rbac] = _bypass_rbac
     transport = ASGITransport(app=app)
     async with AsyncClient(
         transport=transport, base_url="https://testserver"
@@ -384,3 +410,130 @@ async def test_delete_user(api_client: AsyncClient, db_session: AsyncSession):
         )
     ).scalar_one_or_none()
     assert remaining is None
+
+
+async def test_delete_user_refuses_self(
+    api_client: AsyncClient, admin_user: User
+):
+    response = await api_client.delete(f"/v1/users/{admin_user.id}")
+    assert response.status_code == 400
+    assert "your own" in response.json()["detail"]
+
+
+# ----- regression: case-insensitive uniqueness ----------------------------
+#
+# Permission names are forced lowercase by PERMISSION_NAME_PATTERN, so the
+# case-insensitive _name_taken check is dead code for that model (it stays
+# in place for symmetry). Roles and usernames have no shape constraint and
+# are the realistic collision surfaces.
+
+
+async def test_role_name_collision_is_case_insensitive(api_client: AsyncClient):
+    await api_client.post("/v1/roles", json={"name": "Owner"})
+    second = await api_client.post("/v1/roles", json={"name": "owner"})
+    assert second.status_code == 409
+
+
+async def test_role_rename_collision_returns_409(api_client: AsyncClient):
+    a = (await api_client.post("/v1/roles", json={"name": "alpha"})).json()
+    (await api_client.post("/v1/roles", json={"name": "bravo"})).json()
+    patched = await api_client.patch(
+        f"/v1/roles/{a['id']}", json={"name": "Bravo"}
+    )
+    assert patched.status_code == 409
+
+
+async def test_username_collision_is_case_insensitive(api_client: AsyncClient):
+    await api_client.post("/v1/users", json={"username": "Dup"})
+    second = await api_client.post("/v1/users", json={"username": "DUP"})
+    assert second.status_code == 409
+
+
+# ----- regression: updated_at + null/[] semantics --------------------------
+
+
+async def test_update_role_permissions_only_bumps_updated_at(
+    api_client: AsyncClient,
+):
+    p = (
+        await api_client.post("/v1/permissions", json={"name": "perm.a"})
+    ).json()
+    role = (
+        await api_client.post(
+            "/v1/roles", json={"name": "alpha"}
+        )
+    ).json()
+    before = role["updated_at"]
+
+    patched = await api_client.patch(
+        f"/v1/roles/{role['id']}", json={"permission_ids": [p["id"]]}
+    )
+    after = patched.json()["updated_at"]
+    assert after > before
+
+
+async def test_update_role_null_permission_ids_keeps_existing(
+    api_client: AsyncClient,
+):
+    p = (
+        await api_client.post("/v1/permissions", json={"name": "perm.a"})
+    ).json()
+    role = (
+        await api_client.post(
+            "/v1/roles", json={"name": "alpha", "permission_ids": [p["id"]]}
+        )
+    ).json()
+
+    patched = await api_client.patch(
+        f"/v1/roles/{role['id']}", json={"permission_ids": None}
+    )
+    assert patched.status_code == 200
+    assert patched.json()["permission_ids"] == [p["id"]]
+
+
+# ----- regression: stable ordering ----------------------------------------
+
+
+async def test_list_roles_permission_ids_sorted_by_name(
+    api_client: AsyncClient,
+):
+    pb = (
+        await api_client.post("/v1/permissions", json={"name": "perm.b"})
+    ).json()
+    pa = (
+        await api_client.post("/v1/permissions", json={"name": "perm.a"})
+    ).json()
+    pc = (
+        await api_client.post("/v1/permissions", json={"name": "perm.c"})
+    ).json()
+
+    role = (
+        await api_client.post(
+            "/v1/roles",
+            json={
+                "name": "r",
+                # Intentionally out-of-order on the wire.
+                "permission_ids": [pb["id"], pa["id"], pc["id"]],
+            },
+        )
+    ).json()
+
+    listing = (await api_client.get("/v1/roles")).json()
+    fetched = next(r for r in listing if r["id"] == role["id"])
+    assert fetched["permission_ids"] == [pa["id"], pb["id"], pc["id"]]
+
+
+async def test_list_users_role_ids_sorted_by_role_name(
+    api_client: AsyncClient,
+):
+    rz = (await api_client.post("/v1/roles", json={"name": "zeta"})).json()
+    ra = (await api_client.post("/v1/roles", json={"name": "alpha"})).json()
+    user = (
+        await api_client.post("/v1/users", json={"username": "ordered"})
+    ).json()
+    await api_client.put(
+        f"/v1/users/{user['id']}/roles", json={"role_ids": [rz["id"], ra["id"]]}
+    )
+    listing = (await api_client.get("/v1/users")).json()
+    fetched = next(u for u in listing if u["id"] == user["id"])
+    assert fetched["role_ids"] == [ra["id"], rz["id"]]

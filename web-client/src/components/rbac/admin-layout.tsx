@@ -1,4 +1,5 @@
 import { useRouterState } from '@tanstack/react-router'
+import { useSession } from '@/api/session'
 import { Skeleton } from '@/components/ui/skeleton'
 import { usePermissions, useRbacUsers, useRoles } from './queries'
 
@@ -9,9 +10,11 @@ const TAB_LABELS: Record<string, string> = {
 }
 
 export function AdminBreadcrumbAndCounts() {
-  const usersQ = useRbacUsers()
-  const rolesQ = useRoles()
-  const permsQ = usePermissions()
+  const { data: session } = useSession()
+  // /v1/roles, /v1/permissions, /v1/users are all gated on authorization.manage,
+  // so administration.view-only users would 403 and trip the error boundary.
+  const canManageAuth =
+    session?.data.user.permissions.includes('authorization.manage') ?? false
   const pathname = useRouterState({ select: (s) => s.location.pathname })
   const current = TAB_LABELS[pathname] ?? 'Overview'
 
@@ -35,37 +38,46 @@ export function AdminBreadcrumbAndCounts() {
         <span style={{ fontSize: 14, fontWeight: 600, color: 'var(--fg-1)' }}>{current}</span>
       </div>
       <div style={{ flex: 1 }} />
-      <div
+      {canManageAuth && <AdminCountsPill />}
+    </div>
+  )
+}
+
+function AdminCountsPill() {
+  const usersQ = useRbacUsers()
+  const rolesQ = useRoles()
+  const permsQ = usePermissions()
+  return (
+    <div
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 10,
+        padding: '4px 12px',
+        borderRadius: 999,
+        background: 'var(--bg-card)',
+        border: '1px solid var(--border-subtle)',
+        fontSize: 11,
+        fontFamily: 'var(--font-mono)',
+        color: 'var(--fg-3)',
+        fontVariantNumeric: 'tabular-nums',
+      }}
+    >
+      <span
         style={{
-          display: 'inline-flex',
-          alignItems: 'center',
-          gap: 10,
-          padding: '4px 12px',
-          borderRadius: 999,
-          background: 'var(--bg-card)',
-          border: '1px solid var(--border-subtle)',
-          fontSize: 11,
-          fontFamily: 'var(--font-mono)',
-          color: 'var(--fg-3)',
-          fontVariantNumeric: 'tabular-nums',
+          width: 6,
+          height: 6,
+          borderRadius: '50%',
+          background: 'var(--serve-500)',
+          boxShadow: '0 0 6px var(--serve-500)',
+          animation: 'ball-pulse 1.4s ease-in-out infinite',
         }}
-      >
-        <span
-          style={{
-            width: 6,
-            height: 6,
-            borderRadius: '50%',
-            background: 'var(--serve-500)',
-            boxShadow: '0 0 6px var(--serve-500)',
-            animation: 'ball-pulse 1.4s ease-in-out infinite',
-          }}
-        />
-        <CountChip label="users" count={usersQ.data?.length} loading={usersQ.isLoading} />
-        <span style={{ color: 'var(--ink-500)' }}>·</span>
-        <CountChip label="roles" count={rolesQ.data?.length} loading={rolesQ.isLoading} />
-        <span style={{ color: 'var(--ink-500)' }}>·</span>
-        <CountChip label="perms" count={permsQ.data?.length} loading={permsQ.isLoading} />
-      </div>
+      />
+      <CountChip label="users" count={usersQ.data?.length} loading={usersQ.isLoading} />
+      <span style={{ color: 'var(--ink-500)' }}>·</span>
+      <CountChip label="roles" count={rolesQ.data?.length} loading={rolesQ.isLoading} />
+      <span style={{ color: 'var(--ink-500)' }}>·</span>
+      <CountChip label="perms" count={permsQ.data?.length} loading={permsQ.isLoading} />
     </div>
   )
 }
