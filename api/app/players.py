@@ -1,4 +1,5 @@
-from collections.abc import Iterable
+import uuid
+from collections.abc import Iterable, Mapping
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import and_, func, select
@@ -6,7 +7,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from app.db import get_session
-from app.models import Match, MatchSidePlayer, User
+from app.leagues import resolve_league
+from app.models import Match, MatchSidePlayer, User, UserLeagueRating
 from app.schemas.player import PlayerRead
 from app.sessions import get_current_user
 
@@ -19,8 +21,32 @@ SEARCH_DEFAULT_LIMIT = 10
 MAX_LIMIT = 50
 
 
-def _serialize(users: Iterable[User]) -> list[PlayerRead]:
-    return [PlayerRead.model_validate(user) for user in users]
+def _serialize(
+    users: Iterable[User],
+    ratings: Mapping[uuid.UUID, float | None] | None = None,
+) -> list[PlayerRead]:
+    ratings = ratings or {}
+    return [
+        PlayerRead(id=user.id, username=user.username, rating=ratings.get(user.id))
+        for user in users
+    ]
+
+
+async def _load_player_ratings(
+    db: AsyncSession, league_id: uuid.UUID, user_ids: Iterable[uuid.UUID]
+) -> dict[uuid.UUID, float | None]:
+    ids = list(user_ids)
+    if not ids:
+        return {}
+    rows = (
+        await db.execute(
+            select(UserLeagueRating.user_id, UserLeagueRating.rating_value).where(
+                UserLeagueRating.league_id == league_id,
+                UserLeagueRating.user_id.in_(ids),
+            )
+        )
+    ).all()
+    return {user_id: rating for user_id, rating in rows}
 
 
 def escape_like(term: str) -> str:
@@ -32,6 +58,7 @@ def escape_like(term: str) -> str:
 @router.get("/players/recent", response_model=list[PlayerRead])
 async def list_recent_opponents(
     limit: int = Query(RECENT_DEFAULT_LIMIT, ge=1, le=MAX_LIMIT),
+    league_id: uuid.UUID | None = Query(default=None),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_session),
 ) -> list[PlayerRead]:
@@ -88,13 +115,18 @@ async def list_recent_opponents(
         )
         opponents.extend(backfill)
 
-    return _serialize(opponents)
+    league = await resolve_league(db, league_id)
+    ratings = await _load_player_ratings(
+        db, league.id, (user.id for user in opponents)
+    )
+    return _serialize(opponents, ratings)
 
 
 @router.get("/players/search", response_model=list[PlayerRead])
 async def search_players(
     q: str = Query(..., description="Username substring to match against."),
     limit: int = Query(SEARCH_DEFAULT_LIMIT, ge=1, le=MAX_LIMIT),
+    league_id: uuid.UUID | None = Query(default=None),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_session),
 ) -> list[PlayerRead]:
@@ -118,4 +150,9 @@ async def search_players(
         .order_by(User.username)
         .limit(limit)
     )
-    return _serialize(result.scalars().all())
+    users = result.scalars().all()
+    league = await resolve_league(db, league_id)
+    ratings = await _load_player_ratings(
+        db, league.id, (user.id for user in users)
+    )
+    return _serialize(users, ratings)

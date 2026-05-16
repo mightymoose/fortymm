@@ -25,6 +25,7 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import { fmtDateRel, fmtDateShort } from '@/lib/dates'
+import { formatRatingDelta } from '@/lib/rating'
 
 const GUEST_OPPONENT = 'guest'
 
@@ -1117,6 +1118,9 @@ function RecentResultsCard({ rows }: { rows: DashboardRecentResult[] }) {
               <th style={{ textAlign: 'right', padding: '10px 8px 8px', fontWeight: 600 }}>
                 Score
               </th>
+              <th style={{ textAlign: 'right', padding: '10px 8px 8px', fontWeight: 600 }}>
+                Δ
+              </th>
               <th style={{ textAlign: 'right', padding: '10px 18px 8px', fontWeight: 600 }}>
                 When
               </th>
@@ -1158,6 +1162,25 @@ function RecentResultsCard({ rows }: { rows: DashboardRecentResult[] }) {
                     <Mono size={13} weight={500} color={r.is_win ? C.serve500 : C.loss}>
                       {score}
                     </Mono>
+                  </td>
+                  <td style={{ padding: '11px 8px', textAlign: 'right' }}>
+                    {r.my_rating_change ? (
+                      <Mono
+                        size={12}
+                        weight={500}
+                        color={
+                          r.my_rating_change.delta >= 0
+                            ? C.serve500
+                            : C.loss
+                        }
+                      >
+                        {formatRatingDelta(r.my_rating_change.delta)}
+                      </Mono>
+                    ) : (
+                      <Mono size={12} color={C.chalk500}>
+                        —
+                      </Mono>
+                    )}
                   </td>
                   <td style={{ padding: '11px 18px', textAlign: 'right' }}>
                     <Mono size={11} color={C.chalk500}>

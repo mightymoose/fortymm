@@ -101,6 +101,11 @@ async def test_dashboard_returns_recent_results_for_completed_matches(
     assert result["is_win"] is True
     assert result["my_games_won"] == 1
     assert result["opponent_games_won"] == 0
+    change = result["my_rating_change"]
+    assert change is not None
+    assert change["before"] == 1500.0
+    assert change["after"] > 1500.0
+    assert change["delta"] > 0
 
 
 async def test_dashboard_scoped_to_current_user(

@@ -9,6 +9,24 @@ type MatchLeague = components['schemas']['MatchLeague']
 type DashboardScoreBanner = components['schemas']['DashboardScoreBanner']
 type DashboardNextMatch = components['schemas']['DashboardNextMatch']
 type DashboardRecentResult = components['schemas']['DashboardRecentResult']
+type RatingChange = components['schemas']['RatingChange']
+
+const MOCK_BASE_RATING = 1500
+const MOCK_RATING_DELTA = 8
+
+function ratingChangeFor(seedId: string, won: boolean): RatingChange {
+  // Deterministic so re-renders are stable.
+  let h = 0
+  for (let i = 0; i < seedId.length; i += 1) h = (h * 31 + seedId.charCodeAt(i)) | 0
+  const jitter = Math.abs(h) % 7
+  const magnitude = MOCK_RATING_DELTA + jitter
+  const signed = won ? magnitude : -magnitude
+  return {
+    before: MOCK_BASE_RATING,
+    after: MOCK_BASE_RATING + signed,
+    delta: signed,
+  }
+}
 
 // The mock-session user — handlers project every seed match as if this user
 // is on side 1, so `is_current_user_side` and `my_games_won` line up with
@@ -108,6 +126,10 @@ function projectSides(seed: SeedMatch): {
 } {
   const { side1, side2 } = sideWinCounts(seed)
   const decided = seed.status === 'completed'
+
+  const showRatingChange = decided && seed.affects_rating && seed.opponent !== null
+  const myWon = side1 > side2
+
   const mySide: MatchDetailsSide = {
     side_number: 1,
     players: [
@@ -118,8 +140,9 @@ function projectSides(seed: SeedMatch): {
       },
     ],
     games_won: side1,
-    won: decided ? side1 > side2 : null,
+    won: decided ? myWon : null,
     is_current_user_side: true,
+    rating_change: showRatingChange ? ratingChangeFor(seed.id, myWon) : null,
   }
   const opponentSide: MatchDetailsSide | null = seed.opponent
     ? {
@@ -132,8 +155,9 @@ function projectSides(seed: SeedMatch): {
           },
         ],
         games_won: side2,
-        won: decided ? side2 > side1 : null,
+        won: decided ? !myWon : null,
         is_current_user_side: false,
+        rating_change: showRatingChange ? ratingChangeFor(seed.id, !myWon) : null,
       }
     : null
   return { mySide, opponentSide }
@@ -222,13 +246,15 @@ export function projectNextMatch(seed: SeedMatch): DashboardNextMatch | null {
 export function projectRecentResult(seed: SeedMatch): DashboardRecentResult | null {
   if (seed.status !== 'completed' || seed.opponent === null) return null
   const { side1, side2 } = sideWinCounts(seed)
+  const won = side1 > side2
   return {
     match_id: seed.id,
     opponent_username: seed.opponent.username,
-    is_win: side1 > side2,
+    is_win: won,
     my_games_won: side1,
     opponent_games_won: side2,
     completed_at: seed.completed_at ?? seed.created_at,
+    my_rating_change: seed.affects_rating ? ratingChangeFor(seed.id, won) : null,
   }
 }
 

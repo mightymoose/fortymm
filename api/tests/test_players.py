@@ -11,6 +11,7 @@ from app.models import (
     MatchSidePlayer,
     MatchStatus,
     User,
+    UserLeagueRating,
 )
 from tests._helpers import make_user, start_session
 
@@ -44,6 +45,13 @@ async def _record_match(
 
 def _usernames(response) -> list[str]:
     return [player["username"] for player in response.json()]
+
+
+def _rating_for(response, username: str):
+    for player in response.json():
+        if player["username"] == username:
+            return player["rating"]
+    raise KeyError(username)
 
 
 # ----- recent opponents ----------------------------------------------------
@@ -273,3 +281,32 @@ async def test_search_orders_results_alphabetically(
         "match.bob",
         "match.charlie",
     ]
+
+
+# ----- rating field --------------------------------------------------------
+
+
+async def test_search_includes_rating_for_default_league(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    me = await start_session(api_client, db_session)
+    rival = await make_user(db_session, "ratedrival")
+    unrated = await make_user(db_session, "freshface")
+
+    league = await get_default_league(db_session)
+    db_session.add(
+        UserLeagueRating(
+            league_id=league.id,
+            user_id=rival.id,
+            rating_value=1750.0,
+            rating_state={"rating": 1750.0, "rd": 200.0, "volatility": 0.06},
+        )
+    )
+    await db_session.commit()
+
+    response = await api_client.get("/v1/players/search", params={"q": "face"})
+    assert response.status_code == 200
+    assert _rating_for(response, "freshface") is None
+
+    response = await api_client.get("/v1/players/search", params={"q": "rival"})
+    assert _rating_for(response, "ratedrival") == 1750.0

@@ -19,6 +19,7 @@ async def test_default_league_unique_partial_index(
             description="Tries to also be default.",
             visibility=LeagueVisibility.public,
             is_default=True,
+            rating_strategy_id=default_league.rating_strategy_id,
         )
     )
     with pytest.raises(IntegrityError):

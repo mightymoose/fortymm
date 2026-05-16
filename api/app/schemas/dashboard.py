@@ -3,6 +3,8 @@ from datetime import datetime
 
 from pydantic import BaseModel
 
+from app.schemas.rating import RatingChange
+
 
 class DashboardScoreBanner(BaseModel):
     match_id: uuid.UUID
@@ -24,6 +26,7 @@ class DashboardRecentResult(BaseModel):
     my_games_won: int
     opponent_games_won: int
     completed_at: datetime
+    my_rating_change: RatingChange | None = None
 
 
 class DashboardResponse(BaseModel):
