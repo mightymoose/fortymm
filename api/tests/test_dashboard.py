@@ -9,6 +9,8 @@ from app.models import (
     LeagueMembership,
     Match,
     MatchStatus,
+    RatingHistory,
+    RatingHistorySource,
     RatingStrategy,
     UserLeagueRating,
 )
@@ -54,12 +56,14 @@ async def test_dashboard_empty_when_user_has_no_matches(
     assert rating["strategy_key"] == "glicko2"
     assert rating["current"] == 1500.0
     assert rating["delta"] == 0.0
-    assert rating["rd"] == 350.0
-    assert rating["volatility"] == 0.06
     assert rating["peak"] == 1500.0
     assert rating["percentile"] is None  # alone in the league
     assert rating["spark_data"] == []
     assert rating["streak"] is None
+    assert rating["stats"] == [
+        {"label": "RD", "value": "350"},
+        {"label": "Volatility", "value": "0.060"},
+    ]
 
 
 async def test_dashboard_returns_score_banner_for_in_progress_match(
@@ -178,9 +182,10 @@ async def test_dashboard_rating_reflects_completed_match(
     assert rating["current"] > 1500.0
     assert rating["delta"] > 0
     assert rating["peak"] == rating["current"]
-    assert rating["rd"] is not None and rating["rd"] < 350.0
     assert rating["spark_data"] == [rating["current"]]
     assert rating["streak"] == {"kind": "W", "n": 1}
+    rd_stat = next(s for s in rating["stats"] if s["label"] == "RD")
+    assert int(rd_stat["value"]) < 350
 
 
 async def test_dashboard_streak_counts_consecutive_results(
@@ -251,6 +256,52 @@ async def test_dashboard_rating_percentile_against_league_peers(
     rating = (await api_client.get("/v1/dashboard")).json()["rating"]
     # I'm at 1500 among 1200/1400/1500/1600/1800: 3rd of 5 — 60th percentile.
     assert rating["percentile"] == 60
+
+
+async def test_dashboard_sparkline_returns_most_recent_points(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """When the user has more rating-history rows than SPARK_MAX_POINTS in
+    the 30-day window, the sparkline should be the *most recent* points in
+    chronological order — not the oldest 30."""
+    from datetime import datetime, timedelta, timezone
+
+    me = await start_session(api_client, db_session)
+    default_league = (
+        await db_session.execute(
+            select(League).where(League.is_default.is_(True))
+        )
+    ).scalar_one()
+    strategy = (
+        await db_session.execute(
+            select(RatingStrategy).where(RatingStrategy.key == "glicko2")
+        )
+    ).scalar_one()
+    # 40 history rows spaced 1 hour apart, all within the 30-day window;
+    # rating climbs monotonically so we can read the order off the values.
+    now = datetime.now(timezone.utc)
+    for i in range(40):
+        db_session.add(
+            RatingHistory(
+                league_id=default_league.id,
+                user_id=me.id,
+                rating_strategy_id=strategy.id,
+                rating_value=1500.0 + i,
+                rating_state={
+                    "rating": 1500.0 + i,
+                    "rd": 200.0,
+                    "volatility": 0.06,
+                },
+                previous_rating_value=1500.0 + i - 1 if i > 0 else None,
+                source=RatingHistorySource.match,
+                created_at=now - timedelta(hours=40 - i),
+            )
+        )
+    await db_session.commit()
+
+    spark = (await api_client.get("/v1/dashboard")).json()["rating"]["spark_data"]
+    # 30 most-recent values (1510..1539), oldest first.
+    assert spark == [float(v) for v in range(1510, 1540)]
 
 
 async def test_dashboard_rating_is_null_for_manual_league(

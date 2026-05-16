@@ -281,12 +281,14 @@ export function dashboardRating(
     strategy_key: 'glicko2',
     current: 1500,
     delta: 0,
-    rd: 350,
-    volatility: 0.06,
     peak: 1500,
     percentile: null,
     spark_data: [],
     streak: null,
+    stats: [
+      { label: 'RD', value: '350' },
+      { label: 'Volatility', value: '0.060' },
+    ],
     ...overrides,
   }
 }

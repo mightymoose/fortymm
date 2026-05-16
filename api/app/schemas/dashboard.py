@@ -35,6 +35,17 @@ class DashboardStreak(BaseModel):
     n: int
 
 
+class DashboardRatingStat(BaseModel):
+    """Strategy-specific tile in the rating card's stats grid.
+
+    Pre-formatted server-side so the frontend doesn't need to know which
+    fields a strategy emits (Glicko-2's ``rd``/``volatility`` vs whatever a
+    future Elo/TrueSkill row carries)."""
+
+    label: str
+    value: str
+
+
 class DashboardRating(BaseModel):
     """Per-league rating snapshot for the dashboard RatingCard.
 
@@ -47,12 +58,11 @@ class DashboardRating(BaseModel):
     strategy_key: str
     current: float
     delta: float
-    rd: float | None
-    volatility: float | None
     peak: float
     percentile: int | None
     spark_data: list[float]
     streak: DashboardStreak | None
+    stats: list[DashboardRatingStat]
 
 
 class DashboardResponse(BaseModel):

@@ -984,14 +984,19 @@ function Stat({
 }
 
 function RatingCard({ rating }: { rating: DashboardRating }) {
-  const { current, delta, rd, volatility, peak, percentile, spark_data, streak } =
-    rating
+  const { current, delta, peak, percentile, spark_data, streak, stats } = rating
   // Sparkline needs ≥2 points to draw a line; pad a single point so the
   // freshly-rated case still shows a level baseline.
   const sparkPoints =
     spark_data.length >= 2
       ? spark_data
       : [spark_data[0] ?? current, spark_data[0] ?? current]
+  // Peak tile + whatever strategy-specific stats the API returned; capped at
+  // three because the grid is 3 columns.
+  const tiles = [
+    { label: 'Peak', value: String(Math.round(peak)) },
+    ...stats,
+  ].slice(0, 3)
   return (
     <Card padding={20} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -1051,12 +1056,9 @@ function RatingCard({ rating }: { rating: DashboardRating }) {
         </div>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
-        <Stat label="RD" value={rd !== null ? Math.round(rd) : '—'} />
-        <Stat
-          label="Volatility"
-          value={volatility !== null ? volatility.toFixed(3) : '—'}
-        />
-        <Stat label="Peak" value={Math.round(peak)} />
+        {tiles.map((tile) => (
+          <Stat key={tile.label} label={tile.label} value={tile.value} />
+        ))}
       </div>
     </Card>
   )

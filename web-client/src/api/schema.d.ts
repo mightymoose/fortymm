@@ -350,10 +350,6 @@ export interface components {
             current: number;
             /** Delta */
             delta: number;
-            /** Rd */
-            rd: number | null;
-            /** Volatility */
-            volatility: number | null;
             /** Peak */
             peak: number;
             /** Percentile */
@@ -361,6 +357,22 @@ export interface components {
             /** Spark Data */
             spark_data: number[];
             streak: components["schemas"]["DashboardStreak"] | null;
+            /** Stats */
+            stats: components["schemas"]["DashboardRatingStat"][];
+        };
+        /**
+         * DashboardRatingStat
+         * @description Strategy-specific tile in the rating card's stats grid.
+         *
+         *     Pre-formatted server-side so the frontend doesn't need to know which
+         *     fields a strategy emits (Glicko-2's ``rd``/``volatility`` vs whatever a
+         *     future Elo/TrueSkill row carries).
+         */
+        DashboardRatingStat: {
+            /** Label */
+            label: string;
+            /** Value */
+            value: string;
         };
         /** DashboardRecentResult */
         DashboardRecentResult: {

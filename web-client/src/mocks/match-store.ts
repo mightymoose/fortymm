@@ -298,12 +298,14 @@ export function projectRating(seeds: SeedMatch[]): DashboardRating {
     strategy_key: 'glicko2',
     current,
     delta: lastDelta,
-    rd,
-    volatility: 0.058,
     peak,
     percentile: gamesPlayed > 0 ? 72 : null,
     spark_data: sparkData,
     streak: projectStreak(seeds),
+    stats: [
+      { label: 'RD', value: String(rd) },
+      { label: 'Volatility', value: '0.058' },
+    ],
   }
 }
 

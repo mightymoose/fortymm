@@ -30,6 +30,7 @@ from app.models import (
 from app.schemas.dashboard import (
     DashboardNextMatch,
     DashboardRating,
+    DashboardRatingStat,
     DashboardRecentResult,
     DashboardResponse,
     DashboardScoreBanner,
@@ -191,30 +192,24 @@ async def _build_rating(
     if not strategy.is_automatic:
         return None
 
-    state = rating_row.rating_state or {}
-    rd = _coerce_float(state.get("rd"))
-    volatility = _coerce_float(state.get("volatility"))
-
     current = rating_row.rating_value
     league_id = rating_row.league_id
+    spark, delta = await _spark_and_delta(db, user_id, league_id)
     peak = await _league_peak_rating(db, user_id, league_id, current)
     percentile = await _league_percentile(db, league_id, current)
-    spark = await _spark_data(db, user_id, league_id)
-    delta = await _last_delta(db, user_id, league_id)
     streak = await _current_streak(db, user_id)
 
     return DashboardRating(
-        league_id=rating_row.league_id,
+        league_id=league_id,
         league_name=rating_row.league.name,
         strategy_key=strategy.key,
         current=current,
         delta=delta,
-        rd=rd,
-        volatility=volatility,
         peak=peak,
         percentile=percentile,
         spark_data=spark,
         streak=streak,
+        stats=_strategy_stats(strategy.key, rating_row.rating_state or {}),
     )
 
 
@@ -297,42 +292,44 @@ async def _league_percentile(
     return round(at_or_below / total * 100)
 
 
-async def _spark_data(
+async def _spark_and_delta(
     db: AsyncSession, user_id: uuid.UUID, league_id: uuid.UUID
-) -> list[float]:
+) -> tuple[list[float], float]:
+    """Pull the most-recent history rows once, then derive both the sparkline
+    (last 30 days, oldest-first) and the last-match delta from them. Ordering
+    DESC + reversing avoids the latent bug where ``LIMIT 30 ORDER BY ASC``
+    would silently truncate today's points on a power user with >30 events in
+    the window."""
     cutoff = datetime.now(timezone.utc) - timedelta(days=SPARK_WINDOW_DAYS)
     rows = (
         await db.execute(
-            select(RatingHistory.rating_value)
-            .where(
-                RatingHistory.user_id == user_id,
-                RatingHistory.league_id == league_id,
-                RatingHistory.created_at >= cutoff,
+            select(
+                RatingHistory.rating_value,
+                RatingHistory.previous_rating_value,
+                RatingHistory.created_at,
             )
-            .order_by(RatingHistory.created_at.asc())
-            .limit(SPARK_MAX_POINTS)
-        )
-    ).scalars().all()
-    return [float(v) for v in rows]
-
-
-async def _last_delta(
-    db: AsyncSession, user_id: uuid.UUID, league_id: uuid.UUID
-) -> float:
-    latest = (
-        await db.execute(
-            select(RatingHistory)
             .where(
                 RatingHistory.user_id == user_id,
                 RatingHistory.league_id == league_id,
             )
             .order_by(RatingHistory.created_at.desc())
-            .limit(1)
+            .limit(SPARK_MAX_POINTS)
         )
-    ).scalar_one_or_none()
-    if latest is None:
-        return 0.0
-    return RatingChange.from_history(latest).delta
+    ).all()
+    if not rows:
+        return [], 0.0
+    latest = rows[0]
+    delta = (
+        latest.rating_value - latest.previous_rating_value
+        if latest.previous_rating_value is not None
+        else 0.0
+    )
+    spark = [
+        float(r.rating_value)
+        for r in reversed(rows)
+        if r.created_at >= cutoff
+    ]
+    return spark, delta
 
 
 async def _current_streak(
@@ -370,8 +367,31 @@ async def _current_streak(
     return DashboardStreak(kind=head_kind, n=n)
 
 
-def _coerce_float(value: object) -> float | None:
-    if value is None:
+def _strategy_stats(
+    strategy_key: str, state: dict[str, object]
+) -> list[DashboardRatingStat]:
+    """Strategy-specific tiles for the rating card's stats grid.
+
+    Keeps the API contract generic — the frontend renders whatever labels
+    come back without needing to know which fields a given strategy carries.
+    """
+    if strategy_key == "glicko2":
+        rd = _as_float(state.get("rd"))
+        volatility = _as_float(state.get("volatility"))
+        return [
+            DashboardRatingStat(label="RD", value=str(round(rd)) if rd is not None else "—"),
+            DashboardRatingStat(
+                label="Volatility",
+                value=f"{volatility:.3f}" if volatility is not None else "—",
+            ),
+        ]
+    return []
+
+
+def _as_float(value: object) -> float | None:
+    # Excludes bool (which is an int subclass) — Glicko-2 state never carries
+    # booleans, but coercing True → 1.0 silently would be a bad surprise.
+    if isinstance(value, bool):
         return None
     if isinstance(value, (int, float)):
         return float(value)
