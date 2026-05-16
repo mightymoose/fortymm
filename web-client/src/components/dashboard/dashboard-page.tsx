@@ -457,19 +457,25 @@ function SkeletonCard({
   )
 }
 
+const COMING_SOON_TRIGGER: CSSProperties = {
+  opacity: 0.55,
+  filter: 'saturate(0.75)',
+  cursor: 'not-allowed',
+}
+
+// `inert` (not just pointer-events: none) is what keeps focus and AT
+// out of the disabled subtree — without it, Tab still lands on inner
+// buttons/links and screen readers still announce them as actionable.
+const COMING_SOON_INNER: CSSProperties = { pointerEvents: 'none' }
+
 function ComingSoon({ children }: { children: ReactNode }) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <div
-          aria-disabled="true"
-          style={{
-            opacity: 0.55,
-            filter: 'saturate(0.75)',
-            cursor: 'not-allowed',
-          }}
-        >
-          <div style={{ pointerEvents: 'none' }}>{children}</div>
+        <div style={COMING_SOON_TRIGGER}>
+          <div inert style={COMING_SOON_INNER}>
+            {children}
+          </div>
         </div>
       </TooltipTrigger>
       <TooltipContent>coming soon</TooltipContent>
