@@ -14,11 +14,12 @@ import {
 import { createFileRoute, useRouterState } from '@tanstack/react-router'
 
 import { AppShell } from '@/components/app-shell'
+import { pageTitle } from '@/lib/page-title'
 import './settings.css'
 
 export const Route = createFileRoute('/settings')({
   head: () => ({
-    meta: [{ title: 'Settings · FortyMM' }],
+    meta: [{ title: pageTitle('Settings') }],
   }),
   component: SettingsPage,
 })

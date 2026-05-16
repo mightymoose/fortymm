@@ -1,9 +1,10 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { RolesPage } from '@/components/rbac/roles-page'
+import { pageTitle } from '@/lib/page-title'
 
 export const Route = createFileRoute('/admin/roles')({
   head: () => ({
-    meta: [{ title: 'Roles · Admin · FortyMM' }],
+    meta: [{ title: pageTitle('Roles · Admin') }],
   }),
   component: RolesPage,
 })

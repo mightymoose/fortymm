@@ -1,9 +1,10 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { SystemHealth } from '@/components/system-health'
+import { pageTitle } from '@/lib/page-title'
 
 export const Route = createFileRoute('/admin/')({
   head: () => ({
-    meta: [{ title: 'Administration · FortyMM' }],
+    meta: [{ title: pageTitle('Administration') }],
   }),
   component: AdminOverview,
 })

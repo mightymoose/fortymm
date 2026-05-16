@@ -14,13 +14,14 @@ import {
   type Player,
 } from '@/api/matches'
 import { OpponentPickerBoundary } from '@/components/matches/opponent-picker-boundary'
+import { pageTitle } from '@/lib/page-title'
 import { useDebouncedValue } from '@/lib/use-debounced-value'
 import { cn } from '@/lib/utils'
 import './new.css'
 
 export const Route = createFileRoute('/matches/new')({
   head: () => ({
-    meta: [{ title: 'New match · FortyMM' }],
+    meta: [{ title: pageTitle('New match') }],
   }),
   component: NewMatchPage,
 })
