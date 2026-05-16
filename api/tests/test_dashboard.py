@@ -1,7 +1,6 @@
 import uuid
 
 from httpx import AsyncClient
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Match, MatchStatus
@@ -70,14 +69,9 @@ async def test_dashboard_returns_next_match_for_pending_match(
     await start_session(api_client, db_session)
     opp = await make_user(db_session, "rival")
     created = await _create_match(api_client, opp.id, best_of=5)
-    # New matches start in_progress; force pending here to cover the widget
-    # (the legacy "scheduled" branch is dormant in production but the API
-    # endpoint still surfaces such rows if they exist).
-    db_match = (
-        await db_session.execute(
-            select(Match).where(Match.id == uuid.UUID(created["id"]))
-        )
-    ).scalar_one()
+    # Backfill to pending — the API no longer creates pending rows.
+    db_match = await db_session.get(Match, uuid.UUID(created["id"]))
+    assert db_match is not None
     db_match.status = MatchStatus.pending
     await db_session.commit()
 

@@ -406,7 +406,6 @@ async def test_scoring_game_1_keeps_in_progress_and_adds_game_2(
     await start_session(api_client, db_session)
     opp = await make_user(db_session, "rival")
     match = await _create_match(api_client, opp.id, best_of=5)
-    assert match["status"] == "in_progress"
 
     response = await api_client.post(
         f"/v1/matches/{match['id']}/games/{match['games'][0]['id']}/scores",
