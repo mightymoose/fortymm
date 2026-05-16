@@ -102,10 +102,12 @@ export function reconcile(seed: SeedMatch): void {
   }
 }
 
-export function projectMatchDetails(seed: SeedMatch): MatchDetails {
+function projectSides(seed: SeedMatch): {
+  mySide: MatchDetailsSide
+  opponentSide: MatchDetailsSide | null
+} {
   const { side1, side2 } = sideWinCounts(seed)
   const decided = seed.status === 'completed'
-
   const mySide: MatchDetailsSide = {
     side_number: 1,
     players: [
@@ -134,6 +136,11 @@ export function projectMatchDetails(seed: SeedMatch): MatchDetails {
         is_current_user_side: false,
       }
     : null
+  return { mySide, opponentSide }
+}
+
+export function projectMatchDetails(seed: SeedMatch): MatchDetails {
+  const { mySide, opponentSide } = projectSides(seed)
 
   const games: MatchDetailsGame[] = seed.games
     .slice()
@@ -173,26 +180,22 @@ export function projectMatchDetails(seed: SeedMatch): MatchDetails {
 }
 
 export function projectListRow(seed: SeedMatch): MatchListRow {
-  const { side1, side2 } = sideWinCounts(seed)
-  const decided = seed.status === 'completed'
+  const { mySide, opponentSide } = projectSides(seed)
   const current = currentUnscored(seed)
   const scorable =
     (seed.status === 'pending' || seed.status === 'in_progress') &&
-    seed.opponent !== null &&
+    opponentSide !== null &&
     current !== null
   return {
     id: seed.id,
     status: seed.status,
     status_label: STATUS_LABELS[seed.status],
     league: MOCK_DEFAULT_LEAGUE,
-    opponent_username: seed.opponent?.username ?? null,
-    opponent_user_id: seed.opponent?.id ?? null,
-    my_games_won: side1,
-    opponent_games_won: side2,
-    is_win: decided && seed.opponent ? side1 > side2 : null,
+    sides: opponentSide ? [mySide, opponentSide] : [mySide],
     best_of: seed.best_of,
     created_at: seed.created_at,
-    current_game_id: scorable && current ? current.id : null,
+    current_game_id: scorable ? current.id : null,
+    can_score: scorable,
   }
 }
 

@@ -242,8 +242,21 @@
   color: var(--serve-500);
   font-weight: 600;
 }
-.match-list-page .player-name.is-loser {
+.match-list-page .player-name.is-empty {
   color: var(--fg-3);
+  font-style: italic;
+}
+.match-list-page .players-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+.match-list-page .players-vs {
+  color: var(--fg-3);
+  font-family: var(--font-mono);
+  font-size: 11px;
 }
 .match-list-page .seed-tag {
   font-family: var(--font-mono);

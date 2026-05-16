@@ -11,28 +11,23 @@ const PAGE_SIZE = 25
 const SEED = [
   matchListRow({
     id: 'm-live-1',
-    opponent_username: 'nguyen.t',
+    opponent: 'nguyen.t',
     status: 'in_progress',
     status_label: 'Live',
-    my_games_won: 1,
-    opponent_games_won: 1,
     current_game_id: 'g-live-1-3',
   }),
   matchListRow({
     id: 'm-pending-1',
-    opponent_username: 'okafor.d',
+    opponent: 'okafor.d',
     status: 'pending',
     status_label: 'Scheduled',
     current_game_id: 'g-pending-1-1',
   }),
   matchListRow({
     id: 'm-final-1',
-    opponent_username: 'silva.r',
+    opponent: 'silva.r',
     status: 'completed',
     status_label: 'Final',
-    my_games_won: 3,
-    opponent_games_won: 1,
-    is_win: true,
     current_game_id: null,
   }),
 ]
@@ -125,7 +120,7 @@ test.describe('Matches list — pagination', () => {
     const many = Array.from({ length: 30 }, (_, i) =>
       matchListRow({
         id: `m-${i}`,
-        opponent_username: `opp-${i}`,
+        opponent: `opp-${i}`,
         status: 'pending',
       }),
     )

@@ -265,19 +265,51 @@ async def test_list_matches_empty(
     assert body["status_counts"]["completed"] == 0
 
 
-async def test_list_matches_scoped_to_current_user(
+async def test_list_matches_shows_every_match_on_the_system(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    await start_session(api_client, db_session)
+    me = await start_session(api_client, db_session)
     async with make_client() as other_client:
         them = await start_session(other_client, db_session)
         bystander = await make_user(db_session, "bystander")
-        # A match between Bob and a bystander — should NOT appear in Alice's list.
-        await _create_match(other_client, bystander.id)
-        del them
+        # A match between two strangers — historically hidden, now visible.
+        other_match = await _create_match(other_client, bystander.id)
 
     response = await api_client.get("/v1/matches")
-    assert response.json()["items"] == []
+    body = response.json()
+    ids = {row["id"] for row in body["items"]}
+    assert other_match["id"] in ids
+    # The spectator sees both sides flagged neutrally — neither claims to be
+    # `is_current_user_side`, and `me` doesn't appear in any row's players.
+    row = next(r for r in body["items"] if r["id"] == other_match["id"])
+    assert [side["is_current_user_side"] for side in row["sides"]] == [
+        False,
+        False,
+    ]
+    usernames = {p["username"] for side in row["sides"] for p in side["players"]}
+    assert usernames == {them.username, bystander.username}
+    assert me.username not in usernames
+
+
+async def test_list_q_filter_matches_caller_username(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    me = await start_session(api_client, db_session)
+    opp = await make_user(db_session, "rival")
+    mine = await _create_match(api_client, opp.id)
+    async with make_client() as other_client:
+        await start_session(other_client, db_session)
+        bystander = await make_user(db_session, "bystander")
+        # A match the caller is not in — searching for the caller's own
+        # username should not pick this up.
+        unrelated = await _create_match(other_client, bystander.id)
+
+    listing = (
+        await api_client.get("/v1/matches", params={"q": me.username})
+    ).json()
+    ids = {row["id"] for row in listing["items"]}
+    assert mine["id"] in ids
+    assert unrelated["id"] not in ids
 
 
 async def test_list_filter_by_status(
@@ -302,7 +334,7 @@ async def test_list_filter_by_status(
     assert listing["status_counts"]["completed"] == 1
 
 
-async def test_list_q_filter_matches_opponent_username(
+async def test_list_q_filter_matches_any_player_username(
     api_client: AsyncClient, db_session: AsyncSession
 ):
     await start_session(api_client, db_session)
@@ -315,7 +347,12 @@ async def test_list_q_filter_matches_opponent_username(
         await api_client.get("/v1/matches", params={"q": "alpha"})
     ).json()
     assert len(listing["items"]) == 1
-    assert listing["items"][0]["opponent_username"] == "alphabet"
+    players = {
+        p["username"]
+        for side in listing["items"][0]["sides"]
+        for p in side["players"]
+    }
+    assert "alphabet" in players
     # status_counts honors q (one row total)
     assert sum(listing["status_counts"].values()) == 1
 
@@ -354,7 +391,26 @@ async def test_list_row_carries_current_game_id_when_scorable(
     created = await _create_match(api_client, opp.id)
 
     listing = (await api_client.get("/v1/matches")).json()
-    assert listing["items"][0]["current_game_id"] == created["games"][0]["id"]
+    row = listing["items"][0]
+    assert row["current_game_id"] == created["games"][0]["id"]
+    assert row["can_score"] is True
+
+
+async def test_list_row_hides_scoring_affordance_from_spectators(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    # Spectators get neither `can_score` nor `current_game_id` — the scoring
+    # route 404s for them anyway, and the FE has no reason to deep-link.
+    await start_session(api_client, db_session)
+    async with make_client() as other_client:
+        await start_session(other_client, db_session)
+        bystander = await make_user(db_session, "bystander")
+        created = await _create_match(other_client, bystander.id)
+
+    listing = (await api_client.get("/v1/matches")).json()
+    row = next(r for r in listing["items"] if r["id"] == created["id"])
+    assert row["current_game_id"] is None
+    assert row["can_score"] is False
 
 
 # ----- TT scoring rules ---------------------------------------------------

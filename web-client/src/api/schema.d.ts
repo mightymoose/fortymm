@@ -545,16 +545,8 @@ export interface components {
             /** Status Label */
             status_label: string;
             league: components["schemas"]["MatchLeague"];
-            /** Opponent Username */
-            opponent_username: string | null;
-            /** Opponent User Id */
-            opponent_user_id: string | null;
-            /** My Games Won */
-            my_games_won: number;
-            /** Opponent Games Won */
-            opponent_games_won: number;
-            /** Is Win */
-            is_win: boolean | null;
+            /** Sides */
+            sides: components["schemas"]["MatchDetailsSide"][];
             /** Best Of */
             best_of: number;
             /**
@@ -564,6 +556,8 @@ export interface components {
             created_at: string;
             /** Current Game Id */
             current_game_id: string | null;
+            /** Can Score */
+            can_score: boolean;
         };
         /**
          * MatchStatus

@@ -13,8 +13,6 @@ type Player = components['schemas']['PlayerRead']
 type MatchDetails = components['schemas']['MatchDetails']
 type MatchDetailsSide = components['schemas']['MatchDetailsSide']
 type MatchDetailsGame = components['schemas']['MatchDetailsGame']
-type MatchDetailsCurrentGame =
-  components['schemas']['MatchDetailsCurrentGame']
 type MatchListRow = components['schemas']['MatchListRow']
 type MatchListResponse = components['schemas']['MatchListResponse']
 type MatchStatus = components['schemas']['MatchStatus']
@@ -130,6 +128,45 @@ export function player(overrides: Partial<Player> = {}): Player {
   }
 }
 
+/** Build a default `[mySide, opponentSide]` pair (or `[mySide]` for solo
+ * matches). Shared by `matchDetails` and `matchListRow` so both factories
+ * agree on the canonical "rita.kovac vs faker-name" shape. */
+function defaultSides(opponentName: string | null): {
+  mySide: MatchDetailsSide
+  opponentSide: MatchDetailsSide | null
+} {
+  const mySide: MatchDetailsSide = {
+    side_number: 1,
+    players: [
+      {
+        user_id: nextId('u'),
+        username: 'rita.kovac',
+        is_current_user: true,
+      },
+    ],
+    games_won: 0,
+    won: null,
+    is_current_user_side: true,
+  }
+  const opponentSide: MatchDetailsSide | null =
+    opponentName === null
+      ? null
+      : {
+          side_number: 2,
+          players: [
+            {
+              user_id: nextId('u'),
+              username: opponentName,
+              is_current_user: false,
+            },
+          ],
+          games_won: 0,
+          won: null,
+          is_current_user_side: false,
+        }
+  return { mySide, opponentSide }
+}
+
 /**
  * `MatchDetails` factory. Defaults to a fresh `in_progress` 1v1 with the
  * current user on side 1, a single opponent on side 2, and game 1 unscored
@@ -140,42 +177,13 @@ export function matchDetails(
 ): MatchDetails {
   const id = overrides.id ?? nextId('m')
   const bestOf = overrides.best_of ?? 5
-  const currentUserId = nextId('u')
-  const opponentId = nextId('u')
-  const mySide: MatchDetailsSide = {
-    side_number: 1,
-    players: [
-      {
-        user_id: currentUserId,
-        username: 'rita.kovac',
-        is_current_user: true,
-      },
-    ],
-    games_won: 0,
-    won: null,
-    is_current_user_side: true,
-  }
-  const opponentSide: MatchDetailsSide = {
-    side_number: 2,
-    players: [
-      {
-        user_id: opponentId,
-        username: faker.internet.username().toLowerCase(),
-        is_current_user: false,
-      },
-    ],
-    games_won: 0,
-    won: null,
-    is_current_user_side: false,
-  }
+  const { mySide, opponentSide } = defaultSides(
+    faker.internet.username().toLowerCase(),
+  )
   const firstGame: MatchDetailsGame = {
     id: nextId('g'),
     game_number: 1,
     score: null,
-  }
-  const currentGame: MatchDetailsCurrentGame = {
-    id: firstGame.id,
-    game_number: 1,
   }
   return {
     id,
@@ -190,7 +198,7 @@ export function matchDetails(
     my_side: mySide,
     opponent_side: opponentSide,
     games: [firstGame],
-    current_game: currentGame,
+    current_game: { id: firstGame.id, game_number: 1 },
     can_score: true,
     ...overrides,
   }
@@ -198,24 +206,28 @@ export function matchDetails(
 
 /** Row-shaped projection for the /matches list. Defaults mirror an
  * in_progress 1v1 against a registered opponent with one trailing
- * un-scored game. */
+ * un-scored game. Pass `opponent` as a shorthand to set the side-2
+ * player without spelling out `sides`. */
 export function matchListRow(
-  overrides: Partial<MatchListRow> = {},
+  overrides: Partial<MatchListRow> & { opponent?: string | null } = {},
 ): MatchListRow {
+  const { opponent, ...rest } = overrides
+  const opponentName =
+    opponent === undefined
+      ? faker.internet.username().toLowerCase()
+      : opponent
+  const { mySide, opponentSide } = defaultSides(opponentName)
   return {
     id: nextId('m'),
     status: 'in_progress',
     status_label: 'Live',
     league: MOCK_DEFAULT_LEAGUE,
-    opponent_username: faker.internet.username().toLowerCase(),
-    opponent_user_id: nextId('u'),
-    my_games_won: 0,
-    opponent_games_won: 0,
-    is_win: null,
+    sides: opponentSide ? [mySide, opponentSide] : [mySide],
     best_of: 5,
     created_at: ISO,
-    current_game_id: nextId('g'),
-    ...overrides,
+    current_game_id: opponentName === null ? null : nextId('g'),
+    can_score: opponentName !== null,
+    ...rest,
   }
 }
 

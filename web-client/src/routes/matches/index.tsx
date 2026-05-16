@@ -17,6 +17,7 @@ import {
   type MatchListRow,
   type MatchStatus,
 } from '@/api/matches'
+import type { components } from '@/api/schema'
 import { AppShell } from '@/components/app-shell'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
@@ -43,8 +44,10 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import { useDebouncedValue } from '@/lib/use-debounced-value'
-import { cn } from '@/lib/utils'
+import { cn, initialsOf } from '@/lib/utils'
 import './index.css'
+
+type MatchListRowSide = components['schemas']['MatchDetailsSide']
 
 export const Route = createFileRoute('/matches/')({
   component: MatchesPage,
@@ -209,7 +212,7 @@ function FilterRow({
         <Search className="ml-search-icon" size={16} strokeWidth={2} />
         <Input
           className="h-9 pl-9 pr-9"
-          placeholder="Search opponents…"
+          placeholder="Search players…"
           value={q}
           onChange={(e) => setQ(e.target.value)}
         />
@@ -336,7 +339,7 @@ function MatchTableHead() {
     <thead>
       <tr>
         <th style={{ width: 120 }}>Match</th>
-        <th>Opponent</th>
+        <th>Players</th>
         <th style={{ width: 120 }}>Score</th>
         <th style={{ width: 120 }}>Status</th>
         <th style={{ width: 140 }}>Started</th>
@@ -371,7 +374,8 @@ function MatchRow({
   navigate: NavigateFn
 }) {
   const tab = API_TO_TAB[row.status]
-  const opponentName = row.opponent_username ?? 'No opponent'
+  const side1 = row.sides.find((s) => s.side_number === 1) ?? row.sides[0]
+  const side2 = row.sides.find((s) => s.side_number === 2) ?? null
   const showScore =
     row.status === 'in_progress' || row.status === 'completed'
 
@@ -384,7 +388,7 @@ function MatchRow({
       className={cn('is-clickable', row.status === 'in_progress' && 'is-live')}
       role="link"
       tabIndex={0}
-      aria-label={`Open match against ${opponentName}`}
+      aria-label={`Open match: ${sideLabel(side1)} vs ${sideLabel(side2)}`}
       onClick={open}
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') {
@@ -395,25 +399,14 @@ function MatchRow({
     >
       <td className="id-cell">M-{shortId(row.id)}</td>
       <td>
-        <div className="player">
-          <Avatar className="size-[26px]">
-            <AvatarFallback className="font-mono text-[11px] font-bold">
-              {initials(opponentName)}
-            </AvatarFallback>
-          </Avatar>
-          <span
-            className={cn(
-              'player-name',
-              row.is_win === true && 'is-winner',
-              row.is_win === false && 'is-loser',
-            )}
-          >
-            {opponentName}
-          </span>
+        <div className="players-cell">
+          <PlayerChip side={side1} />
+          <span className="players-vs">vs</span>
+          <PlayerChip side={side2} />
         </div>
       </td>
       <td>
-        <ScoreCell row={row} showScore={showScore} />
+        <ScoreCell side1={side1} side2={side2} showScore={showScore} />
       </td>
       <td>
         <StatusBadge tab={tab} label={row.status_label} />
@@ -442,17 +435,48 @@ function MatchRow({
   )
 }
 
+function sideLabel(side: MatchListRowSide | null): string {
+  return side?.players.map((p) => p.username).join(' & ') || 'No opponent'
+}
+
+function PlayerChip({ side }: { side: MatchListRowSide | null }) {
+  const name = sideLabel(side)
+  const isEmpty = side === null
+  return (
+    <div className="player">
+      <Avatar className="size-[26px]">
+        <AvatarFallback className="font-mono text-[11px] font-bold">
+          {isEmpty ? '?' : initialsOf(name)}
+        </AvatarFallback>
+      </Avatar>
+      <span
+        className={cn(
+          'player-name',
+          isEmpty && 'is-empty',
+          side?.won === true && 'is-winner',
+        )}
+      >
+        {name}
+      </span>
+    </div>
+  )
+}
+
 function ScoreCell({
-  row,
+  side1,
+  side2,
   showScore,
 }: {
-  row: MatchListRow
+  side1: MatchListRowSide
+  side2: MatchListRowSide | null
   showScore: boolean
 }) {
-  if (!showScore) return <span className="score-cell pending">—</span>
+  if (!showScore || side2 === null) {
+    return <span className="score-cell pending">—</span>
+  }
   return (
     <span className="score-cell games">
-      {row.my_games_won}–{row.opponent_games_won}
+      {side1.games_won}–{side2.games_won}
     </span>
   )
 }
@@ -487,15 +511,6 @@ function TimeCell({ iso }: { iso: string }) {
 
 function shortId(id: string): string {
   return id.slice(-6).toUpperCase().padStart(6, '0')
-}
-
-function initials(name: string): string {
-  const parts = name.split(/[^a-zA-Z0-9]+/).filter(Boolean)
-  const letters =
-    parts.length >= 2
-      ? parts[0][0] + parts[1][0]
-      : name.replace(/[^a-zA-Z0-9]/g, '').slice(0, 2)
-  return letters.toUpperCase() || '?'
 }
 
 type PageToken = number | 'ellipsis'
