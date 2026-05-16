@@ -1,13 +1,18 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { Link, useRouterState } from '@tanstack/react-router'
 import { Bell, Gauge, Globe, Key, Mail, MapPin, Shield, User, Users } from 'lucide-react'
+import { useSession } from '@/api/session'
+import { PERM } from '@/lib/permissions'
 import { UserMenu } from './user-menu'
+
+type NavChild = { label: string; to: string; hash?: string; icon: ReactNode; requires?: string }
 
 type NavItem = {
   label: string
   icon: ReactNode
   to: string
-  children?: Array<{ label: string; to: string; hash?: string; icon: ReactNode }>
+  requires?: string
+  children?: NavChild[]
 }
 
 type NavSection = {
@@ -93,6 +98,7 @@ const NAV_SECTIONS: NavSection[] = [
       {
         label: 'Administration',
         to: '/admin',
+        requires: PERM.ADMIN_VIEW,
         icon: (
           <svg
             width="18"
@@ -110,14 +116,43 @@ const NAV_SECTIONS: NavSection[] = [
         ),
         children: [
           { label: 'Overview', to: '/admin', icon: <Gauge size={15} strokeWidth={1.75} /> },
-          { label: 'Roles', to: '/admin/roles', icon: <Shield size={15} strokeWidth={1.75} /> },
-          { label: 'Permissions', to: '/admin/permissions', icon: <Key size={15} strokeWidth={1.75} /> },
-          { label: 'Users', to: '/admin/users', icon: <Users size={15} strokeWidth={1.75} /> },
+          { label: 'Roles', to: '/admin/roles', icon: <Shield size={15} strokeWidth={1.75} />, requires: PERM.AUTH_MANAGE },
+          { label: 'Permissions', to: '/admin/permissions', icon: <Key size={15} strokeWidth={1.75} />, requires: PERM.AUTH_MANAGE },
+          { label: 'Users', to: '/admin/users', icon: <Users size={15} strokeWidth={1.75} />, requires: PERM.AUTH_MANAGE },
         ],
       },
     ],
   },
 ]
+
+/**
+ * Drops items / children the user lacks permission for. When an item with
+ * children survives but every child that survives points back at the parent's
+ * `to` (i.e. only "Overview" is left), the children are stripped so the entry
+ * renders as a flat link instead of an expandable group.
+ */
+function filterNavByPermissions(
+  sections: NavSection[],
+  permissions: ReadonlySet<string>,
+): NavSection[] {
+  const allowed = (req?: string) => !req || permissions.has(req)
+  return sections
+    .map((section) => ({
+      ...section,
+      items: section.items.flatMap<NavItem>((item) => {
+        if (!allowed(item.requires)) return []
+        if (!item.children) return [item]
+        const children = item.children.filter((c) => allowed(c.requires))
+        const onlyOverview =
+          children.length === 1 && children[0].to === item.to && !children[0].hash
+        if (children.length === 0 || onlyOverview) {
+          return [{ ...item, children: undefined }]
+        }
+        return [{ ...item, children }]
+      }),
+    }))
+    .filter((s) => s.items.length > 0)
+}
 
 interface AppShellProps {
   children: ReactNode
@@ -126,6 +161,15 @@ interface AppShellProps {
 export function AppShell({ children }: AppShellProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const pathname = useRouterState({ select: (s) => s.location.pathname })
+  const permissions = useSession().data?.data.user.permissions
+  // TanStack Query's default structuralSharing preserves array identity across
+  // background refetches when the data is unchanged, so depending on the
+  // permissions array (not the whole session) skips the rebuild on no-op
+  // refetches.
+  const sections = useMemo(
+    () => filterNavByPermissions(NAV_SECTIONS, new Set(permissions ?? [])),
+    [permissions],
+  )
   const activeHash = useRouterState({
     select: (s) => s.location.hash.replace(/^#/, ''),
   })
@@ -194,7 +238,7 @@ export function AppShell({ children }: AppShellProps) {
         </div>
 
         <nav className="app-shell__nav">
-          {NAV_SECTIONS.map((section) => (
+          {sections.map((section) => (
             <div className="app-shell__nav-section" key={section.label}>
               <div className="app-shell__nav-label">{section.label}</div>
               <ul className="app-shell__nav-list">

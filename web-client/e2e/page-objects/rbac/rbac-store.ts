@@ -1,4 +1,5 @@
 import type { Locator, Page, Request as PWRequest, Route } from '@playwright/test'
+import { PERM } from '../../../src/lib/permissions'
 import { sessionResponse } from '../../../src/test/factories'
 import {
   createRbacState,
@@ -12,7 +13,16 @@ import {
 
 export type { Permission, RbacUser, Role, SeedSpec }
 
-const SESSION = sessionResponse({ user: { username: 'rita.kovac' } })
+// The default session carries both admin permissions so the existing RBAC
+// e2e tests see the full Roles/Permissions/Users sub-nav. Suites that need
+// a non-admin session should layer their own page.route('**/v1/session')
+// AFTER calling RbacStore.install() so it wins by recency.
+const SESSION = sessionResponse({
+  user: {
+    username: 'rita.kovac',
+    permissions: [PERM.ADMIN_VIEW, PERM.AUTH_MANAGE],
+  },
+})
 
 export interface FailureSpec {
   /** Matched against `${method} ${url}` — substring (string) or regex. */

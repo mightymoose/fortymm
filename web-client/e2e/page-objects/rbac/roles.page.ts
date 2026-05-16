@@ -38,11 +38,17 @@ export class RolesPage extends RbacPage {
   }
   /** Detail title (h1 with role name) */
   detailTitle(name: string): Locator {
-    return this.page.locator('h1.rbac-inline-edit', { hasText: name }).first()
+    // Inline rename was replaced by a modal Edit dialog; the h1 is now plain.
+    return this.page.getByRole('heading', { level: 1, name }).first()
   }
-  /** Save / cancel inline edit input for the title */
-  titleInput(value: string): Locator {
-    return this.page.locator(`input[value="${value}"]`).first()
+  get editButton(): Locator {
+    return this.page.getByRole('button', { name: /^Edit$/ }).first()
+  }
+  get editNameInput(): Locator {
+    return this.page.getByLabel('Name', { exact: true })
+  }
+  get editSaveButton(): Locator {
+    return this.page.getByRole('button', { name: 'Save changes' })
   }
   get confirmDeleteButton(): Locator {
     return this.page.getByRole('button', { name: 'Delete role' })

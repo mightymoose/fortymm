@@ -577,7 +577,10 @@ function AddUserModal({
   const [username, setUsername] = useState('')
   const trimmed = username.trim()
   const taken = existingUsernames.some((u) => u.toLowerCase() === trimmed.toLowerCase())
-  const validShape = /^[a-z0-9._-]{2,}$/i.test(trimmed)
+  // Match the settings-page rule: separators allowed in the middle but not
+  // at the ends, length 2+. Settings.tsx is the canonical source.
+  const validShape =
+    /^[a-z0-9._-]{2,}$/i.test(trimmed) && !/^[._-]|[._-]$/.test(trimmed)
   const valid = trimmed && validShape && !taken
   const { hint, hintTone } = validateUsername({ trimmed, taken, validShape })
 

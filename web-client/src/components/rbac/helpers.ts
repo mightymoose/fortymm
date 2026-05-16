@@ -73,13 +73,16 @@ export function initialsFor(name: string): string {
     .toUpperCase()
 }
 
+// Same cardinality as ROLE_PALETTE (7) so name → bucket maps consistently
+// between role pill colors and user avatars.
 const AVATAR_PALETTE: Array<[string, string]> = [
   ['#FF7A1A', '#fff'],
   ['#00E29A', '#0B0D12'],
   ['#6FB5FF', '#0B0D12'],
   ['#FFC43D', '#0B0D12'],
-  ['#FF4D6D', '#fff'],
   ['#A87BFF', '#fff'],
+  ['#FF4D6D', '#fff'],
+  ['#8CFFD4', '#0B0D12'],
 ]
 
 export function avatarColorsFor(name: string): [string, string] {

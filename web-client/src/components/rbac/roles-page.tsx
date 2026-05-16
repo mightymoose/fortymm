@@ -1,7 +1,21 @@
 import { useMemo, useState, type CSSProperties } from 'react'
-import { Check, Copy, Folder, Plus, Search, Shield, Trash2, Users, X } from 'lucide-react'
+import { zodResolver } from '@hookform/resolvers/zod'
+import { useForm } from 'react-hook-form'
+import { toast } from 'sonner'
+import { z } from 'zod'
+import { Check, Copy, Folder, Pencil, Plus, Search, Shield, Trash2, Users, X } from 'lucide-react'
+import { ApiError } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
+import {
+  Form,
+  FormControl,
+  FormDescription,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+} from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import {
@@ -43,8 +57,10 @@ export function RolesPage() {
   const { data: permissions = [] } = usePermissions()
   const { data: users = [] } = useRbacUsers()
   const createRole = useCreateRole()
+  const updateRole = useUpdateRole()
   const [search, setSearch] = useState('')
   const [creating, setCreating] = useState(false)
+  const [editing, setEditing] = useState<Role | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
 
   const memberCounts = useMemo(() => {
@@ -153,7 +169,7 @@ export function RolesPage() {
 
       <div style={{ flex: 1, overflowY: 'auto', background: 'var(--bg-app)' }}>
         {selected ? (
-          <RoleDetail role={selected} permissions={permissions} users={users} onSelect={setSelectedId} />
+          <RoleDetail role={selected} permissions={permissions} users={users} onSelect={setSelectedId} onEdit={setEditing} />
         ) : (
           <div style={{ padding: 40, color: 'var(--fg-3)' }}>
             No role selected.{' '}
@@ -176,6 +192,20 @@ export function RolesPage() {
             })
             setSelectedId(created.id)
             setCreating(false)
+          }}
+        />
+      )}
+      {editing && (
+        <EditRoleModal
+          role={editing}
+          existingNames={roles.filter((r) => r.id !== editing.id).map((r) => r.name)}
+          onClose={() => setEditing(null)}
+          onSubmit={async (values) => {
+            await updateRole.mutateAsync({
+              id: editing.id,
+              patch: { name: values.name, description: values.description ?? '' },
+            })
+            setEditing(null)
           }}
         />
       )}
@@ -264,19 +294,19 @@ function RoleDetail({
   permissions,
   users,
   onSelect,
+  onEdit,
 }: {
   role: Role
   permissions: Permission[]
   users: RbacUser[]
   onSelect: (id: string | null) => void
+  onEdit: (role: Role) => void
 }) {
   const updateRole = useUpdateRole()
   const deleteRole = useDeleteRole()
   const createRole = useCreateRole()
   const setUserRoles = useSetUserRoles()
   const [tab, setTab] = useState<'permissions' | 'members'>('permissions')
-  const [editingName, setEditingName] = useState(false)
-  const [editingDesc, setEditingDesc] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
 
   const accent = colorFor(role.name)
@@ -324,44 +354,10 @@ function RoleDetail({
             <Shield size={20} color={accent} strokeWidth={1.75} />
           </div>
           <div style={{ flex: 1, minWidth: 0 }}>
-            {editingName ? (
-              <Input
-                autoFocus
-                defaultValue={role.name}
-                onBlur={(e) => {
-                  updateRole.mutate({ id: role.id, patch: { name: e.target.value.trim() || role.name } })
-                  setEditingName(false)
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
-                  if (e.key === 'Escape') {
-                    ;(e.target as HTMLInputElement).value = role.name
-                    ;(e.target as HTMLInputElement).blur()
-                  }
-                }}
-                style={{ fontSize: 22, fontWeight: 700, height: 38, maxWidth: 420 }}
-              />
-            ) : (
-              <h1 onClick={() => setEditingName(true)} className="rbac-inline-edit" style={titleStyle}>
-                {role.name}
-              </h1>
-            )}
-            {editingDesc ? (
-              <Textarea
-                autoFocus
-                defaultValue={role.description || ''}
-                onBlur={(e) => {
-                  updateRole.mutate({ id: role.id, patch: { description: e.target.value.trim() } })
-                  setEditingDesc(false)
-                }}
-                placeholder="Describe what this role can do…"
-                style={{ maxWidth: 640, minHeight: 50, fontSize: 13 }}
-              />
-            ) : (
-              <div onClick={() => setEditingDesc(true)} className="rbac-inline-edit" style={descStyle(!!role.description)}>
-                {role.description || 'No description — click to add one'}
-              </div>
-            )}
+            <h1 style={titleStyle}>{role.name}</h1>
+            <div style={descStyle(!!role.description)}>
+              {role.description || 'No description'}
+            </div>
             <div style={{ display: 'flex', gap: 24, marginTop: 14, flexWrap: 'wrap' }}>
               <Stat label="Users" value={members.length} />
               <Stat label="Permissions" value={`${role.permission_ids.length} / ${permissions.length}`} />
@@ -371,6 +367,9 @@ function RoleDetail({
             </div>
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
+            <Button variant="outline" size="sm" onClick={() => onEdit(role)}>
+              <Pencil size={14} /> Edit
+            </Button>
             <Button
               variant="outline"
               size="sm"
@@ -447,7 +446,115 @@ function RoleDetail({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
     </div>
+  )
+}
+
+function buildRoleEditSchema(existingNames: string[]) {
+  const taken = new Set(existingNames.map((n) => n.toLowerCase()))
+  return z.object({
+    name: z
+      .string()
+      .trim()
+      .min(1, { message: 'Name is required.' })
+      .max(255, { message: 'Name must be 255 characters or fewer.' })
+      .refine((v) => !taken.has(v.toLowerCase()), {
+        message: 'A role with this name already exists.',
+      }),
+    description: z
+      .string()
+      .trim()
+      .max(1024, { message: 'Description must be 1024 characters or fewer.' })
+      .optional(),
+  })
+}
+
+type RoleEditValues = z.infer<ReturnType<typeof buildRoleEditSchema>>
+
+function EditRoleModal({
+  role,
+  existingNames,
+  onClose,
+  onSubmit,
+}: {
+  role: Role
+  existingNames: string[]
+  onClose: () => void
+  onSubmit: (values: { name: string; description: string }) => Promise<void>
+}) {
+  const schema = useMemo(() => buildRoleEditSchema(existingNames), [existingNames])
+  const form = useForm<RoleEditValues>({
+    resolver: zodResolver(schema),
+    defaultValues: { name: role.name, description: role.description ?? '' },
+    mode: 'onChange',
+  })
+
+  const handleSubmit = form.handleSubmit(async (values) => {
+    try {
+      await onSubmit({ name: values.name, description: values.description ?? '' })
+    } catch (err) {
+      if (err instanceof ApiError && (err.status === 409 || err.status === 422)) {
+        form.setError('name', {
+          type: 'server',
+          message: err.detail ?? 'Server rejected this name.',
+        })
+        return
+      }
+      toast.error("Couldn't update the role", {
+        description: err instanceof Error ? err.message : String(err),
+      })
+    }
+  })
+
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-h-[calc(100vh-2rem)] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>Edit role</DialogTitle>
+          <DialogDescription>Rename this role or update its description.</DialogDescription>
+        </DialogHeader>
+        <Form {...form}>
+          <form onSubmit={handleSubmit} noValidate>
+            <div style={{ display: 'grid', gap: 16 }}>
+              <FormField
+                control={form.control}
+                name="name"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Name</FormLabel>
+                    <FormControl>
+                      <Input autoFocus {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name="description"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Description</FormLabel>
+                    <FormControl>
+                      <Textarea style={{ minHeight: 80 }} {...field} value={field.value ?? ''} />
+                    </FormControl>
+                    <FormDescription>What does this role let people do?</FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            </div>
+            <DialogFooter style={{ marginTop: 16 }}>
+              <Button type="button" variant="outline" onClick={onClose}>
+                Cancel
+              </Button>
+              <Button type="submit">Save changes</Button>
+            </DialogFooter>
+          </form>
+        </Form>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -790,11 +897,6 @@ const titleStyle: CSSProperties = {
   fontWeight: 700,
   color: 'var(--fg-1)',
   margin: '0 0 4px',
-  cursor: 'text',
-  display: 'inline-block',
-  padding: '2px 6px',
-  marginLeft: -6,
-  borderRadius: 6,
 }
 
 function descStyle(hasDescription: boolean): CSSProperties {
@@ -803,11 +905,8 @@ function descStyle(hasDescription: boolean): CSSProperties {
     color: hasDescription ? 'var(--fg-3)' : 'var(--fg-muted)',
     fontStyle: hasDescription ? 'normal' : 'italic',
     maxWidth: 640,
-    cursor: 'text',
-    padding: '4px 6px',
-    marginLeft: -6,
-    borderRadius: 6,
     lineHeight: 1.5,
+    marginTop: 4,
   }
 }
 
