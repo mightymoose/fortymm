@@ -14,7 +14,6 @@ import { server } from '@/mocks/server'
 import { matchListResponse, matchListRow } from '@/test/factories'
 import { Route } from './index'
 
-// Route files only export `Route`; pull the component off it to mount.
 const MatchesPage = Route.options.component!
 
 function renderMatchesPage() {
@@ -63,16 +62,18 @@ function renderMatchesPage() {
 
 describe('MatchesPage', () => {
   it('shows skeleton rows while loading, then real rows', async () => {
-    // The default MSW handler serves seeded matches, which are enough to
-    // prove the loading → loaded transition.
     renderMatchesPage()
 
     const skeletonTable = await screen.findByRole('table')
     expect(skeletonTable).toHaveAttribute('aria-busy', 'true')
 
-    // Once the request resolves the seeded `nguyen.t` opponent shows up.
     expect(await screen.findByText('nguyen.t')).toBeInTheDocument()
-    expect(screen.getByRole('table')).not.toHaveAttribute('aria-busy', 'true')
+    // The aria-busy attribute is dropped (not flipped to "false") once the
+    // skeleton table unmounts, so assert on its absence.
+    expect(screen.getByRole('table')).not.toHaveAttribute('aria-busy')
+    // Seed handler also yields silva.r (final win) and patel.m (final loss).
+    expect(screen.getByText('silva.r')).toBeInTheDocument()
+    expect(screen.getByText('patel.m')).toBeInTheDocument()
   })
 
   it('passes the API status when the player picks a status tab', async () => {
@@ -92,7 +93,6 @@ describe('MatchesPage', () => {
     )
     renderMatchesPage()
 
-    // Wait for the first (status=all) request to land.
     await waitFor(() => expect(requests.length).toBeGreaterThanOrEqual(1))
     const firstUrl = new URL(requests[0])
     expect(firstUrl.searchParams.get('status')).toBeNull()
@@ -109,9 +109,7 @@ describe('MatchesPage', () => {
     renderMatchesPage()
     const called = await screen.findByRole('tab', { name: /called/i })
     expect(called).toBeDisabled()
-    // The tab renders no badge, so the only digits in its label come from
-    // accidentally-included counts. There should be none.
-    expect(called.textContent?.trim()).toBe('Called')
+    expect(called).toHaveAccessibleName('Called')
   })
 
   it('moves to the next page when the player clicks Next', async () => {
@@ -121,7 +119,7 @@ describe('MatchesPage', () => {
       http.get('*/v1/matches', ({ request }) => {
         requests.push(request.url)
         const page = Number(new URL(request.url).searchParams.get('page') ?? '1')
-        // 26 items total, so page 2 exists and the Next button activates.
+        // 26 items total — page 2 exists, so Next activates.
         const items = Array.from({ length: page === 1 ? 25 : 1 }, (_, i) =>
           matchListRow({
             id: `m-${page}-${i}`,
@@ -170,8 +168,6 @@ describe('MatchesPage', () => {
     await waitFor(() => expect(requests.length).toBeGreaterThanOrEqual(1))
     const requestsBeforeTyping = requests.length
 
-    // Three keystrokes in quick succession should coalesce into one request
-    // after the debounce window, not three.
     await user.type(screen.getByPlaceholderText(/search opponents/i), 'ngu')
 
     await waitFor(
@@ -181,17 +177,7 @@ describe('MatchesPage', () => {
       },
       { timeout: 1000 },
     )
-    // One request for the final settled term, not one per keystroke.
-    expect(requests.length - requestsBeforeTyping).toBeLessThanOrEqual(2)
-  })
-
-  it('renders the seeded matches end-to-end against MSW', async () => {
-    renderMatchesPage()
-
-    // The default MSW seeds include nguyen.t (live), silva.r (final win),
-    // patel.m (final loss). All three should render in the initial page.
-    expect(await screen.findByText('nguyen.t')).toBeInTheDocument()
-    expect(screen.getByText('silva.r')).toBeInTheDocument()
-    expect(screen.getByText('patel.m')).toBeInTheDocument()
+    // Three keystrokes should coalesce into one debounced fetch.
+    expect(requests.length - requestsBeforeTyping).toBe(1)
   })
 })

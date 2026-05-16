@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { Link, createFileRoute, useNavigate } from '@tanstack/react-router'
 import {
   ChevronLeft,
@@ -50,21 +50,24 @@ export const Route = createFileRoute('/matches/')({
   component: MatchesPage,
 })
 
-type StatusKey = 'live' | 'final' | 'called' | 'scheduled'
+type RowTab = 'scheduled' | 'live' | 'final'
+type StatusKey = RowTab | 'called'
 
-// UI tabs ↔ API status. `called` has no backend concept yet — the tab stays
-// visible (disabled) so the navigation shape is stable as features land.
-const TAB_TO_API: Record<Exclude<StatusKey, 'called'>, MatchStatus> = {
+// `called` has no backend concept yet — the tab stays visible (disabled) so
+// the nav shape is stable as features land.
+const TAB_TO_API: Record<RowTab, MatchStatus> = {
   scheduled: 'pending',
   live: 'in_progress',
   final: 'completed',
 }
-const API_TO_TAB: Record<MatchStatus, StatusKey | null> = {
+// Terminal statuses (disputed, voided) fall back to the `final` tone — they
+// share final's "no further action" semantics, not scheduled's pending one.
+const API_TO_TAB: Record<MatchStatus, RowTab> = {
   pending: 'scheduled',
   in_progress: 'live',
   completed: 'final',
-  disputed: null,
-  voided: null,
+  disputed: 'final',
+  voided: 'final',
 }
 
 const STATUS_TABS: { value: 'all' | StatusKey; label: string; live?: boolean }[] = [
@@ -77,39 +80,49 @@ const STATUS_TABS: { value: 'all' | StatusKey; label: string; live?: boolean }[]
 
 const PAGE_SIZE = 25
 
-// Pill tones keyed by UI tab; the visible text comes from the API's
-// `status_label` so the FE doesn't redefine copy.
-const STATUS_TONE: Record<StatusKey, string> = {
+const STATUS_TONE: Record<RowTab, string> = {
   live: 'status-tone-live',
   final: 'status-tone-final',
-  called: 'status-tone-called',
   scheduled: 'status-tone-scheduled',
 }
+
+type NavigateFn = ReturnType<typeof useNavigate>
 
 function MatchesPage() {
   const [q, setQ] = useState('')
   const [status, setStatus] = useState<'all' | StatusKey>('all')
   const [page, setPage] = useState(1)
   const debouncedQ = useDebouncedValue(q, 300).trim()
+  const navigate = useNavigate()
 
-  const apiStatus = status === 'all' || status === 'called'
-    ? undefined
-    : TAB_TO_API[status]
-  const { data, isLoading } = useMatchList({
-    status: apiStatus,
-    q: debouncedQ || undefined,
-    page,
-    page_size: PAGE_SIZE,
-  })
+  const apiStatus =
+    status === 'all' || status === 'called' ? undefined : TAB_TO_API[status]
+  // Memoize the params bag so React Query's structural sharing — and any
+  // future React.memo on MatchTable — sees a stable reference.
+  const queryParams = useMemo(
+    () => ({
+      status: apiStatus,
+      q: debouncedQ || undefined,
+      page,
+      page_size: PAGE_SIZE,
+    }),
+    [apiStatus, debouncedQ, page],
+  )
+  const { data, isLoading } = useMatchList(queryParams)
 
-  function changeStatus(next: 'all' | StatusKey) {
+  const changeStatus = useCallback((next: 'all' | StatusKey) => {
     setStatus(next)
     setPage(1)
-  }
-  function changeQuery(next: string) {
+  }, [])
+  const changeQuery = useCallback((next: string) => {
     setQ(next)
     setPage(1)
-  }
+  }, [])
+  const onClear = useCallback(() => {
+    setQ('')
+    setStatus('all')
+    setPage(1)
+  }, [])
 
   const items = data?.items ?? []
   const total = data?.total ?? 0
@@ -131,10 +144,8 @@ function MatchesPage() {
             <MatchTable
               rows={items}
               isLoading={isLoading}
-              onClear={() => {
-                changeQuery('')
-                changeStatus('all')
-              }}
+              onClear={onClear}
+              navigate={navigate}
             />
           </div>
           <PaginationFooter
@@ -186,14 +197,11 @@ function FilterRow({
 }) {
   function tabCount(value: 'all' | StatusKey): number | null {
     if (value === 'called') return null
-    if (!statusCounts) return 0
+    if (!statusCounts) return null
     if (value === 'all') {
-      // Backend total counts every status the user participates in, so derive
-      // the "all" count from the same histogram the tabs render from.
       return Object.values(statusCounts).reduce((a, b) => a + b, 0)
     }
-    const apiStatus = TAB_TO_API[value]
-    return statusCounts[apiStatus] ?? 0
+    return statusCounts[TAB_TO_API[value]] ?? 0
   }
   return (
     <div className="filter-row">
@@ -224,13 +232,12 @@ function FilterRow({
         <TabsList>
           {STATUS_TABS.map((t) => {
             const count = tabCount(t.value)
-            const disabled = t.value === 'called'
             return (
               <TabsTrigger
                 key={t.value}
                 value={t.value}
                 className="gap-1.5"
-                disabled={disabled}
+                disabled={t.value === 'called'}
               >
                 {t.live && <span className="live-dot" />}
                 {t.label}
@@ -261,8 +268,9 @@ function ComingSoonSelect({
     <>
       <span className="filter-label">{label}</span>
       <Tooltip>
+        {/* Span wrapper: disabled triggers don't dispatch pointer events, so
+            the tooltip needs an enabled element to attach to. */}
         <TooltipTrigger asChild>
-          {/* Wrap the disabled trigger so the tooltip still receives hover. */}
           <span>
             <Select disabled>
               <SelectTrigger className="h-9 min-w-[120px]" disabled>
@@ -282,10 +290,12 @@ function MatchTable({
   rows,
   isLoading,
   onClear,
+  navigate,
 }: {
   rows: MatchListRow[]
   isLoading: boolean
   onClear: () => void
+  navigate: NavigateFn
 }) {
   if (isLoading && rows.length === 0) return <SkeletonRows />
   if (rows.length === 0) {
@@ -311,38 +321,35 @@ function MatchTable({
   }
   return (
     <table className="matches">
-      <thead>
-        <tr>
-          <th style={{ width: 120 }}>Match</th>
-          <th>Opponent</th>
-          <th style={{ width: 120 }}>Score</th>
-          <th style={{ width: 120 }}>Status</th>
-          <th style={{ width: 140 }}>Started</th>
-          <th style={{ width: 56 }} />
-        </tr>
-      </thead>
+      <MatchTableHead />
       <tbody>
         {rows.map((row) => (
-          <MatchRow key={row.id} row={row} />
+          <MatchRow key={row.id} row={row} navigate={navigate} />
         ))}
       </tbody>
     </table>
   )
 }
 
+function MatchTableHead() {
+  return (
+    <thead>
+      <tr>
+        <th style={{ width: 120 }}>Match</th>
+        <th>Opponent</th>
+        <th style={{ width: 120 }}>Score</th>
+        <th style={{ width: 120 }}>Status</th>
+        <th style={{ width: 140 }}>Started</th>
+        <th style={{ width: 56 }} />
+      </tr>
+    </thead>
+  )
+}
+
 function SkeletonRows() {
   return (
     <table className="matches" aria-busy="true">
-      <thead>
-        <tr>
-          <th style={{ width: 120 }}>Match</th>
-          <th>Opponent</th>
-          <th style={{ width: 120 }}>Score</th>
-          <th style={{ width: 120 }}>Status</th>
-          <th style={{ width: 140 }}>Started</th>
-          <th style={{ width: 56 }} />
-        </tr>
-      </thead>
+      <MatchTableHead />
       <tbody>
         {Array.from({ length: 6 }).map((_, i) => (
           <tr key={i} className="skeleton-row" aria-hidden="true">
@@ -356,9 +363,14 @@ function SkeletonRows() {
   )
 }
 
-function MatchRow({ row }: { row: MatchListRow }) {
-  const navigate = useNavigate()
-  const tab = API_TO_TAB[row.status] ?? 'scheduled'
+function MatchRow({
+  row,
+  navigate,
+}: {
+  row: MatchListRow
+  navigate: NavigateFn
+}) {
+  const tab = API_TO_TAB[row.status]
   const opponentName = row.opponent_username ?? 'No opponent'
   const showScore =
     row.status === 'in_progress' || row.status === 'completed'
@@ -381,7 +393,7 @@ function MatchRow({ row }: { row: MatchListRow }) {
         }
       }}
     >
-      <td className="id-cell">M-{row.id.slice(-6).toUpperCase()}</td>
+      <td className="id-cell">M-{shortId(row.id)}</td>
       <td>
         <div className="player">
           <Avatar className="size-[26px]">
@@ -404,7 +416,7 @@ function MatchRow({ row }: { row: MatchListRow }) {
         <ScoreCell row={row} showScore={showScore} />
       </td>
       <td>
-        <StatusBadge status={tab} label={row.status_label} />
+        <StatusBadge tab={tab} label={row.status_label} />
       </td>
       <td>
         <TimeCell iso={row.created_at} />
@@ -421,7 +433,6 @@ function MatchRow({ row }: { row: MatchListRow }) {
             type="button"
             className="row-action"
             aria-label="Row actions"
-            onClick={(e) => e.stopPropagation()}
           >
             <MoreHorizontal size={16} strokeWidth={2} />
           </button>
@@ -446,10 +457,10 @@ function ScoreCell({
   )
 }
 
-function StatusBadge({ status, label }: { status: StatusKey; label: string }) {
+function StatusBadge({ tab, label }: { tab: RowTab; label: string }) {
   return (
-    <Badge variant="secondary" className={`status-pill ${STATUS_TONE[status]}`}>
-      {status === 'live' && <span className="live-dot" />}
+    <Badge variant="secondary" className={`status-pill ${STATUS_TONE[tab]}`}>
+      {tab === 'live' && <span className="live-dot" />}
       {label}
     </Badge>
   )
@@ -458,9 +469,7 @@ function StatusBadge({ status, label }: { status: StatusKey; label: string }) {
 function TimeCell({ iso }: { iso: string }) {
   const created = new Date(iso)
   const now = new Date()
-  const diffMs = now.getTime() - created.getTime()
-  const dayMs = 86400000
-  const days = Math.floor(diffMs / dayMs)
+  const days = Math.floor((now.getTime() - created.getTime()) / 86400000)
   let when: string
   if (days === 0) {
     const hh = String(created.getHours()).padStart(2, '0')
@@ -474,6 +483,10 @@ function TimeCell({ iso }: { iso: string }) {
       <span className="strong">{when}</span>
     </span>
   )
+}
+
+function shortId(id: string): string {
+  return id.slice(-6).toUpperCase().padStart(6, '0')
 }
 
 function initials(name: string): string {

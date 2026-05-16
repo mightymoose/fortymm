@@ -384,7 +384,6 @@
   font-family: var(--font-mono);
 }
 
-/* ============ Skeleton rows ============ */
 .match-list-page table.matches tbody tr.skeleton-row {
   cursor: default;
 }

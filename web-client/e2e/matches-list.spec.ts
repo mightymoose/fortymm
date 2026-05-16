@@ -6,10 +6,8 @@ import {
 } from '../src/test/factories'
 
 const SESSION = sessionResponse({ user: { username: 'rita.kovac' } })
+const PAGE_SIZE = 25
 
-/** Three seeded matches across statuses, plus a "Score" CTA on the live row.
- *  Each row exists in `mock` because the API filters by `status` server-side;
- *  the page never has to filter client-side. */
 const SEED = [
   matchListRow({
     id: 'm-live-1',
@@ -39,11 +37,10 @@ const SEED = [
   }),
 ]
 
-/** Mount a `GET /v1/matches` stub that filters seeded rows by the requested
- *  status and paginates them. Records every request so specs can assert the
- *  client sent the right query string. */
-async function installListMock(page: Page, rows = SEED, pageSize = 25) {
-  const requests: URL[] = []
+// `status_counts` is computed off the unfiltered `rows` so tab badges reflect
+// the full histogram regardless of which status the request asked for; `total`
+// uses the filtered set so the footer matches the visible page.
+async function installListMock(page: Page, rows = SEED) {
   await page.route('**/api/v1/**', (route: Route) => {
     const url = new URL(route.request().url())
     const path = url.pathname.replace(/^\/api/, '')
@@ -55,12 +52,11 @@ async function installListMock(page: Page, rows = SEED, pageSize = 25) {
       })
     }
     if (path === '/v1/matches' && route.request().method() === 'GET') {
-      requests.push(url)
       const status = url.searchParams.get('status')
       const pageNum = Number(url.searchParams.get('page') ?? '1')
       const filtered = status ? rows.filter((r) => r.status === status) : rows
-      const start = (pageNum - 1) * pageSize
-      const slice = filtered.slice(start, start + pageSize)
+      const start = (pageNum - 1) * PAGE_SIZE
+      const slice = filtered.slice(start, start + PAGE_SIZE)
       const counts: Record<string, number> = {
         pending: rows.filter((r) => r.status === 'pending').length,
         in_progress: rows.filter((r) => r.status === 'in_progress').length,
@@ -76,7 +72,7 @@ async function installListMock(page: Page, rows = SEED, pageSize = 25) {
             items: slice,
             total: filtered.length,
             page: pageNum,
-            page_size: pageSize,
+            page_size: PAGE_SIZE,
             status_counts: counts,
           }),
         ),
@@ -88,12 +84,14 @@ async function installListMock(page: Page, rows = SEED, pageSize = 25) {
       body: JSON.stringify({ detail: `unmocked ${route.request().method()} ${path}` }),
     })
   })
-  return requests
 }
 
 test.describe('Matches list', () => {
-  test('renders the seeded matches', async ({ page }) => {
+  test.beforeEach(async ({ page }) => {
     await installListMock(page)
+  })
+
+  test('renders the seeded matches', async ({ page }) => {
     await page.goto('/matches')
 
     await expect(page.getByText('nguyen.t')).toBeVisible()
@@ -102,28 +100,25 @@ test.describe('Matches list', () => {
   })
 
   test('filters down to the live tab', async ({ page }) => {
-    await installListMock(page)
     await page.goto('/matches')
-    // Wait for the initial render so the tab interactions land after data.
     await expect(page.getByText('nguyen.t')).toBeVisible()
 
     await page.getByRole('tab', { name: /^live/i }).click()
 
     await expect(page.getByText('nguyen.t')).toBeVisible()
-    await expect(page.getByText('okafor.d')).not.toBeVisible()
-    await expect(page.getByText('silva.r')).not.toBeVisible()
+    await expect(page.getByText('okafor.d')).toHaveCount(0)
+    await expect(page.getByText('silva.r')).toHaveCount(0)
   })
 
   test('opens the match details page when a row is clicked', async ({ page }) => {
-    await installListMock(page)
     await page.goto('/matches')
 
-    // The details page itself isn't mocked here — asserting the URL change is
-    // enough to prove the row navigated.
     await page.getByText('nguyen.t').click()
     await expect(page).toHaveURL(/\/matches\/m-live-1$/)
   })
+})
 
+test.describe('Matches list — pagination', () => {
   test('shows the pagination footer when total exceeds page size', async ({
     page,
   }) => {
@@ -137,7 +132,6 @@ test.describe('Matches list', () => {
     await installListMock(page, many)
     await page.goto('/matches')
 
-    // Showing 1–25 of 30 — confirms the footer rendered with the API total.
     await expect(page.getByText(/Showing/i)).toContainText('1–25')
     await expect(page.getByText(/Showing/i)).toContainText('30')
     await expect(page.getByRole('button', { name: /next page/i })).toBeEnabled()
