@@ -24,17 +24,19 @@ type MatchDetailsSide = components['schemas']['MatchDetailsSide']
 type HeroState = 'live' | 'final' | 'upcoming'
 
 type SideView = {
+  sideNumber: number
   username: string
   initials: string
   gamesWon: number
   won: boolean | null
+  isCurrentUser: boolean
 }
 
 type GameView = {
   id: string
   gameNumber: number
   // `null` for an un-scored trailing game.
-  score: { mine: number; opponent: number; isMyWin: boolean } | null
+  score: { leftPoints: number; rightPoints: number; leftWon: boolean } | null
   // The full score record for an edit-link affordance. Null when the game
   // hasn't been scored yet.
   scoreId: string | null
@@ -46,8 +48,11 @@ type MatchView = {
   bestOf: number
   gamesToWin: number
   rated: boolean
-  mySide: SideView
-  opponentSide: SideView | null
+  // Left/right are perspective-relative: when the current user is on a side
+  // they're left; otherwise left = side 1, right = side 2.
+  leftSide: SideView
+  rightSide: SideView | null
+  viewerIsParticipant: boolean
   games: GameView[]
   currentGameNumber: number | null
   canScore: boolean
@@ -57,25 +62,54 @@ type MatchView = {
 function projectSide(side: MatchDetailsSide, fallbackLabel: string): SideView {
   const username = side.players[0]?.username ?? fallbackLabel
   return {
+    sideNumber: side.side_number,
     username,
     initials: initialsOf(username),
     gamesWon: side.games_won,
     won: side.won,
+    isCurrentUser: side.is_current_user_side,
   }
 }
 
-function projectGame(game: MatchDetailsGame): GameView {
+function orderSides(sides: MatchDetailsSide[]): {
+  leftSide: MatchDetailsSide
+  rightSide: MatchDetailsSide | null
+  viewerIsParticipant: boolean
+} {
+  const bySideNumber = [...sides].sort(
+    (a, b) => a.side_number - b.side_number,
+  )
+  const mine = bySideNumber.find((s) => s.is_current_user_side) ?? null
+  if (mine) {
+    const opp = bySideNumber.find((s) => !s.is_current_user_side) ?? null
+    return { leftSide: mine, rightSide: opp, viewerIsParticipant: true }
+  }
+  // Spectator: surface side 1 on the left, side 2 on the right.
+  return {
+    leftSide: bySideNumber[0],
+    rightSide: bySideNumber[1] ?? null,
+    viewerIsParticipant: false,
+  }
+}
+
+function projectGame(
+  game: MatchDetailsGame,
+  leftSideNumber: number,
+): GameView {
   const score = game.score
-  if (!score) return { id: game.id, gameNumber: game.game_number, score: null, scoreId: null }
-  // `my_points` / `opponent_points` are already current-user-relative — the
-  // API swaps them based on `my_side.side_number` server-side.
+  if (!score)
+    return { id: game.id, gameNumber: game.game_number, score: null, scoreId: null }
+  const leftPoints =
+    leftSideNumber === 1 ? score.side_1_points : score.side_2_points
+  const rightPoints =
+    leftSideNumber === 1 ? score.side_2_points : score.side_1_points
   return {
     id: game.id,
     gameNumber: game.game_number,
     score: {
-      mine: score.my_points,
-      opponent: score.opponent_points,
-      isMyWin: score.is_my_win,
+      leftPoints,
+      rightPoints,
+      leftWon: score.winner_side_number === leftSideNumber,
     },
     scoreId: score.id,
   }
@@ -88,14 +122,15 @@ function projectMatchView(data: MatchDetails, matchId: string): MatchView {
       : data.status === 'completed'
         ? 'final'
         : 'upcoming'
-  const mySide = projectSide(data.my_side, 'You')
-  const opponentSide = data.opponent_side
-    ? projectSide(data.opponent_side, 'Opponent')
-    : null
+  const { leftSide, rightSide, viewerIsParticipant } = orderSides(data.sides)
+  const leftLabel = viewerIsParticipant ? 'You' : 'Side 1'
+  const rightLabel = viewerIsParticipant ? 'Opponent' : 'Side 2'
+  const leftView = projectSide(leftSide, leftLabel)
+  const rightView = rightSide ? projectSide(rightSide, rightLabel) : null
   const games = data.games
     .slice()
     .sort((a, b) => a.game_number - b.game_number)
-    .map(projectGame)
+    .map((g) => projectGame(g, leftView.sideNumber))
   const scoreCta =
     data.can_score && data.current_game
       ? { matchId, gameId: data.current_game.id }
@@ -106,8 +141,9 @@ function projectMatchView(data: MatchDetails, matchId: string): MatchView {
     bestOf: data.best_of,
     gamesToWin: data.games_to_win,
     rated: data.affects_rating,
-    mySide,
-    opponentSide,
+    leftSide: leftView,
+    rightSide: rightView,
+    viewerIsParticipant,
     games,
     currentGameNumber: data.current_game?.game_number ?? null,
     canScore: data.can_score,
@@ -126,7 +162,7 @@ export function MatchDetailsView({ matchId }: { matchId: string }) {
     )
   }
 
-  if (!data.opponent_side) {
+  if (data.sides.length < 2) {
     // Solo matches aren't viewable on this page yet — the surface assumes
     // two sides.
     return <Navigate to="/matches" />
@@ -330,7 +366,7 @@ function HeroScoreboard({
       </div>
 
       <div className="md-hero__row">
-        <PlayerSide side={view.mySide} pos="l" />
+        <PlayerSide side={view.leftSide} pos="l" />
         <div className="md-hero__score-block">
           {isUpcoming ? (
             <>
@@ -344,29 +380,29 @@ function HeroScoreboard({
                 <div
                   className={cn(
                     'md-hero__score md-hero__score--l',
-                    view.mySide.won && 'md-hero__score--win',
+                    view.leftSide.won && 'md-hero__score--win',
                   )}
                 >
-                  {view.mySide.gamesWon}
+                  {view.leftSide.gamesWon}
                 </div>
                 <div className="md-hero__score-dash">—</div>
                 <div
                   className={cn(
                     'md-hero__score md-hero__score--r',
-                    view.opponentSide?.won && 'md-hero__score--win',
+                    view.rightSide?.won && 'md-hero__score--win',
                   )}
                 >
-                  {view.opponentSide?.gamesWon ?? 0}
+                  {view.rightSide?.gamesWon ?? 0}
                 </div>
               </div>
               <div className="md-hero__score-caption">{view.statusLabel}</div>
             </>
           )}
         </div>
-        {view.opponentSide && <PlayerSide side={view.opponentSide} pos="r" />}
+        {view.rightSide && <PlayerSide side={view.rightSide} pos="r" />}
       </div>
 
-      {!isUpcoming && view.opponentSide && (
+      {!isUpcoming && view.rightSide && (
         <GameGrid view={view} matchId={matchId} />
       )}
     </section>
@@ -402,6 +438,9 @@ function GameGrid({ view, matchId }: { view: MatchView; matchId: string }) {
   for (let n = 1; n <= view.bestOf; n += 1) {
     slots.push(view.games.find((g) => g.gameNumber === n) ?? null)
   }
+  // Per-cell edit links are gated on participation — spectators can't write
+  // scores, so the row never wraps cells in `<Link>`s for them.
+  const canEdit = view.viewerIsParticipant
   return (
     <div className="md-games">
       <div className="md-games__grid">
@@ -414,19 +453,21 @@ function GameGrid({ view, matchId }: { view: MatchView; matchId: string }) {
         <div className="md-games__col-label">SETS</div>
 
         <GameGridSide
-          side={view.mySide}
+          side={view.leftSide}
           slots={slots}
-          mineSide
+          rowSide="left"
           matchId={matchId}
           currentGameNumber={view.currentGameNumber}
+          canEdit={canEdit}
         />
-        {view.opponentSide && (
+        {view.rightSide && (
           <GameGridSide
-            side={view.opponentSide}
+            side={view.rightSide}
             slots={slots}
-            mineSide={false}
+            rowSide="right"
             matchId={matchId}
             currentGameNumber={view.currentGameNumber}
+            canEdit={false}
           />
         )}
       </div>
@@ -437,15 +478,17 @@ function GameGrid({ view, matchId }: { view: MatchView; matchId: string }) {
 function GameGridSide({
   side,
   slots,
-  mineSide,
+  rowSide,
   matchId,
   currentGameNumber,
+  canEdit,
 }: {
   side: SideView
   slots: Array<GameView | null>
-  mineSide: boolean
+  rowSide: 'left' | 'right'
   matchId: string
   currentGameNumber: number | null
+  canEdit: boolean
 }) {
   const won = side.won === true
   return (
@@ -478,18 +521,21 @@ function GameGridSide({
             </div>
           )
         }
-        const cellWin = mineSide ? g.score.isMyWin : !g.score.isMyWin
-        const value = mineSide ? g.score.mine : g.score.opponent
-        const editTo = g.scoreId
-          ? scoringEditRoute(matchId, g.id, g.scoreId)
-          : null
+        const cellWin =
+          rowSide === 'left' ? g.score.leftWon : !g.score.leftWon
+        const value =
+          rowSide === 'left' ? g.score.leftPoints : g.score.rightPoints
+        const editTo =
+          canEdit && g.scoreId
+            ? scoringEditRoute(matchId, g.id, g.scoreId)
+            : null
         const className = cn(
           'md-games__cell',
           cellWin ? 'md-games__cell--win' : 'md-games__cell--loss',
         )
-        // Only render the per-cell edit link once per game (on my row) so the
-        // user doesn't see two stacked links over the same cell.
-        if (mineSide && editTo) {
+        // Only render the per-cell edit link on the participant's own row so
+        // the user doesn't see two stacked links over the same cell.
+        if (editTo) {
           return (
             <Link key={i} {...editTo} className={className}>
               {value}
@@ -516,12 +562,12 @@ function PlayersCard({ view }: { view: MatchView }) {
         <h3>Players</h3>
       </div>
       <div className="md-players">
-        <PlayerProfile side={view.mySide} won={view.mySide.won === true} />
+        <PlayerProfile side={view.leftSide} won={view.leftSide.won === true} />
         <div className="md-players__divider" />
-        {view.opponentSide && (
+        {view.rightSide && (
           <PlayerProfile
-            side={view.opponentSide}
-            won={view.opponentSide.won === true}
+            side={view.rightSide}
+            won={view.rightSide.won === true}
           />
         )}
       </div>

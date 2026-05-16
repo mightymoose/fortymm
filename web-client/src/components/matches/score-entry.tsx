@@ -79,7 +79,11 @@ function ScoreEntryInner({
     )
   }
 
-  if (!data.opponent_side) {
+  // The scoring screen is participant-only; spectators and solo-match owners
+  // (no opponent side) bounce back to the read-only details page.
+  const mySide = data.sides.find((s) => s.is_current_user_side) ?? null
+  const oppSide = data.sides.find((s) => !s.is_current_user_side) ?? null
+  if (!mySide || !oppSide) {
     return <Navigate {...matchDetailRoute(matchId)} />
   }
 
@@ -88,9 +92,9 @@ function ScoreEntryInner({
     return <Navigate {...matchDetailRoute(matchId)} />
   }
 
-  const mySideNumber = data.my_side.side_number === 2 ? 2 : 1
-  const oppName = data.opponent_side.players[0]?.username ?? 'Opponent'
-  const meName = data.my_side.players[0]?.username ?? 'You'
+  const mySideNumber = mySide.side_number === 2 ? 2 : 1
+  const oppName = oppSide.players[0]?.username ?? 'Opponent'
+  const meName = mySide.players[0]?.username ?? 'You'
   const meInitials = initialsOf(meName)
   const oppInitials = initialsOf(oppName)
 
@@ -98,14 +102,22 @@ function ScoreEntryInner({
   const gamesToWin = data.games_to_win
   const gameNumber = game.game_number
 
-  const meWins = data.my_side.games_won
-  const oppWins = data.opponent_side.games_won
+  const meWins = mySide.games_won
+  const oppWins = oppSide.games_won
 
   const persistedScore = mode.kind === 'edit' ? game.score : null
-  const me =
-    meTyped ?? (persistedScore ? String(persistedScore.my_points) : '')
-  const opp =
-    oppTyped ?? (persistedScore ? String(persistedScore.opponent_points) : '')
+  const persistedMe =
+    persistedScore &&
+    (mySideNumber === 1
+      ? persistedScore.side_1_points
+      : persistedScore.side_2_points)
+  const persistedOpp =
+    persistedScore &&
+    (mySideNumber === 1
+      ? persistedScore.side_2_points
+      : persistedScore.side_1_points)
+  const me = meTyped ?? (persistedMe !== null ? String(persistedMe) : '')
+  const opp = oppTyped ?? (persistedOpp !== null ? String(persistedOpp) : '')
 
   const sanitize = (value: string) => value.replace(/[^0-9]/g, '').slice(0, 2)
   const onMeChange = (value: string) => {
@@ -302,6 +314,7 @@ function ScoreEntryInner({
           data={data}
           activeGameId={gameId}
           matchId={matchId}
+          mySideNumber={mySideNumber}
         />
       </div>
     </div>
@@ -373,10 +386,12 @@ function Scoreline({
   data,
   activeGameId,
   matchId,
+  mySideNumber,
 }: {
   data: MatchDetails
   activeGameId: string
   matchId: string
+  mySideNumber: 1 | 2
 }) {
   const slots: Array<MatchDetails['games'][number] | null> = []
   for (let n = 1; n <= data.best_of; n += 1) {
@@ -406,16 +421,29 @@ function Scoreline({
             score ? 'done' : 'pending',
             isActive && 'active',
           )
+          const myPoints = score
+            ? mySideNumber === 1
+              ? score.side_1_points
+              : score.side_2_points
+            : null
+          const oppPoints = score
+            ? mySideNumber === 1
+              ? score.side_2_points
+              : score.side_1_points
+            : null
+          const isMyWin = score
+            ? score.winner_side_number === mySideNumber
+            : null
           const inner = (
             <>
               <div className="sl-n">G{g.game_number}</div>
               <div className="sl-scores">
-                <span className={cn('s', score?.is_my_win === true && 'w')}>
-                  {score?.my_points ?? '—'}
+                <span className={cn('s', isMyWin === true && 'w')}>
+                  {myPoints ?? '—'}
                 </span>
                 <span className="dash">–</span>
-                <span className={cn('s', score?.is_my_win === false && 'w')}>
-                  {score?.opponent_points ?? '—'}
+                <span className={cn('s', isMyWin === false && 'w')}>
+                  {oppPoints ?? '—'}
                 </span>
               </div>
             </>

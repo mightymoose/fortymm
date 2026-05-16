@@ -47,16 +47,16 @@ async def test_create_rated_match_with_registered_opponent(
     assert body["team_size"] == 1
     assert body["affects_rating"] is True
 
-    assert body["my_side"]["side_number"] == 1
-    assert body["my_side"]["is_current_user_side"] is True
-    assert body["my_side"]["players"][0]["user_id"] == str(me.id)
-    assert body["my_side"]["players"][0]["is_current_user"] is True
-    assert body["my_side"]["games_won"] == 0
+    assert [s["side_number"] for s in body["sides"]] == [1, 2]
+    my_side, opp_side = body["sides"]
+    assert my_side["is_current_user_side"] is True
+    assert my_side["players"][0]["user_id"] == str(me.id)
+    assert my_side["players"][0]["is_current_user"] is True
+    assert my_side["games_won"] == 0
 
-    assert body["opponent_side"]["side_number"] == 2
-    assert body["opponent_side"]["is_current_user_side"] is False
-    assert body["opponent_side"]["players"][0]["user_id"] == str(opponent.id)
-    assert body["opponent_side"]["players"][0]["is_current_user"] is False
+    assert opp_side["is_current_user_side"] is False
+    assert opp_side["players"][0]["user_id"] == str(opponent.id)
+    assert opp_side["players"][0]["is_current_user"] is False
 
     # Game 1 always exists from the moment a match is created.
     assert len(body["games"]) == 1
@@ -90,10 +90,10 @@ async def test_create_unrated_match_with_opponent(
     assert response.status_code == 201
     body = response.json()
     assert body["affects_rating"] is False
-    assert body["opponent_side"] is not None
+    assert len(body["sides"]) == 2
 
 
-async def test_create_match_without_opponent_has_no_opponent_side(
+async def test_create_match_without_opponent_has_a_single_side(
     api_client: AsyncClient, db_session: AsyncSession
 ):
     me = await start_session(api_client, db_session)
@@ -104,8 +104,8 @@ async def test_create_match_without_opponent_has_no_opponent_side(
     assert response.status_code == 201
     body = response.json()
     assert body["affects_rating"] is False
-    assert body["my_side"]["players"][0]["user_id"] == str(me.id)
-    assert body["opponent_side"] is None
+    assert len(body["sides"]) == 1
+    assert body["sides"][0]["players"][0]["user_id"] == str(me.id)
     # No opponent → nothing to score against, even though game 1 exists.
     assert body["current_game"] is not None
     assert body["can_score"] is False
@@ -192,7 +192,7 @@ async def _create_match(
     return response.json()
 
 
-async def test_get_match_returns_current_user_view(
+async def test_get_match_flags_current_user_side(
     api_client: AsyncClient, db_session: AsyncSession
 ):
     me = await start_session(api_client, db_session)
@@ -202,8 +202,10 @@ async def test_get_match_returns_current_user_view(
     response = await api_client.get(f"/v1/matches/{created['id']}")
     assert response.status_code == 200
     body = response.json()
-    assert body["my_side"]["players"][0]["user_id"] == str(me.id)
-    assert body["opponent_side"]["players"][0]["user_id"] == str(opponent.id)
+    my_side = next(s for s in body["sides"] if s["is_current_user_side"])
+    opp_side = next(s for s in body["sides"] if not s["is_current_user_side"])
+    assert my_side["players"][0]["user_id"] == str(me.id)
+    assert opp_side["players"][0]["user_id"] == str(opponent.id)
 
 
 async def test_details_perspective_swaps_per_caller(
@@ -217,26 +219,38 @@ async def test_details_perspective_swaps_per_caller(
         mine = (await api_client.get(f"/v1/matches/{created['id']}")).json()
         theirs = (await other_client.get(f"/v1/matches/{created['id']}")).json()
 
-    assert mine["my_side"]["players"][0]["user_id"] == str(me.id)
-    assert theirs["my_side"]["players"][0]["user_id"] == str(them.id)
-    # The two sides flip without changing which underlying row is which.
-    assert mine["my_side"]["side_number"] == theirs["opponent_side"]["side_number"]
-    assert mine["opponent_side"]["side_number"] == theirs["my_side"]["side_number"]
+    my_perspective = next(s for s in mine["sides"] if s["is_current_user_side"])
+    their_perspective = next(
+        s for s in theirs["sides"] if s["is_current_user_side"]
+    )
+    assert my_perspective["players"][0]["user_id"] == str(me.id)
+    assert their_perspective["players"][0]["user_id"] == str(them.id)
+    # The flag flips per caller, but the underlying side numbers are stable.
+    assert my_perspective["side_number"] != their_perspective["side_number"]
 
 
-async def test_get_match_404_for_non_participant(
+async def test_get_match_is_open_to_non_participants(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    await start_session(api_client, db_session)
+    spectator = await start_session(api_client, db_session)
     async with make_client() as other_client:
-        them = await start_session(other_client, db_session)
+        await start_session(other_client, db_session)
         bystander = await make_user(db_session, "bystander")
         created = await _create_match(other_client, bystander.id)
-        del them
 
         response = await api_client.get(f"/v1/matches/{created['id']}")
-        assert response.status_code == 404
-        assert response.json()["detail"] == "Match not found."
+        assert response.status_code == 200
+        body = response.json()
+        # Spectator isn't on either side — both flags are False, and the
+        # write affordance is suppressed regardless of game state.
+        assert all(not s["is_current_user_side"] for s in body["sides"])
+        assert all(
+            not p["is_current_user"]
+            for s in body["sides"]
+            for p in s["players"]
+        )
+        assert body["can_score"] is False
+        del spectator
 
 
 async def test_get_unknown_match_is_404(
@@ -471,8 +485,7 @@ async def test_scoring_game_1_keeps_in_progress_and_adds_game_2(
     body = response.json()
     assert body["status"] == "in_progress"
     assert body["status_label"] == "Live"
-    assert body["my_side"]["games_won"] == 1
-    assert body["opponent_side"]["games_won"] == 0
+    assert [s["games_won"] for s in body["sides"]] == [1, 0]
 
     # Game 2 has been opened.
     assert len(body["games"]) == 2
@@ -507,8 +520,7 @@ async def test_deciding_game_flips_to_completed_with_no_trailing_unscored(
     assert after_g2["status_label"] == "Final"
     assert len(after_g2["games"]) == 2  # no trailing unscored game
     assert after_g2["current_game"] is None
-    assert after_g2["my_side"]["won"] is True
-    assert after_g2["opponent_side"]["won"] is False
+    assert [s["won"] for s in after_g2["sides"]] == [True, False]
     assert after_g2["can_score"] is False
 
 
@@ -553,8 +565,7 @@ async def test_put_edits_a_past_games_score(
     )
     assert edited.status_code == 200
     body = edited.json()
-    assert body["my_side"]["games_won"] == 0
-    assert body["opponent_side"]["games_won"] == 1
+    assert [s["games_won"] for s in body["sides"]] == [0, 1]
     # Status stays in_progress; game 2 stays open.
     assert body["status"] == "in_progress"
 
@@ -589,8 +600,7 @@ async def test_put_reopens_a_completed_match(
     assert reopened.status_code == 200
     body = reopened.json()
     assert body["status"] == "in_progress"
-    assert body["my_side"]["won"] is None
-    assert body["opponent_side"]["won"] is None
+    assert all(s["won"] is None for s in body["sides"])
     # Game 3 has been opened by reconciliation.
     assert len(body["games"]) == 3
     assert body["games"][2]["score"] is None

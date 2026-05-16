@@ -152,34 +152,38 @@ export class MatchStore {
         best_of: body.best_of,
         games_to_win: Math.ceil(body.best_of / 2),
         affects_rating: body.rated && opponent !== null,
-        my_side: {
-          side_number: 1,
-          players: [
-            {
-              user_id: 'u-me',
-              username: this.creatorUsername,
-              is_current_user: true,
-            },
-          ],
-          games_won: 0,
-          won: null,
-          is_current_user_side: true,
-        },
-        opponent_side: opponent
-          ? {
-              side_number: 2,
-              players: [
+        sides: [
+          {
+            side_number: 1,
+            players: [
+              {
+                user_id: 'u-me',
+                username: this.creatorUsername,
+                is_current_user: true,
+              },
+            ],
+            games_won: 0,
+            won: null,
+            is_current_user_side: true,
+          },
+          ...(opponent
+            ? [
                 {
-                  user_id: opponent.id,
-                  username: opponent.username,
-                  is_current_user: false,
+                  side_number: 2,
+                  players: [
+                    {
+                      user_id: opponent.id,
+                      username: opponent.username,
+                      is_current_user: false,
+                    },
+                  ],
+                  games_won: 0,
+                  won: null,
+                  is_current_user_side: false,
                 },
-              ],
-              games_won: 0,
-              won: null,
-              is_current_user_side: false,
-            }
-          : null,
+              ]
+            : []),
+        ],
       }),
     )
   }

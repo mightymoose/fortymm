@@ -13,7 +13,58 @@ import { describe, expect, it } from 'vitest'
 import { server } from '@/mocks/server'
 import { matchDetails } from '@/test/factories'
 import { useCreateScore, useUpdateScore } from '@/api/matches'
+import type { components } from '@/api/schema'
 import { ScoreEntry } from './score-entry'
+
+type MatchDetailsSide = components['schemas']['MatchDetailsSide']
+type MatchDetailsScore = components['schemas']['MatchDetailsScore']
+
+// rita.kovac (current user) is always side 1, nguyen.t (opponent) is side 2.
+function participantSides({
+  meWins,
+  oppWins,
+  meWon = null,
+}: {
+  meWins: number
+  oppWins: number
+  meWon?: boolean | null
+}): [MatchDetailsSide, MatchDetailsSide] {
+  return [
+    {
+      side_number: 1,
+      players: [
+        { user_id: 'u-me', username: 'rita.kovac', is_current_user: true },
+      ],
+      games_won: meWins,
+      won: meWon,
+      is_current_user_side: true,
+    },
+    {
+      side_number: 2,
+      players: [
+        { user_id: 'u-opp', username: 'nguyen.t', is_current_user: false },
+      ],
+      games_won: oppWins,
+      won: meWon === null ? null : !meWon,
+      is_current_user_side: false,
+    },
+  ]
+}
+
+// `myPoints` / `oppPoints` are written from the current-user side-1
+// perspective; the helper picks the winning side number.
+function score(
+  id: string,
+  myPoints: number,
+  oppPoints: number,
+): MatchDetailsScore {
+  return {
+    id,
+    side_1_points: myPoints,
+    side_2_points: oppPoints,
+    winner_side_number: myPoints > oppPoints ? 1 : 2,
+  }
+}
 
 type RouteSpec =
   | { kind: 'create'; matchId: string; gameId: string }
@@ -109,35 +160,10 @@ function inProgressMatch(overrides: Parameters<typeof matchDetails>[0] = {}) {
     best_of: 5,
     games_to_win: 3,
     affects_rating: true,
-    my_side: {
-      side_number: 1,
-      players: [
-        { user_id: 'u-me', username: 'rita.kovac', is_current_user: true },
-      ],
-      games_won: 1,
-      won: null,
-      is_current_user_side: true,
-    },
-    opponent_side: {
-      side_number: 2,
-      players: [
-        { user_id: 'u-opp', username: 'nguyen.t', is_current_user: false },
-      ],
-      games_won: 1,
-      won: null,
-      is_current_user_side: false,
-    },
+    sides: participantSides({ meWins: 1, oppWins: 1 }),
     games: [
-      {
-        id: 'g-1',
-        game_number: 1,
-        score: { id: 's-1', my_points: 11, opponent_points: 8, is_my_win: true },
-      },
-      {
-        id: 'g-2',
-        game_number: 2,
-        score: { id: 's-2', my_points: 9, opponent_points: 11, is_my_win: false },
-      },
+      { id: 'g-1', game_number: 1, score: score('s-1', 11, 8) },
+      { id: 'g-2', game_number: 2, score: score('s-2', 9, 11) },
       { id: 'g-3', game_number: 3, score: null },
     ],
     current_game: { id: 'g-3', game_number: 3 },
@@ -158,50 +184,11 @@ describe('ScoreEntry — create', () => {
           captured = await request.json()
           // After scoring game 3, an unscored game 4 is reconciled in.
           const next = inProgressMatch({
-            my_side: {
-              side_number: 1,
-              players: [
-                {
-                  user_id: 'u-me',
-                  username: 'rita.kovac',
-                  is_current_user: true,
-                },
-              ],
-              games_won: 2,
-              won: null,
-              is_current_user_side: true,
-            },
+            sides: participantSides({ meWins: 2, oppWins: 1 }),
             games: [
-              {
-                id: 'g-1',
-                game_number: 1,
-                score: {
-                  id: 's-1',
-                  my_points: 11,
-                  opponent_points: 8,
-                  is_my_win: true,
-                },
-              },
-              {
-                id: 'g-2',
-                game_number: 2,
-                score: {
-                  id: 's-2',
-                  my_points: 9,
-                  opponent_points: 11,
-                  is_my_win: false,
-                },
-              },
-              {
-                id: 'g-3',
-                game_number: 3,
-                score: {
-                  id: 's-3',
-                  my_points: 11,
-                  opponent_points: 4,
-                  is_my_win: true,
-                },
-              },
+              { id: 'g-1', game_number: 1, score: score('s-1', 11, 8) },
+              { id: 'g-2', game_number: 2, score: score('s-2', 9, 11) },
+              { id: 'g-3', game_number: 3, score: score('s-3', 11, 4) },
               { id: 'g-4', game_number: 4, score: null },
             ],
             current_game: { id: 'g-4', game_number: 4 },
@@ -232,36 +219,12 @@ describe('ScoreEntry — create', () => {
       http.get('*/v1/matches/m-1', () =>
         HttpResponse.json(
           inProgressMatch({
-            my_side: {
-              side_number: 1,
-              players: [
-                {
-                  user_id: 'u-me',
-                  username: 'rita.kovac',
-                  is_current_user: true,
-                },
-              ],
-              // Already 2-1 leading; this game decides it.
-              games_won: 2,
-              won: null,
-              is_current_user_side: true,
-            },
+            // Already 2-1 leading; this game decides it.
+            sides: participantSides({ meWins: 2, oppWins: 1 }),
             games: [
-              {
-                id: 'g-1',
-                game_number: 1,
-                score: { id: 's-1', my_points: 11, opponent_points: 4, is_my_win: true },
-              },
-              {
-                id: 'g-2',
-                game_number: 2,
-                score: { id: 's-2', my_points: 11, opponent_points: 6, is_my_win: true },
-              },
-              {
-                id: 'g-3',
-                game_number: 3,
-                score: { id: 's-3', my_points: 5, opponent_points: 11, is_my_win: false },
-              },
+              { id: 'g-1', game_number: 1, score: score('s-1', 11, 4) },
+              { id: 'g-2', game_number: 2, score: score('s-2', 11, 6) },
+              { id: 'g-3', game_number: 3, score: score('s-3', 5, 11) },
               { id: 'g-4', game_number: 4, score: null },
             ],
             current_game: { id: 'g-4', game_number: 4 },
@@ -272,21 +235,9 @@ describe('ScoreEntry — create', () => {
         const done = inProgressMatch({
           status: 'completed',
           status_label: 'Final',
-          my_side: {
-            side_number: 1,
-            players: [
-              { user_id: 'u-me', username: 'rita.kovac', is_current_user: true },
-            ],
-            games_won: 3,
-            won: true,
-            is_current_user_side: true,
-          },
+          sides: participantSides({ meWins: 3, oppWins: 1, meWon: true }),
           games: [
-            {
-              id: 'g-4',
-              game_number: 4,
-              score: { id: 's-4', my_points: 11, opponent_points: 7, is_my_win: true },
-            },
+            { id: 'g-4', game_number: 4, score: score('s-4', 11, 7) },
           ],
           current_game: null,
           can_score: false,
@@ -326,16 +277,7 @@ describe('ScoreEntry — create', () => {
         return HttpResponse.json(
           inProgressMatch({
             games: [
-              {
-                id: 'g-3',
-                game_number: 3,
-                score: {
-                  id: 's-3',
-                  my_points: 12,
-                  opponent_points: 10,
-                  is_my_win: true,
-                },
-              },
+              { id: 'g-3', game_number: 3, score: score('s-3', 12, 10) },
               { id: 'g-4', game_number: 4, score: null },
             ],
             current_game: { id: 'g-4', game_number: 4 },
@@ -377,12 +319,7 @@ describe('ScoreEntry — create', () => {
               {
                 id: 'g-3',
                 game_number: 3,
-                score: {
-                  id: 's-3-existing',
-                  my_points: 11,
-                  opponent_points: 6,
-                  is_my_win: true,
-                },
+                score: score('s-3-existing', 11, 6),
               },
               { id: 'g-4', game_number: 4, score: null },
             ],
@@ -505,53 +442,10 @@ describe('ScoreEntry — edit', () => {
             status_label: 'Final',
             best_of: 3,
             games_to_win: 2,
-            my_side: {
-              side_number: 1,
-              players: [
-                {
-                  user_id: 'u-me',
-                  username: 'rita.kovac',
-                  is_current_user: true,
-                },
-              ],
-              games_won: 2,
-              won: true,
-              is_current_user_side: true,
-            },
-            opponent_side: {
-              side_number: 2,
-              players: [
-                {
-                  user_id: 'u-opp',
-                  username: 'nguyen.t',
-                  is_current_user: false,
-                },
-              ],
-              games_won: 0,
-              won: false,
-              is_current_user_side: false,
-            },
+            sides: participantSides({ meWins: 2, oppWins: 0, meWon: true }),
             games: [
-              {
-                id: 'g-1',
-                game_number: 1,
-                score: {
-                  id: 's-1',
-                  my_points: 11,
-                  opponent_points: 4,
-                  is_my_win: true,
-                },
-              },
-              {
-                id: 'g-2',
-                game_number: 2,
-                score: {
-                  id: 's-2',
-                  my_points: 11,
-                  opponent_points: 6,
-                  is_my_win: true,
-                },
-              },
+              { id: 'g-1', game_number: 1, score: score('s-1', 11, 4) },
+              { id: 'g-2', game_number: 2, score: score('s-2', 11, 6) },
             ],
             current_game: null,
             can_score: false,
@@ -566,53 +460,10 @@ describe('ScoreEntry — edit', () => {
             status_label: 'Live',
             best_of: 3,
             games_to_win: 2,
-            my_side: {
-              side_number: 1,
-              players: [
-                {
-                  user_id: 'u-me',
-                  username: 'rita.kovac',
-                  is_current_user: true,
-                },
-              ],
-              games_won: 1,
-              won: null,
-              is_current_user_side: true,
-            },
-            opponent_side: {
-              side_number: 2,
-              players: [
-                {
-                  user_id: 'u-opp',
-                  username: 'nguyen.t',
-                  is_current_user: false,
-                },
-              ],
-              games_won: 1,
-              won: null,
-              is_current_user_side: false,
-            },
+            sides: participantSides({ meWins: 1, oppWins: 1 }),
             games: [
-              {
-                id: 'g-1',
-                game_number: 1,
-                score: {
-                  id: 's-1',
-                  my_points: 11,
-                  opponent_points: 4,
-                  is_my_win: true,
-                },
-              },
-              {
-                id: 'g-2',
-                game_number: 2,
-                score: {
-                  id: 's-2',
-                  my_points: 9,
-                  opponent_points: 11,
-                  is_my_win: false,
-                },
-              },
+              { id: 'g-1', game_number: 1, score: score('s-1', 11, 4) },
+              { id: 'g-2', game_number: 2, score: score('s-2', 9, 11) },
               { id: 'g-3', game_number: 3, score: null },
             ],
             current_game: { id: 'g-3', game_number: 3 },

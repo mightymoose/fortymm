@@ -68,9 +68,9 @@ class MatchDetailsSide(BaseModel):
 
 class MatchDetailsScore(BaseModel):
     id: uuid.UUID
-    my_points: int
-    opponent_points: int
-    is_my_win: bool
+    side_1_points: int
+    side_2_points: int
+    winner_side_number: int
 
 
 class MatchDetailsGame(BaseModel):
@@ -94,8 +94,10 @@ class MatchDetails(BaseModel):
     team_size: int
     affects_rating: bool
     created_at: datetime
-    my_side: MatchDetailsSide
-    opponent_side: MatchDetailsSide | None
+    # Sorted by ``side_number`` (1 then 2). Solo matches return a single side.
+    # Per-side ``is_current_user_side`` lets the FE pick a viewing perspective
+    # without the BFF baking one in — non-participants can read this payload.
+    sides: list[MatchDetailsSide]
     games: list[MatchDetailsGame]
     current_game: MatchDetailsCurrentGame | None
     can_score: bool

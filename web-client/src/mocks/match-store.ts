@@ -151,9 +151,10 @@ export function projectMatchDetails(seed: SeedMatch): MatchDetails {
       score: g.score
         ? {
             id: g.score.id,
-            my_points: g.score.side_1_points,
-            opponent_points: g.score.side_2_points,
-            is_my_win: g.score.side_1_points > g.score.side_2_points,
+            side_1_points: g.score.side_1_points,
+            side_2_points: g.score.side_2_points,
+            winner_side_number:
+              g.score.side_1_points > g.score.side_2_points ? 1 : 2,
           }
         : null,
     }))
@@ -169,8 +170,7 @@ export function projectMatchDetails(seed: SeedMatch): MatchDetails {
     team_size: 1,
     affects_rating: seed.affects_rating,
     created_at: seed.created_at,
-    my_side: mySide,
-    opponent_side: opponentSide,
+    sides: opponentSide ? [mySide, opponentSide] : [mySide],
     games,
     current_game: current
       ? { id: current.id, game_number: current.game_number }

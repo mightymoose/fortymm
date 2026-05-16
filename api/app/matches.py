@@ -47,7 +47,7 @@ MAX_PAGE_SIZE = 100
 def _side_schema(
     side: MatchSide,
     side_wins: dict[int, int],
-    current_user_id: uuid.UUID,
+    current_user_id: uuid.UUID | None,
 ) -> MatchDetailsSide:
     return MatchDetailsSide(
         side_number=side.side_number,
@@ -161,25 +161,14 @@ def current_unscored_game(match: Match) -> MatchGame | None:
 
 
 def _serialize_details(match: Match, current_user_id: uuid.UUID) -> MatchDetails:
-    mine = my_side(match, current_user_id)
-    if mine is None:
-        raise RuntimeError("serialize_details called for non-participant")
-    opp = opponent_side(match, current_user_id)
     side_wins = side_win_counts(match)
-    my_number = mine.side_number
 
     def _score_schema(score: MatchGameScore) -> MatchDetailsScore:
-        my_points = (
-            score.side_1_points if my_number == 1 else score.side_2_points
-        )
-        opp_points = (
-            score.side_2_points if my_number == 1 else score.side_1_points
-        )
         return MatchDetailsScore(
             id=score.id,
-            my_points=my_points,
-            opponent_points=opp_points,
-            is_my_win=_game_winner_side(score) == my_number,
+            side_1_points=score.side_1_points,
+            side_2_points=score.side_2_points,
+            winner_side_number=_game_winner_side(score),
         )
 
     games_sorted = sorted(match.games, key=lambda g: g.game_number)
@@ -201,6 +190,9 @@ def _serialize_details(match: Match, current_user_id: uuid.UUID) -> MatchDetails
         else None
     )
 
+    sides_sorted = sorted(match.sides, key=lambda s: s.side_number)
+    is_participant = _is_participant(match, current_user_id)
+
     return MatchDetails(
         id=match.id,
         status=match.status,
@@ -211,13 +203,17 @@ def _serialize_details(match: Match, current_user_id: uuid.UUID) -> MatchDetails
         team_size=match.match_settings.team_size,
         affects_rating=match.match_settings.affects_rating,
         created_at=match.created_at,
-        my_side=_side_schema(mine, side_wins, current_user_id),
-        opponent_side=(
-            _side_schema(opp, side_wins, current_user_id) if opp else None
-        ),
+        sides=[
+            _side_schema(side, side_wins, current_user_id)
+            for side in sides_sorted
+        ],
         games=games,
         current_game=current_game,
-        can_score=current_game is not None and opp is not None,
+        # Spectators see scores, never the Score CTA — writes still 404 for
+        # non-participants in the score endpoints below.
+        can_score=(
+            current_game is not None and len(match.sides) >= 2 and is_participant
+        ),
     )
 
 
@@ -414,8 +410,10 @@ async def get_match(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_session),
 ) -> MatchDetails:
+    # Open to any signed-in viewer. The serializer flags whether the current
+    # user is on a side; write paths below still gate on participation.
     match = await _load_match(db, match_id)
-    if match is None or not _is_participant(match, current_user.id):
+    if match is None:
         raise HTTPException(status_code=404, detail="Match not found.")
     return _serialize_details(match, current_user.id)
 
