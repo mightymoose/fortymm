@@ -1478,7 +1478,7 @@ function ToastCard({
       : 'var(--info)'
   return (
     <div
-      className="sonner relative flex w-[360px] flex-wrap items-start gap-2.5 rounded-[var(--radius)] border border-[color:var(--border-subtle)] bg-[color:var(--bg-card)] px-[18px] py-4"
+      className={`sonner sonner-${tone} relative flex w-[360px] flex-wrap items-start gap-2.5 rounded-[var(--radius)] border border-[color:var(--border-subtle)] bg-[color:var(--bg-card)] px-[18px] py-4`}
       style={{ borderLeft: `3px solid ${accent}`, boxShadow: 'var(--shadow-lg)' }}
     >
       <div className="flex min-w-0 flex-[1_1_100%] flex-col gap-1 pr-6">
