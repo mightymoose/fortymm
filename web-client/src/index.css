@@ -414,8 +414,14 @@ body.dark.fortymm-theme {
    specify Sonner's own runtime-injected stylesheet (same specificity would
    lose the tie, since Sonner's <style> is appended later). */
 [data-sonner-toast].cn-toast[data-styled='true'] {
-  padding: 14px 16px;
+  padding: 16px 18px;
+  border-radius: var(--radius);
   box-shadow: var(--shadow-lg);
+  /* Sonner lays content + action in a single centered row. Wrap so the
+     action button drops onto its own line, bottom-right, when present. */
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 10px;
 }
 [data-sonner-toast].cn-toast[data-type='success'] {
   border-left: 3px solid var(--serve-500);
@@ -426,22 +432,65 @@ body.dark.fortymm-theme {
 [data-sonner-toast].cn-toast[data-type='info'] {
   border-left: 3px solid var(--info);
 }
-/* The icon and close-button rules below need one more attribute over the
-   rules above: Sonner styles those parts with `[data-sonner-toast]
-   [data-styled='true'] [data-part]` (0,3,0), which would tie — so match
-   `[data-styled='true']` too and land at (0,4,0). */
+/* The icon, content, title, description, button, and close-button rules
+   below need one more attribute over the rules above: Sonner styles those
+   parts with `[data-sonner-toast][data-styled='true'] [data-part]` (0,3,0),
+   which would tie — so match `[data-styled='true']` too and land at (0,4,0). */
 
 /* The kit's toast has no leading status icon — drop Sonner's. */
 [data-sonner-toast][data-styled='true'].cn-toast [data-icon] {
   display: none;
 }
+/* Title + description stack takes the full first row so the action button
+   wraps below to the right. Reserve room on the right for the absolutely-
+   positioned close button. */
+[data-sonner-toast][data-styled='true'].cn-toast [data-content] {
+  flex: 1 1 100%;
+  min-width: 0;
+  gap: 4px;
+  padding-right: 24px;
+}
+[data-sonner-toast][data-styled='true'].cn-toast [data-title] {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--fg-1);
+}
+[data-sonner-toast][data-styled='true'].cn-toast [data-description] {
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--fg-3);
+}
+/* Action button — a generous light pill with dark text, pushed right when
+   it wraps onto its own line. Overrides Sonner's tiny 24px default. */
+[data-sonner-toast][data-styled='true'].cn-toast [data-button] {
+  margin-left: auto;
+  height: auto;
+  padding: 8px 18px;
+  font-size: 13px;
+  font-weight: 500;
+  border-radius: calc(var(--radius) - 2px);
+  background: var(--chalk-50);
+  color: var(--ink-800);
+}
+[data-sonner-toast][data-styled='true'].cn-toast [data-button]:hover {
+  background: var(--chalk-300);
+}
 /* Pull the close button inside the toast at the top-right corner (Sonner
-   defaults it to the top-left, translated outside the card). */
+   defaults it to the top-left, translated outside the card) and strip the
+   circular chip styling so it reads as a plain X icon. */
 [data-sonner-toast][data-styled='true'].cn-toast [data-close-button] {
   left: auto;
-  right: 8px;
-  top: 8px;
+  right: 10px;
+  top: 12px;
   transform: none;
+  background: transparent;
+  border: none;
+  color: var(--fg-3);
+  border-radius: 4px;
+}
+[data-sonner-toast][data-styled='true'].cn-toast [data-close-button]:hover {
+  background: transparent;
+  color: var(--fg-1);
 }
 
 .fortymm-theme .ball-dot {

@@ -12,6 +12,7 @@ import {
   RefreshCw,
   Search,
   TriangleAlert,
+  X,
   XCircle,
 } from 'lucide-react'
 
@@ -1379,9 +1380,15 @@ function FeedbackSection() {
         </div>
       </Showcase>
 
-      <Showcase title="Sonner / Toast" tag="3 variants">
+      <Showcase title="Sonner / Toast" tag="4 variants">
         <div className="flex flex-col gap-5">
           <div className="flex max-w-[420px] flex-col gap-3">
+            <ToastCard
+              tone="info"
+              title="A new version of FortyMM is ready"
+              body="Reload to get the latest update."
+              action="Reload"
+            />
             <ToastCard
               tone="success"
               title="Match logged"
@@ -1399,6 +1406,18 @@ function FeedbackSection() {
             />
           </div>
           <div className="flex flex-wrap gap-3">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() =>
+                toast.info('A new version of FortyMM is ready', {
+                  description: 'Reload to get the latest update.',
+                  action: { label: 'Reload', onClick: () => {} },
+                })
+              }
+            >
+              Trigger update
+            </Button>
             <Button
               variant="outline"
               size="sm"
@@ -1444,10 +1463,12 @@ function ToastCard({
   tone,
   title,
   body,
+  action,
 }: {
   tone: 'success' | 'error' | 'info'
   title: string
   body: string
+  action?: string
 }) {
   const accent =
     tone === 'success'
@@ -1457,13 +1478,29 @@ function ToastCard({
       : 'var(--info)'
   return (
     <div
-      className={`sonner sonner-${tone} flex w-[360px] items-start gap-3 rounded-[10px] border border-[color:var(--border-subtle)] bg-[color:var(--bg-card)] px-4 py-3.5`}
+      className="sonner relative flex w-[360px] flex-wrap items-start gap-2.5 rounded-[var(--radius)] border border-[color:var(--border-subtle)] bg-[color:var(--bg-card)] px-[18px] py-4"
       style={{ borderLeft: `3px solid ${accent}`, boxShadow: 'var(--shadow-lg)' }}
     >
-      <div className="flex flex-col gap-0.5">
-        <p className="text-sm font-medium text-[color:var(--fg-1)]">{title}</p>
-        <p className="text-xs text-[color:var(--fg-3)]">{body}</p>
+      <div className="flex min-w-0 flex-[1_1_100%] flex-col gap-1 pr-6">
+        <p className="text-[15px] font-semibold leading-tight text-[color:var(--fg-1)]">
+          {title}
+        </p>
+        <p className="text-[13px] leading-snug text-[color:var(--fg-3)]">
+          {body}
+        </p>
       </div>
+      {action ? (
+        <button
+          type="button"
+          className="ml-auto rounded-[calc(var(--radius)-2px)] bg-[color:var(--chalk-50)] px-[18px] py-2 text-[13px] font-medium text-[color:var(--ink-800)]"
+        >
+          {action}
+        </button>
+      ) : null}
+      <X
+        aria-hidden="true"
+        className="absolute right-[10px] top-3 size-4 text-[color:var(--fg-3)]"
+      />
     </div>
   )
 }
