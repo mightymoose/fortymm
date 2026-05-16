@@ -19,3 +19,9 @@ export function sessionQueryOptions() {
 export function useSession() {
   return useQuery(sessionQueryOptions())
 }
+
+/** True when the current session carries `name` in its permissions list. */
+export function useHasPermission(name: string): boolean {
+  const { data } = useSession()
+  return data?.data.user.permissions.includes(name) ?? false
+}

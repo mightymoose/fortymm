@@ -1,4 +1,5 @@
 import type { Locator, Page, Request as PWRequest, Route } from '@playwright/test'
+import { PERM } from '../../../src/lib/permissions'
 import { sessionResponse } from '../../../src/test/factories'
 import {
   createRbacState,
@@ -19,7 +20,7 @@ export type { Permission, RbacUser, Role, SeedSpec }
 const SESSION = sessionResponse({
   user: {
     username: 'rita.kovac',
-    permissions: ['administration.view', 'authorization.manage'],
+    permissions: [PERM.ADMIN_VIEW, PERM.AUTH_MANAGE],
   },
 })
 

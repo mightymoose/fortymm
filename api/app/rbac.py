@@ -71,8 +71,7 @@ async def _load_role_permission_map(
 ) -> dict[uuid.UUID, list[uuid.UUID]]:
     if not role_ids:
         return {}
-    # Order by permission name so response payloads are stable across calls —
-    # tests and the UI assume the array is sorted.
+    # Stable order: tests and the UI assume sorted permission_ids.
     result = await db.execute(
         select(RolePermission.role_id, RolePermission.permission_id)
         .join(Permission, Permission.id == RolePermission.permission_id)
@@ -176,16 +175,17 @@ async def _validate_permission_ids(
 
 async def _name_taken(
     db: AsyncSession,
-    model: type,
+    id_col,
+    name_col,
     name: str,
     *,
     exclude_id: uuid.UUID | None = None,
 ) -> bool:
-    """Case-insensitive uniqueness check for `name` columns on Role/Permission/User."""
-    field = getattr(model, "name", None) or model.username  # type: ignore[attr-defined]
-    stmt = select(model.id).where(func.lower(field) == name.lower())
+    """Case-insensitive uniqueness check. Pass the model's id + name columns
+    (e.g. `Role.id, Role.name` or `User.id, User.username`)."""
+    stmt = select(id_col).where(func.lower(name_col) == name.lower())
     if exclude_id is not None:
-        stmt = stmt.where(model.id != exclude_id)
+        stmt = stmt.where(id_col != exclude_id)
     return (await db.execute(stmt.limit(1))).first() is not None
 
 
@@ -226,7 +226,7 @@ async def create_permission(
     payload: PermissionCreate,
     db: AsyncSession = Depends(get_session),
 ) -> PermissionRead:
-    if await _name_taken(db, Permission, payload.name):
+    if await _name_taken(db, Permission.id, Permission.name, payload.name):
         raise HTTPException(
             status_code=409, detail="permission name already exists"
         )
@@ -263,7 +263,9 @@ async def update_permission(
     if (
         "name" in data
         and data["name"]
-        and await _name_taken(db, Permission, data["name"], exclude_id=perm.id)
+        and await _name_taken(
+            db, Permission.id, Permission.name, data["name"], exclude_id=perm.id
+        )
     ):
         raise HTTPException(
             status_code=409, detail="permission name already exists"
@@ -318,7 +320,7 @@ async def create_role(
             detail="provide either template_id or permission_ids, not both",
         )
 
-    if await _name_taken(db, Role, payload.name):
+    if await _name_taken(db, Role.id, Role.name, payload.name):
         raise HTTPException(status_code=409, detail="role name already exists")
 
     permission_ids: list[uuid.UUID] = []
@@ -384,7 +386,9 @@ async def update_role(
     if (
         "name" in data
         and data["name"]
-        and await _name_taken(db, Role, data["name"], exclude_id=role.id)
+        and await _name_taken(
+            db, Role.id, Role.name, data["name"], exclude_id=role.id
+        )
     ):
         raise HTTPException(status_code=409, detail="role name already exists")
 
@@ -447,7 +451,7 @@ async def create_user(
     payload: RbacUserCreate,
     db: AsyncSession = Depends(get_session),
 ) -> RbacUserRead:
-    if await _name_taken(db, User, payload.username):
+    if await _name_taken(db, User.id, User.username, payload.username):
         raise HTTPException(status_code=409, detail="username already exists")
     user = User(username=payload.username)
     db.add(user)

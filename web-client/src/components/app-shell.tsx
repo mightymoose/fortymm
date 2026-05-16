@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { Link, useRouterState } from '@tanstack/react-router'
 import { Bell, Gauge, Globe, Key, Mail, MapPin, Shield, User, Users } from 'lucide-react'
 import { useSession } from '@/api/session'
+import { PERM } from '@/lib/permissions'
 import { UserMenu } from './user-menu'
 
 type NavChild = { label: string; to: string; hash?: string; icon: ReactNode; requires?: string }
@@ -97,7 +98,7 @@ const NAV_SECTIONS: NavSection[] = [
       {
         label: 'Administration',
         to: '/admin',
-        requires: 'administration.view',
+        requires: PERM.ADMIN_VIEW,
         icon: (
           <svg
             width="18"
@@ -115,20 +116,14 @@ const NAV_SECTIONS: NavSection[] = [
         ),
         children: [
           { label: 'Overview', to: '/admin', icon: <Gauge size={15} strokeWidth={1.75} /> },
-          { label: 'Roles', to: '/admin/roles', icon: <Shield size={15} strokeWidth={1.75} />, requires: 'authorization.manage' },
-          { label: 'Permissions', to: '/admin/permissions', icon: <Key size={15} strokeWidth={1.75} />, requires: 'authorization.manage' },
-          { label: 'Users', to: '/admin/users', icon: <Users size={15} strokeWidth={1.75} />, requires: 'authorization.manage' },
+          { label: 'Roles', to: '/admin/roles', icon: <Shield size={15} strokeWidth={1.75} />, requires: PERM.AUTH_MANAGE },
+          { label: 'Permissions', to: '/admin/permissions', icon: <Key size={15} strokeWidth={1.75} />, requires: PERM.AUTH_MANAGE },
+          { label: 'Users', to: '/admin/users', icon: <Users size={15} strokeWidth={1.75} />, requires: PERM.AUTH_MANAGE },
         ],
       },
     ],
   },
 ]
-
-function withoutChildren(item: NavItem): NavItem {
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const { children, ...flat } = item
-  return flat
-}
 
 /**
  * Drops items / children the user lacks permission for. When an item with
@@ -148,10 +143,11 @@ function filterNavByPermissions(
         if (!allowed(item.requires)) return []
         if (!item.children) return [item]
         const children = item.children.filter((c) => allowed(c.requires))
-        if (children.length === 0) return [withoutChildren(item)]
         const onlyOverview =
           children.length === 1 && children[0].to === item.to && !children[0].hash
-        if (onlyOverview) return [withoutChildren(item)]
+        if (children.length === 0 || onlyOverview) {
+          return [{ ...item, children: undefined }]
+        }
         return [{ ...item, children }]
       }),
     }))
@@ -165,14 +161,14 @@ interface AppShellProps {
 export function AppShell({ children }: AppShellProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const pathname = useRouterState({ select: (s) => s.location.pathname })
-  const { data: session } = useSession()
+  const permissions = useSession().data?.data.user.permissions
+  // TanStack Query's default structuralSharing preserves array identity across
+  // background refetches when the data is unchanged, so depending on the
+  // permissions array (not the whole session) skips the rebuild on no-op
+  // refetches.
   const sections = useMemo(
-    () =>
-      filterNavByPermissions(
-        NAV_SECTIONS,
-        new Set(session?.data.user.permissions ?? []),
-      ),
-    [session],
+    () => filterNavByPermissions(NAV_SECTIONS, new Set(permissions ?? [])),
+    [permissions],
   )
   const activeHash = useRouterState({
     select: (s) => s.location.hash.replace(/^#/, ''),

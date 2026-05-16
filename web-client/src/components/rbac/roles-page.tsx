@@ -57,8 +57,10 @@ export function RolesPage() {
   const { data: permissions = [] } = usePermissions()
   const { data: users = [] } = useRbacUsers()
   const createRole = useCreateRole()
+  const updateRole = useUpdateRole()
   const [search, setSearch] = useState('')
   const [creating, setCreating] = useState(false)
+  const [editing, setEditing] = useState<Role | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
 
   const memberCounts = useMemo(() => {
@@ -167,7 +169,7 @@ export function RolesPage() {
 
       <div style={{ flex: 1, overflowY: 'auto', background: 'var(--bg-app)' }}>
         {selected ? (
-          <RoleDetail role={selected} roles={roles} permissions={permissions} users={users} onSelect={setSelectedId} />
+          <RoleDetail role={selected} permissions={permissions} users={users} onSelect={setSelectedId} onEdit={setEditing} />
         ) : (
           <div style={{ padding: 40, color: 'var(--fg-3)' }}>
             No role selected.{' '}
@@ -190,6 +192,20 @@ export function RolesPage() {
             })
             setSelectedId(created.id)
             setCreating(false)
+          }}
+        />
+      )}
+      {editing && (
+        <EditRoleModal
+          role={editing}
+          existingNames={roles.filter((r) => r.id !== editing.id).map((r) => r.name)}
+          onClose={() => setEditing(null)}
+          onSubmit={async (values) => {
+            await updateRole.mutateAsync({
+              id: editing.id,
+              patch: { name: values.name, description: values.description ?? '' },
+            })
+            setEditing(null)
           }}
         />
       )}
@@ -275,23 +291,22 @@ function RoleRow({
 
 function RoleDetail({
   role,
-  roles,
   permissions,
   users,
   onSelect,
+  onEdit,
 }: {
   role: Role
-  roles: Role[]
   permissions: Permission[]
   users: RbacUser[]
   onSelect: (id: string | null) => void
+  onEdit: (role: Role) => void
 }) {
   const updateRole = useUpdateRole()
   const deleteRole = useDeleteRole()
   const createRole = useCreateRole()
   const setUserRoles = useSetUserRoles()
   const [tab, setTab] = useState<'permissions' | 'members'>('permissions')
-  const [editingDetails, setEditingDetails] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
 
   const accent = colorFor(role.name)
@@ -352,7 +367,7 @@ function RoleDetail({
             </div>
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
-            <Button variant="outline" size="sm" onClick={() => setEditingDetails(true)}>
+            <Button variant="outline" size="sm" onClick={() => onEdit(role)}>
               <Pencil size={14} /> Edit
             </Button>
             <Button
@@ -432,20 +447,6 @@ function RoleDetail({
         </AlertDialogContent>
       </AlertDialog>
 
-      {editingDetails && (
-        <EditRoleModal
-          role={role}
-          existingNames={roles.filter((r) => r.id !== role.id).map((r) => r.name)}
-          onClose={() => setEditingDetails(false)}
-          onSubmit={async (values) => {
-            await updateRole.mutateAsync({
-              id: role.id,
-              patch: { name: values.name, description: values.description ?? '' },
-            })
-            setEditingDetails(false)
-          }}
-        />
-      )}
     </div>
   )
 }
@@ -896,8 +897,6 @@ const titleStyle: CSSProperties = {
   fontWeight: 700,
   color: 'var(--fg-1)',
   margin: '0 0 4px',
-  cursor: 'text',
-  display: 'inline-block',
 }
 
 function descStyle(hasDescription: boolean): CSSProperties {

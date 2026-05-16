@@ -1,5 +1,6 @@
 import { useRouterState } from '@tanstack/react-router'
-import { useSession } from '@/api/session'
+import { useHasPermission } from '@/api/session'
+import { PERM } from '@/lib/permissions'
 import { Skeleton } from '@/components/ui/skeleton'
 import { usePermissions, useRbacUsers, useRoles } from './queries'
 
@@ -10,11 +11,10 @@ const TAB_LABELS: Record<string, string> = {
 }
 
 export function AdminBreadcrumbAndCounts() {
-  const { data: session } = useSession()
-  // /v1/roles, /v1/permissions, /v1/users are all gated on authorization.manage,
-  // so administration.view-only users would 403 and trip the error boundary.
-  const canManageAuth =
-    session?.data.user.permissions.includes('authorization.manage') ?? false
+  // /v1/roles, /v1/permissions, /v1/users are all gated server-side on
+  // authorization.manage; without it the count fetches 403 and trip the
+  // error boundary, so skip the entire pill (and its hooks) instead.
+  const canManageAuth = useHasPermission(PERM.AUTH_MANAGE)
   const pathname = useRouterState({ select: (s) => s.location.pathname })
   const current = TAB_LABELS[pathname] ?? 'Overview'
 

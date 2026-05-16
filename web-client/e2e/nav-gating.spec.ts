@@ -7,6 +7,7 @@
  *     a flat link with no sub-menu (matching the other top-level items).
  */
 import { test, expect, type Page } from '@playwright/test'
+import { PERM } from '../src/lib/permissions'
 
 interface SessionShape {
   username?: string
@@ -14,44 +15,25 @@ interface SessionShape {
 }
 
 async function withSession(page: Page, session: SessionShape) {
-  await page.route('**/v1/session', async (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({
-        data: {
-          user: {
-            username: session.username ?? 'tester',
-            permissions: session.permissions,
-          },
-        },
-      }),
-    }),
-  )
-  // Generic catch-all so the dashboard (or any other AppShell page) doesn't
-  // surface unrelated 404s from missing API mocks.
+  const sessionBody = JSON.stringify({
+    data: {
+      user: {
+        username: session.username ?? 'tester',
+        permissions: session.permissions,
+      },
+    },
+  })
+  // The client hits `/api/v1/session` (see api/client.ts resolveBaseUrl) so
+  // the `**/api/v1/**` catch-all is the one that intercepts the session
+  // request — branch on it here, and serve `[]` for anything else the
+  // dashboard/AppShell happens to fetch.
   await page.route('**/api/v1/**', async (route) => {
     const path = new URL(route.request().url()).pathname
     if (path.endsWith('/v1/session')) {
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({
-          data: {
-            user: {
-              username: session.username ?? 'tester',
-              permissions: session.permissions,
-            },
-          },
-        }),
-      })
+      await route.fulfill({ status: 200, contentType: 'application/json', body: sessionBody })
       return
     }
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: '[]',
-    })
+    await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' })
   })
 }
 
@@ -73,7 +55,7 @@ test.describe('Sidebar permission gating', () => {
   })
 
   test('administration.view alone shows Administration as a flat link with no children', async ({ page }) => {
-    await withSession(page, { permissions: ['administration.view'] })
+    await withSession(page, { permissions: [PERM.ADMIN_VIEW] })
     await page.goto('/dashboard')
 
     const bar = sidebar(page)
@@ -86,7 +68,7 @@ test.describe('Sidebar permission gating', () => {
   })
 
   test('navigating to /admin shows the flat-link variant with no sub-nav', async ({ page }) => {
-    await withSession(page, { permissions: ['administration.view'] })
+    await withSession(page, { permissions: [PERM.ADMIN_VIEW] })
     await page.goto('/admin')
 
     const bar = sidebar(page)
@@ -98,7 +80,7 @@ test.describe('Sidebar permission gating', () => {
 
   test('both permissions reveal full Roles / Permissions / Users sub-nav on /admin', async ({ page }) => {
     await withSession(page, {
-      permissions: ['administration.view', 'authorization.manage'],
+      permissions: [PERM.ADMIN_VIEW, PERM.AUTH_MANAGE],
     })
     await page.goto('/admin')
 
@@ -115,7 +97,7 @@ test.describe('Sidebar permission gating', () => {
   test('authorization.manage without administration.view still hides Administration', async ({ page }) => {
     // Defensive: the parent gate is administration.view; without it, you don't
     // see Administration at all even if you could otherwise manage roles.
-    await withSession(page, { permissions: ['authorization.manage'] })
+    await withSession(page, { permissions: [PERM.AUTH_MANAGE] })
     await page.goto('/dashboard')
 
     const bar = sidebar(page)
