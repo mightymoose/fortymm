@@ -753,6 +753,11 @@ body.dark.fortymm-theme {
   flex-direction: column;
   gap: 20px;
 }
+.app-shell__nav-footer {
+  padding: 12px 12px 16px;
+  border-top: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+}
 .app-shell__nav-label {
   font-family: var(--font-ui);
   font-size: 10px;
