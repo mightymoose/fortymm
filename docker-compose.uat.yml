@@ -49,12 +49,15 @@ services:
       redis:
         condition: service_healthy
     # Same image as dev but no --reload and no source volume mount —
-    # the image's COPY'd /app is what runs. seed_rbac.py is additive
-    # and idempotent, so chaining it after migrations is safe on every
-    # boot (same pattern as docker-compose.dev.yml).
+    # the image's COPY'd /app is what runs. Both seed scripts are
+    # idempotent (seed_rbac.py: additive; seed_leagues.py: upserts the
+    # default league), so chaining them after migrations is safe on
+    # every boot. UAT runs both on each release; dev compose only
+    # chains rbac (leagues is opt-in for local dev).
     command: >
       sh -c "alembic upgrade head &&
              python scripts/seed_rbac.py &&
+             python scripts/seed_leagues.py &&
              uvicorn app.main:app --host 0.0.0.0 --port 8000"
 
   worker:
