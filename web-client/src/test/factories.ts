@@ -204,6 +204,10 @@ export function matchDetails(
       (s) => ({
         user_id: s.players[0]?.user_id ?? nextId('u'),
         recent_results: [],
+        rating_before: null,
+        rating_history: [],
+        career_matches_before: 0,
+        career_wins_before: 0,
       }),
     ),
     head_to_head: opponentSide

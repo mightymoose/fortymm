@@ -2674,6 +2674,12 @@ body.dark.fortymm-theme {
   color: var(--loss);
 }
 .fortymm-theme .md-form-row__opp {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.fortymm-theme .md-form-row__opp-name {
   font: 500 13px var(--font-ui);
   color: var(--fg-1);
   overflow: hidden;
