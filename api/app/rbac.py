@@ -52,7 +52,7 @@ def require_permission(name: str) -> Callable[..., Awaitable[User]]:
         db: AsyncSession = Depends(get_session),
     ) -> User:
         if not await _user_has_permission(db, user.id, name):
-            raise HTTPException(status_code=403, detail="forbidden")
+            raise HTTPException(status_code=403, detail="Forbidden.")
         return user
 
     return dep
@@ -130,7 +130,7 @@ async def _get_role_or_404(db: AsyncSession, role_id: uuid.UUID) -> Role:
         await db.execute(select(Role).where(Role.id == role_id))
     ).scalar_one_or_none()
     if role is None:
-        raise HTTPException(status_code=404, detail="role not found")
+        raise HTTPException(status_code=404, detail="Role not found.")
     return role
 
 
@@ -141,7 +141,7 @@ async def _get_permission_or_404(
         await db.execute(select(Permission).where(Permission.id == permission_id))
     ).scalar_one_or_none()
     if perm is None:
-        raise HTTPException(status_code=404, detail="permission not found")
+        raise HTTPException(status_code=404, detail="Permission not found.")
     return perm
 
 
@@ -150,7 +150,7 @@ async def _get_user_or_404(db: AsyncSession, user_id: uuid.UUID) -> User:
         await db.execute(select(User).where(User.id == user_id))
     ).scalar_one_or_none()
     if user is None:
-        raise HTTPException(status_code=404, detail="user not found")
+        raise HTTPException(status_code=404, detail="User not found.")
     return user
 
 
@@ -168,7 +168,7 @@ async def _validate_permission_ids(
     if missing:
         raise HTTPException(
             status_code=400,
-            detail=f"unknown permission ids: {', '.join(str(m) for m in missing)}",
+            detail=f"Unknown permission ids: {', '.join(str(m) for m in missing)}.",
         )
     return deduped
 
@@ -201,7 +201,7 @@ async def _validate_role_ids(
     if missing:
         raise HTTPException(
             status_code=400,
-            detail=f"unknown role ids: {', '.join(str(m) for m in missing)}",
+            detail=f"Unknown role ids: {', '.join(str(m) for m in missing)}.",
         )
     return deduped
 
@@ -228,7 +228,7 @@ async def create_permission(
 ) -> PermissionRead:
     if await _name_taken(db, Permission.id, Permission.name, payload.name):
         raise HTTPException(
-            status_code=409, detail="permission name already exists"
+            status_code=409, detail="Permission name already exists."
         )
     perm = Permission(name=payload.name, description=payload.description)
     db.add(perm)
@@ -237,7 +237,7 @@ async def create_permission(
     except IntegrityError:
         await db.rollback()
         raise HTTPException(
-            status_code=409, detail="permission name already exists"
+            status_code=409, detail="Permission name already exists."
         )
     await db.refresh(perm)
     return PermissionRead.model_validate(perm)
@@ -268,7 +268,7 @@ async def update_permission(
         )
     ):
         raise HTTPException(
-            status_code=409, detail="permission name already exists"
+            status_code=409, detail="Permission name already exists."
         )
     for key, value in data.items():
         setattr(perm, key, value)
@@ -277,7 +277,7 @@ async def update_permission(
     except IntegrityError:
         await db.rollback()
         raise HTTPException(
-            status_code=409, detail="permission name already exists"
+            status_code=409, detail="Permission name already exists."
         )
     await db.refresh(perm)
     return PermissionRead.model_validate(perm)
@@ -317,11 +317,11 @@ async def create_role(
     if payload.template_id is not None and payload.permission_ids is not None:
         raise HTTPException(
             status_code=400,
-            detail="provide either template_id or permission_ids, not both",
+            detail="Provide either template_id or permission_ids, not both.",
         )
 
     if await _name_taken(db, Role.id, Role.name, payload.name):
-        raise HTTPException(status_code=409, detail="role name already exists")
+        raise HTTPException(status_code=409, detail="Role name already exists.")
 
     permission_ids: list[uuid.UUID] = []
     if payload.template_id is not None:
@@ -339,7 +339,7 @@ async def create_role(
         await db.flush()
     except IntegrityError:
         await db.rollback()
-        raise HTTPException(status_code=409, detail="role name already exists")
+        raise HTTPException(status_code=409, detail="Role name already exists.")
 
     for pid in permission_ids:
         db.add(RolePermission(role_id=role.id, permission_id=pid))
@@ -372,7 +372,7 @@ async def update_role(
     )
     role = locked.scalar_one_or_none()
     if role is None:
-        raise HTTPException(status_code=404, detail="role not found")
+        raise HTTPException(status_code=404, detail="Role not found.")
 
     data = payload.model_dump(exclude_unset=True)
 
@@ -390,7 +390,7 @@ async def update_role(
             db, Role.id, Role.name, data["name"], exclude_id=role.id
         )
     ):
-        raise HTTPException(status_code=409, detail="role name already exists")
+        raise HTTPException(status_code=409, detail="Role name already exists.")
 
     for key, value in data.items():
         setattr(role, key, value)
@@ -399,7 +399,7 @@ async def update_role(
         await db.flush()
     except IntegrityError:
         await db.rollback()
-        raise HTTPException(status_code=409, detail="role name already exists")
+        raise HTTPException(status_code=409, detail="Role name already exists.")
 
     if new_permission_ids is not None:
         await db.execute(
@@ -452,14 +452,14 @@ async def create_user(
     db: AsyncSession = Depends(get_session),
 ) -> RbacUserRead:
     if await _name_taken(db, User.id, User.username, payload.username):
-        raise HTTPException(status_code=409, detail="username already exists")
+        raise HTTPException(status_code=409, detail="Username already exists.")
     user = User(username=payload.username)
     db.add(user)
     try:
         await db.commit()
     except IntegrityError:
         await db.rollback()
-        raise HTTPException(status_code=409, detail="username already exists")
+        raise HTTPException(status_code=409, detail="Username already exists.")
     await db.refresh(user)
     return _serialize_user(user, [])
 
@@ -486,7 +486,7 @@ async def set_user_roles(
     )
     user = locked.scalar_one_or_none()
     if user is None:
-        raise HTTPException(status_code=404, detail="user not found")
+        raise HTTPException(status_code=404, detail="User not found.")
     role_ids = await _validate_role_ids(db, payload.role_ids)
     await db.execute(delete(UserRole).where(UserRole.user_id == user.id))
     for rid in role_ids:
@@ -505,7 +505,7 @@ async def delete_user(
         # Defense in depth — the UI also disables this button. Without this
         # guard, the workspace can be locked out by deleting the last admin.
         raise HTTPException(
-            status_code=400, detail="you cannot delete your own account"
+            status_code=400, detail="You cannot delete your own account."
         )
     user = await _get_user_or_404(db, user_id)
     await db.delete(user)

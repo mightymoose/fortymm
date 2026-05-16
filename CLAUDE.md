@@ -58,6 +58,8 @@ Full stack via Docker: `docker compose -f docker-compose.dev.yml up`. Nginx on *
 
 **Routing is file-based and generated.** `web-client/src/routes/*.tsx` files are compiled into `routeTree.gen.ts` by the `@tanstack/router-plugin/vite` plugin. Don't edit `routeTree.gen.ts` by hand.
 
+**BFF endpoints — one per page.** Each page-level UI surface has a single backend endpoint that returns all the data it needs, pre-shaped for that page. The frontend does no joining, aggregation, or status-label mapping — those happen on the server, current-user-aware. Examples: `GET /v1/matches` backs `/matches`; `GET /v1/matches/{id}` backs both `/matches/$matchId` and the scoring routes; `GET /v1/dashboard` backs the dynamic widgets on `/dashboard`. Exception: independently-interactive widgets (typeaheads, autocompletes, infinite-scroll panels) keep their own endpoints — e.g. `GET /v1/players/search` backs the new-match opponent picker. Rule of thumb: if the widget fetches in response to user input rather than on page load, it's its own endpoint.
+
 **MSW only intercepts in `import.meta.env.DEV`.** See `web-client/src/main.tsx`. The vitest setup (`src/test/setup.ts`) uses the Node MSW server with `onUnhandledRequest: 'error'` — every fetch in a test must have a matching handler in `src/mocks/handlers.ts` (or one added via `server.use(...)`). Production builds never load MSW.
 
 **`VITE_API_URL`** (web-client) overrides the API base URL; otherwise the client uses `window.location.origin`. In dev that means MSW handles everything; in the compose stack the web origin (`:8080`) is also where nginx proxies the API.

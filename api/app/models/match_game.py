@@ -1,12 +1,15 @@
 import uuid
+from datetime import datetime
 from typing import TYPE_CHECKING
 
 from sqlalchemy import (
     CheckConstraint,
+    DateTime,
     ForeignKey,
     Index,
     SmallInteger,
     UniqueConstraint,
+    func,
     text,
 )
 from sqlalchemy.dialects.postgresql import UUID
@@ -16,10 +19,12 @@ from app.db import Base
 
 if TYPE_CHECKING:
     from app.models.match import Match
+    from app.models.match_game_score import MatchGameScore
 
 
 class MatchGame(Base):
-    """Per-game scores within a match. Each row is one game."""
+    """Lifecycle row for one game inside a match. The score is a separate row
+    that exists only once the game has been completed and reported."""
 
     __tablename__ = "match_games"
     __table_args__ = (
@@ -27,8 +32,6 @@ class MatchGame(Base):
             "match_id", "game_number", name="uq_match_games_match_id_game_number"
         ),
         CheckConstraint("game_number >= 1", name="ck_match_games_game_number"),
-        CheckConstraint("side_1_points >= 0", name="ck_match_games_side_1_points"),
-        CheckConstraint("side_2_points >= 0", name="ck_match_games_side_2_points"),
         Index("ix_match_games_match_id", "match_id"),
     )
 
@@ -43,7 +46,20 @@ class MatchGame(Base):
         nullable=False,
     )
     game_number: Mapped[int] = mapped_column(SmallInteger, nullable=False)
-    side_1_points: Mapped[int] = mapped_column(SmallInteger, nullable=False)
-    side_2_points: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
 
     match: Mapped["Match"] = relationship(back_populates="games")
+    score: Mapped["MatchGameScore | None"] = relationship(
+        back_populates="match_game",
+        uselist=False,
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
