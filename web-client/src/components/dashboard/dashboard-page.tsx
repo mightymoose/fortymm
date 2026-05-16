@@ -1,16 +1,24 @@
 import type { CSSProperties, ReactNode } from 'react'
+import { Link } from '@tanstack/react-router'
+import { format, formatDistanceToNowStrict } from 'date-fns'
 import {
   ArrowRight,
   Calendar,
   Check,
   ChevronRight,
-  Clock,
-  MapPin,
   Plus,
   Trophy,
   Users,
   X,
 } from 'lucide-react'
+import { useDashboard } from '@/api/dashboard'
+import type {
+  DashboardNextMatch,
+  DashboardRecentResult,
+  DashboardScoreBanner,
+} from '@/api/dashboard'
+import { scoringNewRoute } from '@/api/matches'
+import { useSession } from '@/api/session'
 
 const C = {
   ink950: 'var(--ink-950)',
@@ -285,6 +293,18 @@ const buttonKinds: Record<ButtonKind, CSSProperties> = {
   },
 }
 
+type ButtonProps = {
+  children: ReactNode
+  kind?: ButtonKind
+  size?: ButtonSize
+  iconLeft?: ReactNode
+  iconRight?: ReactNode
+  fullWidth?: boolean
+  style?: CSSProperties
+  /** When set, renders a TanStack Router Link with the same styling instead of a <button>. */
+  to?: string
+}
+
 function Button({
   children,
   kind = 'primary',
@@ -293,39 +313,43 @@ function Button({
   iconRight,
   fullWidth = false,
   style,
-}: {
-  children: ReactNode
-  kind?: ButtonKind
-  size?: ButtonSize
-  iconLeft?: ReactNode
-  iconRight?: ReactNode
-  fullWidth?: boolean
-  style?: CSSProperties
-}) {
+  to,
+}: ButtonProps) {
   const s = buttonSizes[size]
-  return (
-    <button
-      type="button"
-      style={{
-        height: s.h,
-        padding: `0 ${s.px}px`,
-        borderRadius: 8,
-        font: `600 ${s.font}px ${UI}`,
-        letterSpacing: '0.005em',
-        display: 'inline-flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 8,
-        cursor: 'pointer',
-        whiteSpace: 'nowrap',
-        width: fullWidth ? '100%' : 'auto',
-        ...buttonKinds[kind],
-        ...style,
-      }}
-    >
+  const composed: CSSProperties = {
+    height: s.h,
+    padding: `0 ${s.px}px`,
+    borderRadius: 8,
+    font: `600 ${s.font}px ${UI}`,
+    letterSpacing: '0.005em',
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    cursor: 'pointer',
+    whiteSpace: 'nowrap',
+    width: fullWidth ? '100%' : 'auto',
+    textDecoration: 'none',
+    ...buttonKinds[kind],
+    ...style,
+  }
+  const body = (
+    <>
       {iconLeft}
       <span>{children}</span>
       {iconRight}
+    </>
+  )
+  if (to) {
+    return (
+      <Link to={to} style={composed}>
+        {body}
+      </Link>
+    )
+  }
+  return (
+    <button type="button" style={composed}>
+      {body}
     </button>
   )
 }
@@ -401,6 +425,45 @@ function SectionHeader({
 }
 
 
+function SkeletonCard({
+  label,
+  height,
+}: {
+  label: string
+  height: number
+}) {
+  return (
+    <div
+      role="status"
+      aria-busy
+      aria-label={label}
+      style={{
+        background: C.ink800,
+        border: `1px solid ${C.ink600}`,
+        borderRadius: 10,
+        minHeight: height,
+      }}
+    />
+  )
+}
+
+function EmptyCard({ overline, body }: { overline: string; body: string }) {
+  return (
+    <Card>
+      <Overline color={C.chalk500}>{overline}</Overline>
+      <div
+        style={{
+          marginTop: 10,
+          font: `400 13px ${UI}`,
+          color: C.chalk300,
+        }}
+      >
+        {body}
+      </div>
+    </Card>
+  )
+}
+
 function PageTitle({
   greeting,
   subtitle,
@@ -435,6 +498,7 @@ function PageTitle({
         kind="secondary"
         size="md"
         iconLeft={<Plus size={16} strokeWidth={1.75} />}
+        to="/matches/new"
       >
         Log a match
       </Button>
@@ -481,52 +545,13 @@ function PaddleBadge({ accent }: { accent: string }) {
   )
 }
 
-function ElapsedMeter({ elapsed }: { elapsed: string }) {
-  return (
-    <div
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 8,
-        padding: '4px 10px 4px 8px',
-        borderRadius: 999,
-        border: '1px solid rgba(255,122,26,0.3)',
-        background: 'rgba(255,122,26,0.08)',
-        whiteSpace: 'nowrap',
-        flexShrink: 0,
-      }}
-    >
-      <Clock size={13} color={C.ball400} strokeWidth={1.75} />
-      <span
-        style={{
-          font: `600 12px ${MONO}`,
-          color: C.ball400,
-          fontVariantNumeric: 'tabular-nums',
-          letterSpacing: '0.02em',
-        }}
-      >
-        {elapsed} elapsed
-      </span>
-    </div>
-  )
-}
-
-function ScoreBanner({
-  opponent,
-  event,
-  court,
-  round,
-  elapsed,
-}: {
-  opponent: { name: string; rating: number }
-  event: string
-  court: string
-  round: string
-  elapsed: string
-}) {
+function ScoreBanner({ banner }: { banner: DashboardScoreBanner }) {
   const accent = C.ball500
+  const opponent = banner.opponent_username ?? 'guest'
+  const scoringRoute = scoringNewRoute(banner.match_id, banner.current_game_id)
   return (
     <div
+      data-testid="dashboard-score-banner"
       className="banner-glow"
       style={{
         position: 'relative',
@@ -579,16 +604,8 @@ function ScoreBanner({
               fontVariantNumeric: 'tabular-nums',
             }}
           >
-            SCORE NEEDED · {elapsed.toUpperCase()} AGO
+            SCORE NEEDED
           </span>
-          <div style={{ width: 1, height: 14, background: C.ink500 }} />
-          <span
-            style={{ font: `500 12px ${UI}`, color: C.chalk300, whiteSpace: 'nowrap' }}
-          >
-            {event} · {round}
-          </span>
-          <div style={{ flex: 1, minWidth: 8 }} />
-          <ElapsedMeter elapsed={elapsed} />
         </div>
 
         <div
@@ -609,58 +626,21 @@ function ScoreBanner({
             }}
           >
             <div style={{ position: 'relative' }}>
-              <Avatar name={opponent.name} size={64} ring ringColor={accent} />
+              <Avatar name={opponent} size={64} ring ringColor={accent} />
               <PaddleBadge accent={accent} />
             </div>
             <div style={{ minWidth: 0, flex: 1 }}>
-              <div
+              <h1
                 style={{
-                  display: 'flex',
-                  alignItems: 'baseline',
-                  gap: 10,
-                  flexWrap: 'wrap',
+                  margin: 0,
+                  font: `700 28px ${UI}`,
+                  letterSpacing: '-0.01em',
+                  color: C.chalk50,
+                  lineHeight: 1.1,
                 }}
               >
-                <h1
-                  style={{
-                    margin: 0,
-                    font: `700 28px ${UI}`,
-                    letterSpacing: '-0.01em',
-                    color: C.chalk50,
-                    lineHeight: 1.1,
-                  }}
-                >
-                  vs {opponent.name}
-                </h1>
-                <Pill mono>{opponent.rating}</Pill>
-              </div>
-              <div
-                style={{
-                  marginTop: 6,
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 10,
-                  font: `400 14px ${UI}`,
-                  color: C.chalk300,
-                  flexWrap: 'wrap',
-                }}
-              >
-                <span
-                  style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
-                >
-                  <MapPin size={14} color={C.chalk500} strokeWidth={1.75} />
-                  {court}
-                </span>
-                <span style={{ color: C.chalk500 }}>·</span>
-                <span
-                  style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
-                >
-                  <Trophy size={14} color={C.chalk500} strokeWidth={1.75} />
-                  {event}
-                </span>
-                <span style={{ color: C.chalk500 }}>·</span>
-                <span>{round}</span>
-              </div>
+                vs {opponent}
+              </h1>
             </div>
           </div>
 
@@ -673,24 +653,30 @@ function ScoreBanner({
               flex: '0 0 auto',
             }}
           >
-            <Button
-              kind="primary"
-              size="lg"
-              iconRight={<ArrowRight size={18} strokeWidth={1.75} />}
-              style={{ minWidth: 220 }}
-            >
-              Enter final score
-            </Button>
-            <a
-              href="#"
+            <Link
+              {...scoringRoute}
               style={{
-                font: `500 12px ${UI}`,
-                color: C.chalk500,
+                height: 44,
+                padding: '0 22px',
+                borderRadius: 8,
+                font: `600 15px ${UI}`,
+                letterSpacing: '0.005em',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 8,
                 textDecoration: 'none',
+                minWidth: 220,
+                background: C.ball500,
+                color: C.ink950,
+                border: '1px solid transparent',
+                boxShadow:
+                  '0 4px 14px rgba(255,122,26,0.35), inset 0 1px 0 rgba(255,255,255,0.18)',
               }}
             >
-              Dispute · not my match →
-            </a>
+              <span>Enter final score</span>
+              <ArrowRight size={18} strokeWidth={1.75} />
+            </Link>
           </div>
         </div>
       </div>
@@ -721,22 +707,17 @@ function ScoreBanner({
 }
 
 
-type UpcomingMatch = {
-  label: string
-  when: string
-  opponent: { name: string; rating: number }
-  h2h: string
-  court: string
-  event: string
-  round: string
-}
-
 type Deadline = { name: string; detail: string; closes: string; urgent?: boolean }
 
-function NextMatchCard({ match }: { match: UpcomingMatch }) {
+function NextMatchCard({ match }: { match: DashboardNextMatch }) {
+  const opponent = match.opponent_username ?? 'guest'
   return (
-    <Card padding={0} style={{ overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+    <Card
+      padding={0}
+      style={{ overflow: 'hidden', display: 'flex', flexDirection: 'column' }}
+    >
       <div
+        data-testid="dashboard-next-match"
         style={{
           padding: '14px 18px 0',
           display: 'flex',
@@ -744,10 +725,10 @@ function NextMatchCard({ match }: { match: UpcomingMatch }) {
           gap: 10,
         }}
       >
-        <Overline color={C.chalk500}>{match.label}</Overline>
+        <Overline color={C.chalk500}>Your next match</Overline>
         <div style={{ flex: 1 }} />
         <Pill mono tone="soft">
-          {match.when}
+          Best of {match.best_of}
         </Pill>
       </div>
       <div
@@ -769,20 +750,19 @@ function NextMatchCard({ match }: { match: UpcomingMatch }) {
         >
           VS
         </div>
-        <Avatar name={match.opponent.name} size={44} />
+        <Avatar name={opponent} size={44} />
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ font: `600 16px ${UI}`, color: C.chalk50, lineHeight: 1.2 }}>
-            {match.opponent.name}
+          <div
+            style={{ font: `600 16px ${UI}`, color: C.chalk50, lineHeight: 1.2 }}
+          >
+            {opponent}
           </div>
-          <div style={{ font: `400 13px ${UI}`, color: C.chalk300, marginTop: 2 }}>
-            <Mono size={12} color={C.chalk300}>
-              {match.opponent.rating}
-            </Mono>
-            <span style={{ color: C.chalk500, margin: '0 8px' }}>·</span>
-            H2H{' '}
-            <Mono size={12} color={C.chalk300}>
-              {match.h2h}
-            </Mono>
+          <div
+            style={{ font: `400 13px ${UI}`, color: C.chalk300, marginTop: 2 }}
+          >
+            Created {formatDistanceToNowStrict(new Date(match.created_at), {
+              addSuffix: true,
+            })}
           </div>
         </div>
       </div>
@@ -796,25 +776,29 @@ function NextMatchCard({ match }: { match: UpcomingMatch }) {
           gap: 14,
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <MapPin size={13} color={C.chalk500} strokeWidth={1.75} />
-          <span style={{ font: `500 12px ${UI}`, color: C.chalk100 }}>{match.court}</span>
-        </div>
-        <div style={{ width: 1, height: 14, background: C.ink600 }} />
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <Trophy size={13} color={C.chalk500} strokeWidth={1.75} />
-          <span style={{ font: `500 12px ${UI}`, color: C.chalk100 }}>
-            {match.event} · {match.round}
-          </span>
-        </div>
         <div style={{ flex: 1 }} />
-        <Button
-          kind="secondary"
-          size="sm"
-          iconRight={<ChevronRight size={14} strokeWidth={1.75} />}
+        <Link
+          to="/matches/$matchId"
+          params={{ matchId: match.match_id }}
+          style={{
+            height: 32,
+            padding: '0 14px',
+            borderRadius: 8,
+            font: `600 13px ${UI}`,
+            letterSpacing: '0.005em',
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 8,
+            textDecoration: 'none',
+            background: 'transparent',
+            color: C.chalk100,
+            border: `1px solid ${C.ink500}`,
+          }}
         >
-          View bracket
-        </Button>
+          <span>View match</span>
+          <ChevronRight size={14} strokeWidth={1.75} />
+        </Link>
       </div>
     </Card>
   )
@@ -920,10 +904,12 @@ function DeadlineStack({ deadlines }: { deadlines: Deadline[] }) {
 
 function UpNextRow({
   match,
+  isLoading,
   checkin,
   deadlines,
 }: {
-  match: UpcomingMatch
+  match: DashboardNextMatch | null
+  isLoading: boolean
   checkin: { event: string; closesIn: string }
   deadlines: Deadline[]
 }) {
@@ -941,7 +927,16 @@ function UpNextRow({
           gap: 14,
         }}
       >
-        <NextMatchCard match={match} />
+        {isLoading ? (
+          <SkeletonCard label="Loading next match" height={160} />
+        ) : match ? (
+          <NextMatchCard match={match} />
+        ) : (
+          <EmptyCard
+            overline="Your next match"
+            body="No upcoming match yet."
+          />
+        )}
         <CheckinCard event={checkin.event} closesIn={checkin.closesIn} />
         <DeadlineStack deadlines={deadlines} />
       </div>
@@ -950,14 +945,6 @@ function UpNextRow({
 }
 
 
-type RecentResult = {
-  opp: string
-  oppRating: number
-  event: string
-  score: string
-  win: boolean
-  delta: number
-}
 
 function Stat({
   label,
@@ -1064,11 +1051,12 @@ function RatingCard({
   )
 }
 
-function RecentResultsCard({ rows }: { rows: RecentResult[] }) {
-  const wins = rows.filter((r) => r.win).length
+function RecentResultsCard({ rows }: { rows: DashboardRecentResult[] }) {
+  const wins = rows.filter((r) => r.is_win).length
   return (
     <Card padding={0}>
       <div
+        data-testid="dashboard-recent-results"
         style={{
           padding: '14px 18px 10px',
           display: 'flex',
@@ -1086,87 +1074,93 @@ function RecentResultsCard({ rows }: { rows: RecentResult[] }) {
           · last {rows.length}
         </span>
       </div>
-      <table
-        style={{
-          width: '100%',
-          borderCollapse: 'collapse',
-          font: `400 13px ${UI}`,
-          color: C.chalk100,
-        }}
-      >
-        <thead>
-          <tr
-            style={{
-              font: `600 10px ${UI}`,
-              color: C.chalk500,
-              letterSpacing: '0.14em',
-              textTransform: 'uppercase',
-            }}
-          >
-            <th style={{ textAlign: 'left', padding: '10px 18px 8px', fontWeight: 600 }}>
-              Opponent
-            </th>
-            <th style={{ textAlign: 'left', padding: '10px 8px 8px', fontWeight: 600 }}>
-              Event
-            </th>
-            <th style={{ textAlign: 'right', padding: '10px 8px 8px', fontWeight: 600 }}>
-              Score
-            </th>
-            <th style={{ textAlign: 'right', padding: '10px 18px 8px', fontWeight: 600 }}>
-              Δ
-            </th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r, i) => (
+      {rows.length === 0 ? (
+        <div
+          style={{
+            padding: '20px 18px',
+            font: `400 13px ${UI}`,
+            color: C.chalk300,
+          }}
+        >
+          No completed matches yet.
+        </div>
+      ) : (
+        <table
+          style={{
+            width: '100%',
+            borderCollapse: 'collapse',
+            font: `400 13px ${UI}`,
+            color: C.chalk100,
+          }}
+        >
+          <thead>
             <tr
-              key={r.opp}
-              style={{ borderTop: i === 0 ? 'none' : `1px solid ${C.ink700}` }}
+              style={{
+                font: `600 10px ${UI}`,
+                color: C.chalk500,
+                letterSpacing: '0.14em',
+                textTransform: 'uppercase',
+              }}
             >
-              <td style={{ padding: '11px 18px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <span
-                    style={{
-                      width: 6,
-                      height: 6,
-                      borderRadius: '50%',
-                      background: r.win ? C.serve500 : C.loss,
-                      boxShadow: `0 0 6px ${r.win ? 'rgba(0,226,154,0.5)' : 'rgba(255,77,109,0.5)'}`,
-                    }}
-                  />
-                  <Avatar name={r.opp} size={24} />
-                  <span
-                    style={{
-                      color: C.chalk50,
-                      fontWeight: 500,
-                      whiteSpace: 'nowrap',
-                    }}
-                  >
-                    {r.opp}
-                  </span>
-                  <Mono size={11} color={C.chalk500}>
-                    {r.oppRating}
-                  </Mono>
-                </div>
-              </td>
-              <td style={{ padding: '11px 8px', color: C.chalk300, fontSize: 12 }}>
-                {r.event}
-              </td>
-              <td style={{ padding: '11px 8px', textAlign: 'right' }}>
-                <Mono size={13} weight={500} color={r.win ? C.serve500 : C.loss}>
-                  {r.score}
-                </Mono>
-              </td>
-              <td style={{ padding: '11px 18px', textAlign: 'right' }}>
-                <Mono size={13} weight={600} color={r.delta >= 0 ? C.serve500 : C.loss}>
-                  {r.delta >= 0 ? '+' : ''}
-                  {r.delta}
-                </Mono>
-              </td>
+              <th style={{ textAlign: 'left', padding: '10px 18px 8px', fontWeight: 600 }}>
+                Opponent
+              </th>
+              <th style={{ textAlign: 'right', padding: '10px 8px 8px', fontWeight: 600 }}>
+                Score
+              </th>
+              <th style={{ textAlign: 'right', padding: '10px 18px 8px', fontWeight: 600 }}>
+                When
+              </th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => {
+              const opponent = r.opponent_username ?? 'guest'
+              const score = `${r.my_games_won}-${r.opponent_games_won}`
+              return (
+                <tr
+                  key={r.match_id}
+                  style={{ borderTop: i === 0 ? 'none' : `1px solid ${C.ink700}` }}
+                >
+                  <td style={{ padding: '11px 18px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                      <span
+                        style={{
+                          width: 6,
+                          height: 6,
+                          borderRadius: '50%',
+                          background: r.is_win ? C.serve500 : C.loss,
+                          boxShadow: `0 0 6px ${r.is_win ? 'rgba(0,226,154,0.5)' : 'rgba(255,77,109,0.5)'}`,
+                        }}
+                      />
+                      <Avatar name={opponent} size={24} />
+                      <span
+                        style={{
+                          color: C.chalk50,
+                          fontWeight: 500,
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        {opponent}
+                      </span>
+                    </div>
+                  </td>
+                  <td style={{ padding: '11px 8px', textAlign: 'right' }}>
+                    <Mono size={13} weight={500} color={r.is_win ? C.serve500 : C.loss}>
+                      {score}
+                    </Mono>
+                  </td>
+                  <td style={{ padding: '11px 18px', textAlign: 'right' }}>
+                    <Mono size={11} color={C.chalk500}>
+                      {format(new Date(r.completed_at), 'MMM d')}
+                    </Mono>
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      )}
     </Card>
   )
 }
@@ -1174,6 +1168,7 @@ function RecentResultsCard({ rows }: { rows: RecentResult[] }) {
 function YourGameRow({
   rating,
   recent,
+  isLoading,
   streak,
 }: {
   rating: {
@@ -1185,7 +1180,8 @@ function YourGameRow({
     percentile: number
     sparkData: number[]
   }
-  recent: RecentResult[]
+  recent: DashboardRecentResult[]
+  isLoading: boolean
   streak: { kind: 'W' | 'L'; n: number }
 }) {
   return (
@@ -1203,7 +1199,11 @@ function YourGameRow({
         }}
       >
         <RatingCard {...rating} streak={streak} />
-        <RecentResultsCard rows={recent} />
+        {isLoading ? (
+          <SkeletonCard label="Loading recent matches" height={260} />
+        ) : (
+          <RecentResultsCard rows={recent} />
+        )}
       </div>
     </section>
   )
@@ -1480,22 +1480,6 @@ function AroundYouRow({
 
 
 const DATA = {
-  banner: {
-    opponent: { name: 'Marcus Okafor', rating: 1812 },
-    event: 'April Spring Open',
-    court: 'Court 3',
-    round: 'Round 2 · R32',
-    elapsed: '4m',
-  },
-  upcoming: {
-    label: 'Your next match',
-    when: 'Tomorrow · 7:15 PM',
-    opponent: { name: 'Jin Hwang', rating: 1856 },
-    h2h: '1-1',
-    court: 'Court 2 · Westside TTC',
-    event: 'Spring Open',
-    round: 'R32',
-  } satisfies UpcomingMatch,
   checkin: { event: 'April Spring Open', closesIn: 'in 18m' },
   deadlines: [
     {
@@ -1519,13 +1503,6 @@ const DATA = {
     ],
   },
   streak: { kind: 'W' as const, n: 2 },
-  recent: [
-    { opp: 'David Liang', oppRating: 1820, event: 'Spring Open · R64', score: '3-1', win: true, delta: 12 },
-    { opp: 'Kenji Tan', oppRating: 1798, event: 'Club ladder', score: '3-2', win: true, delta: 9 },
-    { opp: 'Sara Holm', oppRating: 1881, event: 'Spring Open · R128', score: '2-3', win: false, delta: -7 },
-    { opp: 'Marco Bianchi', oppRating: 1755, event: 'Club ladder', score: '3-0', win: true, delta: 6 },
-    { opp: 'Yuki Sato', oppRating: 1870, event: 'Northside Cup', score: '1-3', win: false, delta: -11 },
-  ] satisfies RecentResult[],
   club: {
     name: 'Westside TTC',
     ladderPos: 4,
@@ -1575,6 +1552,12 @@ const DATA = {
 
 
 export function DashboardPage() {
+  // /v1/dashboard requires an established session; wait for /v1/session
+  // (which mints one) to resolve before firing the dashboard query.
+  const session = useSession()
+  const dashboard = useDashboard({ enabled: session.isSuccess })
+  const isLoading = !session.isSuccess || dashboard.isPending
+  const data = dashboard.data
   return (
     <div
       style={{
@@ -1586,13 +1569,23 @@ export function DashboardPage() {
       }}
     >
       <PageTitle greeting="Hi, Aimee" subtitle="3 things need your attention" />
-      <ScoreBanner {...DATA.banner} />
+      {isLoading ? (
+        <SkeletonCard label="Loading score banner" height={140} />
+      ) : data?.score_banner ? (
+        <ScoreBanner banner={data.score_banner} />
+      ) : null}
       <UpNextRow
-        match={DATA.upcoming}
+        match={data?.next_match ?? null}
+        isLoading={isLoading}
         checkin={DATA.checkin}
         deadlines={DATA.deadlines}
       />
-      <YourGameRow rating={DATA.rating} recent={DATA.recent} streak={DATA.streak} />
+      <YourGameRow
+        rating={DATA.rating}
+        recent={data?.recent_results ?? []}
+        isLoading={isLoading}
+        streak={DATA.streak}
+      />
       <AroundYouRow
         club={DATA.club}
         tournaments={DATA.tournaments}
