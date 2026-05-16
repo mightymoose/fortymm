@@ -3,8 +3,12 @@ import {
   MatchDetailsError,
   MatchDetailsView,
 } from '@/components/matches/match-details-page'
+import { pageTitle } from '@/lib/page-title'
 
 export const Route = createFileRoute('/matches/$matchId/')({
+  head: () => ({
+    meta: [{ title: pageTitle('Match') }],
+  }),
   component: MatchDetailsRoute,
   errorComponent: MatchDetailsError,
 })

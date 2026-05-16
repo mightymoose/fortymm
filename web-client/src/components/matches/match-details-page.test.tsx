@@ -373,8 +373,19 @@ describe('MatchDetailsView', () => {
               completed_at: '2026-05-07T18:00:00Z',
             },
           ],
+          rating_before: 1612,
+          rating_history: [1580, 1601, 1612],
+          career_matches_before: 12,
+          career_wins_before: 9,
         },
-        { user_id: 'u-rookie', recent_results: [] },
+        {
+          user_id: 'u-rookie',
+          recent_results: [],
+          rating_before: null,
+          rating_history: [],
+          career_matches_before: 0,
+          career_wins_before: 0,
+        },
       ],
     })
     server.use(http.get('*/v1/matches/m-form', () => HttpResponse.json(match)))
@@ -394,12 +405,29 @@ describe('MatchDetailsView', () => {
     expect(within(myForm).getByText('3–1')).toBeInTheDocument()
     expect(within(myForm).getByText('tanaka.y')).toBeInTheDocument()
     expect(within(myForm).getByText('1–3')).toBeInTheDocument()
+    // Each form row carries the date the past match completed on.
+    expect(within(myForm).getByText('May 9')).toBeInTheDocument()
+    expect(within(myForm).getByText('May 7')).toBeInTheDocument()
+    // Pre-match rating shows (rounded) with a sparkline; career stats below.
+    const myRating = screen.getByTestId('rating-box-1')
+    expect(within(myRating).getByText('1612')).toBeInTheDocument()
+    expect(myRating.querySelector('svg')).not.toBeNull()
+    const myCareer = screen.getByTestId('career-1')
+    expect(within(myCareer).getByText('12')).toBeInTheDocument()
+    expect(within(myCareer).getByText('75%')).toBeInTheDocument()
     // Rookie shows the empty state, not a result list.
     const oppForm = screen.getByTestId('form-2')
     expect(within(oppForm).getByText(/No prior matches yet/)).toBeInTheDocument()
     expect(
       within(oppForm).queryByText(/Recent form · /),
     ).not.toBeInTheDocument()
+    // Unrated rookie: no rating number, no sparkline, no win rate.
+    const oppRating = screen.getByTestId('rating-box-2')
+    expect(within(oppRating).getByText('Unrated')).toBeInTheDocument()
+    expect(oppRating.querySelector('svg')).toBeNull()
+    const oppCareer = screen.getByTestId('career-2')
+    expect(within(oppCareer).getByText('0')).toBeInTheDocument()
+    expect(within(oppCareer).getByText('—')).toBeInTheDocument()
   })
 
   it('shows the head-to-head card with prior meetings counted per side', async () => {

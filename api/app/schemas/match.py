@@ -102,10 +102,22 @@ class MatchDetailsFormResult(BaseModel):
 
 class MatchDetailsPlayerForm(BaseModel):
     """A player's previous-5 results, attached by ``user_id`` so the FE can
-    map it onto whichever side carries that user."""
+    map it onto whichever side carries that user.
+
+    All `*_before` fields are anchored to this match's `created_at` — they
+    describe the player's rating + record going into this match, not after."""
 
     user_id: uuid.UUID
     recent_results: list[MatchDetailsFormResult]
+    # Rating in this match's league as of just before this match. Null when
+    # the player has no prior rating in the league.
+    rating_before: float | None = None
+    # Chronological rating values (oldest first) preceding this match in this
+    # match's league. Capped at ~10 — enough for a sparkline, small enough
+    # to keep the BFF cheap.
+    rating_history: list[float] = Field(default_factory=list)
+    career_matches_before: int = 0
+    career_wins_before: int = 0
 
 
 class MatchDetailsH2HMeeting(BaseModel):

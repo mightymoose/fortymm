@@ -24,9 +24,19 @@ type MatchDetails = components['schemas']['MatchDetails']
 type MatchDetailsGame = components['schemas']['MatchDetailsGame']
 type MatchDetailsSide = components['schemas']['MatchDetailsSide']
 type MatchDetailsFormResult = components['schemas']['MatchDetailsFormResult']
+type MatchDetailsPlayerForm = components['schemas']['MatchDetailsPlayerForm']
 type MatchDetailsH2H = components['schemas']['MatchDetailsH2H']
 type MatchDetailsH2HMeeting = components['schemas']['MatchDetailsH2HMeeting']
 type RatingChange = components['schemas']['RatingChange']
+
+const EMPTY_FORM: MatchDetailsPlayerForm = {
+  user_id: '',
+  recent_results: [],
+  rating_before: null,
+  rating_history: [],
+  career_matches_before: 0,
+  career_wins_before: 0,
+}
 
 type HeroState = 'live' | 'final' | 'upcoming'
 
@@ -40,6 +50,10 @@ type SideView = {
   isCurrentUser: boolean
   ratingChange: RatingChange | null
   recentForm: MatchDetailsFormResult[]
+  ratingBefore: number | null
+  ratingHistory: number[]
+  careerMatchesBefore: number
+  careerWinsBefore: number
 }
 
 type GameView = {
@@ -88,7 +102,7 @@ type MatchView = {
 function projectSide(
   side: MatchDetailsSide,
   fallbackLabel: string,
-  recentForm: MatchDetailsFormResult[],
+  form: MatchDetailsPlayerForm,
 ): SideView {
   const player = side.players[0]
   const username = player?.username ?? fallbackLabel
@@ -101,7 +115,11 @@ function projectSide(
     won: side.won,
     isCurrentUser: side.is_current_user_side,
     ratingChange: side.rating_change ?? null,
-    recentForm,
+    recentForm: form.recent_results,
+    ratingBefore: form.rating_before ?? null,
+    ratingHistory: form.rating_history ?? [],
+    careerMatchesBefore: form.career_matches_before,
+    careerWinsBefore: form.career_wins_before,
   }
 }
 
@@ -149,11 +167,9 @@ function projectGame(
 function formForUser(
   data: MatchDetails,
   userId: string | null,
-): MatchDetailsFormResult[] {
-  if (!userId) return []
-  return (
-    data.recent_form?.find((f) => f.user_id === userId)?.recent_results ?? []
-  )
+): MatchDetailsPlayerForm {
+  if (!userId) return EMPTY_FORM
+  return data.recent_form?.find((f) => f.user_id === userId) ?? EMPTY_FORM
 }
 
 function projectHeadToHead(
@@ -685,6 +701,7 @@ function PlayerProfile({ side, won }: { side: SideView; won: boolean }) {
           <div className="md-profile__name">{side.username}</div>
         </div>
       </div>
+      <RatingBox side={side} />
       <div className="md-profile__form" data-testid={`form-${side.sideNumber}`}>
         <div className="md-kicker">
           {form.length === 0
@@ -703,6 +720,105 @@ function PlayerProfile({ side, won }: { side: SideView; won: boolean }) {
             ))}
           </ul>
         )}
+      </div>
+      <CareerStats side={side} />
+    </div>
+  )
+}
+
+function RatingBox({ side }: { side: SideView }) {
+  const value = side.ratingBefore
+  return (
+    <div
+      className="md-profile__rating-box"
+      data-testid={`rating-box-${side.sideNumber}`}
+    >
+      <div>
+        <div className="md-kicker">Rating</div>
+        <div className="md-profile__rating-value">
+          {value === null ? <span className="dim">Unrated</span> : Math.round(value)}
+        </div>
+      </div>
+      {side.ratingHistory.length >= 2 && (
+        <ProfileSparkline data={side.ratingHistory} />
+      )}
+    </div>
+  )
+}
+
+// Local copy of the dashboard sparkline — same shape and palette, but the
+// match-details card uses a smaller footprint than the dashboard hero.
+function ProfileSparkline({
+  data,
+  w = 110,
+  h = 36,
+}: {
+  data: number[]
+  w?: number
+  h?: number
+}) {
+  const min = Math.min(...data)
+  const max = Math.max(...data)
+  const range = max - min || 1
+  const pad = 2
+  const points = data.map((v, i) => {
+    const x = pad + (i / (data.length - 1)) * (w - pad * 2)
+    const y = h - pad - ((v - min) / range) * (h - pad * 2)
+    return [x, y] as const
+  })
+  const path = points
+    .map((p, i) => `${i === 0 ? 'M' : 'L'}${p[0].toFixed(1)} ${p[1].toFixed(1)}`)
+    .join(' ')
+  // The last point's trend picks the colour so a falling rating reads as a
+  // loss tone even before the user squints at the y-axis.
+  const trendUp = data[data.length - 1] >= data[0]
+  const color = trendUp ? 'var(--serve-500)' : 'var(--fg-3)'
+  const last = points[points.length - 1]
+  return (
+    <svg
+      width={w}
+      height={h}
+      style={{ display: 'block', overflow: 'visible' }}
+      aria-hidden="true"
+    >
+      <path
+        d={path}
+        fill="none"
+        stroke={color}
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <circle cx={last[0]} cy={last[1]} r="2.4" fill={color} />
+    </svg>
+  )
+}
+
+function CareerStats({ side }: { side: SideView }) {
+  const matches = side.careerMatchesBefore
+  const winRate =
+    matches > 0 ? Math.round((side.careerWinsBefore / matches) * 100) : null
+  return (
+    <div
+      className="md-profile__career"
+      data-testid={`career-${side.sideNumber}`}
+    >
+      <div>
+        <div className="md-kicker">Career matches</div>
+        <div className="md-profile__career-value">{matches}</div>
+      </div>
+      <div>
+        <div className="md-kicker">Win rate</div>
+        <div
+          className={cn(
+            'md-profile__career-value',
+            winRate !== null &&
+              winRate >= 50 &&
+              'md-profile__career-value--good',
+          )}
+        >
+          {winRate === null ? <span className="dim">—</span> : `${winRate}%`}
+        </div>
       </div>
     </div>
   )
@@ -723,7 +839,8 @@ function FormRow({ result }: { result: MatchDetailsFormResult }) {
         {win ? 'W' : 'L'}
       </span>
       <span className="md-form-row__opp" title={opponentLabel}>
-        {opponentLabel}
+        <span className="md-form-row__opp-name">{opponentLabel}</span>
+        <span className="md-form-row__when">{fmtDateShort(result.completed_at)}</span>
       </span>
       <span
         className={cn(

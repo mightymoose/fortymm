@@ -43,6 +43,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
+import { pageTitle } from '@/lib/page-title'
 import { useDebouncedValue } from '@/lib/use-debounced-value'
 import { cn, initialsOf } from '@/lib/utils'
 import './index.css'
@@ -50,6 +51,9 @@ import './index.css'
 type MatchListRowSide = components['schemas']['MatchDetailsSide']
 
 export const Route = createFileRoute('/matches/')({
+  head: () => ({
+    meta: [{ title: pageTitle('Matches') }],
+  }),
   component: MatchesPage,
 })
 

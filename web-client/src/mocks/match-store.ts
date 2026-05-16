@@ -269,8 +269,36 @@ function projectRecentForm(
       if (row) recent_results.push(row)
       if (recent_results.length === RECENT_FORM_LIMIT) break
     }
-    return { user_id, recent_results }
+    const wins = recent_results.filter((r) => r.is_win).length
+    // The mock store doesn't track real rating moves, so synthesize a
+    // deterministic-ish curve from the W/L pattern so the dev sparkline
+    // looks alive. The real BFF returns RatingHistory rows here.
+    const history = synthesizeRatingHistory(recent_results)
+    return {
+      user_id,
+      recent_results,
+      rating_before: history.length ? history[history.length - 1] : null,
+      rating_history: history,
+      career_matches_before: recent_results.length,
+      career_wins_before: wins,
+    }
   })
+}
+
+function synthesizeRatingHistory(
+  recent: MatchDetailsFormResult[],
+): number[] {
+  if (recent.length === 0) return []
+  // Walk newest → oldest results in reverse so the sparkline reads
+  // chronologically; +12 per W, -10 per L is just enough to make the line
+  // visibly tilt without claiming to be a real rating system.
+  let rating = 1500
+  const points: number[] = [rating]
+  for (let i = recent.length - 1; i >= 0; i -= 1) {
+    rating += recent[i].is_win ? 12 : -10
+    points.push(rating)
+  }
+  return points
 }
 
 function projectHeadToHead(

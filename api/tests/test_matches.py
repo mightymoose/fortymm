@@ -977,3 +977,56 @@ async def test_details_head_to_head_is_null_for_solo_match(
     # Only the creator is in recent_form — and they have no prior history.
     assert len(detail["recent_form"]) == 1
     assert detail["recent_form"][0]["recent_results"] == []
+
+
+async def test_details_recent_form_includes_pre_match_rating_and_career(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    me = await start_session(api_client, db_session)
+    other = await make_user(db_session, "career-other")
+    # Two completed wins build up career stats *and* rating history before
+    # the head-to-head match is created.
+    await _play_match_to_completion(api_client, other.id, best_of=3, side_1_wins=True)
+    await _play_match_to_completion(api_client, other.id, best_of=3, side_1_wins=True)
+
+    opp = await make_user(db_session, "pre-rating-opp")
+    current = await _create_match(api_client, opp.id, best_of=3)
+    detail = (await api_client.get(f"/v1/matches/{current['id']}")).json()
+
+    forms = {f["user_id"]: f for f in detail["recent_form"]}
+    mine = forms[str(me.id)]
+    # I had 2 completed matches before this one, both wins.
+    assert mine["career_matches_before"] == 2
+    assert mine["career_wins_before"] == 2
+    # Rating history exists with 2 prior entries (one per rated match) and
+    # rating_before matches the most-recent entry.
+    assert mine["rating_before"] is not None
+    assert len(mine["rating_history"]) == 2
+    assert mine["rating_history"][-1] == mine["rating_before"]
+    # Brand-new opponent: no rating, no career.
+    fresh = forms[str(opp.id)]
+    assert fresh["rating_before"] is None
+    assert fresh["rating_history"] == []
+    assert fresh["career_matches_before"] == 0
+    assert fresh["career_wins_before"] == 0
+
+
+async def test_details_recent_form_excludes_self_from_career_count(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """A just-completed match's own row in rating_history / its own match
+    row must not double-count itself in the BFF."""
+    await start_session(api_client, db_session)
+    opp = await make_user(db_session, "self-exclude-opp")
+    finished = await _play_match_to_completion(
+        api_client, opp.id, best_of=3, side_1_wins=True
+    )
+
+    detail = (await api_client.get(f"/v1/matches/{finished['id']}")).json()
+    for f in detail["recent_form"]:
+        # No prior matches exist — only the current one — so career and
+        # rating-history must be empty.
+        assert f["career_matches_before"] == 0
+        assert f["career_wins_before"] == 0
+        assert f["rating_history"] == []
+        assert f["rating_before"] is None

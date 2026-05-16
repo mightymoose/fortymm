@@ -623,6 +623,9 @@ export interface components {
          * MatchDetailsPlayerForm
          * @description A player's previous-5 results, attached by ``user_id`` so the FE can
          *     map it onto whichever side carries that user.
+         *
+         *     All `*_before` fields are anchored to this match's `created_at` — they
+         *     describe the player's rating + record going into this match, not after.
          */
         MatchDetailsPlayerForm: {
             /**
@@ -632,6 +635,20 @@ export interface components {
             user_id: string;
             /** Recent Results */
             recent_results: components["schemas"]["MatchDetailsFormResult"][];
+            /** Rating Before */
+            rating_before?: number | null;
+            /** Rating History */
+            rating_history?: number[];
+            /**
+             * Career Matches Before
+             * @default 0
+             */
+            career_matches_before: number;
+            /**
+             * Career Wins Before
+             * @default 0
+             */
+            career_wins_before: number;
         };
         /** MatchDetailsScore */
         MatchDetailsScore: {

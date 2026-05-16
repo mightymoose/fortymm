@@ -4,14 +4,6 @@ on:
   push:
     branches: [main]
   pull_request:
-    paths:
-      - 'api/**'
-      - 'web-client/package.json'
-      - 'web-client/package-lock.json'
-      - 'web-client/.npmrc'
-      - 'web-client/src/api/**'
-      - 'mise.toml'
-      - '.github/workflows/openapi-schema.yml'
 
 jobs:
   verify:
