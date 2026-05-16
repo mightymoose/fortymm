@@ -1,4 +1,4 @@
-"""create users_tokens table
+"""create user_tokens table
 
 Revision ID: 0002
 Revises: 0001
@@ -20,7 +20,7 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     op.create_table(
-        "users_tokens",
+        "user_tokens",
         sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
         sa.Column("token", sa.LargeBinary(), nullable=False),
         sa.Column("context", sa.String(length=255), nullable=False),
@@ -33,16 +33,16 @@ def upgrade() -> None:
         ),
         sa.Column(
             "created_at",
-            sa.DateTime(),
+            sa.DateTime(timezone=True),
             server_default=sa.func.now(),
             nullable=False,
         ),
     )
     op.create_index(
-        "ix_users_tokens_user_id", "users_tokens", ["user_id"]
+        "ix_user_tokens_user_id", "user_tokens", ["user_id"]
     )
 
 
 def downgrade() -> None:
-    op.drop_index("ix_users_tokens_user_id", table_name="users_tokens")
-    op.drop_table("users_tokens")
+    op.drop_index("ix_user_tokens_user_id", table_name="user_tokens")
+    op.drop_table("user_tokens")

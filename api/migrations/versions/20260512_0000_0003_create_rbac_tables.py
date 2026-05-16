@@ -26,13 +26,13 @@ def upgrade() -> None:
         sa.Column("description", sa.String(length=1024), nullable=True),
         sa.Column(
             "created_at",
-            sa.DateTime(),
+            sa.DateTime(timezone=True),
             server_default=sa.func.now(),
             nullable=False,
         ),
         sa.Column(
             "updated_at",
-            sa.DateTime(),
+            sa.DateTime(timezone=True),
             server_default=sa.func.now(),
             nullable=False,
         ),
@@ -47,13 +47,13 @@ def upgrade() -> None:
         sa.Column("description", sa.String(length=1024), nullable=True),
         sa.Column(
             "created_at",
-            sa.DateTime(),
+            sa.DateTime(timezone=True),
             server_default=sa.func.now(),
             nullable=False,
         ),
         sa.Column(
             "updated_at",
-            sa.DateTime(),
+            sa.DateTime(timezone=True),
             server_default=sa.func.now(),
             nullable=False,
         ),
@@ -62,7 +62,7 @@ def upgrade() -> None:
     op.create_index("ix_permissions_name", "permissions", ["name"])
 
     op.create_table(
-        "roles_permissions",
+        "role_permissions",
         sa.Column(
             "role_id",
             postgresql.UUID(as_uuid=True),
@@ -77,14 +77,14 @@ def upgrade() -> None:
         ),
         sa.Column(
             "created_at",
-            sa.DateTime(),
+            sa.DateTime(timezone=True),
             server_default=sa.func.now(),
             nullable=False,
         ),
     )
 
     op.create_table(
-        "users_roles",
+        "user_roles",
         sa.Column(
             "user_id",
             postgresql.UUID(as_uuid=True),
@@ -99,7 +99,7 @@ def upgrade() -> None:
         ),
         sa.Column(
             "created_at",
-            sa.DateTime(),
+            sa.DateTime(timezone=True),
             server_default=sa.func.now(),
             nullable=False,
         ),
@@ -107,8 +107,8 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_table("users_roles")
-    op.drop_table("roles_permissions")
+    op.drop_table("user_roles")
+    op.drop_table("role_permissions")
     op.drop_index("ix_permissions_name", table_name="permissions")
     op.drop_table("permissions")
     op.drop_index("ix_roles_name", table_name="roles")

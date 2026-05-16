@@ -391,7 +391,7 @@ async def set_user_roles(
     db: AsyncSession = Depends(get_session),
 ) -> RbacUserRead:
     # FOR UPDATE on the user row prevents racing PUTs from colliding on the
-    # users_roles primary key (delete-then-insert otherwise conflicts).
+    # user_roles primary key (delete-then-insert otherwise conflicts).
     locked = await db.execute(
         select(User).where(User.id == user_id).with_for_update()
     )
