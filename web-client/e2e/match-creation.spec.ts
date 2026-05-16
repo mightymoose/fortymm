@@ -2,9 +2,10 @@ import { expect, test } from '@playwright/test'
 import { NewMatchPage } from './page-objects/matches/new-match.page'
 import { CREATOR_USERNAME } from './page-objects/matches/match-store'
 
-// Successful match creation lands on the scoring page for game 1 of the new
-// match's id (the factory mints ids like `m-1`).
-const SCORING_URL = /\/matches\/[^/]+\/games\/1\/scores\/new$/
+// Successful match creation navigates to the new match's `current_game`
+// scoring URL — both ids are server-assigned, so this matches any non-empty
+// segment.
+const SCORING_URL = /\/matches\/[^/]+\/games\/[^/]+\/scores\/new$/
 
 // Stable, explicit ids so request-body assertions can name them.
 const ADA = { id: 'pl-ada', username: 'ada.lovelace' }

@@ -19,7 +19,11 @@ import { Route } from './new'
 const NewMatchPage = Route.options.component!
 
 function pendingMatch() {
-  return matchDetails({ id: 'm-test' })
+  return matchDetails({
+    id: 'm-test',
+    games: [{ id: 'g-test', game_number: 1, score: null }],
+    current_game: { id: 'g-test', game_number: 1 },
+  })
 }
 
 function renderNewMatch() {
@@ -103,7 +107,7 @@ describe('NewMatchPage', () => {
 
     await waitFor(() =>
       expect(
-        screen.getByText('Scoring route m-test game 1'),
+        screen.getByText('Scoring route m-test game g-test'),
       ).toBeInTheDocument(),
     )
     expect(captured).toEqual({
@@ -131,7 +135,7 @@ describe('NewMatchPage', () => {
 
     await waitFor(() =>
       expect(
-        screen.getByText('Scoring route m-test game 1'),
+        screen.getByText('Scoring route m-test game g-test'),
       ).toBeInTheDocument(),
     )
     // Guest / TBD opponents can't be rated, so `rated` is forced false.

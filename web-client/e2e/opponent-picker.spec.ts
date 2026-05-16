@@ -9,9 +9,10 @@ const MARGARET = { id: 'pl-margaret', username: 'margaret.hamilton' }
 
 const ROSTER = [ADA, GRACE, LINUS, MARGARET]
 
-// Successful match creation lands on the scoring page for game 1 of the new
-// match's id (the factory mints ids like `m-1`).
-const SCORING_URL = /\/matches\/[^/]+\/games\/1\/scores\/new$/
+// Successful match creation navigates to the new match's `current_game`
+// scoring URL — both ids are server-assigned, so this matches any non-empty
+// segment.
+const SCORING_URL = /\/matches\/[^/]+\/games\/[^/]+\/scores\/new$/
 
 test.describe('Opponent picker — recent opponents', () => {
   test('shows a skeleton while recent opponents load, then the chips', async ({
