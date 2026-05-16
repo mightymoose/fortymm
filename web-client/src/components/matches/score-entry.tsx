@@ -3,8 +3,9 @@ import { Link, Navigate, useNavigate } from '@tanstack/react-router'
 import type { UseMutationResult } from '@tanstack/react-query'
 import { ApiError } from '@/api/client'
 import {
+  matchDetailRoute,
+  nextScoringDestination,
   scoringEditRoute,
-  scoringNewRoute,
   useMatch,
   type MatchDetails,
   type MatchGameScoreWrite,
@@ -79,12 +80,12 @@ function ScoreEntryInner({
   }
 
   if (!data.opponent_side) {
-    return <Navigate to="/matches/$matchId" params={{ matchId }} />
+    return <Navigate {...matchDetailRoute(matchId)} />
   }
 
   const game = data.games.find((g) => g.id === gameId)
   if (!game) {
-    return <Navigate to="/matches/$matchId" params={{ matchId }} />
+    return <Navigate {...matchDetailRoute(matchId)} />
   }
 
   const mySideNumber = data.my_side.side_number === 2 ? 2 : 1
@@ -136,13 +137,7 @@ function ScoreEntryInner({
   function saveGame() {
     if (!inputsValid) return
     mutation.mutate(toBody(Number(me), Number(opp)), {
-      onSuccess: (response) => {
-        if (response.current_game) {
-          navigate(scoringNewRoute(matchId, response.current_game.id))
-        } else {
-          navigate({ to: '/matches/$matchId', params: { matchId } })
-        }
-      },
+      onSuccess: (response) => navigate(nextScoringDestination(response)),
     })
   }
 
@@ -201,11 +196,7 @@ function ScoreEntryInner({
   return (
     <div className="fortymm-theme dark score-entry-screen">
       <div className="live-bar">
-        <Link
-          to="/matches/$matchId"
-          params={{ matchId }}
-          className="back"
-        >
+        <Link {...matchDetailRoute(matchId)} className="back">
           ← Back to match
         </Link>
         <span className="tag">
@@ -285,11 +276,7 @@ function ScoreEntryInner({
                     Edit existing score
                   </Link>
                 )}
-                <Link
-                  to="/matches/$matchId"
-                  params={{ matchId }}
-                  className="btn primary"
-                >
+                <Link {...matchDetailRoute(matchId)} className="btn primary">
                   Back to match
                 </Link>
               </div>

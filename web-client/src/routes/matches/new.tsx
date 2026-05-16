@@ -7,7 +7,7 @@ import { AppShell } from '@/components/app-shell'
 import { ApiError } from '@/api/client'
 import { useSession } from '@/api/session'
 import {
-  scoringNewRoute,
+  nextScoringDestination,
   useCreateMatch,
   usePlayerSearch,
   useRecentOpponents,
@@ -136,11 +136,7 @@ function MatchCard() {
         best_of: bestOf,
         rated: isRegistered && rated,
       })
-      if (created.current_game) {
-        navigate(scoringNewRoute(created.id, created.current_game.id))
-      } else {
-        navigate({ to: '/matches/$matchId', params: { matchId: created.id } })
-      }
+      navigate(nextScoringDestination(created))
     } catch (err) {
       setError(
         err instanceof ApiError

@@ -233,3 +233,14 @@ export function scoringEditRoute(
     params: { matchId, gameId, scoreId },
   }
 }
+
+/** Where to land after writing a match — score the trailing un-scored game,
+ * or fall back to the match details page when the match is decided (per the
+ * invariant `current_game !== null iff status !== completed`). */
+export function nextScoringDestination(
+  match: Pick<MatchDetails, 'id' | 'current_game'>,
+) {
+  return match.current_game
+    ? scoringNewRoute(match.id, match.current_game.id)
+    : matchDetailRoute(match.id)
+}
