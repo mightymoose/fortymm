@@ -385,10 +385,11 @@ def _list_row(match: Match, current_user_id: uuid.UUID) -> MatchListRow:
     side_wins = side_win_counts(match)
     sides_sorted = sorted(match.sides, key=lambda s: s.side_number)
     current_game = current_unscored_game(match)
-    scorable = (
+    can_score = (
         match.status in {MatchStatus.pending, MatchStatus.in_progress}
         and len(match.sides) >= 2
         and current_game is not None
+        and _is_participant(match, current_user_id)
     )
 
     return MatchListRow(
@@ -402,8 +403,9 @@ def _list_row(match: Match, current_user_id: uuid.UUID) -> MatchListRow:
         ],
         best_of=match.match_settings.best_of,
         created_at=match.created_at,
-        current_game_id=current_game.id if current_game else None,
-        can_score=scorable and _is_participant(match, current_user_id),
+        # Only surfaced to participants — spectators have no scoring affordance.
+        current_game_id=current_game.id if can_score else None,
+        can_score=can_score,
     )
 
 

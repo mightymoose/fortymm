@@ -280,7 +280,7 @@ async def test_list_matches_shows_every_match_on_the_system(
     ids = {row["id"] for row in body["items"]}
     assert other_match["id"] in ids
     # The spectator sees both sides flagged neutrally — neither claims to be
-    # `is_current_user_side`, since `me` is not a participant.
+    # `is_current_user_side`, and `me` doesn't appear in any row's players.
     row = next(r for r in body["items"] if r["id"] == other_match["id"])
     assert [side["is_current_user_side"] for side in row["sides"]] == [
         False,
@@ -288,7 +288,28 @@ async def test_list_matches_shows_every_match_on_the_system(
     ]
     usernames = {p["username"] for side in row["sides"] for p in side["players"]}
     assert usernames == {them.username, bystander.username}
-    assert me.id  # silence "unused" warning — the spectator's identity matters
+    assert me.username not in usernames
+
+
+async def test_list_q_filter_matches_caller_username(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    me = await start_session(api_client, db_session)
+    opp = await make_user(db_session, "rival")
+    mine = await _create_match(api_client, opp.id)
+    async with make_client() as other_client:
+        await start_session(other_client, db_session)
+        bystander = await make_user(db_session, "bystander")
+        # A match the caller is not in — searching for the caller's own
+        # username should not pick this up.
+        unrelated = await _create_match(other_client, bystander.id)
+
+    listing = (
+        await api_client.get("/v1/matches", params={"q": me.username})
+    ).json()
+    ids = {row["id"] for row in listing["items"]}
+    assert mine["id"] in ids
+    assert unrelated["id"] not in ids
 
 
 async def test_list_filter_by_status(
@@ -375,11 +396,11 @@ async def test_list_row_carries_current_game_id_when_scorable(
     assert row["can_score"] is True
 
 
-async def test_list_row_can_score_is_false_for_spectators(
+async def test_list_row_hides_scoring_affordance_from_spectators(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    # `current_game_id` still leaks to spectators (so the FE can deep-link),
-    # but `can_score` gates the Score CTA on participation.
+    # Spectators get neither `can_score` nor `current_game_id` — the scoring
+    # route 404s for them anyway, and the FE has no reason to deep-link.
     await start_session(api_client, db_session)
     async with make_client() as other_client:
         await start_session(other_client, db_session)
@@ -388,7 +409,7 @@ async def test_list_row_can_score_is_false_for_spectators(
 
     listing = (await api_client.get("/v1/matches")).json()
     row = next(r for r in listing["items"] if r["id"] == created["id"])
-    assert row["current_game_id"] is not None
+    assert row["current_game_id"] is None
     assert row["can_score"] is False
 
 

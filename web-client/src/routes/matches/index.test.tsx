@@ -190,7 +190,7 @@ describe('MatchesPage', () => {
     await waitFor(() => expect(requests.length).toBeGreaterThanOrEqual(1))
     const requestsBeforeTyping = requests.length
 
-    await user.type(screen.getByPlaceholderText(/search opponents/i), 'ngu')
+    await user.type(screen.getByPlaceholderText(/search players/i), 'ngu')
 
     await waitFor(
       () => {

@@ -18,8 +18,6 @@ import {
   type MatchStatus,
 } from '@/api/matches'
 import type { components } from '@/api/schema'
-
-type MatchListRowSide = components['schemas']['MatchDetailsSide']
 import { AppShell } from '@/components/app-shell'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
@@ -48,6 +46,8 @@ import {
 import { useDebouncedValue } from '@/lib/use-debounced-value'
 import { cn, initialsOf } from '@/lib/utils'
 import './index.css'
+
+type MatchListRowSide = components['schemas']['MatchDetailsSide']
 
 export const Route = createFileRoute('/matches/')({
   component: MatchesPage,
@@ -212,7 +212,7 @@ function FilterRow({
         <Search className="ml-search-icon" size={16} strokeWidth={2} />
         <Input
           className="h-9 pl-9 pr-9"
-          placeholder="Search opponents…"
+          placeholder="Search players…"
           value={q}
           onChange={(e) => setQ(e.target.value)}
         />
