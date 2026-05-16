@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import ForeignKey, LargeBinary, String, func
+from sqlalchemy import DateTime, ForeignKey, LargeBinary, String, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -10,7 +10,7 @@ from app.models.user import User
 
 
 class UserToken(Base):
-    __tablename__ = "users_tokens"
+    __tablename__ = "user_tokens"
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
@@ -27,7 +27,7 @@ class UserToken(Base):
         index=True,
     )
     created_at: Mapped[datetime] = mapped_column(
-        server_default=func.now(), nullable=False
+        DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
     user: Mapped[User] = relationship(User)
