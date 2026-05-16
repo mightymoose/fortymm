@@ -9,7 +9,18 @@ type Permission = components['schemas']['PermissionRead']
 type Role = components['schemas']['RoleRead']
 type RbacUser = components['schemas']['RbacUserRead']
 type Player = components['schemas']['PlayerRead']
-type MatchRead = components['schemas']['MatchRead']
+type MatchDetails = components['schemas']['MatchDetails']
+type MatchDetailsSide = components['schemas']['MatchDetailsSide']
+type MatchDetailsGame = components['schemas']['MatchDetailsGame']
+type MatchDetailsCurrentGame =
+  components['schemas']['MatchDetailsCurrentGame']
+type MatchListRow = components['schemas']['MatchListRow']
+type MatchListResponse = components['schemas']['MatchListResponse']
+type MatchStatus = components['schemas']['MatchStatus']
+type DashboardResponse = components['schemas']['DashboardResponse']
+type DashboardScoreBanner = components['schemas']['DashboardScoreBanner']
+type DashboardNextMatch = components['schemas']['DashboardNextMatch']
+type DashboardRecentResult = components['schemas']['DashboardRecentResult']
 
 function fastCheck(overrides: Partial<ComponentHealth> = {}): ComponentHealth {
   return {
@@ -119,47 +130,163 @@ export function player(overrides: Partial<Player> = {}): Player {
 }
 
 /**
- * Builds a `MatchRead` the way the API would for a `POST /v1/matches` body:
- * the creator always gets side 1, a registered opponent gets side 2, and
- * guest / no-opponent matches stay single-sided and unrated.
+ * `MatchDetails` factory. Defaults to a fresh `pending` 1v1 with the current
+ * user on side 1, a single opponent on side 2, and game 1 unscored — the
+ * shape the BFF returns straight after `POST /v1/matches`.
  */
-export function matchResponse(input: {
-  creatorUsername: string
-  opponent: Player | null
-  bestOf: number
-  rated: boolean
-}): MatchRead {
-  const creatorId = nextId('u')
-  const affectsRating = input.rated && input.opponent !== null
-  const sides: MatchRead['sides'] = [
-    {
-      side_number: 1,
-      score: 0,
-      won: null,
-      players: [{ user_id: creatorId, username: input.creatorUsername }],
-    },
-  ]
-  if (input.opponent) {
-    sides.push({
-      side_number: 2,
-      score: 0,
-      won: null,
-      players: [
-        { user_id: input.opponent.id, username: input.opponent.username },
-      ],
-    })
+export function matchDetails(
+  overrides: Partial<MatchDetails> = {},
+): MatchDetails {
+  const id = overrides.id ?? nextId('m')
+  const bestOf = overrides.best_of ?? 5
+  const currentUserId = nextId('u')
+  const opponentId = nextId('u')
+  const mySide: MatchDetailsSide = {
+    side_number: 1,
+    players: [
+      {
+        user_id: currentUserId,
+        username: 'rita.kovac',
+        is_current_user: true,
+      },
+    ],
+    games_won: 0,
+    won: null,
+    is_current_user_side: true,
   }
+  const opponentSide: MatchDetailsSide = {
+    side_number: 2,
+    players: [
+      {
+        user_id: opponentId,
+        username: faker.internet.username().toLowerCase(),
+        is_current_user: false,
+      },
+    ],
+    games_won: 0,
+    won: null,
+    is_current_user_side: false,
+  }
+  const firstGame: MatchDetailsGame = {
+    id: nextId('g'),
+    game_number: 1,
+    score: null,
+  }
+  const currentGame: MatchDetailsCurrentGame = {
+    id: firstGame.id,
+    game_number: 1,
+  }
+  return {
+    id,
+    status: 'pending',
+    status_label: 'Scheduled',
+    best_of: bestOf,
+    games_to_win: Math.ceil(bestOf / 2),
+    team_size: 1,
+    affects_rating: false,
+    created_at: ISO,
+    my_side: mySide,
+    opponent_side: opponentSide,
+    games: [firstGame],
+    current_game: currentGame,
+    can_score: true,
+    ...overrides,
+  }
+}
+
+/** Row-shaped projection for the /matches list. Defaults mirror a pending
+ * 1v1 against a registered opponent with one trailing un-scored game. */
+export function matchListRow(
+  overrides: Partial<MatchListRow> = {},
+): MatchListRow {
   return {
     id: nextId('m'),
     status: 'pending',
-    created_by_user_id: creatorId,
+    status_label: 'Scheduled',
+    opponent_username: faker.internet.username().toLowerCase(),
+    opponent_user_id: nextId('u'),
+    my_games_won: 0,
+    opponent_games_won: 0,
+    is_win: null,
+    best_of: 5,
     created_at: ISO,
-    settings: {
-      team_size: 1,
-      best_of: input.bestOf,
-      affects_rating: affectsRating,
-      verification_policy: 'none',
-    },
-    sides,
+    current_game_id: nextId('g'),
+    ...overrides,
+  }
+}
+
+const ALL_STATUSES: MatchStatus[] = [
+  'pending',
+  'in_progress',
+  'completed',
+  'disputed',
+  'voided',
+]
+
+export function matchListResponse(
+  overrides: Partial<MatchListResponse> = {},
+): MatchListResponse {
+  const items = overrides.items ?? []
+  const baseCounts: Record<string, number> = Object.fromEntries(
+    ALL_STATUSES.map((s) => [s, 0]),
+  )
+  for (const item of items) {
+    baseCounts[item.status] = (baseCounts[item.status] ?? 0) + 1
+  }
+  return {
+    items,
+    page: 1,
+    page_size: 25,
+    total: items.length,
+    status_counts: baseCounts,
+    ...overrides,
+  }
+}
+
+export function dashboardResponse(
+  overrides: Partial<DashboardResponse> = {},
+): DashboardResponse {
+  return {
+    score_banner: null,
+    next_match: null,
+    recent_results: [],
+    ...overrides,
+  }
+}
+
+export function dashboardScoreBanner(
+  overrides: Partial<DashboardScoreBanner> = {},
+): DashboardScoreBanner {
+  return {
+    match_id: nextId('m'),
+    opponent_username: faker.internet.username().toLowerCase(),
+    current_game_id: nextId('g'),
+    ...overrides,
+  }
+}
+
+export function dashboardNextMatch(
+  overrides: Partial<DashboardNextMatch> = {},
+): DashboardNextMatch {
+  return {
+    match_id: nextId('m'),
+    opponent_username: faker.internet.username().toLowerCase(),
+    best_of: 5,
+    created_at: ISO,
+    ...overrides,
+  }
+}
+
+export function dashboardRecentResult(
+  overrides: Partial<DashboardRecentResult> = {},
+): DashboardRecentResult {
+  return {
+    match_id: nextId('m'),
+    opponent_username: faker.internet.username().toLowerCase(),
+    is_win: true,
+    my_games_won: 3,
+    opponent_games_won: 1,
+    completed_at: ISO,
+    ...overrides,
   }
 }

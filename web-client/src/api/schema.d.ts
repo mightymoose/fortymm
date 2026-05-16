@@ -155,7 +155,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /** List Matches */
+        get: operations["list_matches_v1_matches_get"];
         put?: never;
         /** Create Match */
         post: operations["create_match_v1_matches_post"];
@@ -175,6 +176,40 @@ export interface paths {
         /** Get Match */
         get: operations["get_match_v1_matches__match_id__get"];
         put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/matches/{match_id}/games/{game_id}/scores": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Game Score */
+        post: operations["create_game_score_v1_matches__match_id__games__game_id__scores_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/matches/{match_id}/games/{game_id}/scores/{score_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Update Game Score */
+        put: operations["update_game_score_v1_matches__match_id__games__game_id__scores__score_id__put"];
         post?: never;
         delete?: never;
         options?: never;
@@ -230,6 +265,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/dashboard": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Dashboard */
+        get: operations["get_dashboard_v1_dashboard_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/health": {
         parameters: {
             query?: never;
@@ -259,6 +311,66 @@ export interface components {
             latency_ms?: number | null;
             /** Error */
             error?: string | null;
+        };
+        /** DashboardNextMatch */
+        DashboardNextMatch: {
+            /**
+             * Match Id
+             * Format: uuid
+             */
+            match_id: string;
+            /** Opponent Username */
+            opponent_username: string | null;
+            /** Best Of */
+            best_of: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /** DashboardRecentResult */
+        DashboardRecentResult: {
+            /**
+             * Match Id
+             * Format: uuid
+             */
+            match_id: string;
+            /** Opponent Username */
+            opponent_username: string | null;
+            /** Is Win */
+            is_win: boolean;
+            /** My Games Won */
+            my_games_won: number;
+            /** Opponent Games Won */
+            opponent_games_won: number;
+            /**
+             * Completed At
+             * Format: date-time
+             */
+            completed_at: string;
+        };
+        /** DashboardResponse */
+        DashboardResponse: {
+            score_banner: components["schemas"]["DashboardScoreBanner"] | null;
+            next_match: components["schemas"]["DashboardNextMatch"] | null;
+            /** Recent Results */
+            recent_results: components["schemas"]["DashboardRecentResult"][];
+        };
+        /** DashboardScoreBanner */
+        DashboardScoreBanner: {
+            /**
+             * Match Id
+             * Format: uuid
+             */
+            match_id: string;
+            /** Opponent Username */
+            opponent_username: string | null;
+            /**
+             * Current Game Id
+             * Format: uuid
+             */
+            current_game_id: string;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -293,40 +405,60 @@ export interface components {
              */
             rated: boolean;
         };
-        /** MatchRead */
-        MatchRead: {
+        /** MatchDetails */
+        MatchDetails: {
             /**
              * Id
              * Format: uuid
              */
             id: string;
             status: components["schemas"]["MatchStatus"];
-            /**
-             * Created By User Id
-             * Format: uuid
-             */
-            created_by_user_id: string;
+            /** Status Label */
+            status_label: string;
+            /** Best Of */
+            best_of: number;
+            /** Games To Win */
+            games_to_win: number;
+            /** Team Size */
+            team_size: number;
+            /** Affects Rating */
+            affects_rating: boolean;
             /**
              * Created At
              * Format: date-time
              */
             created_at: string;
-            settings: components["schemas"]["MatchSettingsRead"];
-            /** Sides */
-            sides: components["schemas"]["MatchSideRead"][];
+            my_side: components["schemas"]["MatchDetailsSide"];
+            opponent_side: components["schemas"]["MatchDetailsSide"] | null;
+            /** Games */
+            games: components["schemas"]["MatchDetailsGame"][];
+            current_game: components["schemas"]["MatchDetailsCurrentGame"] | null;
+            /** Can Score */
+            can_score: boolean;
         };
-        /** MatchSettingsRead */
-        MatchSettingsRead: {
-            /** Team Size */
-            team_size: number;
-            /** Best Of */
-            best_of: number;
-            /** Affects Rating */
-            affects_rating: boolean;
-            verification_policy: components["schemas"]["VerificationPolicy"];
+        /** MatchDetailsCurrentGame */
+        MatchDetailsCurrentGame: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Game Number */
+            game_number: number;
         };
-        /** MatchSidePlayerRead */
-        MatchSidePlayerRead: {
+        /** MatchDetailsGame */
+        MatchDetailsGame: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Game Number */
+            game_number: number;
+            score: components["schemas"]["MatchDetailsScore"] | null;
+        };
+        /** MatchDetailsPlayer */
+        MatchDetailsPlayer: {
             /**
              * User Id
              * Format: uuid
@@ -334,17 +466,87 @@ export interface components {
             user_id: string;
             /** Username */
             username: string;
+            /** Is Current User */
+            is_current_user: boolean;
         };
-        /** MatchSideRead */
-        MatchSideRead: {
+        /** MatchDetailsScore */
+        MatchDetailsScore: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** My Points */
+            my_points: number;
+            /** Opponent Points */
+            opponent_points: number;
+            /** Is My Win */
+            is_my_win: boolean;
+        };
+        /** MatchDetailsSide */
+        MatchDetailsSide: {
             /** Side Number */
             side_number: number;
-            /** Score */
-            score: number;
+            /** Players */
+            players: components["schemas"]["MatchDetailsPlayer"][];
+            /** Games Won */
+            games_won: number;
             /** Won */
             won: boolean | null;
-            /** Players */
-            players: components["schemas"]["MatchSidePlayerRead"][];
+            /** Is Current User Side */
+            is_current_user_side: boolean;
+        };
+        /** MatchGameScoreWrite */
+        MatchGameScoreWrite: {
+            /** Side 1 Points */
+            side_1_points: number;
+            /** Side 2 Points */
+            side_2_points: number;
+        };
+        /** MatchListResponse */
+        MatchListResponse: {
+            /** Items */
+            items: components["schemas"]["MatchListRow"][];
+            /** Page */
+            page: number;
+            /** Page Size */
+            page_size: number;
+            /** Total */
+            total: number;
+            /** Status Counts */
+            status_counts: {
+                [key: string]: number;
+            };
+        };
+        /** MatchListRow */
+        MatchListRow: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            status: components["schemas"]["MatchStatus"];
+            /** Status Label */
+            status_label: string;
+            /** Opponent Username */
+            opponent_username: string | null;
+            /** Opponent User Id */
+            opponent_user_id: string | null;
+            /** My Games Won */
+            my_games_won: number;
+            /** Opponent Games Won */
+            opponent_games_won: number;
+            /** Is Win */
+            is_win: boolean | null;
+            /** Best Of */
+            best_of: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Current Game Id */
+            current_game_id: string | null;
         };
         /**
          * MatchStatus
@@ -499,11 +701,6 @@ export interface components {
             /** Context */
             ctx?: Record<string, never>;
         };
-        /**
-         * VerificationPolicy
-         * @enum {string}
-         */
-        VerificationPolicy: "none" | "self_report" | "opponent_confirms" | "all_players_confirm";
     };
     responses: never;
     parameters: never;
@@ -1045,6 +1242,42 @@ export interface operations {
             };
         };
     };
+    list_matches_v1_matches_get: {
+        parameters: {
+            query?: {
+                status?: components["schemas"]["MatchStatus"] | null;
+                q?: string | null;
+                page?: number;
+                page_size?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MatchListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     create_match_v1_matches_post: {
         parameters: {
             query?: never;
@@ -1066,7 +1299,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["MatchRead"];
+                    "application/json": components["schemas"]["MatchDetails"];
                 };
             };
             /** @description Validation Error */
@@ -1087,7 +1320,9 @@ export interface operations {
             path: {
                 match_id: string;
             };
-            cookie?: never;
+            cookie?: {
+                session?: string | null;
+            };
         };
         requestBody?: never;
         responses: {
@@ -1097,7 +1332,84 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["MatchRead"];
+                    "application/json": components["schemas"]["MatchDetails"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_game_score_v1_matches__match_id__games__game_id__scores_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                match_id: string;
+                game_id: string;
+            };
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MatchGameScoreWrite"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MatchDetails"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_game_score_v1_matches__match_id__games__game_id__scores__score_id__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                match_id: string;
+                game_id: string;
+                score_id: string;
+            };
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MatchGameScoreWrite"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MatchDetails"];
                 };
             };
             /** @description Validation Error */
@@ -1166,6 +1478,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PlayerRead"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_dashboard_v1_dashboard_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DashboardResponse"];
                 };
             };
             /** @description Validation Error */

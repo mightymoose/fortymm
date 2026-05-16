@@ -1,10 +1,27 @@
-import { useMutation, useQuery } from '@tanstack/react-query'
+import {
+  keepPreviousData,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query'
 import { api, unwrap } from './client'
+import { DASHBOARD_QUERY_KEY } from './dashboard'
 import type { components } from './schema'
 
 export type Player = components['schemas']['PlayerRead']
-export type Match = components['schemas']['MatchRead']
 export type MatchCreate = components['schemas']['MatchCreate']
+export type MatchDetails = components['schemas']['MatchDetails']
+export type MatchListResponse = components['schemas']['MatchListResponse']
+export type MatchListRow = components['schemas']['MatchListRow']
+export type MatchGameScoreWrite = components['schemas']['MatchGameScoreWrite']
+export type MatchStatus = components['schemas']['MatchStatus']
+
+export type MatchListParams = {
+  status?: MatchStatus
+  q?: string
+  page: number
+  page_size: number
+}
 
 export const RECENT_OPPONENTS_QUERY_KEY = ['players', 'recent'] as const
 
@@ -12,6 +29,17 @@ export const RECENT_OPPONENTS_QUERY_KEY = ['players', 'recent'] as const
  * cached independently and `enabled` can gate the empty-term case. */
 export function playerSearchQueryKey(term: string) {
   return ['players', 'search', term] as const
+}
+
+/** Query key for the paginated /matches list. The whole params bag is the
+ * key so two different filters keep separate cache slots. */
+export function matchListQueryKey(params: MatchListParams) {
+  return ['matches', 'list', params] as const
+}
+
+/** Query key for a single match's details (BFF response). */
+export function matchQueryKey(matchId: string) {
+  return ['matches', 'detail', matchId] as const
 }
 
 /**
@@ -65,7 +93,140 @@ export function usePlayerSearch(term: string) {
  */
 export function useCreateMatch() {
   return useMutation({
-    mutationFn: async (input: MatchCreate): Promise<Match> =>
+    mutationFn: async (input: MatchCreate): Promise<MatchDetails> =>
       unwrap('create match', await api.POST('/v1/matches', { body: input })),
   })
+}
+
+/**
+ * Paginated /matches list. `placeholderData: keepPreviousData` keeps the
+ * current page rendered while the next page or filter resolves, so the table
+ * doesn't flash empty between requests. Throws to the surrounding boundary.
+ */
+export function useMatchList(params: MatchListParams) {
+  return useQuery({
+    queryKey: matchListQueryKey(params),
+    queryFn: async (): Promise<MatchListResponse> =>
+      unwrap(
+        'load matches',
+        await api.GET('/v1/matches', {
+          params: {
+            query: {
+              status: params.status,
+              q: params.q,
+              page: params.page,
+              page_size: params.page_size,
+            },
+          },
+        }),
+      ),
+    placeholderData: keepPreviousData,
+    retry: false,
+    throwOnError: true,
+  })
+}
+
+/**
+ * Single match details (BFF for /matches/$id and the scoring routes).
+ * Throws to the surrounding boundary on failure.
+ */
+export function useMatch(matchId: string) {
+  return useQuery({
+    queryKey: matchQueryKey(matchId),
+    queryFn: async (): Promise<MatchDetails> =>
+      unwrap(
+        'load match',
+        await api.GET('/v1/matches/{match_id}', {
+          params: { path: { match_id: matchId } },
+        }),
+      ),
+    retry: false,
+    throwOnError: true,
+  })
+}
+
+/** Cache work shared by both score mutations: prime the detail cache from the
+ * mutation response and invalidate the list / dashboard so they re-read the
+ * derived status, scoreboard, and next-up state. */
+function applyScoreMutationCache(
+  queryClient: ReturnType<typeof useQueryClient>,
+  matchId: string,
+  data: MatchDetails,
+) {
+  queryClient.setQueryData<MatchDetails>(matchQueryKey(matchId), data)
+  queryClient.invalidateQueries({ queryKey: ['matches', 'list'] })
+  queryClient.invalidateQueries({ queryKey: DASHBOARD_QUERY_KEY })
+}
+
+/**
+ * Writes the first score for a game. The scoring route surfaces errors
+ * inline, so `throwOnError` is intentionally omitted — callers branch on
+ * `mutation.error`.
+ */
+export function useCreateScore(matchId: string, gameId: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (input: MatchGameScoreWrite): Promise<MatchDetails> =>
+      unwrap(
+        'submit score',
+        await api.POST('/v1/matches/{match_id}/games/{game_id}/scores', {
+          params: { path: { match_id: matchId, game_id: gameId } },
+          body: input,
+        }),
+      ),
+    onSuccess: (data) => applyScoreMutationCache(queryClient, matchId, data),
+  })
+}
+
+/**
+ * Edits an existing score. Same cache work and same no-throw posture as
+ * `useCreateScore` — the edit route handles errors inline.
+ */
+export function useUpdateScore(
+  matchId: string,
+  gameId: string,
+  scoreId: string,
+) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (input: MatchGameScoreWrite): Promise<MatchDetails> =>
+      unwrap(
+        'update score',
+        await api.PUT(
+          '/v1/matches/{match_id}/games/{game_id}/scores/{score_id}',
+          {
+            params: {
+              path: {
+                match_id: matchId,
+                game_id: gameId,
+                score_id: scoreId,
+              },
+            },
+            body: input,
+          },
+        ),
+      ),
+    onSuccess: (data) => applyScoreMutationCache(queryClient, matchId, data),
+  })
+}
+
+// URL helpers used by every scoring CTA so the route shape lives in one place.
+// `as const` preserves the literal `to` for TanStack Router's typed navigation.
+
+export function scoringNewRoute(matchId: string, gameId: string) {
+  return {
+    to: '/matches/$matchId/games/$gameId/scores/new' as const,
+    params: { matchId, gameId },
+  }
+}
+
+export function scoringEditRoute(
+  matchId: string,
+  gameId: string,
+  scoreId: string,
+) {
+  return {
+    to: '/matches/$matchId/games/$gameId/scores/$scoreId/edit' as const,
+    params: { matchId, gameId, scoreId },
+  }
 }
