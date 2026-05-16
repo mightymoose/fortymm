@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 import { Link, Navigate, useNavigate } from '@tanstack/react-router'
 import type { UseMutationResult } from '@tanstack/react-query'
 import { ApiError } from '@/api/client'
@@ -9,7 +9,7 @@ import {
   type MatchDetails,
   type MatchGameScoreWrite,
 } from '@/api/matches'
-import { cn } from '@/lib/utils'
+import { cn, initialsOf } from '@/lib/utils'
 
 export type ScoreMutation = UseMutationResult<
   MatchDetails,
@@ -67,11 +67,6 @@ function ScoreEntryInner({
   const [oppTyped, setOppTyped] = useState<string | null>(null)
   const meRef = useRef<HTMLInputElement>(null)
   const oppRef = useRef<HTMLInputElement>(null)
-
-  useEffect(() => {
-    const timer = setTimeout(() => meRef.current?.focus(), 60)
-    return () => clearTimeout(timer)
-  }, [])
 
   if (isLoading || !data) {
     return (
@@ -132,15 +127,15 @@ function ScoreEntryInner({
       ? apiError.detail ?? apiError.message
       : null
 
+  function toBody(mine: number, opponent: number): MatchGameScoreWrite {
+    return mySideNumber === 1
+      ? { side_1_points: mine, side_2_points: opponent }
+      : { side_1_points: opponent, side_2_points: mine }
+  }
+
   function saveGame() {
     if (!inputsValid) return
-    const meScore = Number(me)
-    const oppScore = Number(opp)
-    const body: MatchGameScoreWrite =
-      mySideNumber === 1
-        ? { side_1_points: meScore, side_2_points: oppScore }
-        : { side_1_points: oppScore, side_2_points: meScore }
-    mutation.mutate(body, {
+    mutation.mutate(toBody(Number(me), Number(opp)), {
       onSuccess: (response) => {
         if (response.current_game) {
           navigate(scoringNewRoute(matchId, response.current_game.id))
@@ -174,10 +169,27 @@ function ScoreEntryInner({
   const pad = (n: number) => String(n).padStart(2, '0')
   const gameLabel = `GAME ${pad(gameNumber)} OF ${pad(bestOf)}`
   const inputsLocked = mutation.isPending || lockedReason !== null
+  const isEdit = mode.kind === 'edit'
 
-  // The "already scored" 409 only happens on the create route — and the
-  // existing score id is in the cached match payload. Surface a link to the
-  // edit route so the user can switch over without leaving the page.
+  const heading = isEdit
+    ? `Edit game ${gameNumber} score.`
+    : `Enter game ${gameNumber} score.`
+  const subtitle = isEdit
+    ? 'Save updates the score for this game.'
+    : gameNumber < bestOf
+      ? `Save this game to continue to game ${gameNumber + 1}.`
+      : 'Final game. Save to finish the match.'
+  const saveLabel = mutation.isPending
+    ? 'Saving…'
+    : isEdit
+      ? 'Save changes →'
+      : gameNumber < bestOf
+        ? 'Save game & next →'
+        : 'Save final game →'
+
+  // The "already scored" 409 only happens on the create route. The existing
+  // score id is in the cached payload, so we can offer a direct switch to its
+  // edit route.
   const editLink =
     mode.kind === 'create' &&
     apiError?.status === 409 &&
@@ -207,11 +219,7 @@ function ScoreEntryInner({
 
       <div className="entry-wrap">
         <div className="entry-head">
-          <h2>
-            {mode.kind === 'edit'
-              ? `Edit game ${gameNumber} score.`
-              : `Enter game ${gameNumber} score.`}
-          </h2>
+          <h2>{heading}</h2>
           {!lockedReason && (
             <div className="hint">
               <kbd>0</kbd>–<kbd>9</kbd> score &nbsp;·&nbsp; <kbd>Enter</kbd> next
@@ -228,6 +236,7 @@ function ScoreEntryInner({
             wins={meWins}
             value={me}
             inputRef={meRef}
+            autoFocus
             disabled={inputsLocked}
             invalid={apiError !== null && apiError.status === 422}
             onChange={onMeChange}
@@ -287,13 +296,7 @@ function ScoreEntryInner({
             </>
           ) : (
             <>
-              <div className="result-line subtle">
-                {mode.kind === 'edit'
-                  ? 'Save updates the score for this game.'
-                  : gameNumber < bestOf
-                    ? `Save this game to continue to game ${gameNumber + 1}.`
-                    : 'Final game. Save to finish the match.'}
-              </div>
+              <div className="result-line subtle">{subtitle}</div>
               <div className="action-btns">
                 <button
                   type="button"
@@ -301,13 +304,7 @@ function ScoreEntryInner({
                   disabled={!inputsValid || mutation.isPending}
                   onClick={saveGame}
                 >
-                  {mutation.isPending
-                    ? 'Saving…'
-                    : mode.kind === 'edit'
-                      ? 'Save changes →'
-                      : gameNumber < bestOf
-                        ? 'Save game & next →'
-                        : 'Save final game →'}
+                  {saveLabel}
                 </button>
               </div>
             </>
@@ -331,6 +328,7 @@ function ScoreSide({
   wins,
   value,
   inputRef,
+  autoFocus,
   disabled,
   invalid,
   onChange,
@@ -342,6 +340,7 @@ function ScoreSide({
   wins: number
   value: string
   inputRef: React.RefObject<HTMLInputElement | null>
+  autoFocus?: boolean
   disabled: boolean
   invalid: boolean
   onChange: (value: string) => void
@@ -373,6 +372,7 @@ function ScoreSide({
         aria-invalid={invalid || undefined}
         placeholder="0"
         value={value}
+        autoFocus={autoFocus}
         disabled={disabled}
         onFocus={(e) => e.target.select()}
         onChange={(e) => onChange(e.target.value)}
@@ -462,9 +462,3 @@ function Scoreline({
   )
 }
 
-function initialsOf(username: string): string {
-  const parts = username.split(/[.\s_-]+/).filter(Boolean)
-  if (parts.length === 0) return username.slice(0, 2).toUpperCase()
-  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase()
-  return (parts[0][0] + parts[1][0]).toUpperCase()
-}

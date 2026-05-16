@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, Navigate, useRouter } from '@tanstack/react-router'
 import {
   Check,
@@ -12,7 +12,7 @@ import {
 } from 'lucide-react'
 
 import { AppShell } from '@/components/app-shell'
-import { cn } from '@/lib/utils'
+import { cn, initialsOf } from '@/lib/utils'
 import { scoringEditRoute, scoringNewRoute, useMatch } from '@/api/matches'
 import type { components } from '@/api/schema'
 import { ApiError } from '@/api/client'
@@ -24,9 +24,6 @@ type MatchDetailsSide = components['schemas']['MatchDetailsSide']
 type HeroState = 'live' | 'final' | 'upcoming'
 
 type SideView = {
-  // 'a' = current user side, 'b' = opponent (or guest). Drives the
-  // win-coloring classes the existing CSS keys off of.
-  key: 'a' | 'b'
   username: string
   initials: string
   gamesWon: number
@@ -57,21 +54,9 @@ type MatchView = {
   scoreCta: { matchId: string; gameId: string } | null
 }
 
-function initialsOf(username: string): string {
-  const parts = username.split(/[.\s_-]+/).filter(Boolean)
-  if (parts.length === 0) return username.slice(0, 2).toUpperCase()
-  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase()
-  return (parts[0][0] + parts[1][0]).toUpperCase()
-}
-
-function projectSide(
-  side: MatchDetailsSide,
-  key: 'a' | 'b',
-  fallbackLabel: string,
-): SideView {
+function projectSide(side: MatchDetailsSide, fallbackLabel: string): SideView {
   const username = side.players[0]?.username ?? fallbackLabel
   return {
-    key,
     username,
     initials: initialsOf(username),
     gamesWon: side.games_won,
@@ -104,9 +89,9 @@ function projectMatchView(data: MatchDetails, matchId: string): MatchView {
         ? 'final'
         : 'upcoming'
   const mySideNumber = (data.my_side.side_number === 2 ? 2 : 1) as 1 | 2
-  const mySide = projectSide(data.my_side, 'a', 'You')
+  const mySide = projectSide(data.my_side, 'You')
   const opponentSide = data.opponent_side
-    ? projectSide(data.opponent_side, 'b', 'Opponent')
+    ? projectSide(data.opponent_side, 'Opponent')
     : null
   const games = data.games
     .slice()
@@ -143,8 +128,8 @@ export function MatchDetailsView({ matchId }: { matchId: string }) {
   }
 
   if (!data.opponent_side) {
-    // Solo matches aren't viewable here yet; the rest of the surface assumes
-    // two sides. Send the user back to the list.
+    // Solo matches aren't viewable on this page yet — the surface assumes
+    // two sides.
     return <Navigate to="/matches" />
   }
 
@@ -201,9 +186,9 @@ function MatchDetailsSkeleton() {
 
 function MatchDetailsPage({ view, matchId }: { view: MatchView; matchId: string }) {
   const [shareOpen, setShareOpen] = useState(false)
-  // Rating, H2H, comments, and share are kept around as design context for
-  // later phases. The page intentionally doesn't render them until each one
-  // has real data behind it.
+  // Rating sparklines, H2H, comments, and the share modal are part of the
+  // design handoff but have no real data behind them yet. The cards and their
+  // render sites are gated off; flip this once each one's data lands.
   const showAuxCards = false
 
   return (
@@ -220,17 +205,19 @@ function MatchDetailsPage({ view, matchId }: { view: MatchView; matchId: string 
                 Score
               </Link>
             )}
-            <button
-              type="button"
-              className="md-btn md-btn--ghost md-btn--sm"
-              onClick={() => setShareOpen(true)}
-            >
-              <Share2 size={14} /> Share
-            </button>
+            {showAuxCards && (
+              <button
+                type="button"
+                className="md-btn md-btn--ghost md-btn--sm"
+                onClick={() => setShareOpen(true)}
+              >
+                <Share2 size={14} /> Share
+              </button>
+            )}
           </div>
         </div>
 
-        <HeroScoreboard view={view} />
+        <HeroScoreboard view={view} matchId={matchId} />
 
         <div className="md-col-2">
           <div className="md-col-2__main">
@@ -295,7 +282,13 @@ function Breadcrumb({ matchId }: { matchId: string }) {
   )
 }
 
-function HeroScoreboard({ view }: { view: MatchView }) {
+function HeroScoreboard({
+  view,
+  matchId,
+}: {
+  view: MatchView
+  matchId: string
+}) {
   const isLive = view.state === 'live'
   const isUpcoming = view.state === 'upcoming'
 
@@ -375,7 +368,7 @@ function HeroScoreboard({ view }: { view: MatchView }) {
       </div>
 
       {!isUpcoming && view.opponentSide && (
-        <GameGrid view={view} matchId={view.scoreCta?.matchId ?? ''} />
+        <GameGrid view={view} matchId={matchId} />
       )}
     </section>
   )
@@ -422,23 +415,17 @@ function GameGrid({ view, matchId }: { view: MatchView; matchId: string }) {
         <div className="md-games__col-label">SETS</div>
 
         <GameGridSide
-          label={view.mySide.username}
-          initials={view.mySide.initials}
+          side={view.mySide}
           slots={slots}
           mineSide
-          won={view.mySide.won === true}
-          gamesWon={view.mySide.gamesWon}
           matchId={matchId}
           currentGameNumber={view.currentGameNumber}
         />
         {view.opponentSide && (
           <GameGridSide
-            label={view.opponentSide.username}
-            initials={view.opponentSide.initials}
+            side={view.opponentSide}
             slots={slots}
             mineSide={false}
-            won={view.opponentSide.won === true}
-            gamesWon={view.opponentSide.gamesWon}
             matchId={matchId}
             currentGameNumber={view.currentGameNumber}
           />
@@ -449,31 +436,26 @@ function GameGrid({ view, matchId }: { view: MatchView; matchId: string }) {
 }
 
 function GameGridSide({
-  label,
-  initials,
+  side,
   slots,
   mineSide,
-  won,
-  gamesWon,
   matchId,
   currentGameNumber,
 }: {
-  label: string
-  initials: string
+  side: SideView
   slots: Array<GameView | null>
   mineSide: boolean
-  won: boolean
-  gamesWon: number
   matchId: string
   currentGameNumber: number | null
 }) {
+  const won = side.won === true
   return (
     <>
       <div className="md-games__player">
         <span className={cn('md-avatar', won ? 'md-avatar--win' : 'md-avatar--loss')}>
-          {initials}
+          {side.initials}
         </span>
-        <span className="md-games__player-name">{label}</span>
+        <span className="md-games__player-name">{side.username}</span>
       </div>
       {slots.map((g, i) => {
         if (!g) {
@@ -522,7 +504,7 @@ function GameGridSide({
         )
       })}
       <div className={cn('md-games__total', won && 'md-games__total--win')}>
-        {gamesWon}
+        {side.gamesWon}
       </div>
     </>
   )
@@ -584,12 +566,6 @@ function MatchInfoCard({ view }: { view: MatchView }) {
   )
 }
 
-// ---------------------------------------------------------------------------
-// Cards below are part of the design handoff but have no real data behind
-// them yet. They're kept here (un-rendered) so future phases can re-wire them
-// without re-deriving the visual structure.
-// ---------------------------------------------------------------------------
-
 function RatingCard() {
   return null
 }
@@ -599,21 +575,7 @@ function H2HCard() {
 }
 
 function CommentsCard() {
-  const [draft, setDraft] = useState('')
-  function submit(e: FormEvent) {
-    e.preventDefault()
-    setDraft('')
-  }
-  return (
-    <form className="md-comments__form" onSubmit={submit}>
-      <input
-        type="text"
-        className="md-input"
-        value={draft}
-        onChange={(e) => setDraft(e.target.value)}
-      />
-    </form>
-  )
+  return null
 }
 
 function ShareModal({
