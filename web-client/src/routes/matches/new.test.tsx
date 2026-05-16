@@ -10,30 +10,16 @@ import {
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { delay, http, HttpResponse } from 'msw'
 import { describe, expect, it } from 'vitest'
-import type { components } from '@/api/schema'
 import { server } from '@/mocks/server'
+import { matchDetails } from '@/test/factories'
 import { Route } from './new'
-
-type MatchRead = components['schemas']['MatchRead']
 
 // The page component isn't exported (route files should only export `Route`,
 // so the router plugin can code-split them) — pull it off the route instead.
 const NewMatchPage = Route.options.component!
 
-function pendingMatch(): MatchRead {
-  return {
-    id: 'm-test',
-    status: 'pending',
-    created_by_user_id: 'u-test',
-    created_at: '2026-05-14T00:00:00Z',
-    settings: {
-      team_size: 1,
-      best_of: 5,
-      affects_rating: false,
-      verification_policy: 'none',
-    },
-    sides: [],
-  }
+function pendingMatch() {
+  return matchDetails({ id: 'm-test' })
 }
 
 function renderNewMatch() {

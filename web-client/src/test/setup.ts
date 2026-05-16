@@ -1,5 +1,6 @@
 import '@testing-library/jest-dom/vitest'
 import { afterAll, afterEach, beforeAll } from 'vitest'
+import { resetMockMatches } from '../mocks/match-store'
 import { server } from '../mocks/server'
 
 // jsdom doesn't implement matchMedia; responsive components (e.g. AppShell)
@@ -19,5 +20,8 @@ if (!window.matchMedia) {
 }
 
 beforeAll(() => server.listen({ onUnhandledRequest: 'error' }))
-afterEach(() => server.resetHandlers())
+afterEach(() => {
+  server.resetHandlers()
+  resetMockMatches()
+})
 afterAll(() => server.close())
