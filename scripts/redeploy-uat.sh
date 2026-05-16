@@ -58,13 +58,6 @@ until curl -fsS --max-time 3 "$UAT_URL/api/v1/health" >/dev/null 2>&1; do
   sleep 2
 done
 
-# Seed RBAC fixtures. The script is idempotent — it bails out cleanly when
-# permissions already exist — so re-running on each deploy just no-ops on
-# an already-seeded DB and only does real work after a nuke.
-echo
-echo "==> Seeding RBAC fixtures"
-"${COMPOSE[@]}" exec -T api python scripts/seed_rbac.py
-
 echo
 echo "==> Container status"
 "${COMPOSE[@]}" ps
