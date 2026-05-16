@@ -18,6 +18,12 @@ import type {
 } from '@/api/dashboard'
 import { matchDetailRoute, scoringNewRoute } from '@/api/matches'
 import { useSession } from '@/api/session'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
 import { fmtDateRel, fmtDateShort } from '@/lib/dates'
 
 const GUEST_OPPONENT = 'guest'
@@ -448,6 +454,26 @@ function SkeletonCard({
         minHeight: height,
       }}
     />
+  )
+}
+
+function ComingSoon({ children }: { children: ReactNode }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <div
+          aria-disabled="true"
+          style={{
+            opacity: 0.55,
+            filter: 'saturate(0.75)',
+            cursor: 'not-allowed',
+          }}
+        >
+          <div style={{ pointerEvents: 'none' }}>{children}</div>
+        </div>
+      </TooltipTrigger>
+      <TooltipContent>coming soon</TooltipContent>
+    </Tooltip>
   )
 }
 
@@ -910,8 +936,12 @@ function UpNextRow({
             body="No upcoming match yet."
           />
         )}
-        <CheckinCard event={checkin.event} closesIn={checkin.closesIn} />
-        <DeadlineStack deadlines={deadlines} />
+        <ComingSoon>
+          <CheckinCard event={checkin.event} closesIn={checkin.closesIn} />
+        </ComingSoon>
+        <ComingSoon>
+          <DeadlineStack deadlines={deadlines} />
+        </ComingSoon>
       </div>
     </section>
   )
@@ -1171,7 +1201,9 @@ function YourGameRow({
           gap: 14,
         }}
       >
-        <RatingCard {...rating} streak={streak} />
+        <ComingSoon>
+          <RatingCard {...rating} streak={streak} />
+        </ComingSoon>
         {isLoading ? (
           <SkeletonCard label="Loading recent matches" height={260} />
         ) : (
@@ -1443,9 +1475,15 @@ function AroundYouRow({
           gap: 14,
         }}
       >
-        <ClubActivityCard {...club} />
-        <TournamentDiscoveryCard tournaments={tournaments} />
-        <PlayerSuggestionCard {...suggestion} />
+        <ComingSoon>
+          <ClubActivityCard {...club} />
+        </ComingSoon>
+        <ComingSoon>
+          <TournamentDiscoveryCard tournaments={tournaments} />
+        </ComingSoon>
+        <ComingSoon>
+          <PlayerSuggestionCard {...suggestion} />
+        </ComingSoon>
       </div>
     </section>
   )
@@ -1530,38 +1568,40 @@ export function DashboardPage() {
   const isLoading = dashboard.isPending
   const data = dashboard.data
   return (
-    <div
-      style={{
-        maxWidth: 1280,
-        margin: '0 auto',
-        padding: '28px 32px 40px',
-        width: '100%',
-        boxSizing: 'border-box',
-      }}
-    >
-      <PageTitle greeting="Hi, Aimee" subtitle="3 things need your attention" />
-      {isLoading ? (
-        <SkeletonCard label="Loading score banner" height={140} />
-      ) : data?.score_banner ? (
-        <ScoreBanner banner={data.score_banner} />
-      ) : null}
-      <UpNextRow
-        match={data?.next_match ?? null}
-        isLoading={isLoading}
-        checkin={DATA.checkin}
-        deadlines={DATA.deadlines}
-      />
-      <YourGameRow
-        rating={DATA.rating}
-        recent={data?.recent_results ?? []}
-        isLoading={isLoading}
-        streak={DATA.streak}
-      />
-      <AroundYouRow
-        club={DATA.club}
-        tournaments={DATA.tournaments}
-        suggestion={DATA.suggestion}
-      />
-    </div>
+    <TooltipProvider>
+      <div
+        style={{
+          maxWidth: 1280,
+          margin: '0 auto',
+          padding: '28px 32px 40px',
+          width: '100%',
+          boxSizing: 'border-box',
+        }}
+      >
+        <PageTitle greeting="Hi, Aimee" subtitle="3 things need your attention" />
+        {isLoading ? (
+          <SkeletonCard label="Loading score banner" height={140} />
+        ) : data?.score_banner ? (
+          <ScoreBanner banner={data.score_banner} />
+        ) : null}
+        <UpNextRow
+          match={data?.next_match ?? null}
+          isLoading={isLoading}
+          checkin={DATA.checkin}
+          deadlines={DATA.deadlines}
+        />
+        <YourGameRow
+          rating={DATA.rating}
+          recent={data?.recent_results ?? []}
+          isLoading={isLoading}
+          streak={DATA.streak}
+        />
+        <AroundYouRow
+          club={DATA.club}
+          tournaments={DATA.tournaments}
+          suggestion={DATA.suggestion}
+        />
+      </div>
+    </TooltipProvider>
   )
 }
