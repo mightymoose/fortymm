@@ -469,11 +469,11 @@ body.dark.fortymm-theme {
   font-size: 13px;
   font-weight: 500;
   border-radius: calc(var(--radius) - 2px);
-  background: var(--chalk-50);
-  color: var(--ink-800);
+  background: var(--foreground);
+  color: var(--background);
 }
 [data-sonner-toast][data-styled='true'].cn-toast [data-button]:hover {
-  background: var(--chalk-300);
+  opacity: 0.92;
 }
 /* Pull the close button inside the toast at the top-right corner (Sonner
    defaults it to the top-left, translated outside the card) and strip the
@@ -489,7 +489,6 @@ body.dark.fortymm-theme {
   border-radius: 4px;
 }
 [data-sonner-toast][data-styled='true'].cn-toast [data-close-button]:hover {
-  background: transparent;
   color: var(--fg-1);
 }
 

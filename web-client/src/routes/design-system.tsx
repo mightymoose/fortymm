@@ -1492,7 +1492,7 @@ function ToastCard({
       {action ? (
         <button
           type="button"
-          className="ml-auto rounded-[calc(var(--radius)-2px)] bg-[color:var(--chalk-50)] px-[18px] py-2 text-[13px] font-medium text-[color:var(--ink-800)]"
+          className="ml-auto rounded-[calc(var(--radius)-2px)] bg-foreground px-[18px] py-2 text-[13px] font-medium text-background"
         >
           {action}
         </button>
