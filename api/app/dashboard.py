@@ -63,12 +63,13 @@ async def get_dashboard(
         .order_by(Match.created_at.desc())
         .limit(1)
     )
+    # Oldest first — the most-urgent banner heads the stack, and the
+    # frontend collapses anything past the second into a "+N more" pill.
     in_progress_q = (
         participant_filter(select(Match), current_user.id)
         .where(Match.status == MatchStatus.in_progress)
         .options(*match_eager_options())
-        .order_by(Match.created_at.desc())
-        .limit(1)
+        .order_by(Match.created_at.asc())
     )
     completed_q = (
         participant_filter(select(Match), current_user.id)
@@ -86,7 +87,7 @@ async def get_dashboard(
         db, current_user.id, [m.id for m in completed]
     )
 
-    score_banner = _build_score_banner(in_progress, current_user.id)
+    score_banners = _build_score_banners(in_progress, current_user.id)
     next_match = _build_next_match(pending, current_user.id)
     recent_results = [
         _build_recent_result(match, current_user.id, rating_changes.get(match.id))
@@ -95,7 +96,7 @@ async def get_dashboard(
     rating = await _build_rating(db, current_user.id)
 
     return DashboardResponse(
-        score_banner=score_banner,
+        score_banners=score_banners,
         next_match=next_match,
         recent_results=recent_results,
         rating=rating,
@@ -120,20 +121,22 @@ async def _load_my_rating_changes(
     return {row.match_id: RatingChange.from_history(row) for row in rows}
 
 
-def _build_score_banner(
-    in_progress: list[Match], current_user_id: uuid.UUID
-) -> DashboardScoreBanner | None:
-    if not in_progress:
-        return None
-    match = in_progress[0]
-    current_game = current_unscored_game(match)
-    if current_game is None:
-        return None
-    return DashboardScoreBanner(
-        match_id=match.id,
-        opponent_username=opponent_username(match, current_user_id),
-        current_game_id=current_game.id,
-    )
+def _build_score_banners(
+    in_progress: Sequence[Match], current_user_id: uuid.UUID
+) -> list[DashboardScoreBanner]:
+    banners: list[DashboardScoreBanner] = []
+    for match in in_progress:
+        current_game = current_unscored_game(match)
+        if current_game is None:
+            continue
+        banners.append(
+            DashboardScoreBanner(
+                match_id=match.id,
+                opponent_username=opponent_username(match, current_user_id),
+                current_game_id=current_game.id,
+            )
+        )
+    return banners
 
 
 def _build_next_match(

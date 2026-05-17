@@ -66,7 +66,7 @@ class DashboardRating(BaseModel):
 
 
 class DashboardResponse(BaseModel):
-    score_banner: DashboardScoreBanner | None
+    score_banners: list[DashboardScoreBanner]
     next_match: DashboardNextMatch | None
     recent_results: list[DashboardRecentResult]
     rating: DashboardRating | None = None
