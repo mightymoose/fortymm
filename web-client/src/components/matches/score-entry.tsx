@@ -10,6 +10,7 @@ import {
   type MatchDetails,
   type MatchGameScoreWrite,
 } from '@/api/matches'
+import { AppShell } from '@/components/app-shell'
 import { cn, initialsOf } from '@/lib/utils'
 
 export type ScoreMutation = UseMutationResult<
@@ -71,11 +72,9 @@ function ScoreEntryInner({
 
   if (isLoading || !data) {
     return (
-      <div
-        className="fortymm-theme dark score-entry-screen"
-        aria-busy="true"
-        data-testid="score-entry-loading"
-      />
+      <AppShell>
+        <div aria-busy="true" data-testid="score-entry-loading" />
+      </AppShell>
     )
   }
 
@@ -99,7 +98,6 @@ function ScoreEntryInner({
   const oppInitials = initialsOf(oppName)
 
   const bestOf = data.best_of
-  const gamesToWin = data.games_to_win
   const gameNumber = game.game_number
 
   const meWins = mySide.games_won
@@ -173,8 +171,6 @@ function ScoreEntryInner({
     }
   }
 
-  const pad = (n: number) => String(n).padStart(2, '0')
-  const gameLabel = `GAME ${pad(gameNumber)} OF ${pad(bestOf)}`
   const inputsLocked = mutation.isPending || lockedReason !== null
   const isEdit = mode.kind === 'edit'
 
@@ -206,20 +202,7 @@ function ScoreEntryInner({
       : null
 
   return (
-    <div className="fortymm-theme dark score-entry-screen">
-      <div className="live-bar">
-        <Link {...matchDetailRoute(matchId)} className="back">
-          ← Back to match
-        </Link>
-        <span className="tag">
-          <span className="dot" /> {gameLabel}
-        </span>
-        <span className="meta">
-          {data.affects_rating ? 'RATED' : 'UNRATED'} · BEST OF {bestOf} ·
-          FIRST TO {gamesToWin}
-        </span>
-      </div>
-
+    <AppShell>
       <div className="entry-wrap">
         <div className="entry-head">
           <h2>{heading}</h2>
@@ -317,7 +300,7 @@ function ScoreEntryInner({
           mySideNumber={mySideNumber}
         />
       </div>
-    </div>
+    </AppShell>
   )
 }
 

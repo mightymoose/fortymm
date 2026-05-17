@@ -376,9 +376,7 @@ describe('ScoreEntry — create', () => {
     expect(alert).toBeInTheDocument()
     expect(screen.getByRole('textbox', { name: 'rita.kovac score' })).toBeDisabled()
     expect(screen.getByRole('textbox', { name: 'nguyen.t score' })).toBeDisabled()
-    // The primary "Back to match" CTA replaces the save button. The live-bar
-    // link is the persistent "← Back to match" at the top — we want the new
-    // primary CTA below.
+    // The primary "Back to match" CTA replaces the save button.
     expect(
       screen.getByRole('link', { name: 'Back to match' }),
     ).toHaveAttribute('href', '/matches/m-1')

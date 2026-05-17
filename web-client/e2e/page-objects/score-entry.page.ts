@@ -24,8 +24,6 @@ export const SEED = {
 export class ScoreEntryPage {
   public readonly page: Page
   public readonly heading: Locator
-  public readonly gameTag: Locator
-  public readonly metaLine: Locator
   public readonly meInput: Locator
   public readonly oppInput: Locator
   public readonly saveButton: Locator
@@ -52,8 +50,6 @@ export class ScoreEntryPage {
   constructor(page: Page, opponentUsername: string = SEED.opponentUsername) {
     this.page = page
     this.heading = page.getByRole('heading', { level: 2 })
-    this.gameTag = page.locator('.live-bar .tag')
-    this.metaLine = page.locator('.live-bar .meta')
     this.meInput = page.getByRole('textbox', { name: `${SEED.meUsername} score` })
     this.oppInput = page.getByRole('textbox', {
       name: `${opponentUsername} score`,
