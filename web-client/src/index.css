@@ -1375,7 +1375,6 @@ body.dark.fortymm-theme {
 /* =========================================================================
    Score entry — single-game score capture
    (route: /matches/:matchId/games/:gameId/scores/new)
-   Ported from the "Match Settings Page v2" design handoff (LiveScreen).
    ========================================================================= */
 /* ---------- Entry layout ---------- */
 .fortymm-theme .entry-wrap {
