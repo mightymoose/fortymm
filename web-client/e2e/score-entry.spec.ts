@@ -216,10 +216,6 @@ test.describe('Score entry', () => {
     const scoreEntry = await ScoreEntryPage.navigateTo(page)
 
     await expect(scoreEntry.heading).toHaveText('Enter game 3 score.')
-    await expect(scoreEntry.gameTag).toContainText('GAME 03 OF 05')
-    await expect(scoreEntry.metaLine).toContainText(
-      'RATED · BEST OF 5 · FIRST TO 3',
-    )
     await expect(scoreEntry.meInput).toBeVisible()
     await expect(scoreEntry.oppInput).toBeVisible()
   })

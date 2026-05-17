@@ -1458,9 +1458,9 @@ body.dark.fortymm-theme {
 /* =========================================================================
    Score entry — single-game score capture
    (route: /matches/:matchId/games/:gameId/scores/new)
-   Ported from the "Match Settings Page v2" design handoff (LiveScreen).
    ========================================================================= */
-.fortymm-theme .score-entry-screen {
+/* ---------- Entry layout ---------- */
+.fortymm-theme .entry-wrap {
   /* Motion/shadow tokens the design defines at :root — kept local so the
      port stays faithful without expanding the shared token set. */
   --dur-fast: 120ms;
@@ -1468,70 +1468,6 @@ body.dark.fortymm-theme {
   --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
 
-  position: fixed;
-  inset: 0;
-  background: var(--ink-950);
-  color: var(--fg-1);
-  font-family: var(--font-ui);
-  z-index: 100;
-  display: flex;
-  flex-direction: column;
-  overflow: auto;
-}
-.fortymm-theme .score-entry-screen *,
-.fortymm-theme .score-entry-screen *::before,
-.fortymm-theme .score-entry-screen *::after {
-  box-sizing: border-box;
-}
-
-/* ---------- Top bar ---------- */
-.fortymm-theme .live-bar {
-  padding: 18px 40px;
-  display: flex;
-  align-items: center;
-  gap: 20px;
-  border-bottom: 1px solid var(--ink-600);
-}
-.fortymm-theme .live-bar .back {
-  background: transparent;
-  border: 1px solid var(--ink-500);
-  color: var(--fg-2);
-  height: 36px;
-  padding: 0 14px;
-  border-radius: 8px;
-  cursor: pointer;
-  font: 600 13px var(--font-ui);
-}
-.fortymm-theme .live-bar .back:hover {
-  background: var(--bg-hover);
-  color: var(--fg-1);
-}
-.fortymm-theme .live-bar .tag {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  font: 700 11px var(--font-mono);
-  letter-spacing: 0.2em;
-  color: var(--ball-500);
-}
-.fortymm-theme .live-bar .tag .dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--ball-500);
-  box-shadow: 0 0 10px rgba(255, 122, 26, 0.7);
-  animation: ball-pulse 1.4s ease-in-out infinite;
-}
-.fortymm-theme .live-bar .meta {
-  font: 600 11px var(--font-mono);
-  letter-spacing: 0.14em;
-  color: var(--fg-3);
-  margin-left: auto;
-}
-
-/* ---------- Entry layout ---------- */
-.fortymm-theme .entry-wrap {
-  flex: 1;
   display: flex;
   flex-direction: column;
   max-width: 1180px;
@@ -1868,9 +1804,6 @@ body.dark.fortymm-theme {
 
 /* ---------- Responsive ---------- */
 @media (max-width: 820px) {
-  .fortymm-theme .live-bar {
-    padding: 14px 16px;
-  }
   .fortymm-theme .entry-wrap {
     padding: 20px 16px;
   }
@@ -1913,9 +1846,6 @@ body.dark.fortymm-theme {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .fortymm-theme .live-bar .tag .dot {
-    animation: none !important;
-  }
   .fortymm-theme .sl-cell {
     transition: none !important;
   }
