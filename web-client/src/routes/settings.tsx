@@ -13,6 +13,8 @@ import {
 } from 'react'
 import { createFileRoute, useRouterState } from '@tanstack/react-router'
 
+import { ApiError } from '@/api/client'
+import { useSession, useUpdateUsername } from '@/api/session'
 import { AppShell } from '@/components/app-shell'
 import { pageTitle } from '@/lib/page-title'
 import './settings.css'
@@ -40,7 +42,6 @@ interface NotificationPrefs {
 }
 
 interface User {
-  username: string
   email: string
   emailVerified: boolean
   homeClub: string | null
@@ -49,7 +50,6 @@ interface User {
   sessionStartedAt: number
   location: string
   _lastSaved: {
-    username: number | null
     email: number | null
     notifications: number | null
     club: number | null
@@ -249,27 +249,22 @@ function clubInitials(name: string): string {
     .toUpperCase()
 }
 
-const TAKEN_USERNAMES = new Set([
-  'admin',
-  'fortymm',
-  'forty',
-  'mm',
-  'support',
-  'root',
-  'nguyen',
-  'okafor',
-])
+// Mirrors api/app/schemas/session.py USERNAME_PATTERN. Client-side validation
+// is for fast feedback; the server still enforces the same rules and returns
+// 409 on duplicates.
+const USERNAME_RE = /^[a-z0-9](?:[a-z0-9._-]{1,38}[a-z0-9])?$/
+const USERNAME_MIN = 3
+const USERNAME_MAX = 40
 
 function validateUsername(u: string): Validation {
   if (!u) return { ok: false, err: 'Username is required.' }
-  if (u.length < 3) return { ok: false, err: 'At least 3 characters.' }
-  if (u.length > 20) return { ok: false, err: 'No more than 20 characters.' }
-  if (!/^[a-z0-9._-]+$/i.test(u))
-    return { ok: false, err: 'Letters, numbers, dots, hyphens and underscores only.' }
-  if (/^[._-]|[._-]$/.test(u))
-    return { ok: false, err: "Can't start or end with a dot, hyphen, or underscore." }
-  if (TAKEN_USERNAMES.has(u.toLowerCase()))
-    return { ok: false, err: "That one's taken. Pick another." }
+  if (u.length < USERNAME_MIN) return { ok: false, err: `At least ${USERNAME_MIN} characters.` }
+  if (u.length > USERNAME_MAX) return { ok: false, err: `No more than ${USERNAME_MAX} characters.` }
+  if (!USERNAME_RE.test(u))
+    return {
+      ok: false,
+      err: 'Lowercase letters, numbers, dots, hyphens and underscores. Must start and end with a letter or number.',
+    }
   return { ok: true }
 }
 
@@ -296,16 +291,8 @@ function makeSessionId(): string {
   return `sess_${s.slice(0, 4)}·${s.slice(4, 8)}·${s.slice(8, 12)}·${s.slice(12, 16)}`
 }
 
-function makeGuestName(): string {
-  const hex = '0123456789abcdef'
-  let s = ''
-  for (let i = 0; i < 5; i++) s += hex[Math.floor(Math.random() * 16)]
-  return `guest-${s}`
-}
-
 function initialUser(): User {
   return {
-    username: 'guest-7f3a2',
     email: '',
     emailVerified: false,
     homeClub: null,
@@ -320,7 +307,6 @@ function initialUser(): User {
     sessionStartedAt: Date.now() - 28 * 60 * 1000, // 28 min ago
     location: 'Brooklyn, NY',
     _lastSaved: {
-      username: null,
       email: null,
       notifications: null,
       club: null,
@@ -767,7 +753,13 @@ function KVCard({
 /*  Page header — large Bebas "SETTINGS"                              */
 /* ------------------------------------------------------------------ */
 
-function PageHeader({ user, claimed }: { user: User; claimed: boolean }) {
+function PageHeader({
+  username,
+  claimed,
+}: {
+  username: string
+  claimed: boolean
+}) {
   return (
     <header style={{ marginBottom: 28 }}>
       <div
@@ -821,7 +813,7 @@ function PageHeader({ user, claimed }: { user: User; claimed: boolean }) {
             flexShrink: 0,
           }}
         >
-          <Avatar name={user.username} size={26} dim={!claimed} />
+          <Avatar name={username || '…'} size={26} dim={!claimed} />
           <div
             style={{
               fontFamily: 'var(--font-mono)',
@@ -830,7 +822,7 @@ function PageHeader({ user, claimed }: { user: User; claimed: boolean }) {
               letterSpacing: '0.02em',
             }}
           >
-            {user.username}
+            {username || '…'}
           </div>
           {claimed && <Icon.Check size={14} color="var(--serve-500)" />}
         </div>
@@ -936,33 +928,52 @@ function ClaimBanner({
 /*  01 — Username                                                     */
 /* ------------------------------------------------------------------ */
 
-function UsernameSection({
-  user,
-  setUser,
-}: {
-  user: User
-  setUser: Dispatch<SetStateAction<User>>
-}) {
+function UsernameSection({ currentUsername }: { currentUsername: string }) {
   const toast = useToast()
-  const [val, setVal] = useState(user.username)
+  const updateUsername = useUpdateUsername()
+  const [val, setVal] = useState(currentUsername)
   const [touched, setTouched] = useState(false)
-  const [saving, setSaving] = useState(false)
-  const [savedAt, setSavedAt] = useState<number | null>(user._lastSaved.username)
+  const [serverErr, setServerErr] = useState<string | null>(null)
+  const [savedAt, setSavedAt] = useState<number | null>(null)
 
-  const v = useMemo(() => validateUsername(val), [val])
-  const dirty = val !== user.username
-  const showErr = touched && !v.ok
+  // The session query refetches in the background (window focus, post-save
+  // setQueryData, etc.); most of those pass back the same username. Only
+  // reset local input state when the upstream value actually changed —
+  // otherwise we'd clobber the user's in-progress edits on every refetch.
+  const lastSyncedRef = useRef(currentUsername)
+  useEffect(() => {
+    if (currentUsername === lastSyncedRef.current) return
+    lastSyncedRef.current = currentUsername
+    setVal(currentUsername)
+    setTouched(false)
+    setServerErr(null)
+  }, [currentUsername])
+
+  const clientV = useMemo(() => validateUsername(val), [val])
+  const dirty = val !== currentUsername
+  const displayedErr =
+    serverErr ?? (touched && !clientV.ok ? (clientV.err ?? null) : null)
 
   const onSave = async () => {
-    if (!v.ok) return
-    setSaving(true)
-    await new Promise((r) => setTimeout(r, 700))
-    const now = Date.now()
-    setUser((u) => ({ ...u, username: val, _lastSaved: { ...u._lastSaved, username: now } }))
-    setSavedAt(now)
-    setSaving(false)
-    setTouched(false)
-    toast('Username saved.')
+    if (!clientV.ok || !dirty) return
+    setServerErr(null)
+    try {
+      await updateUsername.mutateAsync(val)
+      setSavedAt(Date.now())
+      setTouched(false)
+      toast('Username saved.')
+    } catch (err) {
+      if (err instanceof ApiError && (err.status === 409 || err.status === 422)) {
+        setServerErr(err.detail ?? 'Server rejected this username.')
+        return
+      }
+      toast(
+        err instanceof Error
+          ? `Couldn't update username: ${err.message}`
+          : "Couldn't update username.",
+        { kind: 'err' },
+      )
+    }
   }
 
   return (
@@ -975,13 +986,14 @@ function UsernameSection({
       footer={
         <SaveBar
           dirty={dirty}
-          valid={v.ok}
-          saving={saving}
+          valid={clientV.ok}
+          saving={updateUsername.isPending}
           savedAt={savedAt}
           onSave={onSave}
           onCancel={() => {
-            setVal(user.username)
+            setVal(currentUsername)
             setTouched(false)
+            setServerErr(null)
           }}
         />
       }
@@ -989,19 +1001,19 @@ function UsernameSection({
       <Field
         label="Username"
         htmlFor="username"
-        hint="Lowercase letters, numbers, dots, hyphens and underscores. 3–20 characters."
-        error={showErr ? v.err : null}
-        success={dirty && v.ok ? 'Looks good. Save to make it stick.' : null}
+        hint={`Lowercase letters, numbers, dots, hyphens and underscores. ${USERNAME_MIN}–${USERNAME_MAX} characters.`}
+        error={displayedErr}
+        success={dirty && clientV.ok && !serverErr ? 'Looks good. Save to make it stick.' : null}
         right={
           <span
             style={{
               fontFamily: 'var(--font-mono)',
               fontSize: 'var(--text-xs)',
-              color: val.length > 20 ? 'var(--loss)' : 'var(--fg-muted)',
+              color: val.length > USERNAME_MAX ? 'var(--loss)' : 'var(--fg-muted)',
               letterSpacing: '0.05em',
             }}
           >
-            {val.length}/20
+            {val.length}/{USERNAME_MAX}
           </span>
         }
       >
@@ -1022,15 +1034,18 @@ function UsernameSection({
           </span>
           <input
             id="username"
-            className={`fmm-input fmm-input--mono ${showErr ? 'fmm-input--err' : dirty && v.ok ? 'fmm-input--ok' : ''}`}
+            className={`fmm-input fmm-input--mono ${displayedErr ? 'fmm-input--err' : dirty && clientV.ok ? 'fmm-input--ok' : ''}`}
             value={val}
-            onChange={(e) => setVal(e.target.value.toLowerCase().replace(/\s/g, ''))}
+            onChange={(e) => {
+              setVal(e.target.value.toLowerCase().replace(/\s/g, ''))
+              if (serverErr) setServerErr(null)
+            }}
             onBlur={() => setTouched(true)}
-            placeholder="guest-7f3a2"
+            placeholder="your-name"
             style={{ paddingLeft: 30 }}
             spellCheck={false}
             autoComplete="off"
-            aria-invalid={showErr || undefined}
+            aria-invalid={!!displayedErr || undefined}
           />
         </div>
       </Field>
@@ -1047,7 +1062,7 @@ function UsernameSection({
           gap: 14,
         }}
       >
-        <Avatar name={val} size={36} dim={!v.ok} />
+        <Avatar name={val} size={36} dim={!clientV.ok} />
         <div style={{ flex: 1 }}>
           <div
             style={{
@@ -1067,7 +1082,7 @@ function UsernameSection({
               color: 'var(--fg-1)',
             }}
           >
-            {v.ok ? `@${val}` : '—'}
+            {clientV.ok ? `@${val}` : '—'}
           </div>
         </div>
         <span
@@ -1078,7 +1093,7 @@ function UsernameSection({
             letterSpacing: '0.08em',
           }}
         >
-          fortymm.app/p/{v.ok ? val : '—'}
+          fortymm.app/p/{clientV.ok ? val : '—'}
         </span>
       </div>
     </SectionCard>
@@ -1871,6 +1886,8 @@ function SessionSection({
 /* ------------------------------------------------------------------ */
 
 function SettingsPage() {
+  const session = useSession()
+  const sessionUsername = session.data?.data.user.username ?? ''
   const [user, setUser] = useState<User>(initialUser)
   const hash = useRouterState({ select: (s) => s.location.hash })
 
@@ -1901,7 +1918,6 @@ function SettingsPage() {
   const onResetSession = () => {
     setUser({
       ...initialUser(),
-      username: makeGuestName(),
       sessionId: makeSessionId(),
       sessionStartedAt: Date.now(),
     })
@@ -1917,7 +1933,7 @@ function SettingsPage() {
       <div className="fmm-settings">
         <ToastProvider>
           <div className="fmm-main-inner">
-            <PageHeader user={user} claimed={claimed} />
+            <PageHeader username={sessionUsername} claimed={claimed} />
 
             <ClaimBanner
               status={effectiveStatus}
@@ -1926,7 +1942,7 @@ function SettingsPage() {
             />
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-              <UsernameSection key={`u-${sessionKey}`} user={user} setUser={setUser} />
+              <UsernameSection currentUsername={sessionUsername} />
               <EmailSection key={`e-${sessionKey}`} user={user} setUser={setUser} />
               <HomeClubSection user={user} setUser={setUser} />
               <NotificationsSection key={`n-${sessionKey}`} user={user} setUser={setUser} />
