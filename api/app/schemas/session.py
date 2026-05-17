@@ -16,6 +16,10 @@ class SessionUser(BaseModel):
     permissions: list[str]
     email: str | None = None
     confirmed_at: datetime | None = None
+    # Pending change address. Lives only on the change token until
+    # confirm_email consumes it; surfaced here so the FE can distinguish
+    # "verified for X with a pending move to Y" from plain "verified".
+    pending_email: str | None = None
 
 
 class SessionData(BaseModel):

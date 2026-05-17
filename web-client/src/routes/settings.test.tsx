@@ -44,6 +44,7 @@ beforeEach(() => {
   // Reset the shared session between tests so honeypot/email checks start fresh.
   mockSession.data.user.email = null
   mockSession.data.user.confirmed_at = null
+  mockSession.data.user.pending_email = null
   mockSession.data.user.username = 'rita.kovac'
 })
 
@@ -98,7 +99,10 @@ describe('SettingsPage email section', () => {
     expect(
       await screen.findByText(/waiting for verification/i),
     ).toBeInTheDocument()
-    expect(mockSession.data.user.email).toBe('me@example.com')
+    // The pending address now lives on pending_email; the confirmed
+    // user.email stays null until consume runs.
+    expect(mockSession.data.user.pending_email).toBe('me@example.com')
+    expect(mockSession.data.user.email).toBeNull()
   })
 
   it("doesn't persist when the honeypot is filled", async () => {
@@ -120,8 +124,9 @@ describe('SettingsPage email section', () => {
     await user.click(submit)
 
     // The server responds as if it succeeded (status hidden from the bot)
-    // but the session never picked up the email.
+    // but nothing landed on the session.
     await waitFor(() => expect(mockSession.data.user.email).toBeNull())
+    expect(mockSession.data.user.pending_email).toBeNull()
   })
 
   it('requires the captcha before the submit button enables', async () => {

@@ -43,6 +43,17 @@ export const Route = createFileRoute('/settings')({
 
 type EmailStatus = 'guest' | 'pending' | 'verified'
 
+// A pending change outranks a prior verification — the user still has to
+// click the new link before we consider them settled on the new address.
+function deriveEmailStatus(args: {
+  pendingEmail: string | null
+  confirmedAt: string | null
+}): EmailStatus {
+  if (args.pendingEmail) return 'pending'
+  if (args.confirmedAt) return 'verified'
+  return 'guest'
+}
+
 interface Validation {
   ok: boolean
   err?: string
@@ -796,14 +807,19 @@ const HONEYPOT_STYLE: CSSProperties = {
 function EmailSection({
   email,
   confirmedAt,
+  pendingEmail,
 }: {
   email: string | null
   confirmedAt: string | null
+  pendingEmail: string | null
 }) {
   const toast = useToast()
   const setEmail = useSetEmail()
   const resendEmail = useResendEmailConfirmation()
-  const current = email ?? ''
+  // The pending address takes precedence — that's what the user most
+  // recently asked to use, and what the "Open the link we just sent to…"
+  // banner needs to display. Falls back to the confirmed address.
+  const current = pendingEmail ?? email ?? ''
   const [val, setVal] = useState(current)
   const [touched, setTouched] = useState(false)
   const [captchaToken, setCaptchaToken] = useState<string | null>(null)
@@ -827,11 +843,7 @@ function EmailSection({
   const dirty = val !== current
   const showErr = serverErr ?? (touched && !v.ok ? v.err : null)
 
-  const status: EmailStatus = confirmedAt
-    ? 'verified'
-    : email
-      ? 'pending'
-      : 'guest'
+  const status = deriveEmailStatus({ pendingEmail, confirmedAt })
 
   const resetCaptcha = () => {
     captchaRef.current?.reset()
@@ -878,7 +890,7 @@ function EmailSection({
     try {
       await resendEmail.mutateAsync({ captchaToken, honeypot })
       resetCaptcha()
-      toast(`Verification link re-sent to ${email}.`)
+      toast(`Verification link re-sent to ${current}.`)
     } catch (err) {
       resetCaptcha()
       toast(
@@ -916,7 +928,7 @@ function EmailSection({
             setTouched(false)
             setServerErr(null)
           }}
-          primaryLabel={email ? 'Update email' : 'Add email'}
+          primaryLabel={email || pendingEmail ? 'Update email' : 'Add email'}
         />
       }
     >
@@ -991,7 +1003,7 @@ function EmailSection({
         />
       </div>
 
-      {email && (
+      {current && (
         <div
           style={{
             marginTop: 16,
@@ -1042,7 +1054,10 @@ function EmailSection({
                 </div>
                 <div style={{ color: 'var(--fg-3)', marginTop: 2 }}>
                   Open the link we just sent to{' '}
-                  <span style={{ fontFamily: 'var(--font-mono)' }}>{email}</span>.
+                  <span style={{ fontFamily: 'var(--font-mono)' }}>
+                    {current}
+                  </span>
+                  .
                 </div>
               </>
             )}
@@ -1086,13 +1101,13 @@ function SettingsPage() {
   const sessionUsername = sessionUser?.username ?? ''
   const sessionEmail = sessionUser?.email ?? null
   const sessionConfirmedAt = sessionUser?.confirmed_at ?? null
+  const sessionPendingEmail = sessionUser?.pending_email ?? null
   const hash = useRouterState({ select: (s) => s.location.hash })
 
-  const effectiveStatus: EmailStatus = sessionConfirmedAt
-    ? 'verified'
-    : sessionEmail
-      ? 'pending'
-      : 'guest'
+  const effectiveStatus = deriveEmailStatus({
+    pendingEmail: sessionPendingEmail,
+    confirmedAt: sessionConfirmedAt,
+  })
   const claimed = effectiveStatus === 'verified'
 
   // Honor /settings#sec-* deep links from external nav.
@@ -1111,7 +1126,7 @@ function SettingsPage() {
 
               <ClaimBanner
                 status={effectiveStatus}
-                email={sessionEmail ?? ''}
+                email={sessionPendingEmail ?? sessionEmail ?? ''}
                 onJump={() => scrollToSection('sec-email')}
               />
 
@@ -1120,6 +1135,7 @@ function SettingsPage() {
                 <EmailSection
                   email={sessionEmail}
                   confirmedAt={sessionConfirmedAt}
+                  pendingEmail={sessionPendingEmail}
                 />
               </div>
 

@@ -83,15 +83,13 @@ export interface paths {
         put?: never;
         /**
          * Confirm Email
-         * @description Confirm the email-change handshake.
+         * @description Consume an email-change token: stamp the new email + confirmed_at.
          *
-         *     The token in the email is itself the bearer credential — we don't
-         *     require the click to come from the same browser that requested it.
-         *     That lets users complete the flow on a mobile mail client even when
-         *     their desktop session cookie isn't available, and avoids minting an
-         *     orphan guest user on every cross-device click. The endpoint also
-         *     rotates the caller's session cookie to the token's owner so the
-         *     confirming browser ends up signed in as the right user.
+         *     Invariant: ``user.email`` holds the prior confirmed address; the new
+         *     address lives on ``token.sent_to``. This is the only place either
+         *     one flips. The token itself is the bearer credential, so the click
+         *     doesn't have to come from the original browser — we rotate the
+         *     caller's session cookie to the token's owner on success.
          */
         post: operations["confirm_email_v1_me_email_confirm_post"];
         delete?: never;
@@ -975,6 +973,8 @@ export interface components {
             email?: string | null;
             /** Confirmed At */
             confirmed_at?: string | null;
+            /** Pending Email */
+            pending_email?: string | null;
         };
         /** SetEmailRequest */
         SetEmailRequest: {
