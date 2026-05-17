@@ -132,6 +132,13 @@ export const handlers = [
     await delay(600)
     return HttpResponse.json(mockSession)
   }),
+  http.patch('*/v1/me', async ({ request }) => {
+    const body = (await readJson(request)) as { username?: string } | undefined
+    const next = body?.username?.trim() ?? ''
+    if (!next) return detail('Username is required.')
+    mockSession.data.user = { ...mockSession.data.user, username: next }
+    return HttpResponse.json(mockSession)
+  }),
   http.get('*/v1/players/recent', async () => {
     await delay(300)
     return HttpResponse.json(mockRecentOpponents)
