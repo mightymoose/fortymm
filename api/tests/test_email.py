@@ -11,6 +11,7 @@ from app.db import get_session
 from app.main import app
 from app.models import User, UserToken
 from app.sessions import EMAIL_CONFIRMATION_TOKEN_CONTEXT
+from tests._helpers import start_session
 
 
 @pytest_asyncio.fixture
@@ -32,15 +33,6 @@ VALID_BODY = {
     "captcha_token": "test-token",
     "website": "",
 }
-
-
-async def _start_session(client: AsyncClient, db: AsyncSession) -> User:
-    response = await client.get("/v1/session")
-    assert response.status_code == 200
-    username = response.json()["data"]["user"]["username"]
-    return (
-        await db.execute(select(User).where(User.username == username))
-    ).scalar_one()
 
 
 async def _set_email(
@@ -65,7 +57,7 @@ async def test_session_response_includes_email_fields(
 async def test_set_email_persists_and_enqueues_send(
     api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
 ):
-    user = await _start_session(api_client, db_session)
+    user = await start_session(api_client, db_session)
     response = await _set_email(api_client)
     assert response.status_code == 202
 
@@ -102,7 +94,7 @@ async def test_set_email_requires_session(api_client: AsyncClient):
 async def test_set_email_normalizes_to_lowercase(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    user = await _start_session(api_client, db_session)
+    user = await start_session(api_client, db_session)
     response = await _set_email(api_client, email="MixedCase@Example.COM")
     assert response.status_code == 202
     await db_session.refresh(user)
@@ -110,7 +102,7 @@ async def test_set_email_normalizes_to_lowercase(
 
 
 async def test_set_email_rejects_invalid_format(api_client: AsyncClient, db_session):
-    await _start_session(api_client, db_session)
+    await start_session(api_client, db_session)
     response = await _set_email(api_client, email="not-an-email")
     assert response.status_code == 422
 
@@ -118,7 +110,7 @@ async def test_set_email_rejects_invalid_format(api_client: AsyncClient, db_sess
 async def test_set_email_honeypot_silently_succeeds(
     api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
 ):
-    user = await _start_session(api_client, db_session)
+    user = await start_session(api_client, db_session)
     response = await _set_email(api_client, website="https://spammer.example")
     # Same shape as a real success — gives the bot no signal.
     assert response.status_code == 202
@@ -138,7 +130,7 @@ async def test_set_email_honeypot_silently_succeeds(
 async def test_set_email_rejects_failed_captcha(
     api_client: AsyncClient, db_session: AsyncSession, monkeypatch
 ):
-    await _start_session(api_client, db_session)
+    await start_session(api_client, db_session)
 
     async def _fail(token):  # noqa: ARG001
         return False
@@ -156,7 +148,7 @@ async def test_set_email_rejects_duplicate(
 ):
     db_session.add(User(username="other", email="taken@example.com"))
     await db_session.commit()
-    await _start_session(api_client, db_session)
+    await start_session(api_client, db_session)
 
     response = await _set_email(api_client, email="taken@example.com")
     assert response.status_code == 409
@@ -165,7 +157,7 @@ async def test_set_email_rejects_duplicate(
 async def test_set_email_replaces_existing_unconfirmed_token(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    await _start_session(api_client, db_session)
+    await start_session(api_client, db_session)
     await _set_email(api_client)
     await _set_email(api_client, email="rita2@example.com")
 
@@ -183,7 +175,7 @@ async def test_set_email_replaces_existing_unconfirmed_token(
 async def test_changing_email_clears_confirmation(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    user = await _start_session(api_client, db_session)
+    user = await start_session(api_client, db_session)
     await _set_email(api_client)
 
     # Confirm out-of-band to set confirmed_at.
@@ -237,7 +229,7 @@ async def _capture_raw_token(
 async def test_confirm_email_sets_confirmed_at_and_invalidates_token(
     api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
 ):
-    user = await _start_session(api_client, db_session)
+    user = await start_session(api_client, db_session)
     raw_token = await _capture_raw_token(api_client, db_session, fake_email_queue)
 
     response = await api_client.post(
@@ -270,7 +262,7 @@ async def test_confirm_email_sets_confirmed_at_and_invalidates_token(
 async def test_confirm_email_rejects_unknown_token(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    await _start_session(api_client, db_session)
+    await start_session(api_client, db_session)
     response = await api_client.post(
         "/v1/me/email/confirm", json={"token": "totally-bogus"}
     )
@@ -284,12 +276,12 @@ async def test_confirm_email_rejects_other_users_token(
     from tests._helpers import make_client
 
     # User A sets an email and we capture their token.
-    await _start_session(api_client, db_session)
+    await start_session(api_client, db_session)
     raw_token = await _capture_raw_token(api_client, db_session, fake_email_queue)
 
     # User B has a fresh session — submitting A's token must 400.
     async with make_client() as other_client:
-        await _start_session(other_client, db_session)
+        await start_session(other_client, db_session)
         response = await other_client.post(
             "/v1/me/email/confirm", json={"token": raw_token}
         )
@@ -306,7 +298,7 @@ async def test_confirm_email_requires_session(api_client: AsyncClient):
 async def test_token_is_stored_hashed_not_plaintext(
     api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
 ):
-    await _start_session(api_client, db_session)
+    await start_session(api_client, db_session)
     raw_token = await _capture_raw_token(api_client, db_session, fake_email_queue)
 
     token_row = (
@@ -326,7 +318,7 @@ async def test_token_is_stored_hashed_not_plaintext(
 async def test_resend_issues_new_token(
     api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
 ):
-    await _start_session(api_client, db_session)
+    await start_session(api_client, db_session)
     first_token = await _capture_raw_token(
         api_client, db_session, fake_email_queue
     )
@@ -351,7 +343,7 @@ async def test_resend_issues_new_token(
 async def test_resend_requires_email_set(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    await _start_session(api_client, db_session)
+    await start_session(api_client, db_session)
     response = await api_client.post(
         "/v1/me/email/resend",
         json={"captcha_token": "x", "website": ""},
@@ -362,7 +354,7 @@ async def test_resend_requires_email_set(
 async def test_resend_rejects_if_already_confirmed(
     api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
 ):
-    user = await _start_session(api_client, db_session)
+    user = await start_session(api_client, db_session)
     raw_token = await _capture_raw_token(api_client, db_session, fake_email_queue)
     await api_client.post(
         "/v1/me/email/confirm", json={"token": raw_token}
@@ -380,7 +372,7 @@ async def test_resend_rejects_if_already_confirmed(
 async def test_resend_honeypot_short_circuits(
     api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
 ):
-    await _start_session(api_client, db_session)
+    await start_session(api_client, db_session)
     await _set_email(api_client)
     job_count_before = fake_email_queue.finished_job_registry.count
 

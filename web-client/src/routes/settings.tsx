@@ -1040,11 +1040,11 @@ function EmailSection({
             />
           )}
           <div style={{ flex: 1, fontSize: 'var(--text-sm)', color: 'var(--fg-2)' }}>
-            {status === 'verified' ? (
+            {status === 'verified' && confirmedAt ? (
               <>
                 <div style={{ fontWeight: 600, color: 'var(--fg-1)' }}>Account claimed.</div>
                 <div style={{ color: 'var(--fg-3)', marginTop: 2 }}>
-                  Verified {relativeTime(new Date(confirmedAt!).getTime())}. You can sign in
+                  Verified {relativeTime(new Date(confirmedAt).getTime())}. You can sign in
                   from anywhere.
                 </div>
               </>

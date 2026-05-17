@@ -6,7 +6,7 @@ from typing import Annotated
 
 from coolname import generate_slug
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Response, status
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -32,6 +32,7 @@ SESSION_COOKIE_NAME = "session"
 SESSION_TOKEN_CONTEXT = "session"
 EMAIL_CONFIRMATION_TOKEN_CONTEXT = "email_confirmation"
 SESSION_LIFETIME = timedelta(days=30)
+EMAIL_TAKEN_DETAIL = "That email is already in use."
 
 
 def _hash_token(raw_token: str) -> bytes:
@@ -213,26 +214,18 @@ async def _verify_captcha_or_400(captcha_token: str) -> None:
         )
 
 
-async def _delete_email_tokens(db: AsyncSession, user_id) -> None:
-    existing = (
-        await db.execute(
-            select(UserToken).where(
-                UserToken.user_id == user_id,
-                UserToken.context == EMAIL_CONFIRMATION_TOKEN_CONTEXT,
-            )
-        )
-    ).scalars().all()
-    for token in existing:
-        await db.delete(token)
-
-
 async def _issue_confirmation_token(
     db: AsyncSession, user: User, email: str
 ) -> str:
     """Generate, hash, and persist a fresh confirmation token. Returns the
     raw token (only ever in memory) so the caller can hand it to the email
     sender."""
-    await _delete_email_tokens(db, user.id)
+    await db.execute(
+        delete(UserToken).where(
+            UserToken.user_id == user.id,
+            UserToken.context == EMAIL_CONFIRMATION_TOKEN_CONTEXT,
+        )
+    )
     raw_token = secrets.token_urlsafe(32)
     db.add(
         UserToken(
@@ -276,18 +269,12 @@ async def set_email(
 
     email = payload.email.lower()
     if current_user.email != email:
-        # Case-insensitive uniqueness — emails are stored lowercased.
-        taken = (
-            await db.execute(
-                select(User.id).where(
-                    User.email == email, User.id != current_user.id
-                )
-            )
-        ).first()
-        if taken:
+        if await name_taken(
+            db, User.id, User.email, email, exclude_id=current_user.id
+        ):
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="That email is already in use.",
+                detail=EMAIL_TAKEN_DETAIL,
             )
         current_user.email = email
         # Changing the email un-confirms; user must click the new link.
@@ -300,9 +287,8 @@ async def set_email(
         await db.rollback()
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="That email is already in use.",
+            detail=EMAIL_TAKEN_DETAIL,
         )
-    await db.refresh(current_user)
     _enqueue_confirmation_email(email, raw_token, current_user.username)
     return await _build_session_response(db, current_user)
 
@@ -373,5 +359,4 @@ async def confirm_email(
     current_user.confirmed_at = datetime.now(timezone.utc)
     await db.delete(token_row)
     await db.commit()
-    await db.refresh(current_user)
     return await _build_session_response(db, current_user)

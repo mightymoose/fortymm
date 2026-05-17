@@ -37,7 +37,7 @@ function loadTurnstile(): Promise<TurnstileApi> {
   if (window.turnstile) return Promise.resolve(window.turnstile)
   if (scriptPromise) return scriptPromise
 
-  scriptPromise = new Promise((resolve, reject) => {
+  scriptPromise = new Promise<TurnstileApi>((resolve, reject) => {
     const existing = document.querySelector<HTMLScriptElement>(
       `script[src="${TURNSTILE_SCRIPT_SRC}"]`,
     )
@@ -59,6 +59,11 @@ function loadTurnstile(): Promise<TurnstileApi> {
     }
     script.onerror = () => reject(new Error('script-load-failed'))
     document.head.appendChild(script)
+  })
+  // Clear the cached promise on failure so a transient network error
+  // doesn't poison every future mount in this tab.
+  scriptPromise.catch(() => {
+    scriptPromise = null
   })
   return scriptPromise
 }

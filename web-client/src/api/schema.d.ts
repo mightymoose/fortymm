@@ -967,11 +967,6 @@ export interface components {
         };
         /** SetEmailRequest */
         SetEmailRequest: {
-            /**
-             * Email
-             * Format: email
-             */
-            email: string;
             /** Captcha Token */
             captcha_token: string;
             /**
@@ -979,6 +974,11 @@ export interface components {
              * @default
              */
             website: string;
+            /**
+             * Email
+             * Format: email
+             */
+            email: string;
         };
         /** UpdateCurrentUserRequest */
         UpdateCurrentUserRequest: {

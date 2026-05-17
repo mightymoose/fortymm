@@ -34,19 +34,23 @@ class UpdateCurrentUserRequest(BaseModel):
     )
 
 
-class SetEmailRequest(BaseModel):
-    email: EmailStr
+class CaptchaProtectedRequest(BaseModel):
+    """Base for endpoints gated by Cloudflare Turnstile + an off-screen
+    honeypot. ``website`` is the honeypot — bots fill every field; humans
+    never see it. Endpoints short-circuit as if successful when it's filled,
+    so the bot doesn't learn the field is a trap."""
+
     captcha_token: str = Field(min_length=1, max_length=4096)
-    # Honeypot — bots fill in every field; humans never see this one because
-    # the FE keeps it visually hidden. Any non-empty value short-circuits the
-    # request as if it succeeded (so bots don't learn the field is a trap).
     website: str = Field(default="", max_length=512)
+
+
+class SetEmailRequest(CaptchaProtectedRequest):
+    email: EmailStr
+
+
+class ResendEmailRequest(CaptchaProtectedRequest):
+    pass
 
 
 class ConfirmEmailRequest(BaseModel):
     token: str = Field(min_length=1, max_length=512)
-
-
-class ResendEmailRequest(BaseModel):
-    captcha_token: str = Field(min_length=1, max_length=4096)
-    website: str = Field(default="", max_length=512)
