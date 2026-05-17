@@ -6,7 +6,7 @@ from typing import Annotated
 
 from coolname import generate_slug
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Response, status
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -35,11 +35,11 @@ def _hash_token(raw_token: str) -> bytes:
 async def _generate_username(db: AsyncSession) -> str:
     base = generate_slug(2)
     result = await db.execute(
-        select(func.lower(User.username)).where(
-            func.lower(User.username).like(f"{base}%")
+        select(User.username).where(
+            User.username.ilike(f"{base}%", escape="\\")
         )
     )
-    taken = set(result.scalars().all())
+    taken = {u.lower() for u in result.scalars().all()}
     if base not in taken:
         return base
     suffix = 2
