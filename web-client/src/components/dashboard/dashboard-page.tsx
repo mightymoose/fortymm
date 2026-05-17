@@ -9,7 +9,6 @@ import type {
 } from '@/api/dashboard'
 import { scoringNewRoute } from '@/api/matches'
 import { useSession } from '@/api/session'
-import { TooltipProvider } from '@/components/ui/tooltip'
 import { fmtDateShort } from '@/lib/dates'
 import { formatRatingDelta } from '@/lib/rating'
 
@@ -36,7 +35,6 @@ const C = {
 
 const UI = "'Space Grotesk', ui-sans-serif, system-ui, sans-serif"
 const MONO = "'JetBrains Mono', ui-monospace, monospace"
-
 
 function Overline({
   children,
@@ -421,7 +419,6 @@ function SectionHeader({
   )
 }
 
-
 function SkeletonCard({
   label,
   height,
@@ -502,7 +499,6 @@ function PageTitle({
     </div>
   )
 }
-
 
 function PaddleBadge({ accent }: { accent: string }) {
   return (
@@ -990,28 +986,26 @@ export function DashboardPage() {
   const isLoading = dashboard.isPending
   const data = dashboard.data
   return (
-    <TooltipProvider>
-      <div
-        style={{
-          maxWidth: 1280,
-          margin: '0 auto',
-          padding: '28px 32px 40px',
-          width: '100%',
-          boxSizing: 'border-box',
-        }}
-      >
-        <PageTitle greeting="Hi, Aimee" subtitle="3 things need your attention" />
-        {isLoading ? (
-          <SkeletonCard label="Loading score banner" height={140} />
-        ) : data?.score_banner ? (
-          <ScoreBanner banner={data.score_banner} />
-        ) : null}
-        <YourGameRow
-          rating={data?.rating ?? null}
-          recent={data?.recent_results ?? []}
-          isLoading={isLoading}
-        />
-      </div>
-    </TooltipProvider>
+    <div
+      style={{
+        maxWidth: 1280,
+        margin: '0 auto',
+        padding: '28px 32px 40px',
+        width: '100%',
+        boxSizing: 'border-box',
+      }}
+    >
+      <PageTitle greeting="Hi, Aimee" subtitle="3 things need your attention" />
+      {isLoading ? (
+        <SkeletonCard label="Loading score banner" height={140} />
+      ) : data?.score_banner ? (
+        <ScoreBanner banner={data.score_banner} />
+      ) : null}
+      <YourGameRow
+        rating={data?.rating ?? null}
+        recent={data?.recent_results ?? []}
+        isLoading={isLoading}
+      />
+    </div>
   )
 }

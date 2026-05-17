@@ -11,7 +11,6 @@ import { http, HttpResponse } from 'msw'
 import { describe, expect, it } from 'vitest'
 import { server } from '@/mocks/server'
 import {
-  dashboardNextMatch,
   dashboardRating,
   dashboardRecentResult,
   dashboardResponse,
@@ -34,14 +33,6 @@ function renderDashboard() {
     path: '/matches/new',
     component: () => <div>New match route</div>,
   })
-  const matchDetailRoute = createRoute({
-    getParentRoute: () => rootRoute,
-    path: '/matches/$matchId',
-    component: () => {
-      const { matchId } = matchDetailRoute.useParams()
-      return <div>Match detail {matchId}</div>
-    },
-  })
   const scoringRoute = createRoute({
     getParentRoute: () => rootRoute,
     path: '/matches/$matchId/games/$gameId/scores/new',
@@ -58,7 +49,6 @@ function renderDashboard() {
     routeTree: rootRoute.addChildren([
       dashboardRoute,
       newMatchRoute,
-      matchDetailRoute,
       scoringRoute,
     ]),
     history: createMemoryHistory({ initialEntries: ['/dashboard'] }),
@@ -80,11 +70,6 @@ describe('DashboardPage', () => {
               match_id: 'm-banner',
               current_game_id: 'g-banner-1',
               opponent_username: 'nguyen.t',
-            }),
-            next_match: dashboardNextMatch({
-              match_id: 'm-next',
-              opponent_username: 'okafor.d',
-              best_of: 5,
             }),
             recent_results: [
               dashboardRecentResult({
@@ -126,7 +111,6 @@ describe('DashboardPage', () => {
         HttpResponse.json(
           dashboardResponse({
             score_banner: null,
-            next_match: null,
             recent_results: [],
           }),
         ),
