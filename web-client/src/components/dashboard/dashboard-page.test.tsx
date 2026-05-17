@@ -11,7 +11,6 @@ import { http, HttpResponse } from 'msw'
 import { describe, expect, it } from 'vitest'
 import { server } from '@/mocks/server'
 import {
-  dashboardNextMatch,
   dashboardRating,
   dashboardRecentResult,
   dashboardResponse,
@@ -34,14 +33,6 @@ function renderDashboard() {
     path: '/matches/new',
     component: () => <div>New match route</div>,
   })
-  const matchDetailRoute = createRoute({
-    getParentRoute: () => rootRoute,
-    path: '/matches/$matchId',
-    component: () => {
-      const { matchId } = matchDetailRoute.useParams()
-      return <div>Match detail {matchId}</div>
-    },
-  })
   const scoringRoute = createRoute({
     getParentRoute: () => rootRoute,
     path: '/matches/$matchId/games/$gameId/scores/new',
@@ -58,7 +49,6 @@ function renderDashboard() {
     routeTree: rootRoute.addChildren([
       dashboardRoute,
       newMatchRoute,
-      matchDetailRoute,
       scoringRoute,
     ]),
     history: createMemoryHistory({ initialEntries: ['/dashboard'] }),
@@ -80,11 +70,6 @@ describe('DashboardPage', () => {
               match_id: 'm-banner',
               current_game_id: 'g-banner-1',
               opponent_username: 'nguyen.t',
-            }),
-            next_match: dashboardNextMatch({
-              match_id: 'm-next',
-              opponent_username: 'okafor.d',
-              best_of: 5,
             }),
             recent_results: [
               dashboardRecentResult({
@@ -111,9 +96,6 @@ describe('DashboardPage', () => {
     expect(await screen.findByTestId('dashboard-score-banner')).toHaveTextContent(
       'vs nguyen.t',
     )
-    expect(await screen.findByTestId('dashboard-next-match')).toBeInTheDocument()
-    expect(screen.getByText('okafor.d')).toBeInTheDocument()
-    expect(screen.getByText('Best of 5')).toBeInTheDocument()
     const recent = await screen.findByTestId('dashboard-recent-results')
     const table = recent.parentElement?.querySelector('table')
     expect(table).not.toBeNull()
@@ -123,13 +105,12 @@ describe('DashboardPage', () => {
     expect(table).toHaveTextContent('1-3')
   })
 
-  it('omits the score banner when none is active and shows the empty next-match card', async () => {
+  it('omits the score banner when none is active and shows the empty recent-results card', async () => {
     server.use(
       http.get('*/v1/dashboard', () =>
         HttpResponse.json(
           dashboardResponse({
             score_banner: null,
-            next_match: null,
             recent_results: [],
           }),
         ),
@@ -137,9 +118,8 @@ describe('DashboardPage', () => {
     )
     renderDashboard()
 
-    await screen.findByText('No upcoming match yet.')
+    await screen.findByText('No completed matches yet.')
     expect(screen.queryByTestId('dashboard-score-banner')).not.toBeInTheDocument()
-    expect(screen.getByText('No completed matches yet.')).toBeInTheDocument()
   })
 
   it('Log a match navigates to /matches/new', async () => {
