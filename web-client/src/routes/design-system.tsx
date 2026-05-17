@@ -1379,7 +1379,7 @@ function FeedbackSection() {
         </div>
       </Showcase>
 
-      <Showcase title="Sonner / Toast" tag="3 variants">
+      <Showcase title="Sonner / Toast" tag="4 variants">
         <div className="flex flex-col gap-5">
           <div className="flex max-w-[420px] flex-col gap-3">
             <ToastCard
@@ -1432,6 +1432,20 @@ function FeedbackSection() {
               }
             >
               Trigger info
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() =>
+                toast.info('A new version of FortyMM is ready.', {
+                  id: 'sw-update-available',
+                  description: 'Reload to get the latest update.',
+                  duration: Infinity,
+                  action: { label: 'Reload', onClick: () => {} },
+                })
+              }
+            >
+              Trigger reload
             </Button>
           </div>
         </div>
