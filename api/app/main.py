@@ -1,8 +1,15 @@
+import logging
+import os
 import time
+from contextlib import asynccontextmanager
 
+import redis.asyncio as redis_asyncio
 from fastapi import FastAPI
+from fastapi_limiter import FastAPILimiter
 from pydantic import BaseModel
 from sqlalchemy import text
+
+log = logging.getLogger(__name__)
 
 from app import db, queue
 from app.dashboard import router as dashboard_router
@@ -11,7 +18,30 @@ from app.players import router as players_router
 from app.rbac import router as rbac_router
 from app.sessions import router as sessions_router
 
-app = FastAPI(title="FortyMM API")
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+    connection = redis_asyncio.from_url(redis_url, encoding="utf-8")
+    initialized = False
+    try:
+        await FastAPILimiter.init(connection)
+        initialized = True
+    except Exception as exc:
+        # Don't block startup if Redis is unreachable — offline tooling
+        # (regen-api-types, ad-hoc local runs) still needs /openapi.json
+        # and the unprotected routes. Rate-limited endpoints will 500 on
+        # first request until Redis comes back.
+        log.warning("Rate limiter disabled — Redis unreachable: %s", exc)
+    try:
+        yield
+    finally:
+        if initialized:
+            await FastAPILimiter.close()
+        await connection.aclose()
+
+
+app = FastAPI(title="FortyMM API", lifespan=lifespan)
 app.include_router(sessions_router)
 app.include_router(rbac_router)
 app.include_router(matches_router)

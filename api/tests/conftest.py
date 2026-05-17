@@ -28,6 +28,62 @@ def fake_solver_queue(monkeypatch):
     return q
 
 
+@pytest.fixture(autouse=True)
+def fake_email_queue(monkeypatch):
+    """Sync RQ queue against fakeredis so enqueued jobs execute inline.
+
+    Tests can assert against the queue's ``finished_job_registry`` or peek
+    at recorded jobs via ``q.get_jobs()`` before they run by toggling
+    ``is_async`` if they need to inspect enqueue arguments without
+    triggering the email send.
+
+    Also forces dev mode so ``send_confirmation_email`` runs the
+    log+print path instead of raising on missing SMTP.
+    """
+    connection = fakeredis.FakeStrictRedis()
+    q = Queue(queue_module.EMAIL_QUEUE, connection=connection, is_async=False)
+    monkeypatch.setattr(queue_module, "get_email_queue", lambda: q)
+    monkeypatch.setenv("FORTYMM_DEV", "1")
+    return q
+
+
+@pytest.fixture(autouse=True)
+def stub_captcha(monkeypatch):
+    """Pretend Cloudflare Turnstile said yes. Tests that want the failure
+    path override the patched function with ``monkeypatch.setattr``."""
+
+    async def _always_pass(token):  # noqa: ARG001
+        return True
+
+    from app import captcha as captcha_module
+
+    monkeypatch.setattr(captcha_module, "verify_captcha", _always_pass)
+
+
+@pytest_asyncio.fixture(scope="session")
+async def _rate_limiter_redis():
+    """One fakeredis-backed FastAPILimiter for the whole test session — the
+    httpx ASGITransport never fires the app's lifespan, so we init here.
+    Per-test counter resets happen in ``rate_limiter_fakeredis`` below."""
+    import fakeredis.aioredis
+    from fastapi_limiter import FastAPILimiter
+
+    fake = fakeredis.aioredis.FakeRedis(encoding="utf-8")
+    await FastAPILimiter.init(fake)
+    try:
+        yield fake
+    finally:
+        await FastAPILimiter.close()
+        await fake.aclose()
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def rate_limiter_fakeredis(_rate_limiter_redis):
+    """Flush rate-limit counters between tests so each starts clean."""
+    await _rate_limiter_redis.flushall()
+    return _rate_limiter_redis
+
+
 @pytest.fixture(scope="session")
 def postgres_url() -> Iterator[str]:
     override = os.environ.get("TEST_DATABASE_URL")

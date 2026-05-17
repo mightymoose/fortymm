@@ -139,6 +139,54 @@ export const handlers = [
     mockSession.data.user = { ...mockSession.data.user, username: next }
     return HttpResponse.json(mockSession)
   }),
+  http.post('*/v1/me/email', async ({ request }) => {
+    const body =
+      ((await readJson(request)) as {
+        email?: string
+        captcha_token?: string
+        fmm_hp_token?: string
+      } | undefined) ?? {}
+    // Honeypot win condition: behave like success without persisting.
+    if (body.fmm_hp_token?.trim()) {
+      return HttpResponse.json(mockSession, { status: 202 })
+    }
+    if (!body.captcha_token) return detail('Captcha required.', 400)
+    if (!body.email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(body.email))
+      return detail('Invalid email.', 422)
+    mockSession.data.user = {
+      ...mockSession.data.user,
+      email: body.email.toLowerCase(),
+      confirmed_at: null,
+    }
+    return HttpResponse.json(mockSession, { status: 202 })
+  }),
+  http.post('*/v1/me/email/resend', async ({ request }) => {
+    const body =
+      ((await readJson(request)) as {
+        captcha_token?: string
+        fmm_hp_token?: string
+      } | undefined) ?? {}
+    if (body.fmm_hp_token?.trim())
+      return HttpResponse.json(mockSession, { status: 202 })
+    if (!mockSession.data.user.email)
+      return detail('Add an email address before requesting a resend.', 400)
+    if (mockSession.data.user.confirmed_at)
+      return detail('This email is already confirmed.', 409)
+    if (!body.captcha_token) return detail('Captcha required.', 400)
+    return HttpResponse.json(mockSession, { status: 202 })
+  }),
+  http.post('*/v1/me/email/confirm', async ({ request }) => {
+    const body =
+      ((await readJson(request)) as { token?: string } | undefined) ?? {}
+    if (!body.token) return detail('Missing token.', 400)
+    if (!mockSession.data.user.email)
+      return detail('That confirmation link is invalid or expired.', 400)
+    mockSession.data.user = {
+      ...mockSession.data.user,
+      confirmed_at: new Date().toISOString(),
+    }
+    return HttpResponse.json(mockSession)
+  }),
   http.get('*/v1/players/recent', async () => {
     await delay(300)
     return HttpResponse.json(mockRecentOpponents)

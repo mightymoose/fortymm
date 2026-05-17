@@ -7,16 +7,20 @@ import {
   useRef,
   useState,
   type CSSProperties,
-  type Dispatch,
   type ReactNode,
-  type SetStateAction,
 } from 'react'
 import { createFileRoute, useRouterState } from '@tanstack/react-router'
-import { Check, Mail, Trash2 } from 'lucide-react'
+import { Check, Mail } from 'lucide-react'
 
 import { ApiError } from '@/api/client'
-import { useSession, useUpdateUsername } from '@/api/session'
+import {
+  useResendEmailConfirmation,
+  useSession,
+  useSetEmail,
+  useUpdateUsername,
+} from '@/api/session'
 import { AppShell } from '@/components/app-shell'
+import { Turnstile, type TurnstileHandle } from '@/components/turnstile'
 import {
   Tooltip,
   TooltipContent,
@@ -38,15 +42,6 @@ export const Route = createFileRoute('/settings')({
 /* ------------------------------------------------------------------ */
 
 type EmailStatus = 'guest' | 'pending' | 'verified'
-
-interface User {
-  email: string
-  emailVerified: boolean
-  _lastSaved: {
-    email: number | null
-    verified: number | null
-  }
-}
 
 interface Validation {
   ok: boolean
@@ -88,16 +83,6 @@ function relativeTime(ts: number): string {
   return `${Math.floor(diff / 86400)}d ago`
 }
 
-function initialUser(): User {
-  return {
-    email: '',
-    emailVerified: false,
-    _lastSaved: {
-      email: null,
-      verified: null,
-    },
-  }
-}
 
 /* ------------------------------------------------------------------ */
 /*  Toasts                                                            */
@@ -564,7 +549,6 @@ function ClaimBanner({
   email: string
   onJump: () => void
 }) {
-  const toast = useToast()
   if (status === 'verified') return null
   const guest = status === 'guest'
   return (
@@ -606,28 +590,13 @@ function ClaimBanner({
             </>
           )}
         </div>
-        {guest ? (
-          <button type="button" className="fmm-btn fmm-btn--primary fmm-btn--sm" onClick={onJump}>
-            Add email
-          </button>
-        ) : (
-          <>
-            <button
-              type="button"
-              className="fmm-btn fmm-btn--quiet fmm-btn--sm"
-              onClick={() => toast(`Verification link re-sent to ${email}.`)}
-            >
-              Resend
-            </button>
-            <button
-              type="button"
-              className="fmm-btn fmm-btn--ghost fmm-btn--sm"
-              onClick={onJump}
-            >
-              Verify now
-            </button>
-          </>
-        )}
+        <button
+          type="button"
+          className={`fmm-btn fmm-btn--${guest ? 'primary' : 'ghost'} fmm-btn--sm`}
+          onClick={onJump}
+        >
+          {guest ? 'Add email' : 'Verify now'}
+        </button>
       </div>
     </div>
   )
@@ -813,68 +782,112 @@ function UsernameSection({ currentUsername }: { currentUsername: string }) {
 /*  02 — Email (required to claim)                                    */
 /* ------------------------------------------------------------------ */
 
+// Off-screen but still focusable so AT users hear "Leave this empty" — bots
+// pattern-match every visible field, then fill blanks anyway. Honeypots work
+// by being targeted by automation, not by being invisible to humans.
+const HONEYPOT_STYLE: CSSProperties = {
+  position: 'absolute',
+  left: '-9999px',
+  width: 1,
+  height: 1,
+  opacity: 0,
+}
+
 function EmailSection({
-  user,
-  setUser,
+  email,
+  confirmedAt,
 }: {
-  user: User
-  setUser: Dispatch<SetStateAction<User>>
+  email: string | null
+  confirmedAt: string | null
 }) {
   const toast = useToast()
-  const [val, setVal] = useState(user.email)
+  const setEmail = useSetEmail()
+  const resendEmail = useResendEmailConfirmation()
+  const current = email ?? ''
+  const [val, setVal] = useState(current)
   const [touched, setTouched] = useState(false)
-  const [saving, setSaving] = useState(false)
-  const [verifying, setVerifying] = useState(false)
-  const [savedAt, setSavedAt] = useState<number | null>(user._lastSaved.email)
+  const [captchaToken, setCaptchaToken] = useState<string | null>(null)
+  const [honeypot, setHoneypot] = useState('')
+  const [serverErr, setServerErr] = useState<string | null>(null)
+  const [savedAt, setSavedAt] = useState<number | null>(null)
+  const captchaRef = useRef<TurnstileHandle | null>(null)
+
+  // Reset the local input when the underlying session value changes (e.g. on
+  // refetch after another tab confirmed). Avoid clobbering in-progress edits.
+  const lastSyncedRef = useRef(current)
+  useEffect(() => {
+    if (current === lastSyncedRef.current) return
+    lastSyncedRef.current = current
+    setVal(current)
+    setTouched(false)
+    setServerErr(null)
+  }, [current])
 
   const v = useMemo(() => validateEmail(val), [val])
-  const dirty = val !== user.email
-  const showErr = touched && !v.ok
+  const dirty = val !== current
+  const showErr = serverErr ?? (touched && !v.ok ? v.err : null)
 
-  const status: EmailStatus = user.emailVerified
+  const status: EmailStatus = confirmedAt
     ? 'verified'
-    : user.email
+    : email
       ? 'pending'
       : 'guest'
 
+  const resetCaptcha = () => {
+    captchaRef.current?.reset()
+    setCaptchaToken(null)
+  }
+
   const onSave = async () => {
-    if (!v.ok) return
-    setSaving(true)
-    await new Promise((r) => setTimeout(r, 700))
-    const now = Date.now()
-    setUser((u) => ({
-      ...u,
-      email: val,
-      emailVerified: false, // re-verify on any change
-      _lastSaved: { ...u._lastSaved, email: now },
-    }))
-    setSavedAt(now)
-    setSaving(false)
-    setTouched(false)
-    toast(`Verification link sent to ${val}.`)
+    if (!v.ok || !dirty) return
+    if (!captchaToken) {
+      setServerErr('Please complete the CAPTCHA above.')
+      return
+    }
+    setServerErr(null)
+    try {
+      await setEmail.mutateAsync({
+        email: val,
+        captchaToken,
+        honeypot,
+      })
+      setSavedAt(Date.now())
+      setTouched(false)
+      resetCaptcha()
+      toast(`Verification link sent to ${val}.`)
+    } catch (err) {
+      resetCaptcha()
+      if (err instanceof ApiError && err.status && err.status < 500) {
+        setServerErr(err.detail ?? 'Server rejected this email.')
+        return
+      }
+      toast(
+        err instanceof Error
+          ? `Couldn't update email: ${err.message}`
+          : "Couldn't update email.",
+        { kind: 'err' },
+      )
+    }
   }
 
-  const onVerify = async () => {
-    setVerifying(true)
-    await new Promise((r) => setTimeout(r, 900))
-    setUser((u) => ({
-      ...u,
-      emailVerified: true,
-      _lastSaved: { ...u._lastSaved, verified: Date.now() },
-    }))
-    setVerifying(false)
-    toast('Email verified. Account claimed.')
-  }
-
-  const onResend = () => {
-    toast(`Verification link re-sent to ${user.email}.`)
-  }
-
-  const onRemove = () => {
-    setUser((u) => ({ ...u, email: '', emailVerified: false }))
-    setVal('')
-    setSavedAt(null)
-    toast("Email removed. You're back to a guest session.", { kind: 'err' })
+  const onResend = async () => {
+    if (!captchaToken) {
+      toast('Complete the CAPTCHA, then click Resend.', { kind: 'err' })
+      return
+    }
+    try {
+      await resendEmail.mutateAsync({ captchaToken, honeypot })
+      resetCaptcha()
+      toast(`Verification link re-sent to ${email}.`)
+    } catch (err) {
+      resetCaptcha()
+      toast(
+        err instanceof ApiError && err.detail
+          ? err.detail
+          : "Couldn't resend confirmation.",
+        { kind: 'err' },
+      )
+    }
   }
 
   return (
@@ -894,15 +907,16 @@ function EmailSection({
       footer={
         <SaveBar
           dirty={dirty}
-          valid={v.ok}
-          saving={saving}
+          valid={v.ok && !!captchaToken}
+          saving={setEmail.isPending}
           savedAt={savedAt}
           onSave={onSave}
           onCancel={() => {
-            setVal(user.email)
+            setVal(current)
             setTouched(false)
+            setServerErr(null)
           }}
-          primaryLabel={user.email ? 'Update email' : 'Add email'}
+          primaryLabel={email ? 'Update email' : 'Add email'}
         />
       }
     >
@@ -914,7 +928,7 @@ function EmailSection({
             ? "Verified. You can change it any time — we'll send a fresh link."
             : "We'll send a link to verify it's yours. No marketing, ever."
         }
-        error={showErr ? v.err : null}
+        error={showErr ?? null}
       >
         <div style={{ position: 'relative' }}>
           <span
@@ -934,19 +948,50 @@ function EmailSection({
             type="email"
             className={`fmm-input fmm-input--mono ${showErr ? 'fmm-input--err' : status === 'verified' && !dirty ? 'fmm-input--ok' : ''}`}
             value={val}
-            onChange={(e) => setVal(e.target.value.trim())}
+            onChange={(e) => {
+              setVal(e.target.value.trim())
+              if (serverErr) setServerErr(null)
+            }}
             onBlur={() => setTouched(true)}
             placeholder="you@example.com"
             style={{ paddingLeft: 38 }}
             spellCheck={false}
             autoComplete="email"
-            aria-invalid={showErr || undefined}
+            aria-invalid={!!showErr || undefined}
           />
         </div>
       </Field>
 
-      {/* Verification state strip */}
-      {user.email && (
+      {/* Honeypot. The field name deliberately avoids identity-profile
+          names ("website", "address") because Chrome / 1Password / Bitwarden
+          ignore autoComplete="off" for those and would splash real users'
+          saved data into the trap. */}
+      <div style={HONEYPOT_STYLE} aria-hidden="true">
+        <label htmlFor="email-fmm-hp">Leave this empty</label>
+        <input
+          id="email-fmm-hp"
+          type="text"
+          name="fmm_hp_token"
+          tabIndex={-1}
+          autoComplete="off"
+          value={honeypot}
+          onChange={(e) => setHoneypot(e.target.value)}
+          data-testid="email-honeypot"
+        />
+      </div>
+
+      <div style={{ marginTop: 16 }}>
+        <Turnstile
+          handleRef={(h) => {
+            captchaRef.current = h
+          }}
+          onToken={(t) => setCaptchaToken(t)}
+          onExpire={() => setCaptchaToken(null)}
+          onError={() => setCaptchaToken(null)}
+        />
+      </div>
+
+      {email && (
         <div
           style={{
             marginTop: 16,
@@ -982,12 +1027,12 @@ function EmailSection({
             />
           )}
           <div style={{ flex: 1, fontSize: 'var(--text-sm)', color: 'var(--fg-2)' }}>
-            {status === 'verified' ? (
+            {status === 'verified' && confirmedAt ? (
               <>
                 <div style={{ fontWeight: 600, color: 'var(--fg-1)' }}>Account claimed.</div>
                 <div style={{ color: 'var(--fg-3)', marginTop: 2 }}>
-                  Verified {relativeTime(user._lastSaved.verified ?? 0)}. You can sign in from
-                  anywhere.
+                  Verified {relativeTime(new Date(confirmedAt).getTime())}. You can sign in
+                  from anywhere.
                 </div>
               </>
             ) : (
@@ -996,49 +1041,28 @@ function EmailSection({
                   Waiting for verification.
                 </div>
                 <div style={{ color: 'var(--fg-3)', marginTop: 2 }}>
-                  Open the link in your inbox. Or — for the demo — click verify.
+                  Open the link we just sent to{' '}
+                  <span style={{ fontFamily: 'var(--font-mono)' }}>{email}</span>.
                 </div>
               </>
             )}
           </div>
           {status === 'pending' && (
-            <>
-              <button
-                type="button"
-                className="fmm-btn fmm-btn--quiet fmm-btn--sm"
-                onClick={onResend}
-              >
-                Resend
-              </button>
-              <button
-                type="button"
-                className="fmm-btn fmm-btn--primary fmm-btn--sm"
-                onClick={onVerify}
-                disabled={verifying}
-              >
-                {verifying ? (
-                  <>
-                    <Spinner />
-                    Verifying…
-                  </>
-                ) : (
-                  'Verify'
-                )}
-              </button>
-            </>
+            <button
+              type="button"
+              className="fmm-btn fmm-btn--quiet fmm-btn--sm"
+              onClick={onResend}
+              disabled={resendEmail.isPending || !captchaToken}
+            >
+              {resendEmail.isPending ? (
+                <>
+                  <Spinner /> Resending…
+                </>
+              ) : (
+                'Resend'
+              )}
+            </button>
           )}
-        </div>
-      )}
-
-      {user.email && (
-        <div style={{ marginTop: 16, display: 'flex', justifyContent: 'flex-end' }}>
-          <button
-            type="button"
-            className="fmm-btn fmm-btn--danger fmm-btn--sm"
-            onClick={onRemove}
-          >
-            <Trash2 size={14} /> Remove email
-          </button>
         </div>
       )}
     </SectionCard>
@@ -1058,13 +1082,15 @@ function scrollToSection(id: string) {
 
 function SettingsPage() {
   const session = useSession()
-  const sessionUsername = session.data?.data.user.username ?? ''
-  const [user, setUser] = useState<User>(initialUser)
+  const sessionUser = session.data?.data.user
+  const sessionUsername = sessionUser?.username ?? ''
+  const sessionEmail = sessionUser?.email ?? null
+  const sessionConfirmedAt = sessionUser?.confirmed_at ?? null
   const hash = useRouterState({ select: (s) => s.location.hash })
 
-  const effectiveStatus: EmailStatus = user.emailVerified
+  const effectiveStatus: EmailStatus = sessionConfirmedAt
     ? 'verified'
-    : user.email
+    : sessionEmail
       ? 'pending'
       : 'guest'
   const claimed = effectiveStatus === 'verified'
@@ -1083,19 +1109,18 @@ function SettingsPage() {
             <div className="fmm-main-inner">
               <PageHeader username={sessionUsername} claimed={claimed} />
 
-              <ComingSoon>
-                <ClaimBanner
-                  status={effectiveStatus}
-                  email={user.email}
-                  onJump={() => scrollToSection('sec-email')}
-                />
-              </ComingSoon>
+              <ClaimBanner
+                status={effectiveStatus}
+                email={sessionEmail ?? ''}
+                onJump={() => scrollToSection('sec-email')}
+              />
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
                 <UsernameSection currentUsername={sessionUsername} />
-                <ComingSoon>
-                  <EmailSection user={user} setUser={setUser} />
-                </ComingSoon>
+                <EmailSection
+                  email={sessionEmail}
+                  confirmedAt={sessionConfirmedAt}
+                />
               </div>
 
               <ComingSoon>

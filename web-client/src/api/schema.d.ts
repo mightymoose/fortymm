@@ -38,6 +38,68 @@ export interface paths {
         patch: operations["update_current_user_v1_me_patch"];
         trace?: never;
     };
+    "/v1/me/email": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Set Email */
+        post: operations["set_email_v1_me_email_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/me/email/resend": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Resend Email Confirmation */
+        post: operations["resend_email_confirmation_v1_me_email_resend_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/me/email/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Confirm Email
+         * @description Confirm the email-change handshake.
+         *
+         *     The token in the email is itself the bearer credential — we don't
+         *     require the click to come from the same browser that requested it.
+         *     That lets users complete the flow on a mobile mail client even when
+         *     their desktop session cookie isn't available, and avoids minting an
+         *     orphan guest user on every cross-device click. The endpoint also
+         *     rotates the caller's session cookie to the token's owner so the
+         *     confirming browser ends up signed in as the right user.
+         */
+        post: operations["confirm_email_v1_me_email_confirm_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/permissions": {
         parameters: {
             query?: never;
@@ -328,6 +390,11 @@ export interface components {
             latency_ms?: number | null;
             /** Error */
             error?: string | null;
+        };
+        /** ConfirmEmailRequest */
+        ConfirmEmailRequest: {
+            /** Token */
+            token: string;
         };
         /** DashboardNextMatch */
         DashboardNextMatch: {
@@ -836,6 +903,16 @@ export interface components {
             /** Role Ids */
             role_ids: string[];
         };
+        /** ResendEmailRequest */
+        ResendEmailRequest: {
+            /** Captcha Token */
+            captcha_token: string;
+            /**
+             * Fmm Hp Token
+             * @default
+             */
+            fmm_hp_token: string;
+        };
         /** RoleCreate */
         RoleCreate: {
             /** Name */
@@ -894,6 +971,25 @@ export interface components {
             username: string;
             /** Permissions */
             permissions: string[];
+            /** Email */
+            email?: string | null;
+            /** Confirmed At */
+            confirmed_at?: string | null;
+        };
+        /** SetEmailRequest */
+        SetEmailRequest: {
+            /** Captcha Token */
+            captcha_token: string;
+            /**
+             * Fmm Hp Token
+             * @default
+             */
+            fmm_hp_token: string;
+            /**
+             * Email
+             * Format: email
+             */
+            email: string;
         };
         /** UpdateCurrentUserRequest */
         UpdateCurrentUserRequest: {
@@ -965,6 +1061,109 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["UpdateCurrentUserRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_email_v1_me_email_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetEmailRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    resend_email_confirmation_v1_me_email_resend_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResendEmailRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    confirm_email_v1_me_email_confirm_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfirmEmailRequest"];
             };
         };
         responses: {

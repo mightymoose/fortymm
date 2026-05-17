@@ -46,3 +46,71 @@ export function useUpdateUsername() {
     },
   })
 }
+
+export interface SetEmailInput {
+  email: string
+  captchaToken: string
+  // Honeypot — the form must include this field on the wire even when
+  // empty so the server's bot-check semantics match the FE form shape.
+  honeypot?: string
+}
+
+export function useSetEmail() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async ({
+      email,
+      captchaToken,
+      honeypot = '',
+    }: SetEmailInput): Promise<Session> =>
+      unwrap(
+        'set email',
+        await api.POST('/v1/me/email', {
+          body: {
+            email,
+            captcha_token: captchaToken,
+            fmm_hp_token: honeypot,
+          },
+        }),
+      ),
+    onSuccess: (session) => {
+      qc.setQueryData(SESSION_QUERY_KEY, session)
+    },
+  })
+}
+
+export function useResendEmailConfirmation() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async ({
+      captchaToken,
+      honeypot = '',
+    }: {
+      captchaToken: string
+      honeypot?: string
+    }): Promise<Session> =>
+      unwrap(
+        'resend confirmation',
+        await api.POST('/v1/me/email/resend', {
+          body: { captcha_token: captchaToken, fmm_hp_token: honeypot },
+        }),
+      ),
+    onSuccess: (session) => {
+      qc.setQueryData(SESSION_QUERY_KEY, session)
+    },
+  })
+}
+
+export function useConfirmEmail() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (token: string): Promise<Session> =>
+      unwrap(
+        'confirm email',
+        await api.POST('/v1/me/email/confirm', { body: { token } }),
+      ),
+    onSuccess: (session) => {
+      qc.setQueryData(SESSION_QUERY_KEY, session)
+    },
+  })
+}
