@@ -9,6 +9,7 @@ import type {
 } from '@/api/dashboard'
 import { scoringNewRoute } from '@/api/matches'
 import { useSession } from '@/api/session'
+import { Overline } from '@/components/overline'
 import { fmtDateShort } from '@/lib/dates'
 import { formatRatingDelta } from '@/lib/rating'
 
@@ -35,30 +36,6 @@ const C = {
 
 const UI = "'Space Grotesk', ui-sans-serif, system-ui, sans-serif"
 const MONO = "'JetBrains Mono', ui-monospace, monospace"
-
-function Overline({
-  children,
-  color = C.chalk300,
-  style,
-}: {
-  children: ReactNode
-  color?: string
-  style?: CSSProperties
-}) {
-  return (
-    <div
-      style={{
-        font: `600 10px ${UI}`,
-        letterSpacing: '0.16em',
-        textTransform: 'uppercase',
-        color,
-        ...style,
-      }}
-    >
-      {children}
-    </div>
-  )
-}
 
 function Mono({
   children,
@@ -444,7 +421,7 @@ function SkeletonCard({
 function EmptyCard({ overline, body }: { overline: string; body: string }) {
   return (
     <Card>
-      <Overline color={C.chalk500}>{overline}</Overline>
+      <Overline>{overline}</Overline>
       <div
         style={{
           marginTop: 10,
@@ -468,7 +445,7 @@ function PageTitle({
   return (
     <div style={{ display: 'flex', alignItems: 'flex-end', marginBottom: 24, gap: 16 }}>
       <div>
-        <Overline color={C.chalk500} style={{ marginBottom: 8 }}>
+        <Overline style={{ marginBottom: 8 }}>
           Dashboard · Tuesday, April 22
         </Overline>
         <h1
@@ -776,7 +753,7 @@ function Stat({
         border: `1px solid ${C.ink700}`,
       }}
     >
-      <Overline color={C.chalk500} style={{ fontSize: 9 }}>
+      <Overline style={{ fontSize: 9 }}>
         {label}
       </Overline>
       <Mono size={16} weight={700} style={{ marginTop: 3, display: 'block' }}>
@@ -803,7 +780,7 @@ function RatingCard({ rating }: { rating: DashboardRating }) {
   return (
     <Card padding={20} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <Overline color={C.chalk500}>Current rating</Overline>
+        <Overline>Current rating</Overline>
         <div style={{ flex: 1 }} />
         {streak ? (
           <Pill tone={streak.kind === 'W' ? 'win' : 'loss'} mono>
@@ -881,7 +858,7 @@ function RecentResultsCard({ rows }: { rows: DashboardRecentResult[] }) {
           borderBottom: `1px solid ${C.ink700}`,
         }}
       >
-        <Overline color={C.chalk500}>Recent matches</Overline>
+        <Overline>Recent matches</Overline>
         <div style={{ flex: 1 }} />
         <span style={{ font: `500 11px ${UI}`, color: C.chalk500 }}>
           <Mono size={11} color={C.chalk100}>

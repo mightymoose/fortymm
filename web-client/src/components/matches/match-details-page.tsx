@@ -13,6 +13,7 @@ import {
 } from 'lucide-react'
 
 import { AppShell } from '@/components/app-shell'
+import { Overline } from '@/components/overline'
 import { cn, initialsOf } from '@/lib/utils'
 import { fmtDateShort } from '@/lib/dates'
 import { formatRatingDelta } from '@/lib/rating'
@@ -659,7 +660,7 @@ function PlayersCard({ view }: { view: MatchView }) {
   return (
     <div className="md-card">
       <div className="md-card__hd">
-        <h3>Players &amp; form</h3>
+        <Overline as="h3">Players &amp; form</Overline>
         <span className="md-card__hd-meta">LAST 5 RESULTS</span>
       </div>
       <div className="md-players">
@@ -851,7 +852,7 @@ function MatchInfoCard({ view }: { view: MatchView }) {
   ]
   return (
     <div className="md-card">
-      <div className="md-card__hd"><h3>Match info</h3></div>
+      <div className="md-card__hd"><Overline as="h3">Match info</Overline></div>
       <div className="md-card__body">
         {rows.map(([k, v]) => (
           <div key={k} className="md-info-row">
@@ -871,7 +872,7 @@ function RatingCard({ view }: { view: MatchView }) {
   return (
     <div className="md-card">
       <div className="md-card__hd">
-        <h3>Rating change</h3>
+        <Overline as="h3">Rating change</Overline>
       </div>
       <div className="md-card__body md-rating-card__body">
         {sides.map((side, i) => (
@@ -959,7 +960,7 @@ function H2HCard({ view, h2h }: { view: MatchView; h2h: H2HView }) {
   return (
     <div className="md-card">
       <div className="md-card__hd">
-        <h3>Head to head</h3>
+        <Overline as="h3">Head to head</Overline>
         <span className="md-card__hd-meta">
           {h2h.totalMeetings} {h2h.totalMeetings === 1 ? 'MEETING' : 'MEETINGS'}
         </span>
