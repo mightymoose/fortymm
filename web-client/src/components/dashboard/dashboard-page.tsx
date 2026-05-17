@@ -500,44 +500,6 @@ function PageTitle({
   )
 }
 
-function PaddleBadge({ accent }: { accent: string }) {
-  return (
-    <div
-      style={{
-        position: 'absolute',
-        bottom: -4,
-        right: -6,
-        width: 26,
-        height: 26,
-        borderRadius: '50%',
-        background: C.ink900,
-        border: `1.5px solid ${accent}`,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-      }}
-    >
-      <svg width="13" height="13" viewBox="0 0 24 24" aria-hidden="true">
-        <circle
-          cx="10"
-          cy="10"
-          r="7"
-          fill="none"
-          stroke={accent}
-          strokeWidth="1.75"
-        />
-        <path
-          d="M14.5 14.5L20 20"
-          fill="none"
-          stroke={accent}
-          strokeWidth="1.75"
-          strokeLinecap="round"
-        />
-      </svg>
-    </div>
-  )
-}
-
 function ScoreBanner({ banner }: { banner: DashboardScoreBanner }) {
   const accent = C.ball500
   const opponent = banner.opponent_username ?? GUEST_OPPONENT
@@ -617,10 +579,7 @@ function ScoreBanner({ banner }: { banner: DashboardScoreBanner }) {
               minWidth: 0,
             }}
           >
-            <div style={{ position: 'relative' }}>
-              <Avatar name={opponent} size={64} ring ringColor={accent} />
-              <PaddleBadge accent={accent} />
-            </div>
+            <Avatar name={opponent} size={64} ring ringColor={accent} />
             <div style={{ minWidth: 0, flex: 1 }}>
               <h1
                 style={{
