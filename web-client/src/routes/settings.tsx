@@ -549,7 +549,6 @@ function ClaimBanner({
   email: string
   onJump: () => void
 }) {
-  const toast = useToast()
   if (status === 'verified') return null
   const guest = status === 'guest'
   return (
@@ -591,28 +590,13 @@ function ClaimBanner({
             </>
           )}
         </div>
-        {guest ? (
-          <button type="button" className="fmm-btn fmm-btn--primary fmm-btn--sm" onClick={onJump}>
-            Add email
-          </button>
-        ) : (
-          <>
-            <button
-              type="button"
-              className="fmm-btn fmm-btn--quiet fmm-btn--sm"
-              onClick={() => toast(`Verification link re-sent to ${email}.`)}
-            >
-              Resend
-            </button>
-            <button
-              type="button"
-              className="fmm-btn fmm-btn--ghost fmm-btn--sm"
-              onClick={onJump}
-            >
-              Verify now
-            </button>
-          </>
-        )}
+        <button
+          type="button"
+          className={`fmm-btn fmm-btn--${guest ? 'primary' : 'ghost'} fmm-btn--sm`}
+          onClick={onJump}
+        >
+          {guest ? 'Add email' : 'Verify now'}
+        </button>
       </div>
     </div>
   )
@@ -823,7 +807,7 @@ function EmailSection({
   const [val, setVal] = useState(current)
   const [touched, setTouched] = useState(false)
   const [captchaToken, setCaptchaToken] = useState<string | null>(null)
-  const [website, setWebsite] = useState('')
+  const [honeypot, setHoneypot] = useState('')
   const [serverErr, setServerErr] = useState<string | null>(null)
   const [savedAt, setSavedAt] = useState<number | null>(null)
   const captchaRef = useRef<TurnstileHandle | null>(null)
@@ -865,7 +849,7 @@ function EmailSection({
       await setEmail.mutateAsync({
         email: val,
         captchaToken,
-        website,
+        honeypot,
       })
       setSavedAt(Date.now())
       setTouched(false)
@@ -892,7 +876,7 @@ function EmailSection({
       return
     }
     try {
-      await resendEmail.mutateAsync({ captchaToken, website })
+      await resendEmail.mutateAsync({ captchaToken, honeypot })
       resetCaptcha()
       toast(`Verification link re-sent to ${email}.`)
     } catch (err) {
@@ -978,17 +962,20 @@ function EmailSection({
         </div>
       </Field>
 
-      {/* Honeypot — invisible to humans, magnet for bots. */}
+      {/* Honeypot. The field name deliberately avoids identity-profile
+          names ("website", "address") because Chrome / 1Password / Bitwarden
+          ignore autoComplete="off" for those and would splash real users'
+          saved data into the trap. */}
       <div style={HONEYPOT_STYLE} aria-hidden="true">
-        <label htmlFor="email-website">Website</label>
+        <label htmlFor="email-fmm-hp">Leave this empty</label>
         <input
-          id="email-website"
+          id="email-fmm-hp"
           type="text"
-          name="website"
+          name="fmm_hp_token"
           tabIndex={-1}
           autoComplete="off"
-          value={website}
-          onChange={(e) => setWebsite(e.target.value)}
+          value={honeypot}
+          onChange={(e) => setHoneypot(e.target.value)}
           data-testid="email-honeypot"
         />
       </div>

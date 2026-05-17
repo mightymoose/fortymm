@@ -81,7 +81,18 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Confirm Email */
+        /**
+         * Confirm Email
+         * @description Confirm the email-change handshake.
+         *
+         *     The token in the email is itself the bearer credential — we don't
+         *     require the click to come from the same browser that requested it.
+         *     That lets users complete the flow on a mobile mail client even when
+         *     their desktop session cookie isn't available, and avoids minting an
+         *     orphan guest user on every cross-device click. The endpoint also
+         *     rotates the caller's session cookie to the token's owner so the
+         *     confirming browser ends up signed in as the right user.
+         */
         post: operations["confirm_email_v1_me_email_confirm_post"];
         delete?: never;
         options?: never;
@@ -897,10 +908,10 @@ export interface components {
             /** Captcha Token */
             captcha_token: string;
             /**
-             * Website
+             * Fmm Hp Token
              * @default
              */
-            website: string;
+            fmm_hp_token: string;
         };
         /** RoleCreate */
         RoleCreate: {
@@ -970,10 +981,10 @@ export interface components {
             /** Captcha Token */
             captcha_token: string;
             /**
-             * Website
+             * Fmm Hp Token
              * @default
              */
-            website: string;
+            fmm_hp_token: string;
             /**
              * Email
              * Format: email
@@ -1148,9 +1159,7 @@ export interface operations {
             query?: never;
             header?: never;
             path?: never;
-            cookie?: {
-                session?: string | null;
-            };
+            cookie?: never;
         };
         requestBody: {
             content: {

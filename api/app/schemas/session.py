@@ -36,12 +36,17 @@ class UpdateCurrentUserRequest(BaseModel):
 
 class CaptchaProtectedRequest(BaseModel):
     """Base for endpoints gated by Cloudflare Turnstile + an off-screen
-    honeypot. ``website`` is the honeypot — bots fill every field; humans
-    never see it. Endpoints short-circuit as if successful when it's filled,
-    so the bot doesn't learn the field is a trap."""
+    honeypot. ``fmm_hp_token`` is the honeypot — bots fill every field;
+    humans never see it. Endpoints short-circuit as if successful when it's
+    filled, so the bot doesn't learn the field is a trap.
+
+    The field name deliberately avoids canonical identity-profile names
+    (``website``, ``address``, ``phone``) because password managers and
+    browser autofillers ignore ``autocomplete=off`` for those and would
+    splash a real user's saved value into the trap."""
 
     captcha_token: str = Field(min_length=1, max_length=4096)
-    website: str = Field(default="", max_length=512)
+    fmm_hp_token: str = Field(default="", max_length=512)
 
 
 class SetEmailRequest(CaptchaProtectedRequest):

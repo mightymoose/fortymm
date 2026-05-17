@@ -32,7 +32,7 @@ async def api_client(db_session: AsyncSession) -> AsyncIterator[AsyncClient]:
 VALID_BODY = {
     "email": "rita@example.com",
     "captcha_token": "test-token",
-    "website": "",
+    "fmm_hp_token": "",
 }
 
 
@@ -112,7 +112,9 @@ async def test_set_email_honeypot_silently_succeeds(
     api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
 ):
     user = await start_session(api_client, db_session)
-    response = await _set_email(api_client, website="https://spammer.example")
+    response = await _set_email(
+        api_client, fmm_hp_token="https://spammer.example"
+    )
     # Same shape as a real success — gives the bot no signal.
     assert response.status_code == 202
 
@@ -144,15 +146,35 @@ async def test_set_email_rejects_failed_captcha(
     assert "Captcha" in response.json()["detail"]
 
 
-async def test_set_email_rejects_duplicate(
-    api_client: AsyncClient, db_session: AsyncSession
+async def test_set_email_with_taken_address_is_enumeration_safe(
+    api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
 ):
+    """Submitting an address belonging to someone else must look identical
+    to a no-op success — same 202, same session response shape, no token
+    issued, no email enqueued. Returning 409 would let an attacker cycle
+    fresh `/v1/session` cookies to enumerate the user base."""
     db_session.add(User(username="other", email="taken@example.com"))
     await db_session.commit()
-    await start_session(api_client, db_session)
+    me = await start_session(api_client, db_session)
 
     response = await _set_email(api_client, email="taken@example.com")
-    assert response.status_code == 409
+    assert response.status_code == 202
+
+    await db_session.refresh(me)
+    # Caller's own row is untouched.
+    assert me.email is None
+    assert me.confirmed_at is None
+
+    tokens = (
+        await db_session.execute(
+            select(UserToken).where(
+                UserToken.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX),
+                UserToken.user_id == me.id,
+            )
+        )
+    ).scalars().all()
+    assert tokens == []
+    assert fake_email_queue.finished_job_registry.count == 0
 
 
 async def test_token_context_records_old_email(
@@ -212,7 +234,7 @@ async def test_resend_preserves_original_change_context(
 
     await api_client.post(
         "/v1/me/email/resend",
-        json={"captcha_token": "x", "website": ""},
+        json={"captcha_token": "x", "fmm_hp_token": ""},
     )
     after = (
         await db_session.execute(
@@ -360,30 +382,43 @@ async def test_confirm_email_rejects_unknown_token(
     assert response.status_code == 400
 
 
-async def test_confirm_email_rejects_other_users_token(
+async def test_confirm_email_works_from_a_different_browser(
     api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
 ):
-    """A confirmation link issued to user A must not confirm user B."""
+    """The token is itself a bearer credential — clicking the link in any
+    browser must confirm the change. The endpoint rotates the caller's
+    session cookie to the token's owner so they end up signed in as the
+    right user."""
     from tests._helpers import make_client
 
-    # User A sets an email and we capture their token.
-    await start_session(api_client, db_session)
-    raw_token = await _capture_raw_token(api_client, db_session, fake_email_queue)
+    user_a = await start_session(api_client, db_session)
+    raw_token = await _capture_raw_token(
+        api_client, db_session, fake_email_queue
+    )
 
-    # User B has a fresh session — submitting A's token must 400.
     async with make_client() as other_client:
-        await start_session(other_client, db_session)
+        # User B opens the link in a separate browser with no session cookie.
         response = await other_client.post(
             "/v1/me/email/confirm", json={"token": raw_token}
         )
-        assert response.status_code == 400
+        assert response.status_code == 200
+        body_user = response.json()["data"]["user"]
+        assert body_user["username"] == user_a.username
+        assert body_user["confirmed_at"] is not None
+        # Session cookie was minted/rotated to user A on the new browser.
+        assert other_client.cookies.get("session")
+
+    await db_session.refresh(user_a)
+    assert user_a.confirmed_at is not None
 
 
-async def test_confirm_email_requires_session(api_client: AsyncClient):
+async def test_confirm_email_does_not_require_session(api_client: AsyncClient):
+    """Cookieless POST to /confirm-email is the cross-device mobile-mail
+    case — it should return 400 (invalid token) not 401 (no session)."""
     response = await api_client.post(
         "/v1/me/email/confirm", json={"token": "anything"}
     )
-    assert response.status_code == 401
+    assert response.status_code == 400
 
 
 async def test_token_is_stored_hashed_not_plaintext(
@@ -416,7 +451,7 @@ async def test_resend_issues_new_token(
 
     response = await api_client.post(
         "/v1/me/email/resend",
-        json={"captcha_token": "x", "website": ""},
+        json={"captcha_token": "x", "fmm_hp_token": ""},
     )
     assert response.status_code == 202
 
@@ -437,7 +472,7 @@ async def test_resend_requires_email_set(
     await start_session(api_client, db_session)
     response = await api_client.post(
         "/v1/me/email/resend",
-        json={"captcha_token": "x", "website": ""},
+        json={"captcha_token": "x", "fmm_hp_token": ""},
     )
     assert response.status_code == 400
 
@@ -455,7 +490,7 @@ async def test_resend_rejects_if_already_confirmed(
 
     response = await api_client.post(
         "/v1/me/email/resend",
-        json={"captcha_token": "x", "website": ""},
+        json={"captcha_token": "x", "fmm_hp_token": ""},
     )
     assert response.status_code == 409
 
@@ -469,7 +504,7 @@ async def test_resend_honeypot_short_circuits(
 
     response = await api_client.post(
         "/v1/me/email/resend",
-        json={"captcha_token": "x", "website": "spam"},
+        json={"captcha_token": "x", "fmm_hp_token": "spam"},
     )
     assert response.status_code == 202
     assert fake_email_queue.finished_job_registry.count == job_count_before
@@ -509,7 +544,7 @@ async def test_set_email_rate_limit_is_per_session(
             json={
                 "email": "other@example.com",
                 "captcha_token": "x",
-                "website": "",
+                "fmm_hp_token": "",
             },
         )
         assert response.status_code == 202
@@ -525,12 +560,111 @@ async def test_resend_rate_limited(
     for i in range(3):
         response = await api_client.post(
             "/v1/me/email/resend",
-            json={"captcha_token": "x", "website": ""},
+            json={"captcha_token": "x", "fmm_hp_token": ""},
         )
         assert response.status_code == 202, (i, response.text)
 
     over = await api_client.post(
         "/v1/me/email/resend",
-        json={"captcha_token": "x", "website": ""},
+        json={"captcha_token": "x", "fmm_hp_token": ""},
     )
     assert over.status_code == 429
+
+
+async def test_set_email_ip_limit_catches_session_cycling(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """An attacker who cycles `/v1/session` for fresh per-session buckets
+    is still caught by the looser per-IP ceiling."""
+    from tests._helpers import make_client
+
+    # Burn through the per-session cap on the primary client.
+    await start_session(api_client, db_session)
+    for _ in range(5):
+        assert (await _set_email(api_client)).status_code == 202
+
+    # Rotate through fresh sessions; each gets its own 5/hr session bucket,
+    # but the per-IP bucket is shared. After 20 total IP hits, the next 429s.
+    total = 5
+    for _ in range(20):
+        if total >= 20:
+            break
+        async with make_client() as fresh:
+            await start_session(fresh, db_session)
+            resp = await _set_email(fresh, email=f"r{total}@example.com")
+            assert resp.status_code == 202, (total, resp.text)
+            total += 1
+
+    async with make_client() as fresh:
+        await start_session(fresh, db_session)
+        resp = await _set_email(fresh, email="overflow@example.com")
+        assert resp.status_code == 429
+
+
+async def test_rate_limit_key_hashes_session_cookie(
+    api_client: AsyncClient, db_session: AsyncSession, rate_limiter_fakeredis
+):
+    """The session cookie is a bearer credential — it must never land in
+    Redis verbatim, where read-only access would let anyone impersonate
+    the user."""
+    await start_session(api_client, db_session)
+    raw_cookie = api_client.cookies.get("session")
+    assert raw_cookie
+
+    await _set_email(api_client)
+
+    keys = await rate_limiter_fakeredis.keys("*")
+    decoded = [k.decode() if isinstance(k, bytes) else k for k in keys]
+    for key in decoded:
+        assert raw_cookie not in key, (
+            f"raw session cookie leaked into Redis key: {key!r}"
+        )
+
+
+# ---- captcha + email config guards ---------------------------------------
+
+
+def test_captcha_secret_default_only_in_dev(monkeypatch):
+    from app import captcha as captcha_module
+
+    monkeypatch.delenv("TURNSTILE_SECRET_KEY", raising=False)
+    monkeypatch.setenv("APP_ENV", "production")
+    with pytest.raises(RuntimeError, match="TURNSTILE_SECRET_KEY"):
+        captcha_module._secret_key()
+
+    monkeypatch.setenv("APP_ENV", "dev")
+    assert captcha_module._secret_key() == captcha_module.TURNSTILE_TEST_SECRET_ALWAYS_PASSES
+
+
+async def test_captcha_fails_closed_when_misconfigured_in_prod(monkeypatch):
+    # Restore the real verifier (autouse `stub_captcha` swaps it out).
+    import importlib
+
+    from app import captcha as captcha_module
+
+    importlib.reload(captcha_module)
+
+    monkeypatch.delenv("TURNSTILE_SECRET_KEY", raising=False)
+    monkeypatch.setenv("APP_ENV", "production")
+    # Even with a non-empty token, verification refuses rather than
+    # silently passing via the test secret.
+    assert await captcha_module.verify_captcha("any-token") is False
+
+
+def test_email_refuses_to_send_without_app_base_url(monkeypatch):
+    from app import email as email_module
+
+    monkeypatch.delenv("APP_BASE_URL", raising=False)
+    monkeypatch.delenv("FORTYMM_DEV", raising=False)
+    with pytest.raises(RuntimeError, match="APP_BASE_URL"):
+        email_module._confirm_url("token")
+
+
+def test_email_refuses_to_send_when_smtp_unset_outside_dev(monkeypatch):
+    from app import email as email_module
+
+    monkeypatch.delenv("SMTP_HOST", raising=False)
+    monkeypatch.delenv("FORTYMM_DEV", raising=False)
+    monkeypatch.setenv("APP_BASE_URL", "https://example.com")
+    with pytest.raises(RuntimeError, match="SMTP"):
+        email_module.send_confirmation_email("a@b.com", "tok", "user")

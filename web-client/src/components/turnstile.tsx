@@ -37,19 +37,27 @@ function loadTurnstile(): Promise<TurnstileApi> {
   if (window.turnstile) return Promise.resolve(window.turnstile)
   if (scriptPromise) return scriptPromise
 
+  // Track the tag we own so we can remove it on failure. `load`/`error`
+  // are one-shot — if we ever inherit a stale tag whose events already
+  // fired, attaching new listeners would never resolve, so we replace it.
+  let ownedScript: HTMLScriptElement | null = null
+
   scriptPromise = new Promise<TurnstileApi>((resolve, reject) => {
     const existing = document.querySelector<HTMLScriptElement>(
       `script[src="${TURNSTILE_SCRIPT_SRC}"]`,
     )
     if (existing) {
-      existing.addEventListener('load', () => {
-        if (window.turnstile) resolve(window.turnstile)
-        else reject(new Error('turnstile-missing-after-load'))
-      })
-      existing.addEventListener('error', () => reject(new Error('script-load-failed')))
-      return
+      // If turnstile already loaded successfully, we're done.
+      if (window.turnstile) {
+        resolve(window.turnstile)
+        return
+      }
+      // Otherwise the existing tag is a leftover from a failed load whose
+      // events have already fired and won't fire again. Drop it.
+      existing.remove()
     }
     const script = document.createElement('script')
+    ownedScript = script
     script.src = TURNSTILE_SCRIPT_SRC
     script.async = true
     script.defer = true
@@ -60,10 +68,15 @@ function loadTurnstile(): Promise<TurnstileApi> {
     script.onerror = () => reject(new Error('script-load-failed'))
     document.head.appendChild(script)
   })
-  // Clear the cached promise on failure so a transient network error
-  // doesn't poison every future mount in this tab.
+  // On failure, clear the cached promise AND drop the stale <script> tag
+  // so the next mount installs a fresh one. Without removing the tag, the
+  // existing-tag branch above would inherit a node whose one-shot load
+  // event already fired, deadlocking the new promise forever.
   scriptPromise.catch(() => {
     scriptPromise = null
+    if (ownedScript && ownedScript.parentNode) {
+      ownedScript.parentNode.removeChild(ownedScript)
+    }
   })
   return scriptPromise
 }

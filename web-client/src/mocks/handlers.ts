@@ -144,10 +144,10 @@ export const handlers = [
       ((await readJson(request)) as {
         email?: string
         captcha_token?: string
-        website?: string
+        fmm_hp_token?: string
       } | undefined) ?? {}
     // Honeypot win condition: behave like success without persisting.
-    if (body.website?.trim()) {
+    if (body.fmm_hp_token?.trim()) {
       return HttpResponse.json(mockSession, { status: 202 })
     }
     if (!body.captcha_token) return detail('Captcha required.', 400)
@@ -164,9 +164,9 @@ export const handlers = [
     const body =
       ((await readJson(request)) as {
         captcha_token?: string
-        website?: string
+        fmm_hp_token?: string
       } | undefined) ?? {}
-    if (body.website?.trim())
+    if (body.fmm_hp_token?.trim())
       return HttpResponse.json(mockSession, { status: 202 })
     if (!mockSession.data.user.email)
       return detail('Add an email address before requesting a resend.', 400)

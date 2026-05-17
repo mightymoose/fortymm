@@ -50,7 +50,9 @@ export function useUpdateUsername() {
 export interface SetEmailInput {
   email: string
   captchaToken: string
-  website?: string
+  // Honeypot — the form must include this field on the wire even when
+  // empty so the server's bot-check semantics match the FE form shape.
+  honeypot?: string
 }
 
 export function useSetEmail() {
@@ -59,7 +61,7 @@ export function useSetEmail() {
     mutationFn: async ({
       email,
       captchaToken,
-      website = '',
+      honeypot = '',
     }: SetEmailInput): Promise<Session> =>
       unwrap(
         'set email',
@@ -67,7 +69,7 @@ export function useSetEmail() {
           body: {
             email,
             captcha_token: captchaToken,
-            website,
+            fmm_hp_token: honeypot,
           },
         }),
       ),
@@ -82,15 +84,15 @@ export function useResendEmailConfirmation() {
   return useMutation({
     mutationFn: async ({
       captchaToken,
-      website = '',
+      honeypot = '',
     }: {
       captchaToken: string
-      website?: string
+      honeypot?: string
     }): Promise<Session> =>
       unwrap(
         'resend confirmation',
         await api.POST('/v1/me/email/resend', {
-          body: { captcha_token: captchaToken, website },
+          body: { captcha_token: captchaToken, fmm_hp_token: honeypot },
         }),
       ),
     onSuccess: (session) => {

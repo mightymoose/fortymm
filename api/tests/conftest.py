@@ -36,10 +36,14 @@ def fake_email_queue(monkeypatch):
     at recorded jobs via ``q.get_jobs()`` before they run by toggling
     ``is_async`` if they need to inspect enqueue arguments without
     triggering the email send.
+
+    Also forces dev mode so ``send_confirmation_email`` runs the
+    log+print path instead of raising on missing SMTP.
     """
     connection = fakeredis.FakeStrictRedis()
     q = Queue(queue_module.EMAIL_QUEUE, connection=connection, is_async=False)
     monkeypatch.setattr(queue_module, "get_email_queue", lambda: q)
+    monkeypatch.setenv("FORTYMM_DEV", "1")
     return q
 
 

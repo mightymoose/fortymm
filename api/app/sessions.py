@@ -44,26 +44,53 @@ def _email_change_context(old_email: str | None) -> str:
     return f"{EMAIL_CHANGE_CONTEXT_PREFIX}{old_email or ''}"
 
 
+def _hash_cookie_for_key(cookie: str) -> str:
+    """Hash the raw session cookie before putting it into a Redis key. The
+    cookie is a bearer credential; if it lands in Redis verbatim (snapshots,
+    MONITOR, redis_exporter metric labels) anyone with read-only access can
+    impersonate the user."""
+    return hashlib.sha256(cookie.encode("utf-8")).hexdigest()
+
+
+def _client_ip(request: Request) -> str:
+    client = request.client
+    return client.host if client else "unknown"
+
+
 async def _email_rate_limit_key(request: Request) -> str:
-    """Key the email-send limiters by session cookie so legitimate users
-    behind a shared NAT aren't punished for each other's submissions. Fall
-    back to client IP for cookie-less requests (those will 401 downstream
-    anyway, but the limiter still gets to count the attempt)."""
+    """Key the email-send limiters by hashed session cookie so legitimate
+    users behind a shared NAT aren't penalised collectively. Fall back to
+    client IP for cookie-less requests (those will 401 downstream anyway,
+    but the limiter still counts the attempt)."""
     cookie = request.cookies.get(SESSION_COOKIE_NAME)
     if cookie:
-        return f"session:{cookie}"
-    client = request.client
-    return f"ip:{client.host if client else 'unknown'}"
+        return f"session:{_hash_cookie_for_key(cookie)}"
+    return f"ip:{_client_ip(request)}"
 
 
-# Limits chosen to allow normal flows (edit email, immediate resend on typo)
-# while making bulk abuse uneconomical. Resend is tighter since users have an
-# explicit no-cost path via re-submitting `set_email`.
+async def _email_ip_rate_limit_key(request: Request) -> str:
+    """Per-IP key for the looser ceiling that catches attackers cycling
+    fresh `/v1/session` cookies to bypass the per-session limit."""
+    return f"email-ip:{_client_ip(request)}"
+
+
+# Two-tier limit on the email-sending endpoints:
+#   - tight per-session caps so a single user doesn't bulk-spam themselves
+#     into a state where bounce-tracking matters,
+#   - looser per-IP ceiling so an attacker can't trivially multiply their
+#     budget by rotating guest sessions (each `GET /v1/session` mints a new
+#     one for free).
 email_send_rate_limit = RateLimiter(
     times=5, hours=1, identifier=_email_rate_limit_key
 )
+email_send_ip_rate_limit = RateLimiter(
+    times=20, hours=1, identifier=_email_ip_rate_limit_key
+)
 email_resend_rate_limit = RateLimiter(
     times=3, hours=1, identifier=_email_rate_limit_key
+)
+email_resend_ip_rate_limit = RateLimiter(
+    times=10, hours=1, identifier=_email_ip_rate_limit_key
 )
 
 
@@ -287,14 +314,17 @@ async def _issue_confirmation_token(
     return raw_token
 
 
-def _enqueue_confirmation_email(
-    to_email: str, raw_token: str, username: str
-) -> None:
-    queue_module.get_email_queue().enqueue(
+def _enqueue_confirmation_email(to_email: str, raw_token: str, username: str):
+    # result_ttl=60 / failure_ttl=300 shrinks the window during which the raw
+    # token (pickled into the RQ job hash in Redis) is recoverable from a
+    # snapshot or dashboard. Defaults are 8m / 1 year respectively.
+    return queue_module.get_email_queue().enqueue(
         "app.email.send_confirmation_email",
         to_email,
         raw_token,
         username,
+        result_ttl=60,
+        failure_ttl=300,
     )
 
 
@@ -302,7 +332,10 @@ def _enqueue_confirmation_email(
     "/v1/me/email",
     response_model=SessionResponse,
     status_code=status.HTTP_202_ACCEPTED,
-    dependencies=[Depends(email_send_rate_limit)],
+    dependencies=[
+        Depends(email_send_ip_rate_limit),
+        Depends(email_send_rate_limit),
+    ],
 )
 async def set_email(
     payload: SetEmailRequest,
@@ -312,21 +345,25 @@ async def set_email(
     # Honeypot: silently succeed without doing anything. Bots fill it; humans
     # never see it. We respond as if all is well so the bot doesn't learn the
     # field is a trap.
-    if payload.website.strip():
+    if payload.fmm_hp_token.strip():
         return await _build_session_response(db, current_user)
 
     await _verify_captcha_or_400(payload.captcha_token)
 
     email = payload.email.lower()
     old_email = current_user.email
+    if current_user.email != email and await name_taken(
+        db, User.id, User.email, email, exclude_id=current_user.id
+    ):
+        # Don't reveal that the email belongs to another user — that
+        # differential lets attackers enumerate the user base by cycling
+        # `GET /v1/session` for fresh rate-limit buckets. Return the same
+        # 202 + unchanged session shape as the success path. The legitimate
+        # owner is unaffected; the typo-on-someone-else's-address case sees
+        # a "sent" toast but never receives an email.
+        return await _build_session_response(db, current_user)
+
     if current_user.email != email:
-        if await name_taken(
-            db, User.id, User.email, email, exclude_id=current_user.id
-        ):
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=EMAIL_TAKEN_DETAIL,
-            )
         current_user.email = email
 
     # Every successful set_email re-starts the confirmation handshake — the
@@ -335,15 +372,36 @@ async def set_email(
     raw_token = await _issue_confirmation_token(
         db, current_user, email, _email_change_context(old_email)
     )
+
+    # Enqueue BEFORE commit so a Redis flap can't leave a previously-verified
+    # user silently un-verified with no link sent. If enqueue fails, rollback
+    # restores in-memory + on-disk state.
+    try:
+        job = _enqueue_confirmation_email(
+            email, raw_token, current_user.username
+        )
+    except Exception:
+        await db.rollback()
+        await db.refresh(current_user)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Email service unavailable. Try again in a moment.",
+        )
+
     try:
         await db.commit()
     except IntegrityError:
+        # Race with another user claiming the same address between our
+        # `name_taken` probe and our commit. Cancel the now-orphan job and
+        # return the same enumeration-safe 202 as the up-front collision.
         await db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=EMAIL_TAKEN_DETAIL,
-        )
-    _enqueue_confirmation_email(email, raw_token, current_user.username)
+        try:
+            job.cancel()
+        except Exception:
+            pass
+        await db.refresh(current_user)
+        return await _build_session_response(db, current_user)
+
     return await _build_session_response(db, current_user)
 
 
@@ -351,14 +409,17 @@ async def set_email(
     "/v1/me/email/resend",
     response_model=SessionResponse,
     status_code=status.HTTP_202_ACCEPTED,
-    dependencies=[Depends(email_resend_rate_limit)],
+    dependencies=[
+        Depends(email_resend_ip_rate_limit),
+        Depends(email_resend_rate_limit),
+    ],
 )
 async def resend_email_confirmation(
     payload: ResendEmailRequest,
     db: AsyncSession = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> SessionResponse:
-    if payload.website.strip():
+    if payload.fmm_hp_token.strip():
         return await _build_session_response(db, current_user)
     if not current_user.email:
         raise HTTPException(
@@ -381,19 +442,44 @@ async def resend_email_confirmation(
         current_user.email,
         prior_context or _email_change_context(None),
     )
-    await db.commit()
-    _enqueue_confirmation_email(
-        current_user.email, raw_token, current_user.username
-    )
+    try:
+        job = _enqueue_confirmation_email(
+            current_user.email, raw_token, current_user.username
+        )
+    except Exception:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Email service unavailable. Try again in a moment.",
+        )
+    try:
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        try:
+            job.cancel()
+        except Exception:
+            pass
+        raise
     return await _build_session_response(db, current_user)
 
 
 @router.post("/v1/me/email/confirm", response_model=SessionResponse)
 async def confirm_email(
     payload: ConfirmEmailRequest,
+    response: Response,
     db: AsyncSession = Depends(get_session),
-    current_user: User = Depends(get_current_user),
 ) -> SessionResponse:
+    """Confirm the email-change handshake.
+
+    The token in the email is itself the bearer credential — we don't
+    require the click to come from the same browser that requested it.
+    That lets users complete the flow on a mobile mail client even when
+    their desktop session cookie isn't available, and avoids minting an
+    orphan guest user on every cross-device click. The endpoint also
+    rotates the caller's session cookie to the token's owner so the
+    confirming browser ends up signed in as the right user.
+    """
     token_row = (
         await db.execute(
             select(UserToken).where(
@@ -402,14 +488,24 @@ async def confirm_email(
             )
         )
     ).scalar_one_or_none()
-    if token_row is None or token_row.user_id != current_user.id:
+    if token_row is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="That confirmation link is invalid or expired.",
         )
-    # Defensive: the email on the user may have been changed since the link
-    # was sent. If so, the link no longer matches the intended address.
-    if token_row.sent_to and token_row.sent_to != current_user.email:
+    user = (
+        await db.execute(select(User).where(User.id == token_row.user_id))
+    ).scalar_one_or_none()
+    if user is None:
+        await db.delete(token_row)
+        await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="That confirmation link is invalid or expired.",
+        )
+    if token_row.sent_to and token_row.sent_to != user.email:
+        # The user changed their email between request and click — the link
+        # no longer matches the intended address.
         await db.delete(token_row)
         await db.commit()
         raise HTTPException(
@@ -417,7 +513,19 @@ async def confirm_email(
             detail="That confirmation link no longer matches your email.",
         )
 
-    current_user.confirmed_at = datetime.now(timezone.utc)
+    user.confirmed_at = datetime.now(timezone.utc)
     await db.delete(token_row)
+    # Mint a fresh session for the token's owner so the confirming browser
+    # is signed in as them — replaces whatever guest session this browser
+    # had (or hadn't) on arrival.
+    raw_session = secrets.token_urlsafe(32)
+    db.add(
+        UserToken(
+            user_id=user.id,
+            context=SESSION_TOKEN_CONTEXT,
+            token=_hash_token(raw_session),
+        )
+    )
     await db.commit()
-    return await _build_session_response(db, current_user)
+    _set_session_cookie(response, raw_session)
+    return await _build_session_response(db, user)
