@@ -172,6 +172,25 @@ async def test_set_email_replaces_existing_unconfirmed_token(
     assert tokens[0].sent_to == "rita2@example.com"
 
 
+async def test_resubmitting_same_email_clears_confirmation(
+    api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
+):
+    """Even when the address didn't change, calling set_email un-confirms
+    the user — they must click the fresh link to re-prove ownership."""
+    user = await start_session(api_client, db_session)
+    raw_token = await _capture_raw_token(api_client, db_session, fake_email_queue)
+    await api_client.post(
+        "/v1/me/email/confirm", json={"token": raw_token}
+    )
+    await db_session.refresh(user)
+    assert user.confirmed_at is not None
+
+    await _set_email(api_client)  # same email as VALID_BODY
+    await db_session.refresh(user)
+    assert user.confirmed_at is None
+    assert user.email == "rita@example.com"
+
+
 async def test_changing_email_clears_confirmation(
     api_client: AsyncClient, db_session: AsyncSession
 ):
@@ -382,3 +401,64 @@ async def test_resend_honeypot_short_circuits(
     )
     assert response.status_code == 202
     assert fake_email_queue.finished_job_registry.count == job_count_before
+
+
+# ---- rate limiting --------------------------------------------------------
+
+
+async def test_set_email_rate_limited(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """After 5 successful submits in the same session window, a 6th 429s."""
+    await start_session(api_client, db_session)
+    for i in range(5):
+        response = await _set_email(api_client, email=f"rita{i}@example.com")
+        assert response.status_code == 202, (i, response.text)
+
+    over = await _set_email(api_client, email="rita-final@example.com")
+    assert over.status_code == 429
+
+
+async def test_set_email_rate_limit_is_per_session(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """Another user with a fresh session isn't penalised by the first's burst."""
+    from tests._helpers import make_client
+
+    await start_session(api_client, db_session)
+    for _ in range(5):
+        assert (await _set_email(api_client)).status_code == 202
+    assert (await _set_email(api_client)).status_code == 429
+
+    async with make_client() as other_client:
+        await start_session(other_client, db_session)
+        response = await other_client.post(
+            "/v1/me/email",
+            json={
+                "email": "other@example.com",
+                "captcha_token": "x",
+                "website": "",
+            },
+        )
+        assert response.status_code == 202
+
+
+async def test_resend_rate_limited(
+    api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
+):
+    """The resend endpoint allows 3 sends per session window; the 4th 429s."""
+    await start_session(api_client, db_session)
+    await _set_email(api_client)  # establishes an unconfirmed email
+
+    for i in range(3):
+        response = await api_client.post(
+            "/v1/me/email/resend",
+            json={"captcha_token": "x", "website": ""},
+        )
+        assert response.status_code == 202, (i, response.text)
+
+    over = await api_client.post(
+        "/v1/me/email/resend",
+        json={"captcha_token": "x", "website": ""},
+    )
+    assert over.status_code == 429

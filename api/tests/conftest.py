@@ -56,6 +56,23 @@ def stub_captcha(monkeypatch):
     monkeypatch.setattr(captcha_module, "verify_captcha", _always_pass)
 
 
+@pytest_asyncio.fixture(autouse=True)
+async def rate_limiter_fakeredis():
+    """Initialise FastAPILimiter against an in-memory fakeredis per test so
+    the rate-limit counters start clean. The httpx ASGITransport used by the
+    test client doesn't fire the app's lifespan, so we init here directly."""
+    import fakeredis.aioredis
+    from fastapi_limiter import FastAPILimiter
+
+    fake = fakeredis.aioredis.FakeRedis(encoding="utf-8")
+    await FastAPILimiter.init(fake)
+    try:
+        yield fake
+    finally:
+        await FastAPILimiter.close()
+        await fake.aclose()
+
+
 @pytest.fixture(scope="session")
 def postgres_url() -> Iterator[str]:
     override = os.environ.get("TEST_DATABASE_URL")

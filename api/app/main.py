@@ -1,6 +1,10 @@
+import os
 import time
+from contextlib import asynccontextmanager
 
+import redis.asyncio as redis_asyncio
 from fastapi import FastAPI
+from fastapi_limiter import FastAPILimiter
 from pydantic import BaseModel
 from sqlalchemy import text
 
@@ -11,7 +15,19 @@ from app.players import router as players_router
 from app.rbac import router as rbac_router
 from app.sessions import router as sessions_router
 
-app = FastAPI(title="FortyMM API")
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+    connection = redis_asyncio.from_url(redis_url, encoding="utf-8")
+    await FastAPILimiter.init(connection)
+    try:
+        yield
+    finally:
+        await FastAPILimiter.close()
+
+
+app = FastAPI(title="FortyMM API", lifespan=lifespan)
 app.include_router(sessions_router)
 app.include_router(rbac_router)
 app.include_router(matches_router)
