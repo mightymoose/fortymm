@@ -2069,6 +2069,15 @@ body.dark.fortymm-theme {
   background: var(--warn);
 }
 
+/* ---------- Overline ---------- */
+.fortymm-theme .fortymm-overline {
+  font: 600 10px var(--font-ui);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+  margin: 0;
+}
+
 /* ---------- Cards ---------- */
 .fortymm-theme .md-card {
   background: var(--bg-card);
@@ -2076,25 +2085,19 @@ body.dark.fortymm-theme {
   border-radius: var(--r-md);
 }
 .fortymm-theme .md-card__hd {
-  padding: 14px 18px;
-  border-bottom: 1px solid var(--border-subtle);
+  padding: 14px 18px 10px;
+  border-bottom: 1px solid var(--ink-700);
   display: flex;
   align-items: center;
   justify-content: space-between;
-}
-.fortymm-theme .md-card__hd h3 {
-  font: 600 13px var(--font-ui);
-  margin: 0;
-  color: var(--fg-1);
-  letter-spacing: 0.01em;
 }
 .fortymm-theme .md-card__body {
   padding: 18px;
 }
 .fortymm-theme .md-card__hd-meta {
-  font: 500 11px var(--font-mono);
-  color: var(--fg-3);
-  letter-spacing: 0.12em;
+  font: 500 11px var(--font-ui);
+  color: var(--fg-muted);
+  letter-spacing: 0.08em;
 }
 .fortymm-theme .md-rating-card__body {
   display: flex;
