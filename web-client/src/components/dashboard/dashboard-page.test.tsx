@@ -111,9 +111,6 @@ describe('DashboardPage', () => {
     expect(await screen.findByTestId('dashboard-score-banner')).toHaveTextContent(
       'vs nguyen.t',
     )
-    expect(await screen.findByTestId('dashboard-next-match')).toBeInTheDocument()
-    expect(screen.getByText('okafor.d')).toBeInTheDocument()
-    expect(screen.getByText('Best of 5')).toBeInTheDocument()
     const recent = await screen.findByTestId('dashboard-recent-results')
     const table = recent.parentElement?.querySelector('table')
     expect(table).not.toBeNull()
@@ -123,7 +120,7 @@ describe('DashboardPage', () => {
     expect(table).toHaveTextContent('1-3')
   })
 
-  it('omits the score banner when none is active and shows the empty next-match card', async () => {
+  it('omits the score banner when none is active and shows the empty recent-results card', async () => {
     server.use(
       http.get('*/v1/dashboard', () =>
         HttpResponse.json(
@@ -137,9 +134,8 @@ describe('DashboardPage', () => {
     )
     renderDashboard()
 
-    await screen.findByText('No upcoming match yet.')
+    await screen.findByText('No completed matches yet.')
     expect(screen.queryByTestId('dashboard-score-banner')).not.toBeInTheDocument()
-    expect(screen.getByText('No completed matches yet.')).toBeInTheDocument()
   })
 
   it('Log a match navigates to /matches/new', async () => {
