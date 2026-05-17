@@ -28,6 +28,34 @@ def fake_solver_queue(monkeypatch):
     return q
 
 
+@pytest.fixture(autouse=True)
+def fake_email_queue(monkeypatch):
+    """Sync RQ queue against fakeredis so enqueued jobs execute inline.
+
+    Tests can assert against the queue's ``finished_job_registry`` or peek
+    at recorded jobs via ``q.get_jobs()`` before they run by toggling
+    ``is_async`` if they need to inspect enqueue arguments without
+    triggering the email send.
+    """
+    connection = fakeredis.FakeStrictRedis()
+    q = Queue(queue_module.EMAIL_QUEUE, connection=connection, is_async=False)
+    monkeypatch.setattr(queue_module, "get_email_queue", lambda: q)
+    return q
+
+
+@pytest.fixture(autouse=True)
+def stub_captcha(monkeypatch):
+    """Pretend Cloudflare Turnstile said yes. Tests that want the failure
+    path override the patched function with ``monkeypatch.setattr``."""
+
+    async def _always_pass(token):  # noqa: ARG001
+        return True
+
+    from app import captcha as captcha_module
+
+    monkeypatch.setattr(captcha_module, "verify_captcha", _always_pass)
+
+
 @pytest.fixture(scope="session")
 def postgres_url() -> Iterator[str]:
     override = os.environ.get("TEST_DATABASE_URL")

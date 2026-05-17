@@ -46,3 +46,69 @@ export function useUpdateUsername() {
     },
   })
 }
+
+export interface SetEmailInput {
+  email: string
+  captchaToken: string
+  website?: string
+}
+
+export function useSetEmail() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async ({
+      email,
+      captchaToken,
+      website = '',
+    }: SetEmailInput): Promise<Session> =>
+      unwrap(
+        'set email',
+        await api.POST('/v1/me/email', {
+          body: {
+            email,
+            captcha_token: captchaToken,
+            website,
+          },
+        }),
+      ),
+    onSuccess: (session) => {
+      qc.setQueryData(SESSION_QUERY_KEY, session)
+    },
+  })
+}
+
+export function useResendEmailConfirmation() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async ({
+      captchaToken,
+      website = '',
+    }: {
+      captchaToken: string
+      website?: string
+    }): Promise<Session> =>
+      unwrap(
+        'resend confirmation',
+        await api.POST('/v1/me/email/resend', {
+          body: { captcha_token: captchaToken, website },
+        }),
+      ),
+    onSuccess: (session) => {
+      qc.setQueryData(SESSION_QUERY_KEY, session)
+    },
+  })
+}
+
+export function useConfirmEmail() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (token: string): Promise<Session> =>
+      unwrap(
+        'confirm email',
+        await api.POST('/v1/me/email/confirm', { body: { token } }),
+      ),
+    onSuccess: (session) => {
+      qc.setQueryData(SESSION_QUERY_KEY, session)
+    },
+  })
+}

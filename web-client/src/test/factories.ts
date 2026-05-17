@@ -67,6 +67,8 @@ export function sessionUser(overrides: Partial<SessionUser> = {}): SessionUser {
   return {
     username: faker.internet.username().toLowerCase(),
     permissions: [],
+    email: null,
+    confirmed_at: null,
     ...overrides,
   }
 }

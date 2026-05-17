@@ -1,7 +1,7 @@
 import hashlib
 import os
 import secrets
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
 from coolname import generate_slug
@@ -10,13 +10,18 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app import captcha as captcha_module
+from app import queue as queue_module
 from app.db import get_session
 from app.leagues import add_user_to_default_league
 from app.models import Permission, Role, RolePermission, User, UserRole, UserToken
 from app.schemas.session import (
+    ConfirmEmailRequest,
+    ResendEmailRequest,
     SessionData,
     SessionResponse,
     SessionUser,
+    SetEmailRequest,
     UpdateCurrentUserRequest,
 )
 from app.uniqueness import name_taken
@@ -25,6 +30,7 @@ router = APIRouter()
 
 SESSION_COOKIE_NAME = "session"
 SESSION_TOKEN_CONTEXT = "session"
+EMAIL_CONFIRMATION_TOKEN_CONTEXT = "email_confirmation"
 SESSION_LIFETIME = timedelta(days=30)
 
 
@@ -64,6 +70,20 @@ async def _find_session_user(db: AsyncSession, raw_token: str) -> User | None:
         return None
     user_result = await db.execute(select(User).where(User.id == token.user_id))
     return user_result.scalar_one_or_none()
+
+
+async def _build_session_response(db: AsyncSession, user: User) -> SessionResponse:
+    permissions = await _load_permissions(db, user.id)
+    return SessionResponse(
+        data=SessionData(
+            user=SessionUser(
+                username=user.username,
+                permissions=permissions,
+                email=user.email,
+                confirmed_at=user.confirmed_at,
+            )
+        )
+    )
 
 
 async def _load_permissions(db: AsyncSession, user_id) -> list[str]:
@@ -125,12 +145,7 @@ async def get_session_endpoint(
     if user is None:
         user, raw_token = await _create_session(db)
         _set_session_cookie(response, raw_token)
-    permissions = await _load_permissions(db, user.id)
-    return SessionResponse(
-        data=SessionData(
-            user=SessionUser(username=user.username, permissions=permissions)
-        )
-    )
+    return await _build_session_response(db, user)
 
 
 async def get_current_user(
@@ -187,11 +202,176 @@ async def update_current_user(
             )
         await db.refresh(current_user)
 
-    permissions = await _load_permissions(db, current_user.id)
-    return SessionResponse(
-        data=SessionData(
-            user=SessionUser(
-                username=current_user.username, permissions=permissions
+    return await _build_session_response(db, current_user)
+
+
+async def _verify_captcha_or_400(captcha_token: str) -> None:
+    if not await captcha_module.verify_captcha(captcha_token):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Captcha verification failed. Please try again.",
+        )
+
+
+async def _delete_email_tokens(db: AsyncSession, user_id) -> None:
+    existing = (
+        await db.execute(
+            select(UserToken).where(
+                UserToken.user_id == user_id,
+                UserToken.context == EMAIL_CONFIRMATION_TOKEN_CONTEXT,
             )
         )
+    ).scalars().all()
+    for token in existing:
+        await db.delete(token)
+
+
+async def _issue_confirmation_token(
+    db: AsyncSession, user: User, email: str
+) -> str:
+    """Generate, hash, and persist a fresh confirmation token. Returns the
+    raw token (only ever in memory) so the caller can hand it to the email
+    sender."""
+    await _delete_email_tokens(db, user.id)
+    raw_token = secrets.token_urlsafe(32)
+    db.add(
+        UserToken(
+            user_id=user.id,
+            context=EMAIL_CONFIRMATION_TOKEN_CONTEXT,
+            token=_hash_token(raw_token),
+            sent_to=email,
+        )
     )
+    return raw_token
+
+
+def _enqueue_confirmation_email(
+    to_email: str, raw_token: str, username: str
+) -> None:
+    queue_module.get_email_queue().enqueue(
+        "app.email.send_confirmation_email",
+        to_email,
+        raw_token,
+        username,
+    )
+
+
+@router.post(
+    "/v1/me/email",
+    response_model=SessionResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def set_email(
+    payload: SetEmailRequest,
+    db: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+) -> SessionResponse:
+    # Honeypot: silently succeed without doing anything. Bots fill it; humans
+    # never see it. We respond as if all is well so the bot doesn't learn the
+    # field is a trap.
+    if payload.website.strip():
+        return await _build_session_response(db, current_user)
+
+    await _verify_captcha_or_400(payload.captcha_token)
+
+    email = payload.email.lower()
+    if current_user.email != email:
+        # Case-insensitive uniqueness — emails are stored lowercased.
+        taken = (
+            await db.execute(
+                select(User.id).where(
+                    User.email == email, User.id != current_user.id
+                )
+            )
+        ).first()
+        if taken:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="That email is already in use.",
+            )
+        current_user.email = email
+        # Changing the email un-confirms; user must click the new link.
+        current_user.confirmed_at = None
+
+    raw_token = await _issue_confirmation_token(db, current_user, email)
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="That email is already in use.",
+        )
+    await db.refresh(current_user)
+    _enqueue_confirmation_email(email, raw_token, current_user.username)
+    return await _build_session_response(db, current_user)
+
+
+@router.post(
+    "/v1/me/email/resend",
+    response_model=SessionResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def resend_email_confirmation(
+    payload: ResendEmailRequest,
+    db: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+) -> SessionResponse:
+    if payload.website.strip():
+        return await _build_session_response(db, current_user)
+    if not current_user.email:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Add an email address before requesting a resend.",
+        )
+    if current_user.confirmed_at is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This email is already confirmed.",
+        )
+    await _verify_captcha_or_400(payload.captcha_token)
+
+    raw_token = await _issue_confirmation_token(
+        db, current_user, current_user.email
+    )
+    await db.commit()
+    _enqueue_confirmation_email(
+        current_user.email, raw_token, current_user.username
+    )
+    return await _build_session_response(db, current_user)
+
+
+@router.post("/v1/me/email/confirm", response_model=SessionResponse)
+async def confirm_email(
+    payload: ConfirmEmailRequest,
+    db: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+) -> SessionResponse:
+    token_row = (
+        await db.execute(
+            select(UserToken).where(
+                UserToken.token == _hash_token(payload.token),
+                UserToken.context == EMAIL_CONFIRMATION_TOKEN_CONTEXT,
+            )
+        )
+    ).scalar_one_or_none()
+    if token_row is None or token_row.user_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="That confirmation link is invalid or expired.",
+        )
+    # Defensive: the email on the user may have been changed since the link
+    # was sent. If so, the link no longer matches the intended address.
+    if token_row.sent_to and token_row.sent_to != current_user.email:
+        await db.delete(token_row)
+        await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="That confirmation link no longer matches your email.",
+        )
+
+    current_user.confirmed_at = datetime.now(timezone.utc)
+    await db.delete(token_row)
+    await db.commit()
+    await db.refresh(current_user)
+    return await _build_session_response(db, current_user)
