@@ -1,23 +1,12 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { Link, useRouterState } from '@tanstack/react-router'
-import {
-  Bell,
-  Gauge,
-  Globe,
-  Key,
-  Mail,
-  MapPin,
-  Settings,
-  Shield,
-  User,
-  Users,
-} from 'lucide-react'
+import { Gauge, Key, Settings, Shield, Users } from 'lucide-react'
 import { useSession } from '@/api/session'
 import { cn } from '@/lib/utils'
 import { PERM } from '@/lib/permissions'
 import { UserMenu } from './user-menu'
 
-type NavChild = { label: string; to: string; hash?: string; icon: ReactNode; requires?: string }
+type NavChild = { label: string; to: string; icon: ReactNode; requires?: string }
 
 type NavItem = {
   label: string
@@ -36,13 +25,6 @@ const SETTINGS_ITEM: NavItem = {
   label: 'Settings',
   to: '/settings',
   icon: <Settings size={18} strokeWidth={2} />,
-  children: [
-    { label: 'Username', to: '/settings', hash: 'sec-username', icon: <User size={15} strokeWidth={1.75} /> },
-    { label: 'Email', to: '/settings', hash: 'sec-email', icon: <Mail size={15} strokeWidth={1.75} /> },
-    { label: 'Home club', to: '/settings', hash: 'sec-club', icon: <MapPin size={15} strokeWidth={1.75} /> },
-    { label: 'Notifications', to: '/settings', hash: 'sec-notifications', icon: <Bell size={15} strokeWidth={1.75} /> },
-    { label: 'Session', to: '/settings', hash: 'sec-session', icon: <Globe size={15} strokeWidth={1.75} /> },
-  ],
 }
 
 const NAV_SECTIONS: NavSection[] = [
@@ -141,8 +123,7 @@ function filterNavByPermissions(
         if (!allowed(item.requires)) return []
         if (!item.children) return [item]
         const children = item.children.filter((c) => allowed(c.requires))
-        const onlyOverview =
-          children.length === 1 && children[0].to === item.to && !children[0].hash
+        const onlyOverview = children.length === 1 && children[0].to === item.to
         if (children.length === 0 || onlyOverview) {
           return [{ ...item, children: undefined }]
         }
@@ -152,12 +133,7 @@ function filterNavByPermissions(
     .filter((s) => s.items.length > 0)
 }
 
-function renderNavItem(
-  item: NavItem,
-  pathname: string,
-  activeHash: string,
-  closeOnMobile: () => void,
-) {
+function renderNavItem(item: NavItem, pathname: string, closeOnMobile: () => void) {
   const childActive = item.children?.some((c) => pathname === c.to) ?? false
   const isActive = pathname === item.to || childActive
   return (
@@ -176,23 +152,21 @@ function renderNavItem(
       </Link>
       {item.children && isActive ? (
         <ul className="app-shell__sub-nav-list">
-          {item.children.map((child) => {
-            const childIsActive =
-              pathname === child.to && (!child.hash || activeHash === child.hash)
-            return (
-              <li key={child.label}>
-                <Link
-                  to={child.to}
-                  hash={child.hash}
-                  className={cn('app-shell__sub-nav-link', childIsActive && 'is-active')}
-                  onClick={closeOnMobile}
-                >
-                  <span className="app-shell__nav-icon">{child.icon}</span>
-                  {child.label}
-                </Link>
-              </li>
-            )
-          })}
+          {item.children.map((child) => (
+            <li key={child.label}>
+              <Link
+                to={child.to}
+                className={cn(
+                  'app-shell__sub-nav-link',
+                  pathname === child.to && 'is-active',
+                )}
+                onClick={closeOnMobile}
+              >
+                <span className="app-shell__nav-icon">{child.icon}</span>
+                {child.label}
+              </Link>
+            </li>
+          ))}
         </ul>
       ) : null}
     </li>
@@ -215,9 +189,6 @@ export function AppShell({ children }: AppShellProps) {
     () => filterNavByPermissions(NAV_SECTIONS, new Set(permissions ?? [])),
     [permissions],
   )
-  const activeHash = useRouterState({
-    select: (s) => s.location.hash.replace(/^#/, ''),
-  })
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -289,16 +260,14 @@ export function AppShell({ children }: AppShellProps) {
                 <div className="app-shell__nav-label">{section.label}</div>
               ) : null}
               <ul className="app-shell__nav-list">
-                {section.items.map((item) =>
-                  renderNavItem(item, pathname, activeHash, closeOnMobile),
-                )}
+                {section.items.map((item) => renderNavItem(item, pathname, closeOnMobile))}
               </ul>
             </div>
           ))}
         </nav>
         <div className="app-shell__nav-footer">
           <ul className="app-shell__nav-list">
-            {renderNavItem(SETTINGS_ITEM, pathname, activeHash, closeOnMobile)}
+            {renderNavItem(SETTINGS_ITEM, pathname, closeOnMobile)}
           </ul>
         </div>
       </aside>

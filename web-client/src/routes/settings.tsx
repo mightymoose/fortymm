@@ -12,6 +12,7 @@ import {
   type SetStateAction,
 } from 'react'
 import { createFileRoute, useRouterState } from '@tanstack/react-router'
+import { Check, Mail, Trash2 } from 'lucide-react'
 
 import { ApiError } from '@/api/client'
 import { useSession, useUpdateUsername } from '@/api/session'
@@ -33,226 +34,23 @@ export const Route = createFileRoute('/settings')({
 })
 
 /* ------------------------------------------------------------------ */
-/*  Types                                                             */
-/*  UI only — no backend wired up yet. State lives in the component.  */
+/*  Types & helpers                                                   */
 /* ------------------------------------------------------------------ */
 
 type EmailStatus = 'guest' | 'pending' | 'verified'
 
-interface NotificationPrefs {
-  matchInvites: boolean
-  tournamentUpdates: boolean
-  ratingChanges: boolean
-  clubAnnouncements: boolean
-  digestEmail: boolean
-}
-
 interface User {
   email: string
   emailVerified: boolean
-  homeClub: string | null
-  notifications: NotificationPrefs
-  sessionId: string
-  sessionStartedAt: number
-  location: string
   _lastSaved: {
     email: number | null
-    notifications: number | null
-    club: number | null
     verified: number | null
   }
-}
-
-interface Club {
-  id: string
-  name: string
-  city: string
-  members: number
-  dist: string
 }
 
 interface Validation {
   ok: boolean
   err?: string
-}
-
-/* ------------------------------------------------------------------ */
-/*  Icons — tiny inline SVGs, ported from the design handoff          */
-/* ------------------------------------------------------------------ */
-
-interface IconProps {
-  size?: number
-  color?: string
-}
-
-const Icon = {
-  Check: ({ size = 16, color = 'currentColor' }: IconProps) => (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke={color}
-      strokeWidth="2.25"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M5 12l5 5L20 7" />
-    </svg>
-  ),
-  Search: ({ size = 16, color = 'currentColor' }: IconProps) => (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke={color}
-      strokeWidth="1.8"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <circle cx="11" cy="11" r="7" />
-      <path d="M20 20l-3.5-3.5" />
-    </svg>
-  ),
-  Mail: ({ size = 16, color = 'currentColor' }: IconProps) => (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke={color}
-      strokeWidth="1.8"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <rect x="3" y="5" width="18" height="14" rx="2" />
-      <path d="M3 7l9 6 9-6" />
-    </svg>
-  ),
-  Pin: ({ size = 16, color = 'currentColor' }: IconProps) => (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke={color}
-      strokeWidth="1.8"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M12 22s8-7.5 8-13a8 8 0 10-16 0c0 5.5 8 13 8 13z" />
-      <circle cx="12" cy="9" r="2.5" />
-    </svg>
-  ),
-  ChevronRight: ({ size = 16, color = 'currentColor' }: IconProps) => (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke={color}
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M9 6l6 6-6 6" />
-    </svg>
-  ),
-  Edit: ({ size = 16, color = 'currentColor' }: IconProps) => (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke={color}
-      strokeWidth="1.8"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M12 20h9" />
-      <path d="M16.5 3.5a2.121 2.121 0 113 3L7 19l-4 1 1-4L16.5 3.5z" />
-    </svg>
-  ),
-  Refresh: ({ size = 16, color = 'currentColor' }: IconProps) => (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke={color}
-      strokeWidth="1.8"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M3 12a9 9 0 0115-6.7L21 8" />
-      <path d="M21 3v5h-5" />
-      <path d="M21 12a9 9 0 01-15 6.7L3 16" />
-      <path d="M3 21v-5h5" />
-    </svg>
-  ),
-  Trash: ({ size = 16, color = 'currentColor' }: IconProps) => (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke={color}
-      strokeWidth="1.8"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M3 6h18" />
-      <path d="M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2" />
-      <path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6" />
-    </svg>
-  ),
-  Globe: ({ size = 16, color = 'currentColor' }: IconProps) => (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke={color}
-      strokeWidth="1.7"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <circle cx="12" cy="12" r="9" />
-      <path d="M3 12h18" />
-      <path d="M12 3a14 14 0 010 18M12 3a14 14 0 000 18" />
-    </svg>
-  ),
-}
-
-/* ------------------------------------------------------------------ */
-/*  Fake data + helpers                                               */
-/* ------------------------------------------------------------------ */
-
-const CLUBS: Club[] = [
-  { id: 'brk', name: 'Brooklyn Paddle Club', city: 'Brooklyn, NY', members: 184, dist: '2.1 mi' },
-  { id: 'mhs', name: 'Manhattan Smash', city: 'New York, NY', members: 312, dist: '5.4 mi' },
-  { id: 'bay', name: 'Bay Area Table Tennis', city: 'San Francisco, CA', members: 421, dist: '2,900 mi' },
-  { id: 'mlt', name: 'Maple Leaf TTC', city: 'Toronto, ON', members: 246, dist: '470 mi' },
-  { id: 'pgb', name: 'Pongtopia', city: 'Berlin, DE', members: 198, dist: '3,950 mi' },
-  { id: 'elw', name: 'East London Spin', city: 'London, UK', members: 167, dist: '3,470 mi' },
-  { id: 'atx', name: 'Austin Spin Club', city: 'Austin, TX', members: 142, dist: '1,510 mi' },
-  { id: 'sea', name: 'Pacific Paddles', city: 'Seattle, WA', members: 209, dist: '2,420 mi' },
-  { id: 'gns', name: 'Granite State TTC', city: 'Concord, NH', members: 88, dist: '230 mi' },
-  { id: 'lkv', name: 'Lakeview Loopers', city: 'Chicago, IL', members: 261, dist: '750 mi' },
-  { id: 'nct', name: 'North Country TT', city: 'Minneapolis, MN', members: 134, dist: '1,020 mi' },
-  { id: 'wst', name: 'Westside Wallop', city: 'Los Angeles, CA', members: 277, dist: '2,460 mi' },
-  { id: 'syd', name: 'Sydney Topspin', city: 'Sydney, AU', members: 158, dist: '9,950 mi' },
-  { id: 'tky', name: 'Tokyo Loop Society', city: 'Tokyo, JP', members: 401, dist: '6,750 mi' },
-]
-
-function clubInitials(name: string): string {
-  return name
-    .split(/\s+/)
-    .slice(0, 2)
-    .map((w) => w[0])
-    .join('')
-    .toUpperCase()
 }
 
 // Mirrors api/app/schemas/session.py USERNAME_PATTERN. Client-side validation
@@ -290,32 +88,12 @@ function relativeTime(ts: number): string {
   return `${Math.floor(diff / 86400)}d ago`
 }
 
-function makeSessionId(): string {
-  const hex = '0123456789abcdef'
-  let s = ''
-  for (let i = 0; i < 16; i++) s += hex[Math.floor(Math.random() * 16)]
-  return `sess_${s.slice(0, 4)}·${s.slice(4, 8)}·${s.slice(8, 12)}·${s.slice(12, 16)}`
-}
-
 function initialUser(): User {
   return {
     email: '',
     emailVerified: false,
-    homeClub: null,
-    notifications: {
-      matchInvites: true,
-      tournamentUpdates: true,
-      ratingChanges: true,
-      clubAnnouncements: true,
-      digestEmail: false,
-    },
-    sessionId: 'sess_7f3a·2c91·b40e·d18a',
-    sessionStartedAt: Date.now() - 28 * 60 * 1000, // 28 min ago
-    location: 'Brooklyn, NY',
     _lastSaved: {
       email: null,
-      notifications: null,
-      club: null,
       verified: null,
     },
   }
@@ -425,63 +203,6 @@ function Avatar({ name, size = 32, dim = false }: { name: string; size?: number;
       }}
     >
       {init}
-    </div>
-  )
-}
-
-function Toggle({
-  checked,
-  onChange,
-  disabled,
-  label,
-}: {
-  checked: boolean
-  onChange: (v: boolean) => void
-  disabled?: boolean
-  label: string
-}) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      aria-label={label}
-      className="fmm-toggle"
-      data-on={String(!!checked)}
-      data-disabled={String(!!disabled)}
-      disabled={disabled}
-      onClick={() => !disabled && onChange(!checked)}
-    />
-  )
-}
-
-function Modal({
-  onClose,
-  children,
-  ariaLabel,
-}: {
-  onClose: () => void
-  children: ReactNode
-  ariaLabel: string
-}) {
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if (e.key === 'Escape') onClose()
-    }
-    window.addEventListener('keydown', onKey)
-    const previous = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
-    return () => {
-      window.removeEventListener('keydown', onKey)
-      document.body.style.overflow = previous
-    }
-  }, [onClose])
-
-  return (
-    <div className="fmm-modal-scrim" onClick={onClose} role="dialog" aria-label={ariaLabel}>
-      <div className="fmm-modal" onClick={(e) => e.stopPropagation()}>
-        {children}
-      </div>
     </div>
   )
 }
@@ -693,7 +414,7 @@ function SaveBar({
   const status =
     savedAt && !dirty ? (
       <span style={{ ...MONO_LABEL_STYLE, color: 'var(--fg-3)' }}>
-        <Icon.Check size={14} color="var(--serve-500)" />
+        <Check size={14} color="var(--serve-500)" />
         Saved {relativeTime(savedAt)}
       </span>
     ) : dirty ? (
@@ -734,50 +455,6 @@ function SaveBar({
         )}
       </button>
     </>
-  )
-}
-
-function KVCard({
-  k,
-  v,
-  sub,
-  mono,
-}: {
-  k: string
-  v: string
-  sub?: string
-  mono?: boolean
-}) {
-  return (
-    <div
-      style={{
-        padding: '14px 16px',
-        background: 'var(--bg-panel)',
-        border: '1px solid var(--border-subtle)',
-        borderRadius: 'var(--r-md)',
-      }}
-    >
-      <div className="fmm-overline" style={{ marginBottom: 6 }}>
-        {k}
-      </div>
-      <div
-        style={{
-          fontSize: 'var(--text-md)',
-          fontFamily: mono ? 'var(--font-mono)' : 'var(--font-ui)',
-          fontWeight: 500,
-          color: 'var(--fg-1)',
-          letterSpacing: mono ? '0.02em' : 'normal',
-          wordBreak: 'break-all',
-        }}
-      >
-        {v}
-      </div>
-      {sub && (
-        <div style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-muted)', marginTop: 4 }}>
-          {sub}
-        </div>
-      )}
-    </div>
   )
 }
 
@@ -856,7 +533,7 @@ function PageHeader({
           >
             {username || '…'}
           </div>
-          {claimed && <Icon.Check size={14} color="var(--serve-500)" />}
+          {claimed && <Check size={14} color="var(--serve-500)" />}
         </div>
       </div>
       <p
@@ -868,7 +545,7 @@ function PageHeader({
           maxWidth: 560,
         }}
       >
-        Five sections. Save each on its own — we don't bundle changes you didn't ask for.
+        Save each section on its own — we don't bundle changes you didn't ask for.
       </p>
     </header>
   )
@@ -1250,7 +927,7 @@ function EmailSection({
               pointerEvents: 'none',
             }}
           >
-            <Icon.Mail size={16} color="var(--fg-muted)" />
+            <Mail size={16} color="var(--fg-muted)" />
           </span>
           <input
             id="email"
@@ -1296,7 +973,7 @@ function EmailSection({
                 flexShrink: 0,
               }}
             >
-              <Icon.Check size={16} color="var(--serve-500)" />
+              <Check size={16} color="var(--serve-500)" />
             </div>
           ) : (
             <span
@@ -1360,555 +1037,10 @@ function EmailSection({
             className="fmm-btn fmm-btn--danger fmm-btn--sm"
             onClick={onRemove}
           >
-            <Icon.Trash size={14} /> Remove email
+            <Trash2 size={14} /> Remove email
           </button>
         </div>
       )}
-    </SectionCard>
-  )
-}
-
-/* ------------------------------------------------------------------ */
-/*  03 — Home club                                                    */
-/* ------------------------------------------------------------------ */
-
-function HomeClubSection({
-  user,
-  setUser,
-}: {
-  user: User
-  setUser: Dispatch<SetStateAction<User>>
-}) {
-  const toast = useToast()
-  const [open, setOpen] = useState(false)
-
-  const club = user.homeClub ? (CLUBS.find((c) => c.id === user.homeClub) ?? null) : null
-
-  const onPick = (clubId: string) => {
-    const c = CLUBS.find((x) => x.id === clubId)
-    setUser((u) => ({ ...u, homeClub: clubId, _lastSaved: { ...u._lastSaved, club: Date.now() } }))
-    setOpen(false)
-    if (c) toast(`Home club set to ${c.name}.`)
-  }
-
-  const onClear = () => {
-    setUser((u) => ({ ...u, homeClub: null, _lastSaved: { ...u._lastSaved, club: Date.now() } }))
-    toast('Home club cleared.')
-  }
-
-  return (
-    <SectionCard
-      id="sec-club"
-      num="03"
-      eyebrow="Location"
-      title="Home club"
-      subtitle="Pick the place you mostly play. We'll surface their matches, ladders, and tournaments first."
-    >
-      {club ? (
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 18,
-            padding: '18px 20px',
-            background: 'var(--bg-panel)',
-            border: '1px solid var(--border-subtle)',
-            borderRadius: 'var(--r-md)',
-          }}
-        >
-          <div
-            style={{
-              width: 52,
-              height: 52,
-              borderRadius: 'var(--r-md)',
-              background: 'linear-gradient(135deg, var(--ball-500), var(--ball-700))',
-              color: 'var(--ink-950)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              fontFamily: 'var(--font-display)',
-              fontSize: 22,
-              letterSpacing: '0.04em',
-              fontWeight: 600,
-            }}
-          >
-            {clubInitials(club.name)}
-          </div>
-          <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 'var(--text-md)', fontWeight: 600, color: 'var(--fg-1)' }}>
-              {club.name}
-            </div>
-            <div
-              style={{
-                display: 'flex',
-                gap: 14,
-                marginTop: 4,
-                fontSize: 'var(--text-sm)',
-                color: 'var(--fg-3)',
-              }}
-            >
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                <Icon.Pin size={13} color="var(--fg-muted)" /> {club.city}
-              </span>
-              <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--fg-muted)' }}>·</span>
-              <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--fg-3)' }}>
-                {club.members} members
-              </span>
-              <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--fg-muted)' }}>·</span>
-              <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--fg-3)' }}>
-                {club.dist}
-              </span>
-            </div>
-          </div>
-          <button
-            type="button"
-            className="fmm-btn fmm-btn--ghost fmm-btn--sm"
-            onClick={() => setOpen(true)}
-          >
-            <Icon.Edit size={14} /> Change
-          </button>
-          <button type="button" className="fmm-btn fmm-btn--quiet fmm-btn--sm" onClick={onClear}>
-            Clear
-          </button>
-        </div>
-      ) : (
-        <button
-          type="button"
-          className="fmm-clubpick"
-          onClick={() => setOpen(true)}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 14,
-            width: '100%',
-            padding: '20px 22px',
-            borderRadius: 'var(--r-md)',
-            color: 'var(--fg-2)',
-            cursor: 'pointer',
-            textAlign: 'left',
-          }}
-        >
-          <div
-            style={{
-              width: 44,
-              height: 44,
-              borderRadius: 'var(--r-md)',
-              background: 'var(--bg-card)',
-              border: '1px solid var(--border-subtle)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
-          >
-            <Icon.Pin size={18} color="var(--ball-500)" />
-          </div>
-          <div style={{ flex: 1 }}>
-            <div style={{ fontWeight: 600, color: 'var(--fg-1)' }}>Pick your home club</div>
-            <div style={{ fontSize: 'var(--text-sm)', color: 'var(--fg-3)', marginTop: 2 }}>
-              Search by name or city. Don't see yours? You can skip.
-            </div>
-          </div>
-          <Icon.ChevronRight size={18} color="var(--fg-muted)" />
-        </button>
-      )}
-
-      {open && (
-        <ClubPickerModal
-          onClose={() => setOpen(false)}
-          selectedId={user.homeClub}
-          onPick={onPick}
-        />
-      )}
-    </SectionCard>
-  )
-}
-
-/* ------------------------------------------------------------------ */
-/*  Club picker modal                                                 */
-/* ------------------------------------------------------------------ */
-
-function ClubPickerModal({
-  onClose,
-  onPick,
-  selectedId,
-}: {
-  onClose: () => void
-  onPick: (id: string) => void
-  selectedId: string | null
-}) {
-  const [q, setQ] = useState('')
-  const inputRef = useRef<HTMLInputElement>(null)
-
-  useEffect(() => {
-    const t = setTimeout(() => inputRef.current?.focus(), 80)
-    return () => clearTimeout(t)
-  }, [])
-
-  const filtered = useMemo(() => {
-    const s = q.trim().toLowerCase()
-    if (!s) return CLUBS
-    return CLUBS.filter(
-      (c) => c.name.toLowerCase().includes(s) || c.city.toLowerCase().includes(s),
-    )
-  }, [q])
-
-  return (
-    <Modal onClose={onClose} ariaLabel="Pick your home club">
-      <header style={{ padding: '20px 24px 0' }}>
-        <div className="fmm-overline" style={{ color: 'var(--ball-500)', marginBottom: 8 }}>
-          ● Home club
-        </div>
-        <h3
-          style={{
-            fontFamily: 'var(--font-ui)',
-            fontSize: 'var(--text-xl)',
-            fontWeight: 600,
-            margin: '0 0 12px',
-            color: 'var(--fg-1)',
-          }}
-        >
-          Pick your club
-        </h3>
-        <div style={{ position: 'relative', marginBottom: 12 }}>
-          <span style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)' }}>
-            <Icon.Search size={16} color="var(--fg-muted)" />
-          </span>
-          <input
-            ref={inputRef}
-            className="fmm-input"
-            placeholder="Search by name or city"
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            style={{ paddingLeft: 38 }}
-          />
-        </div>
-      </header>
-
-      <div style={{ padding: '4px 14px', overflowY: 'auto', flex: 1 }}>
-        {filtered.length === 0 ? (
-          <div
-            style={{
-              padding: '40px 16px',
-              textAlign: 'center',
-              color: 'var(--fg-3)',
-              fontSize: 'var(--text-sm)',
-            }}
-          >
-            No clubs match "<span style={{ color: 'var(--fg-1)' }}>{q}</span>".
-            <br />
-            <span style={{ color: 'var(--fg-muted)' }}>
-              You can skip — we'll ask again later.
-            </span>
-          </div>
-        ) : (
-          filtered.map((c) => (
-            <div
-              key={c.id}
-              className="fmm-clubrow"
-              data-selected={String(c.id === selectedId)}
-              onClick={() => onPick(c.id)}
-              role="button"
-              tabIndex={0}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') onPick(c.id)
-              }}
-            >
-              <div
-                style={{
-                  width: 36,
-                  height: 36,
-                  borderRadius: 'var(--r-md)',
-                  background:
-                    c.id === selectedId
-                      ? 'linear-gradient(135deg, var(--ball-500), var(--ball-700))'
-                      : 'var(--bg-raised)',
-                  color: c.id === selectedId ? 'var(--ink-950)' : 'var(--fg-2)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  fontFamily: 'var(--font-mono)',
-                  fontWeight: 700,
-                  fontSize: 12,
-                }}
-              >
-                {clubInitials(c.name)}
-              </div>
-              <div>
-                <div
-                  className="fmm-clubrow-name"
-                  style={{
-                    fontSize: 'var(--text-base)',
-                    fontWeight: 500,
-                    color: 'var(--fg-1)',
-                    marginBottom: 1,
-                  }}
-                >
-                  {c.name}
-                </div>
-                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--fg-3)' }}>
-                  {c.city} · <span style={{ fontFamily: 'var(--font-mono)' }}>{c.members}</span>{' '}
-                  members
-                </div>
-              </div>
-              <div
-                style={{
-                  fontFamily: 'var(--font-mono)',
-                  fontSize: 'var(--text-xs)',
-                  color: c.id === selectedId ? 'var(--ball-500)' : 'var(--fg-muted)',
-                  letterSpacing: '0.04em',
-                }}
-              >
-                {c.id === selectedId ? '● selected' : c.dist}
-              </div>
-            </div>
-          ))
-        )}
-      </div>
-
-      <footer
-        style={{
-          padding: '14px 20px',
-          background: 'var(--bg-panel)',
-          borderTop: '1px solid var(--border-subtle)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          gap: 12,
-        }}
-      >
-        <span
-          style={{
-            fontSize: 'var(--text-xs)',
-            color: 'var(--fg-muted)',
-            fontFamily: 'var(--font-mono)',
-            letterSpacing: '0.08em',
-          }}
-        >
-          {filtered.length} of {CLUBS.length} clubs
-        </span>
-        <button type="button" className="fmm-btn fmm-btn--ghost fmm-btn--sm" onClick={onClose}>
-          Close
-        </button>
-      </footer>
-    </Modal>
-  )
-}
-
-/* ------------------------------------------------------------------ */
-/*  04 — Notifications                                                */
-/* ------------------------------------------------------------------ */
-
-interface NotifItem {
-  key: keyof NotificationPrefs
-  label: string
-  desc: string
-  needsEmail?: boolean
-}
-
-const NOTIF_ITEMS: NotifItem[] = [
-  { key: 'matchInvites', label: 'Match invites', desc: 'When another player challenges you.' },
-  {
-    key: 'tournamentUpdates',
-    label: 'Tournament updates',
-    desc: 'Draws posted, schedule shifts, your call to court.',
-  },
-  { key: 'ratingChanges', label: 'Rating changes', desc: 'After every rated match.' },
-  {
-    key: 'clubAnnouncements',
-    label: 'Club announcements',
-    desc: 'News from your home club only.',
-  },
-  {
-    key: 'digestEmail',
-    label: 'Weekly digest email',
-    desc: 'Quiet recap — Sunday morning. Email only.',
-    needsEmail: true,
-  },
-]
-
-function NotificationsSection({
-  user,
-  setUser,
-}: {
-  user: User
-  setUser: Dispatch<SetStateAction<User>>
-}) {
-  const toast = useToast()
-  const [draft, setDraft] = useState<NotificationPrefs>(user.notifications)
-  const [saving, setSaving] = useState(false)
-  const [savedAt, setSavedAt] = useState<number | null>(user._lastSaved.notifications)
-
-  const dirty = NOTIF_ITEMS.some((it) => draft[it.key] !== user.notifications[it.key])
-
-  const onSave = async () => {
-    setSaving(true)
-    await new Promise((r) => setTimeout(r, 500))
-    const now = Date.now()
-    setUser((u) => ({
-      ...u,
-      notifications: { ...draft },
-      _lastSaved: { ...u._lastSaved, notifications: now },
-    }))
-    setSavedAt(now)
-    setSaving(false)
-    toast('Notification preferences saved.')
-  }
-
-  const hasEmail = !!user.email
-  const anyOn = Object.values(draft).some(Boolean)
-
-  return (
-    <SectionCard
-      id="sec-notifications"
-      num="04"
-      eyebrow="Notifications"
-      title="What you want to hear from us"
-      subtitle="Push goes to whichever device you've signed in on. Email needs a verified address."
-      footer={
-        <SaveBar
-          dirty={dirty}
-          valid={true}
-          saving={saving}
-          savedAt={savedAt}
-          onSave={onSave}
-          onCancel={() => setDraft(user.notifications)}
-        />
-      }
-    >
-      <div style={{ display: 'flex', flexDirection: 'column' }}>
-        {NOTIF_ITEMS.map((it) => {
-          const disabled = !!it.needsEmail && !hasEmail
-          return (
-            <div key={it.key} className="fmm-notif-row">
-              <div style={{ minWidth: 0 }}>
-                <div
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 10,
-                    fontSize: 'var(--text-base)',
-                    fontWeight: 500,
-                    color: disabled ? 'var(--fg-disabled)' : 'var(--fg-1)',
-                  }}
-                >
-                  {it.label}
-                  {it.needsEmail && (
-                    <span
-                      className="fmm-tag"
-                      style={{ color: disabled ? 'var(--fg-disabled)' : 'var(--fg-3)' }}
-                    >
-                      Email
-                    </span>
-                  )}
-                </div>
-                <div
-                  style={{
-                    fontSize: 'var(--text-sm)',
-                    color: disabled ? 'var(--fg-disabled)' : 'var(--fg-3)',
-                    marginTop: 2,
-                    maxWidth: 480,
-                  }}
-                >
-                  {it.desc}
-                  {disabled && ' · Add a verified email to enable.'}
-                </div>
-              </div>
-              <Toggle
-                checked={!!draft[it.key] && !disabled}
-                disabled={disabled}
-                onChange={(value) => setDraft((d) => ({ ...d, [it.key]: value }))}
-                label={it.label}
-              />
-            </div>
-          )
-        })}
-      </div>
-
-      {!anyOn && (
-        <div
-          style={{
-            marginTop: 16,
-            padding: '12px 14px',
-            background: 'var(--bg-panel)',
-            border: '1px solid var(--border-subtle)',
-            borderRadius: 'var(--r-md)',
-            fontSize: 'var(--text-sm)',
-            color: 'var(--fg-3)',
-          }}
-        >
-          Everything's off. You'll only hear from us when you open the app. That's allowed.
-        </div>
-      )}
-    </SectionCard>
-  )
-}
-
-/* ------------------------------------------------------------------ */
-/*  05 — Session                                                      */
-/* ------------------------------------------------------------------ */
-
-function SessionSection({
-  user,
-  onResetSession,
-}: {
-  user: User
-  onResetSession: () => void
-}) {
-  return (
-    <SectionCard
-      id="sec-session"
-      num="05"
-      eyebrow="This session"
-      title="Devices & session"
-      subtitle="One device per session for now. We don't track you across sites; sessions are device-local."
-    >
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: '1fr 1fr',
-          gap: 14,
-          marginBottom: 16,
-        }}
-      >
-        <KVCard
-          k="Session ID"
-          v={user.sessionId}
-          mono
-          sub={`Started ${relativeTime(user.sessionStartedAt)}`}
-        />
-        <KVCard k="This device" v="Chrome · macOS" sub={user.location} />
-      </div>
-
-      <div
-        style={{
-          padding: '14px 16px',
-          background: 'var(--bg-panel)',
-          border: '1px solid var(--border-subtle)',
-          borderRadius: 'var(--r-md)',
-          fontSize: 'var(--text-sm)',
-          color: 'var(--fg-2)',
-          lineHeight: 'var(--lh-snug)',
-        }}
-      >
-        <strong style={{ color: 'var(--fg-1)' }}>What we keep:</strong> your username, your home
-        club, your ratings, your match history.{' '}
-        <strong style={{ color: 'var(--fg-1)' }}>What we don't:</strong> location beyond city, ad
-        IDs, cross-site cookies, anything we'd be embarrassed about.{' '}
-        <a className="fmm-link">Read the privacy promise →</a>
-      </div>
-
-      <div style={{ marginTop: 18, display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
-        <button type="button" className="fmm-btn fmm-btn--ghost fmm-btn--sm">
-          <Icon.Globe size={14} /> Export my data
-        </button>
-        <button
-          type="button"
-          className="fmm-btn fmm-btn--danger fmm-btn--sm"
-          onClick={onResetSession}
-        >
-          <Icon.Refresh size={14} /> Reset session
-        </button>
-      </div>
     </SectionCard>
   )
 }
@@ -1916,6 +1048,13 @@ function SessionSection({
 /* ------------------------------------------------------------------ */
 /*  Page                                                              */
 /* ------------------------------------------------------------------ */
+
+function scrollToSection(id: string) {
+  const el = document.getElementById(id)
+  if (!el) return
+  const y = el.getBoundingClientRect().top + window.scrollY - 24
+  window.scrollTo({ top: y, behavior: 'smooth' })
+}
 
 function SettingsPage() {
   const session = useSession()
@@ -1930,35 +1069,11 @@ function SettingsPage() {
       : 'guest'
   const claimed = effectiveStatus === 'verified'
 
-  // Smooth-scroll to a section when the sidebar links to /settings#sec-*.
+  // Honor /settings#sec-* deep links from external nav.
   useEffect(() => {
     const id = hash.replace(/^#/, '')
-    if (!id) return
-    const el = document.getElementById(id)
-    if (!el) return
-    const y = el.getBoundingClientRect().top + window.scrollY - 24
-    window.scrollTo({ top: y, behavior: 'smooth' })
+    if (id) scrollToSection(id)
   }, [hash])
-
-  const onJump = (id: string) => {
-    const el = document.getElementById(id)
-    if (!el) return
-    const y = el.getBoundingClientRect().top + window.scrollY - 24
-    window.scrollTo({ top: y, behavior: 'smooth' })
-  }
-
-  const onResetSession = () => {
-    setUser({
-      ...initialUser(),
-      sessionId: makeSessionId(),
-      sessionStartedAt: Date.now(),
-    })
-    window.scrollTo({ top: 0, behavior: 'smooth' })
-  }
-
-  // The section components keep a local draft of their field; re-keying on the
-  // session id remounts them with fresh state after "Reset session".
-  const sessionKey = user.sessionId
 
   return (
     <AppShell>
@@ -1972,23 +1087,14 @@ function SettingsPage() {
                 <ClaimBanner
                   status={effectiveStatus}
                   email={user.email}
-                  onJump={() => onJump('sec-email')}
+                  onJump={() => scrollToSection('sec-email')}
                 />
               </ComingSoon>
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
                 <UsernameSection currentUsername={sessionUsername} />
                 <ComingSoon>
-                  <EmailSection key={`e-${sessionKey}`} user={user} setUser={setUser} />
-                </ComingSoon>
-                <ComingSoon>
-                  <HomeClubSection user={user} setUser={setUser} />
-                </ComingSoon>
-                <ComingSoon>
-                  <NotificationsSection key={`n-${sessionKey}`} user={user} setUser={setUser} />
-                </ComingSoon>
-                <ComingSoon>
-                  <SessionSection user={user} onResetSession={onResetSession} />
+                  <EmailSection user={user} setUser={setUser} />
                 </ComingSoon>
               </div>
 

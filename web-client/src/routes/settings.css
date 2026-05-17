@@ -274,49 +274,6 @@
   font-size: var(--text-xs);
 }
 
-/* ---------- Toggle ---------- */
-.fmm-settings .fmm-toggle {
-  position: relative;
-  width: 40px;
-  height: 24px;
-  background: var(--ink-700);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--r-pill);
-  cursor: pointer;
-  transition: background var(--dur-base) var(--ease-out),
-    border-color var(--dur-base) var(--ease-out);
-  flex-shrink: 0;
-}
-.fmm-settings .fmm-toggle::before {
-  content: '';
-  position: absolute;
-  left: 2px;
-  top: 50%;
-  width: 18px;
-  height: 18px;
-  background: var(--chalk-300);
-  border-radius: 50%;
-  transform: translateY(-50%);
-  transition: transform var(--dur-base) var(--ease-snap),
-    background var(--dur-base) var(--ease-out);
-}
-.fmm-settings .fmm-toggle[data-on='true'] {
-  background: var(--ball-500);
-  border-color: var(--ball-500);
-}
-.fmm-settings .fmm-toggle[data-on='true']::before {
-  transform: translate(16px, -50%);
-  background: var(--ink-950);
-}
-.fmm-settings .fmm-toggle[data-disabled='true'] {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-.fmm-settings .fmm-toggle:focus-visible {
-  outline: 2px solid var(--ball-500);
-  outline-offset: 2px;
-}
-
 /* ---------- Ball dot ---------- */
 .fmm-settings .ball-dot {
   display: inline-block;
@@ -423,85 +380,6 @@
   }
 }
 
-/* ---------- Modal ---------- */
-.fmm-settings .fmm-modal-scrim {
-  position: fixed;
-  inset: 0;
-  z-index: 1000;
-  background: rgba(11, 13, 18, 0.75);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
-  animation: fmm-scrim-in 200ms var(--ease-out);
-}
-@keyframes fmm-scrim-in {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
-}
-.fmm-settings .fmm-modal {
-  width: 100%;
-  max-width: 520px;
-  max-height: 80vh;
-  background: var(--ink-900);
-  border: 1px solid var(--border-default);
-  border-radius: var(--r-xl);
-  box-shadow: var(--shadow-lg);
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  animation: fmm-modal-in 360ms var(--ease-snap);
-}
-@keyframes fmm-modal-in {
-  from {
-    opacity: 0;
-    transform: translateY(16px) scale(0.96);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-}
-
-/* ---------- Home club picker (empty-state button) ---------- */
-.fmm-settings .fmm-clubpick {
-  background: var(--bg-panel);
-  border: 1px dashed var(--border-default);
-  transition: background var(--dur-fast) var(--ease-out),
-    border-color var(--dur-fast) var(--ease-out);
-}
-.fmm-settings .fmm-clubpick:hover {
-  background: var(--bg-hover);
-  border-color: var(--ball-500);
-}
-
-/* ---------- Club row (in picker) ---------- */
-.fmm-settings .fmm-clubrow {
-  display: grid;
-  grid-template-columns: 36px 1fr auto;
-  align-items: center;
-  gap: 14px;
-  padding: 12px 16px;
-  cursor: pointer;
-  border-radius: var(--r-md);
-  transition: background var(--dur-fast) var(--ease-out);
-}
-.fmm-settings .fmm-clubrow:hover {
-  background: var(--bg-hover);
-}
-.fmm-settings .fmm-clubrow[data-selected='true'] {
-  background: var(--bg-accent-soft);
-}
-.fmm-settings .fmm-clubrow[data-selected='true'] .fmm-clubrow-name {
-  color: var(--ball-500);
-}
-
 /* ---------- Field helper text ---------- */
 .fmm-settings .fmm-help {
   font-size: var(--text-sm);
@@ -514,23 +392,6 @@
 }
 .fmm-settings .fmm-help--ok {
   color: var(--serve-500);
-}
-
-/* ---------- Notification row ---------- */
-.fmm-settings .fmm-notif-row {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  align-items: center;
-  gap: 16px;
-  padding: 14px 0;
-  border-top: 1px solid var(--border-subtle);
-}
-.fmm-settings .fmm-notif-row:first-child {
-  border-top: none;
-  padding-top: 4px;
-}
-.fmm-settings .fmm-notif-row:last-child {
-  padding-bottom: 4px;
 }
 
 /* ---------- Tag for "REQUIRED" / "VERIFIED" etc ---------- */
@@ -581,9 +442,7 @@
   .fmm-settings .fmm-spinner {
     animation: none;
   }
-  .fmm-settings .fmm-toast,
-  .fmm-settings .fmm-modal-scrim,
-  .fmm-settings .fmm-modal {
+  .fmm-settings .fmm-toast {
     animation: none;
   }
 }
