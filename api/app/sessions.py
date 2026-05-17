@@ -31,9 +31,17 @@ router = APIRouter()
 
 SESSION_COOKIE_NAME = "session"
 SESSION_TOKEN_CONTEXT = "session"
-EMAIL_CONFIRMATION_TOKEN_CONTEXT = "email_confirmation"
+# Email-change confirmation tokens carry the *prior* address in their context
+# (e.g. "change:old@example.com", or "change:" on first-ever set). This gives
+# us an audit trail of what each token was changing away from. Look up
+# pending tokens by `context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX)`.
+EMAIL_CHANGE_CONTEXT_PREFIX = "change:"
 SESSION_LIFETIME = timedelta(days=30)
 EMAIL_TAKEN_DETAIL = "That email is already in use."
+
+
+def _email_change_context(old_email: str | None) -> str:
+    return f"{EMAIL_CHANGE_CONTEXT_PREFIX}{old_email or ''}"
 
 
 async def _email_rate_limit_key(request: Request) -> str:
@@ -238,25 +246,40 @@ async def _verify_captcha_or_400(captcha_token: str) -> None:
         )
 
 
+async def _existing_change_context(
+    db: AsyncSession, user_id
+) -> str | None:
+    """Return the context of the user's pending email-change token, if any.
+    Lets ``resend`` preserve the original "change:" + old_email signature
+    instead of guessing once the user's row has been overwritten."""
+    result = await db.execute(
+        select(UserToken.context).where(
+            UserToken.user_id == user_id,
+            UserToken.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX),
+        )
+    )
+    return result.scalars().first()
+
+
 async def _issue_confirmation_token(
-    db: AsyncSession, user: User, email: str
+    db: AsyncSession, user: User, sent_to: str, context: str
 ) -> str:
-    """Generate, hash, and persist a fresh confirmation token. Returns the
-    raw token (only ever in memory) so the caller can hand it to the email
-    sender."""
+    """Generate, hash, and persist a fresh confirmation token, rotating any
+    prior change token for this user. Returns the raw token (only ever in
+    memory) so the caller can hand it to the email sender."""
     await db.execute(
         delete(UserToken).where(
             UserToken.user_id == user.id,
-            UserToken.context == EMAIL_CONFIRMATION_TOKEN_CONTEXT,
+            UserToken.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX),
         )
     )
     raw_token = secrets.token_urlsafe(32)
     db.add(
         UserToken(
             user_id=user.id,
-            context=EMAIL_CONFIRMATION_TOKEN_CONTEXT,
+            context=context,
             token=_hash_token(raw_token),
-            sent_to=email,
+            sent_to=sent_to,
         )
     )
     return raw_token
@@ -293,6 +316,7 @@ async def set_email(
     await _verify_captcha_or_400(payload.captcha_token)
 
     email = payload.email.lower()
+    old_email = current_user.email
     if current_user.email != email:
         if await name_taken(
             db, User.id, User.email, email, exclude_id=current_user.id
@@ -306,7 +330,9 @@ async def set_email(
     # Every successful set_email re-starts the confirmation handshake — the
     # user must click the new link even if they re-submitted the same address.
     current_user.confirmed_at = None
-    raw_token = await _issue_confirmation_token(db, current_user, email)
+    raw_token = await _issue_confirmation_token(
+        db, current_user, email, _email_change_context(old_email)
+    )
     try:
         await db.commit()
     except IntegrityError:
@@ -344,8 +370,14 @@ async def resend_email_confirmation(
         )
     await _verify_captcha_or_400(payload.captcha_token)
 
+    # Reuse the prior token's context so the audit trail still records what
+    # the user was originally changing away from.
+    prior_context = await _existing_change_context(db, current_user.id)
     raw_token = await _issue_confirmation_token(
-        db, current_user, current_user.email
+        db,
+        current_user,
+        current_user.email,
+        prior_context or _email_change_context(None),
     )
     await db.commit()
     _enqueue_confirmation_email(
@@ -364,7 +396,7 @@ async def confirm_email(
         await db.execute(
             select(UserToken).where(
                 UserToken.token == _hash_token(payload.token),
-                UserToken.context == EMAIL_CONFIRMATION_TOKEN_CONTEXT,
+                UserToken.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX),
             )
         )
     ).scalar_one_or_none()

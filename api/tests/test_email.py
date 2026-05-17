@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db import get_session
 from app.main import app
 from app.models import User, UserToken
-from app.sessions import EMAIL_CONFIRMATION_TOKEN_CONTEXT
+from app.sessions import EMAIL_CHANGE_CONTEXT_PREFIX
 from tests._helpers import start_session
 
 
@@ -72,7 +72,7 @@ async def test_set_email_persists_and_enqueues_send(
     tokens = (
         await db_session.execute(
             select(UserToken).where(
-                UserToken.context == EMAIL_CONFIRMATION_TOKEN_CONTEXT
+                UserToken.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX)
             )
         )
     ).scalars().all()
@@ -120,7 +120,7 @@ async def test_set_email_honeypot_silently_succeeds(
 
     tokens = (
         await db_session.execute(select(UserToken).where(
-            UserToken.context == EMAIL_CONFIRMATION_TOKEN_CONTEXT
+            UserToken.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX)
         ))
     ).scalars().all()
     assert tokens == []
@@ -154,6 +154,79 @@ async def test_set_email_rejects_duplicate(
     assert response.status_code == 409
 
 
+async def test_token_context_records_old_email(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """Tokens carry their pre-change address in their context so we have an
+    audit trail of what each one was changing FROM. First-time set leaves
+    the address empty."""
+    await start_session(api_client, db_session)
+
+    # First-time set — no prior address.
+    await _set_email(api_client, email="first@example.com")
+    token = (
+        await db_session.execute(
+            select(UserToken).where(
+                UserToken.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX)
+            )
+        )
+    ).scalar_one()
+    assert token.context == "change:"
+    assert token.sent_to == "first@example.com"
+
+    # Change to a new address — the old one shows up in the context.
+    await _set_email(api_client, email="second@example.com")
+    token = (
+        await db_session.execute(
+            select(UserToken).where(
+                UserToken.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX)
+            )
+        )
+    ).scalar_one()
+    assert token.context == "change:first@example.com"
+    assert token.sent_to == "second@example.com"
+
+
+async def test_resend_preserves_original_change_context(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """Resend should keep the original 'change:OLD' context so the audit
+    trail still reflects what the user was changing away from."""
+    user = await start_session(api_client, db_session)
+    # Establish a confirmed prior email so the next set has something to
+    # change FROM.
+    user.email = "prior@example.com"
+    from datetime import datetime, timezone
+    user.confirmed_at = datetime.now(timezone.utc)
+    await db_session.commit()
+
+    await _set_email(api_client, email="next@example.com")
+    first = (
+        await db_session.execute(
+            select(UserToken).where(
+                UserToken.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX)
+            )
+        )
+    ).scalar_one()
+    assert first.context == "change:prior@example.com"
+
+    await api_client.post(
+        "/v1/me/email/resend",
+        json={"captcha_token": "x", "website": ""},
+    )
+    after = (
+        await db_session.execute(
+            select(UserToken).where(
+                UserToken.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX)
+            )
+        )
+    ).scalar_one()
+    assert after.context == "change:prior@example.com"
+    assert after.sent_to == "next@example.com"
+    # Token rotated.
+    assert after.token != first.token
+
+
 async def test_set_email_replaces_existing_unconfirmed_token(
     api_client: AsyncClient, db_session: AsyncSession
 ):
@@ -164,7 +237,7 @@ async def test_set_email_replaces_existing_unconfirmed_token(
     tokens = (
         await db_session.execute(
             select(UserToken).where(
-                UserToken.context == EMAIL_CONFIRMATION_TOKEN_CONTEXT
+                UserToken.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX)
             )
         )
     ).scalars().all()
@@ -201,7 +274,7 @@ async def test_changing_email_clears_confirmation(
     token_row = (
         await db_session.execute(
             select(UserToken).where(
-                UserToken.context == EMAIL_CONFIRMATION_TOKEN_CONTEXT
+                UserToken.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX)
             )
         )
     ).scalar_one()
@@ -265,7 +338,7 @@ async def test_confirm_email_sets_confirmed_at_and_invalidates_token(
     tokens = (
         await db_session.execute(
             select(UserToken).where(
-                UserToken.context == EMAIL_CONFIRMATION_TOKEN_CONTEXT
+                UserToken.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX)
             )
         )
     ).scalars().all()
@@ -323,7 +396,7 @@ async def test_token_is_stored_hashed_not_plaintext(
     token_row = (
         await db_session.execute(
             select(UserToken).where(
-                UserToken.context == EMAIL_CONFIRMATION_TOKEN_CONTEXT
+                UserToken.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX)
             )
         )
     ).scalar_one()
