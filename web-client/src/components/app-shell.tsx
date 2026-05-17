@@ -1,17 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { Link, useRouterState } from '@tanstack/react-router'
-import {
-  Bell,
-  Gauge,
-  Globe,
-  Key,
-  Mail,
-  MapPin,
-  Settings,
-  Shield,
-  User,
-  Users,
-} from 'lucide-react'
+import { Gauge, Key, Settings, Shield, Users } from 'lucide-react'
 import { useSession } from '@/api/session'
 import { cn } from '@/lib/utils'
 import { PERM } from '@/lib/permissions'
@@ -36,13 +25,6 @@ const SETTINGS_ITEM: NavItem = {
   label: 'Settings',
   to: '/settings',
   icon: <Settings size={18} strokeWidth={2} />,
-  children: [
-    { label: 'Username', to: '/settings', hash: 'sec-username', icon: <User size={15} strokeWidth={1.75} /> },
-    { label: 'Email', to: '/settings', hash: 'sec-email', icon: <Mail size={15} strokeWidth={1.75} /> },
-    { label: 'Home club', to: '/settings', hash: 'sec-club', icon: <MapPin size={15} strokeWidth={1.75} /> },
-    { label: 'Notifications', to: '/settings', hash: 'sec-notifications', icon: <Bell size={15} strokeWidth={1.75} /> },
-    { label: 'Session', to: '/settings', hash: 'sec-session', icon: <Globe size={15} strokeWidth={1.75} /> },
-  ],
 }
 
 const NAV_SECTIONS: NavSection[] = [
