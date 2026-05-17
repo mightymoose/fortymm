@@ -1,0 +1,46 @@
+import { useSession } from '@/api/session'
+
+function getInitials(username: string): string {
+  const cleaned = username.replace(/[._-]+/g, ' ').trim()
+  const parts = cleaned.split(/\s+/).filter(Boolean)
+  if (parts.length === 0) return '??'
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase()
+  return (parts[0][0] + parts[1][0]).toUpperCase()
+}
+
+export function UserMenu() {
+  const { data, isLoading, isError } = useSession()
+
+  if (isLoading) {
+    return (
+      <div
+        className="app-shell__user-menu app-shell__user-menu--loading"
+        aria-busy="true"
+        aria-label="Loading user menu"
+        data-testid="user-menu-skeleton"
+      >
+        <div className="app-shell__user-avatar app-shell__skeleton app-shell__skeleton--avatar" />
+        <div className="app-shell__user-name app-shell__skeleton app-shell__skeleton--name" />
+      </div>
+    )
+  }
+
+  const username = !isError && data ? data.data.user.username : 'Guest'
+  const initials = getInitials(username)
+
+  return (
+    <div
+      className="app-shell__user-menu"
+      data-testid="user-menu"
+      aria-label={`Signed in as ${username}`}
+    >
+      <div className="app-shell__user-avatar">{initials}</div>
+      <div
+        className="app-shell__user-name app-shell__user-name--truncate"
+        title={username}
+      >
+        {username}
+      </div>
+    </div>
+  )
+}

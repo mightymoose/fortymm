@@ -15,6 +15,7 @@ import {
 import { useSession } from '@/api/session'
 import { cn } from '@/lib/utils'
 import { PERM } from '@/lib/permissions'
+import { UserMenu } from './user-menu'
 
 type NavChild = { label: string; to: string; hash?: string; icon: ReactNode; requires?: string }
 
@@ -333,6 +334,10 @@ export function AppShell({ children }: AppShellProps) {
           </a>
 
           <div className="app-shell__spacer" />
+
+          <div className="app-shell__actions">
+            <UserMenu />
+          </div>
         </header>
 
         <main className="app-shell__content">{children}</main>
