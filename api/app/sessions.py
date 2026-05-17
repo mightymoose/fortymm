@@ -32,8 +32,20 @@ def _hash_token(raw_token: str) -> bytes:
     return hashlib.sha256(raw_token.encode("utf-8")).digest()
 
 
-def _generate_username() -> str:
-    return f"{generate_slug(2)}-{secrets.token_hex(4)}"
+async def _generate_username(db: AsyncSession) -> str:
+    base = generate_slug(2)
+    result = await db.execute(
+        select(User.username).where(
+            User.username.ilike(f"{base}%", escape="\\")
+        )
+    )
+    taken = {u.lower() for u in result.scalars().all()}
+    if base not in taken:
+        return base
+    suffix = 2
+    while f"{base}-{suffix}" in taken:
+        suffix += 1
+    return f"{base}-{suffix}"
 
 
 def _cookie_secure() -> bool:
@@ -68,7 +80,7 @@ async def _load_permissions(db: AsyncSession, user_id) -> list[str]:
 
 
 async def _create_session(db: AsyncSession) -> tuple[User, str]:
-    user = User(username=_generate_username())
+    user = User(username=await _generate_username(db))
     db.add(user)
     await db.flush()
 
