@@ -12,6 +12,7 @@ import {
   type SetStateAction,
 } from 'react'
 import { createFileRoute, useRouterState } from '@tanstack/react-router'
+import { Check, Mail, Trash2 } from 'lucide-react'
 
 import { ApiError } from '@/api/client'
 import { useSession, useUpdateUsername } from '@/api/session'
@@ -33,8 +34,7 @@ export const Route = createFileRoute('/settings')({
 })
 
 /* ------------------------------------------------------------------ */
-/*  Types                                                             */
-/*  UI only — no backend wired up yet. State lives in the component.  */
+/*  Types & helpers                                                   */
 /* ------------------------------------------------------------------ */
 
 type EmailStatus = 'guest' | 'pending' | 'verified'
@@ -52,67 +52,6 @@ interface Validation {
   ok: boolean
   err?: string
 }
-
-/* ------------------------------------------------------------------ */
-/*  Icons — tiny inline SVGs, ported from the design handoff          */
-/* ------------------------------------------------------------------ */
-
-interface IconProps {
-  size?: number
-  color?: string
-}
-
-const Icon = {
-  Check: ({ size = 16, color = 'currentColor' }: IconProps) => (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke={color}
-      strokeWidth="2.25"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M5 12l5 5L20 7" />
-    </svg>
-  ),
-  Mail: ({ size = 16, color = 'currentColor' }: IconProps) => (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke={color}
-      strokeWidth="1.8"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <rect x="3" y="5" width="18" height="14" rx="2" />
-      <path d="M3 7l9 6 9-6" />
-    </svg>
-  ),
-  Trash: ({ size = 16, color = 'currentColor' }: IconProps) => (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke={color}
-      strokeWidth="1.8"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M3 6h18" />
-      <path d="M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2" />
-      <path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6" />
-    </svg>
-  ),
-}
-
-/* ------------------------------------------------------------------ */
-/*  Helpers                                                           */
-/* ------------------------------------------------------------------ */
 
 // Mirrors api/app/schemas/session.py USERNAME_PATTERN. Client-side validation
 // is for fast feedback; the server still enforces the same rules and returns
@@ -475,7 +414,7 @@ function SaveBar({
   const status =
     savedAt && !dirty ? (
       <span style={{ ...MONO_LABEL_STYLE, color: 'var(--fg-3)' }}>
-        <Icon.Check size={14} color="var(--serve-500)" />
+        <Check size={14} color="var(--serve-500)" />
         Saved {relativeTime(savedAt)}
       </span>
     ) : dirty ? (
@@ -594,7 +533,7 @@ function PageHeader({
           >
             {username || '…'}
           </div>
-          {claimed && <Icon.Check size={14} color="var(--serve-500)" />}
+          {claimed && <Check size={14} color="var(--serve-500)" />}
         </div>
       </div>
       <p
@@ -988,7 +927,7 @@ function EmailSection({
               pointerEvents: 'none',
             }}
           >
-            <Icon.Mail size={16} color="var(--fg-muted)" />
+            <Mail size={16} color="var(--fg-muted)" />
           </span>
           <input
             id="email"
@@ -1034,7 +973,7 @@ function EmailSection({
                 flexShrink: 0,
               }}
             >
-              <Icon.Check size={16} color="var(--serve-500)" />
+              <Check size={16} color="var(--serve-500)" />
             </div>
           ) : (
             <span
@@ -1098,7 +1037,7 @@ function EmailSection({
             className="fmm-btn fmm-btn--danger fmm-btn--sm"
             onClick={onRemove}
           >
-            <Icon.Trash size={14} /> Remove email
+            <Trash2 size={14} /> Remove email
           </button>
         </div>
       )}
@@ -1109,6 +1048,13 @@ function EmailSection({
 /* ------------------------------------------------------------------ */
 /*  Page                                                              */
 /* ------------------------------------------------------------------ */
+
+function scrollToSection(id: string) {
+  const el = document.getElementById(id)
+  if (!el) return
+  const y = el.getBoundingClientRect().top + window.scrollY - 24
+  window.scrollTo({ top: y, behavior: 'smooth' })
+}
 
 function SettingsPage() {
   const session = useSession()
@@ -1123,22 +1069,11 @@ function SettingsPage() {
       : 'guest'
   const claimed = effectiveStatus === 'verified'
 
-  // Smooth-scroll to a section when the URL points at /settings#sec-*.
+  // Honor /settings#sec-* deep links from external nav.
   useEffect(() => {
     const id = hash.replace(/^#/, '')
-    if (!id) return
-    const el = document.getElementById(id)
-    if (!el) return
-    const y = el.getBoundingClientRect().top + window.scrollY - 24
-    window.scrollTo({ top: y, behavior: 'smooth' })
+    if (id) scrollToSection(id)
   }, [hash])
-
-  const onJump = (id: string) => {
-    const el = document.getElementById(id)
-    if (!el) return
-    const y = el.getBoundingClientRect().top + window.scrollY - 24
-    window.scrollTo({ top: y, behavior: 'smooth' })
-  }
 
   return (
     <AppShell>
@@ -1152,7 +1087,7 @@ function SettingsPage() {
                 <ClaimBanner
                   status={effectiveStatus}
                   email={user.email}
-                  onJump={() => onJump('sec-email')}
+                  onJump={() => scrollToSection('sec-email')}
                 />
               </ComingSoon>
 
