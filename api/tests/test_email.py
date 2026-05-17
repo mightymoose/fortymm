@@ -1,5 +1,6 @@
 import hashlib
 from collections.abc import AsyncIterator
+from datetime import datetime, timezone
 
 import pytest
 import pytest_asyncio
@@ -196,7 +197,6 @@ async def test_resend_preserves_original_change_context(
     # Establish a confirmed prior email so the next set has something to
     # change FROM.
     user.email = "prior@example.com"
-    from datetime import datetime, timezone
     user.confirmed_at = datetime.now(timezone.utc)
     await db_session.commit()
 
@@ -280,7 +280,6 @@ async def test_changing_email_clears_confirmation(
     ).scalar_one()
     # We don't know the raw token in this test, so simulate by changing email
     # while user is confirmed.
-    from datetime import datetime, timezone
     user.confirmed_at = datetime.now(timezone.utc)
     await db_session.delete(token_row)
     await db_session.commit()

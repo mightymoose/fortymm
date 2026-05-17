@@ -253,10 +253,12 @@ async def _existing_change_context(
     Lets ``resend`` preserve the original "change:" + old_email signature
     instead of guessing once the user's row has been overwritten."""
     result = await db.execute(
-        select(UserToken.context).where(
+        select(UserToken.context)
+        .where(
             UserToken.user_id == user_id,
             UserToken.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX),
         )
+        .limit(1)
     )
     return result.scalars().first()
 

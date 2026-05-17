@@ -56,11 +56,11 @@ def stub_captcha(monkeypatch):
     monkeypatch.setattr(captcha_module, "verify_captcha", _always_pass)
 
 
-@pytest_asyncio.fixture(autouse=True)
-async def rate_limiter_fakeredis():
-    """Initialise FastAPILimiter against an in-memory fakeredis per test so
-    the rate-limit counters start clean. The httpx ASGITransport used by the
-    test client doesn't fire the app's lifespan, so we init here directly."""
+@pytest_asyncio.fixture(scope="session")
+async def _rate_limiter_redis():
+    """One fakeredis-backed FastAPILimiter for the whole test session — the
+    httpx ASGITransport never fires the app's lifespan, so we init here.
+    Per-test counter resets happen in ``rate_limiter_fakeredis`` below."""
     import fakeredis.aioredis
     from fastapi_limiter import FastAPILimiter
 
@@ -71,6 +71,13 @@ async def rate_limiter_fakeredis():
     finally:
         await FastAPILimiter.close()
         await fake.aclose()
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def rate_limiter_fakeredis(_rate_limiter_redis):
+    """Flush rate-limit counters between tests so each starts clean."""
+    await _rate_limiter_redis.flushall()
+    return _rate_limiter_redis
 
 
 @pytest.fixture(scope="session")

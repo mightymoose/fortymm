@@ -25,6 +25,7 @@ async def lifespan(_: FastAPI):
         yield
     finally:
         await FastAPILimiter.close()
+        await connection.aclose()
 
 
 app = FastAPI(title="FortyMM API", lifespan=lifespan)
