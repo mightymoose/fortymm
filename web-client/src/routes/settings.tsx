@@ -16,6 +16,12 @@ import { createFileRoute, useRouterState } from '@tanstack/react-router'
 import { ApiError } from '@/api/client'
 import { useSession, useUpdateUsername } from '@/api/session'
 import { AppShell } from '@/components/app-shell'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
 import { pageTitle } from '@/lib/page-title'
 import './settings.css'
 
@@ -477,6 +483,32 @@ function Modal({
         {children}
       </div>
     </div>
+  )
+}
+
+const COMING_SOON_TRIGGER: CSSProperties = {
+  opacity: 0.55,
+  filter: 'saturate(0.75)',
+  cursor: 'not-allowed',
+}
+
+// `inert` (not just pointer-events: none) is what keeps focus and AT
+// out of the disabled subtree — without it, Tab still lands on inner
+// buttons/links and screen readers still announce them as actionable.
+const COMING_SOON_INNER: CSSProperties = { pointerEvents: 'none' }
+
+function ComingSoon({ children }: { children: ReactNode }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <div style={COMING_SOON_TRIGGER}>
+          <div inert style={COMING_SOON_INNER}>
+            {children}
+          </div>
+        </div>
+      </TooltipTrigger>
+      <TooltipContent>coming soon</TooltipContent>
+    </Tooltip>
   )
 }
 
@@ -1932,47 +1964,61 @@ function SettingsPage() {
     <AppShell>
       <div className="fmm-settings">
         <ToastProvider>
-          <div className="fmm-main-inner">
-            <PageHeader username={sessionUsername} claimed={claimed} />
+          <TooltipProvider>
+            <div className="fmm-main-inner">
+              <PageHeader username={sessionUsername} claimed={claimed} />
 
-            <ClaimBanner
-              status={effectiveStatus}
-              email={user.email}
-              onJump={() => onJump('sec-email')}
-            />
+              <ComingSoon>
+                <ClaimBanner
+                  status={effectiveStatus}
+                  email={user.email}
+                  onJump={() => onJump('sec-email')}
+                />
+              </ComingSoon>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-              <UsernameSection currentUsername={sessionUsername} />
-              <EmailSection key={`e-${sessionKey}`} user={user} setUser={setUser} />
-              <HomeClubSection user={user} setUser={setUser} />
-              <NotificationsSection key={`n-${sessionKey}`} user={user} setUser={setUser} />
-              <SessionSection user={user} onResetSession={onResetSession} />
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+                <UsernameSection currentUsername={sessionUsername} />
+                <ComingSoon>
+                  <EmailSection key={`e-${sessionKey}`} user={user} setUser={setUser} />
+                </ComingSoon>
+                <ComingSoon>
+                  <HomeClubSection user={user} setUser={setUser} />
+                </ComingSoon>
+                <ComingSoon>
+                  <NotificationsSection key={`n-${sessionKey}`} user={user} setUser={setUser} />
+                </ComingSoon>
+                <ComingSoon>
+                  <SessionSection user={user} onResetSession={onResetSession} />
+                </ComingSoon>
+              </div>
+
+              <ComingSoon>
+                <div
+                  style={{
+                    marginTop: 32,
+                    paddingTop: 20,
+                    borderTop: '1px solid var(--border-subtle)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 14,
+                    fontSize: 'var(--text-xs)',
+                    color: 'var(--fg-muted)',
+                    fontFamily: 'var(--font-mono)',
+                    letterSpacing: '0.06em',
+                  }}
+                >
+                  <span>v2.4.1 · made by players · no trackers</span>
+                  <div style={{ flex: 1 }} />
+                  <a className="fmm-link" style={{ fontSize: 'var(--text-xs)' }}>
+                    Privacy
+                  </a>
+                  <a className="fmm-link" style={{ fontSize: 'var(--text-xs)' }}>
+                    Sign out
+                  </a>
+                </div>
+              </ComingSoon>
             </div>
-
-            <div
-              style={{
-                marginTop: 32,
-                paddingTop: 20,
-                borderTop: '1px solid var(--border-subtle)',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 14,
-                fontSize: 'var(--text-xs)',
-                color: 'var(--fg-muted)',
-                fontFamily: 'var(--font-mono)',
-                letterSpacing: '0.06em',
-              }}
-            >
-              <span>v2.4.1 · made by players · no trackers</span>
-              <div style={{ flex: 1 }} />
-              <a className="fmm-link" style={{ fontSize: 'var(--text-xs)' }}>
-                Privacy
-              </a>
-              <a className="fmm-link" style={{ fontSize: 'var(--text-xs)' }}>
-                Sign out
-              </a>
-            </div>
-          </div>
+          </TooltipProvider>
         </ToastProvider>
       </div>
     </AppShell>
