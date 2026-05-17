@@ -44,7 +44,7 @@ async def test_dashboard_empty_when_user_has_no_matches(
     response = await api_client.get("/v1/dashboard")
     assert response.status_code == 200
     body = response.json()
-    assert body["score_banner"] is None
+    assert body["score_banners"] == []
     assert body["next_match"] is None
     assert body["recent_results"] == []
     # A fresh signup is auto-joined to the default Glicko-2 league with
@@ -80,12 +80,42 @@ async def test_dashboard_returns_score_banner_for_in_progress_match(
     ).json()
 
     body = (await api_client.get("/v1/dashboard")).json()
-    assert body["score_banner"]["match_id"] == match["id"]
-    assert body["score_banner"]["opponent_username"] == "rival"
-    assert body["score_banner"]["current_game_id"] == after_g1["current_game"]["id"]
+    assert len(body["score_banners"]) == 1
+    banner = body["score_banners"][0]
+    assert banner["match_id"] == match["id"]
+    assert banner["opponent_username"] == "rival"
+    assert banner["current_game_id"] == after_g1["current_game"]["id"]
     # An in-progress match is not "pending" so the next_match slot is empty.
     assert body["next_match"] is None
     assert body["recent_results"] == []
+
+
+async def test_dashboard_returns_multiple_banners_oldest_first(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    # Variant D: back-to-back tournament play means a player can have two (or
+    # more) matches sitting in_progress at once. The frontend stacks them, but
+    # only if the API returns them in priority order — oldest first, since the
+    # one that's been waiting longest is the most urgent to score.
+    await start_session(api_client, db_session)
+    opp_a = await make_user(db_session, "rival_a")
+    opp_b = await make_user(db_session, "rival_b")
+    opp_c = await make_user(db_session, "rival_c")
+    match_a = await _create_match(api_client, opp_a.id, best_of=5)
+    match_b = await _create_match(api_client, opp_b.id, best_of=5)
+    match_c = await _create_match(api_client, opp_c.id, best_of=5)
+
+    body = (await api_client.get("/v1/dashboard")).json()
+    assert [b["match_id"] for b in body["score_banners"]] == [
+        match_a["id"],
+        match_b["id"],
+        match_c["id"],
+    ]
+    assert [b["opponent_username"] for b in body["score_banners"]] == [
+        "rival_a",
+        "rival_b",
+        "rival_c",
+    ]
 
 
 async def test_dashboard_returns_next_match_for_pending_match(
@@ -101,7 +131,7 @@ async def test_dashboard_returns_next_match_for_pending_match(
     await db_session.commit()
 
     body = (await api_client.get("/v1/dashboard")).json()
-    assert body["score_banner"] is None
+    assert body["score_banners"] == []
     assert body["next_match"]["match_id"] == created["id"]
     assert body["next_match"]["opponent_username"] == "rival"
     assert body["next_match"]["best_of"] == 5
@@ -144,7 +174,7 @@ async def test_dashboard_scoped_to_current_user(
         await _create_match(other_client, bystander.id)
 
     body = (await api_client.get("/v1/dashboard")).json()
-    assert body["score_banner"] is None
+    assert body["score_banners"] == []
     assert body["next_match"] is None
     assert body["recent_results"] == []
     # Alice has her own seeded league row but no completed matches of her own

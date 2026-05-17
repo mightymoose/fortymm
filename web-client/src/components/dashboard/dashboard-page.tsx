@@ -552,7 +552,6 @@ function ScoreBanner({ banner }: { banner: DashboardScoreBanner }) {
         border: '1px solid rgba(255,122,26,0.42)',
         borderRadius: 14,
         overflow: 'hidden',
-        marginBottom: 32,
       }}
     >
       <div
@@ -680,6 +679,124 @@ function ScoreBanner({ banner }: { banner: DashboardScoreBanner }) {
       >
         <X size={14} strokeWidth={1.75} />
       </button>
+    </div>
+  )
+}
+
+// Used when a player has more than one match waiting for their score. The
+// primary ScoreBanner above keeps the single hero-orange CTA; this strip
+// uses an amber accent so a second pending match is impossible to miss
+// without dimming the priority of the headline match.
+function CompactScoreBanner({ banner }: { banner: DashboardScoreBanner }) {
+  const opponent = banner.opponent_username ?? GUEST_OPPONENT
+  const scoringRoute = scoringNewRoute(banner.match_id, banner.current_game_id)
+  return (
+    <div
+      data-testid="dashboard-score-banner-compact"
+      style={{
+        position: 'relative',
+        background: `linear-gradient(180deg, rgba(255,196,61,0.06) 0%, rgba(11,13,18,0) 100%), ${C.ink800}`,
+        border: '1px solid rgba(255,196,61,0.24)',
+        borderRadius: 12,
+        padding: '14px 18px',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 16,
+      }}
+    >
+      <div
+        style={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          right: 0,
+          height: 2,
+          background: `linear-gradient(90deg, ${C.warn} 0%, ${C.warn} 50%, transparent 100%)`,
+        }}
+      />
+      <BallDot live color={C.warn} size={8} />
+      <Avatar name={opponent} size={36} />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div
+          style={{
+            font: `700 10px ${MONO}`,
+            color: C.warn,
+            letterSpacing: '0.16em',
+            marginBottom: 2,
+          }}
+        >
+          ALSO PENDING
+        </div>
+        <div
+          style={{
+            font: `600 15px ${UI}`,
+            color: C.chalk50,
+            lineHeight: 1.2,
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+          }}
+        >
+          vs {opponent}
+        </div>
+      </div>
+      <Button
+        kind="secondary"
+        size="md"
+        iconRight={<ArrowRight size={14} strokeWidth={1.75} />}
+        style={{ borderColor: 'rgba(255,196,61,0.4)', color: C.warn }}
+        {...scoringRoute}
+      >
+        Enter score
+      </Button>
+    </div>
+  )
+}
+
+// 3+ pending: a single quiet link that funnels the rest into /matches.
+function MorePendingLink({ count }: { count: number }) {
+  return (
+    <Link
+      to="/matches"
+      data-testid="dashboard-score-banner-more"
+      style={{
+        display: 'inline-flex',
+        alignSelf: 'flex-start',
+        alignItems: 'center',
+        gap: 8,
+        padding: '6px 12px',
+        borderRadius: 999,
+        border: `1px solid ${C.ink500}`,
+        background: 'transparent',
+        font: `500 12px ${UI}`,
+        color: C.chalk300,
+        textDecoration: 'none',
+      }}
+    >
+      <Mono size={12} weight={600} color={C.chalk100}>
+        +{count}
+      </Mono>
+      more pending
+      <ChevronRight size={14} strokeWidth={1.75} />
+    </Link>
+  )
+}
+
+function ScoreBannerStack({ banners }: { banners: DashboardScoreBanner[] }) {
+  if (banners.length === 0) return null
+  const [primary, secondary, ...rest] = banners
+  return (
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 12,
+        marginBottom: 32,
+      }}
+    >
+      <ScoreBanner banner={primary} />
+      {secondary && <CompactScoreBanner banner={secondary} />}
+      {rest.length > 0 && <MorePendingLink count={rest.length} />}
     </div>
   )
 }
@@ -998,8 +1115,8 @@ export function DashboardPage() {
       <PageTitle greeting="Hi, Aimee" subtitle="3 things need your attention" />
       {isLoading ? (
         <SkeletonCard label="Loading score banner" height={140} />
-      ) : data?.score_banner ? (
-        <ScoreBanner banner={data.score_banner} />
+      ) : data?.score_banners?.length ? (
+        <ScoreBannerStack banners={data.score_banners} />
       ) : null}
       <YourGameRow
         rating={data?.rating ?? null}

@@ -415,7 +415,8 @@ export interface components {
         };
         /** DashboardResponse */
         DashboardResponse: {
-            score_banner: components["schemas"]["DashboardScoreBanner"] | null;
+            /** Score Banners */
+            score_banners: components["schemas"]["DashboardScoreBanner"][];
             next_match: components["schemas"]["DashboardNextMatch"] | null;
             /** Recent Results */
             recent_results: components["schemas"]["DashboardRecentResult"][];

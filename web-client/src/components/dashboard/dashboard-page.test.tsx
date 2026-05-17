@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
 import {
   RouterProvider,
   createMemoryHistory,
@@ -66,11 +66,13 @@ describe('DashboardPage', () => {
       http.get('*/v1/dashboard', () =>
         HttpResponse.json(
           dashboardResponse({
-            score_banner: dashboardScoreBanner({
-              match_id: 'm-banner',
-              current_game_id: 'g-banner-1',
-              opponent_username: 'nguyen.t',
-            }),
+            score_banners: [
+              dashboardScoreBanner({
+                match_id: 'm-banner',
+                current_game_id: 'g-banner-1',
+                opponent_username: 'nguyen.t',
+              }),
+            ],
             recent_results: [
               dashboardRecentResult({
                 match_id: 'm-recent-1',
@@ -110,7 +112,7 @@ describe('DashboardPage', () => {
       http.get('*/v1/dashboard', () =>
         HttpResponse.json(
           dashboardResponse({
-            score_banner: null,
+            score_banners: [],
             recent_results: [],
           }),
         ),
@@ -185,11 +187,13 @@ describe('DashboardPage', () => {
       http.get('*/v1/dashboard', () =>
         HttpResponse.json(
           dashboardResponse({
-            score_banner: dashboardScoreBanner({
-              match_id: 'm-banner',
-              current_game_id: 'g-banner-1',
-              opponent_username: 'nguyen.t',
-            }),
+            score_banners: [
+              dashboardScoreBanner({
+                match_id: 'm-banner',
+                current_game_id: 'g-banner-1',
+                opponent_username: 'nguyen.t',
+              }),
+            ],
           }),
         ),
       ),
@@ -201,5 +205,78 @@ describe('DashboardPage', () => {
       'href',
       '/matches/m-banner/games/g-banner-1/scores/new',
     )
+  })
+
+  it('stacks a compact banner when a second match is pending scoring', async () => {
+    server.use(
+      http.get('*/v1/dashboard', () =>
+        HttpResponse.json(
+          dashboardResponse({
+            score_banners: [
+              dashboardScoreBanner({
+                match_id: 'm-primary',
+                current_game_id: 'g-primary',
+                opponent_username: 'nguyen.t',
+              }),
+              dashboardScoreBanner({
+                match_id: 'm-secondary',
+                current_game_id: 'g-secondary',
+                opponent_username: 'holm.s',
+              }),
+            ],
+          }),
+        ),
+      ),
+    )
+    renderDashboard()
+
+    expect(await screen.findByTestId('dashboard-score-banner')).toHaveTextContent(
+      'vs nguyen.t',
+    )
+    const compact = await screen.findByTestId('dashboard-score-banner-compact')
+    expect(compact).toHaveTextContent('vs holm.s')
+    expect(compact).toHaveTextContent(/also pending/i)
+    expect(within(compact).getByRole('link', { name: /enter score/i })).toHaveAttribute(
+      'href',
+      '/matches/m-secondary/games/g-secondary/scores/new',
+    )
+    expect(
+      screen.queryByTestId('dashboard-score-banner-more'),
+    ).not.toBeInTheDocument()
+  })
+
+  it('collapses 3+ pending matches into a "+N more pending" link to /matches', async () => {
+    server.use(
+      http.get('*/v1/dashboard', () =>
+        HttpResponse.json(
+          dashboardResponse({
+            score_banners: [
+              dashboardScoreBanner({
+                match_id: 'm-1',
+                opponent_username: 'nguyen.t',
+              }),
+              dashboardScoreBanner({
+                match_id: 'm-2',
+                opponent_username: 'holm.s',
+              }),
+              dashboardScoreBanner({
+                match_id: 'm-3',
+                opponent_username: 'okafor.m',
+              }),
+              dashboardScoreBanner({
+                match_id: 'm-4',
+                opponent_username: 'silva.r',
+              }),
+            ],
+          }),
+        ),
+      ),
+    )
+    renderDashboard()
+
+    const more = await screen.findByTestId('dashboard-score-banner-more')
+    expect(more).toHaveTextContent('+2')
+    expect(more).toHaveTextContent(/more pending/i)
+    expect(more).toHaveAttribute('href', '/matches')
   })
 })

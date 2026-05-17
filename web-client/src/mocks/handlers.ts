@@ -238,8 +238,7 @@ export const handlers = [
   // ----- dashboard -------------------------------------------------------
   http.get('*/v1/dashboard', async () => {
     await delay(300)
-    const scoreBanner =
-      mockMatches.map(projectScoreBanner).find(notNull) ?? null
+    const scoreBanners = mockMatches.map(projectScoreBanner).filter(notNull)
     const nextMatch =
       mockMatches.map(projectNextMatch).find(notNull) ?? null
     const recentResults = mockMatches
@@ -248,7 +247,7 @@ export const handlers = [
       .sort((a, b) => b.completed_at.localeCompare(a.completed_at))
       .slice(0, 5)
     return HttpResponse.json({
-      score_banner: scoreBanner,
+      score_banners: scoreBanners,
       next_match: nextMatch,
       recent_results: recentResults,
       rating: projectRating(mockMatches),

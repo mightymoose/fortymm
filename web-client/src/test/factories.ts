@@ -281,7 +281,7 @@ export function dashboardResponse(
   overrides: Partial<DashboardResponse> = {},
 ): DashboardResponse {
   return {
-    score_banner: null,
+    score_banners: [],
     next_match: null,
     recent_results: [],
     rating: dashboardRating(),
