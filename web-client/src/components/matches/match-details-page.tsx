@@ -966,28 +966,30 @@ function H2HCard({ view, h2h }: { view: MatchView; h2h: H2HView }) {
       </div>
       <div className="md-card__body md-h2h">
         <div className="md-h2h__counts">
-          <div className="md-h2h__count-block md-h2h__count-block--l">
-            <div
-              className={cn(
-                'md-h2h__count',
-                h2h.leftWins > h2h.rightWins && 'md-h2h__count--win',
-              )}
-            >
-              {h2h.leftWins}
-            </div>
-            <div className="md-h2h__count-label">{leftLabel}</div>
+          <div className="md-h2h__count-label md-h2h__count-label--l">
+            {leftLabel}
+          </div>
+          <div
+            className={cn(
+              'md-h2h__count',
+              'md-h2h__count--l',
+              h2h.leftWins > h2h.rightWins && 'md-h2h__count--win',
+            )}
+          >
+            {h2h.leftWins}
           </div>
           <span className="md-h2h__sep">—</span>
-          <div className="md-h2h__count-block md-h2h__count-block--r">
-            <div
-              className={cn(
-                'md-h2h__count',
-                h2h.rightWins > h2h.leftWins && 'md-h2h__count--win',
-              )}
-            >
-              {h2h.rightWins}
-            </div>
-            <div className="md-h2h__count-label">{rightLabel}</div>
+          <div
+            className={cn(
+              'md-h2h__count',
+              'md-h2h__count--r',
+              h2h.rightWins > h2h.leftWins && 'md-h2h__count--win',
+            )}
+          >
+            {h2h.rightWins}
+          </div>
+          <div className="md-h2h__count-label md-h2h__count-label--r">
+            {rightLabel}
           </div>
         </div>
         {hasMeetings ? (
