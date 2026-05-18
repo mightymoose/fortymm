@@ -59,3 +59,11 @@ class ResendEmailRequest(CaptchaProtectedRequest):
 
 class ConfirmEmailRequest(BaseModel):
     token: str = Field(min_length=1, max_length=512)
+
+
+class RequestLoginRequest(CaptchaProtectedRequest):
+    email: EmailStr
+
+
+class ConsumeLoginRequest(BaseModel):
+    token: str = Field(min_length=1, max_length=512)

@@ -1,6 +1,24 @@
-import type { CSSProperties, ReactNode } from 'react'
+import { useRef, useState } from 'react'
+import type { CSSProperties, FormEvent, ReactNode } from 'react'
+
+import { Turnstile, type TurnstileHandle } from '@/components/turnstile'
 
 import './login.css'
+
+// Off-screen but still focusable so AT users hear "Leave this empty" — bots
+// pattern-match every visible field, then fill blanks anyway. Honeypots work
+// by being targeted by automation, not by being invisible to humans.
+const HONEYPOT_STYLE: CSSProperties = {
+  position: 'absolute',
+  left: '-9999px',
+  width: 1,
+  height: 1,
+  opacity: 0,
+}
+
+function isValidEmail(value: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(value)
+}
 
 /* ─── Brand atoms ───────────────────────────────────────────────────── */
 
@@ -281,11 +299,15 @@ function StepDots({ active }: { active: number }) {
 /* ─── Form parts ────────────────────────────────────────────────────── */
 
 function EmailField({
-  defaultValue = '',
+  value,
+  onChange,
   state = 'valid',
+  autoFocus,
 }: {
-  defaultValue?: string
+  value: string
+  onChange: (next: string) => void
   state?: 'valid' | 'error'
+  autoFocus?: boolean
 }) {
   const error = state === 'error'
   return (
@@ -322,7 +344,10 @@ function EmailField({
       </span>
       <input
         type="email"
-        defaultValue={defaultValue}
+        autoComplete="email"
+        autoFocus={autoFocus}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
         placeholder="you@yourclub.com"
         aria-label="Email address"
         aria-invalid={error || undefined}
@@ -482,7 +507,13 @@ function SolverLog({ lines }: { lines: SolverLine[] }) {
   )
 }
 
-function SuccessReceipt() {
+function SuccessReceipt({
+  username,
+  email,
+}: {
+  username: string
+  email: string | null
+}) {
   return (
     <div
       style={{
@@ -521,22 +552,19 @@ function SuccessReceipt() {
               marginTop: 4,
             }}
           >
-            Tomás Fischer · Club 37 · seed 14
+            @{username}
           </div>
         </div>
       </div>
-      <div style={receiptDiv} />
-      <div style={receiptRow}>
-        <span style={receiptK}>Rating</span>
-        <span style={{ ...receiptV, color: 'var(--serve-500)' }}>
-          1842 ▲ +12
-        </span>
-      </div>
-      <div style={receiptDiv} />
-      <div style={receiptRow}>
-        <span style={receiptK}>Next match</span>
-        <span style={receiptV}>Tonight · 19:30 · Court 2</span>
-      </div>
+      {email && (
+        <>
+          <div style={receiptDiv} />
+          <div style={receiptRow}>
+            <span style={receiptK}>Email</span>
+            <span style={receiptV}>{email}</span>
+          </div>
+        </>
+      )}
     </div>
   )
 }
@@ -682,7 +710,7 @@ function BounceReceipt({ email }: { email: string }) {
   )
 }
 
-function ErrorReceipt({ code }: { code: string }) {
+function ErrorReceipt({ code, detail }: { code: string; detail?: string }) {
   return (
     <div
       style={{
@@ -711,37 +739,22 @@ function ErrorReceipt({ code }: { code: string }) {
               letterSpacing: '0.18em',
             }}
           >
-            ● TOKEN REJECTED
+            ● {code}
           </div>
-          <div
-            style={{
-              fontFamily: 'var(--font-ui)',
-              fontSize: 14,
-              fontWeight: 500,
-              color: 'var(--fg-1)',
-              marginTop: 4,
-            }}
-          >
-            {code}
-          </div>
+          {detail && (
+            <div
+              style={{
+                fontFamily: 'var(--font-ui)',
+                fontSize: 14,
+                fontWeight: 500,
+                color: 'var(--fg-1)',
+                marginTop: 4,
+              }}
+            >
+              {detail}
+            </div>
+          )}
         </div>
-      </div>
-      <div style={receiptDiv} />
-      <div style={receiptRow}>
-        <span style={receiptK}>Issued</span>
-        <span style={{ ...receiptV, color: 'var(--fg-2)' }}>18 min ago</span>
-      </div>
-      <div style={receiptDiv} />
-      <div style={receiptRow}>
-        <span style={receiptK}>Expired</span>
-        <span style={{ ...receiptV, color: 'var(--loss)' }}>
-          3 min ago · ttl 15m
-        </span>
-      </div>
-      <div style={receiptDiv} />
-      <div style={receiptRow}>
-        <span style={receiptK}>For</span>
-        <span style={receiptV}>tomas.fischer@club37.de</span>
       </div>
     </div>
   )
@@ -1076,7 +1089,47 @@ const logCard: CSSProperties = {
 
 /* ─── Screens ───────────────────────────────────────────────────────── */
 
-export function ScreenEmail() {
+export interface ScreenEmailProps {
+  initialEmail?: string
+  submitting?: boolean
+  errorMessage?: string | null
+  onSubmit: (input: {
+    email: string
+    captchaToken: string
+    honeypot: string
+  }) => void
+}
+
+export function ScreenEmail({
+  initialEmail = '',
+  submitting = false,
+  errorMessage = null,
+  onSubmit,
+}: ScreenEmailProps) {
+  const [email, setEmail] = useState(initialEmail)
+  const [touched, setTouched] = useState(false)
+  const [captchaToken, setCaptchaToken] = useState<string | null>(null)
+  const [honeypot, setHoneypot] = useState('')
+  const [localError, setLocalError] = useState<string | null>(null)
+  const captchaRef = useRef<TurnstileHandle | null>(null)
+
+  const valid = isValidEmail(email)
+  const showError = errorMessage ?? localError ?? (touched && !valid
+    ? "That doesn't look like a valid email."
+    : null)
+
+  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    setTouched(true)
+    if (!valid) return
+    if (!captchaToken) {
+      setLocalError('Complete the check above so we know you’re not a bot.')
+      return
+    }
+    setLocalError(null)
+    onSubmit({ email: email.trim(), captchaToken, honeypot })
+  }
+
   return (
     <Shell
       left={
@@ -1093,8 +1146,66 @@ export function ScreenEmail() {
           title="Your email"
           subtitle="Drop your email. We send a one-tap link — open it and you’re in. We never made a password, so we can’t lose yours."
         >
-          <EmailField defaultValue="" />
-          <button style={btnPrimary}>Send the link</button>
+          <form
+            onSubmit={handleSubmit}
+            style={{ display: 'flex', flexDirection: 'column', gap: 18 }}
+            noValidate
+          >
+            <EmailField
+              value={email}
+              onChange={(next) => {
+                setEmail(next)
+                if (localError) setLocalError(null)
+              }}
+              state={showError ? 'error' : 'valid'}
+              autoFocus
+            />
+            {showError && (
+              <p className="fmm-help fmm-help--err" role="alert">
+                {showError}
+              </p>
+            )}
+
+            <div style={HONEYPOT_STYLE} aria-hidden="true">
+              <label htmlFor="login-fmm-hp">Leave this empty</label>
+              <input
+                id="login-fmm-hp"
+                name="fmm_hp_token"
+                type="text"
+                tabIndex={-1}
+                autoComplete="off"
+                value={honeypot}
+                onChange={(e) => setHoneypot(e.target.value)}
+                data-testid="login-honeypot"
+              />
+            </div>
+
+            <div>
+              <Turnstile
+                handleRef={(h) => {
+                  captchaRef.current = h
+                }}
+                onToken={(token) => {
+                  setCaptchaToken(token)
+                  if (localError) setLocalError(null)
+                }}
+                onExpire={() => setCaptchaToken(null)}
+                onError={() => setCaptchaToken(null)}
+              />
+            </div>
+
+            <button
+              type="submit"
+              style={{
+                ...btnPrimary,
+                opacity: submitting ? 0.7 : 1,
+                cursor: submitting ? 'wait' : 'pointer',
+              }}
+              disabled={submitting}
+            >
+              {submitting ? 'Sending the link…' : 'Send the link'}
+            </button>
+          </form>
           <Divider label="OR" />
           <div style={fineprint}>
             New here? Same flow — we’ll create your account when you confirm.
@@ -1111,8 +1222,21 @@ export function ScreenEmail() {
   )
 }
 
-export function ScreenSent() {
-  const email = 'tomas.fischer@club37.de'
+export interface ScreenSentProps {
+  email: string
+  onResend?: () => void
+  onStartOver?: () => void
+  resending?: boolean
+  resendMessage?: string | null
+}
+
+export function ScreenSent({
+  email,
+  onResend,
+  onStartOver,
+  resending = false,
+  resendMessage = null,
+}: ScreenSentProps) {
   return (
     <Shell
       left={
@@ -1138,15 +1262,56 @@ export function ScreenSent() {
           <EmailReceipt email={email} />
 
           <div style={{ display: 'flex', gap: 10, marginTop: 4 }}>
-            <button style={{ ...btnPrimary, flex: 1 }}>Open inbox</button>
-            <button style={btnGhost}>Resend</button>
+            <button
+              type="button"
+              style={{
+                ...btnGhost,
+                flex: 1,
+                opacity: resending ? 0.7 : 1,
+                cursor: resending ? 'wait' : 'pointer',
+              }}
+              onClick={onResend}
+              disabled={resending || !onResend}
+            >
+              {resending ? 'Resending…' : 'Resend'}
+            </button>
+            <button
+              type="button"
+              style={btnGhost}
+              onClick={onStartOver}
+              disabled={!onStartOver}
+            >
+              Start over
+            </button>
           </div>
+
+          {resendMessage && (
+            <p
+              className="fmm-help fmm-help--ok"
+              role="status"
+              style={{ marginTop: 6 }}
+            >
+              {resendMessage}
+            </p>
+          )}
 
           <div style={{ ...fineprint, marginTop: 10 }}>
             No link? Check spam. Or hit resend, we don’t mind.
             <br />
             <span style={{ color: 'var(--fg-muted)' }}>
-              Wrong address? <a href="#" role="button" style={linkInline}>Start over</a>.
+              Wrong address?{' '}
+              <a
+                href="#"
+                role="button"
+                style={linkInline}
+                onClick={(e) => {
+                  e.preventDefault()
+                  onStartOver?.()
+                }}
+              >
+                Start over
+              </a>
+              .
             </span>
           </div>
 
@@ -1182,14 +1347,24 @@ export function ScreenVerify() {
   )
 }
 
-export function ScreenSuccess() {
+export interface ScreenSuccessProps {
+  username?: string
+  email?: string | null
+  redirectTo?: string
+}
+
+export function ScreenSuccess({
+  username = '',
+  email = null,
+  redirectTo = '/dashboard',
+}: ScreenSuccessProps) {
   return (
     <Shell
       left={
         <HeroCol
           eyebrow="● You’re in"
-          h1a="Welcome back,"
-          h1b="Tomás."
+          h1a="Welcome back"
+          h1b={username ? `@${username}.` : '.'}
         />
       }
       right={
@@ -1200,15 +1375,20 @@ export function ScreenSuccess() {
           subtitle="Warming up the courts."
           accent="var(--serve-500)"
         >
-          <SuccessReceipt />
-          <RedirectStrip dest="/dashboard" />
+          <SuccessReceipt username={username} email={email} />
+          <RedirectStrip dest={redirectTo} />
         </FormCol>
       }
     />
   )
 }
 
-export function ScreenError() {
+export interface ScreenErrorProps {
+  detail?: string
+  onRequestNew?: () => void
+}
+
+export function ScreenError({ detail, onRequestNew }: ScreenErrorProps) {
   return (
     <Shell
       left={
@@ -1226,8 +1406,15 @@ export function ScreenError() {
           subtitle="Your link expired or was already used. Links are good for 15 minutes and one tap — strict for a reason. We’ll send a fresh one."
           accent="var(--loss)"
         >
-          <ErrorReceipt code="ERR_TOKEN_EXPIRED" />
-          <button style={btnPrimary}>Hit me with a new link</button>
+          <ErrorReceipt code="ERR_TOKEN_EXPIRED" detail={detail} />
+          <button
+            type="button"
+            style={btnPrimary}
+            onClick={onRequestNew}
+            disabled={!onRequestNew}
+          >
+            Hit me with a new link
+          </button>
           <div style={{ ...fineprint, marginTop: 6 }}>
             Still stuck? <a href="#" role="button" style={linkInline}>Email support</a> — we read every
             one.
@@ -1238,7 +1425,17 @@ export function ScreenError() {
   )
 }
 
-export function ScreenEmailSendFailed() {
+export interface ScreenEmailSendFailedProps {
+  email?: string
+  detail?: string
+  onTryAgain?: () => void
+}
+
+export function ScreenEmailSendFailed({
+  email = '',
+  detail,
+  onTryAgain,
+}: ScreenEmailSendFailedProps) {
   return (
     <Shell
       left={
@@ -1256,31 +1453,31 @@ export function ScreenEmailSendFailed() {
           subtitle="Our email gateway isn’t answering. Not your fault. Give it a minute and try again — we’re already on it."
           accent="var(--loss)"
         >
-          <EmailField defaultValue="tomas.fischer@club37.de" state="error" />
+          <EmailField value={email} onChange={() => undefined} state="error" />
 
           <InlineError
-            code="ERR_MAIL_PROVIDER_5XX"
-            title="Mail gateway returned 503"
-            detail="Postmark · upstream timed out after 8s. Status: degraded."
-            statusUrl="status.fortymm.com"
+            code="ERR_MAIL_PROVIDER"
+            title="Email service unavailable"
+            detail={
+              detail ??
+              'Our mail provider didn’t answer. Give it a minute and try again.'
+            }
           />
 
           <div style={{ display: 'flex', gap: 10 }}>
-            <button style={{ ...btnPrimary, flex: 1 }}>Try again</button>
-            <button style={btnGhost}>Try magic-code instead</button>
+            <button
+              type="button"
+              style={{ ...btnPrimary, flex: 1 }}
+              onClick={onTryAgain}
+              disabled={!onTryAgain}
+            >
+              Try again
+            </button>
           </div>
 
           <div style={fineprint}>
-            We auto-retry in{' '}
-            <span
-              style={{ color: 'var(--fg-1)', fontFamily: 'var(--font-mono)' }}
-            >
-              00:14
-            </span>
-            .
-            <br />
             <span style={{ color: 'var(--fg-muted)' }}>
-              Still broken in 5 min? <a href="#" role="button" style={linkInline}>Email support</a> or
+              Still broken? <a href="#" role="button" style={linkInline}>Email support</a> or
               check <a href="#" role="button" style={linkInline}>status.fortymm.com</a>.
             </span>
           </div>
@@ -1290,8 +1487,19 @@ export function ScreenEmailSendFailed() {
   )
 }
 
-export function ScreenSentBounced() {
-  const email = 'tomas.fischr@club37.de'
+export interface ScreenSentBouncedProps {
+  email: string
+  onChangeEmail?: () => void
+  onRetry?: () => void
+  retrying?: boolean
+}
+
+export function ScreenSentBounced({
+  email,
+  onChangeEmail,
+  onRetry,
+  retrying = false,
+}: ScreenSentBouncedProps) {
   return (
     <Shell
       left={
@@ -1312,10 +1520,22 @@ export function ScreenSentBounced() {
           <BounceReceipt email={email} />
 
           <div style={{ display: 'flex', gap: 10 }}>
-            <button style={{ ...btnPrimary, flex: 1 }}>
+            <button
+              type="button"
+              style={{ ...btnPrimary, flex: 1 }}
+              onClick={onChangeEmail}
+              disabled={!onChangeEmail}
+            >
               Use a different email
             </button>
-            <button style={btnGhost}>Retry same address</button>
+            <button
+              type="button"
+              style={btnGhost}
+              onClick={onRetry}
+              disabled={retrying || !onRetry}
+            >
+              {retrying ? 'Retrying…' : 'Retry same address'}
+            </button>
           </div>
 
           <div style={fineprint}>
@@ -1332,7 +1552,17 @@ export function ScreenSentBounced() {
   )
 }
 
-export function ScreenVerifyNetError() {
+export interface ScreenVerifyNetErrorProps {
+  onRetry?: () => void
+  onSendNewLink?: () => void
+  retrying?: boolean
+}
+
+export function ScreenVerifyNetError({
+  onRetry,
+  onSendNewLink,
+  retrying = false,
+}: ScreenVerifyNetErrorProps) {
   return (
     <Shell
       left={
@@ -1353,17 +1583,28 @@ export function ScreenVerifyNetError() {
           <InlineError
             code="ERR_NETWORK_UNREACHABLE"
             title="auth.fortymm.com is unreachable"
-            detail="3 attempts · timed out after 12s. Your device looks online; our edge node may be down."
-            statusUrl="status.fortymm.com"
+            detail="The server didn’t answer. Your device looks online; our edge node may be down."
           />
 
           <SolverLog lines={FAILED_VERIFY_LOG} />
 
           <div style={{ display: 'flex', gap: 10 }}>
-            <button style={{ ...btnPrimary, flex: 1 }}>
-              Retry verification
+            <button
+              type="button"
+              style={{ ...btnPrimary, flex: 1 }}
+              onClick={onRetry}
+              disabled={retrying || !onRetry}
+            >
+              {retrying ? 'Retrying…' : 'Retry verification'}
             </button>
-            <button style={btnGhost}>Send a new link</button>
+            <button
+              type="button"
+              style={btnGhost}
+              onClick={onSendNewLink}
+              disabled={!onSendNewLink}
+            >
+              Send a new link
+            </button>
           </div>
         </FormCol>
       }

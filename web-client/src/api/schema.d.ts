@@ -100,6 +100,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/login/request": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Request Login Email
+         * @description Mint a magic-link sign-in token and email it.
+         *
+         *     Always returns 202 regardless of whether the address belongs to a
+         *     confirmed account. Differential responses here would let an attacker
+         *     enumerate accounts by cycling guest sessions for fresh rate-limit
+         *     budgets, the same enumeration vector the email-change flow guards
+         *     against.
+         */
+        post: operations["request_login_email_v1_login_request_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/login/consume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Consume Login Token
+         * @description Verify a magic-link token and rotate the caller's session cookie.
+         *
+         *     The token is itself the bearer credential, so the click is accepted from
+         *     any browser — the inbox proves ownership of the email. The endpoint
+         *     rotates the caller's session cookie to the token's owner regardless of
+         *     which guest session (if any) the browser arrived with.
+         */
+        post: operations["consume_login_token_v1_login_consume_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/permissions": {
         parameters: {
             query?: never;
@@ -393,6 +444,11 @@ export interface components {
         };
         /** ConfirmEmailRequest */
         ConfirmEmailRequest: {
+            /** Token */
+            token: string;
+        };
+        /** ConsumeLoginRequest */
+        ConsumeLoginRequest: {
             /** Token */
             token: string;
         };
@@ -903,6 +959,21 @@ export interface components {
             /** Role Ids */
             role_ids: string[];
         };
+        /** RequestLoginRequest */
+        RequestLoginRequest: {
+            /** Captcha Token */
+            captcha_token: string;
+            /**
+             * Fmm Hp Token
+             * @default
+             */
+            fmm_hp_token: string;
+            /**
+             * Email
+             * Format: email
+             */
+            email: string;
+        };
         /** ResendEmailRequest */
         ResendEmailRequest: {
             /** Captcha Token */
@@ -1164,6 +1235,74 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["ConfirmEmailRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    request_login_email_v1_login_request_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RequestLoginRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    consume_login_token_v1_login_consume_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConsumeLoginRequest"];
             };
         };
         responses: {

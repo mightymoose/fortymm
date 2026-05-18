@@ -44,6 +44,17 @@ def _confirm_url(raw_token: str) -> str:
     return f"{base}/confirm-email?{query}"
 
 
+def _login_url(raw_token: str) -> str:
+    base = _app_base_url()
+    if base is None:
+        raise RuntimeError(
+            "APP_BASE_URL must be set outside FORTYMM_DEV — refusing to "
+            "render an unclickable localhost URL into a sign-in email."
+        )
+    query = urlencode({"token": raw_token})
+    return f"{base}/login/verifying?{query}"
+
+
 def _smtp_configured() -> bool:
     return bool(os.environ.get("SMTP_HOST"))
 
@@ -91,6 +102,41 @@ def send_confirmation_email(to_email: str, raw_token: str, username: str) -> Non
             extra={"to": to_email, "url": confirm_url},
         )
         print(f"[email] confirmation link for {to_email}: {confirm_url}")
+        return
+
+    message = EmailMessage()
+    message["Subject"] = subject
+    message["From"] = from_addr
+    message["To"] = to_email
+    message.set_content(body)
+    _send_via_smtp(message)
+
+
+def send_login_email(to_email: str, raw_token: str, username: str) -> None:
+    """Render and deliver the magic-link sign-in email. Invoked by the RQ worker."""
+    login_url = _login_url(raw_token)
+    from_addr = os.environ.get("EMAIL_FROM", "noreply@fortymm.local")
+    subject = "Your FortyMM sign-in link"
+    body = (
+        f"Hi @{username},\n\n"
+        "Click the link below to sign in to FortyMM. The link is good for "
+        "15 minutes and only works once.\n\n"
+        f"{login_url}\n\n"
+        "If you didn't ask to sign in, you can ignore this email — nobody "
+        "can use the link without your inbox.\n"
+    )
+
+    if not _smtp_configured():
+        if not _dev_mode():
+            raise RuntimeError(
+                "SMTP is not configured and FORTYMM_DEV is not set — "
+                "refusing to silently drop a sign-in email."
+            )
+        log.info(
+            "email_login_link",
+            extra={"to": to_email, "url": login_url},
+        )
+        print(f"[email] sign-in link for {to_email}: {login_url}")
         return
 
     message = EmailMessage()

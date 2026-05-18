@@ -18,6 +18,8 @@ from app.leagues import add_user_to_default_league
 from app.models import Permission, Role, RolePermission, User, UserRole, UserToken
 from app.schemas.session import (
     ConfirmEmailRequest,
+    ConsumeLoginRequest,
+    RequestLoginRequest,
     ResendEmailRequest,
     SessionData,
     SessionResponse,
@@ -36,6 +38,8 @@ SESSION_TOKEN_CONTEXT = "session"
 # us an audit trail of what each token was changing away from. Look up
 # pending tokens by `context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX)`.
 EMAIL_CHANGE_CONTEXT_PREFIX = "change:"
+LOGIN_TOKEN_CONTEXT = "login"
+LOGIN_TOKEN_LIFETIME = timedelta(minutes=15)
 SESSION_LIFETIME = timedelta(days=30)
 EMAIL_TAKEN_DETAIL = "That email is already in use."
 
@@ -518,6 +522,158 @@ async def confirm_email(
     # Mint a fresh session for the token's owner so the confirming browser
     # is signed in as them — replaces whatever guest session this browser
     # had (or hadn't) on arrival.
+    raw_session = secrets.token_urlsafe(32)
+    db.add(
+        UserToken(
+            user_id=user.id,
+            context=SESSION_TOKEN_CONTEXT,
+            token=_hash_token(raw_session),
+        )
+    )
+    await db.commit()
+    _set_session_cookie(response, raw_session)
+    return await _build_session_response(db, user)
+
+
+def _enqueue_login_email(to_email: str, raw_token: str, username: str):
+    return queue_module.get_email_queue().enqueue(
+        "app.email.send_login_email",
+        to_email,
+        raw_token,
+        username,
+        result_ttl=60,
+        failure_ttl=300,
+    )
+
+
+@router.post(
+    "/v1/login/request",
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[
+        Depends(email_send_ip_rate_limit),
+        Depends(email_send_rate_limit),
+    ],
+)
+async def request_login_email(
+    payload: RequestLoginRequest,
+    db: AsyncSession = Depends(get_session),
+) -> dict:
+    """Mint a magic-link sign-in token and email it.
+
+    Always returns 202 regardless of whether the address belongs to a
+    confirmed account. Differential responses here would let an attacker
+    enumerate accounts by cycling guest sessions for fresh rate-limit
+    budgets, the same enumeration vector the email-change flow guards
+    against.
+    """
+    if payload.fmm_hp_token.strip():
+        return {"email": payload.email}
+
+    await _verify_captcha_or_400(payload.captcha_token)
+
+    email = payload.email.lower()
+    user = (
+        await db.execute(
+            select(User).where(
+                User.email == email, User.confirmed_at.is_not(None)
+            )
+        )
+    ).scalar_one_or_none()
+    if user is None:
+        # Unknown email or unconfirmed account — return the same shape as the
+        # success path so the response can't be used to probe membership.
+        return {"email": email}
+
+    # One live login token per user — clicking "resend" or re-submitting the
+    # form invalidates the prior link.
+    await db.execute(
+        delete(UserToken).where(
+            UserToken.user_id == user.id,
+            UserToken.context == LOGIN_TOKEN_CONTEXT,
+        )
+    )
+    raw_token = secrets.token_urlsafe(32)
+    db.add(
+        UserToken(
+            user_id=user.id,
+            context=LOGIN_TOKEN_CONTEXT,
+            token=_hash_token(raw_token),
+            sent_to=email,
+        )
+    )
+
+    try:
+        job = _enqueue_login_email(email, raw_token, user.username)
+    except Exception:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Email service unavailable. Try again in a moment.",
+        )
+
+    try:
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        try:
+            job.cancel()
+        except Exception:
+            pass
+        raise
+    return {"email": email}
+
+
+@router.post("/v1/login/consume", response_model=SessionResponse)
+async def consume_login_token(
+    payload: ConsumeLoginRequest,
+    response: Response,
+    db: AsyncSession = Depends(get_session),
+) -> SessionResponse:
+    """Verify a magic-link token and rotate the caller's session cookie.
+
+    The token is itself the bearer credential, so the click is accepted from
+    any browser — the inbox proves ownership of the email. The endpoint
+    rotates the caller's session cookie to the token's owner regardless of
+    which guest session (if any) the browser arrived with.
+    """
+    token_row = (
+        await db.execute(
+            select(UserToken).where(
+                UserToken.token == _hash_token(payload.token),
+                UserToken.context == LOGIN_TOKEN_CONTEXT,
+            )
+        )
+    ).scalar_one_or_none()
+    if token_row is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="That sign-in link is invalid or expired.",
+        )
+
+    issued_at = token_row.created_at
+    if issued_at.tzinfo is None:
+        issued_at = issued_at.replace(tzinfo=timezone.utc)
+    if datetime.now(timezone.utc) - issued_at > LOGIN_TOKEN_LIFETIME:
+        await db.delete(token_row)
+        await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="That sign-in link is invalid or expired.",
+        )
+
+    user = (
+        await db.execute(select(User).where(User.id == token_row.user_id))
+    ).scalar_one_or_none()
+    if user is None:
+        await db.delete(token_row)
+        await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="That sign-in link is invalid or expired.",
+        )
+
+    # Single-use: delete the link the moment we accept it.
+    await db.delete(token_row)
     raw_session = secrets.token_urlsafe(32)
     db.add(
         UserToken(
