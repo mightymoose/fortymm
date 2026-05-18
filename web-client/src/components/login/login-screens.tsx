@@ -8,7 +8,12 @@ function BallLogo({ size = 26 }: { size?: number }) {
   const gradId = `fmm-login-lg-${size}`
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-      <svg width={size} height={size} viewBox="0 0 80 80">
+      <svg
+        width={size}
+        height={size}
+        viewBox="0 0 80 80"
+        aria-hidden="true"
+      >
         <defs>
           <radialGradient id={gradId} cx="35%" cy="35%" r="65%">
             <stop offset="0%" stopColor="#FFB57A" />
@@ -319,6 +324,8 @@ function EmailField({
         type="email"
         defaultValue={defaultValue}
         placeholder="you@yourclub.com"
+        aria-label="Email address"
+        aria-invalid={error || undefined}
         style={{
           flex: 1,
           minWidth: 0,
@@ -602,7 +609,7 @@ function InlineError({
         {statusUrl && (
           <>
             {' '}
-            <a style={linkInline}>{statusUrl}</a>
+            <a href="#" role="button" style={linkInline}>{statusUrl}</a>
           </>
         )}
       </div>
@@ -874,6 +881,7 @@ function ProgressBar({ pct }: { pct: number }) {
 function Spinner() {
   return (
     <div
+      aria-hidden="true"
       style={{
         width: 36,
         height: 36,
@@ -890,6 +898,7 @@ function Spinner() {
 function CheckBadge() {
   return (
     <div
+      aria-hidden="true"
       style={{
         width: 36,
         height: 36,
@@ -917,6 +926,7 @@ function CheckBadge() {
 function XBadge() {
   return (
     <div
+      aria-hidden="true"
       style={{
         width: 36,
         height: 36,
@@ -1091,8 +1101,8 @@ export function ScreenEmail() {
             <br />
             <span style={{ color: 'var(--fg-muted)' }}>
               By signing in you agree to play fair. That’s it.{' '}
-              <a style={linkInline}>House rules</a> ·{' '}
-              <a style={linkInline}>Privacy</a>
+              <a href="#" role="button" style={linkInline}>House rules</a> ·{' '}
+              <a href="#" role="button" style={linkInline}>Privacy</a>
             </span>
           </div>
         </FormCol>
@@ -1136,7 +1146,7 @@ export function ScreenSent() {
             No link? Check spam. Or hit resend, we don’t mind.
             <br />
             <span style={{ color: 'var(--fg-muted)' }}>
-              Wrong address? <a style={linkInline}>Start over</a>.
+              Wrong address? <a href="#" role="button" style={linkInline}>Start over</a>.
             </span>
           </div>
 
@@ -1219,7 +1229,7 @@ export function ScreenError() {
           <ErrorReceipt code="ERR_TOKEN_EXPIRED" />
           <button style={btnPrimary}>Hit me with a new link</button>
           <div style={{ ...fineprint, marginTop: 6 }}>
-            Still stuck? <a style={linkInline}>Email support</a> — we read every
+            Still stuck? <a href="#" role="button" style={linkInline}>Email support</a> — we read every
             one.
           </div>
         </FormCol>
@@ -1270,8 +1280,8 @@ export function ScreenEmailSendFailed() {
             .
             <br />
             <span style={{ color: 'var(--fg-muted)' }}>
-              Still broken in 5 min? <a style={linkInline}>Email support</a> or
-              check <a style={linkInline}>status.fortymm.com</a>.
+              Still broken in 5 min? <a href="#" role="button" style={linkInline}>Email support</a> or
+              check <a href="#" role="button" style={linkInline}>status.fortymm.com</a>.
             </span>
           </div>
         </FormCol>
@@ -1309,11 +1319,11 @@ export function ScreenSentBounced() {
           </div>
 
           <div style={fineprint}>
-            Did you mean <a style={linkInline}>tomas.fischer@club37.de</a>?
+            Did you mean <a href="#" role="button" style={linkInline}>tomas.fischer@club37.de</a>?
             <br />
             <span style={{ color: 'var(--fg-muted)' }}>
               If your address is right, it might be on a blocklist.{' '}
-              <a style={linkInline}>Tell us</a>.
+              <a href="#" role="button" style={linkInline}>Tell us</a>.
             </span>
           </div>
         </FormCol>
