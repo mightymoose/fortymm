@@ -562,12 +562,10 @@ function InlineError({
   code,
   title,
   detail,
-  statusUrl,
 }: {
   code: string
   title: string
   detail: string
-  statusUrl?: string
 }) {
   return (
     <div
@@ -623,12 +621,6 @@ function InlineError({
         }}
       >
         {detail}
-        {statusUrl && (
-          <>
-            {' '}
-            <a href="#" role="button" style={linkInline}>{statusUrl}</a>
-          </>
-        )}
       </div>
     </div>
   )
@@ -1024,6 +1016,32 @@ const linkInline: CSSProperties = {
   cursor: 'pointer',
 }
 
+// Reset for <button> elements that should render as inline text-link. Lets
+// app actions live in <button> (correct semantics, no scroll-jump, no `#`
+// in history) while still looking like the underlined links around them.
+const linkButtonStyle: CSSProperties = {
+  ...linkInline,
+  appearance: 'none',
+  background: 'transparent',
+  border: 'none',
+  padding: 0,
+  font: 'inherit',
+}
+
+function LinkButton({
+  onClick,
+  children,
+}: {
+  onClick?: () => void
+  children: ReactNode
+}) {
+  return (
+    <button type="button" style={linkButtonStyle} onClick={onClick}>
+      {children}
+    </button>
+  )
+}
+
 const mono: CSSProperties = {
   fontFamily: 'var(--font-mono)',
   color: 'var(--ball-500)',
@@ -1201,8 +1219,8 @@ export function ScreenEmail({
             <br />
             <span style={{ color: 'var(--fg-muted)' }}>
               By signing in you agree to play fair. That’s it.{' '}
-              <a href="#" role="button" style={linkInline}>House rules</a> ·{' '}
-              <a href="#" role="button" style={linkInline}>Privacy</a>
+              <LinkButton>House rules</LinkButton> ·{' '}
+              <LinkButton>Privacy</LinkButton>
             </span>
           </div>
         </FormCol>
@@ -1289,18 +1307,7 @@ export function ScreenSent({
             <br />
             <span style={{ color: 'var(--fg-muted)' }}>
               Wrong address?{' '}
-              <a
-                href="#"
-                role="button"
-                style={linkInline}
-                onClick={(e) => {
-                  e.preventDefault()
-                  onStartOver?.()
-                }}
-              >
-                Start over
-              </a>
-              .
+              <LinkButton onClick={onStartOver}>Start over</LinkButton>.
             </span>
           </div>
 
@@ -1405,8 +1412,11 @@ export function ScreenError({ detail, onRequestNew }: ScreenErrorProps) {
             Hit me with a new link
           </button>
           <div style={{ ...fineprint, marginTop: 6 }}>
-            Still stuck? <a href="#" role="button" style={linkInline}>Email support</a> — we read every
-            one.
+            Still stuck?{' '}
+            <a href="mailto:support@fortymm.com" style={linkInline}>
+              Email support
+            </a>{' '}
+            — we read every one.
           </div>
         </FormCol>
       }
@@ -1466,8 +1476,20 @@ export function ScreenEmailSendFailed({
 
           <div style={fineprint}>
             <span style={{ color: 'var(--fg-muted)' }}>
-              Still broken? <a href="#" role="button" style={linkInline}>Email support</a> or
-              check <a href="#" role="button" style={linkInline}>status.fortymm.com</a>.
+              Still broken?{' '}
+              <a href="mailto:support@fortymm.com" style={linkInline}>
+                Email support
+              </a>{' '}
+              or check{' '}
+              <a
+                href="https://status.fortymm.com"
+                target="_blank"
+                rel="noopener noreferrer"
+                style={linkInline}
+              >
+                status.fortymm.com
+              </a>
+              .
             </span>
           </div>
         </FormCol>
@@ -1528,11 +1550,15 @@ export function ScreenSentBounced({
           </div>
 
           <div style={fineprint}>
-            Did you mean <a href="#" role="button" style={linkInline}>tomas.fischer@club37.de</a>?
+            Did you mean{' '}
+            <LinkButton onClick={onChangeEmail}>tomas.fischer@club37.de</LinkButton>?
             <br />
             <span style={{ color: 'var(--fg-muted)' }}>
               If your address is right, it might be on a blocklist.{' '}
-              <a href="#" role="button" style={linkInline}>Tell us</a>.
+              <a href="mailto:support@fortymm.com" style={linkInline}>
+                Tell us
+              </a>
+              .
             </span>
           </div>
         </FormCol>
