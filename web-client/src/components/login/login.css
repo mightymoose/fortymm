@@ -1,0 +1,170 @@
+/* =========================================================================
+   FortyMM Login flow — layout + decorative chrome
+   Scoped to .fmm-login so it doesn't leak into other routes.
+   Design tokens (--ink-*, --ball-*, --serve-*, --fg-*, --font-*) come from
+   the .fortymm-theme block in index.css.
+   ========================================================================= */
+
+.fmm-login,
+.fmm-login * {
+  box-sizing: border-box;
+}
+
+.fmm-login {
+  min-height: 100svh;
+  background: var(--bg-app);
+  color: var(--fg-1);
+  font-family: var(--font-ui);
+  font-size: 15px;
+  line-height: 1.5;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+}
+
+.fmm-login input::placeholder {
+  color: var(--fg-muted);
+}
+
+@keyframes fmm-login-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* ── Shell — split hero/form, container-query driven ────────────────── */
+
+.fmm-shell-frame {
+  container-type: inline-size;
+  flex: 1;
+  width: 100%;
+}
+
+.fmm-shell {
+  width: 100%;
+  min-height: 100svh;
+  background: var(--bg-app);
+  color: var(--fg-1);
+  font-family: var(--font-ui);
+  display: grid;
+  grid-template-columns: 1.05fr 0.95fr;
+  position: relative;
+  overflow: hidden;
+}
+
+.fmm-shell__grid {
+  position: absolute;
+  inset: 0;
+  opacity: 0.5;
+  -webkit-mask-image: radial-gradient(ellipse 60% 60% at 25% 35%, black, transparent 70%);
+          mask-image: radial-gradient(ellipse 60% 60% at 25% 35%, black, transparent 70%);
+  pointer-events: none;
+}
+
+.fmm-shell__halo {
+  position: absolute;
+  top: -15%;
+  left: -10%;
+  width: 700px;
+  height: 700px;
+  background: radial-gradient(circle, rgba(255, 122, 26, 0.22), transparent 65%);
+  pointer-events: none;
+}
+
+.fmm-shell__left,
+.fmm-shell__right {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.fmm-shell__left {
+  padding: 32px 40px 40px;
+}
+
+.fmm-shell__right {
+  padding: 32px 40px 40px;
+  border-left: 1px solid var(--ink-600);
+  background: rgba(11, 13, 18, 0.4);
+}
+
+/* Hero internals ─────────────────────────────────────────────────────── */
+
+.fmm-hero__body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  max-width: 480px;
+  padding-right: 24px;
+}
+
+.fmm-hero__solver {
+  margin-top: 36px;
+  padding-top: 28px;
+  border-top: 1px solid var(--ink-600);
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 14px;
+  align-items: baseline;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  color: var(--fg-3);
+}
+
+.fmm-hero__footer {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--fg-3);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+/* ── Tablet: stack to one column ──────────────────────────────────────── */
+@container (max-width: 900px) {
+  .fmm-shell {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
+  }
+  .fmm-shell__left {
+    padding: 24px 32px 16px;
+  }
+  .fmm-shell__right {
+    border-left: none;
+    border-top: 1px solid var(--ink-600);
+    padding: 24px 32px 32px;
+  }
+  .fmm-hero__body {
+    justify-content: flex-start;
+    max-width: none;
+    padding-right: 0;
+  }
+  .fmm-hero__solver {
+    margin-top: 20px;
+    padding-top: 16px;
+  }
+}
+
+/* ── Phone: drop decorative chrome, tighten everything ────────────────── */
+@container (max-width: 560px) {
+  .fmm-shell__left {
+    padding: 18px 20px 8px;
+  }
+  .fmm-shell__right {
+    padding: 18px 20px 22px;
+  }
+  .fmm-hero__solver,
+  .fmm-hero__footer {
+    display: none;
+  }
+  .fmm-shell__halo {
+    width: 360px;
+    height: 360px;
+    top: -12%;
+    left: -25%;
+  }
+}

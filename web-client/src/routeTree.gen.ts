@@ -16,8 +16,12 @@ import { Route as ConfirmEmailRouteImport } from './routes/confirm-email'
 import { Route as AdminRouteImport } from './routes/admin'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as MatchesIndexRouteImport } from './routes/matches/index'
+import { Route as LoginIndexRouteImport } from './routes/login.index'
 import { Route as AdminIndexRouteImport } from './routes/admin.index'
 import { Route as MatchesNewRouteImport } from './routes/matches/new'
+import { Route as LoginWelcomeRouteImport } from './routes/login.welcome'
+import { Route as LoginVerifyingRouteImport } from './routes/login.verifying'
+import { Route as LoginSentRouteImport } from './routes/login.sent'
 import { Route as AdminUsersRouteImport } from './routes/admin.users'
 import { Route as AdminRolesRouteImport } from './routes/admin.roles'
 import { Route as AdminPermissionsRouteImport } from './routes/admin.permissions'
@@ -60,6 +64,11 @@ const MatchesIndexRoute = MatchesIndexRouteImport.update({
   path: '/matches/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const LoginIndexRoute = LoginIndexRouteImport.update({
+  id: '/login/',
+  path: '/login/',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AdminIndexRoute = AdminIndexRouteImport.update({
   id: '/',
   path: '/',
@@ -68,6 +77,21 @@ const AdminIndexRoute = AdminIndexRouteImport.update({
 const MatchesNewRoute = MatchesNewRouteImport.update({
   id: '/matches/new',
   path: '/matches/new',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const LoginWelcomeRoute = LoginWelcomeRouteImport.update({
+  id: '/login/welcome',
+  path: '/login/welcome',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const LoginVerifyingRoute = LoginVerifyingRouteImport.update({
+  id: '/login/verifying',
+  path: '/login/verifying',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const LoginSentRoute = LoginSentRouteImport.update({
+  id: '/login/sent',
+  path: '/login/sent',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AdminUsersRoute = AdminUsersRouteImport.update({
@@ -113,8 +137,12 @@ export interface FileRoutesByFullPath {
   '/admin/permissions': typeof AdminPermissionsRoute
   '/admin/roles': typeof AdminRolesRoute
   '/admin/users': typeof AdminUsersRoute
+  '/login/sent': typeof LoginSentRoute
+  '/login/verifying': typeof LoginVerifyingRoute
+  '/login/welcome': typeof LoginWelcomeRoute
   '/matches/new': typeof MatchesNewRoute
   '/admin/': typeof AdminIndexRoute
+  '/login/': typeof LoginIndexRoute
   '/matches/': typeof MatchesIndexRoute
   '/matches/$matchId/': typeof MatchesMatchIdIndexRoute
   '/matches/$matchId/games/$gameId/scores/new': typeof MatchesMatchIdGamesGameIdScoresNewRoute
@@ -129,8 +157,12 @@ export interface FileRoutesByTo {
   '/admin/permissions': typeof AdminPermissionsRoute
   '/admin/roles': typeof AdminRolesRoute
   '/admin/users': typeof AdminUsersRoute
+  '/login/sent': typeof LoginSentRoute
+  '/login/verifying': typeof LoginVerifyingRoute
+  '/login/welcome': typeof LoginWelcomeRoute
   '/matches/new': typeof MatchesNewRoute
   '/admin': typeof AdminIndexRoute
+  '/login': typeof LoginIndexRoute
   '/matches': typeof MatchesIndexRoute
   '/matches/$matchId': typeof MatchesMatchIdIndexRoute
   '/matches/$matchId/games/$gameId/scores/new': typeof MatchesMatchIdGamesGameIdScoresNewRoute
@@ -147,8 +179,12 @@ export interface FileRoutesById {
   '/admin/permissions': typeof AdminPermissionsRoute
   '/admin/roles': typeof AdminRolesRoute
   '/admin/users': typeof AdminUsersRoute
+  '/login/sent': typeof LoginSentRoute
+  '/login/verifying': typeof LoginVerifyingRoute
+  '/login/welcome': typeof LoginWelcomeRoute
   '/matches/new': typeof MatchesNewRoute
   '/admin/': typeof AdminIndexRoute
+  '/login/': typeof LoginIndexRoute
   '/matches/': typeof MatchesIndexRoute
   '/matches/$matchId/': typeof MatchesMatchIdIndexRoute
   '/matches/$matchId/games/$gameId/scores/new': typeof MatchesMatchIdGamesGameIdScoresNewRoute
@@ -166,8 +202,12 @@ export interface FileRouteTypes {
     | '/admin/permissions'
     | '/admin/roles'
     | '/admin/users'
+    | '/login/sent'
+    | '/login/verifying'
+    | '/login/welcome'
     | '/matches/new'
     | '/admin/'
+    | '/login/'
     | '/matches/'
     | '/matches/$matchId/'
     | '/matches/$matchId/games/$gameId/scores/new'
@@ -182,8 +222,12 @@ export interface FileRouteTypes {
     | '/admin/permissions'
     | '/admin/roles'
     | '/admin/users'
+    | '/login/sent'
+    | '/login/verifying'
+    | '/login/welcome'
     | '/matches/new'
     | '/admin'
+    | '/login'
     | '/matches'
     | '/matches/$matchId'
     | '/matches/$matchId/games/$gameId/scores/new'
@@ -199,8 +243,12 @@ export interface FileRouteTypes {
     | '/admin/permissions'
     | '/admin/roles'
     | '/admin/users'
+    | '/login/sent'
+    | '/login/verifying'
+    | '/login/welcome'
     | '/matches/new'
     | '/admin/'
+    | '/login/'
     | '/matches/'
     | '/matches/$matchId/'
     | '/matches/$matchId/games/$gameId/scores/new'
@@ -214,7 +262,11 @@ export interface RootRouteChildren {
   DashboardRoute: typeof DashboardRoute
   DesignSystemRoute: typeof DesignSystemRoute
   SettingsRoute: typeof SettingsRoute
+  LoginSentRoute: typeof LoginSentRoute
+  LoginVerifyingRoute: typeof LoginVerifyingRoute
+  LoginWelcomeRoute: typeof LoginWelcomeRoute
   MatchesNewRoute: typeof MatchesNewRoute
+  LoginIndexRoute: typeof LoginIndexRoute
   MatchesIndexRoute: typeof MatchesIndexRoute
   MatchesMatchIdIndexRoute: typeof MatchesMatchIdIndexRoute
   MatchesMatchIdGamesGameIdScoresNewRoute: typeof MatchesMatchIdGamesGameIdScoresNewRoute
@@ -272,6 +324,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof MatchesIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/login/': {
+      id: '/login/'
+      path: '/login'
+      fullPath: '/login/'
+      preLoaderRoute: typeof LoginIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/admin/': {
       id: '/admin/'
       path: '/'
@@ -284,6 +343,27 @@ declare module '@tanstack/react-router' {
       path: '/matches/new'
       fullPath: '/matches/new'
       preLoaderRoute: typeof MatchesNewRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/login/welcome': {
+      id: '/login/welcome'
+      path: '/login/welcome'
+      fullPath: '/login/welcome'
+      preLoaderRoute: typeof LoginWelcomeRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/login/verifying': {
+      id: '/login/verifying'
+      path: '/login/verifying'
+      fullPath: '/login/verifying'
+      preLoaderRoute: typeof LoginVerifyingRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/login/sent': {
+      id: '/login/sent'
+      path: '/login/sent'
+      fullPath: '/login/sent'
+      preLoaderRoute: typeof LoginSentRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin/users': {
@@ -354,7 +434,11 @@ const rootRouteChildren: RootRouteChildren = {
   DashboardRoute: DashboardRoute,
   DesignSystemRoute: DesignSystemRoute,
   SettingsRoute: SettingsRoute,
+  LoginSentRoute: LoginSentRoute,
+  LoginVerifyingRoute: LoginVerifyingRoute,
+  LoginWelcomeRoute: LoginWelcomeRoute,
   MatchesNewRoute: MatchesNewRoute,
+  LoginIndexRoute: LoginIndexRoute,
   MatchesIndexRoute: MatchesIndexRoute,
   MatchesMatchIdIndexRoute: MatchesMatchIdIndexRoute,
   MatchesMatchIdGamesGameIdScoresNewRoute:
