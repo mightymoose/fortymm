@@ -249,6 +249,11 @@ function FormCol({
   )
 }
 
+function stepDotColor(n: number, active: number) {
+  if (active === -1) return n === 4 ? 'var(--loss)' : 'var(--ink-500)'
+  return n <= active ? 'var(--ball-500)' : 'var(--ink-600)'
+}
+
 function StepDots({ active }: { active: number }) {
   return (
     <div style={{ display: 'inline-flex', gap: 6 }}>
@@ -259,14 +264,7 @@ function StepDots({ active }: { active: number }) {
             width: n === active ? 18 : 6,
             height: 6,
             borderRadius: 999,
-            background:
-              active === -1
-                ? n === 4
-                  ? 'var(--loss)'
-                  : 'var(--ink-500)'
-                : n <= active
-                  ? 'var(--ball-500)'
-                  : 'var(--ink-600)',
+            background: stepDotColor(n, active),
             transition: 'all 200ms var(--ease-out)',
           }}
         />
@@ -428,56 +426,35 @@ function VerifyCard() {
   )
 }
 
-function SolverLog() {
-  const lines: Array<[string, string, string, string]> = [
-    ['200', 'POST', '/auth/verify', 'token signature ok'],
-    ['200', 'GET', '/auth/session', 'device fingerprint match'],
-    ['…', '···', '/auth/grant', 'minting session…'],
-  ]
-  return (
-    <div style={logCard}>
-      {lines.map((l, i) => (
-        <div
-          key={i}
-          style={{
-            display: 'grid',
-            gridTemplateColumns: '42px 56px 1fr auto',
-            gap: 10,
-          }}
-        >
-          <span
-            style={{
-              color: l[0] === '200' ? 'var(--serve-500)' : 'var(--warn)',
-            }}
-          >
-            {l[0]}
-          </span>
-          <span style={{ color: 'var(--fg-2)' }}>{l[1]}</span>
-          <span style={{ color: 'var(--ball-500)' }}>{l[2]}</span>
-          <span style={{ color: 'var(--fg-muted)' }}>{l[3]}</span>
-        </div>
-      ))}
-    </div>
-  )
+type SolverLine = [string, string, string, string]
+
+const VERIFY_LOG: SolverLine[] = [
+  ['200', 'POST', '/auth/verify', 'token signature ok'],
+  ['200', 'GET', '/auth/session', 'device fingerprint match'],
+  ['…', '···', '/auth/grant', 'minting session…'],
+]
+
+const FAILED_VERIFY_LOG: SolverLine[] = [
+  ['200', 'POST', '/auth/verify', 'token signature ok'],
+  ['…', 'GET', '/auth/session', 'connecting…'],
+  ['522', 'GET', '/auth/session', 'origin unreachable'],
+  ['522', 'GET', '/auth/session', 'retry 2/3 · failed'],
+  ['ERR', '···', '/auth/session', 'gave up after 12s'],
+]
+
+function solverStatusColor(status: string) {
+  if (status === '200') return 'var(--serve-500)'
+  if (status === '…') return 'var(--warn)'
+  return 'var(--loss)'
 }
 
-function FailedSolverLog() {
-  const lines: Array<[string, string, string, string]> = [
-    ['200', 'POST', '/auth/verify', 'token signature ok'],
-    ['…', 'GET', '/auth/session', 'connecting…'],
-    ['522', 'GET', '/auth/session', 'origin unreachable'],
-    ['522', 'GET', '/auth/session', 'retry 2/3 · failed'],
-    ['ERR', '···', '/auth/session', 'gave up after 12s'],
-  ]
+function SolverLog({ lines }: { lines: SolverLine[] }) {
   return (
     <div style={logCard}>
       {lines.map((l, i) => {
-        const c =
-          l[0] === '200'
-            ? 'var(--serve-500)'
-            : l[0] === '…'
-              ? 'var(--warn)'
-              : 'var(--loss)'
+        const statusColor = solverStatusColor(l[0])
+        const pathColor =
+          statusColor === 'var(--loss)' ? 'var(--loss)' : 'var(--ball-500)'
         return (
           <div
             key={i}
@@ -487,15 +464,9 @@ function FailedSolverLog() {
               gap: 10,
             }}
           >
-            <span style={{ color: c }}>{l[0]}</span>
+            <span style={{ color: statusColor }}>{l[0]}</span>
             <span style={{ color: 'var(--fg-2)' }}>{l[1]}</span>
-            <span
-              style={{
-                color: c === 'var(--loss)' ? 'var(--loss)' : 'var(--ball-500)',
-              }}
-            >
-              {l[2]}
-            </span>
+            <span style={{ color: pathColor }}>{l[2]}</span>
             <span style={{ color: 'var(--fg-muted)' }}>{l[3]}</span>
           </div>
         )
@@ -1194,7 +1165,7 @@ export function ScreenVerify() {
           subtitle="Just a sec — confirming you’re you."
         >
           <VerifyCard />
-          <SolverLog />
+          <SolverLog lines={VERIFY_LOG} />
         </FormCol>
       }
     />
@@ -1376,7 +1347,7 @@ export function ScreenVerifyNetError() {
             statusUrl="status.fortymm.com"
           />
 
-          <FailedSolverLog />
+          <SolverLog lines={FAILED_VERIFY_LOG} />
 
           <div style={{ display: 'flex', gap: 10 }}>
             <button style={{ ...btnPrimary, flex: 1 }}>
