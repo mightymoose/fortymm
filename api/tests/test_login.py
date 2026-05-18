@@ -111,28 +111,39 @@ async def test_request_for_unknown_email_returns_202_without_sending(
     assert fake_email_queue.finished_job_registry.count == 0
 
 
-async def test_request_for_unconfirmed_account_returns_202_without_sending(
+async def test_request_for_unconfirmed_account_resends_confirmation(
     api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
 ):
-    db_session.add(
-        User(
-            username="pending",
-            email="rita@example.com",
-            confirmed_at=None,
-        )
-    )
+    """An account whose email isn't confirmed yet gets the confirmation
+    link re-sent instead of a sign-in link, so the user has a path
+    forward. Response shape stays identical for enumeration safety."""
+    user = User(username="pending", email="rita@example.com", confirmed_at=None)
+    db_session.add(user)
     await db_session.commit()
 
     response = await api_client.post("/v1/login/request", json=REQUEST_BODY)
     assert response.status_code == 202
+    assert response.json() == {"email": "rita@example.com"}
 
-    tokens = (
+    login_tokens = (
         await db_session.execute(
             select(UserToken).where(UserToken.context == LOGIN_TOKEN_CONTEXT)
         )
     ).scalars().all()
-    assert tokens == []
-    assert fake_email_queue.finished_job_registry.count == 0
+    assert login_tokens == []
+
+    change_tokens = (
+        await db_session.execute(
+            select(UserToken).where(
+                UserToken.context.startswith("change:")
+            )
+        )
+    ).scalars().all()
+    assert len(change_tokens) == 1
+    assert change_tokens[0].sent_to == "rita@example.com"
+    assert change_tokens[0].user_id == user.id
+
+    assert fake_email_queue.finished_job_registry.count == 1
 
 
 async def test_request_replaces_prior_login_token_for_same_user(
@@ -170,6 +181,25 @@ async def test_request_honeypot_silently_succeeds(
         )
     ).scalars().all()
     assert tokens == []
+
+
+async def test_request_honeypot_response_matches_success_path(api_client: AsyncClient):
+    """Honeypot 202 must echo the lowercased email so bots can't diff
+    honeypot vs success responses to detect the trap."""
+    honeypot = await api_client.post(
+        "/v1/login/request",
+        json={
+            **REQUEST_BODY,
+            "email": "Rita@Example.COM",
+            "fmm_hp_token": "https://spammer.example",
+        },
+    )
+    success = await api_client.post(
+        "/v1/login/request",
+        json={**REQUEST_BODY, "email": "Rita@Example.COM"},
+    )
+    assert honeypot.status_code == success.status_code == 202
+    assert honeypot.json() == success.json()
 
 
 async def test_request_rejects_bad_captcha(
@@ -350,3 +380,28 @@ async def test_consume_does_not_accept_email_change_token(
         "/v1/login/consume", json={"token": raw}
     )
     assert response.status_code == 400
+
+
+async def test_consume_rejects_link_after_user_changed_email(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """An in-flight login link to address X must not sign the user in if
+    they've since pointed their account at address Y."""
+    user = await _make_confirmed_user(db_session, "rita@example.com")
+    raw = "raw-login-token-stale"
+    await _issue_login_token(db_session, user, raw)
+
+    user.email = "rita-new@example.com"
+    await db_session.commit()
+
+    response = await api_client.post(
+        "/v1/login/consume", json={"token": raw}
+    )
+    assert response.status_code == 400
+
+    leftover = (
+        await db_session.execute(
+            select(UserToken).where(UserToken.context == LOGIN_TOKEN_CONTEXT)
+        )
+    ).scalars().all()
+    assert leftover == []

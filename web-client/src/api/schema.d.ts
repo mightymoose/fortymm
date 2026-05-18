@@ -113,11 +113,17 @@ export interface paths {
          * Request Login Email
          * @description Mint a magic-link sign-in token and email it.
          *
-         *     Always returns 202 regardless of whether the address belongs to a
-         *     confirmed account. Differential responses here would let an attacker
-         *     enumerate accounts by cycling guest sessions for fresh rate-limit
-         *     budgets, the same enumeration vector the email-change flow guards
-         *     against.
+         *     Always returns the same 202 shape regardless of whether the address
+         *     belongs to a known account. Differential responses would let an
+         *     attacker enumerate the user base by cycling guest sessions for fresh
+         *     rate-limit budgets — the same enumeration vector the email-change flow
+         *     guards against.
+         *
+         *     Accounts whose email hasn't been confirmed yet get the confirmation
+         *     link re-sent instead of a sign-in link. The login token would let
+         *     someone sign in without proving control of the inbox; the confirmation
+         *     link clears that hurdle and (per ``confirm_email``) rotates them into
+         *     a session anyway.
          */
         post: operations["request_login_email_v1_login_request_post"];
         delete?: never;
