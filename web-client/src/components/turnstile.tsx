@@ -18,6 +18,7 @@ interface TurnstileApi {
       'expired-callback'?: () => void
       'error-callback'?: () => void
       theme?: 'light' | 'dark' | 'auto'
+      appearance?: 'always' | 'execute' | 'interaction-only'
     },
   ) => string
   reset: (widgetId?: string) => void
@@ -122,6 +123,7 @@ export function Turnstile({
           sitekey:
             import.meta.env.VITE_TURNSTILE_SITE_KEY ?? TURNSTILE_TEST_SITE_KEY,
           theme: 'dark',
+          appearance: 'interaction-only',
           callback: (token) => onTokenRef.current(token),
           'expired-callback': () => onExpireRef.current?.(),
           'error-callback': () => {
