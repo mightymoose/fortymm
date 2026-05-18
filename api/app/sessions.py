@@ -318,17 +318,31 @@ async def _issue_confirmation_token(
     return raw_token
 
 
-def _enqueue_confirmation_email(to_email: str, raw_token: str, username: str):
+def _enqueue_email_job(
+    job_func: str, to_email: str, raw_token: str, username: str
+):
     # result_ttl=60 / failure_ttl=300 shrinks the window during which the raw
     # token (pickled into the RQ job hash in Redis) is recoverable from a
     # snapshot or dashboard. Defaults are 8m / 1 year respectively.
     return queue_module.get_email_queue().enqueue(
-        "app.email.send_confirmation_email",
+        job_func,
         to_email,
         raw_token,
         username,
         result_ttl=60,
         failure_ttl=300,
+    )
+
+
+def _enqueue_confirmation_email(to_email: str, raw_token: str, username: str):
+    return _enqueue_email_job(
+        "app.email.send_confirmation_email", to_email, raw_token, username
+    )
+
+
+def _enqueue_login_email(to_email: str, raw_token: str, username: str):
+    return _enqueue_email_job(
+        "app.email.send_login_email", to_email, raw_token, username
     )
 
 
@@ -533,17 +547,6 @@ async def confirm_email(
     await db.commit()
     _set_session_cookie(response, raw_session)
     return await _build_session_response(db, user)
-
-
-def _enqueue_login_email(to_email: str, raw_token: str, username: str):
-    return queue_module.get_email_queue().enqueue(
-        "app.email.send_login_email",
-        to_email,
-        raw_token,
-        username,
-        result_ttl=60,
-        failure_ttl=300,
-    )
 
 
 @router.post(

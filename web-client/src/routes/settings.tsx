@@ -27,6 +27,11 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
+import {
+  HONEYPOT_STYLE,
+  validateEmail,
+  type Validation,
+} from '@/lib/form-helpers'
 import { pageTitle } from '@/lib/page-title'
 import './settings.css'
 
@@ -42,11 +47,6 @@ export const Route = createFileRoute('/settings')({
 /* ------------------------------------------------------------------ */
 
 type EmailStatus = 'guest' | 'pending' | 'verified'
-
-interface Validation {
-  ok: boolean
-  err?: string
-}
 
 // Mirrors api/app/schemas/session.py USERNAME_PATTERN. Client-side validation
 // is for fast feedback; the server still enforces the same rules and returns
@@ -64,13 +64,6 @@ function validateUsername(u: string): Validation {
       ok: false,
       err: 'Lowercase letters, numbers, dots, hyphens and underscores. Must start and end with a letter or number.',
     }
-  return { ok: true }
-}
-
-function validateEmail(e: string): Validation {
-  if (!e) return { ok: false, err: 'Email is required to claim your account.' }
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(e))
-    return { ok: false, err: "That doesn't look like a valid email." }
   return { ok: true }
 }
 
@@ -781,17 +774,6 @@ function UsernameSection({ currentUsername }: { currentUsername: string }) {
 /* ------------------------------------------------------------------ */
 /*  02 — Email (required to claim)                                    */
 /* ------------------------------------------------------------------ */
-
-// Off-screen but still focusable so AT users hear "Leave this empty" — bots
-// pattern-match every visible field, then fill blanks anyway. Honeypots work
-// by being targeted by automation, not by being invisible to humans.
-const HONEYPOT_STYLE: CSSProperties = {
-  position: 'absolute',
-  left: '-9999px',
-  width: 1,
-  height: 1,
-  opacity: 0,
-}
 
 function EmailSection({
   email,

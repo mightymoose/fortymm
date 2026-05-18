@@ -2,23 +2,9 @@ import { useRef, useState } from 'react'
 import type { CSSProperties, FormEvent, ReactNode } from 'react'
 
 import { Turnstile, type TurnstileHandle } from '@/components/turnstile'
+import { HONEYPOT_STYLE, isValidEmail } from '@/lib/form-helpers'
 
 import './login.css'
-
-// Off-screen but still focusable so AT users hear "Leave this empty" — bots
-// pattern-match every visible field, then fill blanks anyway. Honeypots work
-// by being targeted by automation, not by being invisible to humans.
-const HONEYPOT_STYLE: CSSProperties = {
-  position: 'absolute',
-  left: '-9999px',
-  width: 1,
-  height: 1,
-  opacity: 0,
-}
-
-function isValidEmail(value: string): boolean {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(value)
-}
 
 /* ─── Brand atoms ───────────────────────────────────────────────────── */
 
@@ -303,11 +289,13 @@ function EmailField({
   onChange,
   state = 'valid',
   autoFocus,
+  readOnly = false,
 }: {
   value: string
-  onChange: (next: string) => void
+  onChange?: (next: string) => void
   state?: 'valid' | 'error'
   autoFocus?: boolean
+  readOnly?: boolean
 }) {
   const error = state === 'error'
   return (
@@ -347,7 +335,8 @@ function EmailField({
         autoComplete="email"
         autoFocus={autoFocus}
         value={value}
-        onChange={(e) => onChange(e.target.value)}
+        readOnly={readOnly}
+        onChange={readOnly ? undefined : (e) => onChange?.(e.target.value)}
         placeholder="you@yourclub.com"
         aria-label="Email address"
         aria-invalid={error || undefined}
@@ -1453,7 +1442,7 @@ export function ScreenEmailSendFailed({
           subtitle="Our email gateway isn’t answering. Not your fault. Give it a minute and try again — we’re already on it."
           accent="var(--loss)"
         >
-          <EmailField value={email} onChange={() => undefined} state="error" />
+          <EmailField value={email} state="error" readOnly />
 
           <InlineError
             code="ERR_MAIL_PROVIDER"

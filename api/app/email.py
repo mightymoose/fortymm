@@ -73,75 +73,72 @@ def _send_via_smtp(message: EmailMessage) -> None:
         smtp.send_message(message)
 
 
-def send_confirmation_email(to_email: str, raw_token: str, username: str) -> None:
-    """Render and deliver the confirmation email. Invoked by the RQ worker."""
-    confirm_url = _confirm_url(raw_token)
-    from_addr = os.environ.get("EMAIL_FROM", "noreply@fortymm.local")
-    subject = "Confirm your FortyMM email"
-    body = (
-        f"Hi @{username},\n\n"
-        "Click the link below to confirm your email address and claim your "
-        "FortyMM account.\n\n"
-        f"{confirm_url}\n\n"
-        "If you didn't request this, you can ignore this email.\n"
-    )
-
+def _deliver(
+    *,
+    to_email: str,
+    subject: str,
+    body: str,
+    log_event: str,
+    log_url: str,
+    dev_label: str,
+) -> None:
+    """Deliver an email via SMTP, or print + log it in dev. The ``log_event``
+    and ``log_url`` are kept in dev logs only (gated on FORTYMM_DEV) so a
+    prod deploy that forgets SMTP doesn't write bearer tokens to centralized
+    logs. Outside dev, missing SMTP raises so RQ moves the job to
+    ``failed_job_registry`` for an operator to notice."""
     if not _smtp_configured():
         if not _dev_mode():
-            # No SMTP and not dev — this is a deploy bug, not a workflow.
-            # Raising lands the job in failed_job_registry so it's visible.
             raise RuntimeError(
                 "SMTP is not configured and FORTYMM_DEV is not set — "
-                "refusing to silently drop a confirmation email."
+                f"refusing to silently drop a {dev_label} email."
             )
-        # Dev mode: log + print the link so `rq worker email` shows it.
-        # Gated on FORTYMM_DEV (not on missing SMTP) so a prod deploy that
-        # forgets SMTP doesn't write bearer tokens to centralized logs.
-        log.info(
-            "email_confirmation_link",
-            extra={"to": to_email, "url": confirm_url},
-        )
-        print(f"[email] confirmation link for {to_email}: {confirm_url}")
+        log.info(log_event, extra={"to": to_email, "url": log_url})
+        print(f"[email] {dev_label} link for {to_email}: {log_url}")
         return
 
     message = EmailMessage()
     message["Subject"] = subject
-    message["From"] = from_addr
+    message["From"] = os.environ.get("EMAIL_FROM", "noreply@fortymm.local")
     message["To"] = to_email
     message.set_content(body)
     _send_via_smtp(message)
+
+
+def send_confirmation_email(to_email: str, raw_token: str, username: str) -> None:
+    """Render and deliver the confirmation email. Invoked by the RQ worker."""
+    confirm_url = _confirm_url(raw_token)
+    _deliver(
+        to_email=to_email,
+        subject="Confirm your FortyMM email",
+        body=(
+            f"Hi @{username},\n\n"
+            "Click the link below to confirm your email address and claim your "
+            "FortyMM account.\n\n"
+            f"{confirm_url}\n\n"
+            "If you didn't request this, you can ignore this email.\n"
+        ),
+        log_event="email_confirmation_link",
+        log_url=confirm_url,
+        dev_label="confirmation",
+    )
 
 
 def send_login_email(to_email: str, raw_token: str, username: str) -> None:
     """Render and deliver the magic-link sign-in email. Invoked by the RQ worker."""
     login_url = _login_url(raw_token)
-    from_addr = os.environ.get("EMAIL_FROM", "noreply@fortymm.local")
-    subject = "Your FortyMM sign-in link"
-    body = (
-        f"Hi @{username},\n\n"
-        "Click the link below to sign in to FortyMM. The link is good for "
-        "15 minutes and only works once.\n\n"
-        f"{login_url}\n\n"
-        "If you didn't ask to sign in, you can ignore this email — nobody "
-        "can use the link without your inbox.\n"
+    _deliver(
+        to_email=to_email,
+        subject="Your FortyMM sign-in link",
+        body=(
+            f"Hi @{username},\n\n"
+            "Click the link below to sign in to FortyMM. The link is good for "
+            "15 minutes and only works once.\n\n"
+            f"{login_url}\n\n"
+            "If you didn't ask to sign in, you can ignore this email — nobody "
+            "can use the link without your inbox.\n"
+        ),
+        log_event="email_login_link",
+        log_url=login_url,
+        dev_label="sign-in",
     )
-
-    if not _smtp_configured():
-        if not _dev_mode():
-            raise RuntimeError(
-                "SMTP is not configured and FORTYMM_DEV is not set — "
-                "refusing to silently drop a sign-in email."
-            )
-        log.info(
-            "email_login_link",
-            extra={"to": to_email, "url": login_url},
-        )
-        print(f"[email] sign-in link for {to_email}: {login_url}")
-        return
-
-    message = EmailMessage()
-    message["Subject"] = subject
-    message["From"] = from_addr
-    message["To"] = to_email
-    message.set_content(body)
-    _send_via_smtp(message)
