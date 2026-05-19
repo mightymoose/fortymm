@@ -1,0 +1,20 @@
+# Xcode user state (per-developer, never commit)
+xcuserdata/
+*.xcuserstate
+*.xcuserdatad/
+
+# Build artifacts
+build/
+DerivedData/
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# Swift Package Manager
+.build/
+.swiftpm/
+Package.resolved
+
+# CocoaPods / Carthage (not used yet, but pre-empt)
+Pods/
+Carthage/Build/
