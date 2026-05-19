@@ -29,6 +29,20 @@ def fake_solver_queue(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def fake_ratings_queue(monkeypatch):
+    """Async-style RQ queue against fakeredis: enqueues are recorded but the
+    job body never runs. The recompute job opens its own DB engine via
+    ``app.db.get_engine()`` which would not point at the testcontainers
+    database; we test the recompute algorithm by calling
+    ``app.ratings.recompute.recompute_league_ratings`` directly, and use this
+    fixture only to assert that callers enqueued the job."""
+    connection = fakeredis.FakeStrictRedis()
+    q = Queue(queue_module.RATINGS_QUEUE, connection=connection, is_async=True)
+    monkeypatch.setattr(queue_module, "get_ratings_queue", lambda: q)
+    return q
+
+
+@pytest.fixture(autouse=True)
 def fake_email_queue(monkeypatch):
     """Sync RQ queue against fakeredis so enqueued jobs execute inline.
 

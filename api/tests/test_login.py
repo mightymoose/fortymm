@@ -528,3 +528,62 @@ async def test_consume_omits_merge_when_prior_session_is_verified(
     assert (
         await db_session.execute(select(User).where(User.id == sam.id))
     ).scalar_one() is not None
+
+
+# ---- rating recompute enqueue on merge -----------------------------------
+
+
+async def test_consume_enqueues_rating_recompute_when_matches_moved(
+    api_client: AsyncClient, db_session: AsyncSession, fake_ratings_queue
+):
+    """The merge moved a match — kick off the background rating recompute so
+    the surviving user's ratings catch up to their new match history."""
+    rita = await _make_confirmed_user(db_session, "rita@example.com")
+    raw = "raw-login-token-recompute"
+    await _issue_login_token(db_session, rita, raw)
+
+    guest = await start_session(api_client, db_session)
+    opponent = await make_user(db_session, "opponent-jay")
+    await _record_singles_match(db_session, guest, opponent)
+
+    response = await api_client.post("/v1/login/consume", json={"token": raw})
+    assert response.status_code == 200
+    assert response.json()["merged"] == {"matches_moved": 1}
+
+    jobs = fake_ratings_queue.get_jobs()
+    assert len(jobs) == 1
+    job = jobs[0]
+    assert job.func_name == "app.ratings.jobs.recompute_after_merge"
+    assert job.args == (str(rita.id),)
+
+
+async def test_consume_skips_recompute_when_no_matches_moved(
+    api_client: AsyncClient, db_session: AsyncSession, fake_ratings_queue
+):
+    """No matches → no work to do. Don't burn an RQ slot."""
+    rita = await _make_confirmed_user(db_session, "rita@example.com")
+    raw = "raw-login-token-no-matches"
+    await _issue_login_token(db_session, rita, raw)
+
+    # Ephemeral session exists but never played anything.
+    await start_session(api_client, db_session)
+
+    response = await api_client.post("/v1/login/consume", json={"token": raw})
+    assert response.status_code == 200
+    assert response.json()["merged"] == {"matches_moved": 0}
+    assert fake_ratings_queue.get_jobs() == []
+
+
+async def test_consume_skips_recompute_when_no_prior_session(
+    api_client: AsyncClient, db_session: AsyncSession, fake_ratings_queue
+):
+    """Cookieless consume — no merge happens, so no recompute either."""
+    rita = await _make_confirmed_user(db_session, "rita@example.com")
+    raw = "raw-login-token-cookieless"
+    await _issue_login_token(db_session, rita, raw)
+
+    async with make_client() as fresh:
+        response = await fresh.post("/v1/login/consume", json={"token": raw})
+    assert response.status_code == 200
+    assert response.json().get("merged") is None
+    assert fake_ratings_queue.get_jobs() == []

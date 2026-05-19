@@ -1,4 +1,5 @@
 import hashlib
+import logging
 import os
 import secrets
 from datetime import datetime, timedelta, timezone
@@ -30,6 +31,8 @@ from app.schemas.session import (
     UpdateCurrentUserRequest,
 )
 from app.uniqueness import name_taken
+
+log = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -390,6 +393,28 @@ def _enqueue_login_email(to_email: str, raw_token: str, username: str):
     )
 
 
+def _enqueue_rating_recompute_after_merge(user_id) -> None:
+    """Fire-and-forget the rating recompute for ``user_id`` after a merge.
+
+    Called after the merge has already committed — a Redis flap here can't
+    leave the DB inconsistent because the merge stands on its own. We
+    log+swallow enqueue failures rather than fail the sign-in: the recompute
+    is recoverable (re-run by admin tool or re-fire on next login), but a
+    failed sign-in here is user-visible breakage."""
+    try:
+        queue_module.get_ratings_queue().enqueue(
+            "app.ratings.jobs.recompute_after_merge",
+            str(user_id),
+            result_ttl=60,
+            failure_ttl=86400,
+        )
+    except Exception:
+        log.exception(
+            "Failed to enqueue rating recompute after merge",
+            extra={"user_id": str(user_id)},
+        )
+
+
 @router.post(
     "/v1/me/email",
     response_model=SessionResponse,
@@ -593,6 +618,8 @@ async def confirm_email(
         )
     )
     await db.commit()
+    if merged is not None and merged.matches_moved > 0:
+        _enqueue_rating_recompute_after_merge(user.id)
     _set_session_cookie(response, raw_session)
     return await _build_session_response(db, user, merged=merged)
 
@@ -792,5 +819,7 @@ async def consume_login_token(
         )
     )
     await db.commit()
+    if merged is not None and merged.matches_moved > 0:
+        _enqueue_rating_recompute_after_merge(user.id)
     _set_session_cookie(response, raw_session)
     return await _build_session_response(db, user, merged=merged)

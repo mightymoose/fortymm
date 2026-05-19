@@ -4,8 +4,8 @@ confirmation (``/v1/me/email/confirm``) when the browser arrived with a
 different ephemeral session than the target account.
 
 Leaves the verified user's ``user_league_ratings`` and ``rating_history``
-stale relative to the freshly-moved matches — rebuilding those is the
-caller's problem and must happen separately.
+stale relative to the freshly-moved matches — the caller enqueues the
+``app.ratings.jobs.recompute_after_merge`` background job to reconcile.
 """
 
 import uuid
