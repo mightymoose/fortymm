@@ -66,7 +66,13 @@ function Nav() {
         <a className="nav-link" href="#faq">FAQ</a>
       </div>
       <div style={{ flex: 1 }} />
-      <a className="nav-link" href="#">Sign in</a>
+      <Link
+        className="nav-link"
+        to="/login"
+        search={{ error: undefined, email: undefined }}
+      >
+        Sign in
+      </Link>
       <Link className="btn btn-primary" to="/matches/new">
         <span className="btn-dot" />
         Start playing

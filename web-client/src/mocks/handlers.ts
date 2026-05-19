@@ -187,6 +187,41 @@ export const handlers = [
     }
     return HttpResponse.json(mockSession)
   }),
+  http.post('*/v1/login/request', async ({ request }) => {
+    const body =
+      ((await readJson(request)) as {
+        email?: string
+        captcha_token?: string
+        fmm_hp_token?: string
+      } | undefined) ?? {}
+    if (body.fmm_hp_token?.trim())
+      return HttpResponse.json({ email: body.email ?? '' }, { status: 202 })
+    if (!body.captcha_token) return detail('Captcha required.', 400)
+    if (!body.email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(body.email))
+      return detail('Invalid email.', 422)
+    // Always 202 — the mock matches the API's enumeration-safe shape.
+    return HttpResponse.json(
+      { email: body.email.toLowerCase() },
+      { status: 202 },
+    )
+  }),
+  http.post('*/v1/login/consume', async ({ request }) => {
+    const body =
+      ((await readJson(request)) as { token?: string } | undefined) ?? {}
+    if (!body.token) return detail('Missing token.', 400)
+    // The dev-mode magic token "expired" is a deliberate hook for letting
+    // designers test the failure screen end-to-end without rewriting
+    // handlers — anything else succeeds.
+    if (body.token === 'expired')
+      return detail('That sign-in link is invalid or expired.', 400)
+    mockSession.data.user = {
+      ...mockSession.data.user,
+      email: mockSession.data.user.email ?? 'rita@example.com',
+      confirmed_at:
+        mockSession.data.user.confirmed_at ?? new Date().toISOString(),
+    }
+    return HttpResponse.json(mockSession)
+  }),
   http.get('*/v1/players/recent', async () => {
     await delay(300)
     return HttpResponse.json(mockRecentOpponents)

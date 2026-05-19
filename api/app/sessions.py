@@ -18,6 +18,8 @@ from app.leagues import add_user_to_default_league
 from app.models import Permission, Role, RolePermission, User, UserRole, UserToken
 from app.schemas.session import (
     ConfirmEmailRequest,
+    ConsumeLoginRequest,
+    RequestLoginRequest,
     ResendEmailRequest,
     SessionData,
     SessionResponse,
@@ -36,6 +38,8 @@ SESSION_TOKEN_CONTEXT = "session"
 # us an audit trail of what each token was changing away from. Look up
 # pending tokens by `context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX)`.
 EMAIL_CHANGE_CONTEXT_PREFIX = "change:"
+LOGIN_TOKEN_CONTEXT = "login"
+LOGIN_TOKEN_LIFETIME = timedelta(minutes=15)
 SESSION_LIFETIME = timedelta(days=30)
 EMAIL_TAKEN_DETAIL = "That email is already in use."
 
@@ -91,6 +95,21 @@ email_resend_rate_limit = RateLimiter(
 )
 email_resend_ip_rate_limit = RateLimiter(
     times=10, hours=1, identifier=_email_ip_rate_limit_key
+)
+
+
+async def _login_consume_ip_rate_limit_key(request: Request) -> str:
+    """Separate per-IP key for /v1/login/consume so failed verification
+    bursts don't burn the email-send IP budget for legitimate sign-ins
+    from the same network."""
+    return f"login-consume-ip:{_client_ip(request)}"
+
+
+# Permissive ceiling on /v1/login/consume — the bearer token is 256 bits
+# of entropy, so this is defense-in-depth against floods rather than a
+# realistic brute-force barrier.
+login_consume_ip_rate_limit = RateLimiter(
+    times=60, hours=1, identifier=_login_consume_ip_rate_limit_key
 )
 
 
@@ -314,17 +333,31 @@ async def _issue_confirmation_token(
     return raw_token
 
 
-def _enqueue_confirmation_email(to_email: str, raw_token: str, username: str):
+def _enqueue_email_job(
+    job_func: str, to_email: str, raw_token: str, username: str
+):
     # result_ttl=60 / failure_ttl=300 shrinks the window during which the raw
     # token (pickled into the RQ job hash in Redis) is recoverable from a
     # snapshot or dashboard. Defaults are 8m / 1 year respectively.
     return queue_module.get_email_queue().enqueue(
-        "app.email.send_confirmation_email",
+        job_func,
         to_email,
         raw_token,
         username,
         result_ttl=60,
         failure_ttl=300,
+    )
+
+
+def _enqueue_confirmation_email(to_email: str, raw_token: str, username: str):
+    return _enqueue_email_job(
+        "app.email.send_confirmation_email", to_email, raw_token, username
+    )
+
+
+def _enqueue_login_email(to_email: str, raw_token: str, username: str):
+    return _enqueue_email_job(
+        "app.email.send_login_email", to_email, raw_token, username
     )
 
 
@@ -518,6 +551,201 @@ async def confirm_email(
     # Mint a fresh session for the token's owner so the confirming browser
     # is signed in as them — replaces whatever guest session this browser
     # had (or hadn't) on arrival.
+    raw_session = secrets.token_urlsafe(32)
+    db.add(
+        UserToken(
+            user_id=user.id,
+            context=SESSION_TOKEN_CONTEXT,
+            token=_hash_token(raw_session),
+        )
+    )
+    await db.commit()
+    _set_session_cookie(response, raw_session)
+    return await _build_session_response(db, user)
+
+
+@router.post(
+    "/v1/login/request",
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[
+        Depends(email_send_ip_rate_limit),
+        Depends(email_send_rate_limit),
+    ],
+)
+async def request_login_email(
+    payload: RequestLoginRequest,
+    db: AsyncSession = Depends(get_session),
+) -> dict:
+    """Mint a magic-link sign-in token and email it.
+
+    Always returns the same 202 shape regardless of whether the address
+    belongs to a known account. Differential responses would let an
+    attacker enumerate the user base by cycling guest sessions for fresh
+    rate-limit budgets — the same enumeration vector the email-change flow
+    guards against.
+
+    Accounts whose email hasn't been confirmed yet get the confirmation
+    link re-sent instead of a sign-in link. The login token would let
+    someone sign in without proving control of the inbox; the confirmation
+    link clears that hurdle and (per ``confirm_email``) rotates them into
+    a session anyway.
+    """
+    email = payload.email.lower()
+
+    if payload.fmm_hp_token.strip():
+        return {"email": email}
+
+    await _verify_captcha_or_400(payload.captcha_token)
+
+    user = (
+        await db.execute(select(User).where(User.email == email))
+    ).scalar_one_or_none()
+    if user is None:
+        return {"email": email}
+
+    if user.confirmed_at is None:
+        await _issue_and_send_confirmation_email(db, user, email)
+        return {"email": email}
+
+    await _issue_and_send_login_email(db, user, email)
+    return {"email": email}
+
+
+async def _issue_and_send_login_email(
+    db: AsyncSession, user: User, email: str
+) -> None:
+    """Replace any live login token for this user with a fresh one and
+    enqueue the sign-in email. Enqueue before commit so a Redis flap
+    rolls the DB write back instead of stranding a tokenless user."""
+    await db.execute(
+        delete(UserToken).where(
+            UserToken.user_id == user.id,
+            UserToken.context == LOGIN_TOKEN_CONTEXT,
+        )
+    )
+    raw_token = secrets.token_urlsafe(32)
+    db.add(
+        UserToken(
+            user_id=user.id,
+            context=LOGIN_TOKEN_CONTEXT,
+            token=_hash_token(raw_token),
+            sent_to=email,
+        )
+    )
+    try:
+        job = _enqueue_login_email(email, raw_token, user.username)
+    except Exception:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Email service unavailable. Try again in a moment.",
+        )
+    try:
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        try:
+            job.cancel()
+        except Exception:
+            pass
+        raise
+
+
+async def _issue_and_send_confirmation_email(
+    db: AsyncSession, user: User, email: str
+) -> None:
+    """Re-issue this user's pending email-confirmation link. Preserves the
+    prior change-token's context so the audit trail still records what the
+    user was originally changing away from."""
+    prior_context = await _existing_change_context(db, user.id)
+    raw_token = await _issue_confirmation_token(
+        db, user, email, prior_context or _email_change_context(None)
+    )
+    try:
+        job = _enqueue_confirmation_email(email, raw_token, user.username)
+    except Exception:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Email service unavailable. Try again in a moment.",
+        )
+    try:
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        try:
+            job.cancel()
+        except Exception:
+            pass
+        raise
+
+
+@router.post(
+    "/v1/login/consume",
+    response_model=SessionResponse,
+    dependencies=[Depends(login_consume_ip_rate_limit)],
+)
+async def consume_login_token(
+    payload: ConsumeLoginRequest,
+    response: Response,
+    db: AsyncSession = Depends(get_session),
+) -> SessionResponse:
+    """Verify a magic-link token and rotate the caller's session cookie.
+
+    The token is itself the bearer credential, so the click is accepted from
+    any browser — the inbox proves ownership of the email. The endpoint
+    rotates the caller's session cookie to the token's owner regardless of
+    which guest session (if any) the browser arrived with.
+    """
+    token_row = (
+        await db.execute(
+            select(UserToken).where(
+                UserToken.token == _hash_token(payload.token),
+                UserToken.context == LOGIN_TOKEN_CONTEXT,
+            )
+        )
+    ).scalar_one_or_none()
+    if token_row is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="That sign-in link is invalid or expired.",
+        )
+
+    issued_at = token_row.created_at
+    if issued_at.tzinfo is None:
+        issued_at = issued_at.replace(tzinfo=timezone.utc)
+    if datetime.now(timezone.utc) - issued_at > LOGIN_TOKEN_LIFETIME:
+        await db.delete(token_row)
+        await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="That sign-in link is invalid or expired.",
+        )
+
+    user = (
+        await db.execute(select(User).where(User.id == token_row.user_id))
+    ).scalar_one_or_none()
+    if user is None:
+        await db.delete(token_row)
+        await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="That sign-in link is invalid or expired.",
+        )
+
+    # If the user changed their email between request and click, the link no
+    # longer matches the inbox that proved control — reject so the new owner
+    # of the old address can't ride an in-flight link.
+    if token_row.sent_to and token_row.sent_to != user.email:
+        await db.delete(token_row)
+        await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="That sign-in link no longer matches your email.",
+        )
+
+    # Single-use: delete the link the moment we accept it.
+    await db.delete(token_row)
     raw_session = secrets.token_urlsafe(32)
     db.add(
         UserToken(

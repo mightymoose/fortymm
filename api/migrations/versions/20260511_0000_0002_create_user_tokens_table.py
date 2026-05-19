@@ -41,8 +41,15 @@ def upgrade() -> None:
     op.create_index(
         "ix_user_tokens_user_id", "user_tokens", ["user_id"]
     )
+    # Every cookie validation and every magic-link click looks up tokens by
+    # (token, context). Without this index Postgres falls back to a seq scan
+    # on user_tokens, which gets expensive once any session table grows.
+    op.create_index(
+        "ix_user_tokens_token", "user_tokens", ["token"]
+    )
 
 
 def downgrade() -> None:
+    op.drop_index("ix_user_tokens_token", table_name="user_tokens")
     op.drop_index("ix_user_tokens_user_id", table_name="user_tokens")
     op.drop_table("user_tokens")

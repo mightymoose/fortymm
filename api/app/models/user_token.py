@@ -17,7 +17,7 @@ class UserToken(Base):
         primary_key=True,
         default=uuid.uuid4,
     )
-    token: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    token: Mapped[bytes] = mapped_column(LargeBinary, nullable=False, index=True)
     context: Mapped[str] = mapped_column(String(255), nullable=False)
     sent_to: Mapped[str | None] = mapped_column(String(255), nullable=True)
     user_id: Mapped[uuid.UUID] = mapped_column(

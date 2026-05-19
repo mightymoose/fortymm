@@ -114,3 +114,43 @@ export function useConfirmEmail() {
     },
   })
 }
+
+export interface RequestLoginInput {
+  email: string
+  captchaToken: string
+  honeypot?: string
+}
+
+export function useRequestLogin() {
+  return useMutation({
+    mutationFn: async ({
+      email,
+      captchaToken,
+      honeypot = '',
+    }: RequestLoginInput) =>
+      unwrap(
+        'request sign-in link',
+        await api.POST('/v1/login/request', {
+          body: {
+            email,
+            captcha_token: captchaToken,
+            fmm_hp_token: honeypot,
+          },
+        }),
+      ),
+  })
+}
+
+export function useConsumeLoginToken() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (token: string): Promise<Session> =>
+      unwrap(
+        'sign in',
+        await api.POST('/v1/login/consume', { body: { token } }),
+      ),
+    onSuccess: (session) => {
+      qc.setQueryData(SESSION_QUERY_KEY, session)
+    },
+  })
+}
