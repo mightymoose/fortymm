@@ -69,6 +69,7 @@ export function sessionUser(overrides: Partial<SessionUser> = {}): SessionUser {
     permissions: [],
     email: null,
     confirmed_at: null,
+    pending_email: null,
     ...overrides,
   }
 }

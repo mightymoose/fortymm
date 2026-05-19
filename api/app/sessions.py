@@ -55,6 +55,11 @@ def _email_change_context(old_email: str | None) -> str:
     return f"{EMAIL_CHANGE_CONTEXT_PREFIX}{old_email or ''}"
 
 
+def _old_email_from_context(context: str) -> str | None:
+    """Inverse of ``_email_change_context``."""
+    return context.removeprefix(EMAIL_CHANGE_CONTEXT_PREFIX) or None
+
+
 def _hash_cookie_for_key(cookie: str) -> str:
     """Hash the raw session cookie before putting it into a Redis key. The
     cookie is a bearer credential; if it lands in Redis verbatim (snapshots,
@@ -162,6 +167,7 @@ async def _build_session_response(
     db: AsyncSession, user: User, merged: MergeSummary | None = None
 ) -> SessionResponse:
     permissions = await _load_permissions(db, user.id)
+    pending = await _pending_change_token(db, user.id)
     return SessionResponse(
         data=SessionData(
             user=SessionUser(
@@ -169,6 +175,7 @@ async def _build_session_response(
                 permissions=permissions,
                 email=user.email,
                 confirmed_at=user.confirmed_at,
+                pending_email=pending.sent_to if pending else None,
             )
         ),
         merged=merged,
@@ -326,21 +333,23 @@ async def _verify_captcha_or_400(captcha_token: str) -> None:
         )
 
 
-async def _existing_change_context(
+async def _pending_change_token(
     db: AsyncSession, user_id
-) -> str | None:
-    """Return the context of the user's pending email-change token, if any.
-    Lets ``resend`` preserve the original "change:" + old_email signature
-    instead of guessing once the user's row has been overwritten."""
+) -> UserToken | None:
+    """Return the user's pending email-change token, if any. Resend needs
+    both the prior ``context`` (audit trail) and ``sent_to`` (where to
+    re-deliver) — now that ``user.email`` no longer mirrors the pending
+    address, the token is the only source of truth for the resend target.
+    Also drives the ``pending_email`` field on the session response."""
     result = await db.execute(
-        select(UserToken.context)
+        select(UserToken)
         .where(
             UserToken.user_id == user_id,
             UserToken.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX),
         )
         .limit(1)
     )
-    return result.scalars().first()
+    return result.scalar_one_or_none()
 
 
 async def _issue_confirmation_token(
@@ -441,7 +450,9 @@ async def set_email(
 
     email = payload.email.lower()
     old_email = current_user.email
-    if current_user.email != email and await name_taken(
+    if old_email == email and current_user.confirmed_at is not None:
+        return await _build_session_response(db, current_user)
+    if old_email != email and await name_taken(
         db, User.id, User.email, email, exclude_id=current_user.id
     ):
         # Don't reveal that the email belongs to another user — that
@@ -452,12 +463,6 @@ async def set_email(
         # a "sent" toast but never receives an email.
         return await _build_session_response(db, current_user)
 
-    if current_user.email != email:
-        current_user.email = email
-
-    # Every successful set_email re-starts the confirmation handshake — the
-    # user must click the new link even if they re-submitted the same address.
-    current_user.confirmed_at = None
     raw_token = await _issue_confirmation_token(
         db, current_user, email, _email_change_context(old_email)
     )
@@ -510,30 +515,23 @@ async def resend_email_confirmation(
 ) -> SessionResponse:
     if payload.fmm_hp_token.strip():
         return await _build_session_response(db, current_user)
-    if not current_user.email:
+    pending = await _pending_change_token(db, current_user.id)
+    if pending is None or not pending.sent_to:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Add an email address before requesting a resend.",
-        )
-    if current_user.confirmed_at is not None:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="This email is already confirmed.",
+            detail="No pending email change to resend.",
         )
     await _verify_captcha_or_400(payload.captcha_token)
 
-    # Reuse the prior token's context so the audit trail still records what
-    # the user was originally changing away from.
-    prior_context = await _existing_change_context(db, current_user.id)
     raw_token = await _issue_confirmation_token(
         db,
         current_user,
-        current_user.email,
-        prior_context or _email_change_context(None),
+        pending.sent_to,
+        pending.context,
     )
     try:
         job = _enqueue_confirmation_email(
-            current_user.email, raw_token, current_user.username
+            pending.sent_to, raw_token, current_user.username
         )
     except Exception:
         await db.rollback()
@@ -562,7 +560,11 @@ async def confirm_email(
     ] = None,
     db: AsyncSession = Depends(get_session),
 ) -> SessionResponse:
-    """Confirm the email-change handshake.
+    """Consume an email-change token: stamp the new email + ``confirmed_at``.
+
+    Invariant: ``user.email`` holds the prior confirmed address; the new
+    address lives on ``token.sent_to`` until this endpoint runs. This is
+    the single place either column flips.
 
     The token in the email is itself the bearer credential — we don't
     require the click to come from the same browser that requested it.
@@ -595,31 +597,45 @@ async def confirm_email(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="That confirmation link is invalid or expired.",
         )
-    if token_row.sent_to and token_row.sent_to != user.email:
-        # The user changed their email between request and click — the link
-        # no longer matches the intended address.
+    expected_old = _old_email_from_context(token_row.context)
+    if user.email != expected_old:
+        # The user's current confirmed address no longer matches the one
+        # this token was cut against — could be an admin reset, or a stale
+        # token from a prior change. Burn it and surface the generic
+        # "invalid or expired" so we don't leak any state to the caller.
         await db.delete(token_row)
         await db.commit()
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="That confirmation link no longer matches your email.",
+            detail="That confirmation link is invalid or expired.",
         )
 
-    user.confirmed_at = datetime.now(timezone.utc)
-    await db.delete(token_row)
-    merged = await _maybe_merge_prior_session(db, session_cookie, user)
-    # Mint a fresh session for the token's owner so the confirming browser
-    # is signed in as them — replaces whatever guest session this browser
-    # had (or hadn't) on arrival.
+    # ``_maybe_merge_prior_session`` runs a query that triggers an
+    # autoflush of ``user.email`` before our explicit commit, so the
+    # users.email unique-constraint race (another user confirmed this
+    # address first) can surface anywhere in this block — not just at
+    # commit. Return the opaque "invalid or expired" so we don't leak
+    # who owns the address.
     raw_session = secrets.token_urlsafe(32)
-    db.add(
-        UserToken(
-            user_id=user.id,
-            context=SESSION_TOKEN_CONTEXT,
-            token=_hash_token(raw_session),
+    try:
+        user.email = token_row.sent_to
+        user.confirmed_at = datetime.now(timezone.utc)
+        await db.delete(token_row)
+        merged = await _maybe_merge_prior_session(db, session_cookie, user)
+        db.add(
+            UserToken(
+                user_id=user.id,
+                context=SESSION_TOKEN_CONTEXT,
+                token=_hash_token(raw_session),
+            )
         )
-    )
-    await db.commit()
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="That confirmation link is invalid or expired.",
+        )
     if merged is not None and merged.matches_moved > 0:
         _enqueue_rating_recompute_after_merge(user.id)
     _set_session_cookie(response, raw_session)
@@ -719,9 +735,9 @@ async def _issue_and_send_confirmation_email(
     """Re-issue this user's pending email-confirmation link. Preserves the
     prior change-token's context so the audit trail still records what the
     user was originally changing away from."""
-    prior_context = await _existing_change_context(db, user.id)
+    prior = await _pending_change_token(db, user.id)
     raw_token = await _issue_confirmation_token(
-        db, user, email, prior_context or _email_change_context(None)
+        db, user, email, prior.context if prior else _email_change_context(None)
     )
     try:
         job = _enqueue_confirmation_email(email, raw_token, user.username)

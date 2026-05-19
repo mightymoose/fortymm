@@ -16,6 +16,7 @@ class SessionUser(BaseModel):
     permissions: list[str]
     email: str | None = None
     confirmed_at: datetime | None = None
+    pending_email: str | None = None
 
 
 class SessionData(BaseModel):
