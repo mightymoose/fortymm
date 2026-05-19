@@ -22,6 +22,7 @@ from app.models import (
     UserLeagueRating,
     UserToken,
 )
+from app.sessions import SESSION_TOKEN_CONTEXT
 
 
 async def _make_ephemeral(db: AsyncSession, username: str) -> User:
@@ -110,7 +111,7 @@ async def test_merge_deletes_ephemeral_user_and_cascades_tokens(
     db_session.add(
         UserToken(
             user_id=ephemeral.id,
-            context="session",
+            context=SESSION_TOKEN_CONTEXT,
             token=hashlib.sha256(b"raw").digest(),
         )
     )

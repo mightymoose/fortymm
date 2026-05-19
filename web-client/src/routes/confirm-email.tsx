@@ -27,19 +27,17 @@ function ConfirmEmailPage() {
     confirm.mutate(token)
   }, [token, confirm])
 
-  const toasted = useRef(false)
   useEffect(() => {
-    if (toasted.current || !confirm.data) return
-    const moved = confirm.data.merged?.matches_moved ?? 0
+    if (!confirm.isSuccess) return
+    const moved = confirm.data?.merged?.matches_moved ?? 0
     if (moved > 0) {
-      toasted.current = true
       toast.success(
         moved === 1
           ? 'We brought your 1 match with you.'
           : `We brought your ${moved} matches with you.`,
       )
     }
-  }, [confirm.data])
+  }, [confirm.isSuccess, confirm.data])
 
   const status: 'missing-token' | 'confirming' | 'ok' | 'error' = !token
     ? 'missing-token'

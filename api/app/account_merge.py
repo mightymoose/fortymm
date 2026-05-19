@@ -1,12 +1,11 @@
 """Re-point ownership from an ephemeral user to a verified user, then delete
-the ephemeral user. Used when a browser holding an anonymous session signs in
-(``/v1/login/consume``) or confirms an email (``/v1/me/email/confirm``) for a
-different account.
+the ephemeral user. Called from sign-in (``/v1/login/consume``) and email
+confirmation (``/v1/me/email/confirm``) when the browser arrived with a
+different ephemeral session than the target account.
 
-Rating recompute is intentionally out of scope: after a merge the verified
-user's ``user_league_ratings`` and ``rating_history`` are stale w.r.t. the
-freshly-moved matches and need rebuilding from the merged match list. That
-lives in a follow-up — see CLAUDE.md.
+Leaves the verified user's ``user_league_ratings`` and ``rating_history``
+stale relative to the freshly-moved matches — rebuilding those is the
+caller's problem and must happen separately.
 """
 
 import uuid
@@ -58,8 +57,8 @@ async def merge_user(
     # user_league_ratings / league_memberships both have UNIQUE(league_id,
     # user_id). Re-point only where the verified user has no row in that
     # league; the leftover ephemeral rows cascade-delete with the user below.
-    # Rating recompute (next ticket) reconciles against the merged matches —
-    # don't try to merge JSONB state here.
+    # Don't try to merge JSONB rating state — a rating recompute against the
+    # merged match list is the only correct reconciliation.
     await db.execute(
         text(
             """
