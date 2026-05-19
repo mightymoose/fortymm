@@ -1,10 +1,3 @@
-//
-//  ContentView.swift
-//  Fortymm
-//
-//  Created by Mathew Ryan Morris on 5/19/26.
-//
-
 import SwiftUI
 
 struct ContentView: View {
