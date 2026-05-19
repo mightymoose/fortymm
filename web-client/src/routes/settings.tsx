@@ -778,15 +778,21 @@ function UsernameSection({ currentUsername }: { currentUsername: string }) {
 function EmailSection({
   email,
   confirmedAt,
+  pendingEmail,
 }: {
   email: string | null
   confirmedAt: string | null
+  pendingEmail: string | null
 }) {
   const toast = useToast()
   const setEmail = useSetEmail()
   const resendEmail = useResendEmailConfirmation()
-  const current = email ?? ''
-  const [val, setVal] = useState(current)
+  // ``email`` reflects the user's *confirmed* address; the pending change
+  // (if any) lives on ``pendingEmail`` until the user clicks the link.
+  // Show pending state when either we have a pending change or we have no
+  // confirmed address at all.
+  const displayAddress = pendingEmail ?? email ?? ''
+  const [val, setVal] = useState(displayAddress)
   const [touched, setTouched] = useState(false)
   const [captchaToken, setCaptchaToken] = useState<string | null>(null)
   const [honeypot, setHoneypot] = useState('')
@@ -796,24 +802,26 @@ function EmailSection({
 
   // Reset the local input when the underlying session value changes (e.g. on
   // refetch after another tab confirmed). Avoid clobbering in-progress edits.
-  const lastSyncedRef = useRef(current)
+  const lastSyncedRef = useRef(displayAddress)
   useEffect(() => {
-    if (current === lastSyncedRef.current) return
-    lastSyncedRef.current = current
-    setVal(current)
+    if (displayAddress === lastSyncedRef.current) return
+    lastSyncedRef.current = displayAddress
+    setVal(displayAddress)
     setTouched(false)
     setServerErr(null)
-  }, [current])
+  }, [displayAddress])
 
   const v = useMemo(() => validateEmail(val), [val])
-  const dirty = val !== current
+  const dirty = val !== displayAddress
   const showErr = serverErr ?? (touched && !v.ok ? v.err : null)
 
-  const status: EmailStatus = confirmedAt
-    ? 'verified'
-    : email
-      ? 'pending'
-      : 'guest'
+  const status: EmailStatus = pendingEmail
+    ? 'pending'
+    : confirmedAt
+      ? 'verified'
+      : email
+        ? 'pending'
+        : 'guest'
 
   const resetCaptcha = () => {
     captchaRef.current?.reset()
@@ -860,7 +868,7 @@ function EmailSection({
     try {
       await resendEmail.mutateAsync({ captchaToken, honeypot })
       resetCaptcha()
-      toast(`Verification link re-sent to ${email}.`)
+      toast(`Verification link re-sent to ${pendingEmail ?? displayAddress}.`)
     } catch (err) {
       resetCaptcha()
       toast(
@@ -894,11 +902,11 @@ function EmailSection({
           savedAt={savedAt}
           onSave={onSave}
           onCancel={() => {
-            setVal(current)
+            setVal(displayAddress)
             setTouched(false)
             setServerErr(null)
           }}
-          primaryLabel={email ? 'Update email' : 'Add email'}
+          primaryLabel={email || pendingEmail ? 'Update email' : 'Add email'}
         />
       }
     >
@@ -973,7 +981,7 @@ function EmailSection({
         />
       </div>
 
-      {email && (
+      {(email || pendingEmail) && (
         <div
           style={{
             marginTop: 16,
@@ -1024,7 +1032,10 @@ function EmailSection({
                 </div>
                 <div style={{ color: 'var(--fg-3)', marginTop: 2 }}>
                   Open the link we just sent to{' '}
-                  <span style={{ fontFamily: 'var(--font-mono)' }}>{email}</span>.
+                  <span style={{ fontFamily: 'var(--font-mono)' }}>
+                    {pendingEmail ?? email}
+                  </span>
+                  .
                 </div>
               </>
             )}
@@ -1068,13 +1079,18 @@ function SettingsPage() {
   const sessionUsername = sessionUser?.username ?? ''
   const sessionEmail = sessionUser?.email ?? null
   const sessionConfirmedAt = sessionUser?.confirmed_at ?? null
+  const sessionPendingEmail = sessionUser?.pending_email ?? null
   const hash = useRouterState({ select: (s) => s.location.hash })
 
-  const effectiveStatus: EmailStatus = sessionConfirmedAt
-    ? 'verified'
-    : sessionEmail
-      ? 'pending'
-      : 'guest'
+  // Pending state wins for banner purposes (a verified user with a pending
+  // change still has something the FE needs to nudge them to complete).
+  const effectiveStatus: EmailStatus = sessionPendingEmail
+    ? 'pending'
+    : sessionConfirmedAt
+      ? 'verified'
+      : sessionEmail
+        ? 'pending'
+        : 'guest'
   const claimed = effectiveStatus === 'verified'
 
   // Honor /settings#sec-* deep links from external nav.
@@ -1093,7 +1109,7 @@ function SettingsPage() {
 
               <ClaimBanner
                 status={effectiveStatus}
-                email={sessionEmail ?? ''}
+                email={sessionPendingEmail ?? sessionEmail ?? ''}
                 onJump={() => scrollToSection('sec-email')}
               />
 
@@ -1102,6 +1118,7 @@ function SettingsPage() {
                 <EmailSection
                   email={sessionEmail}
                   confirmedAt={sessionConfirmedAt}
+                  pendingEmail={sessionPendingEmail}
                 />
               </div>
 

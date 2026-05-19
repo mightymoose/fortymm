@@ -153,10 +153,19 @@ export const handlers = [
     if (!body.captcha_token) return detail('Captcha required.', 400)
     if (!body.email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(body.email))
       return detail('Invalid email.', 422)
+    const next = body.email.toLowerCase()
+    // Already-verified-for-this-address resubmit is a no-op.
+    if (
+      mockSession.data.user.email === next &&
+      mockSession.data.user.confirmed_at
+    ) {
+      return HttpResponse.json(mockSession, { status: 202 })
+    }
+    // Pending-only: leave email + confirmed_at alone; surface the new
+    // address as pending_email until confirm consumes it.
     mockSession.data.user = {
       ...mockSession.data.user,
-      email: body.email.toLowerCase(),
-      confirmed_at: null,
+      pending_email: next,
     }
     return HttpResponse.json(mockSession, { status: 202 })
   }),
@@ -168,10 +177,8 @@ export const handlers = [
       } | undefined) ?? {}
     if (body.fmm_hp_token?.trim())
       return HttpResponse.json(mockSession, { status: 202 })
-    if (!mockSession.data.user.email)
-      return detail('Add an email address before requesting a resend.', 400)
-    if (mockSession.data.user.confirmed_at)
-      return detail('This email is already confirmed.', 409)
+    if (!mockSession.data.user.pending_email)
+      return detail('No pending email change to resend.', 400)
     if (!body.captcha_token) return detail('Captcha required.', 400)
     return HttpResponse.json(mockSession, { status: 202 })
   }),
@@ -179,11 +186,13 @@ export const handlers = [
     const body =
       ((await readJson(request)) as { token?: string } | undefined) ?? {}
     if (!body.token) return detail('Missing token.', 400)
-    if (!mockSession.data.user.email)
+    if (!mockSession.data.user.pending_email)
       return detail('That confirmation link is invalid or expired.', 400)
     mockSession.data.user = {
       ...mockSession.data.user,
+      email: mockSession.data.user.pending_email,
       confirmed_at: new Date().toISOString(),
+      pending_email: null,
     }
     return HttpResponse.json(mockSession)
   }),

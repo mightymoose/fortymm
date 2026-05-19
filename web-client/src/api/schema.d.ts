@@ -83,7 +83,11 @@ export interface paths {
         put?: never;
         /**
          * Confirm Email
-         * @description Confirm the email-change handshake.
+         * @description Consume an email-change token: stamp the new email + ``confirmed_at``.
+         *
+         *     Invariant: ``user.email`` holds the prior confirmed address; the new
+         *     address lives on ``token.sent_to`` until this endpoint runs. This is
+         *     the single place either column flips.
          *
          *     The token in the email is itself the bearer credential — we don't
          *     require the click to come from the same browser that requested it.
@@ -1063,6 +1067,8 @@ export interface components {
             email?: string | null;
             /** Confirmed At */
             confirmed_at?: string | null;
+            /** Pending Email */
+            pending_email?: string | null;
         };
         /** SetEmailRequest */
         SetEmailRequest: {

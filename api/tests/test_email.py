@@ -53,21 +53,26 @@ async def test_session_response_includes_email_fields(
     user = response.json()["data"]["user"]
     assert user["email"] is None
     assert user["confirmed_at"] is None
+    assert user["pending_email"] is None
 
 
-async def test_set_email_persists_and_enqueues_send(
+async def test_set_email_is_pending_only(
     api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
 ):
+    """``set_email`` issues a token and enqueues delivery but does not
+    mutate ``user.email`` or ``user.confirmed_at`` — the new address lives
+    only on the token until ``confirm_email`` consumes it."""
     user = await start_session(api_client, db_session)
     response = await _set_email(api_client)
     assert response.status_code == 202
 
     body_user = response.json()["data"]["user"]
-    assert body_user["email"] == "rita@example.com"
+    assert body_user["email"] is None
     assert body_user["confirmed_at"] is None
+    assert body_user["pending_email"] == "rita@example.com"
 
     await db_session.refresh(user)
-    assert user.email == "rita@example.com"
+    assert user.email is None
     assert user.confirmed_at is None
 
     tokens = (
@@ -95,11 +100,18 @@ async def test_set_email_requires_session(api_client: AsyncClient):
 async def test_set_email_normalizes_to_lowercase(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    user = await start_session(api_client, db_session)
+    await start_session(api_client, db_session)
     response = await _set_email(api_client, email="MixedCase@Example.COM")
     assert response.status_code == 202
-    await db_session.refresh(user)
-    assert user.email == "mixedcase@example.com"
+    token = (
+        await db_session.execute(
+            select(UserToken).where(
+                UserToken.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX)
+            )
+        )
+    ).scalar_one()
+    assert token.sent_to == "mixedcase@example.com"
+    assert response.json()["data"]["user"]["pending_email"] == "mixedcase@example.com"
 
 
 async def test_set_email_rejects_invalid_format(api_client: AsyncClient, db_session):
@@ -177,15 +189,16 @@ async def test_set_email_with_taken_address_is_enumeration_safe(
     assert fake_email_queue.finished_job_registry.count == 0
 
 
-async def test_token_context_records_old_email(
+async def test_token_context_records_confirmed_prior_email(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    """Tokens carry their pre-change address in their context so we have an
-    audit trail of what each one was changing FROM. First-time set leaves
-    the address empty."""
-    await start_session(api_client, db_session)
+    """Tokens carry the user's *confirmed* prior address in their context
+    so we have an audit trail of what each token was changing FROM.
+    Unconfirmed re-submits keep context=``change:`` because nothing was
+    ever verified to change FROM."""
+    user = await start_session(api_client, db_session)
 
-    # First-time set — no prior address.
+    # First-time set — no prior confirmed address.
     await _set_email(api_client, email="first@example.com")
     token = (
         await db_session.execute(
@@ -197,7 +210,8 @@ async def test_token_context_records_old_email(
     assert token.context == "change:"
     assert token.sent_to == "first@example.com"
 
-    # Change to a new address — the old one shows up in the context.
+    # Re-submit before confirming — the first address was never confirmed
+    # so the context still records no prior address.
     await _set_email(api_client, email="second@example.com")
     token = (
         await db_session.execute(
@@ -206,8 +220,24 @@ async def test_token_context_records_old_email(
             )
         )
     ).scalar_one()
-    assert token.context == "change:first@example.com"
+    assert token.context == "change:"
     assert token.sent_to == "second@example.com"
+
+    # Simulate confirmation, then change again — now the context picks up
+    # the newly-confirmed prior address.
+    user.email = "second@example.com"
+    user.confirmed_at = datetime.now(timezone.utc)
+    await db_session.commit()
+    await _set_email(api_client, email="third@example.com")
+    token = (
+        await db_session.execute(
+            select(UserToken).where(
+                UserToken.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX)
+            )
+        )
+    ).scalar_one()
+    assert token.context == "change:second@example.com"
+    assert token.sent_to == "third@example.com"
 
 
 async def test_resend_preserves_original_change_context(
@@ -267,11 +297,11 @@ async def test_set_email_replaces_existing_unconfirmed_token(
     assert tokens[0].sent_to == "rita2@example.com"
 
 
-async def test_resubmitting_same_email_clears_confirmation(
+async def test_resubmitting_same_email_when_verified_is_a_noop(
     api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
 ):
-    """Even when the address didn't change, calling set_email un-confirms
-    the user — they must click the fresh link to re-prove ownership."""
+    """Resubmitting the address the user is already verified for has
+    nothing to confirm — no token issued, no email sent, no state change."""
     user = await start_session(api_client, db_session)
     raw_token = await _capture_raw_token(api_client, db_session, fake_email_queue)
     await api_client.post(
@@ -279,39 +309,60 @@ async def test_resubmitting_same_email_clears_confirmation(
     )
     await db_session.refresh(user)
     assert user.confirmed_at is not None
+    sent_count = fake_email_queue.finished_job_registry.count
 
-    await _set_email(api_client)  # same email as VALID_BODY
+    response = await _set_email(api_client)  # same email as VALID_BODY
+    assert response.status_code == 202
+    body_user = response.json()["data"]["user"]
+    assert body_user["pending_email"] is None
+    assert body_user["confirmed_at"] is not None
+
     await db_session.refresh(user)
-    assert user.confirmed_at is None
+    assert user.confirmed_at is not None
     assert user.email == "rita@example.com"
+    # No second email enqueued for the no-op resubmit.
+    assert fake_email_queue.finished_job_registry.count == sent_count
+    # No pending token left behind either.
+    tokens = (
+        await db_session.execute(
+            select(UserToken).where(
+                UserToken.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX)
+            )
+        )
+    ).scalars().all()
+    assert tokens == []
 
 
-async def test_changing_email_clears_confirmation(
+async def test_changing_email_preserves_prior_verification(
     api_client: AsyncClient, db_session: AsyncSession
 ):
+    """Requesting a change to a NEW address must not un-verify the user —
+    they keep their verified state for the prior address until they click
+    the link from the new inbox."""
     user = await start_session(api_client, db_session)
-    await _set_email(api_client)
+    user.email = "prior@example.com"
+    user.confirmed_at = datetime.now(timezone.utc)
+    await db_session.commit()
 
-    # Confirm out-of-band to set confirmed_at.
-    token_row = (
+    response = await _set_email(api_client, email="changed@example.com")
+    assert response.status_code == 202
+    body_user = response.json()["data"]["user"]
+    assert body_user["email"] == "prior@example.com"
+    assert body_user["confirmed_at"] is not None
+    assert body_user["pending_email"] == "changed@example.com"
+
+    await db_session.refresh(user)
+    assert user.email == "prior@example.com"
+    assert user.confirmed_at is not None
+    token = (
         await db_session.execute(
             select(UserToken).where(
                 UserToken.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX)
             )
         )
     ).scalar_one()
-    # We don't know the raw token in this test, so simulate by changing email
-    # while user is confirmed.
-    user.confirmed_at = datetime.now(timezone.utc)
-    await db_session.delete(token_row)
-    await db_session.commit()
-    await db_session.refresh(user)
-    assert user.confirmed_at is not None
-
-    await _set_email(api_client, email="changed@example.com")
-    await db_session.refresh(user)
-    assert user.confirmed_at is None
-    assert user.email == "changed@example.com"
+    assert token.context == "change:prior@example.com"
+    assert token.sent_to == "changed@example.com"
 
 
 # ---- confirm email --------------------------------------------------------
@@ -350,9 +401,12 @@ async def test_confirm_email_sets_confirmed_at_and_invalidates_token(
     )
     assert response.status_code == 200
     body_user = response.json()["data"]["user"]
+    assert body_user["email"] == "rita@example.com"
     assert body_user["confirmed_at"] is not None
+    assert body_user["pending_email"] is None
 
     await db_session.refresh(user)
+    assert user.email == "rita@example.com"
     assert user.confirmed_at is not None
 
     # Token consumed.
@@ -412,6 +466,74 @@ async def test_confirm_email_works_from_a_different_browser(
     assert user_a.confirmed_at is not None
 
 
+async def test_confirm_email_rejects_when_user_email_no_longer_matches_token_context(
+    api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
+):
+    """The token's context records the user's confirmed prior address at
+    issue time. If the user's current ``email`` no longer matches that
+    (admin reset, stale token, etc.), the token is no longer trustworthy —
+    confirm must burn it and return the opaque "invalid or expired"."""
+    user = await start_session(api_client, db_session)
+    user.email = "prior@example.com"
+    user.confirmed_at = datetime.now(timezone.utc)
+    await db_session.commit()
+
+    raw_token = await _capture_raw_token(
+        api_client, db_session, fake_email_queue, email="next@example.com"
+    )
+
+    # Out-of-band reset of the user's email — context was cut against
+    # "prior@example.com" but now points elsewhere.
+    user.email = "different@example.com"
+    await db_session.commit()
+
+    response = await api_client.post(
+        "/v1/me/email/confirm", json={"token": raw_token}
+    )
+    assert response.status_code == 400
+    # Token burned.
+    tokens = (
+        await db_session.execute(
+            select(UserToken).where(
+                UserToken.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX)
+            )
+        )
+    ).scalars().all()
+    assert tokens == []
+
+
+async def test_confirm_email_handles_address_race(
+    api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
+):
+    """If a second user grabs the same address between this user's token
+    being issued and the click, the commit hits the ``users.email`` unique
+    constraint. Surface the same opaque error as any other invalid link —
+    "that address is now taken" would leak who owns it."""
+    me = await start_session(api_client, db_session)
+    raw_token = await _capture_raw_token(
+        api_client, db_session, fake_email_queue, email="contested@example.com"
+    )
+
+    # A different user confirms the same address first.
+    db_session.add(
+        User(
+            username="other",
+            email="contested@example.com",
+            confirmed_at=datetime.now(timezone.utc),
+        )
+    )
+    await db_session.commit()
+
+    response = await api_client.post(
+        "/v1/me/email/confirm", json={"token": raw_token}
+    )
+    assert response.status_code == 400
+    await db_session.refresh(me)
+    # Caller's row is untouched — the rollback preserved their prior state.
+    assert me.email is None
+    assert me.confirmed_at is None
+
+
 async def test_confirm_email_does_not_require_session(api_client: AsyncClient):
     """Cookieless POST to /confirm-email is the cross-device mobile-mail
     case — it should return 400 (invalid token) not 401 (no session)."""
@@ -466,9 +588,11 @@ async def test_resend_issues_new_token(
     assert confirm.status_code == 400
 
 
-async def test_resend_requires_email_set(
+async def test_resend_requires_pending_change(
     api_client: AsyncClient, db_session: AsyncSession
 ):
+    """No pending token → nothing to resend. Covers both the never-set and
+    the already-verified-with-no-change-in-flight cases."""
     await start_session(api_client, db_session)
     response = await api_client.post(
         "/v1/me/email/resend",
@@ -477,9 +601,11 @@ async def test_resend_requires_email_set(
     assert response.status_code == 400
 
 
-async def test_resend_rejects_if_already_confirmed(
+async def test_resend_400s_after_confirm_consumes_the_token(
     api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
 ):
+    """Once the user confirms, the pending token is gone — resend has
+    nothing left to send and returns 400 (not 409 like the old flow)."""
     user = await start_session(api_client, db_session)
     raw_token = await _capture_raw_token(api_client, db_session, fake_email_queue)
     await api_client.post(
@@ -492,7 +618,7 @@ async def test_resend_rejects_if_already_confirmed(
         "/v1/me/email/resend",
         json={"captcha_token": "x", "fmm_hp_token": ""},
     )
-    assert response.status_code == 409
+    assert response.status_code == 400
 
 
 async def test_resend_honeypot_short_circuits(
