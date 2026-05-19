@@ -870,6 +870,16 @@ export interface components {
          * @enum {string}
          */
         MatchStatus: "pending" | "in_progress" | "completed" | "disputed" | "voided";
+        /**
+         * MergeSummary
+         * @description Reported by sign-in / email-confirm responses when the call merged the
+         *     caller's ephemeral session into a different (verified) account. Drives the
+         *     "we brought your N matches with you" toast.
+         */
+        MergeSummary: {
+            /** Matches Moved */
+            matches_moved: number;
+        };
         /** PermissionCreate */
         PermissionCreate: {
             /** Name */
@@ -1041,6 +1051,7 @@ export interface components {
         /** SessionResponse */
         SessionResponse: {
             data: components["schemas"]["SessionData"];
+            merged?: components["schemas"]["MergeSummary"] | null;
         };
         /** SessionUser */
         SessionUser: {
@@ -1236,7 +1247,9 @@ export interface operations {
             query?: never;
             header?: never;
             path?: never;
-            cookie?: never;
+            cookie?: {
+                session?: string | null;
+            };
         };
         requestBody: {
             content: {
@@ -1304,7 +1317,9 @@ export interface operations {
             query?: never;
             header?: never;
             path?: never;
-            cookie?: never;
+            cookie?: {
+                session?: string | null;
+            };
         };
         requestBody: {
             content: {

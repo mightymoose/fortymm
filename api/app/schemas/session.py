@@ -22,8 +22,17 @@ class SessionData(BaseModel):
     user: SessionUser
 
 
+class MergeSummary(BaseModel):
+    """Reported by sign-in / email-confirm responses when the call merged the
+    caller's ephemeral session into a different (verified) account. Drives the
+    "we brought your N matches with you" toast."""
+
+    matches_moved: int
+
+
 class SessionResponse(BaseModel):
     data: SessionData
+    merged: MergeSummary | None = None
 
 
 class UpdateCurrentUserRequest(BaseModel):

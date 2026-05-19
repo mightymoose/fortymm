@@ -23,6 +23,17 @@ layout, commands, and architecture.
   codebase already uses: `ix_`, `uq_`, `ck_`, `fk_`. So
   `ix_user_tokens_user_id`, not `ix_users_tokens_user_id`.
 
+## New `users.id` foreign keys must update the account-merge service
+
+When you add a model (or column) with a foreign key to `users.id`, also update
+the ephemeral→verified account-merge logic to handle the new FK — re-point it
+to the surviving user, or rely on `ON DELETE CASCADE` and let the ephemeral
+user's deletion clean it up. Grep for `merge_user` to find it.
+
+Skipping this means a merged user silently leaves orphan rows, or a `RESTRICT`
+FK blocks the final ephemeral-user delete and the whole merge transaction
+fails.
+
 ## Pre-deploy: edit migrations in place
 
 Until the first production deploy, fix schema mistakes by editing the

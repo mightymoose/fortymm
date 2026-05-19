@@ -13,12 +13,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import captcha as captcha_module
 from app import queue as queue_module
+from app.account_merge import merge_user
 from app.db import get_session
 from app.leagues import add_user_to_default_league
 from app.models import Permission, Role, RolePermission, User, UserRole, UserToken
 from app.schemas.session import (
     ConfirmEmailRequest,
     ConsumeLoginRequest,
+    MergeSummary,
     RequestLoginRequest,
     ResendEmailRequest,
     SessionData,
@@ -151,7 +153,9 @@ async def _find_session_user(db: AsyncSession, raw_token: str) -> User | None:
     return user_result.scalar_one_or_none()
 
 
-async def _build_session_response(db: AsyncSession, user: User) -> SessionResponse:
+async def _build_session_response(
+    db: AsyncSession, user: User, merged: MergeSummary | None = None
+) -> SessionResponse:
     permissions = await _load_permissions(db, user.id)
     return SessionResponse(
         data=SessionData(
@@ -161,8 +165,33 @@ async def _build_session_response(db: AsyncSession, user: User) -> SessionRespon
                 email=user.email,
                 confirmed_at=user.confirmed_at,
             )
-        )
+        ),
+        merged=merged,
     )
+
+
+async def _maybe_merge_prior_session(
+    db: AsyncSession, session_cookie: str | None, target_user: User
+) -> MergeSummary | None:
+    """If the browser arrived with a session cookie identifying a *different*
+    ephemeral user than ``target_user``, fold that user's data into the target
+    and return a summary. Otherwise return None.
+
+    Only runs for ephemeral prior users (``confirmed_at IS NULL``) — a verified
+    prior session means two real accounts share a browser, and silently
+    siphoning data out of one would be data loss.
+    """
+    if not session_cookie:
+        return None
+    prior_user = await _find_session_user(db, session_cookie)
+    if prior_user is None or prior_user.id == target_user.id:
+        return None
+    if prior_user.confirmed_at is not None:
+        return None
+    summary = await merge_user(
+        db, from_user_id=prior_user.id, to_user_id=target_user.id
+    )
+    return MergeSummary(matches_moved=summary.matches_moved)
 
 
 async def _load_permissions(db: AsyncSession, user_id) -> list[str]:
@@ -501,6 +530,9 @@ async def resend_email_confirmation(
 async def confirm_email(
     payload: ConfirmEmailRequest,
     response: Response,
+    session_cookie: Annotated[
+        str | None, Cookie(alias=SESSION_COOKIE_NAME)
+    ] = None,
     db: AsyncSession = Depends(get_session),
 ) -> SessionResponse:
     """Confirm the email-change handshake.
@@ -548,6 +580,7 @@ async def confirm_email(
 
     user.confirmed_at = datetime.now(timezone.utc)
     await db.delete(token_row)
+    merged = await _maybe_merge_prior_session(db, session_cookie, user)
     # Mint a fresh session for the token's owner so the confirming browser
     # is signed in as them — replaces whatever guest session this browser
     # had (or hadn't) on arrival.
@@ -561,7 +594,7 @@ async def confirm_email(
     )
     await db.commit()
     _set_session_cookie(response, raw_session)
-    return await _build_session_response(db, user)
+    return await _build_session_response(db, user, merged=merged)
 
 
 @router.post(
@@ -688,6 +721,9 @@ async def _issue_and_send_confirmation_email(
 async def consume_login_token(
     payload: ConsumeLoginRequest,
     response: Response,
+    session_cookie: Annotated[
+        str | None, Cookie(alias=SESSION_COOKIE_NAME)
+    ] = None,
     db: AsyncSession = Depends(get_session),
 ) -> SessionResponse:
     """Verify a magic-link token and rotate the caller's session cookie.
@@ -746,6 +782,7 @@ async def consume_login_token(
 
     # Single-use: delete the link the moment we accept it.
     await db.delete(token_row)
+    merged = await _maybe_merge_prior_session(db, session_cookie, user)
     raw_session = secrets.token_urlsafe(32)
     db.add(
         UserToken(
@@ -756,4 +793,4 @@ async def consume_login_token(
     )
     await db.commit()
     _set_session_cookie(response, raw_session)
-    return await _build_session_response(db, user)
+    return await _build_session_response(db, user, merged=merged)

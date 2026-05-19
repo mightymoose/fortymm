@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { useQueryClient } from '@tanstack/react-query'
+import { toast } from 'sonner'
 
 import { api, ApiError, unwrap } from '@/api/client'
 import { SESSION_QUERY_KEY, type Session } from '@/api/session'
@@ -53,6 +54,14 @@ function LoginVerifyingPage() {
         const result = await api.POST('/v1/login/consume', { body: { token } })
         const session = unwrap('sign in', result) as Session
         qc.setQueryData(SESSION_QUERY_KEY, session)
+        const movedMatches = session.merged?.matches_moved ?? 0
+        if (movedMatches > 0) {
+          toast.success(
+            movedMatches === 1
+              ? 'We brought your 1 match with you.'
+              : `We brought your ${movedMatches} matches with you.`,
+          )
+        }
         setState({ status: 'success' })
       } catch (err) {
         setState({ status: 'error', error: err })

@@ -8,14 +8,23 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_session
+from app.leagues import get_default_league
 from app.main import app
-from app.models import User, UserToken
+from app.models import (
+    Match,
+    MatchSettings,
+    MatchSide,
+    MatchSidePlayer,
+    MatchStatus,
+    User,
+    UserToken,
+)
 from app.sessions import (
     LOGIN_TOKEN_CONTEXT,
     SESSION_COOKIE_NAME,
     SESSION_TOKEN_CONTEXT,
 )
-from tests._helpers import make_client, start_session
+from tests._helpers import make_client, make_user, start_session
 
 
 @pytest_asyncio.fixture
@@ -405,3 +414,117 @@ async def test_consume_rejects_link_after_user_changed_email(
         )
     ).scalars().all()
     assert leftover == []
+
+
+# ---- merge of ephemeral session on consume -------------------------------
+
+
+async def _record_singles_match(
+    db_session: AsyncSession, *players: User
+) -> Match:
+    league = await get_default_league(db_session)
+    settings = MatchSettings(team_size=1, best_of=5, affects_rating=False)
+    match = Match(
+        match_settings=settings,
+        league=league,
+        created_by_user_id=players[0].id,
+        status=MatchStatus.completed,
+    )
+    for side_number, player in enumerate(players, start=1):
+        side = MatchSide(match=match, side_number=side_number)
+        side.players.append(MatchSidePlayer(match=match, user=player))
+    db_session.add(match)
+    await db_session.commit()
+    return match
+
+
+async def test_consume_merges_ephemeral_matches_into_verified_account(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """When the consuming browser arrived with an ephemeral session that
+    already played a match, that match should follow the user into their
+    verified account and the response should report the merge."""
+    rita = await _make_confirmed_user(db_session, "rita@example.com")
+    raw = "raw-login-token-merge"
+    await _issue_login_token(db_session, rita, raw)
+
+    guest = await start_session(api_client, db_session)
+    opponent = await make_user(db_session, "opponent-jay")
+    match = await _record_singles_match(db_session, guest, opponent)
+
+    response = await api_client.post("/v1/login/consume", json={"token": raw})
+    assert response.status_code == 200
+
+    body = response.json()
+    assert body["merged"] == {"matches_moved": 1}
+
+    players = (
+        await db_session.execute(
+            select(MatchSidePlayer).where(MatchSidePlayer.match_id == match.id)
+        )
+    ).scalars().all()
+    assert {p.user_id for p in players} == {rita.id, opponent.id}
+
+    creator_id = (
+        await db_session.execute(
+            select(Match.created_by_user_id).where(Match.id == match.id)
+        )
+    ).scalar_one()
+    assert creator_id == rita.id
+
+    assert (
+        await db_session.execute(select(User).where(User.id == guest.id))
+    ).scalar_one_or_none() is None
+
+
+async def test_consume_omits_merge_when_no_prior_session(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """Cookieless consume — there's no ephemeral session to merge from."""
+    rita = await _make_confirmed_user(db_session, "rita@example.com")
+    raw = "raw-login-token-fresh-browser"
+    await _issue_login_token(db_session, rita, raw)
+
+    async with make_client() as fresh:
+        response = await fresh.post("/v1/login/consume", json={"token": raw})
+    assert response.status_code == 200
+    assert response.json().get("merged") is None
+
+
+async def test_consume_omits_merge_when_prior_session_is_verified(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """Two verified accounts sharing a browser — silently siphoning one
+    user's data into the other would be data loss. The merge must skip."""
+    rita = await _make_confirmed_user(db_session, "rita@example.com")
+    sam = await _make_confirmed_user(db_session, "sam@example.com")
+    raw_rita = "raw-login-rita"
+    raw_sam = "raw-login-sam"
+    await _issue_login_token(db_session, rita, raw_rita)
+    await _issue_login_token(db_session, sam, raw_sam)
+
+    # Sign in as Sam first to establish a verified session, then "log in" as Rita.
+    sign_in_sam = await api_client.post(
+        "/v1/login/consume", json={"token": raw_sam}
+    )
+    assert sign_in_sam.status_code == 200
+
+    opponent = await make_user(db_session, "opponent-jay")
+    sam_match = await _record_singles_match(db_session, sam, opponent)
+
+    response = await api_client.post(
+        "/v1/login/consume", json={"token": raw_rita}
+    )
+    assert response.status_code == 200
+    assert response.json().get("merged") is None
+
+    # Sam still owns the match.
+    creator_id = (
+        await db_session.execute(
+            select(Match.created_by_user_id).where(Match.id == sam_match.id)
+        )
+    ).scalar_one()
+    assert creator_id == sam.id
+    assert (
+        await db_session.execute(select(User).where(User.id == sam.id))
+    ).scalar_one() is not None
