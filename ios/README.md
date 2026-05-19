@@ -37,9 +37,14 @@ ios/
 ├── Fortymm.xcodeproj/
 ├── Fortymm/
 │   ├── FortymmApp.swift
-│   ├── ContentView.swift
+│   ├── DesignSystem/
+│   │   └── DesignSystemView.swift
+│   ├── Components/         # FMButton, FMCard, FMBadge, FMAvatar, …
+│   ├── Tokens/             # Color, typography, spacing, radius
 │   └── Assets.xcassets/
 └── README.md
 ```
+
+The launch screen renders `DesignSystemView` (a showcase of the FortyMM-branded shadcn-equivalent components) in dark mode. Reference: [`docs/designs/design-system.html`](../docs/designs/design-system.html).
 
 > Xcode's "New Project" wizard creates an extra `Fortymm/` wrapper directory by default (so the project sits at `ios/Fortymm/Fortymm.xcodeproj`). If you ever regenerate the project, flatten that wrapper away — sources are referenced relative to the directory containing the `.xcodeproj`, so moving both up one level is safe.

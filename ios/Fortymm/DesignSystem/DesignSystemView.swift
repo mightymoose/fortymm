@@ -50,7 +50,7 @@ struct DesignSystemContent: View {
                 .tracking(1.5)
                 .foregroundStyle(FMColor.fgMuted)
             Rectangle().fill(FMColor.borderSubtle).frame(height: 1).padding(.top, 4)
-            Text("Every shadcn/ui component, restyled in the FortyMM dark-arena palette. Native SwiftUI implementation matching the web reference at docs/dseigns/design-system.html.")
+            Text("Every shadcn/ui component, restyled in the FortyMM dark-arena palette. Native SwiftUI implementation matching the web reference at docs/designs/design-system.html.")
                 .font(FMFont.ui(FMFont.sm))
                 .foregroundStyle(FMColor.fg3)
         }
