@@ -162,7 +162,6 @@ async def test_recompute_cascade_propagates_through_shared_matches(
     await recompute_league_ratings(db_session, league.id, {a.id})
     await db_session.commit()
 
-    # Two rating_history rows per recomputed match — one per side.
     rows = (
         await db_session.execute(
             select(RatingHistory).where(
@@ -173,12 +172,10 @@ async def test_recompute_cascade_propagates_through_shared_matches(
     assert {row.match_id for row in rows} == {m1.id, m2.id, m3.id}
     assert len(rows) == 6
 
-    # Stamped with the match's completion time, not wall-clock-now.
     by_match = {m.id: m for m in (m1, m2, m3)}
     for row in rows:
         assert row.created_at == by_match[row.match_id].updated_at
 
-    # The current rating rows reflect the rebuilt state.
     a_rating = (
         await db_session.execute(
             select(UserLeagueRating).where(UserLeagueRating.user_id == a.id)
@@ -189,8 +186,6 @@ async def test_recompute_cascade_propagates_through_shared_matches(
             select(UserLeagueRating).where(UserLeagueRating.user_id == d.id)
         )
     ).scalar_one()
-    # A won m1 against a peer → up from 1500. D lost m3 to a since-updated C →
-    # below 1500.
     assert a_rating.rating_value > 1500.0
     assert d_rating.rating_value < 1500.0
 

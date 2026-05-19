@@ -18,14 +18,13 @@ from app.ratings.recompute import recompute_league_ratings
 
 log = logging.getLogger(__name__)
 
+RECOMPUTE_AFTER_MERGE_JOB = "app.ratings.jobs.recompute_after_merge"
+
 
 def recompute_after_merge(user_id: str) -> None:
     """RQ entry point. Re-runs the rating cascade in every league where
     ``user_id`` has at least one completed rated match — i.e. every league
     whose timeline could have been disturbed by the just-completed merge.
-
-    Idempotent: the recompute reads current state and rewrites it deterministically,
-    so a retried job lands on the same result.
     """
     asyncio.run(_recompute_after_merge(uuid.UUID(user_id)))
 

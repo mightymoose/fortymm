@@ -2,6 +2,7 @@ import hashlib
 import logging
 import os
 import secrets
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
@@ -18,6 +19,7 @@ from app.account_merge import merge_user
 from app.db import get_session
 from app.leagues import add_user_to_default_league
 from app.models import Permission, Role, RolePermission, User, UserRole, UserToken
+from app.ratings.jobs import RECOMPUTE_AFTER_MERGE_JOB
 from app.schemas.session import (
     ConfirmEmailRequest,
     ConsumeLoginRequest,
@@ -393,7 +395,7 @@ def _enqueue_login_email(to_email: str, raw_token: str, username: str):
     )
 
 
-def _enqueue_rating_recompute_after_merge(user_id) -> None:
+def _enqueue_rating_recompute_after_merge(user_id: uuid.UUID) -> None:
     """Fire-and-forget the rating recompute for ``user_id`` after a merge.
 
     Called after the merge has already committed — a Redis flap here can't
@@ -403,7 +405,7 @@ def _enqueue_rating_recompute_after_merge(user_id) -> None:
     failed sign-in here is user-visible breakage."""
     try:
         queue_module.get_ratings_queue().enqueue(
-            "app.ratings.jobs.recompute_after_merge",
+            RECOMPUTE_AFTER_MERGE_JOB,
             str(user_id),
             result_ttl=60,
             failure_ttl=86400,

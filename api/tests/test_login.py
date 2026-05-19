@@ -19,6 +19,7 @@ from app.models import (
     User,
     UserToken,
 )
+from app.ratings.jobs import RECOMPUTE_AFTER_MERGE_JOB
 from app.sessions import (
     LOGIN_TOKEN_CONTEXT,
     SESSION_COOKIE_NAME,
@@ -553,7 +554,7 @@ async def test_consume_enqueues_rating_recompute_when_matches_moved(
     jobs = fake_ratings_queue.get_jobs()
     assert len(jobs) == 1
     job = jobs[0]
-    assert job.func_name == "app.ratings.jobs.recompute_after_merge"
+    assert job.func_name == RECOMPUTE_AFTER_MERGE_JOB
     assert job.args == (str(rita.id),)
 
 

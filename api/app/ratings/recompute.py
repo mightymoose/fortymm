@@ -6,11 +6,14 @@ The cascade: if user A's rating changes for match M1, and A then played B in
 match M2 > M1, B's post-M2 rating is also stale; anyone B played after M2
 is stale too. We walk forward chronologically from the earliest affected
 match, growing the affected-users set as we discover them.
+
+Idempotent: reads current state and rewrites it deterministically, so a
+retried call lands on the same result.
 """
 
 import uuid
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -61,8 +64,8 @@ async def recompute_league_ratings(
     if calculator is None:
         return
 
-    # Earliest match (by updated_at) involving a seed user. updated_at is set
-    # when the match completes, which is the moment ratings move.
+    # updated_at is set when the match completes, which is the moment
+    # ratings move — and what we order the replay by.
     t_start = (
         await db.execute(
             select(Match.updated_at)
@@ -107,17 +110,8 @@ async def recompute_league_ratings(
     affected_users: set[uuid.UUID] = set(seed_user_ids)
     affected_matches: list[Match] = []
     for match in matches:
-        winning_side = next((s for s in match.sides if s.won is True), None)
-        losing_side = next((s for s in match.sides if s.won is False), None)
-        if (
-            winning_side is None
-            or losing_side is None
-            or not winning_side.players
-            or not losing_side.players
-        ):
-            # Defensive: completed matches always have a winner + loser side,
-            # but skipping a malformed row beats raising mid-cascade.
-            continue
+        winning_side = next(s for s in match.sides if s.won is True)
+        losing_side = next(s for s in match.sides if s.won is False)
         participants = {
             winning_side.players[0].user_id,
             losing_side.players[0].user_id,
@@ -137,25 +131,9 @@ async def recompute_league_ratings(
         )
     )
 
-    states_by_user: dict[uuid.UUID, dict] = {}
-    for user_id in affected_users:
-        last_pre = (
-            await db.execute(
-                select(RatingHistory)
-                .where(
-                    RatingHistory.league_id == league_id,
-                    RatingHistory.user_id == user_id,
-                    RatingHistory.created_at < t_start,
-                )
-                .order_by(RatingHistory.created_at.desc())
-                .limit(1)
-            )
-        ).scalar_one_or_none()
-        if last_pre is not None:
-            states_by_user[user_id] = dict(last_pre.rating_state)
-        elif strategy.initial_state is not None:
-            states_by_user[user_id] = dict(strategy.initial_state)
-        # else: no seed state — skip below.
+    states_by_user = await _seed_states(
+        db, league_id, affected_users, t_start, strategy
+    )
 
     ratings = (
         (
@@ -210,42 +188,69 @@ async def recompute_league_ratings(
         states_by_user[winner_id] = new_winner_state
         states_by_user[loser_id] = new_loser_state
 
-        new_winner_value = state_rating_value(new_winner_state)
-        new_loser_value = state_rating_value(new_loser_state)
-
-        # Stamp the rewritten history rows with the match's completion time
-        # so the chronological ordering used by ``_load_pre_match_rating`` and
-        # the dashboard sparkline survives the rebuild.
-        db.add(
-            RatingHistory(
-                league_id=league_id,
-                user_id=winner_id,
-                match_id=match.id,
-                rating_strategy_id=strategy.id,
-                rating_value=new_winner_value,
-                rating_state=new_winner_state,
-                previous_rating_value=prev_winner_value,
-                source=RatingHistorySource.match,
-                created_at=match.updated_at,
+        for user_id, new_state, prev_value in (
+            (winner_id, new_winner_state, prev_winner_value),
+            (loser_id, new_loser_state, prev_loser_value),
+        ):
+            new_value = state_rating_value(new_state)
+            db.add(
+                RatingHistory(
+                    league_id=league_id,
+                    user_id=user_id,
+                    match_id=match.id,
+                    rating_strategy_id=strategy.id,
+                    rating_value=new_value,
+                    rating_state=new_state,
+                    previous_rating_value=prev_value,
+                    source=RatingHistorySource.match,
+                    created_at=match.updated_at,
+                )
             )
-        )
-        db.add(
-            RatingHistory(
-                league_id=league_id,
-                user_id=loser_id,
-                match_id=match.id,
-                rating_strategy_id=strategy.id,
-                rating_value=new_loser_value,
-                rating_state=new_loser_state,
-                previous_rating_value=prev_loser_value,
-                source=RatingHistorySource.match,
-                created_at=match.updated_at,
-            )
-        )
-
-        rating_by_user[winner_id].rating_state = new_winner_state
-        rating_by_user[winner_id].rating_value = new_winner_value
-        rating_by_user[loser_id].rating_state = new_loser_state
-        rating_by_user[loser_id].rating_value = new_loser_value
+            rating_by_user[user_id].rating_state = new_state
+            rating_by_user[user_id].rating_value = new_value
 
     await db.flush()
+
+
+async def _seed_states(
+    db: AsyncSession,
+    league_id: uuid.UUID,
+    user_ids: set[uuid.UUID],
+    t_start,
+    strategy,
+) -> dict[uuid.UUID, dict]:
+    """Per-user rating state as of the moment just before ``t_start``: the
+    user's most recent ``rating_history`` row in this league, or the
+    strategy's initial state if they have none. Users with no history and no
+    initial state (e.g. manual strategy with no seed) are omitted.
+
+    A window function gets all users in one round trip — N affected users
+    would otherwise be N queries."""
+    row_number = func.row_number().over(
+        partition_by=RatingHistory.user_id,
+        order_by=RatingHistory.created_at.desc(),
+    )
+    subq = (
+        select(
+            RatingHistory.user_id,
+            RatingHistory.rating_state,
+            row_number.label("rn"),
+        )
+        .where(
+            RatingHistory.league_id == league_id,
+            RatingHistory.user_id.in_(user_ids),
+            RatingHistory.created_at < t_start,
+        )
+        .subquery()
+    )
+    latest_per_user = await db.execute(
+        select(subq.c.user_id, subq.c.rating_state).where(subq.c.rn == 1)
+    )
+
+    states: dict[uuid.UUID, dict] = {
+        user_id: dict(state) for user_id, state in latest_per_user.all()
+    }
+    if strategy.initial_state is not None:
+        for user_id in user_ids:
+            states.setdefault(user_id, dict(strategy.initial_state))
+    return states
