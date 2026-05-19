@@ -48,6 +48,23 @@ export const Route = createFileRoute('/settings')({
 
 type EmailStatus = 'guest' | 'pending' | 'verified'
 
+function deriveEmailStatus({
+  email,
+  confirmedAt,
+  pendingEmail,
+}: {
+  email: string | null
+  confirmedAt: string | null
+  pendingEmail: string | null
+}): EmailStatus {
+  // A pending change wins even when the user is already verified — the FE
+  // still has something to nudge them to complete.
+  if (pendingEmail) return 'pending'
+  if (confirmedAt) return 'verified'
+  if (email) return 'pending'
+  return 'guest'
+}
+
 // Mirrors api/app/schemas/session.py USERNAME_PATTERN. Client-side validation
 // is for fast feedback; the server still enforces the same rules and returns
 // 409 on duplicates.
@@ -787,11 +804,8 @@ function EmailSection({
   const toast = useToast()
   const setEmail = useSetEmail()
   const resendEmail = useResendEmailConfirmation()
-  // ``email`` reflects the user's *confirmed* address; the pending change
-  // (if any) lives on ``pendingEmail`` until the user clicks the link.
-  // Show pending state when either we have a pending change or we have no
-  // confirmed address at all.
   const displayAddress = pendingEmail ?? email ?? ''
+  const hasAddress = Boolean(email || pendingEmail)
   const [val, setVal] = useState(displayAddress)
   const [touched, setTouched] = useState(false)
   const [captchaToken, setCaptchaToken] = useState<string | null>(null)
@@ -815,13 +829,7 @@ function EmailSection({
   const dirty = val !== displayAddress
   const showErr = serverErr ?? (touched && !v.ok ? v.err : null)
 
-  const status: EmailStatus = pendingEmail
-    ? 'pending'
-    : confirmedAt
-      ? 'verified'
-      : email
-        ? 'pending'
-        : 'guest'
+  const status = deriveEmailStatus({ email, confirmedAt, pendingEmail })
 
   const resetCaptcha = () => {
     captchaRef.current?.reset()
@@ -868,7 +876,7 @@ function EmailSection({
     try {
       await resendEmail.mutateAsync({ captchaToken, honeypot })
       resetCaptcha()
-      toast(`Verification link re-sent to ${pendingEmail ?? displayAddress}.`)
+      toast(`Verification link re-sent to ${displayAddress}.`)
     } catch (err) {
       resetCaptcha()
       toast(
@@ -906,7 +914,7 @@ function EmailSection({
             setTouched(false)
             setServerErr(null)
           }}
-          primaryLabel={email || pendingEmail ? 'Update email' : 'Add email'}
+          primaryLabel={hasAddress ? 'Update email' : 'Add email'}
         />
       }
     >
@@ -981,7 +989,7 @@ function EmailSection({
         />
       </div>
 
-      {(email || pendingEmail) && (
+      {hasAddress && (
         <div
           style={{
             marginTop: 16,
@@ -1082,15 +1090,11 @@ function SettingsPage() {
   const sessionPendingEmail = sessionUser?.pending_email ?? null
   const hash = useRouterState({ select: (s) => s.location.hash })
 
-  // Pending state wins for banner purposes (a verified user with a pending
-  // change still has something the FE needs to nudge them to complete).
-  const effectiveStatus: EmailStatus = sessionPendingEmail
-    ? 'pending'
-    : sessionConfirmedAt
-      ? 'verified'
-      : sessionEmail
-        ? 'pending'
-        : 'guest'
+  const effectiveStatus = deriveEmailStatus({
+    email: sessionEmail,
+    confirmedAt: sessionConfirmedAt,
+    pendingEmail: sessionPendingEmail,
+  })
   const claimed = effectiveStatus === 'verified'
 
   // Honor /settings#sec-* deep links from external nav.

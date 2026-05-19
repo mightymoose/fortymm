@@ -154,15 +154,12 @@ export const handlers = [
     if (!body.email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(body.email))
       return detail('Invalid email.', 422)
     const next = body.email.toLowerCase()
-    // Already-verified-for-this-address resubmit is a no-op.
     if (
       mockSession.data.user.email === next &&
       mockSession.data.user.confirmed_at
     ) {
       return HttpResponse.json(mockSession, { status: 202 })
     }
-    // Pending-only: leave email + confirmed_at alone; surface the new
-    // address as pending_email until confirm consumes it.
     mockSession.data.user = {
       ...mockSession.data.user,
       pending_email: next,

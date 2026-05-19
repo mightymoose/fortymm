@@ -99,9 +99,6 @@ describe('SettingsPage email section', () => {
     expect(
       await screen.findByText(/waiting for verification/i),
     ).toBeInTheDocument()
-    // The new address lives only on the pending field until the user
-    // clicks the confirmation link; ``email`` stays at the prior verified
-    // value (null here for a first-time set).
     expect(mockSession.data.user.pending_email).toBe('me@example.com')
     expect(mockSession.data.user.email).toBeNull()
   })
