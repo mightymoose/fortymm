@@ -9,6 +9,7 @@ import {
 } from '@tanstack/react-router'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { http, HttpResponse } from 'msw'
+import { toast } from 'sonner'
 import { describe, expect, it, vi } from 'vitest'
 import { server } from '@/mocks/server'
 import { mockSession } from '@/mocks/handlers'
@@ -30,6 +31,14 @@ vi.mock('@/components/turnstile', () => ({
     return <div data-testid="fake-turnstile" />
   },
 }))
+
+vi.mock('sonner', async () => {
+  const actual = await vi.importActual<typeof import('sonner')>('sonner')
+  return {
+    ...actual,
+    toast: { ...actual.toast, success: vi.fn() },
+  }
+})
 
 function renderAt(initialEntry: string) {
   const queryClient = new QueryClient({
@@ -189,5 +198,34 @@ describe('/login/verifying flow', () => {
     expect(
       screen.getByText(/this link is missing its token/i),
     ).toBeInTheDocument()
+  })
+
+  it('toasts the merged-matches count when consume reports a merge', async () => {
+    server.use(
+      http.post('*/v1/login/consume', () =>
+        HttpResponse.json({
+          ...mockSession,
+          merged: { matches_moved: 3 },
+        }),
+      ),
+    )
+    renderAt('/login/verifying?token=good-token-with-merge')
+
+    await waitFor(() => {
+      expect(toast.success).toHaveBeenCalledWith(
+        'We brought your 3 matches with you.',
+      )
+    })
+  })
+
+  it('does not toast when the consume response carries no merge', async () => {
+    vi.mocked(toast.success).mockClear()
+    renderAt('/login/verifying?token=good-token-no-merge')
+
+    await waitFor(() => {
+      // wait for the consume mutation to settle
+      expect(screen.queryByRole('heading', { name: /welcome back/i })).toBeInTheDocument()
+    })
+    expect(toast.success).not.toHaveBeenCalled()
   })
 })

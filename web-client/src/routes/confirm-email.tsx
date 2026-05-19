@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { Link, createFileRoute } from '@tanstack/react-router'
+import { toast } from 'sonner'
 
 import { ApiError } from '@/api/client'
 import { useConfirmEmail } from '@/api/session'
@@ -25,6 +26,18 @@ function ConfirmEmailPage() {
     fired.current = true
     confirm.mutate(token)
   }, [token, confirm])
+
+  useEffect(() => {
+    if (!confirm.isSuccess) return
+    const moved = confirm.data?.merged?.matches_moved ?? 0
+    if (moved > 0) {
+      toast.success(
+        moved === 1
+          ? 'We brought your 1 match with you.'
+          : `We brought your ${moved} matches with you.`,
+      )
+    }
+  }, [confirm.isSuccess, confirm.data])
 
   const status: 'missing-token' | 'confirming' | 'ok' | 'error' = !token
     ? 'missing-token'
