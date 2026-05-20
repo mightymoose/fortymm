@@ -46,11 +46,14 @@ export function matchQueryKey(matchId: string) {
  * (backfilled with other registered players by the API). Errors are thrown so
  * the surrounding error boundary can render a retry affordance.
  */
-export function useRecentOpponents() {
+export function useRecentOpponents(options: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: RECENT_OPPONENTS_QUERY_KEY,
     queryFn: async (): Promise<Player[]> =>
       unwrap('load recent opponents', await api.GET('/v1/players/recent')),
+    // Gate on the session so a first-visit direct-load doesn't fire before the
+    // session cookie lands and 401 into the error boundary (#98).
+    enabled: options.enabled ?? true,
     staleTime: 1000 * 60 * 5,
     // Fail fast to the error boundary's explicit "Try again" button rather
     // than silently retrying behind the skeleton.

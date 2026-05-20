@@ -270,7 +270,14 @@ function RecentSkeleton() {
 
 function RecentPicker({ onPick }: { onPick: (player: Player) => void }) {
   const [showSearch, setShowSearch] = useState(false)
-  const { data: players = [], isLoading } = useRecentOpponents()
+  // Wait for the session before fetching players — otherwise a first-visit
+  // direct-load races the session cookie and 401s into the error boundary
+  // (#98). A disabled query stays `isPending`, so the skeleton holds until the
+  // session resolves rather than flashing the empty state.
+  const session = useSession()
+  const recent = useRecentOpponents({ enabled: session.isSuccess })
+  const players = recent.data ?? []
+  const isLoading = recent.isPending
 
   if (showSearch) return <TypeaheadPicker onPick={onPick} />
 
