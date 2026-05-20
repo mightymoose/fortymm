@@ -11,7 +11,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { delay, http, HttpResponse } from 'msw'
 import { describe, expect, it } from 'vitest'
 import { server } from '@/mocks/server'
-import { matchDetails } from '@/test/factories'
+import { matchDetails, sessionResponse } from '@/test/factories'
 import { Route } from './new'
 
 // The page component isn't exported (route files should only export `Route`,
@@ -191,6 +191,41 @@ describe('NewMatchPage — recent opponents', () => {
     expect(
       screen.queryByRole('status', { name: /loading players/i }),
     ).not.toBeInTheDocument()
+  })
+
+  it('waits for the session before requesting recent opponents (no first-visit 401 race)', async () => {
+    const recentRequests: string[] = []
+    let releaseSession: (() => void) | null = null
+    server.use(
+      // Hold the session request open to simulate the cookie not having
+      // landed yet on a first-visit direct-load (#98).
+      http.get('*/v1/session', async () => {
+        await new Promise<void>((resolve) => {
+          releaseSession = resolve
+        })
+        return HttpResponse.json(sessionResponse())
+      }),
+      http.get('*/v1/players/recent', ({ request }) => {
+        recentRequests.push(request.url)
+        return HttpResponse.json([{ id: 'pl-1', username: 'ada.lovelace' }])
+      }),
+    )
+    renderNewMatch()
+
+    // While the session is unresolved the query is disabled: the skeleton
+    // holds and no players request is fired (so it can't 401).
+    expect(
+      await screen.findByRole('status', { name: /loading players/i }),
+    ).toBeInTheDocument()
+    await waitFor(() => expect(releaseSession).not.toBeNull())
+    expect(recentRequests).toHaveLength(0)
+
+    // Once the session resolves, the query runs and the real chips render.
+    releaseSession!()
+    expect(
+      await screen.findByRole('button', { name: /ada\.lovelace/i }),
+    ).toBeInTheDocument()
+    expect(recentRequests.length).toBeGreaterThanOrEqual(1)
   })
 
   it('renders recent opponents in the order the endpoint returns them', async () => {
