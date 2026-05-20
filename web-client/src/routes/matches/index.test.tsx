@@ -11,7 +11,11 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { http, HttpResponse } from 'msw'
 import { describe, expect, it } from 'vitest'
 import { server } from '@/mocks/server'
-import { matchListResponse, matchListRow } from '@/test/factories'
+import {
+  matchListResponse,
+  matchListRow,
+  sessionResponse,
+} from '@/test/factories'
 import { Route } from './index'
 
 const MatchesPage = Route.options.component!
@@ -77,6 +81,44 @@ describe('MatchesPage', () => {
     // The Players column shows both sides — the current mock user (side 1)
     // appears alongside the opponent (side 2).
     expect(screen.getAllByText('rita.kovac').length).toBeGreaterThan(0)
+  })
+
+  it('waits for the session before requesting matches (no first-visit 401 race)', async () => {
+    const matchRequests: string[] = []
+    let releaseSession: (() => void) | null = null
+    server.use(
+      // Hold the session request open to simulate the cookie not having
+      // landed yet on a first-visit direct-load (#144).
+      http.get('*/v1/session', async () => {
+        await new Promise<void>((resolve) => {
+          releaseSession = resolve
+        })
+        return HttpResponse.json(sessionResponse())
+      }),
+      http.get('*/v1/matches', ({ request }) => {
+        matchRequests.push(request.url)
+        return HttpResponse.json(
+          matchListResponse({
+            items: [matchListRow({ opponent: 'nguyen.t' })],
+            total: 1,
+            status_counts: { pending: 1 },
+          }),
+        )
+      }),
+    )
+    renderMatchesPage()
+
+    // While the session is unresolved the query is disabled: the skeleton
+    // holds and no matches request is fired (so it can't 401).
+    const table = await screen.findByRole('table')
+    expect(table).toHaveAttribute('aria-busy', 'true')
+    await waitFor(() => expect(releaseSession).not.toBeNull())
+    expect(matchRequests).toHaveLength(0)
+
+    // Once the session resolves, the query runs and real rows render.
+    releaseSession!()
+    expect(await screen.findByText('nguyen.t')).toBeInTheDocument()
+    expect(matchRequests.length).toBeGreaterThanOrEqual(1)
   })
 
   it('paints the winning side green on a completed row', async () => {

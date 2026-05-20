@@ -102,7 +102,10 @@ export function useCreateMatch() {
  * current page rendered while the next page or filter resolves, so the table
  * doesn't flash empty between requests. Throws to the surrounding boundary.
  */
-export function useMatchList(params: MatchListParams) {
+export function useMatchList(
+  params: MatchListParams,
+  options: { enabled?: boolean } = {},
+) {
   return useQuery({
     queryKey: matchListQueryKey(params),
     queryFn: async (): Promise<MatchListResponse> =>
@@ -119,6 +122,9 @@ export function useMatchList(params: MatchListParams) {
           },
         }),
       ),
+    // Gate on the session so a first-visit direct-load doesn't fire before the
+    // session cookie lands and 401 into the error boundary (#144).
+    enabled: options.enabled ?? true,
     placeholderData: keepPreviousData,
     retry: false,
     throwOnError: true,
