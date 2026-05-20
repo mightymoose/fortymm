@@ -134,6 +134,8 @@ function ScoreEntryInner({
     : null
   const inputsValid = bothFilled && localScoreError === null
   const apiError = mutation.error instanceof ApiError ? mutation.error : null
+  const showScoreError =
+    localScoreError !== null || (apiError !== null && apiError.status === 422)
 
   // 409 from the API means the game is either already scored (create) or the
   // match isn't scorable. Both swap out the regular controls for a back-link.
@@ -228,10 +230,7 @@ function ScoreEntryInner({
             inputRef={meRef}
             autoFocus
             disabled={inputsLocked}
-            invalid={
-              localScoreError !== null ||
-              (apiError !== null && apiError.status === 422)
-            }
+            invalid={showScoreError}
             onChange={onMeChange}
             onKeyDown={(e) => handleKey(e, 'me')}
           />
@@ -251,16 +250,13 @@ function ScoreEntryInner({
             value={opp}
             inputRef={oppRef}
             disabled={inputsLocked}
-            invalid={
-              localScoreError !== null ||
-              (apiError !== null && apiError.status === 422)
-            }
+            invalid={showScoreError}
             onChange={onOppChange}
             onKeyDown={(e) => handleKey(e, 'opp')}
           />
         </div>
 
-        {(localScoreError || (apiError && apiError.status === 422)) && (
+        {showScoreError && (
           <p
             role="alert"
             className="mt-1.5 text-xs text-[color:var(--loss)]"
