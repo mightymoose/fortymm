@@ -325,14 +325,15 @@ export function AppShell({ children }: AppShellProps) {
             <Popover>
               <PopoverTrigger asChild>
                 <Badge
+                  asChild
                   variant="outline"
-                  role="button"
-                  aria-label="About the alpha release"
                   className="cursor-pointer gap-1.5 border-amber-500/50 bg-amber-500/15 px-2.5 font-semibold tracking-wider text-amber-300 uppercase shadow-sm transition-colors hover:bg-amber-500/25 hover:text-amber-200 focus-visible:border-amber-400 focus-visible:ring-amber-400/50"
                 >
-                  <TriangleAlert />
-                  Alpha
-                  <ChevronDown className="opacity-60" />
+                  <button type="button" aria-label="About the alpha release">
+                    <TriangleAlert />
+                    Alpha
+                    <ChevronDown className="opacity-60" />
+                  </button>
                 </Badge>
               </PopoverTrigger>
               <PopoverContent
