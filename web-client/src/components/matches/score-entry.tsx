@@ -12,6 +12,7 @@ import {
 } from '@/api/matches'
 import { AppShell } from '@/components/app-shell'
 import { cn, initialsOf } from '@/lib/utils'
+import { illegalScoreReason } from '@/lib/scoring'
 
 export type ScoreMutation = UseMutationResult<
   MatchDetails,
@@ -127,9 +128,14 @@ function ScoreEntryInner({
     if (mutation.error) mutation.reset()
   }
 
-  const inputsValid =
-    me !== '' && opp !== '' && Number(me) !== Number(opp)
+  const bothFilled = me !== '' && opp !== ''
+  const localScoreError = bothFilled
+    ? illegalScoreReason(Number(me), Number(opp))
+    : null
+  const inputsValid = bothFilled && localScoreError === null
   const apiError = mutation.error instanceof ApiError ? mutation.error : null
+  const showScoreError =
+    localScoreError !== null || (apiError !== null && apiError.status === 422)
 
   // 409 from the API means the game is either already scored (create) or the
   // match isn't scorable. Both swap out the regular controls for a back-link.
@@ -224,7 +230,7 @@ function ScoreEntryInner({
             inputRef={meRef}
             autoFocus
             disabled={inputsLocked}
-            invalid={apiError !== null && apiError.status === 422}
+            invalid={showScoreError}
             onChange={onMeChange}
             onKeyDown={(e) => handleKey(e, 'me')}
           />
@@ -244,18 +250,18 @@ function ScoreEntryInner({
             value={opp}
             inputRef={oppRef}
             disabled={inputsLocked}
-            invalid={apiError !== null && apiError.status === 422}
+            invalid={showScoreError}
             onChange={onOppChange}
             onKeyDown={(e) => handleKey(e, 'opp')}
           />
         </div>
 
-        {apiError && apiError.status === 422 && (
+        {showScoreError && (
           <p
             role="alert"
             className="mt-1.5 text-xs text-[color:var(--loss)]"
           >
-            {apiError.detail ?? apiError.message}
+            {localScoreError ?? apiError?.detail ?? apiError?.message}
           </p>
         )}
 

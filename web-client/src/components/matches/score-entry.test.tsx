@@ -258,7 +258,53 @@ describe('ScoreEntry — create', () => {
     )
   })
 
-  it('renders the 422 detail inline and clears it when the user edits an input', async () => {
+  it('blocks an illegal final score client-side without hitting the server', async () => {
+    const user = userEvent.setup()
+    let posted = 0
+    server.use(
+      http.get('*/v1/matches/m-1', () => HttpResponse.json(inProgressMatch())),
+      http.post('*/v1/matches/m-1/games/g-3/scores', () => {
+        posted += 1
+        return HttpResponse.json(
+          inProgressMatch({
+            games: [
+              { id: 'g-3', game_number: 3, score: score('s-3', 11, 9) },
+              { id: 'g-4', game_number: 4, score: null },
+            ],
+            current_game: { id: 'g-4', game_number: 4 },
+          }),
+        )
+      }),
+    )
+
+    renderScoreEntry({ kind: 'create', matchId: 'm-1', gameId: 'g-3' })
+    const meInput = await screen.findByRole('textbox', { name: 'rita.kovac score' })
+    const oppInput = screen.getByRole('textbox', { name: 'nguyen.t score' })
+
+    // 11–10 is illegal (win-by-1). The button stays disabled and an inline
+    // hint explains why — no request is made.
+    await user.type(meInput, '11')
+    await user.type(oppInput, '10')
+    const save = screen.getByRole('button', { name: /save/i })
+    expect(save).toBeDisabled()
+    expect(screen.getByRole('alert')).toHaveTextContent(/deuce/i)
+    expect(meInput).toHaveAttribute('aria-invalid', 'true')
+    expect(oppInput).toHaveAttribute('aria-invalid', 'true')
+
+    // Correcting to a legal score clears the hint and re-enables Save.
+    await user.clear(oppInput)
+    await user.type(oppInput, '9')
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(save).toBeEnabled()
+
+    await user.click(save)
+    await waitFor(() =>
+      expect(screen.getByText('scoring-new m-1 g-4')).toBeInTheDocument(),
+    )
+    expect(posted).toBe(1)
+  })
+
+  it('renders a server 422 detail inline and clears it when the user edits an input', async () => {
     const user = userEvent.setup()
     let calls = 0
     server.use(
@@ -266,18 +312,17 @@ describe('ScoreEntry — create', () => {
       http.post('*/v1/matches/m-1/games/g-3/scores', () => {
         calls += 1
         if (calls === 1) {
+          // A client-legal score the server still rejects (e.g. for match
+          // state the client doesn't model) — exercises the 422 render path.
           return HttpResponse.json(
-            {
-              detail:
-                'At 10–10 the game enters deuce; the winner must lead by 2. 11–10 is not a legal final score.',
-            },
+            { detail: 'This score was rejected by the server.' },
             { status: 422 },
           )
         }
         return HttpResponse.json(
           inProgressMatch({
             games: [
-              { id: 'g-3', game_number: 3, score: score('s-3', 12, 10) },
+              { id: 'g-3', game_number: 3, score: score('s-3', 11, 4) },
               { id: 'g-4', game_number: 4, score: null },
             ],
             current_game: { id: 'g-4', game_number: 4 },
@@ -291,11 +336,11 @@ describe('ScoreEntry — create', () => {
     const oppInput = screen.getByRole('textbox', { name: 'nguyen.t score' })
 
     await user.type(meInput, '11')
-    await user.type(oppInput, '10')
+    await user.type(oppInput, '4')
     await user.click(screen.getByRole('button', { name: /save/i }))
 
     const alert = await screen.findByRole('alert')
-    expect(alert).toHaveTextContent(/not a legal final score/i)
+    expect(alert).toHaveTextContent(/rejected by the server/i)
     expect(meInput).toHaveAttribute('aria-invalid', 'true')
     expect(oppInput).toHaveAttribute('aria-invalid', 'true')
 
@@ -303,7 +348,7 @@ describe('ScoreEntry — create', () => {
     await user.clear(meInput)
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
 
-    await user.type(meInput, '12')
+    await user.type(meInput, '11')
     await user.click(screen.getByRole('button', { name: /save/i }))
     await waitFor(() =>
       expect(screen.getByText('scoring-new m-1 g-4')).toBeInTheDocument(),
@@ -481,9 +526,13 @@ describe('ScoreEntry — edit', () => {
     const meInput = await screen.findByRole('textbox', {
       name: 'rita.kovac score',
     })
+    const oppInput = screen.getByRole('textbox', { name: 'nguyen.t score' })
     await waitFor(() => expect(meInput).toHaveValue('11'))
+    // Flip game 2 to a legal opponent win (9–11) so the edit re-opens the match.
     await user.clear(meInput)
     await user.type(meInput, '9')
+    await user.clear(oppInput)
+    await user.type(oppInput, '11')
     await user.click(screen.getByRole('button', { name: /save/i }))
 
     await waitFor(() =>
