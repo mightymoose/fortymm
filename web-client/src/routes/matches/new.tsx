@@ -115,33 +115,29 @@ function MatchCard() {
   const [opponent, setOpponent] = useState<Opponent | null>(null)
   const [bestOf, setBestOf] = useState(5)
   const [rated, setRated] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  const [apiError, setApiError] = useState<string | null>(null)
+  const [submitted, setSubmitted] = useState(false)
 
   const me = session?.data.user ?? null
 
-  // Changing the opponent or the rated toggle can flip the form from invalid
-  // back to valid, so clear any submit error eagerly — otherwise a stale
-  // "rated needs an opponent" message lingers after picking a guest (#150).
-  const chooseOpponent = (next: Opponent | null) => {
-    setOpponent(next)
-    setError(null)
-  }
-  const changeRated = (next: boolean) => {
-    setRated(next)
-    setError(null)
-  }
+  // Validation is derived from the live form state via the zod schema — never
+  // stored — so the message clears the instant the form turns valid (e.g. once
+  // a guest is picked, #150) instead of lingering. It only surfaces after the
+  // user has tried to submit; the async create failure is the only stored error.
+  const validation = matchFormSchema.safeParse({
+    opponentKind: opponent?.kind ?? null,
+    rated,
+    bestOf,
+  })
+  const validationError = validation.success
+    ? null
+    : (validation.error.issues[0]?.message ?? 'Check the match setup.')
+  const error = apiError ?? (submitted ? validationError : null)
 
   async function handleSubmit() {
-    const parsed = matchFormSchema.safeParse({
-      opponentKind: opponent?.kind ?? null,
-      rated,
-      bestOf,
-    })
-    if (!parsed.success) {
-      setError(parsed.error.issues[0]?.message ?? 'Check the match setup.')
-      return
-    }
-    setError(null)
+    setSubmitted(true)
+    if (validationError) return
+    setApiError(null)
 
     // Guest / "start without opponent" matches have a single side, so they
     // can never be rated regardless of the toggle.
@@ -154,7 +150,7 @@ function MatchCard() {
       })
       navigate(nextScoringDestination(created))
     } catch (err) {
-      setError(
+      setApiError(
         err instanceof ApiError
           ? (err.detail ?? err.message)
           : 'Could not start the match. Try again.',
@@ -187,23 +183,23 @@ function MatchCard() {
         {opponent ? (
           <SelectedOpponent
             opponent={opponent}
-            onChange={() => chooseOpponent(null)}
+            onChange={() => setOpponent(null)}
           />
         ) : (
           <OpponentPickerBoundary>
             <RecentPicker
-              onPick={(player) => chooseOpponent(registeredOpponent(player))}
+              onPick={(player) => setOpponent(registeredOpponent(player))}
             />
           </OpponentPickerBoundary>
         )}
 
         {!opponent && (
           <div className="nm-skip-row">
-            <button type="button" onClick={() => chooseOpponent(GUEST)}>
+            <button type="button" onClick={() => setOpponent(GUEST)}>
               Add guest opponent
             </button>
             <span className="sep">·</span>
-            <button type="button" onClick={() => chooseOpponent(OPPONENT_TBD)}>
+            <button type="button" onClick={() => setOpponent(OPPONENT_TBD)}>
               Start without opponent
             </button>
           </div>
@@ -212,7 +208,7 @@ function MatchCard() {
 
       <div className="nm-settings">
         <BestOfField bestOf={bestOf} setBestOf={setBestOf} />
-        <RatedField rated={rated} setRated={changeRated} opponent={opponent} />
+        <RatedField rated={rated} setRated={setRated} opponent={opponent} />
       </div>
 
       <SubmitRow

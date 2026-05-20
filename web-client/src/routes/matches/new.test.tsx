@@ -87,9 +87,11 @@ describe('NewMatchPage', () => {
     const user = userEvent.setup()
     renderNewMatch()
 
-    await user.click(
-      await screen.findByRole('button', { name: /start match/i }),
-    )
+    // The error only appears after a submit attempt — not on initial load.
+    await screen.findByRole('button', { name: /start match/i })
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /start match/i }))
     expect(await screen.findByRole('alert')).toHaveTextContent(
       /rated match needs an opponent/i,
     )
