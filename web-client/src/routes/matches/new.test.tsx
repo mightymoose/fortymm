@@ -83,6 +83,27 @@ describe('NewMatchPage', () => {
     ).toBeInTheDocument()
   })
 
+  it('clears the stale rated-needs-opponent error after picking a guest (#150)', async () => {
+    const user = userEvent.setup()
+    renderNewMatch()
+
+    // The error only appears after a submit attempt — not on initial load.
+    await screen.findByRole('button', { name: /start match/i })
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /start match/i }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      /rated match needs an opponent/i,
+    )
+
+    // Adding a guest auto-unrates the match, so the error no longer applies —
+    // it must not linger and contradict "Guest matches are always unrated".
+    await user.click(
+      screen.getByRole('button', { name: /add guest opponent/i }),
+    )
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
   it('creates a match against a picked opponent and navigates to the dashboard', async () => {
     const user = userEvent.setup()
     let captured: unknown = null
