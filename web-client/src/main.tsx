@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ReactQueryDevtools } from '@tanstack/react-query-devtools'
 import './index.css'
 import { Toaster } from '@/components/ui/sonner'
+import { NotFoundPage } from '@/components/not-found-page'
 import { routeTree } from './routeTree.gen'
 
 const queryClient = new QueryClient({
@@ -15,7 +16,11 @@ const queryClient = new QueryClient({
     },
   },
 })
-const router = createRouter({ routeTree, context: { queryClient } })
+const router = createRouter({
+  routeTree,
+  context: { queryClient },
+  defaultNotFoundComponent: NotFoundPage,
+})
 
 declare module '@tanstack/react-router' {
   interface Register {
