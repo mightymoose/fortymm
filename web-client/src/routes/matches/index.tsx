@@ -18,6 +18,7 @@ import {
   type MatchStatus,
 } from '@/api/matches'
 import type { components } from '@/api/schema'
+import { useSession } from '@/api/session'
 import { AppShell } from '@/components/app-shell'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
@@ -115,7 +116,14 @@ function MatchesPage() {
     }),
     [apiStatus, debouncedQ, page],
   )
-  const { data, isLoading } = useMatchList(queryParams)
+  // Wait for the session before firing the matches query — otherwise a
+  // first-visit direct-load races the session cookie and 401s into the error
+  // boundary (#144). A disabled query stays `isPending`, so the skeleton holds
+  // until the session resolves rather than flashing the empty state.
+  const session = useSession()
+  const matchList = useMatchList(queryParams, { enabled: session.isSuccess })
+  const data = matchList.data
+  const isLoading = matchList.isPending
 
   const changeStatus = useCallback((next: 'all' | StatusKey) => {
     setStatus(next)
