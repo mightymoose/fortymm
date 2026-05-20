@@ -234,6 +234,32 @@ describe('MatchDetailsView', () => {
     expect(within(alert).getByText(/couldn.t find that match/i)).toBeInTheDocument()
   })
 
+  it('shows friendly not-found copy (not the raw API detail) for a malformed match id (#152)', async () => {
+    server.use(
+      http.get('*/v1/matches/garbage', () =>
+        HttpResponse.json(
+          {
+            detail:
+              'Input should be a valid UUID, invalid character: found `g` at 1',
+          },
+          { status: 422 },
+        ),
+      ),
+    )
+    renderDetails('garbage')
+
+    const alert = await screen.findByRole('alert')
+    expect(
+      within(alert).getByText(/couldn.t find that match/i),
+    ).toBeInTheDocument()
+    // The raw pydantic validation message must not leak to the user.
+    expect(within(alert).queryByText(/valid UUID/i)).not.toBeInTheDocument()
+    // Retrying the same broken URL is pointless — offer a way back to the list.
+    expect(
+      within(alert).getByRole('link', { name: /back to matches/i }),
+    ).toHaveAttribute('href', '/matches')
+  })
+
   it('redirects solo matches (no opponent) back to /matches', async () => {
     const match = matchDetails({
       id: 'm-solo',

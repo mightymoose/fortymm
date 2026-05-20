@@ -279,24 +279,34 @@ export function MatchDetailsError({
 }) {
   const router = useRouter()
   const status = error instanceof ApiError ? error.status : 0
-  const message =
-    status === 404
-      ? "We couldn't find that match."
-      : error.message || "Something went wrong loading this match."
+  // Any client error (404 no-such-match, 422 malformed id, …) means there's no
+  // viewable match at this URL — show the friendly copy and never leak the raw
+  // API detail (e.g. the pydantic "Input should be a valid UUID" string, #152).
+  // Retrying the same URL won't help, so offer a way back to the list instead.
+  const notFound = status >= 400 && status < 500
+  const message = notFound
+    ? "We couldn't find that match."
+    : 'Something went wrong loading this match.'
   return (
     <AppShell>
       <div role="alert" className="md-error-state">
         <div className="md-error-state__title">{message}</div>
-        <button
-          type="button"
-          className="md-btn md-btn--secondary"
-          onClick={() => {
-            reset()
-            router.invalidate()
-          }}
-        >
-          Try again
-        </button>
+        {notFound ? (
+          <Link to="/matches" className="md-btn md-btn--secondary">
+            Back to matches
+          </Link>
+        ) : (
+          <button
+            type="button"
+            className="md-btn md-btn--secondary"
+            onClick={() => {
+              reset()
+              router.invalidate()
+            }}
+          >
+            Try again
+          </button>
+        )}
       </div>
     </AppShell>
   )
