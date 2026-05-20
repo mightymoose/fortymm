@@ -280,18 +280,17 @@ test.describe('Score entry', () => {
     await expect(scoreEntry.oppInput).toHaveValue('8')
   })
 
-  test('shows the TT-rule violation inline when the score is illegal', async ({
+  test('blocks an illegal score client-side with an inline hint', async ({
     page,
   }) => {
     const scoreEntry = await ScoreEntryPage.navigateTo(page)
 
-    // 11-10 isn't a legal final score — at 10-10 the game enters deuce.
+    // 11-10 isn't a legal final score — at 10-10 the game enters deuce. The
+    // client catches this so Save stays disabled and never round-trips.
     await scoreEntry.enterScores('11', '10')
-    await scoreEntry.saveButton.click()
 
-    await expect(scoreEntry.inlineError).toContainText(
-      /not a legal final score/i,
-    )
+    await expect(scoreEntry.saveButton).toBeDisabled()
+    await expect(scoreEntry.inlineError).toContainText(/deuce/i)
     await expect(scoreEntry.meInput).toHaveAttribute('aria-invalid', 'true')
     await expect(scoreEntry.oppInput).toHaveAttribute('aria-invalid', 'true')
   })
