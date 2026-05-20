@@ -119,6 +119,18 @@ function MatchCard() {
 
   const me = session?.data.user ?? null
 
+  // Changing the opponent or the rated toggle can flip the form from invalid
+  // back to valid, so clear any submit error eagerly — otherwise a stale
+  // "rated needs an opponent" message lingers after picking a guest (#150).
+  const chooseOpponent = (next: Opponent | null) => {
+    setOpponent(next)
+    setError(null)
+  }
+  const changeRated = (next: boolean) => {
+    setRated(next)
+    setError(null)
+  }
+
   async function handleSubmit() {
     const parsed = matchFormSchema.safeParse({
       opponentKind: opponent?.kind ?? null,
@@ -175,23 +187,23 @@ function MatchCard() {
         {opponent ? (
           <SelectedOpponent
             opponent={opponent}
-            onChange={() => setOpponent(null)}
+            onChange={() => chooseOpponent(null)}
           />
         ) : (
           <OpponentPickerBoundary>
             <RecentPicker
-              onPick={(player) => setOpponent(registeredOpponent(player))}
+              onPick={(player) => chooseOpponent(registeredOpponent(player))}
             />
           </OpponentPickerBoundary>
         )}
 
         {!opponent && (
           <div className="nm-skip-row">
-            <button type="button" onClick={() => setOpponent(GUEST)}>
+            <button type="button" onClick={() => chooseOpponent(GUEST)}>
               Add guest opponent
             </button>
             <span className="sep">·</span>
-            <button type="button" onClick={() => setOpponent(OPPONENT_TBD)}>
+            <button type="button" onClick={() => chooseOpponent(OPPONENT_TBD)}>
               Start without opponent
             </button>
           </div>
@@ -200,7 +212,7 @@ function MatchCard() {
 
       <div className="nm-settings">
         <BestOfField bestOf={bestOf} setBestOf={setBestOf} />
-        <RatedField rated={rated} setRated={setRated} opponent={opponent} />
+        <RatedField rated={rated} setRated={changeRated} opponent={opponent} />
       </div>
 
       <SubmitRow
