@@ -107,6 +107,19 @@ describe('DashboardPage', () => {
     expect(table).toHaveTextContent('1-3')
   })
 
+  it('greets the signed-in user by their username', async () => {
+    server.use(
+      http.get('*/v1/dashboard', () =>
+        HttpResponse.json(dashboardResponse()),
+      ),
+    )
+    renderDashboard()
+
+    expect(
+      await screen.findByRole('heading', { name: /Hi, @rita\.kovac/ }),
+    ).toBeInTheDocument()
+  })
+
   it('omits the score banner when none is active and shows the empty recent-results card', async () => {
     server.use(
       http.get('*/v1/dashboard', () =>
