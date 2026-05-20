@@ -1038,6 +1038,8 @@ export function DashboardPage() {
   const dashboard = useDashboard({ enabled: session.isSuccess })
   const isLoading = dashboard.isPending
   const data = dashboard.data
+  const username = session.data?.data.user.username
+  const greeting = username ? `Hi, @${username}` : 'Hi'
   return (
     <div
       style={{
@@ -1048,7 +1050,7 @@ export function DashboardPage() {
         boxSizing: 'border-box',
       }}
     >
-      <PageTitle greeting="Hi, Aimee" subtitle="3 things need your attention" />
+      <PageTitle greeting={greeting} subtitle="3 things need your attention" />
       {isLoading ? (
         <SkeletonCard label="Loading score banner" height={140} />
       ) : data?.score_banners?.length ? (
