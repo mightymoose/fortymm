@@ -27,3 +27,8 @@ export function fmtDateRel(iso: string | null | undefined): string {
   if (!iso) return '—'
   return formatDistanceToNowStrict(parseApiDate(iso), { addSuffix: true })
 }
+
+/** Full weekday, month and day for a header — e.g. "Tuesday, April 22". */
+export function fmtLongDate(date: Date = new Date()): string {
+  return format(date, 'EEEE, MMMM d')
+}

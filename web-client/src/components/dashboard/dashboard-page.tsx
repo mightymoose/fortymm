@@ -10,7 +10,7 @@ import type {
 import { scoringNewRoute } from '@/api/matches'
 import { useSession } from '@/api/session'
 import { Overline } from '@/components/overline'
-import { fmtDateShort } from '@/lib/dates'
+import { fmtDateShort, fmtLongDate } from '@/lib/dates'
 import { formatRatingDelta } from '@/lib/rating'
 
 const GUEST_OPPONENT = 'guest'
@@ -446,7 +446,7 @@ function PageTitle({
     <div style={{ display: 'flex', alignItems: 'flex-end', marginBottom: 24, gap: 16 }}>
       <div>
         <Overline style={{ marginBottom: 8 }}>
-          Dashboard · Tuesday, April 22
+          Dashboard · {fmtLongDate()}
         </Overline>
         <h1
           style={{
