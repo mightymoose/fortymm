@@ -10,7 +10,7 @@ import type {
 import { scoringNewRoute } from '@/api/matches'
 import { useSession } from '@/api/session'
 import { Overline } from '@/components/overline'
-import { fmtDateShort } from '@/lib/dates'
+import { fmtDateShort, fmtLongDate } from '@/lib/dates'
 import { formatRatingDelta } from '@/lib/rating'
 
 const GUEST_OPPONENT = 'guest'
@@ -440,13 +440,13 @@ function PageTitle({
   subtitle,
 }: {
   greeting: string
-  subtitle: string
+  subtitle?: string
 }) {
   return (
     <div style={{ display: 'flex', alignItems: 'flex-end', marginBottom: 24, gap: 16 }}>
       <div>
         <Overline style={{ marginBottom: 8 }}>
-          Dashboard · Tuesday, April 22
+          Dashboard · {fmtLongDate()}
         </Overline>
         <h1
           style={{
@@ -460,9 +460,11 @@ function PageTitle({
           {greeting}
           <span style={{ color: C.ball500 }}>.</span>
         </h1>
-        <div style={{ marginTop: 6, font: `400 14px ${UI}`, color: C.chalk300 }}>
-          {subtitle}
-        </div>
+        {subtitle && (
+          <div style={{ marginTop: 6, font: `400 14px ${UI}`, color: C.chalk300 }}>
+            {subtitle}
+          </div>
+        )}
       </div>
       <div style={{ flex: 1 }} />
       <Button
@@ -1050,7 +1052,7 @@ export function DashboardPage() {
         boxSizing: 'border-box',
       }}
     >
-      <PageTitle greeting={greeting} subtitle="3 things need your attention" />
+      <PageTitle greeting={greeting} />
       {isLoading ? (
         <SkeletonCard label="Loading score banner" height={140} />
       ) : data?.score_banners?.length ? (
