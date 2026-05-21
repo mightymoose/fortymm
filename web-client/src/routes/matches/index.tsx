@@ -12,6 +12,7 @@ import {
 } from 'lucide-react'
 
 import {
+  matchesCsvUrl,
   scoringNewRoute,
   useMatchList,
   type MatchListRow,
@@ -31,19 +32,7 @@ import {
   PaginationItem,
   PaginationLink,
 } from '@/components/ui/pagination'
-import {
-  Select,
-  SelectContent,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from '@/components/ui/tooltip'
 import { pageTitle } from '@/lib/page-title'
 import { useDebouncedValue } from '@/lib/use-debounced-value'
 import { cn, initialsOf } from '@/lib/utils'
@@ -59,10 +48,8 @@ export const Route = createFileRoute('/matches/')({
 })
 
 type RowTab = 'scheduled' | 'live' | 'final'
-type StatusKey = RowTab | 'called'
+type StatusKey = RowTab
 
-// `called` has no backend concept yet — the tab stays visible (disabled) so
-// the nav shape is stable as features land.
 const TAB_TO_API: Record<RowTab, MatchStatus> = {
   scheduled: 'pending',
   live: 'in_progress',
@@ -81,7 +68,6 @@ const API_TO_TAB: Record<MatchStatus, RowTab> = {
 const STATUS_TABS: { value: 'all' | StatusKey; label: string; live?: boolean }[] = [
   { value: 'all', label: 'All' },
   { value: 'live', label: 'Live', live: true },
-  { value: 'called', label: 'Called' },
   { value: 'scheduled', label: 'Up next' },
   { value: 'final', label: 'Final' },
 ]
@@ -103,8 +89,7 @@ function MatchesPage() {
   const debouncedQ = useDebouncedValue(q, 300).trim()
   const navigate = useNavigate()
 
-  const apiStatus =
-    status === 'all' || status === 'called' ? undefined : TAB_TO_API[status]
+  const apiStatus = status === 'all' ? undefined : TAB_TO_API[status]
   // Memoize the params bag so React Query's structural sharing — and any
   // future React.memo on MatchTable — sees a stable reference.
   const queryParams = useMemo(
@@ -139,43 +124,54 @@ function MatchesPage() {
     setPage(1)
   }, [])
 
+  // Link straight to the CSV endpoint for the active filters — the browser
+  // downloads it directly (no client-side fetch/buffering).
+  const exportHref = useMemo(
+    () => matchesCsvUrl({ status: apiStatus, q: debouncedQ || undefined }),
+    [apiStatus, debouncedQ],
+  )
+
   const items = data?.items ?? []
   const total = data?.total ?? 0
   const liveCount = data?.status_counts?.in_progress ?? 0
 
   return (
     <AppShell>
-      <TooltipProvider>
-        <div className="match-list-page">
-          <ActionBar liveCount={liveCount} />
-          <FilterRow
-            q={q}
-            setQ={changeQuery}
-            status={status}
-            setStatus={changeStatus}
-            statusCounts={data?.status_counts}
-          />
-          <div className="table-wrap">
-            <MatchTable
-              rows={items}
-              isLoading={isLoading}
-              onClear={onClear}
-              navigate={navigate}
-            />
-          </div>
-          <PaginationFooter
-            page={page}
-            setPage={setPage}
-            total={total}
-            pageSize={PAGE_SIZE}
+      <div className="match-list-page">
+        <ActionBar liveCount={liveCount} exportHref={exportHref} />
+        <FilterRow
+          q={q}
+          setQ={changeQuery}
+          status={status}
+          setStatus={changeStatus}
+          statusCounts={data?.status_counts}
+        />
+        <div className="table-wrap">
+          <MatchTable
+            rows={items}
+            isLoading={isLoading}
+            onClear={onClear}
+            navigate={navigate}
           />
         </div>
-      </TooltipProvider>
+        <PaginationFooter
+          page={page}
+          setPage={setPage}
+          total={total}
+          pageSize={PAGE_SIZE}
+        />
+      </div>
     </AppShell>
   )
 }
 
-function ActionBar({ liveCount }: { liveCount: number }) {
+function ActionBar({
+  liveCount,
+  exportHref,
+}: {
+  liveCount: number
+  exportHref: string
+}) {
   return (
     <div className="action-bar">
       <div className="action-bar-title">Matches</div>
@@ -187,8 +183,10 @@ function ActionBar({ liveCount }: { liveCount: number }) {
         {liveCount} LIVE
       </span>
       <div className="filter-spacer" />
-      <Button variant="ghost" size="sm">
-        Export CSV
+      <Button asChild variant="ghost" size="sm">
+        <a href={exportHref} download>
+          Export CSV
+        </a>
       </Button>
       <Button asChild variant="default" size="sm">
         <Link to="/matches/new">+ New match</Link>
@@ -211,7 +209,6 @@ function FilterRow({
   statusCounts?: Record<string, number>
 }) {
   function tabCount(value: 'all' | StatusKey): number | null {
-    if (value === 'called') return null
     if (!statusCounts) return null
     if (value === 'all') {
       return Object.values(statusCounts).reduce((a, b) => a + b, 0)
@@ -252,7 +249,6 @@ function FilterRow({
                 key={t.value}
                 value={t.value}
                 className="gap-1.5"
-                disabled={t.value === 'called'}
               >
                 {t.live && <span className="live-dot" />}
                 {t.label}
@@ -262,42 +258,7 @@ function FilterRow({
           })}
         </TabsList>
       </Tabs>
-
-      <div className="filter-spacer" />
-
-      <ComingSoonSelect label="Context" placeholder="All contexts" />
-      <ComingSoonSelect label="Round" placeholder="All rounds" />
-      <ComingSoonSelect label="Court" placeholder="All courts" />
     </div>
-  )
-}
-
-function ComingSoonSelect({
-  label,
-  placeholder,
-}: {
-  label: string
-  placeholder: string
-}) {
-  return (
-    <>
-      <span className="filter-label">{label}</span>
-      <Tooltip>
-        {/* Span wrapper: disabled triggers don't dispatch pointer events, so
-            the tooltip needs an enabled element to attach to. */}
-        <TooltipTrigger asChild>
-          <span>
-            <Select disabled>
-              <SelectTrigger className="h-9 min-w-[120px]" disabled>
-                <SelectValue placeholder={placeholder} />
-              </SelectTrigger>
-              <SelectContent />
-            </Select>
-          </span>
-        </TooltipTrigger>
-        <TooltipContent>coming soon</TooltipContent>
-      </Tooltip>
-    </>
   )
 }
 

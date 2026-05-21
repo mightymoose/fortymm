@@ -4,7 +4,7 @@ import {
   useQuery,
   useQueryClient,
 } from '@tanstack/react-query'
-import { api, unwrap } from './client'
+import { api, resolveBaseUrl, unwrap } from './client'
 import { DASHBOARD_QUERY_KEY } from './dashboard'
 import type { components } from './schema'
 
@@ -132,6 +132,22 @@ export function useMatchList(
     retry: false,
     throwOnError: true,
   })
+}
+
+/**
+ * URL of the CSV export for the current filters. The dedicated `/v1/matches.csv`
+ * endpoint returns the whole filtered set as a `Content-Disposition: attachment`
+ * download, so the UI can link straight to it — the browser downloads it
+ * directly, with no client-side fetch/buffering.
+ */
+export function matchesCsvUrl(
+  filters: Pick<MatchListParams, 'status' | 'q'>,
+): string {
+  const qs = new URLSearchParams()
+  if (filters.status) qs.set('status', filters.status)
+  if (filters.q) qs.set('q', filters.q)
+  const query = qs.toString()
+  return `${resolveBaseUrl()}/v1/matches.csv${query ? `?${query}` : ''}`
 }
 
 /** Throws on failure so the surrounding boundary can render a retry. */

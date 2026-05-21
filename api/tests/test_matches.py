@@ -1030,3 +1030,56 @@ async def test_details_recent_form_excludes_self_from_career_count(
         assert f["career_wins_before"] == 0
         assert f["rating_history"] == []
         assert f["rating_before"] is None
+
+
+async def test_list_matches_csv_export(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    me = await start_session(api_client, db_session)
+    opp = await make_user(db_session, "csv-rival")
+    created = await _create_match(api_client, opp.id, best_of=5)
+
+    response = await api_client.get("/v1/matches.csv")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/csv")
+    assert "attachment; filename=" in response.headers["content-disposition"]
+    lines = response.text.strip().splitlines()
+    assert lines[0] == "Match ID,Created,Status,League,Side 1,Side 2,Score,Best of"
+    # One data row for the one match, carrying both players + best_of.
+    assert len(lines) == 2
+    assert created["id"] in lines[1]
+    assert me.username in lines[1]
+    assert opp.username in lines[1]
+    assert lines[1].endswith(",5")  # best_of; score blank while pending
+
+
+async def test_list_matches_csv_includes_score_for_completed(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    await start_session(api_client, db_session)
+    opp = await make_user(db_session, "csv-finished")
+    await _play_match_to_completion(api_client, opp.id, best_of=3, side_1_wins=True)
+
+    response = await api_client.get("/v1/matches.csv")
+
+    lines = response.text.strip().splitlines()
+    assert len(lines) == 2
+    # Best-of-3 won 2-0 by side 1 → score column populated.
+    assert lines[1].endswith(",2-0,3")
+
+
+async def test_list_matches_csv_honors_status_filter(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    await start_session(api_client, db_session)
+    opp = await make_user(db_session, "csv-filter")
+    await _create_match(api_client, opp.id)  # pending
+
+    response = await api_client.get("/v1/matches.csv?status=completed")
+
+    # Header only — the pending match is filtered out.
+    assert response.status_code == 200
+    assert response.text.strip().splitlines() == [
+        "Match ID,Created,Status,League,Side 1,Side 2,Score,Best of"
+    ]

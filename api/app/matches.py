@@ -1,9 +1,11 @@
+import csv
+import io
 import math
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased, selectinload
@@ -345,6 +347,45 @@ async def create_match(
     return _serialize_details(created, current_user.id)
 
 
+def _filtered_matches_query(q: str | None, status_: MatchStatus | None):
+    """Shared base query for the matches list + CSV export (status + search)."""
+    base = select(Match)
+    if q:
+        base = _player_username_filter(base, q)
+    return base if status_ is None else base.where(Match.status == status_)
+
+
+@router.get("/matches.csv", response_class=Response)
+async def export_matches_csv(
+    status_: MatchStatus | None = Query(default=None, alias="status"),
+    q: str | None = Query(default=None),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+) -> Response:
+    """CSV export of the whole filtered match set (every match, not paginated),
+    served as an attachment so the browser downloads it directly."""
+    matches = (
+        (
+            await db.execute(
+                _filtered_matches_query(q, status_)
+                .options(*match_eager_options())
+                .order_by(Match.created_at.desc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    csv_text = _matches_to_csv(
+        [_list_row(match, current_user.id) for match in matches]
+    )
+    filename = f"fortymm-matches-{datetime.now(UTC).strftime('%Y-%m-%d')}.csv"
+    return Response(
+        content=csv_text,
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 @router.get("/matches", response_model=MatchListResponse)
 async def list_matches(
     status_: MatchStatus | None = Query(default=None, alias="status"),
@@ -356,16 +397,11 @@ async def list_matches(
 ) -> MatchListResponse:
     # The list is open to every signed-in user. Writes still gate on
     # `_is_participant` downstream.
-    base = select(Match)
-    if q:
-        base = _player_username_filter(base, q)
-
-    paged = base if status_ is None else base.where(Match.status == status_)
-
     matches = (
         (
             await db.execute(
-                paged.options(*match_eager_options())
+                _filtered_matches_query(q, status_)
+                .options(*match_eager_options())
                 .order_by(Match.created_at.desc())
                 .offset((page - 1) * page_size)
                 .limit(page_size)
@@ -375,9 +411,9 @@ async def list_matches(
         .all()
     )
 
-    # status_counts honors `q` and ignores the status filter, so it's built
-    # from `base`. `total` then falls out of the same aggregate — no separate
-    # count round-trip needed.
+    # status_counts honors `q` but ignores the status filter, so it's built
+    # from its own aggregate. `total` then falls out of the same counts — no
+    # separate count round-trip needed.
     counts_query = select(Match.status, func.count(Match.id))
     if q:
         counts_query = _player_username_filter(counts_query, q)
@@ -424,6 +460,55 @@ def _list_row(match: Match, current_user_id: uuid.UUID) -> MatchListRow:
         current_game_id=current_game.id if can_score else None,
         can_score=can_score,
     )
+
+
+_CSV_HEADER = [
+    "Match ID",
+    "Created",
+    "Status",
+    "League",
+    "Side 1",
+    "Side 2",
+    "Score",
+    "Best of",
+]
+
+
+def _csv_side_names(side: MatchDetailsSide | None) -> str:
+    return " & ".join(p.username for p in side.players) if side else ""
+
+
+def _matches_to_csv(rows: list[MatchListRow]) -> str:
+    """Serialize list rows to RFC-4180 CSV (the `csv` module handles quoting)."""
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(_CSV_HEADER)
+    for row in rows:
+        sides = sorted(row.sides, key=lambda s: s.side_number)
+        side1 = sides[0] if sides else None
+        side2 = sides[1] if len(sides) > 1 else None
+
+        score = ""
+        if (
+            row.status in {MatchStatus.in_progress, MatchStatus.completed}
+            and side1 is not None
+            and side2 is not None
+        ):
+            score = f"{side1.games_won}-{side2.games_won}"
+
+        writer.writerow(
+            [
+                str(row.id),
+                row.created_at.isoformat(),
+                row.status_label,
+                row.league.name,
+                _csv_side_names(side1),
+                _csv_side_names(side2),
+                score,
+                row.best_of,
+            ]
+        )
+    return buf.getvalue()
 
 
 @router.get("/matches/{match_id}", response_model=MatchDetails)

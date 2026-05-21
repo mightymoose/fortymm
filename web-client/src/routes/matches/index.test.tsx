@@ -169,11 +169,13 @@ describe('MatchesPage', () => {
     })
   })
 
-  it('keeps the "called" tab disabled with no count', async () => {
+  it('no longer renders the disabled "Called" tab or coming-soon filters (#149)', async () => {
     renderMatchesPage()
-    const called = await screen.findByRole('tab', { name: /called/i })
-    expect(called).toBeDisabled()
-    expect(called).toHaveAccessibleName('Called')
+    await screen.findByRole('tab', { name: /up next/i })
+    expect(screen.queryByRole('tab', { name: /called/i })).not.toBeInTheDocument()
+    expect(screen.queryByText(/all contexts/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/all rounds/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/all courts/i)).not.toBeInTheDocument()
   })
 
   it('moves to the next page when the player clicks Next', async () => {
@@ -263,5 +265,31 @@ describe('MatchesPage', () => {
     await screen.findByText(/no matches yet/i)
     const pill = container.querySelector('.live-pill')
     expect(pill?.textContent?.replace(/\s+/g, ' ').trim()).toBe('0 LIVE')
+  })
+
+  it('Export CSV links straight to /v1/matches.csv with the active filter (#149)', async () => {
+    const user = userEvent.setup()
+    server.use(
+      http.get('*/v1/matches', () =>
+        HttpResponse.json(
+          matchListResponse({
+            items: [matchListRow({ opponent: 'nguyen.t' })],
+            total: 1,
+            status_counts: { completed: 1 },
+          }),
+        ),
+      ),
+    )
+    renderMatchesPage()
+    await screen.findByText('nguyen.t')
+    // Narrow to the Final filter — the export link must carry it.
+    await user.click(screen.getByRole('tab', { name: /final/i }))
+
+    const link = screen.getByRole('link', { name: /export csv/i })
+    const href = link.getAttribute('href') ?? ''
+    expect(href).toContain('/v1/matches.csv')
+    expect(href).toContain('status=completed')
+    // A real download link — the browser fetches the file directly.
+    expect(link).toHaveAttribute('download')
   })
 })
