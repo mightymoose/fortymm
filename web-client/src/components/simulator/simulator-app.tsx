@@ -2,12 +2,13 @@
    simulator-app.tsx — Top-level state, routing between editor/schedule,
    solve loop. Ported from the FortyMM design handoff (app.jsx).
    ===================================================================== */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { CalendarClock, Settings2, SlidersHorizontal } from 'lucide-react'
 import {
   fmtClock,
   makeExampleConfig,
   minutesBetween,
+  nextCompletion,
   solve,
   totalExpectedMatches,
   validateConfig,
@@ -19,6 +20,7 @@ import {
   type Schedule,
   type SolveError,
   type SolveOptions,
+  type TournamentEvent,
 } from './data'
 import { Editor } from './editor'
 import { ScheduleView, type Density, type SimState, type Tweaks } from './schedule'
@@ -222,16 +224,15 @@ export function SimulatorApp() {
 
   const errors = useMemo(() => validateConfig(config), [config])
 
-  // Navigation between editor <-> schedule via custom events (from editor footer)
-  useEffect(() => {
-    const goSchedule = () => setTab('schedule')
-    const goEditor = () => setTab('editor')
-    window.addEventListener('sim-go-schedule', goSchedule)
-    window.addEventListener('sim-go-editor', goEditor)
-    return () => {
-      window.removeEventListener('sim-go-schedule', goSchedule)
-      window.removeEventListener('sim-go-editor', goEditor)
-    }
+  // Any config change invalidates an in-flight simulation and the schedule it
+  // produced. Routing every config write (edits, load-example, reset) through
+  // here keeps that invariant without diffing the whole config each render.
+  const applyConfig = useCallback((next: Config) => {
+    setConfig(next)
+    setSim({ completions: [], nowMin: 0 })
+    setDurations({})
+    setSchedule(null)
+    setInfeasibleErr(null)
   }, [])
 
   // ---- Solve ----
@@ -269,38 +270,15 @@ export function SimulatorApp() {
     if (result && result.status !== 'INFEASIBLE') setTab('schedule')
   }, [runSolve])
 
-  // Watch for actual config changes (deep) — invalidate sim & schedule
-  const lastConfigSig = useRef('')
-  useEffect(() => {
-    const sig = JSON.stringify(config)
-    if (lastConfigSig.current && lastConfigSig.current !== sig) {
-      setSim({ completions: [], nowMin: 0 })
-      setDurations({})
-      setSchedule(null)
-    }
-    lastConfigSig.current = sig
-  }, [config])
-
   // ---- Advance simulator ----
   const advanceOnce = useCallback(async () => {
     if (!schedule) return
+    const eventById = new Map(config.events.map((e) => [e.id, e]))
     const completedIds = new Set(sim.completions.map((c) => c.matchId))
-    const pending = schedule.matches.filter((m) => !completedIds.has(m.id))
-    if (pending.length === 0) return
-    let next: (typeof pending)[number] | null = null,
-      bestT = Infinity
-    for (const m of pending) {
-      const ev = config.events.find((e) => e.id === m.eventId)!
-      const actualDur = durations[m.id] ?? ev.matchDurationMin
-      const t = m.plannedStart + actualDur
-      if (t < bestT || (t === bestT && (!next || m.id < next.id))) {
-        bestT = t
-        next = m
-      }
-    }
-    if (!next) return
-    const ev = config.events.find((e) => e.id === next!.eventId)!
-    const actualDur = durations[next.id] ?? ev.matchDurationMin
+    const picked = nextCompletion(schedule.matches, completedIds, eventById, durations)
+    if (!picked) return
+    const { match: next, actualDur } = picked
+    const ev = eventById.get(next.eventId)!
     const completion = {
       matchId: next.id,
       start: next.plannedStart,
@@ -342,27 +320,15 @@ export function SimulatorApp() {
     if (!schedule) return
     setAutoAdvancing(true)
     const cfg = config
+    const eventById = new Map<string, TournamentEvent>(cfg.events.map((e) => [e.id, e]))
     let s = schedule
     let sm = sim
     const durs = durations
     for (;;) {
       const completedIds = new Set(sm.completions.map((c) => c.matchId))
-      const pending = s.matches.filter((m) => !completedIds.has(m.id))
-      if (pending.length === 0) break
-      let next: (typeof pending)[number] | null = null,
-        bestT = Infinity
-      for (const m of pending) {
-        const ev = cfg.events.find((e) => e.id === m.eventId)!
-        const ad = durs[m.id] ?? ev.matchDurationMin
-        const t = m.plannedStart + ad
-        if (t < bestT || (t === bestT && (!next || m.id < next.id))) {
-          bestT = t
-          next = m
-        }
-      }
-      if (!next) break
-      const ev = cfg.events.find((e) => e.id === next!.eventId)!
-      const ad = durs[next.id] ?? ev.matchDurationMin
+      const picked = nextCompletion(s.matches, completedIds, eventById, durs)
+      if (!picked) break
+      const { match: next, actualDur: ad } = picked
       const comp = {
         matchId: next.id,
         start: next.plannedStart,
@@ -461,12 +427,13 @@ export function SimulatorApp() {
         {tab === 'editor' ? (
           <Editor
             config={config}
-            setConfig={setConfig}
+            setConfig={applyConfig}
             errors={errors}
             onSolve={onSolveInitial}
-            onLoadExample={() => setConfig(makeExampleConfig())}
-            onReset={() => {
-              setConfig({
+            onViewSchedule={() => setTab('schedule')}
+            onLoadExample={() => applyConfig(makeExampleConfig())}
+            onReset={() =>
+              applyConfig({
                 name: '',
                 startISO: T0_ISO,
                 endISO: TEND_ISO,
@@ -475,7 +442,7 @@ export function SimulatorApp() {
                 events: [],
                 tablePools: [],
               })
-            }}
+            }
             solving={solving}
             schedule={schedule}
             infeasibleErr={infeasibleErr}

@@ -570,7 +570,6 @@ function computeTotalIdle(matches: Match[]): number {
   return total
 }
 
-// Count total matches expected (across all events) for progress display
 export function totalExpectedMatches(cfg: Config): number {
   return cfg.events.reduce(
     (s, e) => s + (e.playerIds.length * (e.playerIds.length - 1)) / 2,
@@ -578,17 +577,33 @@ export function totalExpectedMatches(cfg: Config): number {
   )
 }
 
-// Color for event by index
 export function eventColor(eventIndex: number): string {
   return EVENT_COLORS[eventIndex % EVENT_COLORS.length]
 }
 
 export type ColorBy = 'event' | 'table' | 'player'
 
-// Compute color for matching `colorBy` setting
-export function colorForMatch(m: Match, cfg: Config, colorBy: ColorBy): string {
+// O(1) lookups built once per config, so render loops over 50+ matches don't
+// scan the events/tables/players arrays per match.
+export interface ConfigLookups {
+  eventById: Map<string, TournamentEvent>
+  eventIndexById: Map<string, number>
+  tableIndexById: Map<string, number>
+  playerById: Map<string, Player>
+}
+
+export function buildLookups(cfg: Config): ConfigLookups {
+  return {
+    eventById: new Map(cfg.events.map((e) => [e.id, e])),
+    eventIndexById: new Map(cfg.events.map((e, i) => [e.id, i])),
+    tableIndexById: new Map(cfg.tables.map((t, i) => [t.id, i])),
+    playerById: new Map(cfg.players.map((p) => [p.id, p])),
+  }
+}
+
+export function colorForMatch(m: Match, colorBy: ColorBy, lookups: ConfigLookups): string {
   if (colorBy === 'table') {
-    const i = cfg.tables.findIndex((t) => t.id === m.tableId)
+    const i = lookups.tableIndexById.get(m.tableId) ?? 0
     return EVENT_COLORS[(i + 2) % EVENT_COLORS.length]
   }
   if (colorBy === 'player') {
@@ -597,11 +612,38 @@ export function colorForMatch(m: Match, cfg: Config, colorBy: ColorBy): string {
       .reduce((acc, c) => (acc + c.charCodeAt(0)) % 1000, 0)
     return EVENT_COLORS[h % EVENT_COLORS.length]
   }
-  const i = cfg.events.findIndex((e) => e.id === m.eventId)
+  const i = lookups.eventIndexById.get(m.eventId) ?? 0
   return EVENT_COLORS[i % EVENT_COLORS.length]
 }
 
-// Initials helper
+// Which not-yet-completed match finishes first given the user's actual-duration
+// hypotheses. Single source of truth for "what advances next" — the schedule
+// panel highlight and the advance handlers must agree, including the
+// lowest-id tie-break.
+export function nextCompletion(
+  matches: Match[],
+  completedIds: Set<string>,
+  eventById: Map<string, TournamentEvent>,
+  durations: Record<string, number>,
+): { match: Match; actualDur: number } | null {
+  let best: Match | null = null
+  let bestT = Infinity
+  for (const m of matches) {
+    if (completedIds.has(m.id)) continue
+    const ev = eventById.get(m.eventId)
+    if (!ev) continue
+    const dur = durations[m.id] ?? ev.matchDurationMin
+    const t = m.plannedStart + dur
+    if (t < bestT || (t === bestT && (!best || m.id < best.id))) {
+      bestT = t
+      best = m
+    }
+  }
+  if (!best) return null
+  const ev = eventById.get(best.eventId)!
+  return { match: best, actualDur: durations[best.id] ?? ev.matchDurationMin }
+}
+
 export function initials(name: string): string {
   return name
     .split(/\s+/)

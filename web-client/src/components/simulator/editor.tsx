@@ -355,6 +355,7 @@ export function Editor({
   setConfig,
   errors,
   onSolve,
+  onViewSchedule,
   onLoadExample,
   onReset,
   solving,
@@ -365,6 +366,7 @@ export function Editor({
   setConfig: (c: Config) => void
   errors: ValidationError[]
   onSolve: () => void
+  onViewSchedule: () => void
   onLoadExample: () => void
   onReset: () => void
   solving: boolean
@@ -942,10 +944,7 @@ export function Editor({
         </div>
         <div className="grow"></div>
         {schedule && !solving && (
-          <button
-            className="btn ghost"
-            onClick={() => window.dispatchEvent(new CustomEvent('sim-go-schedule'))}
-          >
+          <button className="btn ghost" onClick={onViewSchedule}>
             View current schedule <ArrowRight size={12} />
           </button>
         )}

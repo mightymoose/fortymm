@@ -16,15 +16,19 @@ import {
   Users,
 } from 'lucide-react'
 import {
+  buildLookups,
   colorForMatch,
   eventColor,
   fmtClock,
   initials,
   minutesBetween,
+  nextCompletion,
   type ClockMode,
   type ColorBy,
   type Config,
+  type ConfigLookups,
   type Match,
+  type Player,
   type Schedule,
   type TournamentEvent,
 } from './data'
@@ -61,8 +65,8 @@ function pickTickStep(pxPerMin: number): number {
   return 120
 }
 
-function abbrevPlayer(config: Config, pid: string): string {
-  const p = config.players.find((pp) => pp.id === pid)
+function abbrevPlayer(playerById: Map<string, Player>, pid: string): string {
+  const p = playerById.get(pid)
   if (!p) return '?'
   const parts = p.name.split(/\s+/)
   if (parts.length === 1) return parts[0]
@@ -78,6 +82,7 @@ function GanttChart({
   config,
   schedule,
   sim,
+  lookups,
   density,
   colorBy,
   animateMoves,
@@ -89,6 +94,7 @@ function GanttChart({
   config: Config
   schedule: Schedule
   sim: SimState
+  lookups: ConfigLookups
   density: Density
   colorBy: ColorBy
   animateMoves: boolean
@@ -177,8 +183,8 @@ function GanttChart({
                   ></div>
                 ))}
               {(matchesByTable[t.id] || []).map((m) => {
-                const ev = config.events.find((e) => e.id === m.eventId)
-                const c = colorForMatch(m, config, colorBy)
+                const ev = lookups.eventById.get(m.eventId)
+                const c = colorForMatch(m, colorBy, lookups)
                 const start = m.completed ? (m.actualStart ?? 0) : m.plannedStart
                 const end = m.completed ? (m.actualEnd ?? 0) : m.plannedEnd
                 const w = (end - start) * pxPerMin
@@ -211,8 +217,8 @@ function GanttChart({
                     )}
                     {!tiny && (
                       <div className="match-players">
-                        {abbrevPlayer(config, m.p1)} <span style={{ opacity: 0.6 }}>vs</span>{' '}
-                        {abbrevPlayer(config, m.p2)}
+                        {abbrevPlayer(lookups.playerById, m.p1)} <span style={{ opacity: 0.6 }}>vs</span>{' '}
+                        {abbrevPlayer(lookups.playerById, m.p2)}
                       </div>
                     )}
                     {!narrow && (
@@ -238,6 +244,7 @@ function PlayerTimeline({
   config,
   schedule,
   sim,
+  lookups,
   density,
   colorBy,
   animateMoves,
@@ -250,6 +257,7 @@ function PlayerTimeline({
   config: Config
   schedule: Schedule
   sim: SimState
+  lookups: ConfigLookups
   density: Density
   colorBy: ColorBy
   animateMoves: boolean
@@ -338,7 +346,7 @@ function PlayerTimeline({
         </div>
 
         {sortedPlayers.map(({ id, idleTotal }, ri) => {
-          const p = config.players.find((pp) => pp.id === id)
+          const p = lookups.playerById.get(id)
           if (!p) return null
           const d = playerData[id]
           return (
@@ -396,8 +404,8 @@ function PlayerTimeline({
                     ></div>
                   ))}
                 {d.matches.map((m) => {
-                  const ev = config.events.find((e) => e.id === m.eventId)
-                  const c = colorForMatch(m, config, colorBy)
+                  const ev = lookups.eventById.get(m.eventId)
+                  const c = colorForMatch(m, colorBy, lookups)
                   const start = m.completed ? (m.actualStart ?? 0) : m.plannedStart
                   const end = m.completed ? (m.actualEnd ?? 0) : m.plannedEnd
                   const w = (end - start) * pxPerMin
@@ -429,10 +437,12 @@ function PlayerTimeline({
                           <Lock className="lock" />
                         </>
                       )}
-                      {!tiny && <div className="match-players">vs {abbrevPlayer(config, otherId)}</div>}
+                      {!tiny && (
+                        <div className="match-players">vs {abbrevPlayer(lookups.playerById, otherId)}</div>
+                      )}
                       {!narrow && (
                         <div className="match-meta">
-                          T{config.tables.findIndex((t) => t.id === m.tableId) + 1} ·{' '}
+                          T{(lookups.tableIndexById.get(m.tableId) ?? 0) + 1} ·{' '}
                           {m.completed ? (m.actualEnd ?? 0) - (m.actualStart ?? 0) : m.plannedDurationMin}m
                         </div>
                       )}
@@ -450,12 +460,12 @@ function PlayerTimeline({
 }
 
 // ---------- Hover tooltip ----------
-function MatchTip({ hover, config }: { hover: HoverInfo | null; config: Config }) {
+function MatchTip({ hover, lookups }: { hover: HoverInfo | null; lookups: ConfigLookups }) {
   if (!hover) return null
   const { match: m, event: ev, color, x, y } = hover
-  const p1 = config.players.find((p) => p.id === m.p1)
-  const p2 = config.players.find((p) => p.id === m.p2)
-  const tbl = config.tables.find((t) => t.id === m.tableId)
+  const p1 = lookups.playerById.get(m.p1)
+  const p2 = lookups.playerById.get(m.p2)
+  const tableNum = (lookups.tableIndexById.get(m.tableId) ?? 0) + 1
   const start = m.completed ? (m.actualStart ?? 0) : m.plannedStart
   const end = m.completed ? (m.actualEnd ?? 0) : m.plannedEnd
   const W = 260,
@@ -489,7 +499,7 @@ function MatchTip({ hover, config }: { hover: HoverInfo | null; config: Config }
       </div>
       <div className="rows">
         <span className="k">Table</span>
-        <span className="v">{tbl?.name}</span>
+        <span className="v">T{tableNum}</span>
         <span className="k">Start</span>
         <span className="v">
           {fmtClock(start, '24h')} <span style={{ color: 'var(--fg-3)' }}>+{start}m</span>
@@ -507,9 +517,9 @@ function MatchTip({ hover, config }: { hover: HoverInfo | null; config: Config }
 
 // ---------- Simulator panel ----------
 function SimPanel({
-  config,
   schedule,
   sim,
+  lookups,
   durations,
   setDurations,
   onAdvance,
@@ -521,9 +531,9 @@ function SimPanel({
   onSelectMatch,
   lastResolveMs,
 }: {
-  config: Config
   schedule: Schedule
   sim: SimState
+  lookups: ConfigLookups
   durations: Record<string, number>
   setDurations: (d: Record<string, number>) => void
   onAdvance: () => void
@@ -535,40 +545,43 @@ function SimPanel({
   onSelectMatch: (id: string) => void
   lastResolveMs: number | null
 }) {
-  const totalExpected = schedule?.matches.length || 0
-  const completedIds = new Set(sim.completions.map((c) => c.matchId))
-  const completed = schedule.matches.filter((m) => completedIds.has(m.id))
-  const pending = schedule.matches
-    .filter((m) => !completedIds.has(m.id))
-    .sort((a, b) => a.plannedStart - b.plannedStart)
-
-  completed.sort((a, b) => (b.actualEnd || 0) - (a.actualEnd || 0))
+  const totalExpected = schedule.matches.length
+  const completedIds = useMemo(
+    () => new Set(sim.completions.map((c) => c.matchId)),
+    [sim.completions],
+  )
+  const completed = useMemo(
+    () =>
+      schedule.matches
+        .filter((m) => completedIds.has(m.id))
+        .sort((a, b) => (b.actualEnd || 0) - (a.actualEnd || 0)),
+    [schedule.matches, completedIds],
+  )
+  const pending = useMemo(
+    () =>
+      schedule.matches
+        .filter((m) => !completedIds.has(m.id))
+        .sort((a, b) => a.plannedStart - b.plannedStart),
+    [schedule.matches, completedIds],
+  )
+  const next = useMemo(
+    () => nextCompletion(schedule.matches, completedIds, lookups.eventById, durations),
+    [schedule.matches, completedIds, lookups, durations],
+  )
+  const nextId = next?.match.id ?? null
 
   const onBulkPerturb = () => {
-    const next = { ...durations }
+    const updated = { ...durations }
     pending.forEach((m) => {
-      const ev = config.events.find((e) => e.id === m.eventId)!
-      const planned = ev.matchDurationMin
+      const ev = lookups.eventById.get(m.eventId)!
       const delta = Math.round((Math.random() * 20 - 10) / 5) * 5
-      next[m.id] = Math.max(5, planned + delta)
+      updated[m.id] = Math.max(5, ev.matchDurationMin + delta)
     })
-    setDurations(next)
+    setDurations(updated)
   }
 
-  const nextToComplete = useMemo(() => {
-    let best: Match | null = null,
-      bestT = Infinity
-    pending.forEach((m) => {
-      const ev = config.events.find((e) => e.id === m.eventId)!
-      const dur = durations[m.id] ?? ev.matchDurationMin
-      const t = m.plannedStart + dur
-      if (t < bestT) {
-        bestT = t
-        best = m
-      }
-    })
-    return best as Match | null
-  }, [pending, durations, config])
+  const tableNum = (m: Match) => (lookups.tableIndexById.get(m.tableId) ?? 0) + 1
+  const eventColorFor = (m: Match) => eventColor(lookups.eventIndexById.get(m.eventId) ?? 0)
 
   return (
     <div className="sim">
@@ -628,31 +641,29 @@ function SimPanel({
       </div>
 
       <div className="sim-list">
-        {pending.length > 0 && nextToComplete && (
+        {next && (
           <>
             <div className="sim-section-head">
               <ChevronRight size={12} style={{ color: 'var(--ball-500)' }} />
               Next to complete
             </div>
             {(() => {
-              const m = nextToComplete
-              const ev = config.events.find((e) => e.id === m.eventId)!
-              const dur = durations[m.id] ?? ev.matchDurationMin
-              const evIdx = config.events.findIndex((e) => e.id === m.eventId)
-              const c = eventColor(evIdx)
+              const m = next.match
+              const ev = lookups.eventById.get(m.eventId)!
+              const dur = next.actualDur
               const finishesAt = m.plannedStart + dur
               return (
                 <div
                   className={`sim-row ${selectedMatchId === m.id ? 'selected' : ''}`}
                   onClick={() => onSelectMatch(m.id)}
                 >
-                  <div className="colorbar" style={{ '--c': c } as React.CSSProperties}></div>
+                  <div className="colorbar" style={{ '--c': eventColorFor(m) } as React.CSSProperties}></div>
                   <div className="info">
                     <div className="players">
-                      {abbrevPlayer(config, m.p1)} vs {abbrevPlayer(config, m.p2)}
+                      {abbrevPlayer(lookups.playerById, m.p1)} vs {abbrevPlayer(lookups.playerById, m.p2)}
                     </div>
                     <div className="meta">
-                      T{config.tables.findIndex((t) => t.id === m.tableId) + 1}
+                      T{tableNum(m)}
                       {' · '}starts {fmtClock(m.plannedStart, '24h')}
                       {' · '}done {fmtClock(finishesAt, '24h')}
                     </div>
@@ -688,44 +699,44 @@ function SimPanel({
             No pending matches. Reset to replay.
           </div>
         )}
-        {pending.slice(nextToComplete ? 1 : 0).map((m) => {
-          const ev = config.events.find((e) => e.id === m.eventId)!
-          const evIdx = config.events.findIndex((e) => e.id === m.eventId)
-          const c = eventColor(evIdx)
-          const dur = durations[m.id] ?? ev.matchDurationMin
-          const changed = dur !== ev.matchDurationMin
-          return (
-            <div
-              key={m.id}
-              className={`sim-row ${selectedMatchId === m.id ? 'selected' : ''}`}
-              onClick={() => onSelectMatch(m.id)}
-            >
-              <div className="colorbar" style={{ '--c': c } as React.CSSProperties}></div>
-              <div className="info">
-                <div className="players">
-                  {abbrevPlayer(config, m.p1)} vs {abbrevPlayer(config, m.p2)}
+        {pending
+          .filter((m) => m.id !== nextId)
+          .map((m) => {
+            const ev = lookups.eventById.get(m.eventId)!
+            const dur = durations[m.id] ?? ev.matchDurationMin
+            const changed = dur !== ev.matchDurationMin
+            return (
+              <div
+                key={m.id}
+                className={`sim-row ${selectedMatchId === m.id ? 'selected' : ''}`}
+                onClick={() => onSelectMatch(m.id)}
+              >
+                <div className="colorbar" style={{ '--c': eventColorFor(m) } as React.CSSProperties}></div>
+                <div className="info">
+                  <div className="players">
+                    {abbrevPlayer(lookups.playerById, m.p1)} vs {abbrevPlayer(lookups.playerById, m.p2)}
+                  </div>
+                  <div className="meta">
+                    T{tableNum(m)} · {fmtClock(m.plannedStart, '24h')}
+                  </div>
                 </div>
-                <div className="meta">
-                  T{config.tables.findIndex((t) => t.id === m.tableId) + 1} · {fmtClock(m.plannedStart, '24h')}
+                <div className="dur" onClick={(e) => e.stopPropagation()}>
+                  <input
+                    type="number"
+                    className={changed ? 'changed' : ''}
+                    value={dur}
+                    step={5}
+                    min={5}
+                    onChange={(e) => {
+                      const v = Math.max(5, parseInt(e.target.value || '0', 10) || ev.matchDurationMin)
+                      setDurations({ ...durations, [m.id]: v })
+                    }}
+                  />
+                  <span className="unit">m</span>
                 </div>
               </div>
-              <div className="dur" onClick={(e) => e.stopPropagation()}>
-                <input
-                  type="number"
-                  className={changed ? 'changed' : ''}
-                  value={dur}
-                  step={5}
-                  min={5}
-                  onChange={(e) => {
-                    const v = Math.max(5, parseInt(e.target.value || '0', 10) || ev.matchDurationMin)
-                    setDurations({ ...durations, [m.id]: v })
-                  }}
-                />
-                <span className="unit">m</span>
-              </div>
-            </div>
-          )
-        })}
+            )
+          })}
 
         {completed.length > 0 && (
           <>
@@ -736,9 +747,7 @@ function SimPanel({
               <span style={{ fontSize: 10, color: 'var(--fg-3)', fontFamily: 'var(--font-mono)' }}>ACTUAL</span>
             </div>
             {completed.map((m) => {
-              const ev = config.events.find((e) => e.id === m.eventId)!
-              const evIdx = config.events.findIndex((e) => e.id === m.eventId)
-              const c = eventColor(evIdx)
+              const ev = lookups.eventById.get(m.eventId)!
               const actual = (m.actualEnd ?? 0) - (m.actualStart ?? 0)
               return (
                 <div
@@ -746,18 +755,20 @@ function SimPanel({
                   className={`sim-row completed ${selectedMatchId === m.id ? 'selected' : ''}`}
                   onClick={() => onSelectMatch(m.id)}
                 >
-                  <div className="colorbar" style={{ '--c': c, opacity: 0.5 } as React.CSSProperties}></div>
+                  <div
+                    className="colorbar"
+                    style={{ '--c': eventColorFor(m), opacity: 0.5 } as React.CSSProperties}
+                  ></div>
                   <div className="info">
                     <div className="players">
                       <Lock
                         size={10}
                         style={{ color: 'var(--fg-3)', marginRight: 4, verticalAlign: 'middle' }}
                       />
-                      {abbrevPlayer(config, m.p1)} vs {abbrevPlayer(config, m.p2)}
+                      {abbrevPlayer(lookups.playerById, m.p1)} vs {abbrevPlayer(lookups.playerById, m.p2)}
                     </div>
                     <div className="meta">
-                      T{config.tables.findIndex((t) => t.id === m.tableId) + 1} ·{' '}
-                      {fmtClock(m.actualStart ?? 0, '24h')}–{fmtClock(m.actualEnd ?? 0, '24h')}
+                      T{tableNum(m)} · {fmtClock(m.actualStart ?? 0, '24h')}–{fmtClock(m.actualEnd ?? 0, '24h')}
                     </div>
                   </div>
                   <div className="dur">
@@ -831,7 +842,8 @@ export function ScheduleView({
   const [hover, setHover] = useState<HoverInfo | null>(null)
   const vizRef = useRef<HTMLDivElement>(null)
 
-  const status = schedule?.status || '—'
+  const lookups = useMemo(() => buildLookups(config), [config])
+  const status = schedule.status
   const animateMoves = tweaks.animateMoves !== false
 
   useLayoutEffect(() => {
@@ -925,6 +937,7 @@ export function ScheduleView({
             config={config}
             schedule={schedule}
             sim={sim}
+            lookups={lookups}
             density={tweaks.density || 'comfortable'}
             colorBy={tweaks.colorBy || 'event'}
             animateMoves={animateMoves}
@@ -938,6 +951,7 @@ export function ScheduleView({
             config={config}
             schedule={schedule}
             sim={sim}
+            lookups={lookups}
             density={tweaks.density || 'comfortable'}
             colorBy={tweaks.colorBy || 'event'}
             animateMoves={animateMoves}
@@ -951,9 +965,9 @@ export function ScheduleView({
       </div>
 
       <SimPanel
-        config={config}
         schedule={schedule}
         sim={sim}
+        lookups={lookups}
         durations={durations}
         setDurations={setDurations}
         onAdvance={onAdvance}
@@ -966,7 +980,7 @@ export function ScheduleView({
         lastResolveMs={lastResolveMs}
       />
 
-      <MatchTip hover={hover} config={config} />
+      <MatchTip hover={hover} lookups={lookups} />
     </div>
   )
 }
