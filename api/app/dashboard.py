@@ -118,7 +118,11 @@ async def _load_my_rating_changes(
             )
         )
     ).scalars().all()
-    return {row.match_id: RatingChange.from_history(row) for row in rows}
+    return {
+        row.match_id: RatingChange.from_history(row)
+        for row in rows
+        if row.match_id is not None
+    }
 
 
 def _build_score_banners(
@@ -140,7 +144,7 @@ def _build_score_banners(
 
 
 def _build_next_match(
-    pending: list[Match], current_user_id: uuid.UUID
+    pending: Sequence[Match], current_user_id: uuid.UUID
 ) -> DashboardNextMatch | None:
     if not pending:
         return None

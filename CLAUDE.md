@@ -24,6 +24,7 @@ alembic revision --autogenerate -m "..."       # new migration (autogen reads ap
 pytest                                         # all tests; testcontainers spins ephemeral Postgres
 pytest tests/test_session.py::test_x           # single test
 TEST_DATABASE_URL=postgresql+asyncpg://... pytest   # skip testcontainers, use existing Postgres
+mypy                                           # type-check app/ (config in [tool.mypy], pyproject.toml)
 ```
 
 Web client (`cd web-client`):

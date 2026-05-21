@@ -10,8 +10,9 @@ stale relative to the freshly-moved matches — the caller enqueues the
 
 import uuid
 from dataclasses import dataclass
+from typing import Any, cast
 
-from sqlalchemy import delete, text, update
+from sqlalchemy import CursorResult, delete, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Match, MatchSidePlayer, RatingHistory, User
@@ -130,4 +131,4 @@ async def _repoint_match_side_players(
         ),
         {"from_id": from_user_id, "to_id": to_user_id},
     )
-    return result.rowcount or 0
+    return cast("CursorResult[Any]", result).rowcount or 0
