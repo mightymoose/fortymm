@@ -260,7 +260,7 @@ describe('MatchDetailsView', () => {
     ).toHaveAttribute('href', '/matches')
   })
 
-  it('redirects solo matches (no opponent) back to /matches', async () => {
+  it('renders solo matches (no opponent) with only the participant side', async () => {
     const match = matchDetails({
       id: 'm-solo',
       sides: [
@@ -281,11 +281,14 @@ describe('MatchDetailsView', () => {
     server.use(
       http.get('*/v1/matches/m-solo', () => HttpResponse.json(match)),
     )
-    renderDetails('m-solo')
+    const { container } = renderDetails('m-solo')
 
     await waitFor(() =>
-      expect(screen.getByText('matches-list')).toBeInTheDocument(),
+      expect(container.querySelectorAll('.md-hero__name').length).toBe(1),
     )
+    expect(container.querySelector('.md-hero__name')).toHaveTextContent('me')
+    // Did not bounce to the list — this replaced an earlier redirect.
+    expect(screen.queryByText('matches-list')).not.toBeInTheDocument()
   })
 
   it('renders for spectators (no current-user side) without a Score CTA', async () => {

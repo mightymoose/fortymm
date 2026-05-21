@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Link, Navigate, useRouter } from '@tanstack/react-router'
+import { Link, useRouter } from '@tanstack/react-router'
 import {
   Check,
   ChevronRight,
@@ -254,12 +254,6 @@ export function MatchDetailsView({ matchId }: { matchId: string }) {
         <MatchDetailsSkeleton />
       </AppShell>
     )
-  }
-
-  if (data.sides.length < 2) {
-    // Solo matches aren't viewable on this page yet — the surface assumes
-    // two sides.
-    return <Navigate to="/matches" />
   }
 
   const view = projectMatchView(data, matchId)
@@ -675,12 +669,14 @@ function PlayersCard({ view }: { view: MatchView }) {
       </div>
       <div className="md-players">
         <PlayerProfile side={view.leftSide} won={view.leftSide.won === true} />
-        <div className="md-players__divider" />
         {view.rightSide && (
-          <PlayerProfile
-            side={view.rightSide}
-            won={view.rightSide.won === true}
-          />
+          <>
+            <div className="md-players__divider" />
+            <PlayerProfile
+              side={view.rightSide}
+              won={view.rightSide.won === true}
+            />
+          </>
         )}
       </div>
     </div>
