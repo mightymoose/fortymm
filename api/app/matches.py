@@ -565,10 +565,16 @@ def _singles_user_ids(match: Match) -> list[uuid.UUID]:
     ]
 
 
-def _history_base_query(current_match_id: uuid.UUID):
+def _history_base_query(
+    current_match_id: uuid.UUID, before: datetime | None = None
+):
     """Foundation for both recent-form and H2H lookups: completed matches
-    other than this one, eagerly loading just the sides + games subtree."""
-    return (
+    other than this one, eagerly loading just the sides + games subtree.
+
+    Pass ``before`` to restrict to matches completed before that instant, so a
+    match viewed in the past shows the form as it stood then rather than the
+    players' current form."""
+    query = (
         select(Match)
         .where(
             Match.status == MatchStatus.completed,
@@ -577,6 +583,9 @@ def _history_base_query(current_match_id: uuid.UUID):
         .options(*_match_history_options())
         .order_by(Match.updated_at.desc())
     )
+    if before is not None:
+        query = query.where(Match.updated_at < before)
+    return query
 
 
 async def _load_recent_form(
@@ -592,7 +601,8 @@ async def _load_recent_form(
         rows = (
             await db.execute(
                 participant_filter(
-                    _history_base_query(match.id), user_id
+                    _history_base_query(match.id, before=match.created_at),
+                    user_id,
                 ).limit(RECENT_FORM_LIMIT)
             )
         ).scalars().all()

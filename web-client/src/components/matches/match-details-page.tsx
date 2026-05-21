@@ -665,7 +665,7 @@ function PlayersCard({ view }: { view: MatchView }) {
     <div className="md-card">
       <div className="md-card__hd">
         <Overline as="h3">Players &amp; form</Overline>
-        <span className="md-card__hd-meta">LAST 5 RESULTS</span>
+        <span className="md-card__hd-meta">5 BEFORE THIS MATCH</span>
       </div>
       <div className="md-players">
         <PlayerProfile side={view.leftSide} won={view.leftSide.won === true} />
@@ -701,8 +701,8 @@ function PlayerProfile({ side, won }: { side: SideView; won: boolean }) {
       <div className="md-profile__form" data-testid={`form-${side.sideNumber}`}>
         <div className="md-kicker">
           {form.length === 0
-            ? 'Recent form'
-            : `Recent form · ${wins}–${losses}`}
+            ? 'Form before this match'
+            : `Form before this match · ${wins}–${losses}`}
         </div>
         {form.length === 0 ? (
           <div className="md-profile__empty">
