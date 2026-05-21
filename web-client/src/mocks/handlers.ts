@@ -261,6 +261,58 @@ export const handlers = [
     return HttpResponse.json(projectMatchDetails(seed), { status: 201 })
   }),
 
+  http.get('*/v1/matches.csv', async ({ request }) => {
+    const url = new URL(request.url)
+    const statusFilter = url.searchParams.get('status') ?? null
+    const q = url.searchParams.get('q')?.trim().toLowerCase() ?? ''
+    let scoped = mockMatches.slice()
+    if (q) {
+      scoped = scoped.filter((m) =>
+        (m.opponent?.username ?? '').toLowerCase().includes(q),
+      )
+    }
+    const filtered = statusFilter
+      ? scoped.filter((m) => m.status === statusFilter)
+      : scoped
+
+    const esc = (v: string) =>
+      /[",\r\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v
+    const lines = [
+      'Match ID,Created,Status,League,Side 1,Side 2,Score,Best of',
+    ]
+    for (const row of filtered.map(projectListRow)) {
+      const sides = [...row.sides].sort((a, b) => a.side_number - b.side_number)
+      const names = (s: (typeof sides)[number] | undefined) =>
+        s ? s.players.map((p) => p.username).join(' & ') : ''
+      const score =
+        (row.status === 'in_progress' || row.status === 'completed') &&
+        sides[0] &&
+        sides[1]
+          ? `${sides[0].games_won}-${sides[1].games_won}`
+          : ''
+      lines.push(
+        [
+          String(row.id),
+          row.created_at,
+          row.status_label,
+          row.league.name,
+          names(sides[0]),
+          names(sides[1]),
+          score,
+          String(row.best_of),
+        ]
+          .map((c) => esc(String(c)))
+          .join(','),
+      )
+    }
+    return new HttpResponse(lines.join('\r\n'), {
+      headers: {
+        'Content-Type': 'text/csv',
+        'Content-Disposition': 'attachment; filename="fortymm-matches.csv"',
+      },
+    })
+  }),
+
   http.get('*/v1/matches', async ({ request }) => {
     await delay(250)
     const url = new URL(request.url)

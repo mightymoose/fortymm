@@ -11,9 +11,8 @@ import {
   X,
 } from 'lucide-react'
 
-import { toast } from 'sonner'
 import {
-  fetchAllMatches,
+  matchesCsvUrl,
   scoringNewRoute,
   useMatchList,
   type MatchListRow,
@@ -34,7 +33,6 @@ import {
   PaginationLink,
 } from '@/components/ui/pagination'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { matchesToCsv, downloadCsv } from '@/lib/matches-csv'
 import { pageTitle } from '@/lib/page-title'
 import { useDebouncedValue } from '@/lib/use-debounced-value'
 import { cn, initialsOf } from '@/lib/utils'
@@ -126,18 +124,9 @@ function MatchesPage() {
     setPage(1)
   }, [])
 
-  const [exporting, setExporting] = useState(false)
-  const onExport = useCallback(() => {
-    setExporting(true)
-    // Export the whole filtered set (every page), not just the visible one.
-    fetchAllMatches({ status: apiStatus, q: debouncedQ || undefined })
-      .then((rows) => {
-        const stamp = new Date().toISOString().slice(0, 10)
-        downloadCsv(`fortymm-matches-${stamp}.csv`, matchesToCsv(rows))
-      })
-      .catch(() => toast.error('Could not export matches. Try again.'))
-      .finally(() => setExporting(false))
-  }, [apiStatus, debouncedQ])
+  // Link straight to the CSV endpoint for the active filters — the browser
+  // downloads it directly (no client-side fetch/buffering).
+  const exportHref = matchesCsvUrl({ status: apiStatus, q: debouncedQ || undefined })
 
   const items = data?.items ?? []
   const total = data?.total ?? 0
@@ -146,11 +135,7 @@ function MatchesPage() {
   return (
     <AppShell>
       <div className="match-list-page">
-        <ActionBar
-          liveCount={liveCount}
-          onExport={onExport}
-          exporting={exporting}
-        />
+        <ActionBar liveCount={liveCount} exportHref={exportHref} />
         <FilterRow
           q={q}
           setQ={changeQuery}
@@ -179,12 +164,10 @@ function MatchesPage() {
 
 function ActionBar({
   liveCount,
-  onExport,
-  exporting,
+  exportHref,
 }: {
   liveCount: number
-  onExport: () => void
-  exporting: boolean
+  exportHref: string
 }) {
   return (
     <div className="action-bar">
@@ -197,13 +180,10 @@ function ActionBar({
         {liveCount} LIVE
       </span>
       <div className="filter-spacer" />
-      <Button
-        variant="ghost"
-        size="sm"
-        onClick={onExport}
-        disabled={exporting}
-      >
-        {exporting ? 'Exporting…' : 'Export CSV'}
+      <Button asChild variant="ghost" size="sm">
+        <a href={exportHref} download>
+          Export CSV
+        </a>
       </Button>
       <Button asChild variant="default" size="sm">
         <Link to="/matches/new">+ New match</Link>

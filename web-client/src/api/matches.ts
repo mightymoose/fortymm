@@ -4,7 +4,7 @@ import {
   useQuery,
   useQueryClient,
 } from '@tanstack/react-query'
-import { api, unwrap } from './client'
+import { api, resolveBaseUrl, unwrap } from './client'
 import { DASHBOARD_QUERY_KEY } from './dashboard'
 import type { components } from './schema'
 
@@ -134,36 +134,20 @@ export function useMatchList(
   })
 }
 
-/** Server caps page_size at 100; export pages through at the max. */
-const EXPORT_PAGE_SIZE = 100
-
 /**
- * Fetch every match matching the given filters by paging through the list
- * endpoint — used for CSV export, which covers the whole filtered set rather
- * than just the visible page.
+ * URL of the CSV export for the current filters. The dedicated `/v1/matches.csv`
+ * endpoint returns the whole filtered set as a `Content-Disposition: attachment`
+ * download, so the UI can link straight to it — the browser downloads it
+ * directly, with no client-side fetch/buffering.
  */
-export async function fetchAllMatches(
+export function matchesCsvUrl(
   filters: Pick<MatchListParams, 'status' | 'q'>,
-): Promise<MatchListRow[]> {
-  const all: MatchListRow[] = []
-  for (let page = 1; ; page += 1) {
-    const res = unwrap(
-      'export matches',
-      await api.GET('/v1/matches', {
-        params: {
-          query: {
-            status: filters.status,
-            q: filters.q,
-            page,
-            page_size: EXPORT_PAGE_SIZE,
-          },
-        },
-      }),
-    )
-    all.push(...res.items)
-    if (res.items.length === 0 || all.length >= res.total) break
-  }
-  return all
+): string {
+  const qs = new URLSearchParams()
+  if (filters.status) qs.set('status', filters.status)
+  if (filters.q) qs.set('q', filters.q)
+  const query = qs.toString()
+  return `${resolveBaseUrl()}/v1/matches.csv${query ? `?${query}` : ''}`
 }
 
 /** Throws on failure so the surrounding boundary can render a retry. */
