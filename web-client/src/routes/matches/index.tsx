@@ -11,7 +11,9 @@ import {
   X,
 } from 'lucide-react'
 
+import { toast } from 'sonner'
 import {
+  fetchAllMatches,
   scoringNewRoute,
   useMatchList,
   type MatchListRow,
@@ -31,19 +33,8 @@ import {
   PaginationItem,
   PaginationLink,
 } from '@/components/ui/pagination'
-import {
-  Select,
-  SelectContent,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from '@/components/ui/tooltip'
+import { matchesToCsv, downloadCsv } from '@/lib/matches-csv'
 import { pageTitle } from '@/lib/page-title'
 import { useDebouncedValue } from '@/lib/use-debounced-value'
 import { cn, initialsOf } from '@/lib/utils'
@@ -59,10 +50,8 @@ export const Route = createFileRoute('/matches/')({
 })
 
 type RowTab = 'scheduled' | 'live' | 'final'
-type StatusKey = RowTab | 'called'
+type StatusKey = RowTab
 
-// `called` has no backend concept yet — the tab stays visible (disabled) so
-// the nav shape is stable as features land.
 const TAB_TO_API: Record<RowTab, MatchStatus> = {
   scheduled: 'pending',
   live: 'in_progress',
@@ -81,7 +70,6 @@ const API_TO_TAB: Record<MatchStatus, RowTab> = {
 const STATUS_TABS: { value: 'all' | StatusKey; label: string; live?: boolean }[] = [
   { value: 'all', label: 'All' },
   { value: 'live', label: 'Live', live: true },
-  { value: 'called', label: 'Called' },
   { value: 'scheduled', label: 'Up next' },
   { value: 'final', label: 'Final' },
 ]
@@ -103,8 +91,7 @@ function MatchesPage() {
   const debouncedQ = useDebouncedValue(q, 300).trim()
   const navigate = useNavigate()
 
-  const apiStatus =
-    status === 'all' || status === 'called' ? undefined : TAB_TO_API[status]
+  const apiStatus = status === 'all' ? undefined : TAB_TO_API[status]
   // Memoize the params bag so React Query's structural sharing — and any
   // future React.memo on MatchTable — sees a stable reference.
   const queryParams = useMemo(
@@ -139,43 +126,66 @@ function MatchesPage() {
     setPage(1)
   }, [])
 
+  const [exporting, setExporting] = useState(false)
+  const onExport = useCallback(() => {
+    setExporting(true)
+    // Export the whole filtered set (every page), not just the visible one.
+    fetchAllMatches({ status: apiStatus, q: debouncedQ || undefined })
+      .then((rows) => {
+        const stamp = new Date().toISOString().slice(0, 10)
+        downloadCsv(`fortymm-matches-${stamp}.csv`, matchesToCsv(rows))
+      })
+      .catch(() => toast.error('Could not export matches. Try again.'))
+      .finally(() => setExporting(false))
+  }, [apiStatus, debouncedQ])
+
   const items = data?.items ?? []
   const total = data?.total ?? 0
   const liveCount = data?.status_counts?.in_progress ?? 0
 
   return (
     <AppShell>
-      <TooltipProvider>
-        <div className="match-list-page">
-          <ActionBar liveCount={liveCount} />
-          <FilterRow
-            q={q}
-            setQ={changeQuery}
-            status={status}
-            setStatus={changeStatus}
-            statusCounts={data?.status_counts}
-          />
-          <div className="table-wrap">
-            <MatchTable
-              rows={items}
-              isLoading={isLoading}
-              onClear={onClear}
-              navigate={navigate}
-            />
-          </div>
-          <PaginationFooter
-            page={page}
-            setPage={setPage}
-            total={total}
-            pageSize={PAGE_SIZE}
+      <div className="match-list-page">
+        <ActionBar
+          liveCount={liveCount}
+          onExport={onExport}
+          exporting={exporting}
+        />
+        <FilterRow
+          q={q}
+          setQ={changeQuery}
+          status={status}
+          setStatus={changeStatus}
+          statusCounts={data?.status_counts}
+        />
+        <div className="table-wrap">
+          <MatchTable
+            rows={items}
+            isLoading={isLoading}
+            onClear={onClear}
+            navigate={navigate}
           />
         </div>
-      </TooltipProvider>
+        <PaginationFooter
+          page={page}
+          setPage={setPage}
+          total={total}
+          pageSize={PAGE_SIZE}
+        />
+      </div>
     </AppShell>
   )
 }
 
-function ActionBar({ liveCount }: { liveCount: number }) {
+function ActionBar({
+  liveCount,
+  onExport,
+  exporting,
+}: {
+  liveCount: number
+  onExport: () => void
+  exporting: boolean
+}) {
   return (
     <div className="action-bar">
       <div className="action-bar-title">Matches</div>
@@ -187,8 +197,13 @@ function ActionBar({ liveCount }: { liveCount: number }) {
         {liveCount} LIVE
       </span>
       <div className="filter-spacer" />
-      <Button variant="ghost" size="sm">
-        Export CSV
+      <Button
+        variant="ghost"
+        size="sm"
+        onClick={onExport}
+        disabled={exporting}
+      >
+        {exporting ? 'Exporting…' : 'Export CSV'}
       </Button>
       <Button asChild variant="default" size="sm">
         <Link to="/matches/new">+ New match</Link>
@@ -211,7 +226,6 @@ function FilterRow({
   statusCounts?: Record<string, number>
 }) {
   function tabCount(value: 'all' | StatusKey): number | null {
-    if (value === 'called') return null
     if (!statusCounts) return null
     if (value === 'all') {
       return Object.values(statusCounts).reduce((a, b) => a + b, 0)
@@ -252,7 +266,6 @@ function FilterRow({
                 key={t.value}
                 value={t.value}
                 className="gap-1.5"
-                disabled={t.value === 'called'}
               >
                 {t.live && <span className="live-dot" />}
                 {t.label}
@@ -262,42 +275,7 @@ function FilterRow({
           })}
         </TabsList>
       </Tabs>
-
-      <div className="filter-spacer" />
-
-      <ComingSoonSelect label="Context" placeholder="All contexts" />
-      <ComingSoonSelect label="Round" placeholder="All rounds" />
-      <ComingSoonSelect label="Court" placeholder="All courts" />
     </div>
-  )
-}
-
-function ComingSoonSelect({
-  label,
-  placeholder,
-}: {
-  label: string
-  placeholder: string
-}) {
-  return (
-    <>
-      <span className="filter-label">{label}</span>
-      <Tooltip>
-        {/* Span wrapper: disabled triggers don't dispatch pointer events, so
-            the tooltip needs an enabled element to attach to. */}
-        <TooltipTrigger asChild>
-          <span>
-            <Select disabled>
-              <SelectTrigger className="h-9 min-w-[120px]" disabled>
-                <SelectValue placeholder={placeholder} />
-              </SelectTrigger>
-              <SelectContent />
-            </Select>
-          </span>
-        </TooltipTrigger>
-        <TooltipContent>coming soon</TooltipContent>
-      </Tooltip>
-    </>
   )
 }
 

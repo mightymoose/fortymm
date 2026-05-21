@@ -9,7 +9,7 @@ import {
 } from '@tanstack/react-router'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { http, HttpResponse } from 'msw'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { server } from '@/mocks/server'
 import {
   matchListResponse,
@@ -169,11 +169,13 @@ describe('MatchesPage', () => {
     })
   })
 
-  it('keeps the "called" tab disabled with no count', async () => {
+  it('no longer renders the disabled "Called" tab or coming-soon filters (#149)', async () => {
     renderMatchesPage()
-    const called = await screen.findByRole('tab', { name: /called/i })
-    expect(called).toBeDisabled()
-    expect(called).toHaveAccessibleName('Called')
+    await screen.findByRole('tab', { name: /up next/i })
+    expect(screen.queryByRole('tab', { name: /called/i })).not.toBeInTheDocument()
+    expect(screen.queryByText(/all contexts/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/all rounds/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/all courts/i)).not.toBeInTheDocument()
   })
 
   it('moves to the next page when the player clicks Next', async () => {
@@ -263,5 +265,83 @@ describe('MatchesPage', () => {
     await screen.findByText(/no matches yet/i)
     const pill = container.querySelector('.live-pill')
     expect(pill?.textContent?.replace(/\s+/g, ' ').trim()).toBe('0 LIVE')
+  })
+
+  it('Export CSV downloads every page of the current filter view (#149)', async () => {
+    const user = userEvent.setup()
+    const exportReqs: { page: string; status: string | null }[] = []
+    server.use(
+      http.get('*/v1/matches', ({ request }) => {
+        const url = new URL(request.url)
+        const page = Number(url.searchParams.get('page') ?? '1')
+        const size = Number(url.searchParams.get('page_size') ?? '25')
+        if (size === 100) {
+          // Export path: 150 matches across two max-size pages.
+          exportReqs.push({
+            page: String(page),
+            status: url.searchParams.get('status'),
+          })
+          const items =
+            page === 1
+              ? Array.from({ length: 100 }, (_, i) =>
+                  matchListRow({ id: `m1-${i}`, opponent: `a${i}` }),
+                )
+              : Array.from({ length: 50 }, (_, i) =>
+                  matchListRow({ id: `m2-${i}`, opponent: `b${i}` }),
+                )
+          return HttpResponse.json(
+            matchListResponse({
+              items,
+              total: 150,
+              page,
+              status_counts: { completed: 150 },
+            }),
+          )
+        }
+        // Page render path.
+        return HttpResponse.json(
+          matchListResponse({
+            items: [matchListRow({ opponent: 'nguyen.t' })],
+            total: 150,
+            status_counts: { completed: 150 },
+          }),
+        )
+      }),
+    )
+
+    // jsdom doesn't implement the download plumbing — stub it and capture the blob.
+    let captured: Blob | null = null
+    const realCreate = URL.createObjectURL
+    const realRevoke = URL.revokeObjectURL
+    URL.createObjectURL = vi.fn((b: Blob) => {
+      captured = b
+      return 'blob:test'
+    })
+    URL.revokeObjectURL = vi.fn()
+    const clickSpy = vi
+      .spyOn(HTMLAnchorElement.prototype, 'click')
+      .mockImplementation(() => {})
+
+    try {
+      renderMatchesPage()
+      await screen.findByText('nguyen.t')
+      // Narrow to the Final filter so the export must carry it.
+      await user.click(screen.getByRole('tab', { name: /final/i }))
+      await user.click(screen.getByRole('button', { name: /export csv/i }))
+
+      await waitFor(() => expect(URL.createObjectURL).toHaveBeenCalledTimes(1))
+      // Paged through the whole filtered set, forwarding the active status.
+      expect(exportReqs.map((r) => r.page)).toEqual(['1', '2'])
+      expect(exportReqs.every((r) => r.status === 'completed')).toBe(true)
+
+      const text = await captured!.text()
+      const lines = text.trim().split('\r\n')
+      expect(lines[0]).toContain('Match ID')
+      expect(lines).toHaveLength(1 + 150) // header + every match, not one page
+    } finally {
+      URL.createObjectURL = realCreate
+      URL.revokeObjectURL = realRevoke
+      clickSpy.mockRestore()
+    }
   })
 })
