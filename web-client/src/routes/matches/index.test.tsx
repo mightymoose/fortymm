@@ -244,4 +244,24 @@ describe('MatchesPage', () => {
     // Three keystrokes should coalesce into one debounced fetch.
     expect(requests.length - requestsBeforeTyping).toBe(1)
   })
+
+  it('renders a single-digit live count, not a zero-padded "00" (#282)', async () => {
+    server.use(
+      http.get('*/v1/matches', () =>
+        HttpResponse.json(
+          matchListResponse({
+            items: [],
+            total: 0,
+            status_counts: { in_progress: 0 },
+          }),
+        ),
+      ),
+    )
+    const { container } = renderMatchesPage()
+
+    // Wait for the load to settle (empty result → empty state).
+    await screen.findByText(/no matches yet/i)
+    const pill = container.querySelector('.live-pill')
+    expect(pill?.textContent?.replace(/\s+/g, ' ').trim()).toBe('0 LIVE')
+  })
 })

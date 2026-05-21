@@ -184,7 +184,7 @@ function ActionBar({ liveCount }: { liveCount: number }) {
       </div>
       <span className="live-pill">
         <span className="live-dot" />
-        {String(liveCount).padStart(2, '0')} LIVE
+        {liveCount} LIVE
       </span>
       <div className="filter-spacer" />
       <Button variant="ghost" size="sm">
