@@ -429,7 +429,9 @@ describe('MatchDetailsView', () => {
     )
     // My side: 1 W and 1 L with the right opponent / score labels.
     const myForm = screen.getByTestId('form-1')
-    expect(within(myForm).getByText('Recent form · 1–1')).toBeInTheDocument()
+    expect(
+      within(myForm).getByText('Form before this match · 1–1'),
+    ).toBeInTheDocument()
     expect(within(myForm).getByText('silva.r')).toBeInTheDocument()
     expect(within(myForm).getByText('3–1')).toBeInTheDocument()
     expect(within(myForm).getByText('tanaka.y')).toBeInTheDocument()
@@ -448,7 +450,7 @@ describe('MatchDetailsView', () => {
     const oppForm = screen.getByTestId('form-2')
     expect(within(oppForm).getByText(/No prior matches yet/)).toBeInTheDocument()
     expect(
-      within(oppForm).queryByText(/Recent form · /),
+      within(oppForm).queryByText(/Form before this match · /),
     ).not.toBeInTheDocument()
     // Unrated rookie: no rating number, no sparkline, no win rate.
     const oppRating = screen.getByTestId('rating-box-2')

@@ -942,6 +942,32 @@ async def test_details_recent_form_excludes_the_current_match(
         assert all(r["match_id"] != finished["id"] for r in f["recent_results"])
 
 
+async def test_details_recent_form_excludes_matches_after_this_one(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """Viewing an older match shows form as it stood then: a match completed
+    before this one was created counts; one completed after it does not."""
+    me = await start_session(api_client, db_session)
+    opp = await make_user(db_session, "after-rival")
+    other = await make_user(db_session, "after-third-party")
+    # A match I finished *before* the viewed match is created.
+    earlier = await _play_match_to_completion(
+        api_client, other.id, best_of=3, side_1_wins=True
+    )
+    # The match we'll view (in progress, so it stays "current" in time).
+    current = await _create_match(api_client, opp.id, best_of=3)
+    # A match I finish *after* the viewed match was created.
+    later = await _play_match_to_completion(
+        api_client, other.id, best_of=3, side_1_wins=False
+    )
+
+    detail = (await api_client.get(f"/v1/matches/{current['id']}")).json()
+    forms = {f["user_id"]: f for f in detail["recent_form"]}
+    my_match_ids = {r["match_id"] for r in forms[str(me.id)]["recent_results"]}
+    assert earlier["id"] in my_match_ids
+    assert later["id"] not in my_match_ids
+
+
 async def test_details_head_to_head_counts_prior_meetings_per_side(
     api_client: AsyncClient, db_session: AsyncSession
 ):
