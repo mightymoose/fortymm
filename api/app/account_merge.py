@@ -131,4 +131,4 @@ async def _repoint_match_side_players(
         ),
         {"from_id": from_user_id, "to_id": to_user_id},
     )
-    return cast("CursorResult[Any]", result).rowcount or 0
+    return cast(CursorResult[Any], result).rowcount or 0

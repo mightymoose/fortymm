@@ -50,10 +50,9 @@ warn_redundant_casts = true
 warn_unused_ignores = true
 warn_unused_configs = true
 
-# ortools ships incomplete inline types — CpModel's methods (NewIntVar, Add, …)
-# are added dynamically, so mypy reports false attr-defined errors. Treat the
-# package as untyped instead of chasing those.
+# ortools ships incomplete inline types (it has a py.typed marker) — CpModel's
+# methods (NewIntVar, Add, …) are added dynamically, so mypy reports false
+# attr-defined errors. Skip following its imports so it's treated as untyped.
 [[tool.mypy.overrides]]
 module = "ortools.*"
 follow_imports = "skip"
-ignore_missing_imports = true

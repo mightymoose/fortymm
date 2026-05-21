@@ -118,11 +118,11 @@ async def _load_my_rating_changes(
             )
         )
     ).scalars().all()
-    return {
-        row.match_id: RatingChange.from_history(row)
-        for row in rows
-        if row.match_id is not None
-    }
+    changes: dict[uuid.UUID, RatingChange] = {}
+    for row in rows:
+        assert row.match_id is not None  # IN-filtered to non-null match_ids
+        changes[row.match_id] = RatingChange.from_history(row)
+    return changes
 
 
 def _build_score_banners(
