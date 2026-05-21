@@ -126,7 +126,10 @@ function MatchesPage() {
 
   // Link straight to the CSV endpoint for the active filters — the browser
   // downloads it directly (no client-side fetch/buffering).
-  const exportHref = matchesCsvUrl({ status: apiStatus, q: debouncedQ || undefined })
+  const exportHref = useMemo(
+    () => matchesCsvUrl({ status: apiStatus, q: debouncedQ || undefined }),
+    [apiStatus, debouncedQ],
+  )
 
   const items = data?.items ?? []
   const total = data?.total ?? 0

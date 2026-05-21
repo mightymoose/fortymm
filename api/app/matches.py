@@ -3,7 +3,7 @@ import io
 import math
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import func, select
@@ -378,7 +378,7 @@ async def export_matches_csv(
     csv_text = _matches_to_csv(
         [_list_row(match, current_user.id) for match in matches]
     )
-    filename = f"fortymm-matches-{datetime.now().strftime('%Y-%m-%d')}.csv"
+    filename = f"fortymm-matches-{datetime.now(UTC).strftime('%Y-%m-%d')}.csv"
     return Response(
         content=csv_text,
         media_type="text/csv",
@@ -474,6 +474,10 @@ _CSV_HEADER = [
 ]
 
 
+def _csv_side_names(side: MatchDetailsSide | None) -> str:
+    return " & ".join(p.username for p in side.players) if side else ""
+
+
 def _matches_to_csv(rows: list[MatchListRow]) -> str:
     """Serialize list rows to RFC-4180 CSV (the `csv` module handles quoting)."""
     buf = io.StringIO()
@@ -483,9 +487,6 @@ def _matches_to_csv(rows: list[MatchListRow]) -> str:
         sides = sorted(row.sides, key=lambda s: s.side_number)
         side1 = sides[0] if sides else None
         side2 = sides[1] if len(sides) > 1 else None
-
-        def names(side: MatchDetailsSide | None) -> str:
-            return " & ".join(p.username for p in side.players) if side else ""
 
         score = ""
         if (
@@ -501,8 +502,8 @@ def _matches_to_csv(rows: list[MatchListRow]) -> str:
                 row.created_at.isoformat(),
                 row.status_label,
                 row.league.name,
-                names(side1),
-                names(side2),
+                _csv_side_names(side1),
+                _csv_side_names(side2),
                 score,
                 row.best_of,
             ]
