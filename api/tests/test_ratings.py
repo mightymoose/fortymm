@@ -217,7 +217,15 @@ async def test_unrated_match_does_not_move_ratings(
     for side in body["sides"]:
         assert side["rating_change"] is None
 
-    rows = (await db_session.execute(select(RatingHistory))).scalars().all()
+    # The session user has an `initial` seed row from joining the league, but
+    # an unrated match must not produce any `match`-sourced history.
+    rows = (
+        await db_session.execute(
+            select(RatingHistory).where(
+                RatingHistory.source == RatingHistorySource.match
+            )
+        )
+    ).scalars().all()
     assert rows == []
 
 
