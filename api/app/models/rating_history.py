@@ -75,9 +75,7 @@ class RatingHistory(Base):
     )
     rating_value: Mapped[float] = mapped_column(Float, nullable=False)
     rating_state: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
-    previous_rating_value: Mapped[float | None] = mapped_column(
-        Float, nullable=True
-    )
+    previous_rating_value: Mapped[float | None] = mapped_column(Float, nullable=True)
     source: Mapped[RatingHistorySource] = mapped_column(
         Enum(
             RatingHistorySource,
@@ -100,6 +98,4 @@ class RatingHistory(Base):
     user: Mapped["User"] = relationship(foreign_keys=[user_id])
     match: Mapped["Match | None"] = relationship()
     rating_strategy: Mapped["RatingStrategy"] = relationship()
-    created_by: Mapped["User | None"] = relationship(
-        foreign_keys=[created_by_user_id]
-    )
+    created_by: Mapped["User | None"] = relationship(foreign_keys=[created_by_user_id])

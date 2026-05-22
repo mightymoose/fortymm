@@ -1,9 +1,8 @@
 """Unit tests for the ephemeral→verified merge primitive in app.account_merge."""
 
 import hashlib
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
-import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -39,7 +38,7 @@ async def _make_verified(db: AsyncSession, email: str) -> User:
     user = User(
         username=email.split("@")[0],
         email=email,
-        confirmed_at=datetime.now(timezone.utc),
+        confirmed_at=datetime.now(UTC),
     )
     db.add(user)
     await db.commit()
@@ -47,9 +46,7 @@ async def _make_verified(db: AsyncSession, email: str) -> User:
     return user
 
 
-async def _record_match(
-    db: AsyncSession, creator: User, *players: User
-) -> Match:
+async def _record_match(db: AsyncSession, creator: User, *players: User) -> Match:
     league = await get_default_league(db)
     settings = MatchSettings(team_size=1, best_of=5, affects_rating=False)
     match = Match(
@@ -87,10 +84,14 @@ async def test_merge_repoints_match_side_players_and_creator(
     assert summary.matches_moved == 1
 
     players = (
-        await db_session.execute(
-            select(MatchSidePlayer).where(MatchSidePlayer.match_id == match.id)
+        (
+            await db_session.execute(
+                select(MatchSidePlayer).where(MatchSidePlayer.match_id == match.id)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     user_ids = {p.user_id for p in players}
     assert user_ids == {verified.id, opponent.id}
 
@@ -117,19 +118,21 @@ async def test_merge_deletes_ephemeral_user_and_cascades_tokens(
     )
     await db_session.commit()
 
-    await merge_user(
-        db_session, from_user_id=ephemeral.id, to_user_id=verified.id
-    )
+    await merge_user(db_session, from_user_id=ephemeral.id, to_user_id=verified.id)
     await db_session.commit()
 
     assert (
         await db_session.execute(select(User).where(User.id == ephemeral.id))
     ).scalar_one_or_none() is None
     leftover_tokens = (
-        await db_session.execute(
-            select(UserToken).where(UserToken.user_id == ephemeral.id)
+        (
+            await db_session.execute(
+                select(UserToken).where(UserToken.user_id == ephemeral.id)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert leftover_tokens == []
 
 
@@ -140,19 +143,19 @@ async def test_merge_moves_league_membership_when_target_has_none(
     verified = await _make_verified(db_session, "rita@example.com")
     # verified is NOT in the default league yet
 
-    await merge_user(
-        db_session, from_user_id=ephemeral.id, to_user_id=verified.id
-    )
+    await merge_user(db_session, from_user_id=ephemeral.id, to_user_id=verified.id)
     await db_session.commit()
 
     league = await get_default_league(db_session)
     memberships = (
-        await db_session.execute(
-            select(LeagueMembership).where(
-                LeagueMembership.league_id == league.id
+        (
+            await db_session.execute(
+                select(LeagueMembership).where(LeagueMembership.league_id == league.id)
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     user_ids = {m.user_id for m in memberships}
     assert verified.id in user_ids
     assert ephemeral.id not in user_ids
@@ -168,19 +171,19 @@ async def test_merge_skips_membership_when_target_already_a_member(
     await add_user_to_default_league(db_session, verified.id)
     await db_session.commit()
 
-    await merge_user(
-        db_session, from_user_id=ephemeral.id, to_user_id=verified.id
-    )
+    await merge_user(db_session, from_user_id=ephemeral.id, to_user_id=verified.id)
     await db_session.commit()
 
     league = await get_default_league(db_session)
     memberships = (
-        await db_session.execute(
-            select(LeagueMembership).where(
-                LeagueMembership.league_id == league.id
+        (
+            await db_session.execute(
+                select(LeagueMembership).where(LeagueMembership.league_id == league.id)
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     user_ids = [m.user_id for m in memberships]
     assert user_ids == [verified.id]
 
@@ -208,9 +211,7 @@ async def test_merge_repoints_rating_history_created_by(
     db_session.add(row)
     await db_session.commit()
 
-    await merge_user(
-        db_session, from_user_id=ephemeral.id, to_user_id=verified.id
-    )
+    await merge_user(db_session, from_user_id=ephemeral.id, to_user_id=verified.id)
     await db_session.commit()
 
     await db_session.refresh(row)
@@ -269,24 +270,26 @@ async def test_merge_with_user_league_rating_collision_drops_ephemeral(
     league = await get_default_league(db_session)
     # Sanity: both have a rating row pre-merge.
     pre = (
-        await db_session.execute(
-            select(UserLeagueRating).where(
-                UserLeagueRating.league_id == league.id
+        (
+            await db_session.execute(
+                select(UserLeagueRating).where(UserLeagueRating.league_id == league.id)
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert {r.user_id for r in pre} == {ephemeral.id, verified.id}
 
-    await merge_user(
-        db_session, from_user_id=ephemeral.id, to_user_id=verified.id
-    )
+    await merge_user(db_session, from_user_id=ephemeral.id, to_user_id=verified.id)
     await db_session.commit()
 
     rows = (
-        await db_session.execute(
-            select(UserLeagueRating).where(
-                UserLeagueRating.league_id == league.id
+        (
+            await db_session.execute(
+                select(UserLeagueRating).where(UserLeagueRating.league_id == league.id)
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert [r.user_id for r in rows] == [verified.id]

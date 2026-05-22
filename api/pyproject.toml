@@ -28,6 +28,7 @@ dev = [
     "testcontainers[postgres]>=4.8",
     "mypy>=1.13",
     "types-jsonschema>=4.21",
+    "ruff>=0.8",
 ]
 
 [build-system]
@@ -43,12 +44,18 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "session"
 asyncio_default_test_loop_scope = "session"
 
+[tool.ruff]
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+# B008: FastAPI relies on `Depends(...)` / `Query(...)` as argument defaults.
+ignore = ["B008"]
+
 [tool.mypy]
 python_version = "3.13"
 files = ["app"]
-warn_redundant_casts = true
-warn_unused_ignores = true
-warn_unused_configs = true
+strict = true
 
 # ortools ships incomplete inline types (it has a py.typed marker) — CpModel's
 # methods (NewIntVar, Add, …) are added dynamically, so mypy reports false

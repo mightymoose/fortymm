@@ -12,9 +12,7 @@ from app.main import app as fastapi_app
 from app.models import User
 
 
-async def start_session(
-    api_client: AsyncClient, db_session: AsyncSession
-) -> User:
+async def start_session(api_client: AsyncClient, db_session: AsyncSession) -> User:
     """Establish a session cookie on the client and return the signed-in user."""
     response = await api_client.get("/v1/session")
     assert response.status_code == 200

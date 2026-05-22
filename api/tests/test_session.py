@@ -55,8 +55,7 @@ async def test_creates_session_when_no_cookie(
     token = (
         await db_session.execute(
             select(UserToken).where(
-                UserToken.token
-                == hashlib.sha256(raw_token.encode("utf-8")).digest()
+                UserToken.token == hashlib.sha256(raw_token.encode("utf-8")).digest()
             )
         )
     ).scalar_one()
@@ -81,17 +80,13 @@ async def test_returns_existing_session_when_cookie_valid(
 
     tokens = (await db_session.execute(select(UserToken))).scalars().all()
     assert len(tokens) == 1
-    assert tokens[0].token == hashlib.sha256(
-        first_token.encode("utf-8")
-    ).digest()
+    assert tokens[0].token == hashlib.sha256(first_token.encode("utf-8")).digest()
 
 
 async def test_creates_new_session_when_cookie_invalid(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    api_client.cookies.set(
-        SESSION_COOKIE_NAME, "not-a-real-token", domain="testserver"
-    )
+    api_client.cookies.set(SESSION_COOKIE_NAME, "not-a-real-token", domain="testserver")
     response = await api_client.get("/v1/session")
     assert response.status_code == 200
 
@@ -101,9 +96,7 @@ async def test_creates_new_session_when_cookie_invalid(
 
     tokens = (await db_session.execute(select(UserToken))).scalars().all()
     assert len(tokens) == 1
-    assert tokens[0].token == hashlib.sha256(
-        new_token.encode("utf-8")
-    ).digest()
+    assert tokens[0].token == hashlib.sha256(new_token.encode("utf-8")).digest()
 
 
 async def test_token_is_stored_hashed_not_plaintext(
@@ -115,10 +108,7 @@ async def test_token_is_stored_hashed_not_plaintext(
     tokens = (await db_session.execute(select(UserToken))).scalars().all()
     assert len(tokens) == 1
     assert tokens[0].token != raw_token.encode("utf-8")
-    assert (
-        tokens[0].token
-        == hashlib.sha256(raw_token.encode("utf-8")).digest()
-    )
+    assert tokens[0].token == hashlib.sha256(raw_token.encode("utf-8")).digest()
 
 
 async def test_session_response_includes_user_permissions(
@@ -202,16 +192,12 @@ async def test_update_username_persists_and_returns_session(
     assert body["data"]["user"]["permissions"] == []
 
     user = (
-        await db_session.execute(
-            select(User).where(User.username == "new-name")
-        )
+        await db_session.execute(select(User).where(User.username == "new-name"))
     ).scalar_one()
     assert user.username == "new-name"
 
     # The old name is gone — no orphan row, single user updated in place.
-    stale = await db_session.execute(
-        select(User).where(User.username == original)
-    )
+    stale = await db_session.execute(select(User).where(User.username == original))
     assert stale.scalar_one_or_none() is None
 
 
@@ -259,9 +245,7 @@ async def test_update_username_rejects_taken_name_case_insensitive(
     db_session.add(User(username="Mixed-Case"))
     await db_session.commit()
 
-    response = await api_client.patch(
-        "/v1/me", json={"username": "mixed-case"}
-    )
+    response = await api_client.patch("/v1/me", json={"username": "mixed-case"})
     assert response.status_code == 409
 
 
@@ -276,9 +260,7 @@ async def test_update_username_concurrent_collision_returns_409(
         await other_client.get("/v1/session")
         ok = await api_client.patch("/v1/me", json={"username": "race-name"})
         assert ok.status_code == 200
-        dup = await other_client.patch(
-            "/v1/me", json={"username": "race-name"}
-        )
+        dup = await other_client.patch("/v1/me", json={"username": "race-name"})
         assert dup.status_code == 409
 
 
@@ -302,9 +284,7 @@ async def test_update_username_rejects_invalid_format(
     api_client: AsyncClient, bad_username: str
 ):
     await api_client.get("/v1/session")
-    response = await api_client.patch(
-        "/v1/me", json={"username": bad_username}
-    )
+    response = await api_client.patch("/v1/me", json={"username": bad_username})
     assert response.status_code == 422, (bad_username, response.text)
 
 
@@ -335,8 +315,6 @@ async def test_update_username_preserves_user_id_and_permissions(
     assert response.json()["data"]["user"]["permissions"] == ["match:create"]
 
     refreshed = (
-        await db_session.execute(
-            select(User).where(User.username == "renamed")
-        )
+        await db_session.execute(select(User).where(User.username == "renamed"))
     ).scalar_one()
     assert refreshed.id == original_id

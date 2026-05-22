@@ -75,23 +75,17 @@ async def test_create_and_list_permissions(
 
 async def test_create_permission_rejects_duplicate_name(api_client: AsyncClient):
     await api_client.post("/v1/permissions", json={"name": "perm.dup"})
-    second = await api_client.post(
-        "/v1/permissions", json={"name": "perm.dup"}
-    )
+    second = await api_client.post("/v1/permissions", json={"name": "perm.dup"})
     assert second.status_code == 409
 
 
 async def test_create_permission_rejects_undotted_name(api_client: AsyncClient):
-    response = await api_client.post(
-        "/v1/permissions", json={"name": "invalidname"}
-    )
+    response = await api_client.post("/v1/permissions", json={"name": "invalidname"})
     assert response.status_code == 422
 
 
 async def test_create_permission_rejects_malformed_name(api_client: AsyncClient):
-    response = await api_client.post(
-        "/v1/permissions", json={"name": "Has Spaces!"}
-    )
+    response = await api_client.post("/v1/permissions", json={"name": "Has Spaces!"})
     assert response.status_code == 422
 
 
@@ -100,9 +94,7 @@ async def test_create_permission_rejects_empty_name(api_client: AsyncClient):
     assert response.status_code == 422
 
 
-async def test_update_permission(
-    api_client: AsyncClient, db_session: AsyncSession
-):
+async def test_update_permission(api_client: AsyncClient, db_session: AsyncSession):
     created = (
         await api_client.post(
             "/v1/permissions",
@@ -122,9 +114,7 @@ async def test_update_permission(
 
 async def test_update_permission_rejects_undotted_name(api_client: AsyncClient):
     created = (
-        await api_client.post(
-            "/v1/permissions", json={"name": "perm.start"}
-        )
+        await api_client.post("/v1/permissions", json={"name": "perm.start"})
     ).json()
     response = await api_client.patch(
         f"/v1/permissions/{created['id']}", json={"name": "invalidname"}
@@ -132,9 +122,7 @@ async def test_update_permission_rejects_undotted_name(api_client: AsyncClient):
     assert response.status_code == 422
 
 
-async def test_delete_permission(
-    api_client: AsyncClient, db_session: AsyncSession
-):
+async def test_delete_permission(api_client: AsyncClient, db_session: AsyncSession):
     created = (
         await api_client.post("/v1/permissions", json={"name": "perm.doomed"})
     ).json()
@@ -157,12 +145,8 @@ async def test_get_permission_not_found(api_client: AsyncClient):
 async def test_create_role_with_explicit_permissions(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    p1 = (
-        await api_client.post("/v1/permissions", json={"name": "perm.a"})
-    ).json()
-    p2 = (
-        await api_client.post("/v1/permissions", json={"name": "perm.b"})
-    ).json()
+    p1 = (await api_client.post("/v1/permissions", json={"name": "perm.a"})).json()
+    p2 = (await api_client.post("/v1/permissions", json={"name": "perm.b"})).json()
 
     role_resp = await api_client.post(
         "/v1/roles",
@@ -176,21 +160,15 @@ async def test_create_role_with_explicit_permissions(
     body = role_resp.json()
     assert set(body["permission_ids"]) == {p1["id"], p2["id"]}
 
-    rp = (
-        await db_session.execute(select(RolePermission))
-    ).scalars().all()
+    rp = (await db_session.execute(select(RolePermission))).scalars().all()
     assert len(rp) == 2
 
 
 async def test_create_role_from_template_copies_permissions(
     api_client: AsyncClient,
 ):
-    p1 = (
-        await api_client.post("/v1/permissions", json={"name": "perm.a"})
-    ).json()
-    p2 = (
-        await api_client.post("/v1/permissions", json={"name": "perm.b"})
-    ).json()
+    p1 = (await api_client.post("/v1/permissions", json={"name": "perm.a"})).json()
+    p2 = (await api_client.post("/v1/permissions", json={"name": "perm.b"})).json()
     tmpl = (
         await api_client.post(
             "/v1/roles",
@@ -208,9 +186,7 @@ async def test_create_role_from_template_copies_permissions(
 async def test_create_role_rejects_template_and_permissions_together(
     api_client: AsyncClient,
 ):
-    tmpl = (
-        await api_client.post("/v1/roles", json={"name": "template"})
-    ).json()
+    tmpl = (await api_client.post("/v1/roles", json={"name": "template"})).json()
     response = await api_client.post(
         "/v1/roles",
         json={
@@ -236,9 +212,7 @@ async def test_create_role_rejects_unknown_permission(api_client: AsyncClient):
 async def test_list_roles_returns_permission_ids(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    p = (
-        await api_client.post("/v1/permissions", json={"name": "perm.a"})
-    ).json()
+    p = (await api_client.post("/v1/permissions", json={"name": "perm.a"})).json()
     await api_client.post(
         "/v1/roles", json={"name": "alpha", "permission_ids": [p["id"]]}
     )
@@ -252,15 +226,9 @@ async def test_list_roles_returns_permission_ids(
 
 
 async def test_update_role_replaces_permissions(api_client: AsyncClient):
-    p1 = (
-        await api_client.post("/v1/permissions", json={"name": "perm.a"})
-    ).json()
-    p2 = (
-        await api_client.post("/v1/permissions", json={"name": "perm.b"})
-    ).json()
-    p3 = (
-        await api_client.post("/v1/permissions", json={"name": "perm.c"})
-    ).json()
+    p1 = (await api_client.post("/v1/permissions", json={"name": "perm.a"})).json()
+    p2 = (await api_client.post("/v1/permissions", json={"name": "perm.b"})).json()
+    p3 = (await api_client.post("/v1/permissions", json={"name": "perm.c"})).json()
     role = (
         await api_client.post(
             "/v1/roles",
@@ -277,9 +245,7 @@ async def test_update_role_replaces_permissions(api_client: AsyncClient):
 
 
 async def test_update_role_clears_permissions(api_client: AsyncClient):
-    p = (
-        await api_client.post("/v1/permissions", json={"name": "perm.a"})
-    ).json()
+    p = (await api_client.post("/v1/permissions", json={"name": "perm.a"})).json()
     role = (
         await api_client.post(
             "/v1/roles", json={"name": "r", "permission_ids": [p["id"]]}
@@ -293,9 +259,7 @@ async def test_update_role_clears_permissions(api_client: AsyncClient):
 
 
 async def test_update_role_partial_keeps_permissions(api_client: AsyncClient):
-    p = (
-        await api_client.post("/v1/permissions", json={"name": "perm.a"})
-    ).json()
+    p = (await api_client.post("/v1/permissions", json={"name": "perm.a"})).json()
     role = (
         await api_client.post(
             "/v1/roles", json={"name": "r", "permission_ids": [p["id"]]}
@@ -314,9 +278,7 @@ async def test_delete_role_cascades_user_assignments(
     api_client: AsyncClient, db_session: AsyncSession
 ):
     role = (await api_client.post("/v1/roles", json={"name": "doomed"})).json()
-    user = (
-        await api_client.post("/v1/users", json={"username": "alice"})
-    ).json()
+    user = (await api_client.post("/v1/users", json={"username": "alice"})).json()
     await api_client.put(
         f"/v1/users/{user['id']}/roles", json={"role_ids": [role["id"]]}
     )
@@ -324,9 +286,7 @@ async def test_delete_role_cascades_user_assignments(
     deleted = await api_client.delete(f"/v1/roles/{role['id']}")
     assert deleted.status_code == 204
 
-    remaining = (
-        await db_session.execute(select(UserRole))
-    ).scalars().all()
+    remaining = (await db_session.execute(select(UserRole))).scalars().all()
     assert remaining == []
 
 
@@ -353,9 +313,7 @@ async def test_create_user_rejects_duplicate(api_client: AsyncClient):
 async def test_set_user_roles_replaces_assignments(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    user = (
-        await api_client.post("/v1/users", json={"username": "alex"})
-    ).json()
+    user = (await api_client.post("/v1/users", json={"username": "alex"})).json()
     r1 = (await api_client.post("/v1/roles", json={"name": "one"})).json()
     r2 = (await api_client.post("/v1/roles", json={"name": "two"})).json()
 
@@ -399,22 +357,16 @@ async def test_list_users_includes_role_ids(
 
 
 async def test_delete_user(api_client: AsyncClient, db_session: AsyncSession):
-    user = (
-        await api_client.post("/v1/users", json={"username": "doomed"})
-    ).json()
+    user = (await api_client.post("/v1/users", json={"username": "doomed"})).json()
     deleted = await api_client.delete(f"/v1/users/{user['id']}")
     assert deleted.status_code == 204
     remaining = (
-        await db_session.execute(
-            select(User).where(User.username == "doomed")
-        )
+        await db_session.execute(select(User).where(User.username == "doomed"))
     ).scalar_one_or_none()
     assert remaining is None
 
 
-async def test_delete_user_refuses_self(
-    api_client: AsyncClient, admin_user: User
-):
+async def test_delete_user_refuses_self(api_client: AsyncClient, admin_user: User):
     response = await api_client.delete(f"/v1/users/{admin_user.id}")
     assert response.status_code == 400
     assert "your own" in response.json()["detail"]
@@ -437,9 +389,7 @@ async def test_role_name_collision_is_case_insensitive(api_client: AsyncClient):
 async def test_role_rename_collision_returns_409(api_client: AsyncClient):
     a = (await api_client.post("/v1/roles", json={"name": "alpha"})).json()
     (await api_client.post("/v1/roles", json={"name": "bravo"})).json()
-    patched = await api_client.patch(
-        f"/v1/roles/{a['id']}", json={"name": "Bravo"}
-    )
+    patched = await api_client.patch(f"/v1/roles/{a['id']}", json={"name": "Bravo"})
     assert patched.status_code == 409
 
 
@@ -455,14 +405,8 @@ async def test_username_collision_is_case_insensitive(api_client: AsyncClient):
 async def test_update_role_permissions_only_bumps_updated_at(
     api_client: AsyncClient,
 ):
-    p = (
-        await api_client.post("/v1/permissions", json={"name": "perm.a"})
-    ).json()
-    role = (
-        await api_client.post(
-            "/v1/roles", json={"name": "alpha"}
-        )
-    ).json()
+    p = (await api_client.post("/v1/permissions", json={"name": "perm.a"})).json()
+    role = (await api_client.post("/v1/roles", json={"name": "alpha"})).json()
     before = role["updated_at"]
 
     patched = await api_client.patch(
@@ -475,9 +419,7 @@ async def test_update_role_permissions_only_bumps_updated_at(
 async def test_update_role_null_permission_ids_keeps_existing(
     api_client: AsyncClient,
 ):
-    p = (
-        await api_client.post("/v1/permissions", json={"name": "perm.a"})
-    ).json()
+    p = (await api_client.post("/v1/permissions", json={"name": "perm.a"})).json()
     role = (
         await api_client.post(
             "/v1/roles", json={"name": "alpha", "permission_ids": [p["id"]]}
@@ -497,15 +439,9 @@ async def test_update_role_null_permission_ids_keeps_existing(
 async def test_list_roles_permission_ids_sorted_by_name(
     api_client: AsyncClient,
 ):
-    pb = (
-        await api_client.post("/v1/permissions", json={"name": "perm.b"})
-    ).json()
-    pa = (
-        await api_client.post("/v1/permissions", json={"name": "perm.a"})
-    ).json()
-    pc = (
-        await api_client.post("/v1/permissions", json={"name": "perm.c"})
-    ).json()
+    pb = (await api_client.post("/v1/permissions", json={"name": "perm.b"})).json()
+    pa = (await api_client.post("/v1/permissions", json={"name": "perm.a"})).json()
+    pc = (await api_client.post("/v1/permissions", json={"name": "perm.c"})).json()
 
     role = (
         await api_client.post(
@@ -528,9 +464,7 @@ async def test_list_users_role_ids_sorted_by_role_name(
 ):
     rz = (await api_client.post("/v1/roles", json={"name": "zeta"})).json()
     ra = (await api_client.post("/v1/roles", json={"name": "alpha"})).json()
-    user = (
-        await api_client.post("/v1/users", json={"username": "ordered"})
-    ).json()
+    user = (await api_client.post("/v1/users", json={"username": "ordered"})).json()
     await api_client.put(
         f"/v1/users/{user['id']}/roles", json={"role_ids": [rz["id"], ra["id"]]}
     )

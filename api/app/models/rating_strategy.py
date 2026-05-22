@@ -30,12 +30,8 @@ class RatingStrategy(Base):
     name: Mapped[str] = mapped_column(String(128), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     state_schema: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
-    initial_state: Mapped[dict[str, Any] | None] = mapped_column(
-        JSONB, nullable=True
-    )
-    initial_rating_value: Mapped[float | None] = mapped_column(
-        Float, nullable=True
-    )
+    initial_state: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    initial_rating_value: Mapped[float | None] = mapped_column(Float, nullable=True)
     is_automatic: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("false")
     )

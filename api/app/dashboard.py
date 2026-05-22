@@ -1,6 +1,6 @@
 import uuid
 from collections.abc import Sequence
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Literal
 
 from fastapi import APIRouter, Depends
@@ -10,12 +10,14 @@ from sqlalchemy.orm import selectinload
 
 from app.db import get_session
 from app.matches import (
-    participant_filter,
     current_unscored_game,
     match_eager_options,
-    my_side as resolve_my_side,
     opponent_username,
+    participant_filter,
     side_win_counts,
+)
+from app.matches import (
+    my_side as resolve_my_side,
 )
 from app.models import (
     League,
@@ -111,13 +113,17 @@ async def _load_my_rating_changes(
     if not match_ids:
         return {}
     rows = (
-        await db.execute(
-            select(RatingHistory).where(
-                RatingHistory.match_id.in_(match_ids),
-                RatingHistory.user_id == user_id,
+        (
+            await db.execute(
+                select(RatingHistory).where(
+                    RatingHistory.match_id.in_(match_ids),
+                    RatingHistory.user_id == user_id,
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     changes: dict[uuid.UUID, RatingChange] = {}
     for row in rows:
         assert row.match_id is not None  # IN-filtered to non-null match_ids
@@ -167,9 +173,7 @@ def _build_recent_result(
     side_wins = side_win_counts(match)
     my_games_won = side_wins.get(mine.side_number, 0)
     opp_games_won = sum(
-        wins
-        for number, wins in side_wins.items()
-        if number != mine.side_number
+        wins for number, wins in side_wins.items() if number != mine.side_number
     )
     return DashboardRecentResult(
         match_id=match.id,
@@ -182,9 +186,7 @@ def _build_recent_result(
     )
 
 
-async def _build_rating(
-    db: AsyncSession, user_id: uuid.UUID
-) -> DashboardRating | None:
+async def _build_rating(db: AsyncSession, user_id: uuid.UUID) -> DashboardRating | None:
     """Resolve the user's headline rating row.
 
     Picks the default league's rating if there is one, otherwise the oldest
@@ -228,9 +230,7 @@ async def _resolve_user_rating(
     # and strategy so the caller can read is_automatic without an extra round
     # trip.
     options = (
-        selectinload(UserLeagueRating.league).selectinload(
-            League.rating_strategy
-        ),
+        selectinload(UserLeagueRating.league).selectinload(League.rating_strategy),
     )
     default = (
         await db.execute(
@@ -296,7 +296,7 @@ async def _league_percentile(
     ).one()
     if total <= 1:
         return None
-    return round(at_or_below / total * 100)
+    return round(int(at_or_below) / int(total) * 100)
 
 
 async def _spark_and_delta(
@@ -307,7 +307,7 @@ async def _spark_and_delta(
     DESC + reversing avoids the latent bug where ``LIMIT 30 ORDER BY ASC``
     would silently truncate today's points on a power user with >30 events in
     the window."""
-    cutoff = datetime.now(timezone.utc) - timedelta(days=SPARK_WINDOW_DAYS)
+    cutoff = datetime.now(UTC) - timedelta(days=SPARK_WINDOW_DAYS)
     rows = (
         await db.execute(
             select(
@@ -331,11 +331,7 @@ async def _spark_and_delta(
         if latest.previous_rating_value is not None
         else 0.0
     )
-    spark = [
-        float(r.rating_value)
-        for r in reversed(rows)
-        if r.created_at >= cutoff
-    ]
+    spark = [float(r.rating_value) for r in reversed(rows) if r.created_at >= cutoff]
     return spark, delta
 
 
@@ -346,22 +342,26 @@ async def _current_streak(
     wins or losses from the top. Returns None if the user has no completed
     matches."""
     rows = (
-        await db.execute(
-            select(MatchSide.won)
-            .join(Match, Match.id == MatchSide.match_id)
-            .join(
-                MatchSidePlayer,
-                MatchSidePlayer.match_side_id == MatchSide.id,
+        (
+            await db.execute(
+                select(MatchSide.won)
+                .join(Match, Match.id == MatchSide.match_id)
+                .join(
+                    MatchSidePlayer,
+                    MatchSidePlayer.match_side_id == MatchSide.id,
+                )
+                .where(
+                    MatchSidePlayer.user_id == user_id,
+                    Match.status == MatchStatus.completed,
+                    MatchSide.won.is_not(None),
+                )
+                .order_by(Match.updated_at.desc())
+                .limit(STREAK_SCAN_LIMIT)
             )
-            .where(
-                MatchSidePlayer.user_id == user_id,
-                Match.status == MatchStatus.completed,
-                MatchSide.won.is_not(None),
-            )
-            .order_by(Match.updated_at.desc())
-            .limit(STREAK_SCAN_LIMIT)
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     if not rows:
         return None
     head_kind: Literal["W", "L"] = "W" if rows[0] else "L"
@@ -386,7 +386,10 @@ def _strategy_stats(
         rd = _as_float(state.get("rd"))
         volatility = _as_float(state.get("volatility"))
         return [
-            DashboardRatingStat(label="RD", value=str(round(rd)) if rd is not None else "—"),
+            DashboardRatingStat(
+                label="RD",
+                value=str(round(rd)) if rd is not None else "—",
+            ),
             DashboardRatingStat(
                 label="Volatility",
                 value=f"{volatility:.3f}" if volatility is not None else "—",

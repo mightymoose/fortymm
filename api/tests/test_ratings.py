@@ -1,5 +1,6 @@
 """Coverage for the rating system: strategies, calculator math, validation,
 and the match-completion hook."""
+
 import uuid
 
 import jsonschema
@@ -10,7 +11,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
     League,
-    LeagueVisibility,
     RatingHistory,
     RatingHistorySource,
     RatingStrategy,
@@ -24,7 +24,6 @@ from app.ratings import (
 )
 from app.ratings.glicko2 import CALCULATOR as GLICKO2
 from tests._helpers import make_user, start_session
-
 
 # ----- strategy seeding ----------------------------------------------------
 
@@ -151,10 +150,16 @@ async def test_completing_a_rated_match_writes_rating_history(
 
     # Two history rows, one per player, both linked to this match.
     rows = (
-        await db_session.execute(
-            select(RatingHistory).where(RatingHistory.match_id == uuid.UUID(body["id"]))
+        (
+            await db_session.execute(
+                select(RatingHistory).where(
+                    RatingHistory.match_id == uuid.UUID(body["id"])
+                )
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert len(rows) == 2
     by_user = {row.user_id: row for row in rows}
     winner = by_user[me.id]
@@ -169,9 +174,7 @@ async def test_completing_a_rated_match_writes_rating_history(
     assert winner.rating_strategy_id == default_league.rating_strategy_id
 
     # Current rating rows are upserted in lockstep.
-    ratings = (
-        await db_session.execute(select(UserLeagueRating))
-    ).scalars().all()
+    ratings = (await db_session.execute(select(UserLeagueRating))).scalars().all()
     assert {r.user_id for r in ratings} == {me.id, opp.id}
     assert {r.league_id for r in ratings} == {default_league.id}
 
@@ -239,9 +242,7 @@ async def test_manual_strategy_league_skips_rating_updates(
     membership hook eagerly seeds them), but with the strategy's null
     ``initial_state`` — to be filled by a later external import."""
     default = (
-        await db_session.execute(
-            select(League).where(League.is_default.is_(True))
-        )
+        await db_session.execute(select(League).where(League.is_default.is_(True)))
     ).scalar_one()
     default.rating_strategy_id = rating_strategies["manual"].id
     await db_session.commit()
@@ -259,9 +260,7 @@ async def test_manual_strategy_league_skips_rating_updates(
     # row but with the manual strategy's null initial state. `rival` was
     # created via ``make_user`` which doesn't route through league membership,
     # so they have no row at all.
-    ratings = (
-        await db_session.execute(select(UserLeagueRating))
-    ).scalars().all()
+    ratings = (await db_session.execute(select(UserLeagueRating))).scalars().all()
     assert len(ratings) == 1
     assert ratings[0].user_id == me.id
     assert ratings[0].rating_value is None
@@ -286,10 +285,16 @@ async def test_rating_update_is_idempotent_across_score_edits(
     assert edited.status_code == 200
 
     rows = (
-        await db_session.execute(
-            select(RatingHistory).where(RatingHistory.match_id == uuid.UUID(body["id"]))
+        (
+            await db_session.execute(
+                select(RatingHistory).where(
+                    RatingHistory.match_id == uuid.UUID(body["id"])
+                )
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert len(rows) == 2  # still just the original pair
 
 

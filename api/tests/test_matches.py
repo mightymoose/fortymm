@@ -15,7 +15,6 @@ from app.models import (
 )
 from tests._helpers import make_client, make_user, start_session
 
-
 # ----- create -------------------------------------------------------------
 
 
@@ -98,9 +97,7 @@ async def test_create_match_without_opponent_has_a_sentinel_opponent_side(
 ):
     me = await start_session(api_client, db_session)
 
-    response = await api_client.post(
-        "/v1/matches", json={"best_of": 7, "rated": False}
-    )
+    response = await api_client.post("/v1/matches", json={"best_of": 7, "rated": False})
     assert response.status_code == 201
     body = response.json()
     assert body["affects_rating"] is False
@@ -156,9 +153,7 @@ async def test_rated_match_without_opponent_is_rejected(
 ):
     await start_session(api_client, db_session)
 
-    response = await api_client.post(
-        "/v1/matches", json={"best_of": 5, "rated": True}
-    )
+    response = await api_client.post("/v1/matches", json={"best_of": 5, "rated": True})
     assert response.status_code == 422
     assert "rated" in response.json()["detail"].lower()
     assert (await db_session.execute(select(Match))).first() is None
@@ -257,9 +252,7 @@ async def test_details_perspective_swaps_per_caller(
         theirs = (await other_client.get(f"/v1/matches/{created['id']}")).json()
 
     my_perspective = next(s for s in mine["sides"] if s["is_current_user_side"])
-    their_perspective = next(
-        s for s in theirs["sides"] if s["is_current_user_side"]
-    )
+    their_perspective = next(s for s in theirs["sides"] if s["is_current_user_side"])
     assert my_perspective["players"][0]["user_id"] == str(me.id)
     assert their_perspective["players"][0]["user_id"] == str(them.id)
     # The flag flips per caller, but the underlying side numbers are stable.
@@ -282,9 +275,7 @@ async def test_get_match_is_open_to_non_participants(
         # write affordance is suppressed regardless of game state.
         assert all(not s["is_current_user_side"] for s in body["sides"])
         assert all(
-            not p["is_current_user"]
-            for s in body["sides"]
-            for p in s["players"]
+            not p["is_current_user"] for s in body["sides"] for p in s["players"]
         )
         assert body["can_score"] is False
         del spectator
@@ -301,9 +292,7 @@ async def test_get_unknown_match_is_404(
 # ----- list ---------------------------------------------------------------
 
 
-async def test_list_matches_empty(
-    api_client: AsyncClient, db_session: AsyncSession
-):
+async def test_list_matches_empty(api_client: AsyncClient, db_session: AsyncSession):
     await start_session(api_client, db_session)
     response = await api_client.get("/v1/matches")
     assert response.status_code == 200
@@ -355,17 +344,13 @@ async def test_list_q_filter_matches_caller_username(
         # username should not pick this up.
         unrelated = await _create_match(other_client, bystander.id)
 
-    listing = (
-        await api_client.get("/v1/matches", params={"q": me.username})
-    ).json()
+    listing = (await api_client.get("/v1/matches", params={"q": me.username})).json()
     ids = {row["id"] for row in listing["items"]}
     assert mine["id"] in ids
     assert unrelated["id"] not in ids
 
 
-async def test_list_filter_by_status(
-    api_client: AsyncClient, db_session: AsyncSession
-):
+async def test_list_filter_by_status(api_client: AsyncClient, db_session: AsyncSession):
     await start_session(api_client, db_session)
     opp = await make_user(db_session, "rival")
     in_progress = await _create_match(api_client, opp.id, best_of=1)
@@ -394,37 +379,27 @@ async def test_list_q_filter_matches_any_player_username(
     await _create_match(api_client, alpha.id)
     await _create_match(api_client, bravo.id)
 
-    listing = (
-        await api_client.get("/v1/matches", params={"q": "alpha"})
-    ).json()
+    listing = (await api_client.get("/v1/matches", params={"q": "alpha"})).json()
     assert len(listing["items"]) == 1
     players = {
-        p["username"]
-        for side in listing["items"][0]["sides"]
-        for p in side["players"]
+        p["username"] for side in listing["items"][0]["sides"] for p in side["players"]
     }
     assert "alphabet" in players
     # status_counts honors q (one row total)
     assert sum(listing["status_counts"].values()) == 1
 
 
-async def test_list_pagination(
-    api_client: AsyncClient, db_session: AsyncSession
-):
+async def test_list_pagination(api_client: AsyncClient, db_session: AsyncSession):
     await start_session(api_client, db_session)
     opp = await make_user(db_session, "rival")
     for _ in range(3):
         await _create_match(api_client, opp.id)
 
     page_1 = (
-        await api_client.get(
-            "/v1/matches", params={"page": 1, "page_size": 2}
-        )
+        await api_client.get("/v1/matches", params={"page": 1, "page_size": 2})
     ).json()
     page_2 = (
-        await api_client.get(
-            "/v1/matches", params={"page": 2, "page_size": 2}
-        )
+        await api_client.get("/v1/matches", params={"page": 2, "page_size": 2})
     ).json()
     assert page_1["total"] == 3
     assert len(page_1["items"]) == 2
@@ -682,9 +657,7 @@ async def test_put_closes_match_earlier_and_deletes_trailing_unscored(
     # No orphan score rows or trailing games left behind in the DB.
     games = (await db_session.execute(select(MatchGame))).scalars().all()
     assert len(games) == 2
-    scores = (
-        await db_session.execute(select(MatchGameScore))
-    ).scalars().all()
+    scores = (await db_session.execute(select(MatchGameScore))).scalars().all()
     assert len(scores) == 2
 
 
@@ -771,9 +744,7 @@ async def test_can_score_match_without_opponent(
 ):
     await start_session(api_client, db_session)
     created = (
-        await api_client.post(
-            "/v1/matches", json={"best_of": 5, "rated": False}
-        )
+        await api_client.post("/v1/matches", json={"best_of": 5, "rated": False})
     ).json()
     response = await api_client.post(
         f"/v1/matches/{created['id']}/games/{created['games'][0]['id']}/scores",
@@ -795,9 +766,7 @@ async def test_create_match_without_league_id_uses_default_league(
     default_league: League,
 ):
     await start_session(api_client, db_session)
-    response = await api_client.post(
-        "/v1/matches", json={"best_of": 3, "rated": False}
-    )
+    response = await api_client.post("/v1/matches", json={"best_of": 3, "rated": False})
     assert response.status_code == 201
     body = response.json()
     assert body["league"]["id"] == str(default_league.id)
@@ -859,9 +828,7 @@ async def test_create_match_with_no_default_seeded_is_500(
     await db_session.delete(default_league)
     await db_session.commit()
 
-    response = await api_client.post(
-        "/v1/matches", json={"best_of": 3, "rated": False}
-    )
+    response = await api_client.post("/v1/matches", json={"best_of": 3, "rated": False})
     assert response.status_code == 500
 
 
@@ -958,9 +925,7 @@ async def test_details_recent_form_lists_each_player_previous_results(
     # I have 2 prior completed matches (1 W, 1 L) against third-party.
     mine = forms[str(me.id)]
     assert {r["is_win"] for r in mine["recent_results"]} == {True, False}
-    assert all(
-        r["opponent_username"] == "third-party" for r in mine["recent_results"]
-    )
+    assert all(r["opponent_username"] == "third-party" for r in mine["recent_results"])
     # Opp shows up in the form list with no prior completed matches.
     assert forms[str(opp.id)]["recent_results"] == []
 
@@ -1034,9 +999,7 @@ async def test_details_head_to_head_is_null_for_solo_match(
 ):
     await start_session(api_client, db_session)
     created = (
-        await api_client.post(
-            "/v1/matches", json={"best_of": 3, "rated": False}
-        )
+        await api_client.post("/v1/matches", json={"best_of": 3, "rated": False})
     ).json()
     detail = (await api_client.get(f"/v1/matches/{created['id']}")).json()
     assert detail["head_to_head"] is None
