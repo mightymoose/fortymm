@@ -1,7 +1,8 @@
 """Coverage for ``app.ratings.recompute`` — the forward-walking cascade
 algorithm that rebuilds ratings after a merge moves matches onto a user."""
+
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,7 +24,6 @@ from app.models import (
 )
 from app.ratings.recompute import recompute_league_ratings
 from tests._helpers import make_user
-
 
 # ----- fixtures + helpers -------------------------------------------------
 
@@ -56,9 +56,7 @@ async def _build_completed_match(
     completion timestamp. ``updated_at`` is what ``recompute_league_ratings``
     orders by, so we overwrite it via raw SQL to control the chronology
     without sleeping in tests."""
-    settings = MatchSettings(
-        team_size=1, best_of=1, affects_rating=affects_rating
-    )
+    settings = MatchSettings(team_size=1, best_of=1, affects_rating=affects_rating)
     match = Match(
         match_settings=settings,
         league=league,
@@ -76,10 +74,7 @@ async def _build_completed_match(
     await db.refresh(match)
 
     await db.execute(
-        text(
-            "UPDATE matches SET created_at = :ts, updated_at = :ts "
-            "WHERE id = :id"
-        ),
+        text("UPDATE matches SET created_at = :ts, updated_at = :ts WHERE id = :id"),
         {"ts": completed_at, "id": match.id},
     )
     await db.commit()
@@ -98,9 +93,7 @@ async def test_recompute_no_matches_is_noop(
 
     await recompute_league_ratings(db_session, league.id, {me.id})
 
-    rows = (
-        await db_session.execute(select(RatingHistory))
-    ).scalars().all()
+    rows = (await db_session.execute(select(RatingHistory))).scalars().all()
     assert rows == []
 
 
@@ -118,14 +111,12 @@ async def test_recompute_manual_strategy_is_noop(
     me = await make_user(db_session, "me")
     opp = await make_user(db_session, "opp")
     await _build_completed_match(
-        db_session, default, me, opp, datetime(2026, 5, 1, tzinfo=timezone.utc)
+        db_session, default, me, opp, datetime(2026, 5, 1, tzinfo=UTC)
     )
 
     await recompute_league_ratings(db_session, default.id, {me.id})
 
-    rows = (
-        await db_session.execute(select(RatingHistory))
-    ).scalars().all()
+    rows = (await db_session.execute(select(RatingHistory))).scalars().all()
     assert rows == []
 
 
@@ -148,10 +139,8 @@ async def test_recompute_cascade_propagates_through_shared_matches(
     for user in (a, b, c, d):
         await _seed_rating(db_session, league, user.id, strategy)
 
-    base = datetime(2026, 5, 1, tzinfo=timezone.utc)
-    m1 = await _build_completed_match(
-        db_session, league, a, b, base
-    )
+    base = datetime(2026, 5, 1, tzinfo=UTC)
+    m1 = await _build_completed_match(db_session, league, a, b, base)
     m2 = await _build_completed_match(
         db_session, league, b, c, base + timedelta(hours=1)
     )
@@ -163,12 +152,16 @@ async def test_recompute_cascade_propagates_through_shared_matches(
     await db_session.commit()
 
     rows = (
-        await db_session.execute(
-            select(RatingHistory).where(
-                RatingHistory.match_id.in_([m1.id, m2.id, m3.id])
+        (
+            await db_session.execute(
+                select(RatingHistory).where(
+                    RatingHistory.match_id.in_([m1.id, m2.id, m3.id])
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert {row.match_id for row in rows} == {m1.id, m2.id, m3.id}
     assert len(rows) == 6
 
@@ -205,7 +198,7 @@ async def test_recompute_leaves_unrelated_matches_alone(
     for user in (me, opp, x, y):
         await _seed_rating(db_session, league, user.id, strategy)
 
-    base = datetime(2026, 5, 1, tzinfo=timezone.utc)
+    base = datetime(2026, 5, 1, tzinfo=UTC)
     my_match = await _build_completed_match(db_session, league, me, opp, base)
     unrelated = await _build_completed_match(
         db_session, league, x, y, base + timedelta(hours=1)
@@ -241,10 +234,14 @@ async def test_recompute_leaves_unrelated_matches_alone(
 
     # The seed user's match did produce its own history rows.
     mine = (
-        await db_session.execute(
-            select(RatingHistory).where(RatingHistory.match_id == my_match.id)
+        (
+            await db_session.execute(
+                select(RatingHistory).where(RatingHistory.match_id == my_match.id)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert {row.user_id for row in mine} == {me.id, opp.id}
 
 
@@ -266,7 +263,7 @@ async def test_recompute_restores_user_to_last_pre_window_rating(
     for user in (me, opp, later_opp):
         await _seed_rating(db_session, league, user.id, strategy)
 
-    base = datetime(2026, 5, 1, tzinfo=timezone.utc)
+    base = datetime(2026, 5, 1, tzinfo=UTC)
     # Pre-window: opp already played a match and sits at 1550 going in.
     pre_match = await _build_completed_match(
         db_session, league, opp, later_opp, base - timedelta(days=30)
@@ -285,9 +282,7 @@ async def test_recompute_restores_user_to_last_pre_window_rating(
     )
     await db_session.commit()
     await db_session.execute(
-        text(
-            "UPDATE rating_history SET created_at = :ts WHERE match_id = :id"
-        ),
+        text("UPDATE rating_history SET created_at = :ts WHERE match_id = :id"),
         {"ts": base - timedelta(days=30), "id": pre_match.id},
     )
     await db_session.commit()
@@ -325,32 +320,32 @@ async def test_recompute_is_idempotent(
         await _seed_rating(db_session, league, user.id, strategy)
 
     await _build_completed_match(
-        db_session, league, me, opp, datetime(2026, 5, 1, tzinfo=timezone.utc)
+        db_session, league, me, opp, datetime(2026, 5, 1, tzinfo=UTC)
     )
 
     await recompute_league_ratings(db_session, league.id, {me.id})
     await db_session.commit()
     first = {
         r.user_id: r.rating_value
-        for r in (
-            await db_session.execute(select(UserLeagueRating))
-        ).scalars().all()
+        for r in (await db_session.execute(select(UserLeagueRating))).scalars().all()
     }
 
     await recompute_league_ratings(db_session, league.id, {me.id})
     await db_session.commit()
     second = {
         r.user_id: r.rating_value
-        for r in (
-            await db_session.execute(select(UserLeagueRating))
-        ).scalars().all()
+        for r in (await db_session.execute(select(UserLeagueRating))).scalars().all()
     }
 
     assert first == second
     # And only one set of history rows survives.
     rows = (
-        await db_session.execute(
-            select(RatingHistory).where(RatingHistory.user_id == me.id)
+        (
+            await db_session.execute(
+                select(RatingHistory).where(RatingHistory.user_id == me.id)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert len(rows) == 1

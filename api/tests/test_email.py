@@ -1,6 +1,6 @@
 import hashlib
 from collections.abc import AsyncIterator
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 import pytest_asyncio
@@ -36,9 +36,7 @@ VALID_BODY = {
 }
 
 
-async def _set_email(
-    client: AsyncClient, **overrides
-) -> "httpx.Response":  # noqa: F821
+async def _set_email(client: AsyncClient, **overrides) -> "httpx.Response":  # noqa: F821
     body = {**VALID_BODY, **overrides}
     return await client.post("/v1/me/email", json=body)
 
@@ -76,12 +74,16 @@ async def test_set_email_is_pending_only(
     assert user.confirmed_at is None
 
     tokens = (
-        await db_session.execute(
-            select(UserToken).where(
-                UserToken.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX)
+        (
+            await db_session.execute(
+                select(UserToken).where(
+                    UserToken.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX)
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert len(tokens) == 1
     assert tokens[0].sent_to == "rita@example.com"
     assert tokens[0].user_id == user.id
@@ -124,9 +126,7 @@ async def test_set_email_honeypot_silently_succeeds(
     api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
 ):
     user = await start_session(api_client, db_session)
-    response = await _set_email(
-        api_client, fmm_hp_token="https://spammer.example"
-    )
+    response = await _set_email(api_client, fmm_hp_token="https://spammer.example")
     # Same shape as a real success — gives the bot no signal.
     assert response.status_code == 202
 
@@ -134,10 +134,16 @@ async def test_set_email_honeypot_silently_succeeds(
     assert user.email is None  # nothing persisted
 
     tokens = (
-        await db_session.execute(select(UserToken).where(
-            UserToken.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX)
-        ))
-    ).scalars().all()
+        (
+            await db_session.execute(
+                select(UserToken).where(
+                    UserToken.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX)
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
     assert tokens == []
     assert fake_email_queue.finished_job_registry.count == 0
 
@@ -178,13 +184,17 @@ async def test_set_email_with_taken_address_is_enumeration_safe(
     assert me.confirmed_at is None
 
     tokens = (
-        await db_session.execute(
-            select(UserToken).where(
-                UserToken.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX),
-                UserToken.user_id == me.id,
+        (
+            await db_session.execute(
+                select(UserToken).where(
+                    UserToken.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX),
+                    UserToken.user_id == me.id,
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert tokens == []
     assert fake_email_queue.finished_job_registry.count == 0
 
@@ -226,7 +236,7 @@ async def test_token_context_records_confirmed_prior_email(
     # Simulate confirmation, then change again — now the context picks up
     # the newly-confirmed prior address.
     user.email = "second@example.com"
-    user.confirmed_at = datetime.now(timezone.utc)
+    user.confirmed_at = datetime.now(UTC)
     await db_session.commit()
     await _set_email(api_client, email="third@example.com")
     token = (
@@ -249,7 +259,7 @@ async def test_resend_preserves_original_change_context(
     # Establish a confirmed prior email so the next set has something to
     # change FROM.
     user.email = "prior@example.com"
-    user.confirmed_at = datetime.now(timezone.utc)
+    user.confirmed_at = datetime.now(UTC)
     await db_session.commit()
 
     await _set_email(api_client, email="next@example.com")
@@ -287,12 +297,16 @@ async def test_set_email_replaces_existing_unconfirmed_token(
     await _set_email(api_client, email="rita2@example.com")
 
     tokens = (
-        await db_session.execute(
-            select(UserToken).where(
-                UserToken.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX)
+        (
+            await db_session.execute(
+                select(UserToken).where(
+                    UserToken.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX)
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert len(tokens) == 1
     assert tokens[0].sent_to == "rita2@example.com"
 
@@ -304,9 +318,7 @@ async def test_resubmitting_same_email_when_verified_is_a_noop(
     nothing to confirm — no token issued, no email sent, no state change."""
     user = await start_session(api_client, db_session)
     raw_token = await _capture_raw_token(api_client, db_session, fake_email_queue)
-    await api_client.post(
-        "/v1/me/email/confirm", json={"token": raw_token}
-    )
+    await api_client.post("/v1/me/email/confirm", json={"token": raw_token})
     await db_session.refresh(user)
     assert user.confirmed_at is not None
     sent_count = fake_email_queue.finished_job_registry.count
@@ -324,12 +336,16 @@ async def test_resubmitting_same_email_when_verified_is_a_noop(
     assert fake_email_queue.finished_job_registry.count == sent_count
     # No pending token left behind either.
     tokens = (
-        await db_session.execute(
-            select(UserToken).where(
-                UserToken.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX)
+        (
+            await db_session.execute(
+                select(UserToken).where(
+                    UserToken.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX)
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert tokens == []
 
 
@@ -341,7 +357,7 @@ async def test_changing_email_preserves_prior_verification(
     the link from the new inbox."""
     user = await start_session(api_client, db_session)
     user.email = "prior@example.com"
-    user.confirmed_at = datetime.now(timezone.utc)
+    user.confirmed_at = datetime.now(UTC)
     await db_session.commit()
 
     response = await _set_email(api_client, email="changed@example.com")
@@ -396,9 +412,7 @@ async def test_confirm_email_sets_confirmed_at_and_invalidates_token(
     user = await start_session(api_client, db_session)
     raw_token = await _capture_raw_token(api_client, db_session, fake_email_queue)
 
-    response = await api_client.post(
-        "/v1/me/email/confirm", json={"token": raw_token}
-    )
+    response = await api_client.post("/v1/me/email/confirm", json={"token": raw_token})
     assert response.status_code == 200
     body_user = response.json()["data"]["user"]
     assert body_user["email"] == "rita@example.com"
@@ -411,18 +425,20 @@ async def test_confirm_email_sets_confirmed_at_and_invalidates_token(
 
     # Token consumed.
     tokens = (
-        await db_session.execute(
-            select(UserToken).where(
-                UserToken.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX)
+        (
+            await db_session.execute(
+                select(UserToken).where(
+                    UserToken.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX)
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert tokens == []
 
     # Replaying the same token is rejected.
-    replay = await api_client.post(
-        "/v1/me/email/confirm", json={"token": raw_token}
-    )
+    replay = await api_client.post("/v1/me/email/confirm", json={"token": raw_token})
     assert replay.status_code == 400
 
 
@@ -446,9 +462,7 @@ async def test_confirm_email_works_from_a_different_browser(
     from tests._helpers import make_client
 
     user_a = await start_session(api_client, db_session)
-    raw_token = await _capture_raw_token(
-        api_client, db_session, fake_email_queue
-    )
+    raw_token = await _capture_raw_token(api_client, db_session, fake_email_queue)
 
     async with make_client() as other_client:
         # User B opens the link in a separate browser with no session cookie.
@@ -475,7 +489,7 @@ async def test_confirm_email_rejects_when_user_email_no_longer_matches_token_con
     confirm must burn it and return the opaque "invalid or expired"."""
     user = await start_session(api_client, db_session)
     user.email = "prior@example.com"
-    user.confirmed_at = datetime.now(timezone.utc)
+    user.confirmed_at = datetime.now(UTC)
     await db_session.commit()
 
     raw_token = await _capture_raw_token(
@@ -487,18 +501,20 @@ async def test_confirm_email_rejects_when_user_email_no_longer_matches_token_con
     user.email = "different@example.com"
     await db_session.commit()
 
-    response = await api_client.post(
-        "/v1/me/email/confirm", json={"token": raw_token}
-    )
+    response = await api_client.post("/v1/me/email/confirm", json={"token": raw_token})
     assert response.status_code == 400
     # Token burned.
     tokens = (
-        await db_session.execute(
-            select(UserToken).where(
-                UserToken.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX)
+        (
+            await db_session.execute(
+                select(UserToken).where(
+                    UserToken.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX)
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert tokens == []
 
 
@@ -519,14 +535,12 @@ async def test_confirm_email_handles_address_race(
         User(
             username="other",
             email="contested@example.com",
-            confirmed_at=datetime.now(timezone.utc),
+            confirmed_at=datetime.now(UTC),
         )
     )
     await db_session.commit()
 
-    response = await api_client.post(
-        "/v1/me/email/confirm", json={"token": raw_token}
-    )
+    response = await api_client.post("/v1/me/email/confirm", json={"token": raw_token})
     assert response.status_code == 400
     await db_session.refresh(me)
     # Caller's row is untouched — the rollback preserved their prior state.
@@ -537,9 +551,7 @@ async def test_confirm_email_handles_address_race(
 async def test_confirm_email_does_not_require_session(api_client: AsyncClient):
     """Cookieless POST to /confirm-email is the cross-device mobile-mail
     case — it should return 400 (invalid token) not 401 (no session)."""
-    response = await api_client.post(
-        "/v1/me/email/confirm", json={"token": "anything"}
-    )
+    response = await api_client.post("/v1/me/email/confirm", json={"token": "anything"})
     assert response.status_code == 400
 
 
@@ -567,9 +579,7 @@ async def test_resend_issues_new_token(
     api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
 ):
     await start_session(api_client, db_session)
-    first_token = await _capture_raw_token(
-        api_client, db_session, fake_email_queue
-    )
+    first_token = await _capture_raw_token(api_client, db_session, fake_email_queue)
 
     response = await api_client.post(
         "/v1/me/email/resend",
@@ -582,9 +592,7 @@ async def test_resend_issues_new_token(
     new_token = tokens[-1]
     assert new_token != first_token
 
-    confirm = await api_client.post(
-        "/v1/me/email/confirm", json={"token": first_token}
-    )
+    confirm = await api_client.post("/v1/me/email/confirm", json={"token": first_token})
     assert confirm.status_code == 400
 
 
@@ -608,9 +616,7 @@ async def test_resend_400s_after_confirm_consumes_the_token(
     nothing left to send and returns 400 (not 409 like the old flow)."""
     user = await start_session(api_client, db_session)
     raw_token = await _capture_raw_token(api_client, db_session, fake_email_queue)
-    await api_client.post(
-        "/v1/me/email/confirm", json={"token": raw_token}
-    )
+    await api_client.post("/v1/me/email/confirm", json={"token": raw_token})
     await db_session.refresh(user)
     assert user.confirmed_at is not None
 
@@ -759,7 +765,10 @@ def test_captcha_secret_default_only_in_dev(monkeypatch):
         captcha_module._secret_key()
 
     monkeypatch.setenv("APP_ENV", "dev")
-    assert captcha_module._secret_key() == captcha_module.TURNSTILE_TEST_SECRET_ALWAYS_PASSES
+    assert (
+        captcha_module._secret_key()
+        == captcha_module.TURNSTILE_TEST_SECRET_ALWAYS_PASSES
+    )
 
 
 async def test_captcha_fails_closed_when_misconfigured_in_prod(monkeypatch):

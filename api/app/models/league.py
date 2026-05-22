@@ -3,7 +3,17 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Index, String, Text, func, text
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Index,
+    String,
+    Text,
+    func,
+    text,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -71,6 +81,4 @@ class League(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
-    rating_strategy: Mapped["RatingStrategy"] = relationship(
-        back_populates="leagues"
-    )
+    rating_strategy: Mapped["RatingStrategy"] = relationship(back_populates="leagues")

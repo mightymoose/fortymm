@@ -3,6 +3,7 @@
 Each match is its own one-game rating period for both players — the simplest
 mapping that produces an update on every result.
 """
+
 import math
 from typing import Any
 

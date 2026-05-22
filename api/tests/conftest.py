@@ -13,10 +13,10 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
+import app.models  # noqa: F401  -- ensures models register on Base.metadata
 from app import queue as queue_module
 from app.db import Base, get_session
 from app.main import app as fastapi_app
-import app.models  # noqa: F401  -- ensures models register on Base.metadata
 from app.models import League, LeagueVisibility, RatingStrategy
 
 

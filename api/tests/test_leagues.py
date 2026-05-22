@@ -51,9 +51,7 @@ async def test_session_creates_default_league_membership(
 ):
     await start_session(api_client, db_session)
 
-    memberships = (
-        await db_session.execute(select(LeagueMembership))
-    ).scalars().all()
+    memberships = (await db_session.execute(select(LeagueMembership))).scalars().all()
     assert len(memberships) == 1
     assert memberships[0].league_id == default_league.id
 

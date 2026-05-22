@@ -613,6 +613,19 @@ export interface components {
             solver: components["schemas"]["ComponentHealth"];
         };
         /**
+         * LoginRequestAccepted
+         * @description 202 body for the magic-link request endpoint. Always echoes the
+         *     submitted address — identical whether or not it maps to a real account,
+         *     so the response leaks nothing about which addresses are registered.
+         */
+        LoginRequestAccepted: {
+            /**
+             * Email
+             * Format: email
+             */
+            email: string;
+        };
+        /**
          * MatchCreate
          * @description Request body for ``POST /v1/matches``.
          *
@@ -1323,9 +1336,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["LoginRequestAccepted"];
                 };
             };
             /** @description Validation Error */

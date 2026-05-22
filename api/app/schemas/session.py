@@ -75,5 +75,13 @@ class RequestLoginRequest(CaptchaProtectedRequest):
     email: EmailStr
 
 
+class LoginRequestAccepted(BaseModel):
+    """202 body for the magic-link request endpoint. Always echoes the
+    submitted address — identical whether or not it maps to a real account,
+    so the response leaks nothing about which addresses are registered."""
+
+    email: EmailStr
+
+
 class ConsumeLoginRequest(BaseModel):
     token: str = Field(min_length=1, max_length=512)

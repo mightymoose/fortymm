@@ -1,6 +1,7 @@
 import logging
 import os
 import time
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 import redis.asyncio as redis_asyncio
@@ -9,8 +10,6 @@ from fastapi_limiter import FastAPILimiter
 from pydantic import BaseModel
 from sqlalchemy import text
 
-log = logging.getLogger(__name__)
-
 from app import db, queue
 from app.dashboard import router as dashboard_router
 from app.matches import router as matches_router
@@ -18,9 +17,11 @@ from app.players import router as players_router
 from app.rbac import router as rbac_router
 from app.sessions import router as sessions_router
 
+log = logging.getLogger(__name__)
+
 
 @asynccontextmanager
-async def lifespan(_: FastAPI):
+async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
     connection = redis_asyncio.from_url(redis_url, encoding="utf-8")
     initialized = False
@@ -97,16 +98,14 @@ async def _check_database() -> ComponentHealth:
 def _check_solver() -> ComponentHealth:
     started = time.monotonic()
     try:
-        job = queue.get_queue().enqueue(
-            "app.solver.solve_hello_world", job_timeout=10
-        )
+        job = queue.get_queue().enqueue("app.solver.solve_hello_world", job_timeout=10)
     except Exception as exc:
         return ComponentHealth(healthy=False, error=str(exc) or exc.__class__.__name__)
 
     deadline = time.monotonic() + SOLVER_HEALTH_TIMEOUT
     while time.monotonic() < deadline:
         try:
-            job.refresh()
+            job.refresh()  # type: ignore[no-untyped-call]  # rq's Job.refresh is untyped
         except Exception as exc:
             return ComponentHealth(
                 healthy=False, error=str(exc) or exc.__class__.__name__

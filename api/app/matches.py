@@ -4,11 +4,13 @@ import math
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
-from sqlalchemy import func, select
+from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased, selectinload
+from sqlalchemy.sql.base import ExecutableOption
 
 from app.db import get_session
 from app.leagues import resolve_league
@@ -87,9 +89,7 @@ def _side_schema(
         ],
         games_won=side_wins.get(side.side_number, 0),
         won=side.won,
-        is_current_user_side=any(
-            p.user_id == current_user_id for p in side.players
-        ),
+        is_current_user_side=any(p.user_id == current_user_id for p in side.players),
         rating_change=rating_change,
     )
 
@@ -97,7 +97,7 @@ def _side_schema(
 # Shared eager-load chain. Used by every read path that returns a hierarchical
 # match — async SQLAlchemy can't lazy-load mid-request, so all four collections
 # are pulled up front.
-def match_eager_options():
+def match_eager_options() -> tuple[ExecutableOption, ...]:
     return (
         selectinload(Match.match_settings),
         selectinload(Match.league).selectinload(League.rating_strategy),
@@ -105,7 +105,7 @@ def match_eager_options():
     )
 
 
-def _match_history_options():
+def _match_history_options() -> tuple[ExecutableOption, ...]:
     """Subset of ``match_eager_options`` for paths that only need sides + scores
     (recent form, H2H): no match_settings, no league/rating-strategy."""
     return (
@@ -125,11 +125,7 @@ async def _load_match(db: AsyncSession, match_id: uuid.UUID) -> Match | None:
 
 def my_side(match: Match, user_id: uuid.UUID) -> MatchSide | None:
     return next(
-        (
-            s
-            for s in match.sides
-            if any(p.user_id == user_id for p in s.players)
-        ),
+        (s for s in match.sides if any(p.user_id == user_id for p in s.players)),
         None,
     )
 
@@ -138,9 +134,7 @@ def opponent_side(match: Match, user_id: uuid.UUID) -> MatchSide | None:
     mine = my_side(match, user_id)
     if mine is None:
         return None
-    return next(
-        (s for s in match.sides if s.side_number != mine.side_number), None
-    )
+    return next((s for s in match.sides if s.side_number != mine.side_number), None)
 
 
 def opponent_username(match: Match, user_id: uuid.UUID) -> str | None:
@@ -254,7 +248,9 @@ def _add_side(match: Match, side_number: int, player: User) -> None:
 # ----- list helpers --------------------------------------------------------
 
 
-def participant_filter(query, current_user_id: uuid.UUID):
+def participant_filter(
+    query: Select[tuple[Match]], current_user_id: uuid.UUID
+) -> Select[tuple[Match]]:
     me_in_match = (
         select(MatchSidePlayer.id)
         .where(
@@ -266,8 +262,13 @@ def participant_filter(query, current_user_id: uuid.UUID):
     return query.where(me_in_match)
 
 
-def _player_username_filter(query, q: str):
-    """Restrict to matches that have *any* player whose username matches ``q``."""
+def _player_username_filter[SelectT: Select[Any]](query: SelectT, q: str) -> SelectT:
+    """Restrict to matches that have *any* player whose username matches ``q``.
+
+    A row-narrowing filter preserves the ``Select``'s row shape, so it's
+    generic over whatever the caller is selecting (matches list vs. status
+    counts).
+    """
     pattern = f"%{escape_like(q.strip())}%"
     has_matching_player = (
         select(MatchSidePlayer.id)
@@ -302,9 +303,7 @@ async def create_match(
                 detail="You cannot start a match against yourself.",
             )
         opponent = (
-            await db.execute(
-                select(User).where(User.id == payload.opponent_user_id)
-            )
+            await db.execute(select(User).where(User.id == payload.opponent_user_id))
         ).scalar_one_or_none()
         if opponent is None:
             raise HTTPException(status_code=404, detail="Opponent not found.")
@@ -347,7 +346,9 @@ async def create_match(
     return _serialize_details(created, current_user.id)
 
 
-def _filtered_matches_query(q: str | None, status_: MatchStatus | None):
+def _filtered_matches_query(
+    q: str | None, status_: MatchStatus | None
+) -> Select[tuple[Match]]:
     """Shared base query for the matches list + CSV export (status + search)."""
     base = select(Match)
     if q:
@@ -375,9 +376,7 @@ async def export_matches_csv(
         .scalars()
         .all()
     )
-    csv_text = _matches_to_csv(
-        [_list_row(match, current_user.id) for match in matches]
-    )
+    csv_text = _matches_to_csv([_list_row(match, current_user.id) for match in matches])
     filename = f"fortymm-matches-{datetime.now(UTC).strftime('%Y-%m-%d')}.csv"
     return Response(
         content=csv_text,
@@ -451,10 +450,7 @@ def _list_row(match: Match, current_user_id: uuid.UUID) -> MatchListRow:
         status=match.status,
         status_label=STATUS_LABELS[match.status],
         league=MatchLeague(id=match.league.id, name=match.league.name),
-        sides=[
-            _side_schema(side, side_wins, current_user_id)
-            for side in sides_sorted
-        ],
+        sides=[_side_schema(side, side_wins, current_user_id) for side in sides_sorted],
         best_of=match.match_settings.best_of,
         created_at=match.created_at,
         current_game_id=current_game.id if can_score and current_game else None,
@@ -536,9 +532,7 @@ def _enforce_scorable(match: Match) -> None:
             detail="This match has no opponent and can't be scored.",
         )
     if match.status in {MatchStatus.disputed, MatchStatus.voided}:
-        raise HTTPException(
-            status_code=409, detail="This match is no longer scorable."
-        )
+        raise HTTPException(status_code=409, detail="This match is no longer scorable.")
 
 
 async def _load_rating_changes(
@@ -547,10 +541,14 @@ async def _load_rating_changes(
     """Returns ``user_id -> RatingChange`` for every rating row this match
     produced. Empty for matches that didn't move ratings."""
     rows = (
-        await db.execute(
-            select(RatingHistory).where(RatingHistory.match_id == match_id)
+        (
+            await db.execute(
+                select(RatingHistory).where(RatingHistory.match_id == match_id)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     return {row.user_id: RatingChange.from_history(row) for row in rows}
 
 
@@ -559,13 +557,11 @@ def _singles_user_ids(match: Match) -> list[uuid.UUID]:
     player are skipped — no doubles surface yet."""
     sides_in_order = sorted(match.sides, key=lambda s: s.side_number)
     return [
-        side.players[0].user_id
-        for side in sides_in_order
-        if len(side.players) == 1
+        side.players[0].user_id for side in sides_in_order if len(side.players) == 1
     ]
 
 
-def _history_base_query(current_match_id: uuid.UUID):
+def _history_base_query(current_match_id: uuid.UUID) -> Select[tuple[Match]]:
     """Foundation for both recent-form and H2H lookups: completed matches
     other than this one, eagerly loading just the sides + games subtree."""
     return (
@@ -590,12 +586,16 @@ async def _load_recent_form(
     result: list[MatchDetailsPlayerForm] = []
     for user_id in user_ids:
         rows = (
-            await db.execute(
-                participant_filter(
-                    _history_base_query(match.id), user_id
-                ).limit(RECENT_FORM_LIMIT)
+            (
+                await db.execute(
+                    participant_filter(_history_base_query(match.id), user_id).limit(
+                        RECENT_FORM_LIMIT
+                    )
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         rating_before, rating_history = await _load_pre_match_rating(
             db, user_id, match.league_id, match.created_at
         )
@@ -605,9 +605,7 @@ async def _load_recent_form(
         result.append(
             MatchDetailsPlayerForm(
                 user_id=user_id,
-                recent_results=[
-                    _build_form_result(past, user_id) for past in rows
-                ],
+                recent_results=[_build_form_result(past, user_id) for past in rows],
                 rating_before=rating_before,
                 rating_history=rating_history,
                 career_matches_before=matches_before,
@@ -626,17 +624,21 @@ async def _load_pre_match_rating(
     """Returns ``(most-recent-value, chronological-list)``. Strict ``<`` on
     ``before`` so this match's own rating row never leaks in."""
     rows = (
-        await db.execute(
-            select(RatingHistory.rating_value)
-            .where(
-                RatingHistory.user_id == user_id,
-                RatingHistory.league_id == league_id,
-                RatingHistory.created_at < before,
+        (
+            await db.execute(
+                select(RatingHistory.rating_value)
+                .where(
+                    RatingHistory.user_id == user_id,
+                    RatingHistory.league_id == league_id,
+                    RatingHistory.created_at < before,
+                )
+                .order_by(RatingHistory.created_at.desc())
+                .limit(RATING_HISTORY_LIMIT)
             )
-            .order_by(RatingHistory.created_at.desc())
-            .limit(RATING_HISTORY_LIMIT)
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     if not rows:
         return None, []
     history = list(reversed(rows))
@@ -672,16 +674,12 @@ async def _load_career_before(
     return int(row[0]), int(row[1])
 
 
-def _build_form_result(
-    past_match: Match, user_id: uuid.UUID
-) -> MatchDetailsFormResult:
+def _build_form_result(past_match: Match, user_id: uuid.UUID) -> MatchDetailsFormResult:
     mine = my_side(past_match, user_id)
     assert mine is not None  # participant_filter guarantees membership
     side_wins = side_win_counts(past_match)
     player_games = side_wins.get(mine.side_number, 0)
-    opp_games = sum(
-        wins for n, wins in side_wins.items() if n != mine.side_number
-    )
+    opp_games = sum(wins for n, wins in side_wins.items() if n != mine.side_number)
     return MatchDetailsFormResult(
         match_id=past_match.id,
         is_win=mine.won is True,
@@ -704,9 +702,7 @@ async def _load_head_to_head(
         participant_filter(_history_base_query(current_match_id), user_a),
         user_b,
     )
-    rows = (
-        await db.execute(rows_query.limit(H2H_MEETINGS_LIMIT))
-    ).scalars().all()
+    rows = (await db.execute(rows_query.limit(H2H_MEETINGS_LIMIT))).scalars().all()
 
     meetings: list[MatchDetailsH2HMeeting] = []
     for past in rows:
@@ -832,9 +828,7 @@ async def _apply_rating_update(db: AsyncSession, match: Match) -> None:
 
     already_applied = (
         await db.execute(
-            select(RatingHistory.id)
-            .where(RatingHistory.match_id == match.id)
-            .limit(1)
+            select(RatingHistory.id).where(RatingHistory.match_id == match.id).limit(1)
         )
     ).scalar_one_or_none()
     if already_applied is not None:
@@ -936,9 +930,7 @@ def _recompute_match(match: Match) -> None:
         for game in trailing_unscored:
             match.games.remove(game)
     elif not trailing_unscored:
-        next_number = (
-            max((g.game_number for g in games_sorted), default=0) + 1
-        )
+        next_number = max((g.game_number for g in games_sorted), default=0) + 1
         match.games.append(MatchGame(game_number=next_number))
 
 
