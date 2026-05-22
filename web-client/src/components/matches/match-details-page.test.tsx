@@ -307,7 +307,7 @@ describe('MatchDetailsView', () => {
       container.querySelector('.md-hero__name--ghost'),
     ).toHaveTextContent('No opponent')
     expect(container.querySelector('.md-avatar--ghost')).toBeInTheDocument()
-    // The Players & form card mirrors it on the opponent side.
+    // The Players snapshot card mirrors it on the opponent side.
     expect(
       container.querySelector('.md-profile__name--ghost'),
     ).toHaveTextContent('No opponent')
@@ -449,16 +449,20 @@ describe('MatchDetailsView', () => {
 
     const { container } = renderDetails('m-form')
 
-    // Wait for the Players & form card title to render.
+    // Wait for the Players snapshot card title to render. The header now
+    // carries the temporal frame so the per-field labels don't have to.
     await waitFor(() =>
       expect(container.querySelector('.md-card__hd h3')).toHaveTextContent(
-        'Players & form',
+        'Players · going into this match',
       ),
     )
     // My side: 1 W and 1 L with the right opponent / score labels.
     const myForm = screen.getByTestId('form-1')
+    expect(within(myForm).getByText('Form · 1–1')).toBeInTheDocument()
+    // The with-history half leads with a one-line "going in" summary, mirroring
+    // the empty half's "first one" sentence.
     expect(
-      within(myForm).getByText('Form before this match · 1–1'),
+      within(myForm).getByText('12 prior matches · 75% win rate going in'),
     ).toBeInTheDocument()
     expect(within(myForm).getByText('silva.r')).toBeInTheDocument()
     expect(within(myForm).getByText('3–1')).toBeInTheDocument()
@@ -477,9 +481,7 @@ describe('MatchDetailsView', () => {
     // Rookie shows the empty state, not a result list.
     const oppForm = screen.getByTestId('form-2')
     expect(within(oppForm).getByText(/No prior matches yet/)).toBeInTheDocument()
-    expect(
-      within(oppForm).queryByText(/Form before this match · /),
-    ).not.toBeInTheDocument()
+    expect(within(oppForm).queryByText(/Form · /)).not.toBeInTheDocument()
     // Unrated rookie: no rating number, no sparkline, no win rate.
     const oppRating = screen.getByTestId('rating-box-2')
     expect(within(oppRating).getByText('Unrated')).toBeInTheDocument()
@@ -604,7 +606,9 @@ describe('MatchDetailsView', () => {
 
     await waitFor(() => {
       const headings = Array.from(container.querySelectorAll('.md-card__hd h3'))
-      expect(headings.map((h) => h.textContent)).toContain('Rating change')
+      expect(headings.map((h) => h.textContent)).toContain(
+        'Result · rating change',
+      )
     })
     const rows = container.querySelectorAll('.md-rating-row')
     expect(rows).toHaveLength(2)
@@ -639,6 +643,57 @@ describe('MatchDetailsView', () => {
       expect(container.querySelector('.md-card__hd h3')).toBeInTheDocument(),
     )
     const headings = Array.from(container.querySelectorAll('.md-card__hd h3'))
-    expect(headings.map((h) => h.textContent)).not.toContain('Rating change')
+    expect(headings.map((h) => h.textContent)).not.toContain(
+      'Result · rating change',
+    )
+  })
+
+  it('hides the rating change card while the match is still live', async () => {
+    // A live match may carry seeded/projected ratings; surfacing them in a
+    // "result" card mid-match contradicts the pre-match snapshot panel, so the
+    // card stays hidden until the match is Final.
+    const match = matchDetails({
+      id: 'm-live-rated',
+      status: 'in_progress',
+      status_label: 'Live',
+      affects_rating: true,
+      sides: [
+        {
+          side_number: 1,
+          players: [{ user_id: 'u-me', username: 'me', is_current_user: true }],
+          games_won: 1,
+          won: null,
+          is_current_user_side: true,
+          rating_change: { before: 1500, after: 1512, delta: 12 },
+        },
+        {
+          side_number: 2,
+          players: [
+            { user_id: 'u-opp', username: 'opp', is_current_user: false },
+          ],
+          games_won: 0,
+          won: null,
+          is_current_user_side: false,
+          rating_change: { before: 1500, after: 1488, delta: -12 },
+        },
+      ],
+      games: [],
+      current_game: null,
+      can_score: false,
+    })
+    server.use(
+      http.get('*/v1/matches/m-live-rated', () => HttpResponse.json(match)),
+    )
+
+    const { container } = renderDetails('m-live-rated')
+
+    await waitFor(() =>
+      expect(container.querySelector('.md-card__hd h3')).toBeInTheDocument(),
+    )
+    const headings = Array.from(container.querySelectorAll('.md-card__hd h3'))
+    expect(headings.map((h) => h.textContent)).not.toContain(
+      'Result · rating change',
+    )
+    expect(container.querySelector('.md-rating-row')).toBeNull()
   })
 })
