@@ -1007,7 +1007,7 @@ function RatingRow({ side, isFirst }: { side: SideView; isFirst: boolean }) {
             </div>
           ) : (
             <div className="md-rating-row__numbers">
-              <span className="from">No rating change</span>
+              <span className="from">Unrated player</span>
             </div>
           )}
         </div>
