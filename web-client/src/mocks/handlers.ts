@@ -91,9 +91,8 @@ function applyScore(
   body: MatchScoreBody,
   options: { scoreId?: string } = {},
 ): Response {
-  if (seed.opponent === null) {
-    return detail("This match has no opponent and can't be scored.", 422)
-  }
+  // A no-opponent match is scorable against its player-less sentinel side
+  // (mirrors the API), so there's no opponent gate here.
   if (seed.status === 'disputed' || seed.status === 'voided') {
     return detail('This match is no longer scorable.', 409)
   }
