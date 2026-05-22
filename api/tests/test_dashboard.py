@@ -1,7 +1,7 @@
 import uuid
 
 from httpx import AsyncClient
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
@@ -49,7 +49,7 @@ async def test_dashboard_empty_when_user_has_no_matches(
     assert body["recent_results"] == []
     # A fresh signup is auto-joined to the default Glicko-2 league with
     # initial state, so the rating widget lights up immediately with peak ==
-    # current and a null streak / empty sparkline.
+    # current, a null streak, and a sparkline holding the lone seed point.
     rating = body["rating"]
     assert rating is not None
     assert rating["league_name"] == "FortyMM"
@@ -58,7 +58,7 @@ async def test_dashboard_empty_when_user_has_no_matches(
     assert rating["delta"] == 0.0
     assert rating["peak"] == 1500.0
     assert rating["percentile"] is None  # alone in the league
-    assert rating["spark_data"] == []
+    assert rating["spark_data"] == [1500.0]  # the initial seed event
     assert rating["streak"] is None
     assert rating["stats"] == [
         {"label": "RD", "value": "350"},
@@ -212,7 +212,8 @@ async def test_dashboard_rating_reflects_completed_match(
     assert rating["current"] > 1500.0
     assert rating["delta"] > 0
     assert rating["peak"] == rating["current"]
-    assert rating["spark_data"] == [rating["current"]]
+    # Seed point first, then the post-match value.
+    assert rating["spark_data"] == [1500.0, rating["current"]]
     assert rating["streak"] == {"kind": "W", "n": 1}
     rd_stat = next(s for s in rating["stats"] if s["label"] == "RD")
     assert int(rd_stat["value"]) < 350
@@ -230,7 +231,8 @@ async def test_dashboard_streak_counts_consecutive_results(
 
     rating = (await api_client.get("/v1/dashboard")).json()["rating"]
     assert rating["streak"] == {"kind": "L", "n": 1}
-    assert len(rating["spark_data"]) == 3
+    # The seed event plus three match results.
+    assert len(rating["spark_data"]) == 4
 
 
 async def test_dashboard_rating_peak_holds_after_loss(
@@ -307,9 +309,19 @@ async def test_dashboard_sparkline_returns_most_recent_points(
             select(RatingStrategy).where(RatingStrategy.key == "glicko2")
         )
     ).scalar_one()
+    # The signup seed event sits before any match, so push it back behind the
+    # 40 rows below; otherwise it would be the most-recent point and skew the
+    # truncation this test is checking.
+    now = datetime.now(timezone.utc)
+    await db_session.execute(
+        text(
+            "UPDATE rating_history SET created_at = :ts "
+            "WHERE user_id = :uid AND source = 'initial'"
+        ),
+        {"ts": now - timedelta(hours=41), "uid": me.id},
+    )
     # 40 history rows spaced 1 hour apart, all within the 30-day window;
     # rating climbs monotonically so we can read the order off the values.
-    now = datetime.now(timezone.utc)
     for i in range(40):
         db_session.add(
             RatingHistory(

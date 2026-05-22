@@ -998,10 +998,10 @@ async def test_details_recent_form_includes_pre_match_rating_and_career(
     # I had 2 completed matches before this one, both wins.
     assert mine["career_matches_before"] == 2
     assert mine["career_wins_before"] == 2
-    # Rating history exists with 2 prior entries (one per rated match) and
-    # rating_before matches the most-recent entry.
+    # Rating history exists with 3 prior entries (the league-join seed plus
+    # one per rated match) and rating_before matches the most-recent entry.
     assert mine["rating_before"] is not None
-    assert len(mine["rating_history"]) == 2
+    assert len(mine["rating_history"]) == 3
     assert mine["rating_history"][-1] == mine["rating_before"]
     # Brand-new opponent: no rating, no career.
     fresh = forms[str(opp.id)]
@@ -1015,21 +1015,35 @@ async def test_details_recent_form_excludes_self_from_career_count(
     api_client: AsyncClient, db_session: AsyncSession
 ):
     """A just-completed match's own row in rating_history / its own match
-    row must not double-count itself in the BFF."""
-    await start_session(api_client, db_session)
+    row must not double-count itself in the BFF. The session user still shows
+    their league-join seed (recorded before the match), but none of the
+    match's own freshly-written rating rows leak into the pre-match view."""
+    me = await start_session(api_client, db_session)
     opp = await make_user(db_session, "self-exclude-opp")
     finished = await _play_match_to_completion(
         api_client, opp.id, best_of=3, side_1_wins=True
     )
 
     detail = (await api_client.get(f"/v1/matches/{finished['id']}")).json()
-    for f in detail["recent_form"]:
-        # No prior matches exist — only the current one — so career and
-        # rating-history must be empty.
+    forms = {f["user_id"]: f for f in detail["recent_form"]}
+    # No prior matches exist — only the current one — so career counts are 0
+    # for both players.
+    for f in forms.values():
         assert f["career_matches_before"] == 0
         assert f["career_wins_before"] == 0
-        assert f["rating_history"] == []
-        assert f["rating_before"] is None
+
+    # The session user joined the league at signup, so their pre-match rating
+    # is the seeded baseline; the match's own rating rows are excluded.
+    mine = forms[str(me.id)]
+    assert mine["rating_before"] == 1500.0
+    assert mine["rating_history"] == [1500.0]
+
+    # The opponent came in via make_user (no league join) and is only seeded
+    # when the match completes — after match creation — so they have no
+    # pre-match history.
+    opp_form = forms[str(opp.id)]
+    assert opp_form["rating_before"] is None
+    assert opp_form["rating_history"] == []
 
 
 async def test_list_matches_csv_export(
