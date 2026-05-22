@@ -283,10 +283,25 @@ describe('MatchDetailsView', () => {
     )
     const { container } = renderDetails('m-solo')
 
+    // The participant shows on the left; the empty opponent side renders a
+    // "No opponent" placeholder rather than a blank slot.
     await waitFor(() =>
-      expect(container.querySelectorAll('.md-hero__name').length).toBe(1),
+      expect(container.querySelectorAll('.md-hero__name').length).toBe(2),
     )
-    expect(container.querySelector('.md-hero__name')).toHaveTextContent('me')
+    const heroNames = Array.from(
+      container.querySelectorAll('.md-hero__name'),
+    ).map((el) => el.textContent)
+    expect(heroNames).toEqual(['me', 'No opponent'])
+    // The placeholder is styled as a ghost (dashed avatar + muted name), not a
+    // real player.
+    expect(
+      container.querySelector('.md-hero__name--ghost'),
+    ).toHaveTextContent('No opponent')
+    expect(container.querySelector('.md-avatar--ghost')).toBeInTheDocument()
+    // The Players & form card mirrors it on the opponent side.
+    expect(
+      container.querySelector('.md-profile__name--ghost'),
+    ).toHaveTextContent('No opponent')
     // Did not bounce to the list — this replaced an earlier redirect.
     expect(screen.queryByText('matches-list')).not.toBeInTheDocument()
   })
