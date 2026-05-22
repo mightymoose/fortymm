@@ -241,14 +241,20 @@ def _serialize_details(
     )
 
 
-def _add_side(match: Match, side_number: int, player: User) -> None:
-    """Attach a single-player side to ``match``.
+def _add_side(match: Match, side_number: int, player: User | None) -> None:
+    """Attach a side to ``match``. ``player=None`` creates the sentinel
+    "no opponent" side — a real second side carrying no player — so an
+    opponent-less match still has two sides and is therefore scorable. It reads
+    as opponent-less wherever the code inspects ``side.players`` (serialization
+    renders the "No opponent" placeholder; rating updates skip player-less
+    sides).
 
     Wiring up the ``match`` relationship on both the side and the side-player
     is what populates their (non-null, denormalized) ``match_id`` columns on
     flush."""
     side = MatchSide(match=match, side_number=side_number)
-    side.players.append(MatchSidePlayer(match=match, user=player))
+    if player is not None:
+        side.players.append(MatchSidePlayer(match=match, user=player))
 
 
 # ----- list helpers --------------------------------------------------------
@@ -315,8 +321,9 @@ async def create_match(
             detail="A rated match needs a registered opponent.",
         )
 
-    # Guest / "start without opponent" matches have only the creator's side,
-    # so they can never affect ratings regardless of the requested flag.
+    # Guest / "start without opponent" matches get a sentinel opponent side
+    # (no player) below, so they're scorable but can never affect ratings
+    # regardless of the requested flag.
     affects_rating = payload.rated and opponent is not None
 
     league = await resolve_league(db, payload.league_id)
@@ -333,8 +340,9 @@ async def create_match(
         status=MatchStatus.in_progress,
     )
     _add_side(match, 1, current_user)
-    if opponent is not None:
-        _add_side(match, 2, opponent)
+    # Always create side 2. With no opponent it's a player-less sentinel side,
+    # which keeps the match scorable (two sides) while reading as "No opponent".
+    _add_side(match, 2, opponent)
     # The FE never creates a game — game 1 is written here so scoring routes
     # always have a real entity to deep-link into.
     match.games.append(MatchGame(game_number=1))

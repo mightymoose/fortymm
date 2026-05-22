@@ -139,8 +139,9 @@ function MatchCard() {
     if (validationError) return
     setApiError(null)
 
-    // Guest / "start without opponent" matches have a single side, so they
-    // can never be rated regardless of the toggle.
+    // Guest / "start without opponent" matches have no registered opponent, so
+    // they can never be rated regardless of the toggle (the API gives them a
+    // player-less sentinel opponent side instead).
     const isRegistered = opponent?.kind === 'registered'
     try {
       const created = await createMatch.mutateAsync({

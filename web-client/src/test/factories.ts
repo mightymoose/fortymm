@@ -137,7 +137,9 @@ export function player(overrides: Partial<Player> = {}): Player {
  * agree on the canonical "rita.kovac vs faker-name" shape. */
 function defaultSides(opponentName: string | null): {
   mySide: MatchDetailsSide
-  opponentSide: MatchDetailsSide | null
+  // Always present: a real opponent, or the player-less sentinel "No opponent"
+  // side that keeps an opponent-less match scorable (mirrors the API).
+  opponentSide: MatchDetailsSide
 } {
   const mySide: MatchDetailsSide = {
     side_number: 1,
@@ -152,22 +154,23 @@ function defaultSides(opponentName: string | null): {
     won: null,
     is_current_user_side: true,
   }
-  const opponentSide: MatchDetailsSide | null =
-    opponentName === null
-      ? null
-      : {
-          side_number: 2,
-          players: [
+  const opponentSide: MatchDetailsSide = {
+    side_number: 2,
+    // No opponent → an empty (player-less) sentinel side.
+    players:
+      opponentName === null
+        ? []
+        : [
             {
               user_id: nextId('u'),
               username: opponentName,
               is_current_user: false,
             },
           ],
-          games_won: 0,
-          won: null,
-          is_current_user_side: false,
-        }
+    games_won: 0,
+    won: null,
+    is_current_user_side: false,
+  }
   return { mySide, opponentSide }
 }
 
@@ -199,28 +202,26 @@ export function matchDetails(
     team_size: 1,
     affects_rating: false,
     created_at: ISO,
-    sides: opponentSide ? [mySide, opponentSide] : [mySide],
+    sides: [mySide, opponentSide],
     games: [firstGame],
     current_game: { id: firstGame.id, game_number: 1 },
     can_score: true,
-    recent_form: (opponentSide ? [mySide, opponentSide] : [mySide]).map(
-      (s) => ({
-        user_id: s.players[0]?.user_id ?? nextId('u'),
+    recent_form: [mySide, opponentSide]
+      .filter((s) => s.players.length > 0)
+      .map((s) => ({
+        user_id: s.players[0].user_id,
         recent_results: [],
         rating_before: null,
         rating_history: [],
         career_matches_before: 0,
         career_wins_before: 0,
-      }),
-    ),
-    head_to_head: opponentSide
-      ? {
-          total_meetings: 0,
-          side_1_wins: 0,
-          side_2_wins: 0,
-          recent_meetings: [],
-        }
-      : null,
+      })),
+    head_to_head: {
+      total_meetings: 0,
+      side_1_wins: 0,
+      side_2_wins: 0,
+      recent_meetings: [],
+    },
     ...overrides,
   }
 }
@@ -243,11 +244,11 @@ export function matchListRow(
     status: 'in_progress',
     status_label: 'Live',
     league: MOCK_DEFAULT_LEAGUE,
-    sides: opponentSide ? [mySide, opponentSide] : [mySide],
+    sides: [mySide, opponentSide],
     best_of: 5,
     created_at: ISO,
-    current_game_id: opponentName === null ? null : nextId('g'),
-    can_score: opponentName !== null,
+    current_game_id: nextId('g'),
+    can_score: true,
     ...rest,
   }
 }

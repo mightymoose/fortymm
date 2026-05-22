@@ -8,6 +8,7 @@ import {
   Inbox,
   MoreHorizontal,
   Search,
+  User,
   X,
 } from 'lucide-react'
 
@@ -414,14 +415,22 @@ function sideLabel(side: MatchListRowSide | null): string {
 
 function PlayerChip({ side }: { side: MatchListRowSide | null }) {
   const name = sideLabel(side)
-  const isEmpty = side === null
+  // No opponent: a null side (legacy) or a player-less sentinel side. Both read
+  // as "No opponent" and get the dashed-circle placeholder.
+  const isEmpty = side === null || side.players.length === 0
   return (
     <div className="player">
-      <Avatar className="size-[26px]">
-        <AvatarFallback className="font-mono text-[11px] font-bold">
-          {isEmpty ? '?' : initialsOf(name)}
-        </AvatarFallback>
-      </Avatar>
+      {isEmpty ? (
+        <span className="player-avatar player-avatar--ghost" aria-hidden="true">
+          <User size={15} strokeWidth={1.75} />
+        </span>
+      ) : (
+        <Avatar className="size-[26px]">
+          <AvatarFallback className="font-mono text-[11px] font-bold">
+            {initialsOf(name)}
+          </AvatarFallback>
+        </Avatar>
+      )}
       <span
         className={cn(
           'player-name',

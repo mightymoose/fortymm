@@ -52,6 +52,9 @@ type SideView = {
   sideNumber: number
   username: string
   userId: string | null
+  // A "no opponent" side: a real side row carrying no player. Rendered as the
+  // dashed-circle placeholder instead of an avatar/profile.
+  isGhost: boolean
   initials: string
   gamesWon: number
   won: boolean | null
@@ -113,11 +116,13 @@ function projectSide(
   form: MatchDetailsPlayerForm,
 ): SideView {
   const player = side.players[0]
+  const isGhost = side.players.length === 0
   const username = player?.username ?? fallbackLabel
   return {
     sideNumber: side.side_number,
     username,
     userId: player?.user_id ?? null,
+    isGhost,
     initials: initialsOf(username),
     gamesWon: side.games_won,
     won: side.won,
@@ -523,6 +528,7 @@ function HeroScoreboard({
 }
 
 function PlayerSide({ side, pos }: { side: SideView; pos: 'l' | 'r' }) {
+  if (side.isGhost) return <NoOpponentSide pos={pos} />
   const win = side.won === true
   return (
     <div className={`md-hero__player md-hero__player--${pos}`}>
@@ -630,10 +636,20 @@ function GameGridSide({
   return (
     <>
       <div className="md-games__player">
-        <span className={cn('md-avatar', won ? 'md-avatar--win' : 'md-avatar--loss')}>
-          {side.initials}
+        {side.isGhost ? (
+          <span className="md-avatar md-avatar--ghost" aria-hidden="true">
+            <User size={14} strokeWidth={1.75} />
+          </span>
+        ) : (
+          <span
+            className={cn('md-avatar', won ? 'md-avatar--win' : 'md-avatar--loss')}
+          >
+            {side.initials}
+          </span>
+        )}
+        <span className="md-games__player-name">
+          {side.isGhost ? NO_OPPONENT_LABEL : side.username}
         </span>
-        <span className="md-games__player-name">{side.username}</span>
       </div>
       {slots.map((g, i) => {
         if (!g) {
@@ -715,6 +731,7 @@ function PlayersCard({ view }: { view: MatchView }) {
 }
 
 function PlayerProfile({ side, won }: { side: SideView; won: boolean }) {
+  if (side.isGhost) return <NoOpponentProfile />
   const form = side.recentForm
   const wins = form.filter((r) => r.is_win).length
   const losses = form.length - wins

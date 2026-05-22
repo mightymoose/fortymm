@@ -116,7 +116,7 @@ export function reconcile(seed: SeedMatch): void {
   } else {
     seed.status = 'in_progress'
     seed.completed_at = null
-    if (currentUnscored(seed) === null && seed.opponent !== null) {
+    if (currentUnscored(seed) === null) {
       const nextNumber =
         seed.games.reduce((max, g) => Math.max(max, g.game_number), 0) + 1
       seed.games.push({
@@ -130,7 +130,9 @@ export function reconcile(seed: SeedMatch): void {
 
 function projectSides(seed: SeedMatch): {
   mySide: MatchDetailsSide
-  opponentSide: MatchDetailsSide | null
+  // Always present: a real opponent, or the player-less sentinel side that
+  // makes an opponent-less match scorable (mirrors the API).
+  opponentSide: MatchDetailsSide
 } {
   const { side1, side2 } = sideWinCounts(seed)
   const decided = seed.status === 'completed'
@@ -152,22 +154,23 @@ function projectSides(seed: SeedMatch): {
     is_current_user_side: true,
     rating_change: showRatingChange ? ratingChangeFor(seed.id, myWon) : null,
   }
-  const opponentSide: MatchDetailsSide | null = seed.opponent
-    ? {
-        side_number: 2,
-        players: [
+  const opponentSide: MatchDetailsSide = {
+    side_number: 2,
+    // No opponent → an empty (player-less) sentinel side.
+    players: seed.opponent
+      ? [
           {
             user_id: seed.opponent.id,
             username: seed.opponent.username,
             is_current_user: false,
           },
-        ],
-        games_won: side2,
-        won: decided ? !myWon : null,
-        is_current_user_side: false,
-        rating_change: showRatingChange ? ratingChangeFor(seed.id, !myWon) : null,
-      }
-    : null
+        ]
+      : [],
+    games_won: side2,
+    won: decided ? !myWon : null,
+    is_current_user_side: false,
+    rating_change: showRatingChange ? ratingChangeFor(seed.id, !myWon) : null,
+  }
   return { mySide, opponentSide }
 }
 
@@ -203,12 +206,12 @@ export function projectMatchDetails(seed: SeedMatch): MatchDetails {
     team_size: 1,
     affects_rating: seed.affects_rating,
     created_at: seed.created_at,
-    sides: opponentSide ? [mySide, opponentSide] : [mySide],
+    sides: [mySide, opponentSide],
     games,
     current_game: current
       ? { id: current.id, game_number: current.game_number }
       : null,
-    can_score: current !== null && opponentSide !== null,
+    can_score: current !== null,
     recent_form: projectRecentForm(seed, priors),
     head_to_head: projectHeadToHead(seed, priors),
   }
@@ -342,14 +345,13 @@ export function projectListRow(seed: SeedMatch): MatchListRow {
   const current = currentUnscored(seed)
   const scorable =
     (seed.status === 'pending' || seed.status === 'in_progress') &&
-    opponentSide !== null &&
     current !== null
   return {
     id: seed.id,
     status: seed.status,
     status_label: STATUS_LABELS[seed.status],
     league: MOCK_DEFAULT_LEAGUE,
-    sides: opponentSide ? [mySide, opponentSide] : [mySide],
+    sides: [mySide, opponentSide],
     best_of: seed.best_of,
     created_at: seed.created_at,
     current_game_id: scorable ? current.id : null,
