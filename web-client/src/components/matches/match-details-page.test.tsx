@@ -260,7 +260,8 @@ describe('MatchDetailsView', () => {
     ).toHaveAttribute('href', '/matches')
   })
 
-  it('renders solo matches (no opponent) with only the participant side', async () => {
+  it('renders no-opponent matches with a "No opponent" placeholder, still scorable', async () => {
+    const game1 = { id: 'g-solo-1', game_number: 1, score: null }
     const match = matchDetails({
       id: 'm-solo',
       sides: [
@@ -273,18 +274,26 @@ describe('MatchDetailsView', () => {
           won: null,
           is_current_user_side: true,
         },
+        // The sentinel opponent: a real side row with no player.
+        {
+          side_number: 2,
+          players: [],
+          games_won: 0,
+          won: null,
+          is_current_user_side: false,
+        },
       ],
-      games: [],
-      current_game: null,
-      can_score: false,
+      games: [game1],
+      current_game: { id: game1.id, game_number: 1 },
+      can_score: true,
     })
     server.use(
       http.get('*/v1/matches/m-solo', () => HttpResponse.json(match)),
     )
     const { container } = renderDetails('m-solo')
 
-    // The participant shows on the left; the empty opponent side renders a
-    // "No opponent" placeholder rather than a blank slot.
+    // The participant shows on the left; the player-less opponent side renders
+    // a "No opponent" placeholder rather than a blank slot.
     await waitFor(() =>
       expect(container.querySelectorAll('.md-hero__name').length).toBe(2),
     )
@@ -302,7 +311,11 @@ describe('MatchDetailsView', () => {
     expect(
       container.querySelector('.md-profile__name--ghost'),
     ).toHaveTextContent('No opponent')
-    // Did not bounce to the list — this replaced an earlier redirect.
+    // A no-opponent match is now scorable: the Score CTA is present.
+    expect(
+      await screen.findByRole('link', { name: 'Score' }),
+    ).toHaveAttribute('href', '/matches/m-solo/games/g-solo-1/scores/new')
+    // Did not bounce to the list.
     expect(screen.queryByText('matches-list')).not.toBeInTheDocument()
   })
 

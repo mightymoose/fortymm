@@ -617,8 +617,9 @@ export interface components {
          * @description Request body for ``POST /v1/matches``.
          *
          *     ``opponent_user_id`` is optional: a match created without a registered
-         *     opponent (a guest, or "start without opponent") gets a single side and is
-         *     always unrated, since the rating system needs two registered sides.
+         *     opponent (a guest, or "start without opponent") gets a player-less sentinel
+         *     opponent side — so it's still scorable — and is always unrated, since the
+         *     rating system needs two registered sides.
          *
          *     ``league_id`` is optional: when omitted the server binds the match to the
          *     default league (see ``app.leagues.get_default_league``).

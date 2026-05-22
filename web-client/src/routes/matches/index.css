@@ -234,6 +234,18 @@
   gap: 8px;
   min-width: 0;
 }
+.match-list-page .player-avatar--ghost {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  flex: none;
+  border-radius: 9999px;
+  background: transparent;
+  border: 1.5px dashed var(--border-subtle);
+  color: var(--fg-3);
+}
 .match-list-page .player-name {
   font-size: 14px;
   color: var(--fg-1);

@@ -79,8 +79,10 @@ function ScoreEntryInner({
     )
   }
 
-  // The scoring screen is participant-only; spectators and solo-match owners
-  // (no opponent side) bounce back to the read-only details page.
+  // The scoring screen is participant-only; spectators bounce back to the
+  // read-only details page. The opponent side is always present — a real
+  // player, or the player-less "No opponent" sentinel — so its name falls back
+  // to "Opponent" below.
   const mySide = data.sides.find((s) => s.is_current_user_side) ?? null
   const oppSide = data.sides.find((s) => !s.is_current_user_side) ?? null
   if (!mySide || !oppSide) {

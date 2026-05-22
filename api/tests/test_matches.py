@@ -93,7 +93,7 @@ async def test_create_unrated_match_with_opponent(
     assert len(body["sides"]) == 2
 
 
-async def test_create_match_without_opponent_has_a_single_side(
+async def test_create_match_without_opponent_has_a_sentinel_opponent_side(
     api_client: AsyncClient, db_session: AsyncSession
 ):
     me = await start_session(api_client, db_session)
@@ -104,14 +104,51 @@ async def test_create_match_without_opponent_has_a_single_side(
     assert response.status_code == 201
     body = response.json()
     assert body["affects_rating"] is False
-    assert len(body["sides"]) == 1
-    assert body["sides"][0]["players"][0]["user_id"] == str(me.id)
-    # No opponent → nothing to score against, even though game 1 exists.
+    # Two sides: the creator, plus a player-less sentinel "No opponent" side.
+    sides = sorted(body["sides"], key=lambda s: s["side_number"])
+    assert [s["side_number"] for s in sides] == [1, 2]
+    assert sides[0]["players"][0]["user_id"] == str(me.id)
+    assert sides[1]["players"] == []
+    # The sentinel side makes the match scorable for its creator.
     assert body["current_game"] is not None
-    assert body["can_score"] is False
+    assert body["can_score"] is True
 
-    sides = (await db_session.execute(select(MatchSide))).scalars().all()
-    assert len(sides) == 1
+    rows = (await db_session.execute(select(MatchSide))).scalars().all()
+    assert len(rows) == 2
+
+
+async def test_match_without_opponent_can_be_scored_to_completion(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    await start_session(api_client, db_session)
+
+    match = (
+        await api_client.post(
+            "/v1/matches", json={"best_of": 3, "rated": False}
+        )
+    ).json()
+    # The creator is side 1; the sentinel opponent is side 2.
+    after_g1 = (
+        await api_client.post(
+            f"/v1/matches/{match['id']}/games/{match['games'][0]['id']}/scores",
+            json={"side_1_points": 11, "side_2_points": 4},
+        )
+    ).json()
+    assert after_g1["status"] == "in_progress"
+    game_2 = after_g1["games"][1]
+    after_g2 = (
+        await api_client.post(
+            f"/v1/matches/{match['id']}/games/{game_2['id']}/scores",
+            json={"side_1_points": 11, "side_2_points": 7},
+        )
+    )
+    assert after_g2.status_code == 201
+    body = after_g2.json()
+    assert body["status"] == "completed"
+    sides = sorted(body["sides"], key=lambda s: s["side_number"])
+    assert [s["won"] for s in sides] == [True, False]
+    # No rating moved — a player-less opponent can't be rated against.
+    assert body["affects_rating"] is False
 
 
 async def test_rated_match_without_opponent_is_rejected(
@@ -729,7 +766,7 @@ async def test_scoring_an_unknown_game_404(
     assert response.json()["detail"] == "Game not found."
 
 
-async def test_cannot_score_match_without_opponent(
+async def test_can_score_match_without_opponent(
     api_client: AsyncClient, db_session: AsyncSession
 ):
     await start_session(api_client, db_session)
@@ -742,8 +779,11 @@ async def test_cannot_score_match_without_opponent(
         f"/v1/matches/{created['id']}/games/{created['games'][0]['id']}/scores",
         json={"side_1_points": 11, "side_2_points": 4},
     )
-    assert response.status_code == 422
-    assert "opponent" in response.json()["detail"].lower()
+    # The sentinel opponent side makes the match scorable.
+    assert response.status_code == 201
+    body = response.json()
+    sides = sorted(body["sides"], key=lambda s: s["side_number"])
+    assert [s["games_won"] for s in sides] == [1, 0]
 
 
 # ----- league binding -----------------------------------------------------
