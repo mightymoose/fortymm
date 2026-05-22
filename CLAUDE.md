@@ -21,6 +21,7 @@ uvicorn app.main:app --reload                  # dev server on :8000
 rq worker solver --url "$REDIS_URL"            # required for /v1/health to pass
 alembic upgrade head                           # apply migrations
 alembic revision --autogenerate -m "..."       # new migration (autogen reads app.models)
+mypy                                           # static type check (config + paths in pyproject.toml)
 pytest                                         # all tests; testcontainers spins ephemeral Postgres
 pytest tests/test_session.py::test_x           # single test
 TEST_DATABASE_URL=postgresql+asyncpg://... pytest   # skip testcontainers, use existing Postgres

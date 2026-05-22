@@ -457,7 +457,9 @@ def _list_row(match: Match, current_user_id: uuid.UUID) -> MatchListRow:
         ],
         best_of=match.match_settings.best_of,
         created_at=match.created_at,
-        current_game_id=current_game.id if can_score else None,
+        current_game_id=(
+            current_game.id if can_score and current_game is not None else None
+        ),
         can_score=can_score,
     )
 
