@@ -196,11 +196,11 @@ class MatchGameScoreWrite(BaseModel):
     @model_validator(mode="after")
     def _table_tennis_rules(self):
         a, b = self.side_1_points, self.side_2_points
-        if a == b:
-            raise ValueError("A game cannot end in a tie.")
         winner, loser = max(a, b), min(a, b)
         if winner < 11:
             raise ValueError("The winning side must reach at least 11 points.")
+        if a == b:
+            raise ValueError("A game cannot end in a tie.")
         if winner == 11 and loser > 9:
             raise ValueError(
                 f"At 10–10 the game enters deuce; the winner must lead by 2. "

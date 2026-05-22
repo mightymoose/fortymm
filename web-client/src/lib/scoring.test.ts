@@ -14,8 +14,9 @@ describe('illegalScoreReason', () => {
   })
 
   it.each([
-    [11, 11, /tie/i],
-    [0, 0, /tie/i],
+    [11, 11, /tie/i], // tied at/above 11 — the reaching-11 hint doesn't apply
+    [5, 5, /at least 11/i], // tied below 11 — point them at the 11 threshold
+    [0, 0, /at least 11/i],
     [8, 5, /at least 11/i],
     [10, 9, /at least 11/i],
     [11, 10, /deuce/i], // win-by-1 at deuce — the reported bug

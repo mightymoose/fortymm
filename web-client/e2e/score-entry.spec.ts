@@ -133,10 +133,10 @@ function projectMatchDetails(seed: Seed) {
 }
 
 function validateScore(side1: number, side2: number): string | null {
-  if (side1 === side2) return 'A game cannot end in a tie.'
   const winner = Math.max(side1, side2)
   const loser = Math.min(side1, side2)
   if (winner < 11) return 'The winning side must reach at least 11 points.'
+  if (side1 === side2) return 'A game cannot end in a tie.'
   if (winner === 11 && loser > 9) {
     return `At 10–10 the game enters deuce; the winner must lead by 2. ${winner}–${loser} is not a legal final score.`
   }
