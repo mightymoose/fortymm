@@ -2494,7 +2494,7 @@ body.dark.fortymm-theme {
   top: 88px;
 }
 
-/* ---------- Players & form card ---------- */
+/* ---------- Players snapshot (going into this match) card ---------- */
 .fortymm-theme .md-players {
   display: grid;
   grid-template-columns: 1fr 1px 1fr;
@@ -2659,6 +2659,14 @@ body.dark.fortymm-theme {
   font: 400 13px var(--font-ui);
   color: var(--fg-3);
   padding: 8px 0;
+  border-top: 1px dashed var(--border-subtle);
+}
+/* The "going in" one-liner above the form list — matches the empty state's
+   muted, dashed-rule treatment so both halves of the panel read symmetrically. */
+.fortymm-theme .md-profile__form-summary {
+  font: 400 13px var(--font-ui);
+  color: var(--fg-3);
+  padding: 8px 0 2px;
   border-top: 1px dashed var(--border-subtle);
 }
 .fortymm-theme .md-profile__career {

@@ -16,7 +16,7 @@ import {
 import { AppShell } from '@/components/app-shell'
 import { Overline } from '@/components/overline'
 import { cn, initialsOf } from '@/lib/utils'
-import { fmtDateShort } from '@/lib/dates'
+import { fmtDateShort, fmtDateTimeShort } from '@/lib/dates'
 import { formatRatingDelta } from '@/lib/rating'
 import { scoringEditRoute, scoringNewRoute, useMatch } from '@/api/matches'
 import type { components } from '@/api/schema'
@@ -98,6 +98,9 @@ type MatchView = {
   bestOf: number
   gamesToWin: number
   rated: boolean
+  // When the match was created — used to stamp the pre-match "snapshot" of
+  // player form/ratings with the moment those numbers were captured.
+  createdAt: string
   // Left/right are perspective-relative: when the current user is on a side
   // they're left (and `leftSide.isCurrentUser` is true); otherwise left = side
   // 1, right = side 2.
@@ -247,6 +250,7 @@ function projectMatchView(data: MatchDetails, matchId: string): MatchView {
     bestOf: data.best_of,
     gamesToWin: data.games_to_win,
     rated: data.affects_rating,
+    createdAt: data.created_at,
     leftSide: leftView,
     rightSide: rightView,
     games,
@@ -334,9 +338,15 @@ function MatchDetailsPage({ view, matchId }: { view: MatchView; matchId: string 
   // Comments + share modal are still part of the design handoff but have no
   // real data behind them yet; gate them off and flip when each lands.
   const showAuxCards = false
+  // Only an over-and-done match has a real rating change to show. A live match
+  // may carry seeded/projected ratings that look like a finished result — the
+  // snapshot panel already states the pre-match numbers, so a "result" card
+  // mid-match reads as a contradiction. Gate it to Final. (Flagged for design:
+  // a live "PROJECTED · IF … WINS" card could replace this later.)
   const showRatingCard =
-    view.leftSide.ratingChange !== null ||
-    view.rightSide?.ratingChange != null
+    view.state === 'final' &&
+    (view.leftSide.ratingChange !== null ||
+      view.rightSide?.ratingChange != null)
 
   return (
     <div className="match-details">
@@ -711,8 +721,10 @@ function PlayersCard({ view }: { view: MatchView }) {
   return (
     <div className="md-card">
       <div className="md-card__hd">
-        <Overline as="h3">Players &amp; form</Overline>
-        <span className="md-card__hd-meta">5 BEFORE THIS MATCH</span>
+        <Overline as="h3">Players · going into this match</Overline>
+        <span className="md-card__hd-meta">
+          SNAPSHOT · {fmtDateTimeShort(view.createdAt).toUpperCase()}
+        </span>
       </div>
       <div className="md-players">
         <PlayerProfile side={view.leftSide} won={view.leftSide.won === true} />
@@ -735,6 +747,16 @@ function PlayerProfile({ side, won }: { side: SideView; won: boolean }) {
   const form = side.recentForm
   const wins = form.filter((r) => r.is_win).length
   const losses = form.length - wins
+  // A one-line "going in" summary so the with-history half leads with a
+  // sentence, mirroring the empty half's "first one" line (no lone row list).
+  const careerMatches = side.careerMatchesBefore
+  const careerWinRate =
+    careerMatches > 0
+      ? Math.round((side.careerWinsBefore / careerMatches) * 100)
+      : null
+  const formSummary =
+    `${careerMatches} prior ${careerMatches === 1 ? 'match' : 'matches'}` +
+    (careerWinRate !== null ? ` · ${careerWinRate}% win rate going in` : '')
   return (
     <div className="md-profile">
       <div className="md-profile__identity">
@@ -748,9 +770,7 @@ function PlayerProfile({ side, won }: { side: SideView; won: boolean }) {
       <RatingBox side={side} />
       <div className="md-profile__form" data-testid={`form-${side.sideNumber}`}>
         <div className="md-kicker">
-          {form.length === 0
-            ? 'Form before this match'
-            : `Form before this match · ${wins}–${losses}`}
+          {form.length === 0 ? 'Form' : `Form · ${wins}–${losses}`}
         </div>
         {form.length === 0 ? (
           <div className="md-profile__empty">
@@ -758,11 +778,14 @@ function PlayerProfile({ side, won }: { side: SideView; won: boolean }) {
             {side.isCurrentUser ? 'your' : 'their'} first one.
           </div>
         ) : (
-          <ul className="md-profile__form-list">
-            {form.map((r) => (
-              <FormRow key={r.match_id} result={r} />
-            ))}
-          </ul>
+          <>
+            <div className="md-profile__form-summary">{formSummary}</div>
+            <ul className="md-profile__form-list">
+              {form.map((r) => (
+                <FormRow key={r.match_id} result={r} />
+              ))}
+            </ul>
+          </>
         )}
       </div>
       <CareerStats side={side} />
@@ -946,7 +969,7 @@ function RatingCard({ view }: { view: MatchView }) {
   return (
     <div className="md-card">
       <div className="md-card__hd">
-        <Overline as="h3">Rating change</Overline>
+        <Overline as="h3">Result · rating change</Overline>
       </div>
       <div className="md-card__body md-rating-card__body">
         {sides.map((side, i) => (
@@ -984,7 +1007,7 @@ function RatingRow({ side, isFirst }: { side: SideView; isFirst: boolean }) {
             </div>
           ) : (
             <div className="md-rating-row__numbers">
-              <span className="from">Rating updates when the match ends</span>
+              <span className="from">Unrated player</span>
             </div>
           )}
         </div>

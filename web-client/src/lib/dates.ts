@@ -23,6 +23,12 @@ export function fmtDateShort(iso: string | null | undefined): string {
   return format(parseApiDate(iso), 'MMM d')
 }
 
+/** Compact day + 24h time for a snapshot stamp — e.g. "12 May, 09:00". */
+export function fmtDateTimeShort(iso: string | null | undefined): string {
+  if (!iso) return '—'
+  return format(parseApiDate(iso), 'd MMM, HH:mm')
+}
+
 export function fmtDateRel(iso: string | null | undefined): string {
   if (!iso) return '—'
   return formatDistanceToNowStrict(parseApiDate(iso), { addSuffix: true })
