@@ -2126,6 +2126,13 @@ body.dark.fortymm-theme {
   background: linear-gradient(135deg, #2a3040, #11141b);
   color: var(--fg-2);
 }
+/* Empty-seat placeholder: a dashed outline + muted glyph reads as "no player
+   here", distinct from a real (filled) avatar. */
+.fortymm-theme .md-avatar--ghost {
+  background: transparent;
+  border: 1.5px dashed var(--border-subtle);
+  color: var(--fg-3);
+}
 
 /* ---------- Hero scoreboard ---------- */
 .fortymm-theme .md-hero {
@@ -2247,6 +2254,10 @@ body.dark.fortymm-theme {
 }
 .fortymm-theme .md-hero__name--win {
   color: var(--serve-500);
+}
+.fortymm-theme .md-hero__name--ghost {
+  color: var(--fg-3);
+  font-weight: 600;
 }
 .fortymm-theme .md-hero__club {
   font: 500 12px var(--font-ui);
@@ -2541,6 +2552,10 @@ body.dark.fortymm-theme {
   color: var(--fg-1);
   letter-spacing: -0.005em;
   line-height: 1.2;
+}
+.fortymm-theme .md-profile__name--ghost {
+  color: var(--fg-3);
+  font-weight: 600;
 }
 .fortymm-theme .md-profile__club {
   font: 500 12px var(--font-ui);

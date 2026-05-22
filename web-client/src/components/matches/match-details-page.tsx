@@ -9,6 +9,7 @@ import {
   Link2,
   Send,
   Share2,
+  User,
   X,
 } from 'lucide-react'
 
@@ -29,6 +30,12 @@ type MatchDetailsPlayerForm = components['schemas']['MatchDetailsPlayerForm']
 type MatchDetailsH2H = components['schemas']['MatchDetailsH2H']
 type MatchDetailsH2HMeeting = components['schemas']['MatchDetailsH2HMeeting']
 type RatingChange = components['schemas']['RatingChange']
+
+// A match with only the creator's side has no opponent and may never gain one
+// (solo / "start without opponent" matches). The empty side reads as this
+// rather than implying someone is on the way — mirrors the recent-form rows,
+// which already label a missing opponent "No opponent".
+const NO_OPPONENT_LABEL = 'No opponent'
 
 const EMPTY_FORM: MatchDetailsPlayerForm = {
   user_id: '',
@@ -501,7 +508,11 @@ function HeroScoreboard({
             </>
           )}
         </div>
-        {view.rightSide && <PlayerSide side={view.rightSide} pos="r" />}
+        {view.rightSide ? (
+          <PlayerSide side={view.rightSide} pos="r" />
+        ) : (
+          <NoOpponentSide pos="r" />
+        )}
       </div>
 
       {!isUpcoming && view.rightSide && (
@@ -527,6 +538,26 @@ function PlayerSide({ side, pos }: { side: SideView; pos: 'l' | 'r' }) {
         <div className={`md-hero__player-text--${pos}`}>
           <div className={cn('md-hero__name', win && 'md-hero__name--win')}>
             {side.username}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function NoOpponentSide({ pos }: { pos: 'l' | 'r' }) {
+  return (
+    <div className={`md-hero__player md-hero__player--${pos}`}>
+      <div className="md-hero__player-row">
+        <div
+          className="md-avatar md-avatar--ghost md-hero__avatar-singles"
+          aria-hidden="true"
+        >
+          <User size={26} strokeWidth={1.75} />
+        </div>
+        <div className={`md-hero__player-text--${pos}`}>
+          <div className="md-hero__name md-hero__name--ghost">
+            {NO_OPPONENT_LABEL}
           </div>
         </div>
       </div>
@@ -669,14 +700,14 @@ function PlayersCard({ view }: { view: MatchView }) {
       </div>
       <div className="md-players">
         <PlayerProfile side={view.leftSide} won={view.leftSide.won === true} />
-        {view.rightSide && (
-          <>
-            <div className="md-players__divider" />
-            <PlayerProfile
-              side={view.rightSide}
-              won={view.rightSide.won === true}
-            />
-          </>
+        <div className="md-players__divider" />
+        {view.rightSide ? (
+          <PlayerProfile
+            side={view.rightSide}
+            won={view.rightSide.won === true}
+          />
+        ) : (
+          <NoOpponentProfile />
         )}
       </div>
     </div>
@@ -718,6 +749,26 @@ function PlayerProfile({ side, won }: { side: SideView; won: boolean }) {
         )}
       </div>
       <CareerStats side={side} />
+    </div>
+  )
+}
+
+function NoOpponentProfile() {
+  return (
+    <div className="md-profile">
+      <div className="md-profile__identity">
+        <div className="md-avatar md-avatar--ghost" aria-hidden="true">
+          <User size={20} strokeWidth={1.75} />
+        </div>
+        <div className="md-profile__id-text">
+          <div className="md-profile__name md-profile__name--ghost">
+            {NO_OPPONENT_LABEL}
+          </div>
+        </div>
+      </div>
+      <div className="md-profile__empty">
+        This match has no second player.
+      </div>
     </div>
   )
 }
