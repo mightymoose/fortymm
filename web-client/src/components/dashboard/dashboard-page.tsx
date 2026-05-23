@@ -383,11 +383,13 @@ function SectionHeader({
   subtitle,
   action,
   actionTo,
+  actionSearch,
 }: {
   title: string
   subtitle?: string
   action?: string
   actionTo?: string
+  actionSearch?: Record<string, string | undefined>
 }) {
   return (
     <div style={{ display: 'flex', alignItems: 'baseline', marginBottom: 14, gap: 12 }}>
@@ -408,6 +410,7 @@ function SectionHeader({
       {action && actionTo && (
         <Link
           to={actionTo}
+          search={actionSearch}
           style={{
             font: `500 13px ${UI}`,
             color: C.chalk300,
@@ -722,11 +725,20 @@ function CompactScoreBanner({ banner }: { banner: DashboardScoreBanner }) {
   )
 }
 
-// 3+ pending: a single quiet link that funnels the rest into /matches.
-function MorePendingLink({ count }: { count: number }) {
+// 3+ pending: a single quiet link that funnels the rest into /matches,
+// pre-filtered to the current user's live (in-progress) matches so the
+// destination opens straight on the same pile the pill is summarizing.
+function MorePendingLink({
+  count,
+  username,
+}: {
+  count: number
+  username?: string
+}) {
   return (
     <Link
       to="/matches"
+      search={{ q: username, status: 'live' }}
       data-testid="dashboard-score-banner-more"
       style={{
         display: 'inline-flex',
@@ -751,7 +763,13 @@ function MorePendingLink({ count }: { count: number }) {
   )
 }
 
-function ScoreBannerStack({ banners }: { banners: DashboardScoreBanner[] }) {
+function ScoreBannerStack({
+  banners,
+  username,
+}: {
+  banners: DashboardScoreBanner[]
+  username?: string
+}) {
   if (banners.length === 0) return null
   const [primary, secondary, ...rest] = banners
   return (
@@ -765,7 +783,9 @@ function ScoreBannerStack({ banners }: { banners: DashboardScoreBanner[] }) {
     >
       <ScoreBanner banner={primary} />
       {secondary && <CompactScoreBanner banner={secondary} />}
-      {rest.length > 0 && <MorePendingLink count={rest.length} />}
+      {rest.length > 0 && (
+        <MorePendingLink count={rest.length} username={username} />
+      )}
     </div>
   )
 }
@@ -1019,10 +1039,12 @@ function YourGameRow({
   rating,
   recent,
   isLoading,
+  username,
 }: {
   rating: DashboardRating | null
   recent: DashboardRecentResult[]
   isLoading: boolean
+  username?: string
 }) {
   return (
     <section style={{ marginBottom: 36 }}>
@@ -1035,6 +1057,7 @@ function YourGameRow({
         }
         action="Full history"
         actionTo="/matches"
+        actionSearch={{ q: username }}
       />
       <div
         style={{
@@ -1090,12 +1113,13 @@ export function DashboardPage() {
       {isLoading ? (
         <SkeletonCard label="Loading score banner" height={140} />
       ) : data?.score_banners?.length ? (
-        <ScoreBannerStack banners={data.score_banners} />
+        <ScoreBannerStack banners={data.score_banners} username={username} />
       ) : null}
       <YourGameRow
         rating={data?.rating ?? null}
         recent={data?.recent_results ?? []}
         isLoading={isLoading}
+        username={username}
       />
     </div>
   )

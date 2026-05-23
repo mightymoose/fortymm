@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import {
   RouterProvider,
   createMemoryHistory,
@@ -155,7 +155,7 @@ describe('DashboardPage', () => {
     expect(link).toHaveAttribute('href', '/matches/new')
   })
 
-  it('Full history links to /matches', async () => {
+  it('Full history links to /matches filtered by the current user', async () => {
     server.use(
       http.get('*/v1/dashboard', () =>
         HttpResponse.json(dashboardResponse()),
@@ -164,7 +164,12 @@ describe('DashboardPage', () => {
     renderDashboard()
 
     const link = await screen.findByRole('link', { name: /full history/i })
-    expect(link).toHaveAttribute('href', '/matches')
+    // The link renders before the session query resolves; once the username
+    // lands the search params update, so poll the attribute rather than
+    // asserting it on first paint.
+    await waitFor(() =>
+      expect(link).toHaveAttribute('href', '/matches?q=rita.kovac'),
+    )
   })
 
   it('renders the rating card from the dashboard rating payload', async () => {
@@ -276,7 +281,7 @@ describe('DashboardPage', () => {
     ).not.toBeInTheDocument()
   })
 
-  it('collapses 3+ pending matches into a "+N more pending" link to /matches', async () => {
+  it('collapses 3+ pending matches into a "+N more pending" link to the current user\'s live matches', async () => {
     server.use(
       http.get('*/v1/dashboard', () =>
         HttpResponse.json(
@@ -308,6 +313,6 @@ describe('DashboardPage', () => {
     const more = await screen.findByTestId('dashboard-score-banner-more')
     expect(more).toHaveTextContent('+2')
     expect(more).toHaveTextContent(/more pending/i)
-    expect(more).toHaveAttribute('href', '/matches')
+    expect(more).toHaveAttribute('href', '/matches?q=rita.kovac&status=live')
   })
 })
