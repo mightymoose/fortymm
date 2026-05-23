@@ -131,6 +131,51 @@ describe('NewMatchPage', () => {
     })
   })
 
+  it('resets Rated to off when the opponent is cleared, so re-picking does not silently re-engage rating', async () => {
+    const user = userEvent.setup()
+    let captured: unknown = null
+    server.use(
+      http.get('*/v1/players/recent', () =>
+        HttpResponse.json([
+          { id: 'pl-1', username: 'ada.lovelace' },
+          { id: 'pl-2', username: 'grace.hopper' },
+        ]),
+      ),
+      http.post('*/v1/matches', async ({ request }) => {
+        captured = await request.json()
+        return HttpResponse.json(pendingMatch(), { status: 201 })
+      }),
+    )
+    renderNewMatch()
+
+    // Pick Ada and turn Rated on.
+    await user.click(
+      await screen.findByRole('button', { name: /ada\.lovelace/i }),
+    )
+    const ratedSwitch = () =>
+      screen.getByRole('switch', { name: /rated match/i })
+    await user.click(ratedSwitch())
+    expect(ratedSwitch()).toHaveAttribute('aria-checked', 'true')
+
+    // Unpick Ada — clearing the opponent must also clear the rated state, so
+    // re-picking doesn't quietly submit a rated match the user didn't ask for.
+    await user.click(screen.getByRole('button', { name: /^change$/i }))
+    await user.click(screen.getByRole('button', { name: /grace\.hopper/i }))
+    expect(ratedSwitch()).toHaveAttribute('aria-checked', 'false')
+
+    await user.click(screen.getByRole('button', { name: /start match/i }))
+    await waitFor(() =>
+      expect(
+        screen.getByText('Scoring route m-test game g-test'),
+      ).toBeInTheDocument(),
+    )
+    expect(captured).toEqual({
+      opponent_user_id: 'pl-2',
+      best_of: 5,
+      rated: false,
+    })
+  })
+
   it('surfaces the API error detail when match creation fails', async () => {
     const user = userEvent.setup()
     server.use(

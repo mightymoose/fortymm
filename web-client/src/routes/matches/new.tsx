@@ -158,7 +158,16 @@ function MatchCard() {
         {opponent ? (
           <SelectedOpponent
             opponent={opponent}
-            onChange={() => setOpponent(null)}
+            // Clearing the opponent must also clear `rated` — otherwise the
+            // toggle's "off" appearance (because `effectiveRated` is gated by
+            // `ratable`) hides a stored `true` that would either (a) trip the
+            // rated-needs-opponent refinement with a disabled toggle the user
+            // can't switch off, or (b) silently re-engage rating when a new
+            // opponent is picked.
+            onChange={() => {
+              setOpponent(null)
+              setRated(false)
+            }}
           />
         ) : (
           <OpponentPickerBoundary>

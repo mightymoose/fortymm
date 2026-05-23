@@ -87,16 +87,6 @@ export class NewMatchPage {
     await this.playerChip(username).click()
   }
 
-  async addGuest(): Promise<void> {
-    await this.page.getByRole('button', { name: /add guest opponent/i }).click()
-  }
-
-  async startWithoutOpponent(): Promise<void> {
-    await this.page
-      .getByRole('button', { name: /start without opponent/i })
-      .click()
-  }
-
   async changeOpponent(): Promise<void> {
     await this.page.getByRole('button', { name: /^change$/i }).click()
   }
