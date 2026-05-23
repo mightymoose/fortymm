@@ -160,6 +160,7 @@ test.describe('New match — picking an opponent', () => {
     await expect(nm.ratedSwitch).not.toBeChecked()
 
     await nm.start()
+    await expect(page).toHaveURL(SCORING_URL)
     expect(nm.store.createdMatches).toEqual([
       { opponent_user_id: LINUS.id, best_of: 5, rated: false },
     ])
