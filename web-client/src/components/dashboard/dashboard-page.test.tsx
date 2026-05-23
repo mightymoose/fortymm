@@ -33,6 +33,11 @@ function renderDashboard() {
     path: '/matches/new',
     component: () => <div>New match route</div>,
   })
+  const matchesRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/matches',
+    component: () => <div>Matches route</div>,
+  })
   const scoringRoute = createRoute({
     getParentRoute: () => rootRoute,
     path: '/matches/$matchId/games/$gameId/scores/new',
@@ -49,6 +54,7 @@ function renderDashboard() {
     routeTree: rootRoute.addChildren([
       dashboardRoute,
       newMatchRoute,
+      matchesRoute,
       scoringRoute,
     ]),
     history: createMemoryHistory({ initialEntries: ['/dashboard'] }),
@@ -147,6 +153,18 @@ describe('DashboardPage', () => {
 
     const link = await screen.findByRole('link', { name: /log a match/i })
     expect(link).toHaveAttribute('href', '/matches/new')
+  })
+
+  it('Full history links to /matches', async () => {
+    server.use(
+      http.get('*/v1/dashboard', () =>
+        HttpResponse.json(dashboardResponse()),
+      ),
+    )
+    renderDashboard()
+
+    const link = await screen.findByRole('link', { name: /full history/i })
+    expect(link).toHaveAttribute('href', '/matches')
   })
 
   it('renders the rating card from the dashboard rating payload', async () => {
