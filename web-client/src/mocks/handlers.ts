@@ -3,7 +3,6 @@ import type { components } from '@/api/schema'
 import { healthCheck, player, sessionResponse } from '@/test/factories'
 import {
   findMatch,
-  MOCK_CURRENT_USER,
   mockMatches,
   newMatchSeed,
   projectListRow,
@@ -45,10 +44,12 @@ const state = createRbacState(DEMO_SEED)
 // Mirrors the API's `_player_username_filter`: substring-match against *any*
 // participant on the match, not just the opponent. Side 1 is always the mock
 // current user (see match-store), so without this the dashboard's new
-// `?q=<my-username>` deep-links match zero rows in MSW.
+// `?q=<my-username>` deep-links match zero rows in MSW. Read the username
+// off `mockSession` so the filter follows PATCH /v1/me — otherwise renaming
+// yourself via /settings would silently stop matching your own matches.
 function matchHasPlayerLike(m: SeedMatch, q: string): boolean {
   return (
-    MOCK_CURRENT_USER.username.toLowerCase().includes(q) ||
+    mockSession.data.user.username.toLowerCase().includes(q) ||
     (m.opponent?.username ?? '').toLowerCase().includes(q)
   )
 }
