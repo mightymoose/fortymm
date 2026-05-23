@@ -807,7 +807,7 @@ function NoOpponentProfile() {
         </div>
       </div>
       <div className="md-profile__empty">
-        This match has no second player.
+        Solo match — no second player.
       </div>
     </div>
   )

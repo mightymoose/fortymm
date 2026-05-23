@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react'
 import { Link, Navigate, useNavigate } from '@tanstack/react-router'
 import type { UseMutationResult } from '@tanstack/react-query'
+import { User as UserIcon } from 'lucide-react'
 import { ApiError } from '@/api/client'
 import {
   matchDetailRoute,
@@ -13,6 +14,11 @@ import {
 import { AppShell } from '@/components/app-shell'
 import { cn, initialsOf } from '@/lib/utils'
 import { illegalScoreReason } from '@/lib/scoring'
+
+// Mirror the canonical placeholder on the match-details hero and form-history
+// rows. Solo-match scoring used to surface an "OP" avatar via initialsOf('Opponent') —
+// indistinguishable from a real two-letter monogram.
+const NO_OPPONENT_LABEL = 'No opponent'
 
 export type ScoreMutation = UseMutationResult<
   MatchDetails,
@@ -81,8 +87,8 @@ function ScoreEntryInner({
 
   // The scoring screen is participant-only; spectators bounce back to the
   // read-only details page. The opponent side is always present — a real
-  // player, or the player-less "No opponent" sentinel — so its name falls back
-  // to "Opponent" below.
+  // player, or the player-less placeholder for solo matches (rendered as
+  // "No opponent" with a ghost avatar below).
   const mySide = data.sides.find((s) => s.is_current_user_side) ?? null
   const oppSide = data.sides.find((s) => !s.is_current_user_side) ?? null
   if (!mySide || !oppSide) {
@@ -95,10 +101,11 @@ function ScoreEntryInner({
   }
 
   const mySideNumber = mySide.side_number === 2 ? 2 : 1
-  const oppName = oppSide.players[0]?.username ?? 'Opponent'
+  const oppUsername = oppSide.players[0]?.username ?? null
+  const oppName = oppUsername ?? NO_OPPONENT_LABEL
   const meName = mySide.players[0]?.username ?? 'You'
   const meInitials = initialsOf(meName)
-  const oppInitials = initialsOf(oppName)
+  const oppHasPlayer = oppUsername !== null
 
   const bestOf = data.best_of
   const gameNumber = game.game_number
@@ -247,7 +254,7 @@ function ScoreEntryInner({
           <ScoreSide
             side="opp"
             name={oppName}
-            initials={oppInitials}
+            initials={oppHasPlayer ? initialsOf(oppName) : null}
             wins={oppWins}
             value={opp}
             inputRef={oppRef}
@@ -327,7 +334,9 @@ function ScoreSide({
 }: {
   side: 'me' | 'opp'
   name: string
-  initials: string
+  // `null` means there's no player on this side — render the ghost avatar
+  // (dashed circle + person icon) instead of a contrived monogram.
+  initials: string | null
   wins: number
   value: string
   inputRef: React.RefObject<HTMLInputElement | null>
@@ -337,7 +346,12 @@ function ScoreSide({
   onChange: (value: string) => void
   onKeyDown: (e: React.KeyboardEvent<HTMLInputElement>) => void
 }) {
-  const avatar = <div className="av">{initials}</div>
+  const noPlayer = initials === null
+  const avatar = (
+    <div className="av" aria-hidden={noPlayer || undefined}>
+      {noPlayer ? <UserIcon size={20} strokeWidth={1.75} /> : initials}
+    </div>
+  )
   const identity = (
     <div>
       <div className="nm">{name}</div>
@@ -348,7 +362,7 @@ function ScoreSide({
   )
 
   return (
-    <div className={cn('se-side', side)}>
+    <div className={cn('se-side', side, noPlayer && 'no-opponent')}>
       <div className={cn('se-head', side === 'opp' && 'right')}>
         {side === 'opp' && identity}
         {avatar}

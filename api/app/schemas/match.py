@@ -23,10 +23,10 @@ STATUS_LABELS: dict[MatchStatus, str] = {
 class MatchCreate(BaseModel):
     """Request body for ``POST /v1/matches``.
 
-    ``opponent_user_id`` is optional: a match created without a registered
-    opponent (a guest, or "start without opponent") gets a player-less sentinel
-    opponent side — so it's still scorable — and is always unrated, since the
-    rating system needs two registered sides.
+    ``opponent_user_id`` is optional: a solo match (the client submits one
+    when the user starts without picking an opponent) gets a player-less
+    sentinel opponent side — so it's still scorable — and is always unrated,
+    since the rating system needs two registered sides.
 
     ``league_id`` is optional: when omitted the server binds the match to the
     default league (see ``app.leagues.get_default_league``).

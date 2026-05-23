@@ -30,20 +30,13 @@ export const Route = createFileRoute('/matches/new')({
 /*  Opponent model                                                    */
 /* ------------------------------------------------------------------ */
 
-type OpponentKind = 'registered' | 'guest' | 'tbd'
-
 interface Opponent {
-  /** A real user id for `registered`; a sentinel string for guest / tbd. */
   id: string
-  kind: OpponentKind
   name: string
 }
 
-const GUEST: Opponent = { id: 'guest', kind: 'guest', name: 'Guest player' }
-const OPPONENT_TBD: Opponent = { id: 'tbd', kind: 'tbd', name: 'Opponent TBD' }
-
-function registeredOpponent(player: Player): Opponent {
-  return { id: player.id, kind: 'registered', name: player.username }
+function opponentFromPlayer(player: Player): Opponent {
+  return { id: player.id, name: player.username }
 }
 
 /** Two-letter monogram for an avatar bubble. */
@@ -56,31 +49,22 @@ function initialsOf(name: string): string {
   return letters.toUpperCase() || '?'
 }
 
-/** Whether a match against this opponent can count toward ratings. */
-function canRate(opponent: Opponent | null) {
-  return !opponent || opponent.kind === 'registered'
-}
-
 /* ------------------------------------------------------------------ */
 /*  Validation                                                        */
 /* ------------------------------------------------------------------ */
 
-// The backend independently enforces these rules; the client copy gives
-// immediate, inline feedback before a round-trip. The two refinements are
-// ordered so the rated-specific message wins when both would apply.
+// Rated matches need an opponent; the API enforces this independently. The
+// client toggle is disabled when no opponent is picked, so this only fires
+// in a near-impossible race — keep the refinement for defense in depth.
 const matchFormSchema = z
   .object({
-    opponentKind: z.enum(['registered', 'guest', 'tbd']).nullable(),
+    hasOpponent: z.boolean(),
     rated: z.boolean(),
     bestOf: z.number(),
   })
-  .refine((value) => !(value.rated && value.opponentKind === null), {
+  .refine((value) => !(value.rated && !value.hasOpponent), {
     message:
-      'A rated match needs an opponent — pick one, or switch off Rated to play without one.',
-    path: ['opponent'],
-  })
-  .refine((value) => value.opponentKind !== null, {
-    message: "Choose an opponent, or pick 'Start without opponent'.",
+      'A rated match needs an opponent — pick one, or switch off Rated.',
     path: ['opponent'],
   })
 
@@ -114,18 +98,16 @@ function MatchCard() {
 
   const [opponent, setOpponent] = useState<Opponent | null>(null)
   const [bestOf, setBestOf] = useState(5)
-  const [rated, setRated] = useState(true)
+  // Default off so submitting without picking an opponent "just works" —
+  // the no-opponent match is unrated by definition.
+  const [rated, setRated] = useState(false)
   const [apiError, setApiError] = useState<string | null>(null)
   const [submitted, setSubmitted] = useState(false)
 
   const me = session?.data.user ?? null
 
-  // Validation is derived from the live form state via the zod schema — never
-  // stored — so the message clears the instant the form turns valid (e.g. once
-  // a guest is picked, #150) instead of lingering. It only surfaces after the
-  // user has tried to submit; the async create failure is the only stored error.
   const validation = matchFormSchema.safeParse({
-    opponentKind: opponent?.kind ?? null,
+    hasOpponent: opponent !== null,
     rated,
     bestOf,
   })
@@ -139,15 +121,11 @@ function MatchCard() {
     if (validationError) return
     setApiError(null)
 
-    // Guest / "start without opponent" matches have no registered opponent, so
-    // they can never be rated regardless of the toggle (the API gives them a
-    // player-less sentinel opponent side instead).
-    const isRegistered = opponent?.kind === 'registered'
     try {
       const created = await createMatch.mutateAsync({
-        opponent_user_id: isRegistered ? opponent.id : null,
+        opponent_user_id: opponent?.id ?? null,
         best_of: bestOf,
-        rated: isRegistered && rated,
+        rated: opponent !== null && rated,
       })
       navigate(nextScoringDestination(created))
     } catch (err) {
@@ -172,13 +150,9 @@ function MatchCard() {
       <div className="nm-opp-block">
         <div className="nm-section-head">
           <span className="title">Opponent</span>
-          {opponent && (
-            <span className="hint">
-              {opponent.kind === 'registered'
-                ? 'Rated player'
-                : 'Guest · unrated'}
-            </span>
-          )}
+          <span className="hint">
+            {opponent ? 'Rated-eligible' : 'Optional · leave blank for a solo match'}
+          </span>
         </div>
 
         {opponent ? (
@@ -189,21 +163,9 @@ function MatchCard() {
         ) : (
           <OpponentPickerBoundary>
             <RecentPicker
-              onPick={(player) => setOpponent(registeredOpponent(player))}
+              onPick={(player) => setOpponent(opponentFromPlayer(player))}
             />
           </OpponentPickerBoundary>
-        )}
-
-        {!opponent && (
-          <div className="nm-skip-row">
-            <button type="button" onClick={() => setOpponent(GUEST)}>
-              Add guest opponent
-            </button>
-            <span className="sep">·</span>
-            <button type="button" onClick={() => setOpponent(OPPONENT_TBD)}>
-              Start without opponent
-            </button>
-          </div>
         )}
       </div>
 
@@ -236,19 +198,12 @@ function SelectedOpponent({
   opponent: Opponent
   onChange: () => void
 }) {
-  const guest = opponent.kind !== 'registered'
-  const tag =
-    opponent.kind === 'registered'
-      ? 'REGISTERED PLAYER'
-      : opponent.kind === 'guest'
-        ? 'UNRATED GUEST'
-        : 'TO BE DECIDED'
   return (
-    <div className={cn('nm-selected', guest && 'guest')}>
+    <div className="nm-selected">
       <div className="av">{initialsOf(opponent.name)}</div>
       <div className="info">
         <div className="name">{opponent.name}</div>
-        <div className="rating">{tag}</div>
+        <div className="rating">REGISTERED PLAYER</div>
       </div>
       <button type="button" className="change" onClick={onChange}>
         Change
@@ -308,7 +263,8 @@ function RecentPicker({ onPick }: { onPick: (player: Player) => void }) {
         <RecentSkeleton />
       ) : players.length === 0 ? (
         <div className="nm-no-match">
-          No other players yet. Add a guest, or start without an opponent.
+          No other players yet. Start the match without picking one for a
+          casual solo session.
         </div>
       ) : (
         <div className="nm-recent-grid">
@@ -516,27 +472,23 @@ function RatedField({
   setRated: (rated: boolean) => void
   opponent: Opponent | null
 }) {
-  const ratable = canRate(opponent)
+  const ratable = opponent !== null
   const effectiveRated = rated && ratable
 
   let description: string
   if (effectiveRated) {
-    description = opponent
-      ? 'Result will update both ratings.'
-      : 'Pick a registered opponent for this to count.'
+    description = 'Result will update both ratings.'
   } else if (ratable) {
-    description = opponent
-      ? 'No rating change. Still logged to history.'
-      : 'No rating change either way. Still logged to history.'
+    description = 'No rating change. Still logged to history.'
   } else {
-    description = 'Guest matches are always unrated.'
+    description = 'Pick an opponent to make this rated.'
   }
 
   return (
     <div>
       <div className="nm-field-label">
         Rated match
-        {!ratable && <span className="na">Guest · unavailable</span>}
+        {!ratable && <span className="na">No opponent · unavailable</span>}
       </div>
       <div className="nm-rated">
         <button
@@ -580,7 +532,7 @@ function SubmitRow({
   onSubmit: () => void
   onCancel: () => void
 }) {
-  const effectivelyRated = rated && opponent?.kind === 'registered'
+  const effectivelyRated = rated && opponent !== null
   const gamesToWin = Math.ceil(bestOf / 2)
   const lengthCopy =
     bestOf === 1 ? 'Single game' : `Best of ${bestOf} · first to ${gamesToWin}`
@@ -589,17 +541,13 @@ function SubmitRow({
     <div className="nm-summary">
       <div className="read">
         <div className="top">
-          {opponent?.kind === 'registered' ? (
+          {opponent ? (
             <>
               Ready: <b>You</b> vs <b>{opponent.name}</b>
             </>
-          ) : opponent ? (
-            <>
-              You vs <span className="opp-tbd">{opponent.name}</span>
-            </>
           ) : (
             <>
-              You vs <span className="opp-tbd">pick an opponent</span>
+              Ready: <b>You</b> <span className="opp-tbd">· solo match</span>
             </>
           )}
         </div>

@@ -1582,7 +1582,7 @@ body.dark.fortymm-theme {
   color: #fff;
   box-shadow: 0 0 0 1px var(--ball-500);
 }
-.fortymm-theme .se-side.opp.guest .av {
+.fortymm-theme .se-side.opp.no-opponent .av {
   background: transparent;
   border: 1.5px dashed var(--ink-500);
   color: var(--fg-3);

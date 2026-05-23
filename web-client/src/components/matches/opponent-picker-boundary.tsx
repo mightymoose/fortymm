@@ -15,8 +15,8 @@ function OpponentPickerError({ resetErrorBoundary }: FallbackProps) {
       <div className="body">
         <div className="t">Couldn’t load players</div>
         <div className="d">
-          Something went wrong reaching the server. You can still add a guest
-          or start without an opponent.
+          Something went wrong reaching the server. You can still start the
+          match without picking an opponent.
         </div>
       </div>
       <button

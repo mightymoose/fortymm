@@ -1,6 +1,6 @@
 import type { CSSProperties, ReactNode } from 'react'
 import { Link } from '@tanstack/react-router'
-import { ArrowRight, ChevronRight, Plus, X } from 'lucide-react'
+import { ArrowRight, ChevronRight, Plus, User as UserIcon, X } from 'lucide-react'
 import { useDashboard } from '@/api/dashboard'
 import type {
   DashboardRating,
@@ -13,7 +13,11 @@ import { Overline } from '@/components/overline'
 import { fmtDateShort, fmtLongDate } from '@/lib/dates'
 import { formatRatingDelta } from '@/lib/rating'
 
-const GUEST_OPPONENT = 'guest'
+// Used everywhere an opponent slot has no registered player — the form's
+// solo-match path produces this. Matches the label used on the match-details
+// hero and form-history rows so the same match reads identically wherever it
+// surfaces.
+const NO_OPPONENT_LABEL = 'No opponent'
 
 const C = {
   ink950: 'var(--ink-950)',
@@ -145,11 +149,43 @@ function Avatar({
   ring = false,
   ringColor = C.ball500,
 }: {
-  name: string
+  // `null` renders the dashed-circle "no opponent" placeholder. We never want
+  // a contrived monogram (e.g. "NO" for "No opponent") that looks like a real
+  // initials avatar — it should read unambiguously as "no player here".
+  name: string | null
   size?: number
   ring?: boolean
   ringColor?: string
 }) {
+  const baseStyle: CSSProperties = {
+    width: size,
+    height: size,
+    borderRadius: '50%',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    boxShadow: ring
+      ? `0 0 0 2px ${C.ink950}, 0 0 0 ${size > 40 ? 3 : 2.5}px ${ringColor}`
+      : 'none',
+    flexShrink: 0,
+  }
+
+  if (name === null) {
+    return (
+      <div
+        aria-hidden="true"
+        style={{
+          ...baseStyle,
+          background: 'transparent',
+          border: `1px dashed ${C.ink500}`,
+          color: C.chalk500,
+        }}
+      >
+        <UserIcon size={Math.round(size * 0.45)} strokeWidth={1.75} />
+      </div>
+    )
+  }
+
   const initials = name
     .split(/[ -]/)
     .map((s) => s[0])
@@ -164,20 +200,11 @@ function Avatar({
   return (
     <div
       style={{
-        width: size,
-        height: size,
-        borderRadius: '50%',
+        ...baseStyle,
         background: bg,
         color: fg,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
         font: `600 ${Math.round(size * 0.42)}px ${UI}`,
         letterSpacing: '0.03em',
-        boxShadow: ring
-          ? `0 0 0 2px ${C.ink950}, 0 0 0 ${size > 40 ? 3 : 2.5}px ${ringColor}`
-          : 'none',
-        flexShrink: 0,
       }}
     >
       {initials}
@@ -481,7 +508,8 @@ function PageTitle({
 
 function ScoreBanner({ banner }: { banner: DashboardScoreBanner }) {
   const accent = C.ball500
-  const opponent = banner.opponent_username ?? GUEST_OPPONENT
+  const opponent = banner.opponent_username
+  const headline = opponent ? `vs ${opponent}` : NO_OPPONENT_LABEL
   const scoringRoute = scoringNewRoute(banner.match_id, banner.current_game_id)
   return (
     <div
@@ -569,7 +597,7 @@ function ScoreBanner({ banner }: { banner: DashboardScoreBanner }) {
                   lineHeight: 1.1,
                 }}
               >
-                vs {opponent}
+                {headline}
               </h1>
             </div>
           </div>
@@ -626,7 +654,8 @@ function ScoreBanner({ banner }: { banner: DashboardScoreBanner }) {
 // uses an amber accent so a second pending match is impossible to miss
 // without dimming the priority of the headline match.
 function CompactScoreBanner({ banner }: { banner: DashboardScoreBanner }) {
-  const opponent = banner.opponent_username ?? GUEST_OPPONENT
+  const opponent = banner.opponent_username
+  const headline = opponent ? `vs ${opponent}` : NO_OPPONENT_LABEL
   const scoringRoute = scoringNewRoute(banner.match_id, banner.current_game_id)
   return (
     <div
@@ -675,7 +704,7 @@ function CompactScoreBanner({ banner }: { banner: DashboardScoreBanner }) {
             textOverflow: 'ellipsis',
           }}
         >
-          vs {opponent}
+          {headline}
         </div>
       </div>
       <Button
@@ -913,7 +942,8 @@ function RecentResultsCard({ rows }: { rows: DashboardRecentResult[] }) {
           </thead>
           <tbody>
             {rows.map((r, i) => {
-              const opponent = r.opponent_username ?? GUEST_OPPONENT
+              const opponent = r.opponent_username
+              const opponentLabel = opponent ?? NO_OPPONENT_LABEL
               const score = `${r.my_games_won}-${r.opponent_games_won}`
               return (
                 <tr
@@ -934,12 +964,13 @@ function RecentResultsCard({ rows }: { rows: DashboardRecentResult[] }) {
                       <Avatar name={opponent} size={24} />
                       <span
                         style={{
-                          color: C.chalk50,
+                          color: opponent ? C.chalk50 : C.chalk500,
+                          fontStyle: opponent ? 'normal' : 'italic',
                           fontWeight: 500,
                           whiteSpace: 'nowrap',
                         }}
                       >
-                        {opponent}
+                        {opponentLabel}
                       </span>
                     </div>
                   </td>

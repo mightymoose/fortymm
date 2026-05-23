@@ -65,45 +65,6 @@ function renderNewMatch() {
 }
 
 describe('NewMatchPage', () => {
-  it('blocks a rated match with no opponent and shows an inline error', async () => {
-    const user = userEvent.setup()
-    renderNewMatch()
-
-    // Rated is on by default and no opponent is picked yet.
-    await user.click(
-      await screen.findByRole('button', { name: /start match/i }),
-    )
-
-    expect(await screen.findByRole('alert')).toHaveTextContent(
-      /rated match needs an opponent/i,
-    )
-    // Still on the match page — nothing was submitted.
-    expect(
-      screen.getByRole('heading', { level: 1, name: /new match/i }),
-    ).toBeInTheDocument()
-  })
-
-  it('clears the stale rated-needs-opponent error after picking a guest (#150)', async () => {
-    const user = userEvent.setup()
-    renderNewMatch()
-
-    // The error only appears after a submit attempt — not on initial load.
-    await screen.findByRole('button', { name: /start match/i })
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
-
-    await user.click(screen.getByRole('button', { name: /start match/i }))
-    expect(await screen.findByRole('alert')).toHaveTextContent(
-      /rated match needs an opponent/i,
-    )
-
-    // Adding a guest auto-unrates the match, so the error no longer applies —
-    // it must not linger and contradict "Guest matches are always unrated".
-    await user.click(
-      screen.getByRole('button', { name: /add guest opponent/i }),
-    )
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
-  })
-
   it('creates a match against a picked opponent and navigates to the dashboard', async () => {
     const user = userEvent.setup()
     let captured: unknown = null
@@ -124,6 +85,9 @@ describe('NewMatchPage', () => {
     await user.click(
       await screen.findByRole('button', { name: /ada\.lovelace/i }),
     )
+    // Picking an opponent unlocks the Rated toggle; turn it on so the match
+    // is submitted as rated.
+    await user.click(screen.getByRole('switch', { name: /rated match/i }))
     await user.click(screen.getByRole('button', { name: /start match/i }))
 
     await waitFor(() =>
@@ -149,17 +113,17 @@ describe('NewMatchPage', () => {
     )
     renderNewMatch()
 
+    // No opponent picked, no toggle flipped — Start match submits a solo,
+    // unrated match (the form defaults Rated off for this reason).
     await user.click(
-      await screen.findByRole('button', { name: /start without opponent/i }),
+      await screen.findByRole('button', { name: /start match/i }),
     )
-    await user.click(screen.getByRole('button', { name: /start match/i }))
 
     await waitFor(() =>
       expect(
         screen.getByText('Scoring route m-test game g-test'),
       ).toBeInTheDocument(),
     )
-    // Guest / TBD opponents can't be rated, so `rated` is forced false.
     expect(captured).toEqual({
       opponent_user_id: null,
       best_of: 5,

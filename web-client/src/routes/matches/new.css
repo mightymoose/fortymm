@@ -144,32 +144,6 @@
   text-transform: uppercase;
   color: var(--fg-muted);
 }
-.nm-skip-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-top: 12px;
-  font: 500 13px var(--font-ui);
-  color: var(--fg-3);
-}
-.nm-skip-row .sep {
-  color: var(--ink-500);
-}
-.nm-skip-row button {
-  padding: 0 0 1px;
-  background: none;
-  border: none;
-  border-bottom: 1px solid var(--ink-500);
-  font: inherit;
-  color: var(--fg-2);
-  cursor: pointer;
-  transition: color var(--dur-fast), border-color var(--dur-fast);
-}
-.nm-skip-row button:hover {
-  color: var(--ball-500);
-  border-color: var(--ball-500);
-}
-
 /* --- Typeahead picker --- */
 .nm-search {
   position: relative;
@@ -272,11 +246,6 @@
   font: 700 12px var(--font-ui);
   color: var(--fg-1);
 }
-.nm-item.guest .av {
-  background: transparent;
-  border: 1px dashed var(--ink-500);
-  color: var(--fg-3);
-}
 .nm-item .body {
   flex: 1;
   min-width: 0;
@@ -337,11 +306,6 @@
   background: var(--ink-700);
   font: 700 16px var(--font-ui);
   color: var(--fg-1);
-}
-.nm-selected.guest .av {
-  background: transparent;
-  border: 1px dashed var(--ink-500);
-  color: var(--fg-3);
 }
 .nm-selected .info {
   flex: 1;
