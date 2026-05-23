@@ -321,9 +321,9 @@ async def create_match(
             detail="A rated match needs a registered opponent.",
         )
 
-    # Guest / "start without opponent" matches get a sentinel opponent side
-    # (no player) below, so they're scorable but can never affect ratings
-    # regardless of the requested flag.
+    # Solo matches (no opponent picked) get a player-less sentinel opponent
+    # side below, so they're scorable but can never affect ratings regardless
+    # of the requested flag.
     affects_rating = payload.rated and opponent is not None
 
     league = await resolve_league(db, payload.league_id)

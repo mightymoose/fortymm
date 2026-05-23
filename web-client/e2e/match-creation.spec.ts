@@ -35,8 +35,11 @@ test.describe('New match — page', () => {
     await expect(nm.heading).toBeVisible()
     await expect(nm.youName).toHaveText(CREATOR_USERNAME)
     await expect(nm.startButton).toBeEnabled()
-    // Rated is on by default before an opponent is chosen.
-    await expect(nm.ratedSwitch).toBeChecked()
+    // Rated defaults off so submitting without picking an opponent "just
+    // works" — the no-opponent match is unrated by definition. Picking a
+    // registered opponent unlocks the toggle but does not auto-flip it.
+    await expect(nm.ratedSwitch).not.toBeChecked()
+    await expect(nm.ratedSwitch).toBeDisabled()
   })
 
   test('lists the registered players in the picker', async ({ page }) => {
@@ -56,34 +59,37 @@ test.describe('New match — page', () => {
   })
 })
 
-test.describe('New match — validation', () => {
-  test('blocks a rated match with no opponent and sends no request', async ({
-    page,
-  }) => {
-    const nm = await NewMatchPage.open(page, { players: ROSTER })
-
-    await nm.start()
-
-    await expect(nm.error).toHaveText(/rated match needs an opponent/i)
-    await expect(page).toHaveURL(/\/matches\/new$/)
-    expect(nm.store.createdMatches).toHaveLength(0)
-  })
-})
-
 test.describe('New match — creating a match', () => {
-  test('creates a rated match against a registered opponent', async ({
+  test('creates an unrated match against a registered opponent by default', async ({
     page,
   }) => {
     const nm = await NewMatchPage.open(page, { players: ROSTER })
 
     await nm.pickPlayer(GRACE.username)
     await expect(nm.selectedOpponentName).toHaveText(GRACE.username)
-    await expect(nm.summaryTop).toContainText('You vs')
+    await expect(nm.summaryTop).toContainText('You')
     await nm.start()
 
     await expect(page).toHaveURL(SCORING_URL)
     expect(nm.store.createdMatches).toEqual([
-      { opponent_user_id: GRACE.id, best_of: 5, rated: true },
+      { opponent_user_id: GRACE.id, best_of: 5, rated: false },
+    ])
+  })
+
+  test('creates a rated match when Rated is toggled on', async ({ page }) => {
+    const nm = await NewMatchPage.open(page, { players: ROSTER })
+
+    await nm.pickPlayer(ADA.username)
+    // Picking a registered opponent unlocks the Rated toggle; the user opts
+    // into rating explicitly per click.
+    await nm.toggleRated()
+    await expect(nm.ratedSwitch).toBeChecked()
+    await expect(nm.summarySub).toContainText('Rated')
+    await nm.start()
+
+    await expect(page).toHaveURL(SCORING_URL)
+    expect(nm.store.createdMatches).toEqual([
+      { opponent_user_id: ADA.id, best_of: 5, rated: true },
     ])
   })
 
@@ -98,24 +104,7 @@ test.describe('New match — creating a match', () => {
 
     await expect(page).toHaveURL(SCORING_URL)
     expect(nm.store.createdMatches).toEqual([
-      { opponent_user_id: ADA.id, best_of: 7, rated: true },
-    ])
-  })
-
-  test('creates an unrated match when Rated is toggled off', async ({
-    page,
-  }) => {
-    const nm = await NewMatchPage.open(page, { players: ROSTER })
-
-    await nm.pickPlayer(ADA.username)
-    await nm.toggleRated()
-    await expect(nm.ratedSwitch).not.toBeChecked()
-    await expect(nm.summarySub).toContainText('Unrated')
-    await nm.start()
-
-    await expect(page).toHaveURL(SCORING_URL)
-    expect(nm.store.createdMatches).toEqual([
-      { opponent_user_id: ADA.id, best_of: 5, rated: false },
+      { opponent_user_id: ADA.id, best_of: 7, rated: false },
     ])
   })
 
@@ -124,25 +113,8 @@ test.describe('New match — creating a match', () => {
   }) => {
     const nm = await NewMatchPage.open(page, { players: ROSTER })
 
-    await nm.startWithoutOpponent()
-    await nm.start()
-
-    await expect(page).toHaveURL(SCORING_URL)
-    expect(nm.store.createdMatches).toEqual([
-      { opponent_user_id: null, best_of: 5, rated: false },
-    ])
-  })
-
-  test('forces a guest match unrated regardless of the toggle', async ({
-    page,
-  }) => {
-    const nm = await NewMatchPage.open(page, { players: ROSTER })
-
-    await nm.addGuest()
-    // A guest can't be rated, so the switch is disabled and off.
-    await expect(nm.ratedSwitch).toBeDisabled()
-    await expect(nm.ratedSwitch).not.toBeChecked()
-    await expect(nm.summarySub).toContainText('Unrated')
+    // No opponent picked, no toggle flipped — Start match submits a solo,
+    // unrated match (the form's only no-opponent path now).
     await nm.start()
 
     await expect(page).toHaveURL(SCORING_URL)
@@ -166,7 +138,31 @@ test.describe('New match — picking an opponent', () => {
     await nm.start()
     await expect(page).toHaveURL(SCORING_URL)
     expect(nm.store.createdMatches).toEqual([
-      { opponent_user_id: LINUS.id, best_of: 5, rated: true },
+      { opponent_user_id: LINUS.id, best_of: 5, rated: false },
+    ])
+  })
+
+  test('resets the Rated toggle when the opponent is cleared', async ({
+    page,
+  }) => {
+    const nm = await NewMatchPage.open(page, { players: ROSTER })
+
+    // Pick Ada, flip Rated on, then clear the opponent. The toggle must come
+    // back off — otherwise re-picking would silently submit a rated match
+    // the user didn't ask for, and the (now-disabled) toggle would offer no
+    // way to switch it back off.
+    await nm.pickPlayer(ADA.username)
+    await nm.toggleRated()
+    await expect(nm.ratedSwitch).toBeChecked()
+
+    await nm.changeOpponent()
+    await nm.pickPlayer(LINUS.username)
+    await expect(nm.ratedSwitch).not.toBeChecked()
+
+    await nm.start()
+    await expect(page).toHaveURL(SCORING_URL)
+    expect(nm.store.createdMatches).toEqual([
+      { opponent_user_id: LINUS.id, best_of: 5, rated: false },
     ])
   })
 
@@ -182,7 +178,7 @@ test.describe('New match — picking an opponent', () => {
 
     await expect(page).toHaveURL(SCORING_URL)
     expect(nm.store.createdMatches).toEqual([
-      { opponent_user_id: BARBARA.id, best_of: 5, rated: true },
+      { opponent_user_id: BARBARA.id, best_of: 5, rated: false },
     ])
   })
 })

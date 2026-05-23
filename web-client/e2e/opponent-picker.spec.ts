@@ -76,7 +76,7 @@ test.describe('Opponent picker — recent opponents', () => {
     await expect(nm.pickerError).toBeHidden()
   })
 
-  test('still lets the player add a guest after a failed recent load', async ({
+  test('still lets the player start a solo match after a failed recent load', async ({
     page,
   }) => {
     const nm = await NewMatchPage.open(page, {
@@ -85,9 +85,9 @@ test.describe('Opponent picker — recent opponents', () => {
     })
 
     await expect(nm.pickerError).toBeVisible()
-    // The skip row sits outside the picker boundary, so guest / no-opponent
-    // flows keep working even when the players request fails.
-    await nm.addGuest()
+    // The picker boundary swallows the failed players request but the form's
+    // Start button still works — submitting without picking creates a solo,
+    // unrated match.
     await nm.start()
 
     await expect(page).toHaveURL(SCORING_URL)
@@ -125,7 +125,7 @@ test.describe('Opponent picker — search', () => {
     await nm.start()
     await expect(page).toHaveURL(SCORING_URL)
     expect(nm.store.createdMatches).toEqual([
-      { opponent_user_id: MARGARET.id, best_of: 5, rated: true },
+      { opponent_user_id: MARGARET.id, best_of: 5, rated: false },
     ])
   })
 
