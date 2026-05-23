@@ -171,11 +171,16 @@ function MatchesPage() {
     [setSearch],
   )
 
-  // Match the displayed rows — debounced q, live status — so the CSV the
-  // user downloads is the one they're looking at.
+  // CSV reflects what the user just typed (live, not debounced) — clicking
+  // Export right after typing should download the query you see, not the
+  // stale one the table is still showing.
   const exportHref = useMemo(
-    () => matchesCsvUrl({ status: apiStatus, q: debouncedQ || undefined }),
-    [apiStatus, debouncedQ],
+    () =>
+      matchesCsvUrl({
+        status: apiStatus,
+        q: q.trim() || undefined,
+      }),
+    [apiStatus, q],
   )
 
   const items = data?.items ?? []
