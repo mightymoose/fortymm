@@ -382,10 +382,12 @@ function SectionHeader({
   title,
   subtitle,
   action,
+  actionTo,
 }: {
   title: string
   subtitle?: string
   action?: string
+  actionTo?: string
 }) {
   return (
     <div style={{ display: 'flex', alignItems: 'baseline', marginBottom: 14, gap: 12 }}>
@@ -403,9 +405,9 @@ function SectionHeader({
         <span style={{ font: `400 13px ${UI}`, color: C.chalk500 }}>{subtitle}</span>
       )}
       <div style={{ flex: 1 }} />
-      {action && (
-        <a
-          href="#"
+      {action && actionTo && (
+        <Link
+          to={actionTo}
           style={{
             font: `500 13px ${UI}`,
             color: C.chalk300,
@@ -417,7 +419,7 @@ function SectionHeader({
         >
           {action}
           <ChevronRight size={12} strokeWidth={1.75} />
-        </a>
+        </Link>
       )}
     </div>
   )
@@ -1032,6 +1034,7 @@ function YourGameRow({
             : 'Last 30 days'
         }
         action="Full history"
+        actionTo="/matches"
       />
       <div
         style={{
