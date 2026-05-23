@@ -103,24 +103,19 @@ function MatchesPage() {
   const status: 'all' | StatusKey = urlSearch.status ?? 'all'
   const page = urlSearch.page ?? 1
 
-  // Debounce the params that drive the backend call so a quick burst of
-  // keystrokes (or tab clicks) coalesces into a single fetch. The URL still
-  // updates immediately on every change — only the query is held back.
-  const liveParams = useMemo(
-    () => ({ q: q.trim(), status, page }),
-    [q, status, page],
-  )
-  const debounced = useDebouncedValue(liveParams, 300)
-  const apiStatus =
-    debounced.status === 'all' ? undefined : TAB_TO_API[debounced.status]
+  // Debounce only the text search — tab and pagination clicks aren't a
+  // hammer risk and should fire immediately so the table doesn't lag the
+  // click by 300ms. The URL still updates synchronously on every change.
+  const debouncedQ = useDebouncedValue(q.trim(), 300)
+  const apiStatus = status === 'all' ? undefined : TAB_TO_API[status]
   const queryParams = useMemo(
     () => ({
       status: apiStatus,
-      q: debounced.q || undefined,
-      page: debounced.page,
+      q: debouncedQ || undefined,
+      page,
       page_size: PAGE_SIZE,
     }),
-    [apiStatus, debounced.q, debounced.page],
+    [apiStatus, debouncedQ, page],
   )
   // Wait for the session before firing the matches query — otherwise a
   // first-visit direct-load races the session cookie and 401s into the error
@@ -176,14 +171,11 @@ function MatchesPage() {
     [setSearch],
   )
 
-  // CSV reflects what the user typed (URL), not the debounced view.
+  // Match the displayed rows — debounced q, live status — so the CSV the
+  // user downloads is the one they're looking at.
   const exportHref = useMemo(
-    () =>
-      matchesCsvUrl({
-        status: status === 'all' ? undefined : TAB_TO_API[status],
-        q: q.trim() || undefined,
-      }),
-    [status, q],
+    () => matchesCsvUrl({ status: apiStatus, q: debouncedQ || undefined }),
+    [apiStatus, debouncedQ],
   )
 
   const items = data?.items ?? []
