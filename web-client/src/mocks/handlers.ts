@@ -3,6 +3,7 @@ import type { components } from '@/api/schema'
 import { healthCheck, player, sessionResponse } from '@/test/factories'
 import {
   findMatch,
+  MOCK_CURRENT_USER,
   mockMatches,
   newMatchSeed,
   projectListRow,
@@ -40,6 +41,17 @@ export const mockRecentOpponents = mockPlayers.slice(0, 6)
 export { mockMatches }
 
 const state = createRbacState(DEMO_SEED)
+
+// Mirrors the API's `_player_username_filter`: substring-match against *any*
+// participant on the match, not just the opponent. Side 1 is always the mock
+// current user (see match-store), so without this the dashboard's new
+// `?q=<my-username>` deep-links match zero rows in MSW.
+function matchHasPlayerLike(m: SeedMatch, q: string): boolean {
+  return (
+    MOCK_CURRENT_USER.username.toLowerCase().includes(q) ||
+    (m.opponent?.username ?? '').toLowerCase().includes(q)
+  )
+}
 
 async function readJson(request: Request): Promise<unknown> {
   try {
@@ -266,9 +278,7 @@ export const handlers = [
     const q = url.searchParams.get('q')?.trim().toLowerCase() ?? ''
     let scoped = mockMatches.slice()
     if (q) {
-      scoped = scoped.filter((m) =>
-        (m.opponent?.username ?? '').toLowerCase().includes(q),
-      )
+      scoped = scoped.filter((m) => matchHasPlayerLike(m, q))
     }
     const filtered = statusFilter
       ? scoped.filter((m) => m.status === statusFilter)
@@ -325,9 +335,7 @@ export const handlers = [
 
     let scoped = mockMatches.slice()
     if (q) {
-      scoped = scoped.filter((m) =>
-        (m.opponent?.username ?? '').toLowerCase().includes(q),
-      )
+      scoped = scoped.filter((m) => matchHasPlayerLike(m, q))
     }
     const filtered = statusFilter
       ? scoped.filter((m) => m.status === statusFilter)
