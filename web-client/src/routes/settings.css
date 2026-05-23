@@ -335,51 +335,6 @@
   text-underline-offset: 3px;
 }
 
-/* ---------- Toast ---------- */
-.fmm-settings .fmm-toast {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 12px 16px 12px 14px;
-  background: var(--ink-800);
-  border: 1px solid var(--border-default);
-  border-radius: var(--r-md);
-  box-shadow: var(--shadow-lg);
-  min-width: 280px;
-  animation: fmm-toast-in 280ms var(--ease-snap);
-}
-.fmm-settings .fmm-toast--ok {
-  border-color: rgba(0, 226, 154, 0.4);
-}
-.fmm-settings .fmm-toast--ok::before {
-  content: '';
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--serve-500);
-  box-shadow: 0 0 8px rgba(0, 226, 154, 0.7);
-}
-.fmm-settings .fmm-toast--err {
-  border-color: rgba(255, 77, 109, 0.4);
-}
-.fmm-settings .fmm-toast--err::before {
-  content: '';
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--loss);
-}
-@keyframes fmm-toast-in {
-  from {
-    opacity: 0;
-    transform: translateY(8px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
 /* ---------- Field helper text ---------- */
 .fmm-settings .fmm-help {
   font-size: var(--text-sm);
@@ -440,9 +395,6 @@
 @media (prefers-reduced-motion: reduce) {
   .fmm-settings .ball-dot.ball-dot--live,
   .fmm-settings .fmm-spinner {
-    animation: none;
-  }
-  .fmm-settings .fmm-toast {
     animation: none;
   }
 }
