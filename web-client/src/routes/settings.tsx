@@ -74,8 +74,14 @@ const USERNAME_MAX = 40
 
 function validateUsername(u: string): Validation {
   if (!u) return { ok: false, err: 'Username is required.' }
-  if (u.length < USERNAME_MIN) return { ok: false, err: `At least ${USERNAME_MIN} characters.` }
+  // Surface the specific reason a username is invalid so the user knows what
+  // to fix — rather than a generic "allowed characters" hint that they have
+  // to decode against what they typed. Char checks come before length checks
+  // so "Fo" reads as "uppercase isn't allowed" rather than "too short".
+  if (/[A-Z]/.test(u)) return { ok: false, err: 'Lowercase letters only — no uppercase.' }
+  if (/\s/.test(u)) return { ok: false, err: 'No spaces — try a dot, hyphen or underscore instead.' }
   if (u.length > USERNAME_MAX) return { ok: false, err: `No more than ${USERNAME_MAX} characters.` }
+  if (u.length < USERNAME_MIN) return { ok: false, err: `At least ${USERNAME_MIN} characters.` }
   if (!USERNAME_RE.test(u))
     return {
       ok: false,
@@ -639,8 +645,13 @@ function UsernameSection({ currentUsername }: { currentUsername: string }) {
 
   const clientV = useMemo(() => validateUsername(val), [val])
   const dirty = val !== currentUsername
+  // If the value contains a disallowed character (e.g. uppercase, whitespace,
+  // punctuation outside the allowed set), surface that immediately — the user
+  // just typed it and we want them to know it's not going through. Length
+  // errors stay gated on blur so we don't nag while they're still typing.
+  const hasInvalidChar = /[^a-z0-9._-]/.test(val)
   const displayedErr =
-    serverErr ?? (touched && !clientV.ok ? (clientV.err ?? null) : null)
+    serverErr ?? ((touched || hasInvalidChar) && !clientV.ok ? (clientV.err ?? null) : null)
 
   const onSave = async () => {
     if (!clientV.ok || !dirty) return
@@ -725,7 +736,7 @@ function UsernameSection({ currentUsername }: { currentUsername: string }) {
             className={`fmm-input fmm-input--mono ${displayedErr ? 'fmm-input--err' : dirty && clientV.ok ? 'fmm-input--ok' : ''}`}
             value={val}
             onChange={(e) => {
-              setVal(e.target.value.toLowerCase().replace(/\s/g, ''))
+              setVal(e.target.value)
               if (serverErr) setServerErr(null)
             }}
             onBlur={() => setTouched(true)}
@@ -733,6 +744,7 @@ function UsernameSection({ currentUsername }: { currentUsername: string }) {
             style={{ paddingLeft: 30 }}
             spellCheck={false}
             autoComplete="off"
+            autoCapitalize="none"
             aria-invalid={!!displayedErr || undefined}
           />
         </div>
