@@ -355,23 +355,13 @@ describe('ScoreEntry — create', () => {
     )
   })
 
-  it('surfaces an edit-link affordance when the game is already scored (409)', async () => {
+  it('locks the page when a concurrent scorer beat us to it and the server 409s (race)', async () => {
+    // The cache says the game is un-scored, but between our GET and POST
+    // another participant scored it. The cache-first "already scored" case
+    // is caught proactively by the redirect (see the next test); this test
+    // covers the post-submit race where game.score is null in the cache.
     server.use(
-      http.get('*/v1/matches/m-1', () =>
-        HttpResponse.json(
-          inProgressMatch({
-            games: [
-              {
-                id: 'g-3',
-                game_number: 3,
-                score: score('s-3-existing', 11, 6),
-              },
-              { id: 'g-4', game_number: 4, score: null },
-            ],
-            current_game: { id: 'g-4', game_number: 4 },
-          }),
-        ),
-      ),
+      http.get('*/v1/matches/m-1', () => HttpResponse.json(inProgressMatch())),
       http.post('*/v1/matches/m-1/games/g-3/scores', () =>
         HttpResponse.json(
           { detail: 'This game has already been scored.' },
@@ -388,13 +378,33 @@ describe('ScoreEntry — create', () => {
     await user.type(screen.getByRole('textbox', { name: 'nguyen.t score' }), '6')
     await user.click(screen.getByRole('button', { name: /save/i }))
 
-    const editLink = await screen.findByRole('link', {
-      name: /edit existing score/i,
-    })
-    expect(editLink).toHaveAttribute(
-      'href',
-      '/matches/m-1/games/g-3/scores/s-3-existing/edit',
+    expect(
+      await screen.findByText(/already been scored/i),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('link', { name: 'Back to match' }),
+    ).toHaveAttribute('href', '/matches/m-1')
+  })
+
+  it('redirects to the existing score\'s edit page when landing on /scores/new for an already-scored game', async () => {
+    // Simulates the browser-Back-after-save flow: the user advanced to game 3
+    // (scoring g-3), pressed Back to /games/g-1/scores/new, but g-1 already
+    // has a score on the server. Without the redirect the page would render
+    // empty inputs over a tally that already counts the win, and an enabled
+    // Save would either 409 or duplicate.
+    server.use(
+      http.get('*/v1/matches/m-1', () => HttpResponse.json(inProgressMatch())),
     )
+
+    renderScoreEntry({ kind: 'create', matchId: 'm-1', gameId: 'g-1' })
+
+    await waitFor(() =>
+      expect(screen.getByText('scoring-edit m-1 g-1 s-1')).toBeInTheDocument(),
+    )
+    // The /scores/new page must not have rendered its Save button.
+    expect(
+      screen.queryByRole('button', { name: /save/i }),
+    ).not.toBeInTheDocument()
   })
 
   it('disables the form and shows a back link when the match is no longer scorable (409)', async () => {

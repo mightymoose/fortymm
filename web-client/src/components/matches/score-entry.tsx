@@ -94,6 +94,19 @@ function ScoreEntryInner({
     return <Navigate {...matchDetailRoute(matchId)} />
   }
 
+  // Landing on /scores/new for a game that's already scored (e.g. browser
+  // Back after saving and advancing) would show empty inputs alongside the
+  // tally that already counts the win. Replace into the score's edit route
+  // so the form reflects reality and a Save can't create a duplicate.
+  if (mode.kind === 'create' && game.score) {
+    return (
+      <Navigate
+        {...scoringEditRoute(matchId, gameId, game.score.id)}
+        replace
+      />
+    )
+  }
+
   const mySideNumber = mySide.side_number === 2 ? 2 : 1
   const oppName = oppSide.players[0]?.username ?? 'Opponent'
   const meName = mySide.players[0]?.username ?? 'You'
@@ -198,17 +211,6 @@ function ScoreEntryInner({
         ? 'Save game & next →'
         : 'Save final game →'
 
-  // The "already scored" 409 only happens on the create route. The existing
-  // score id is in the cached payload, so we can offer a direct switch to its
-  // edit route.
-  const editLink =
-    mode.kind === 'create' &&
-    apiError?.status === 409 &&
-    apiError.detail?.includes('already been scored') &&
-    game.score
-      ? scoringEditRoute(matchId, gameId, game.score.id)
-      : null
-
   return (
     <AppShell>
       <div className="entry-wrap">
@@ -274,11 +276,6 @@ function ScoreEntryInner({
                 {lockedReason}
               </div>
               <div className="action-btns">
-                {editLink && (
-                  <Link {...editLink} className="btn ghost">
-                    Edit existing score
-                  </Link>
-                )}
                 <Link {...matchDetailRoute(matchId)} className="btn primary">
                   Back to match
                 </Link>
