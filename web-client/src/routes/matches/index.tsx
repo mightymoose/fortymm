@@ -46,11 +46,13 @@ type MatchListRowSide = components['schemas']['MatchDetailsSide']
 type RowTab = 'scheduled' | 'live' | 'final'
 type StatusKey = RowTab
 
-// URL is the source of truth for filters. `.optional().catch(undefined)` keeps
-// junk query strings (`?status=garbage`, `?page=NaN`) from crashing the page —
-// invalid values silently drop back to defaults instead of throwing.
+// URL is the source of truth for filters. `.trim()` strips whitespace so a
+// junk query like `?q=%20%20%20` collapses to "no filter" instead of polluting
+// the URL forever. `.optional().catch(undefined)` keeps `?status=garbage` or
+// `?page=NaN` from crashing the page — invalid values silently drop back to
+// defaults instead of throwing.
 export const matchesSearchSchema = z.object({
-  q: z.string().min(1).optional().catch(undefined),
+  q: z.string().trim().min(1).optional().catch(undefined),
   status: z.enum(['scheduled', 'live', 'final']).optional().catch(undefined),
   page: z.coerce.number().int().min(2).optional().catch(undefined),
 })
