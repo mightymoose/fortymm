@@ -43,8 +43,11 @@ import './index.css'
 
 type MatchListRowSide = components['schemas']['MatchDetailsSide']
 
-type RowTab = 'scheduled' | 'live' | 'final'
-type StatusKey = RowTab
+// Single source of truth for the filter-tab status values — the URL schema,
+// the row classification, and the tab list all derive from this tuple.
+const STATUS_KEYS = ['scheduled', 'live', 'final'] as const
+type StatusKey = (typeof STATUS_KEYS)[number]
+type RowTab = StatusKey
 
 // URL is the source of truth for filters. `.trim()` strips whitespace so a
 // junk query like `?q=%20%20%20` collapses to "no filter" instead of polluting
@@ -53,7 +56,7 @@ type StatusKey = RowTab
 // defaults instead of throwing.
 export const matchesSearchSchema = z.object({
   q: z.string().trim().min(1).optional().catch(undefined),
-  status: z.enum(['scheduled', 'live', 'final']).optional().catch(undefined),
+  status: z.enum(STATUS_KEYS).optional().catch(undefined),
   page: z.coerce.number().int().min(2).optional().catch(undefined),
 })
 
