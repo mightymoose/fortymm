@@ -142,3 +142,49 @@ describe('SettingsPage email section', () => {
     expect(submit).toBeDisabled()
   })
 })
+
+describe('SettingsPage username section', () => {
+  it('preserves what the user typed without silently lowercasing or stripping spaces', async () => {
+    const user = userEvent.setup()
+    await renderSettings()
+
+    const input = (await screen.findByLabelText(/^username$/i)) as HTMLInputElement
+    await user.clear(input)
+    await user.type(input, 'Foo bar')
+
+    expect(input.value).toBe('Foo bar')
+    // Counter reflects the actual typed length, not a post-strip length.
+    const section = input.closest('section') as HTMLElement
+    expect(within(section).getByText('7/40')).toBeInTheDocument()
+  })
+
+  it('shows a clear inline error when uppercase is typed', async () => {
+    const user = userEvent.setup()
+    await renderSettings()
+
+    const input = await screen.findByLabelText(/^username$/i)
+    await user.clear(input)
+    await user.type(input, 'Foo')
+
+    const section = input.closest('section') as HTMLElement
+    expect(
+      within(section).getByText(/lowercase letters only/i),
+    ).toBeInTheDocument()
+    expect(input).toHaveAttribute('aria-invalid', 'true')
+    expect(
+      within(section).getByRole('button', { name: /save changes/i }),
+    ).toBeDisabled()
+  })
+
+  it('shows a clear inline error when whitespace is typed', async () => {
+    const user = userEvent.setup()
+    await renderSettings()
+
+    const input = await screen.findByLabelText(/^username$/i)
+    await user.clear(input)
+    await user.type(input, 'foo bar')
+
+    const section = input.closest('section') as HTMLElement
+    expect(within(section).getByText(/no spaces/i)).toBeInTheDocument()
+  })
+})
