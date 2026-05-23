@@ -1,5 +1,6 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useMemo } from 'react'
 import { Link, createFileRoute, useNavigate } from '@tanstack/react-router'
+import { zodValidator } from '@tanstack/zod-adapter'
 import {
   ChevronLeft,
   ChevronRight,
@@ -11,6 +12,7 @@ import {
   User,
   X,
 } from 'lucide-react'
+import { z } from 'zod'
 
 import {
   matchesCsvUrl,
@@ -41,15 +43,30 @@ import './index.css'
 
 type MatchListRowSide = components['schemas']['MatchDetailsSide']
 
+// Single source of truth for the filter-tab status values — the URL schema,
+// the row classification, and the tab list all derive from this tuple.
+const STATUS_KEYS = ['scheduled', 'live', 'final'] as const
+type StatusKey = (typeof STATUS_KEYS)[number]
+type RowTab = StatusKey
+
+// URL is the source of truth for filters. `.trim()` strips whitespace so a
+// junk query like `?q=%20%20%20` collapses to "no filter" instead of polluting
+// the URL forever. `.optional().catch(undefined)` keeps `?status=garbage` or
+// `?page=NaN` from crashing the page — invalid values silently drop back to
+// defaults instead of throwing.
+export const matchesSearchSchema = z.object({
+  q: z.string().trim().min(1).optional().catch(undefined),
+  status: z.enum(STATUS_KEYS).optional().catch(undefined),
+  page: z.coerce.number().int().min(2).optional().catch(undefined),
+})
+
 export const Route = createFileRoute('/matches/')({
   head: () => ({
     meta: [{ title: pageTitle('Matches') }],
   }),
+  validateSearch: zodValidator(matchesSearchSchema),
   component: MatchesPage,
 })
-
-type RowTab = 'scheduled' | 'live' | 'final'
-type StatusKey = RowTab
 
 const TAB_TO_API: Record<RowTab, MatchStatus> = {
   scheduled: 'pending',
@@ -84,15 +101,18 @@ const STATUS_TONE: Record<RowTab, string> = {
 type NavigateFn = ReturnType<typeof useNavigate>
 
 function MatchesPage() {
-  const [q, setQ] = useState('')
-  const [status, setStatus] = useState<'all' | StatusKey>('all')
-  const [page, setPage] = useState(1)
-  const debouncedQ = useDebouncedValue(q, 300).trim()
+  const urlSearch = Route.useSearch()
   const navigate = useNavigate()
 
+  const q = urlSearch.q ?? ''
+  const status: 'all' | StatusKey = urlSearch.status ?? 'all'
+  const page = urlSearch.page ?? 1
+
+  // Debounce only the text search — tab and pagination clicks aren't a
+  // hammer risk and should fire immediately so the table doesn't lag the
+  // click by 300ms. The URL still updates synchronously on every change.
+  const debouncedQ = useDebouncedValue(q.trim(), 300)
   const apiStatus = status === 'all' ? undefined : TAB_TO_API[status]
-  // Memoize the params bag so React Query's structural sharing — and any
-  // future React.memo on MatchTable — sees a stable reference.
   const queryParams = useMemo(
     () => ({
       status: apiStatus,
@@ -111,25 +131,61 @@ function MatchesPage() {
   const data = matchList.data
   const isLoading = matchList.isPending
 
-  const changeStatus = useCallback((next: 'all' | StatusKey) => {
-    setStatus(next)
-    setPage(1)
-  }, [])
-  const changeQuery = useCallback((next: string) => {
-    setQ(next)
-    setPage(1)
-  }, [])
-  const onClear = useCallback(() => {
-    setQ('')
-    setStatus('all')
-    setPage(1)
-  }, [])
+  // Rewrite the URL — `replace: true` keeps each keystroke from filling
+  // browser history. Defaults are stripped so the URL stays clean.
+  const setSearch = useCallback(
+    (patch: Partial<z.infer<typeof matchesSearchSchema>>) => {
+      void navigate({
+        to: '/matches',
+        replace: true,
+        search: (prev) => {
+          const merged = { ...prev, ...patch }
+          return {
+            q: merged.q && merged.q.length > 0 ? merged.q : undefined,
+            status: merged.status,
+            page: merged.page && merged.page > 1 ? merged.page : undefined,
+          }
+        },
+      })
+    },
+    [navigate],
+  )
 
-  // Link straight to the CSV endpoint for the active filters — the browser
-  // downloads it directly (no client-side fetch/buffering).
+  const changeStatus = useCallback(
+    (next: 'all' | StatusKey) => {
+      setSearch({
+        status: next === 'all' ? undefined : next,
+        page: undefined,
+      })
+    },
+    [setSearch],
+  )
+  const changeQuery = useCallback(
+    (next: string) => {
+      setSearch({ q: next || undefined, page: undefined })
+    },
+    [setSearch],
+  )
+  const onClear = useCallback(() => {
+    setSearch({ q: undefined, status: undefined, page: undefined })
+  }, [setSearch])
+  const setPage = useCallback(
+    (next: number) => {
+      setSearch({ page: next })
+    },
+    [setSearch],
+  )
+
+  // CSV reflects what the user just typed (live, not debounced) — clicking
+  // Export right after typing should download the query you see, not the
+  // stale one the table is still showing.
   const exportHref = useMemo(
-    () => matchesCsvUrl({ status: apiStatus, q: debouncedQ || undefined }),
-    [apiStatus, debouncedQ],
+    () =>
+      matchesCsvUrl({
+        status: apiStatus,
+        q: q.trim() || undefined,
+      }),
+    [apiStatus, q],
   )
 
   const items = data?.items ?? []

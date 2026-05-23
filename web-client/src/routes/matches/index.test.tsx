@@ -20,7 +20,7 @@ import { Route } from './index'
 
 const MatchesPage = Route.options.component!
 
-function renderMatchesPage() {
+function renderMatchesPage(initialEntry = '/matches') {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
@@ -29,6 +29,7 @@ function renderMatchesPage() {
     getParentRoute: () => rootRoute,
     path: '/matches',
     component: MatchesPage,
+    validateSearch: Route.options.validateSearch,
   })
   const matchDetailRoute = createRoute({
     getParentRoute: () => rootRoute,
@@ -55,13 +56,13 @@ function renderMatchesPage() {
       newMatchRoute,
       scoringRoute,
     ]),
-    history: createMemoryHistory({ initialEntries: ['/matches'] }),
+    history: createMemoryHistory({ initialEntries: [initialEntry] }),
   })
-  return render(
+  return { router, ...render(
     <QueryClientProvider client={queryClient}>
       <RouterProvider router={router} />
     </QueryClientProvider>,
-  )
+  ) }
 }
 
 describe('MatchesPage', () => {
@@ -265,6 +266,85 @@ describe('MatchesPage', () => {
     await screen.findByText(/no matches yet/i)
     const pill = container.querySelector('.live-pill')
     expect(pill?.textContent?.replace(/\s+/g, ' ').trim()).toBe('0 LIVE')
+  })
+
+  it('hydrates filters from the URL on load (deep-link)', async () => {
+    const requests: string[] = []
+    server.use(
+      http.get('*/v1/matches', ({ request }) => {
+        requests.push(request.url)
+        return HttpResponse.json(
+          matchListResponse({
+            items: [matchListRow({ opponent: 'nguyen.t' })],
+            total: 1,
+            page: 2,
+            status_counts: { in_progress: 1 },
+          }),
+        )
+      }),
+    )
+    renderMatchesPage('/matches?q=ngu&status=live&page=2')
+
+    // The first fetch already carries the URL filters — no debounce delay
+    // on initial load because the params are the same value across renders.
+    await waitFor(() => expect(requests.length).toBeGreaterThanOrEqual(1))
+    const url = new URL(requests[requests.length - 1])
+    expect(url.searchParams.get('q')).toBe('ngu')
+    expect(url.searchParams.get('status')).toBe('in_progress')
+    expect(url.searchParams.get('page')).toBe('2')
+
+    // The search input reflects the URL value.
+    expect(screen.getByPlaceholderText(/search players/i)).toHaveValue('ngu')
+  })
+
+  it('shrugs off garbage search params via zod fallback', async () => {
+    const requests: string[] = []
+    server.use(
+      http.get('*/v1/matches', ({ request }) => {
+        requests.push(request.url)
+        return HttpResponse.json(
+          matchListResponse({
+            items: [matchListRow({ opponent: 'nguyen.t' })],
+            total: 1,
+            status_counts: { pending: 1 },
+          }),
+        )
+      }),
+    )
+    // ?status=garbage and ?page=NaN should not crash — both fall back to
+    // defaults and the page renders as if no filter were set.
+    renderMatchesPage('/matches?status=garbage&page=NaN')
+
+    await waitFor(() => expect(requests.length).toBeGreaterThanOrEqual(1))
+    const url = new URL(requests[0])
+    expect(url.searchParams.get('status')).toBeNull()
+    expect(url.searchParams.get('page')).toBe('1')
+  })
+
+  it('writes filter changes to the URL immediately, before the debounced fetch fires', async () => {
+    const user = userEvent.setup()
+    server.use(
+      http.get('*/v1/matches', () =>
+        HttpResponse.json(
+          matchListResponse({
+            items: [matchListRow({ opponent: 'nguyen.t' })],
+            total: 1,
+            status_counts: { pending: 1 },
+          }),
+        ),
+      ),
+    )
+    const { router } = renderMatchesPage()
+    await screen.findByText('nguyen.t')
+
+    await user.type(screen.getByPlaceholderText(/search players/i), 'ngu')
+
+    // URL reflects every keystroke — no debounce on the persistence side.
+    await waitFor(() => {
+      expect(router.state.location.search).toEqual(
+        expect.objectContaining({ q: 'ngu' }),
+      )
+    })
   })
 
   it('Export CSV links straight to /v1/matches.csv with the active filter (#149)', async () => {
