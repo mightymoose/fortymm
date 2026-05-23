@@ -1,7 +1,4 @@
 import {
-  createContext,
-  useCallback,
-  useContext,
   useEffect,
   useMemo,
   useRef,
@@ -11,6 +8,7 @@ import {
 } from 'react'
 import { createFileRoute, useRouterState } from '@tanstack/react-router'
 import { Check, Mail } from 'lucide-react'
+import { toast } from 'sonner'
 
 import { ApiError } from '@/api/client'
 import {
@@ -99,77 +97,6 @@ function relativeTime(ts: number): string {
   return `${Math.floor(diff / 86400)}d ago`
 }
 
-
-/* ------------------------------------------------------------------ */
-/*  Toasts                                                            */
-/* ------------------------------------------------------------------ */
-
-type ToastKind = 'ok' | 'err'
-type ToastPush = (msg: string, opts?: { kind?: ToastKind; ttl?: number }) => void
-
-interface ToastItem {
-  id: number
-  msg: string
-  kind: ToastKind
-}
-
-const ToastContext = createContext<ToastPush>(() => {})
-
-function useToast(): ToastPush {
-  return useContext(ToastContext)
-}
-
-function ToastProvider({ children }: { children: ReactNode }) {
-  const [toasts, setToasts] = useState<ToastItem[]>([])
-  const idRef = useRef(0)
-
-  const push = useCallback<ToastPush>((msg, opts = {}) => {
-    const id = ++idRef.current
-    setToasts((arr) => [...arr, { id, msg, kind: opts.kind ?? 'ok' }])
-    setTimeout(
-      () => setToasts((arr) => arr.filter((t) => t.id !== id)),
-      opts.ttl ?? 3200,
-    )
-  }, [])
-
-  return (
-    <ToastContext.Provider value={push}>
-      {children}
-      <div
-        style={{
-          position: 'fixed',
-          bottom: 20,
-          left: '50%',
-          transform: 'translateX(-50%)',
-          zIndex: 2000,
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 8,
-          pointerEvents: 'none',
-        }}
-      >
-        {toasts.map((t) => (
-          <div
-            key={t.id}
-            className={`fmm-toast fmm-toast--${t.kind}`}
-            style={{ pointerEvents: 'auto' }}
-          >
-            <span
-              style={{
-                fontFamily: 'var(--font-ui)',
-                fontSize: 'var(--text-sm)',
-                color: 'var(--fg-1)',
-                fontWeight: 500,
-              }}
-            >
-              {t.msg}
-            </span>
-          </div>
-        ))}
-      </div>
-    </ToastContext.Provider>
-  )
-}
 
 /* ------------------------------------------------------------------ */
 /*  Primitives                                                        */
@@ -623,7 +550,6 @@ function ClaimBanner({
 /* ------------------------------------------------------------------ */
 
 function UsernameSection({ currentUsername }: { currentUsername: string }) {
-  const toast = useToast()
   const updateUsername = useUpdateUsername()
   const [val, setVal] = useState(currentUsername)
   const [touched, setTouched] = useState(false)
@@ -660,17 +586,16 @@ function UsernameSection({ currentUsername }: { currentUsername: string }) {
       await updateUsername.mutateAsync(val)
       setSavedAt(Date.now())
       setTouched(false)
-      toast('Username saved.')
+      toast.success('Username saved.')
     } catch (err) {
       if (err instanceof ApiError && (err.status === 409 || err.status === 422)) {
         setServerErr(err.detail ?? 'Server rejected this username.')
         return
       }
-      toast(
+      toast.error(
         err instanceof Error
           ? `Couldn't update username: ${err.message}`
           : "Couldn't update username.",
-        { kind: 'err' },
       )
     }
   }
@@ -813,7 +738,6 @@ function EmailSection({
   confirmedAt: string | null
   pendingEmail: string | null
 }) {
-  const toast = useToast()
   const setEmail = useSetEmail()
   const resendEmail = useResendEmailConfirmation()
   const displayAddress = pendingEmail ?? email ?? ''
@@ -864,38 +788,36 @@ function EmailSection({
       setSavedAt(Date.now())
       setTouched(false)
       resetCaptcha()
-      toast(`Verification link sent to ${val}.`)
+      toast.success(`Verification link sent to ${val}.`)
     } catch (err) {
       resetCaptcha()
       if (err instanceof ApiError && err.status && err.status < 500) {
         setServerErr(err.detail ?? 'Server rejected this email.')
         return
       }
-      toast(
+      toast.error(
         err instanceof Error
           ? `Couldn't update email: ${err.message}`
           : "Couldn't update email.",
-        { kind: 'err' },
       )
     }
   }
 
   const onResend = async () => {
     if (!captchaToken) {
-      toast('Complete the CAPTCHA, then click Resend.', { kind: 'err' })
+      toast.error('Complete the CAPTCHA, then click Resend.')
       return
     }
     try {
       await resendEmail.mutateAsync({ captchaToken, honeypot })
       resetCaptcha()
-      toast(`Verification link re-sent to ${displayAddress}.`)
+      toast.success(`Verification link re-sent to ${displayAddress}.`)
     } catch (err) {
       resetCaptcha()
-      toast(
+      toast.error(
         err instanceof ApiError && err.detail
           ? err.detail
           : "Couldn't resend confirmation.",
-        { kind: 'err' },
       )
     }
   }
@@ -1118,54 +1040,52 @@ function SettingsPage() {
   return (
     <AppShell>
       <div className="fmm-settings">
-        <ToastProvider>
-          <TooltipProvider>
-            <div className="fmm-main-inner">
-              <PageHeader username={sessionUsername} claimed={claimed} />
+        <TooltipProvider>
+          <div className="fmm-main-inner">
+            <PageHeader username={sessionUsername} claimed={claimed} />
 
-              <ClaimBanner
-                status={effectiveStatus}
-                email={sessionPendingEmail ?? sessionEmail ?? ''}
-                onJump={() => scrollToSection('sec-email')}
+            <ClaimBanner
+              status={effectiveStatus}
+              email={sessionPendingEmail ?? sessionEmail ?? ''}
+              onJump={() => scrollToSection('sec-email')}
+            />
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+              <UsernameSection currentUsername={sessionUsername} />
+              <EmailSection
+                email={sessionEmail}
+                confirmedAt={sessionConfirmedAt}
+                pendingEmail={sessionPendingEmail}
               />
-
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-                <UsernameSection currentUsername={sessionUsername} />
-                <EmailSection
-                  email={sessionEmail}
-                  confirmedAt={sessionConfirmedAt}
-                  pendingEmail={sessionPendingEmail}
-                />
-              </div>
-
-              <ComingSoon>
-                <div
-                  style={{
-                    marginTop: 32,
-                    paddingTop: 20,
-                    borderTop: '1px solid var(--border-subtle)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 14,
-                    fontSize: 'var(--text-xs)',
-                    color: 'var(--fg-muted)',
-                    fontFamily: 'var(--font-mono)',
-                    letterSpacing: '0.06em',
-                  }}
-                >
-                  <span>v2.4.1 · made by players · no trackers</span>
-                  <div style={{ flex: 1 }} />
-                  <a className="fmm-link" style={{ fontSize: 'var(--text-xs)' }}>
-                    Privacy
-                  </a>
-                  <a className="fmm-link" style={{ fontSize: 'var(--text-xs)' }}>
-                    Sign out
-                  </a>
-                </div>
-              </ComingSoon>
             </div>
-          </TooltipProvider>
-        </ToastProvider>
+
+            <ComingSoon>
+              <div
+                style={{
+                  marginTop: 32,
+                  paddingTop: 20,
+                  borderTop: '1px solid var(--border-subtle)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 14,
+                  fontSize: 'var(--text-xs)',
+                  color: 'var(--fg-muted)',
+                  fontFamily: 'var(--font-mono)',
+                  letterSpacing: '0.06em',
+                }}
+              >
+                <span>v2.4.1 · made by players · no trackers</span>
+                <div style={{ flex: 1 }} />
+                <a className="fmm-link" style={{ fontSize: 'var(--text-xs)' }}>
+                  Privacy
+                </a>
+                <a className="fmm-link" style={{ fontSize: 'var(--text-xs)' }}>
+                  Sign out
+                </a>
+              </div>
+            </ComingSoon>
+          </div>
+        </TooltipProvider>
       </div>
     </AppShell>
   )
