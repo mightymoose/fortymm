@@ -1,7 +1,15 @@
 import '@testing-library/jest-dom/vitest'
+import { configure } from '@testing-library/dom'
 import { afterAll, afterEach, beforeAll } from 'vitest'
 import { resetMockMatches } from '../mocks/match-store'
 import { server } from '../mocks/server'
+
+// testing-library's 1s `findBy*` default is tight on CI: the first test in a
+// file pays the MSW + React-Query + jsdom warm-up cost (e.g. waiting for
+// `/v1/session` to resolve, then `/v1/players/recent` chips to render) and
+// occasionally lands at ~1.05s — flaky-by-design. Bump globally so warm-up
+// cost can't time out a fast assertion.
+configure({ asyncUtilTimeout: 5000 })
 
 // vitest's jsdom env on Node 26 doesn't expose localStorage. Production code
 // guards it with try/catch, but tests want to read/write it directly — give
