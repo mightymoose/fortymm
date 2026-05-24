@@ -348,25 +348,6 @@
   color: var(--fg-2);
 }
 
-.match-list-page .row-action {
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  width: 28px;
-  height: 28px;
-  border-radius: 6px;
-  color: var(--fg-3);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  transition: background 120ms cubic-bezier(0.2, 0.8, 0.2, 1),
-    color 120ms cubic-bezier(0.2, 0.8, 0.2, 1);
-}
-.match-list-page .row-action:hover {
-  background: var(--bg-raised);
-  color: var(--fg-1);
-}
-
 /* ============ Context chips ============ */
 .match-list-page .ctx-chip {
   display: inline-flex;

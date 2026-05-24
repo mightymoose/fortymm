@@ -7,7 +7,6 @@ import {
   ChevronsLeft,
   ChevronsRight,
   Inbox,
-  MoreHorizontal,
   Search,
   User,
   X,
@@ -451,15 +450,7 @@ function MatchRow({
               Score
             </Link>
           </Button>
-        ) : (
-          <button
-            type="button"
-            className="row-action"
-            aria-label="Row actions"
-          >
-            <MoreHorizontal size={16} strokeWidth={2} />
-          </button>
-        )}
+        ) : null}
       </td>
     </tr>
   )
