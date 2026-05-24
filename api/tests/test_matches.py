@@ -120,9 +120,7 @@ async def test_match_without_opponent_can_be_scored_to_completion(
     await start_session(api_client, db_session)
 
     match = (
-        await api_client.post(
-            "/v1/matches", json={"best_of": 3, "rated": False}
-        )
+        await api_client.post("/v1/matches", json={"best_of": 3, "rated": False})
     ).json()
     # The creator is side 1; the sentinel opponent is side 2.
     after_g1 = (
@@ -133,11 +131,9 @@ async def test_match_without_opponent_can_be_scored_to_completion(
     ).json()
     assert after_g1["status"] == "in_progress"
     game_2 = after_g1["games"][1]
-    after_g2 = (
-        await api_client.post(
-            f"/v1/matches/{match['id']}/games/{game_2['id']}/scores",
-            json={"side_1_points": 11, "side_2_points": 7},
-        )
+    after_g2 = await api_client.post(
+        f"/v1/matches/{match['id']}/games/{game_2['id']}/scores",
+        json={"side_1_points": 11, "side_2_points": 7},
     )
     assert after_g2.status_code == 201
     body = after_g2.json()

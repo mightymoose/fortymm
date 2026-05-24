@@ -305,7 +305,7 @@ async def test_dashboard_sparkline_returns_most_recent_points(
     # The signup seed event sits before any match, so push it back behind the
     # 40 rows below; otherwise it would be the most-recent point and skew the
     # truncation this test is checking.
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     await db_session.execute(
         text(
             "UPDATE rating_history SET created_at = :ts "
