@@ -144,6 +144,26 @@ export const handlers = [
     await delay(600)
     return HttpResponse.json(mockSession)
   }),
+  http.get('*/v1/users/:userId/profile', async ({ params }) => {
+    await delay(200)
+    const userId = String(params.userId)
+    const match = mockPlayers.find((p) => p.id === userId)
+    if (!match) return HttpResponse.json({ detail: 'User not found.' }, { status: 404 })
+    return HttpResponse.json({ id: match.id, username: match.username })
+  }),
+  http.get('*/v1/p/users/:username', async ({ params }) => {
+    await delay(200)
+    const username = String(params.username)
+    if (username === mockSession.data.user.username) {
+      return HttpResponse.json({
+        id: 'me_mock',
+        username: mockSession.data.user.username,
+      })
+    }
+    const match = mockPlayers.find((p) => p.username === username)
+    if (!match) return HttpResponse.json({ detail: 'User not found.' }, { status: 404 })
+    return HttpResponse.json({ id: match.id, username: match.username })
+  }),
   http.patch('*/v1/me', async ({ request }) => {
     const body = (await readJson(request)) as { username?: string } | undefined
     const next = body?.username?.trim() ?? ''

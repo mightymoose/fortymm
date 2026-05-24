@@ -18,3 +18,12 @@ class UserRead(UserBase):
     id: uuid.UUID
     created_at: datetime
     updated_at: datetime
+
+
+class UserProfile(BaseModel):
+    """Minimal user shape for profile pages — public-safe (no email)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    username: str
