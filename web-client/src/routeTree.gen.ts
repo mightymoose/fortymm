@@ -19,6 +19,7 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as MatchesIndexRouteImport } from './routes/matches/index'
 import { Route as LoginIndexRouteImport } from './routes/login.index'
 import { Route as AdminIndexRouteImport } from './routes/admin.index'
+import { Route as UsersUserIdRouteImport } from './routes/users.$userId'
 import { Route as MatchesNewRouteImport } from './routes/matches/new'
 import { Route as LoginWelcomeRouteImport } from './routes/login.welcome'
 import { Route as LoginVerifyingRouteImport } from './routes/login.verifying'
@@ -27,6 +28,7 @@ import { Route as AdminUsersRouteImport } from './routes/admin.users'
 import { Route as AdminRolesRouteImport } from './routes/admin.roles'
 import { Route as AdminPermissionsRouteImport } from './routes/admin.permissions'
 import { Route as MatchesMatchIdIndexRouteImport } from './routes/matches.$matchId.index'
+import { Route as PUsersUsernameRouteImport } from './routes/p.users.$username'
 import { Route as MatchesMatchIdGamesGameIdScoresNewRouteImport } from './routes/matches.$matchId.games.$gameId.scores.new'
 import { Route as MatchesMatchIdGamesGameIdScoresScoreIdEditRouteImport } from './routes/matches.$matchId.games.$gameId.scores.$scoreId.edit'
 
@@ -80,6 +82,11 @@ const AdminIndexRoute = AdminIndexRouteImport.update({
   path: '/',
   getParentRoute: () => AdminRoute,
 } as any)
+const UsersUserIdRoute = UsersUserIdRouteImport.update({
+  id: '/users/$userId',
+  path: '/users/$userId',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const MatchesNewRoute = MatchesNewRouteImport.update({
   id: '/matches/new',
   path: '/matches/new',
@@ -120,6 +127,11 @@ const MatchesMatchIdIndexRoute = MatchesMatchIdIndexRouteImport.update({
   path: '/matches/$matchId/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const PUsersUsernameRoute = PUsersUsernameRouteImport.update({
+  id: '/p/users/$username',
+  path: '/p/users/$username',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const MatchesMatchIdGamesGameIdScoresNewRoute =
   MatchesMatchIdGamesGameIdScoresNewRouteImport.update({
     id: '/matches/$matchId/games/$gameId/scores/new',
@@ -148,9 +160,11 @@ export interface FileRoutesByFullPath {
   '/login/verifying': typeof LoginVerifyingRoute
   '/login/welcome': typeof LoginWelcomeRoute
   '/matches/new': typeof MatchesNewRoute
+  '/users/$userId': typeof UsersUserIdRoute
   '/admin/': typeof AdminIndexRoute
   '/login/': typeof LoginIndexRoute
   '/matches/': typeof MatchesIndexRoute
+  '/p/users/$username': typeof PUsersUsernameRoute
   '/matches/$matchId/': typeof MatchesMatchIdIndexRoute
   '/matches/$matchId/games/$gameId/scores/new': typeof MatchesMatchIdGamesGameIdScoresNewRoute
   '/matches/$matchId/games/$gameId/scores/$scoreId/edit': typeof MatchesMatchIdGamesGameIdScoresScoreIdEditRoute
@@ -169,9 +183,11 @@ export interface FileRoutesByTo {
   '/login/verifying': typeof LoginVerifyingRoute
   '/login/welcome': typeof LoginWelcomeRoute
   '/matches/new': typeof MatchesNewRoute
+  '/users/$userId': typeof UsersUserIdRoute
   '/admin': typeof AdminIndexRoute
   '/login': typeof LoginIndexRoute
   '/matches': typeof MatchesIndexRoute
+  '/p/users/$username': typeof PUsersUsernameRoute
   '/matches/$matchId': typeof MatchesMatchIdIndexRoute
   '/matches/$matchId/games/$gameId/scores/new': typeof MatchesMatchIdGamesGameIdScoresNewRoute
   '/matches/$matchId/games/$gameId/scores/$scoreId/edit': typeof MatchesMatchIdGamesGameIdScoresScoreIdEditRoute
@@ -192,9 +208,11 @@ export interface FileRoutesById {
   '/login/verifying': typeof LoginVerifyingRoute
   '/login/welcome': typeof LoginWelcomeRoute
   '/matches/new': typeof MatchesNewRoute
+  '/users/$userId': typeof UsersUserIdRoute
   '/admin/': typeof AdminIndexRoute
   '/login/': typeof LoginIndexRoute
   '/matches/': typeof MatchesIndexRoute
+  '/p/users/$username': typeof PUsersUsernameRoute
   '/matches/$matchId/': typeof MatchesMatchIdIndexRoute
   '/matches/$matchId/games/$gameId/scores/new': typeof MatchesMatchIdGamesGameIdScoresNewRoute
   '/matches/$matchId/games/$gameId/scores/$scoreId/edit': typeof MatchesMatchIdGamesGameIdScoresScoreIdEditRoute
@@ -216,9 +234,11 @@ export interface FileRouteTypes {
     | '/login/verifying'
     | '/login/welcome'
     | '/matches/new'
+    | '/users/$userId'
     | '/admin/'
     | '/login/'
     | '/matches/'
+    | '/p/users/$username'
     | '/matches/$matchId/'
     | '/matches/$matchId/games/$gameId/scores/new'
     | '/matches/$matchId/games/$gameId/scores/$scoreId/edit'
@@ -237,9 +257,11 @@ export interface FileRouteTypes {
     | '/login/verifying'
     | '/login/welcome'
     | '/matches/new'
+    | '/users/$userId'
     | '/admin'
     | '/login'
     | '/matches'
+    | '/p/users/$username'
     | '/matches/$matchId'
     | '/matches/$matchId/games/$gameId/scores/new'
     | '/matches/$matchId/games/$gameId/scores/$scoreId/edit'
@@ -259,9 +281,11 @@ export interface FileRouteTypes {
     | '/login/verifying'
     | '/login/welcome'
     | '/matches/new'
+    | '/users/$userId'
     | '/admin/'
     | '/login/'
     | '/matches/'
+    | '/p/users/$username'
     | '/matches/$matchId/'
     | '/matches/$matchId/games/$gameId/scores/new'
     | '/matches/$matchId/games/$gameId/scores/$scoreId/edit'
@@ -279,8 +303,10 @@ export interface RootRouteChildren {
   LoginVerifyingRoute: typeof LoginVerifyingRoute
   LoginWelcomeRoute: typeof LoginWelcomeRoute
   MatchesNewRoute: typeof MatchesNewRoute
+  UsersUserIdRoute: typeof UsersUserIdRoute
   LoginIndexRoute: typeof LoginIndexRoute
   MatchesIndexRoute: typeof MatchesIndexRoute
+  PUsersUsernameRoute: typeof PUsersUsernameRoute
   MatchesMatchIdIndexRoute: typeof MatchesMatchIdIndexRoute
   MatchesMatchIdGamesGameIdScoresNewRoute: typeof MatchesMatchIdGamesGameIdScoresNewRoute
   MatchesMatchIdGamesGameIdScoresScoreIdEditRoute: typeof MatchesMatchIdGamesGameIdScoresScoreIdEditRoute
@@ -358,6 +384,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminIndexRouteImport
       parentRoute: typeof AdminRoute
     }
+    '/users/$userId': {
+      id: '/users/$userId'
+      path: '/users/$userId'
+      fullPath: '/users/$userId'
+      preLoaderRoute: typeof UsersUserIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/matches/new': {
       id: '/matches/new'
       path: '/matches/new'
@@ -414,6 +447,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof MatchesMatchIdIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/p/users/$username': {
+      id: '/p/users/$username'
+      path: '/p/users/$username'
+      fullPath: '/p/users/$username'
+      preLoaderRoute: typeof PUsersUsernameRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/matches/$matchId/games/$gameId/scores/new': {
       id: '/matches/$matchId/games/$gameId/scores/new'
       path: '/matches/$matchId/games/$gameId/scores/new'
@@ -459,8 +499,10 @@ const rootRouteChildren: RootRouteChildren = {
   LoginVerifyingRoute: LoginVerifyingRoute,
   LoginWelcomeRoute: LoginWelcomeRoute,
   MatchesNewRoute: MatchesNewRoute,
+  UsersUserIdRoute: UsersUserIdRoute,
   LoginIndexRoute: LoginIndexRoute,
   MatchesIndexRoute: MatchesIndexRoute,
+  PUsersUsernameRoute: PUsersUsernameRoute,
   MatchesMatchIdIndexRoute: MatchesMatchIdIndexRoute,
   MatchesMatchIdGamesGameIdScoresNewRoute:
     MatchesMatchIdGamesGameIdScoresNewRoute,
