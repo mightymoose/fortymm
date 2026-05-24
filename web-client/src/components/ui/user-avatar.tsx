@@ -11,6 +11,14 @@ function hueFor(name: string): number {
   return hue
 }
 
+// `initialsOf` returns '' for empty input and the literal ellipsis for '…' —
+// neither reads as a name. Coerce those to a stable '?' so transient/empty
+// states render a recognizable placeholder rather than a blank circle.
+function monogram(name: string): string {
+  const out = initialsOf(name).replace(/[^A-Z0-9]/gi, '')
+  return out || '?'
+}
+
 export interface UserAvatarProps {
   /** Username. `null` renders the dashed-circle "no opponent" placeholder. */
   name: string | null
@@ -74,6 +82,8 @@ export function UserAvatar({
   if (dim) {
     return (
       <span
+        role="img"
+        aria-label={name}
         className={cn('user-avatar user-avatar--dim', className)}
         style={{
           ...base,
@@ -82,7 +92,7 @@ export function UserAvatar({
           ...style,
         }}
       >
-        {initialsOf(name)}
+        {monogram(name)}
       </span>
     )
   }
@@ -90,6 +100,8 @@ export function UserAvatar({
   const hue = hueFor(name)
   return (
     <span
+      role="img"
+      aria-label={name}
       className={cn('user-avatar', className)}
       style={{
         ...base,
@@ -98,7 +110,7 @@ export function UserAvatar({
         ...style,
       }}
     >
-      {initialsOf(name)}
+      {monogram(name)}
     </span>
   )
 }
