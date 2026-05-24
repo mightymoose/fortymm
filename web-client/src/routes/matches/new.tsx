@@ -14,6 +14,7 @@ import {
   type Player,
 } from '@/api/matches'
 import { OpponentPickerBoundary } from '@/components/matches/opponent-picker-boundary'
+import { UserAvatar } from '@/components/ui/user-avatar'
 import { pageTitle } from '@/lib/page-title'
 import { useDebouncedValue } from '@/lib/use-debounced-value'
 import { cn } from '@/lib/utils'
@@ -37,16 +38,6 @@ interface Opponent {
 
 function opponentFromPlayer(player: Player): Opponent {
   return { id: player.id, name: player.username }
-}
-
-/** Two-letter monogram for an avatar bubble. */
-function initialsOf(name: string): string {
-  const parts = name.split(/[^a-zA-Z0-9]+/).filter(Boolean)
-  const letters =
-    parts.length >= 2
-      ? parts[0][0] + parts[1][0]
-      : name.replace(/[^a-zA-Z0-9]/g, '').slice(0, 2)
-  return letters.toUpperCase() || '?'
 }
 
 /* ------------------------------------------------------------------ */
@@ -140,7 +131,7 @@ function MatchCard() {
   return (
     <div className="nm-card">
       <div className="nm-you-strip">
-        <div className="av">{me ? initialsOf(me.username) : '··'}</div>
+        <UserAvatar name={me?.username ?? '…'} size={36} dim={!me} />
         <div className="block">
           <span className="lbl">You</span>
           <span className="name">{me?.username ?? 'Loading…'}</span>
@@ -209,7 +200,7 @@ function SelectedOpponent({
 }) {
   return (
     <div className="nm-selected">
-      <div className="av">{initialsOf(opponent.name)}</div>
+      <UserAvatar name={opponent.name} size={48} />
       <div className="info">
         <div className="name">{opponent.name}</div>
         <div className="rating">REGISTERED PLAYER</div>
@@ -284,7 +275,7 @@ function RecentPicker({ onPick }: { onPick: (player: Player) => void }) {
               className="nm-chip"
               onClick={() => onPick(p)}
             >
-              <div className="av">{initialsOf(p.username)}</div>
+              <UserAvatar name={p.username} size={32} />
               <div className="body">
                 <div className="n">{p.username}</div>
                 <div className="m">REGISTERED PLAYER</div>
@@ -378,7 +369,7 @@ function TypeaheadPicker({ onPick }: { onPick: (player: Player) => void }) {
         onMouseEnter={() => setActiveIdx(i)}
         onClick={() => onPick(p)}
       >
-        <div className="av">{initialsOf(p.username)}</div>
+        <UserAvatar name={p.username} size={36} />
         <div className="body">
           <div className="n">{p.username}</div>
           <div className="m">

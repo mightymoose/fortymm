@@ -1,12 +1,5 @@
 import { useSession } from '@/api/session'
-
-function getInitials(username: string): string {
-  const cleaned = username.replace(/[._-]+/g, ' ').trim()
-  const parts = cleaned.split(/\s+/).filter(Boolean)
-  if (parts.length === 0) return '??'
-  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase()
-  return (parts[0][0] + parts[1][0]).toUpperCase()
-}
+import { UserAvatar } from '@/components/ui/user-avatar'
 
 export function UserMenu() {
   const { data, isLoading, isError } = useSession()
@@ -26,7 +19,6 @@ export function UserMenu() {
   }
 
   const username = !isError && data ? data.data.user.username : 'Guest'
-  const initials = getInitials(username)
 
   return (
     <div
@@ -34,7 +26,7 @@ export function UserMenu() {
       data-testid="user-menu"
       aria-label={`Signed in as ${username}`}
     >
-      <div className="app-shell__user-avatar">{initials}</div>
+      <UserAvatar name={username} size={30} />
       <div
         className="app-shell__user-name app-shell__user-name--truncate"
         title={username}

@@ -1,7 +1,8 @@
 import type { CSSProperties, ReactNode } from 'react'
 import { Link } from '@tanstack/react-router'
-import { ArrowRight, ChevronRight, Plus, User as UserIcon, X } from 'lucide-react'
+import { ArrowRight, ChevronRight, Plus, X } from 'lucide-react'
 import { useDashboard } from '@/api/dashboard'
+import { UserAvatar } from '@/components/ui/user-avatar'
 import type {
   DashboardRating,
   DashboardRecentResult,
@@ -143,74 +144,6 @@ function BallDot({
   )
 }
 
-function Avatar({
-  name,
-  size = 40,
-  ring = false,
-  ringColor = C.ball500,
-}: {
-  // `null` renders the dashed-circle "no opponent" placeholder. We never want
-  // a contrived monogram (e.g. "NO" for "No opponent") that looks like a real
-  // initials avatar — it should read unambiguously as "no player here".
-  name: string | null
-  size?: number
-  ring?: boolean
-  ringColor?: string
-}) {
-  const baseStyle: CSSProperties = {
-    width: size,
-    height: size,
-    borderRadius: '50%',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    boxShadow: ring
-      ? `0 0 0 2px ${C.ink950}, 0 0 0 ${size > 40 ? 3 : 2.5}px ${ringColor}`
-      : 'none',
-    flexShrink: 0,
-  }
-
-  if (name === null) {
-    return (
-      <div
-        aria-hidden="true"
-        style={{
-          ...baseStyle,
-          background: 'transparent',
-          border: `1px dashed ${C.ink500}`,
-          color: C.chalk500,
-        }}
-      >
-        <UserIcon size={Math.round(size * 0.45)} strokeWidth={1.75} />
-      </div>
-    )
-  }
-
-  const initials = name
-    .split(/[ -]/)
-    .map((s) => s[0])
-    .filter(Boolean)
-    .slice(0, 2)
-    .join('')
-    .toUpperCase()
-  let hue = 0
-  for (let i = 0; i < name.length; i++) hue = (hue * 31 + name.charCodeAt(i)) % 360
-  const bg = `hsl(${hue}, 28%, 28%)`
-  const fg = `hsl(${hue}, 60%, 78%)`
-  return (
-    <div
-      style={{
-        ...baseStyle,
-        background: bg,
-        color: fg,
-        font: `600 ${Math.round(size * 0.42)}px ${UI}`,
-        letterSpacing: '0.03em',
-      }}
-    >
-      {initials}
-    </div>
-  )
-}
 
 function Sparkline({
   data,
@@ -591,7 +524,7 @@ function ScoreBanner({ banner }: { banner: DashboardScoreBanner }) {
               minWidth: 0,
             }}
           >
-            <Avatar name={opponent} size={64} ring ringColor={accent} />
+            <UserAvatar name={opponent} size={64} ring ringColor={accent} />
             <div style={{ minWidth: 0, flex: 1 }}>
               <h1
                 style={{
@@ -687,7 +620,7 @@ function CompactScoreBanner({ banner }: { banner: DashboardScoreBanner }) {
         }}
       />
       <BallDot live color={C.warn} size={8} />
-      <Avatar name={opponent} size={36} />
+      <UserAvatar name={opponent} size={36} />
       <div style={{ flex: 1, minWidth: 0 }}>
         <div
           style={{
@@ -983,7 +916,7 @@ function RecentResultsCard({ rows }: { rows: DashboardRecentResult[] }) {
                           boxShadow: `0 0 6px ${r.is_win ? 'rgba(0,226,154,0.5)' : 'rgba(255,77,109,0.5)'}`,
                         }}
                       />
-                      <Avatar name={opponent} size={24} />
+                      <UserAvatar name={opponent} size={24} />
                       <span
                         style={{
                           color: opponent ? C.chalk50 : C.chalk500,
