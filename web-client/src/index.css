@@ -1716,6 +1716,9 @@ body.dark.fortymm-theme {
   gap: 10px;
 }
 .fortymm-theme .action-btns .btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   background: var(--ink-700);
   border: 1px solid var(--ink-500);
   color: var(--fg-1);
@@ -1724,6 +1727,7 @@ body.dark.fortymm-theme {
   height: 46px;
   border-radius: 10px;
   cursor: pointer;
+  text-decoration: none;
 }
 .fortymm-theme .action-btns .btn:hover {
   border-color: var(--fg-3);
