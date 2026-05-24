@@ -23,7 +23,6 @@ import {
 import type { components } from '@/api/schema'
 import { useSession } from '@/api/session'
 import { AppShell } from '@/components/app-shell'
-import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -35,9 +34,10 @@ import {
   PaginationLink,
 } from '@/components/ui/pagination'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { UserAvatar } from '@/components/ui/user-avatar'
 import { pageTitle } from '@/lib/page-title'
 import { useDebouncedValue } from '@/lib/use-debounced-value'
-import { cn, initialsOf } from '@/lib/utils'
+import { cn } from '@/lib/utils'
 import './index.css'
 
 type MatchListRowSide = components['schemas']['MatchDetailsSide']
@@ -472,11 +472,7 @@ function PlayerChip({ side }: { side: MatchListRowSide | null }) {
           <User size={15} strokeWidth={1.75} />
         </span>
       ) : (
-        <Avatar className="size-[26px]">
-          <AvatarFallback className="font-mono text-[11px] font-bold">
-            {initialsOf(name)}
-          </AvatarFallback>
-        </Avatar>
+        <UserAvatar name={name} size={26} />
       )}
       <span
         className={cn(

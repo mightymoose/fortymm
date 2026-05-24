@@ -25,6 +25,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
+import { UserAvatar } from '@/components/ui/user-avatar'
 import {
   HONEYPOT_STYLE,
   validateEmail,
@@ -104,35 +105,6 @@ function relativeTime(ts: number): string {
 
 function Spinner() {
   return <span className="fmm-spinner" />
-}
-
-function Avatar({ name, size = 32, dim = false }: { name: string; size?: number; dim?: boolean }) {
-  const init =
-    (name || '?').replace(/[^a-z0-9]/gi, '').slice(0, 2).toUpperCase() || '?'
-  return (
-    <div
-      style={{
-        width: size,
-        height: size,
-        borderRadius: '50%',
-        background: dim
-          ? 'var(--ink-700)'
-          : 'linear-gradient(135deg, var(--ball-500), var(--ball-700))',
-        color: dim ? 'var(--fg-3)' : 'var(--ink-950)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        fontFamily: 'var(--font-mono)',
-        fontSize: Math.round(size * 0.36),
-        fontWeight: 700,
-        letterSpacing: '0.02em',
-        flexShrink: 0,
-        boxShadow: dim ? 'none' : '0 0 0 2px rgba(255,122,26,0.18)',
-      }}
-    >
-      {init}
-    </div>
-  )
 }
 
 const COMING_SOON_TRIGGER: CSSProperties = {
@@ -450,7 +422,7 @@ function PageHeader({
             flexShrink: 0,
           }}
         >
-          <Avatar name={username || '…'} size={26} dim={!claimed} />
+          <UserAvatar name={username || '…'} size={26} dim={!claimed} />
           <div
             style={{
               fontFamily: 'var(--font-mono)',
@@ -687,7 +659,7 @@ function UsernameSection({ currentUsername }: { currentUsername: string }) {
           gap: 14,
         }}
       >
-        <Avatar name={val} size={36} dim={!clientV.ok} />
+        <UserAvatar name={val} size={36} dim={!clientV.ok} />
         <div style={{ flex: 1 }}>
           <div
             style={{
