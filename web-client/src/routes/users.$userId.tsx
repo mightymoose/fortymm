@@ -1,6 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router'
-import { sessionQueryOptions } from '@/api/session'
-import { useUserById, userByIdQueryOptions } from '@/api/users'
+import { sessionQueryOptions, useSession } from '@/api/session'
+import { useUserById } from '@/api/users'
 import { AppShell } from '@/components/app-shell'
 import { pageTitle } from '@/lib/page-title'
 
@@ -8,16 +8,21 @@ export const Route = createFileRoute('/users/$userId')({
   head: () => ({
     meta: [{ title: pageTitle('User') }],
   }),
-  loader: ({ context: { queryClient }, params: { userId } }) => {
+  // Don't prefetch the profile here — it requires a session cookie, and on a
+  // direct-load the session prefetch hasn't landed yet. The component fires
+  // the profile query once `session.isSuccess`. See #144.
+  loader: ({ context: { queryClient } }) => {
     void queryClient.prefetchQuery(sessionQueryOptions())
-    void queryClient.prefetchQuery(userByIdQueryOptions(userId))
   },
   component: UserRoute,
 })
 
 function UserRoute() {
   const { userId } = Route.useParams()
-  const { data, isPending, isError } = useUserById(userId)
+  const session = useSession()
+  const { data, isPending, isError } = useUserById(userId, {
+    enabled: session.isSuccess,
+  })
 
   return (
     <AppShell>
