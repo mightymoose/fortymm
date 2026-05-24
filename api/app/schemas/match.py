@@ -195,7 +195,7 @@ class MatchGameScoreWrite(BaseModel):
     side_2_points: int = Field(ge=0, le=99)
 
     @model_validator(mode="after")
-    def _table_tennis_rules(self):
+    def _table_tennis_rules(self) -> "MatchGameScoreWrite":
         a, b = self.side_1_points, self.side_2_points
         winner, loser = max(a, b), min(a, b)
         if winner < 11:

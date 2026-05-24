@@ -1,6 +1,5 @@
 import uuid
-from collections.abc import Sequence
-from typing import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import delete, func, select
@@ -10,7 +9,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db import get_session
 from app.leagues import add_user_to_default_league
 from app.models import Permission, Role, RolePermission, User, UserRole
-from app.uniqueness import name_taken
 from app.schemas.rbac import (
     PermissionCreate,
     PermissionRead,
@@ -23,7 +21,7 @@ from app.schemas.rbac import (
     RoleUpdate,
 )
 from app.sessions import get_current_user
-
+from app.uniqueness import name_taken
 
 # ----- authorization -------------------------------------------------------
 
@@ -35,9 +33,7 @@ from app.sessions import get_current_user
 RBAC_PERMISSION = "authorization.manage"
 
 
-async def _user_has_permission(
-    db: AsyncSession, user_id: uuid.UUID, name: str
-) -> bool:
+async def _user_has_permission(db: AsyncSession, user_id: uuid.UUID, name: str) -> bool:
     result = await db.execute(
         select(Permission.id)
         .join(RolePermission, RolePermission.permission_id == Permission.id)
@@ -162,9 +158,7 @@ async def _validate_permission_ids(
     deduped = list(dict.fromkeys(permission_ids))
     if not deduped:
         return []
-    result = await db.execute(
-        select(Permission.id).where(Permission.id.in_(deduped))
-    )
+    result = await db.execute(select(Permission.id).where(Permission.id.in_(deduped)))
     found = set(result.scalars().all())
     missing = [pid for pid in deduped if pid not in found]
     if missing:
@@ -213,9 +207,7 @@ async def create_permission(
     db: AsyncSession = Depends(get_session),
 ) -> PermissionRead:
     if await name_taken(db, Permission.id, Permission.name, payload.name):
-        raise HTTPException(
-            status_code=409, detail="Permission name already exists."
-        )
+        raise HTTPException(status_code=409, detail="Permission name already exists.")
     perm = Permission(name=payload.name, description=payload.description)
     db.add(perm)
     try:
@@ -224,7 +216,7 @@ async def create_permission(
         await db.rollback()
         raise HTTPException(
             status_code=409, detail="Permission name already exists."
-        )
+        ) from None
     await db.refresh(perm)
     return PermissionRead.model_validate(perm)
 
@@ -253,9 +245,7 @@ async def update_permission(
             db, Permission.id, Permission.name, data["name"], exclude_id=perm.id
         )
     ):
-        raise HTTPException(
-            status_code=409, detail="Permission name already exists."
-        )
+        raise HTTPException(status_code=409, detail="Permission name already exists.")
     for key, value in data.items():
         setattr(perm, key, value)
     try:
@@ -264,14 +254,12 @@ async def update_permission(
         await db.rollback()
         raise HTTPException(
             status_code=409, detail="Permission name already exists."
-        )
+        ) from None
     await db.refresh(perm)
     return PermissionRead.model_validate(perm)
 
 
-@router.delete(
-    "/permissions/{permission_id}", status_code=status.HTTP_204_NO_CONTENT
-)
+@router.delete("/permissions/{permission_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_permission(
     permission_id: uuid.UUID,
     db: AsyncSession = Depends(get_session),
@@ -293,9 +281,7 @@ async def list_roles(db: AsyncSession = Depends(get_session)) -> list[RoleRead]:
     return [_serialize_role(r, perm_map.get(r.id, [])) for r in roles]
 
 
-@router.post(
-    "/roles", response_model=RoleRead, status_code=status.HTTP_201_CREATED
-)
+@router.post("/roles", response_model=RoleRead, status_code=status.HTTP_201_CREATED)
 async def create_role(
     payload: RoleCreate,
     db: AsyncSession = Depends(get_session),
@@ -315,9 +301,7 @@ async def create_role(
         template_perms = await _load_role_permission_map(db, [template.id])
         permission_ids = template_perms.get(template.id, [])
     elif payload.permission_ids is not None:
-        permission_ids = await _validate_permission_ids(
-            db, payload.permission_ids
-        )
+        permission_ids = await _validate_permission_ids(db, payload.permission_ids)
 
     role = Role(name=payload.name, description=payload.description)
     db.add(role)
@@ -325,7 +309,9 @@ async def create_role(
         await db.flush()
     except IntegrityError:
         await db.rollback()
-        raise HTTPException(status_code=409, detail="Role name already exists.")
+        raise HTTPException(
+            status_code=409, detail="Role name already exists."
+        ) from None
 
     for pid in permission_ids:
         db.add(RolePermission(role_id=role.id, permission_id=pid))
@@ -353,9 +339,7 @@ async def update_role(
     # racing PATCHes (e.g. duplicated clicks) don't collide on the
     # role_permissions primary key when one deletes and re-inserts before the
     # other commits.
-    locked = await db.execute(
-        select(Role).where(Role.id == role_id).with_for_update()
-    )
+    locked = await db.execute(select(Role).where(Role.id == role_id).with_for_update())
     role = locked.scalar_one_or_none()
     if role is None:
         raise HTTPException(status_code=404, detail="Role not found.")
@@ -372,9 +356,7 @@ async def update_role(
     if (
         "name" in data
         and data["name"]
-        and await name_taken(
-            db, Role.id, Role.name, data["name"], exclude_id=role.id
-        )
+        and await name_taken(db, Role.id, Role.name, data["name"], exclude_id=role.id)
     ):
         raise HTTPException(status_code=409, detail="Role name already exists.")
 
@@ -385,7 +367,9 @@ async def update_role(
         await db.flush()
     except IntegrityError:
         await db.rollback()
-        raise HTTPException(status_code=409, detail="Role name already exists.")
+        raise HTTPException(
+            status_code=409, detail="Role name already exists."
+        ) from None
 
     if new_permission_ids is not None:
         await db.execute(
@@ -430,9 +414,7 @@ async def list_users(
     return [_serialize_user(u, role_map.get(u.id, [])) for u in users]
 
 
-@router.post(
-    "/users", response_model=RbacUserRead, status_code=status.HTTP_201_CREATED
-)
+@router.post("/users", response_model=RbacUserRead, status_code=status.HTTP_201_CREATED)
 async def create_user(
     payload: RbacUserCreate,
     db: AsyncSession = Depends(get_session),
@@ -447,7 +429,9 @@ async def create_user(
         await db.commit()
     except IntegrityError:
         await db.rollback()
-        raise HTTPException(status_code=409, detail="Username already exists.")
+        raise HTTPException(
+            status_code=409, detail="Username already exists."
+        ) from None
     await db.refresh(user)
     return _serialize_user(user, [])
 
@@ -469,9 +453,7 @@ async def set_user_roles(
 ) -> RbacUserRead:
     # FOR UPDATE on the user row prevents racing PUTs from colliding on the
     # user_roles primary key (delete-then-insert otherwise conflicts).
-    locked = await db.execute(
-        select(User).where(User.id == user_id).with_for_update()
-    )
+    locked = await db.execute(select(User).where(User.id == user_id).with_for_update())
     user = locked.scalar_one_or_none()
     if user is None:
         raise HTTPException(status_code=404, detail="User not found.")

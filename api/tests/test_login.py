@@ -1,6 +1,6 @@
 import hashlib
 from collections.abc import AsyncIterator
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
@@ -53,7 +53,7 @@ async def _make_confirmed_user(db_session: AsyncSession, email: str) -> User:
     user = User(
         username=email.split("@")[0],
         email=email,
-        confirmed_at=datetime.now(timezone.utc),
+        confirmed_at=datetime.now(UTC),
     )
     db_session.add(user)
     await db_session.commit()
@@ -74,10 +74,14 @@ async def test_request_enqueues_email_and_persists_token(
     assert response.json() == {"email": "rita@example.com"}
 
     tokens = (
-        await db_session.execute(
-            select(UserToken).where(UserToken.context == LOGIN_TOKEN_CONTEXT)
+        (
+            await db_session.execute(
+                select(UserToken).where(UserToken.context == LOGIN_TOKEN_CONTEXT)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert len(tokens) == 1
     assert tokens[0].user_id == user.id
     assert tokens[0].sent_to == "rita@example.com"
@@ -97,10 +101,14 @@ async def test_request_normalizes_email_to_lowercase(
     assert response.status_code == 202
 
     tokens = (
-        await db_session.execute(
-            select(UserToken).where(UserToken.context == LOGIN_TOKEN_CONTEXT)
+        (
+            await db_session.execute(
+                select(UserToken).where(UserToken.context == LOGIN_TOKEN_CONTEXT)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert len(tokens) == 1
     assert tokens[0].user_id == user.id
     assert tokens[0].sent_to == "rita@example.com"
@@ -113,10 +121,14 @@ async def test_request_for_unknown_email_returns_202_without_sending(
     assert response.status_code == 202
 
     tokens = (
-        await db_session.execute(
-            select(UserToken).where(UserToken.context == LOGIN_TOKEN_CONTEXT)
+        (
+            await db_session.execute(
+                select(UserToken).where(UserToken.context == LOGIN_TOKEN_CONTEXT)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert tokens == []
     assert fake_email_queue.finished_job_registry.count == 0
 
@@ -136,19 +148,25 @@ async def test_request_for_unconfirmed_account_resends_confirmation(
     assert response.json() == {"email": "rita@example.com"}
 
     login_tokens = (
-        await db_session.execute(
-            select(UserToken).where(UserToken.context == LOGIN_TOKEN_CONTEXT)
+        (
+            await db_session.execute(
+                select(UserToken).where(UserToken.context == LOGIN_TOKEN_CONTEXT)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert login_tokens == []
 
     change_tokens = (
-        await db_session.execute(
-            select(UserToken).where(
-                UserToken.context.startswith("change:")
+        (
+            await db_session.execute(
+                select(UserToken).where(UserToken.context.startswith("change:"))
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert len(change_tokens) == 1
     assert change_tokens[0].sent_to == "rita@example.com"
     assert change_tokens[0].user_id == user.id
@@ -167,10 +185,14 @@ async def test_request_replaces_prior_login_token_for_same_user(
     assert second.status_code == 202
 
     tokens = (
-        await db_session.execute(
-            select(UserToken).where(UserToken.context == LOGIN_TOKEN_CONTEXT)
+        (
+            await db_session.execute(
+                select(UserToken).where(UserToken.context == LOGIN_TOKEN_CONTEXT)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert len(tokens) == 1
 
 
@@ -186,10 +208,14 @@ async def test_request_honeypot_silently_succeeds(
     assert response.status_code == 202
 
     tokens = (
-        await db_session.execute(
-            select(UserToken).where(UserToken.context == LOGIN_TOKEN_CONTEXT)
+        (
+            await db_session.execute(
+                select(UserToken).where(UserToken.context == LOGIN_TOKEN_CONTEXT)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert tokens == []
 
 
@@ -261,9 +287,7 @@ async def test_consume_rotates_cookie_and_returns_session(
     raw = "raw-login-token-rita"
     await _issue_login_token(db_session, user, raw)
 
-    response = await api_client.post(
-        "/v1/login/consume", json={"token": raw}
-    )
+    response = await api_client.post("/v1/login/consume", json={"token": raw})
     assert response.status_code == 200
 
     body_user = response.json()["data"]["user"]
@@ -277,16 +301,19 @@ async def test_consume_rotates_cookie_and_returns_session(
     assert new_cookie
 
     sessions = (
-        await db_session.execute(
-            select(UserToken).where(
-                UserToken.context == SESSION_TOKEN_CONTEXT,
-                UserToken.user_id == user.id,
+        (
+            await db_session.execute(
+                select(UserToken).where(
+                    UserToken.context == SESSION_TOKEN_CONTEXT,
+                    UserToken.user_id == user.id,
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert any(
-        t.token == hashlib.sha256(new_cookie.encode("utf-8")).digest()
-        for t in sessions
+        t.token == hashlib.sha256(new_cookie.encode("utf-8")).digest() for t in sessions
     )
 
 
@@ -301,17 +328,19 @@ async def test_consume_deletes_token_so_it_cannot_be_reused(
     assert first.status_code == 200
 
     second_client = make_client()
-    second = await second_client.post(
-        "/v1/login/consume", json={"token": raw}
-    )
+    second = await second_client.post("/v1/login/consume", json={"token": raw})
     assert second.status_code == 400
     await second_client.aclose()
 
     leftover = (
-        await db_session.execute(
-            select(UserToken).where(UserToken.context == LOGIN_TOKEN_CONTEXT)
+        (
+            await db_session.execute(
+                select(UserToken).where(UserToken.context == LOGIN_TOKEN_CONTEXT)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert leftover == []
 
 
@@ -322,19 +351,21 @@ async def test_consume_rejects_expired_token(
     raw = "raw-login-token-expired"
     token = await _issue_login_token(db_session, user, raw)
     # Backdate past the 15-minute TTL.
-    token.created_at = datetime.now(timezone.utc) - timedelta(minutes=20)
+    token.created_at = datetime.now(UTC) - timedelta(minutes=20)
     await db_session.commit()
 
-    response = await api_client.post(
-        "/v1/login/consume", json={"token": raw}
-    )
+    response = await api_client.post("/v1/login/consume", json={"token": raw})
     assert response.status_code == 400
 
     leftover = (
-        await db_session.execute(
-            select(UserToken).where(UserToken.context == LOGIN_TOKEN_CONTEXT)
+        (
+            await db_session.execute(
+                select(UserToken).where(UserToken.context == LOGIN_TOKEN_CONTEXT)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert leftover == []
 
 
@@ -357,16 +388,12 @@ async def test_consume_replaces_guest_session_with_owner_session(
     guest = await start_session(api_client, db_session)
     assert guest.id != user.id
 
-    response = await api_client.post(
-        "/v1/login/consume", json={"token": raw}
-    )
+    response = await api_client.post("/v1/login/consume", json={"token": raw})
     assert response.status_code == 200
     assert response.json()["data"]["user"]["username"] == "rita"
 
     new_cookie = response.cookies.get(SESSION_COOKIE_NAME)
-    me = await api_client.get(
-        "/v1/session", cookies={SESSION_COOKIE_NAME: new_cookie}
-    )
+    me = await api_client.get("/v1/session", cookies={SESSION_COOKIE_NAME: new_cookie})
     assert me.json()["data"]["user"]["username"] == "rita"
 
 
@@ -386,9 +413,7 @@ async def test_consume_does_not_accept_email_change_token(
     )
     await db_session.commit()
 
-    response = await api_client.post(
-        "/v1/login/consume", json={"token": raw}
-    )
+    response = await api_client.post("/v1/login/consume", json={"token": raw})
     assert response.status_code == 400
 
 
@@ -404,25 +429,25 @@ async def test_consume_rejects_link_after_user_changed_email(
     user.email = "rita-new@example.com"
     await db_session.commit()
 
-    response = await api_client.post(
-        "/v1/login/consume", json={"token": raw}
-    )
+    response = await api_client.post("/v1/login/consume", json={"token": raw})
     assert response.status_code == 400
 
     leftover = (
-        await db_session.execute(
-            select(UserToken).where(UserToken.context == LOGIN_TOKEN_CONTEXT)
+        (
+            await db_session.execute(
+                select(UserToken).where(UserToken.context == LOGIN_TOKEN_CONTEXT)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert leftover == []
 
 
 # ---- merge of ephemeral session on consume -------------------------------
 
 
-async def _record_singles_match(
-    db_session: AsyncSession, *players: User
-) -> Match:
+async def _record_singles_match(db_session: AsyncSession, *players: User) -> Match:
     league = await get_default_league(db_session)
     settings = MatchSettings(team_size=1, best_of=5, affects_rating=False)
     match = Match(
@@ -460,10 +485,14 @@ async def test_consume_merges_ephemeral_matches_into_verified_account(
     assert body["merged"] == {"matches_moved": 1}
 
     players = (
-        await db_session.execute(
-            select(MatchSidePlayer).where(MatchSidePlayer.match_id == match.id)
+        (
+            await db_session.execute(
+                select(MatchSidePlayer).where(MatchSidePlayer.match_id == match.id)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert {p.user_id for p in players} == {rita.id, opponent.id}
 
     creator_id = (
@@ -505,17 +534,13 @@ async def test_consume_omits_merge_when_prior_session_is_verified(
     await _issue_login_token(db_session, sam, raw_sam)
 
     # Sign in as Sam first to establish a verified session, then "log in" as Rita.
-    sign_in_sam = await api_client.post(
-        "/v1/login/consume", json={"token": raw_sam}
-    )
+    sign_in_sam = await api_client.post("/v1/login/consume", json={"token": raw_sam})
     assert sign_in_sam.status_code == 200
 
     opponent = await make_user(db_session, "opponent-jay")
     sam_match = await _record_singles_match(db_session, sam, opponent)
 
-    response = await api_client.post(
-        "/v1/login/consume", json={"token": raw_rita}
-    )
+    response = await api_client.post("/v1/login/consume", json={"token": raw_rita})
     assert response.status_code == 200
     assert response.json().get("merged") is None
 

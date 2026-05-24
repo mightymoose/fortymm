@@ -46,9 +46,7 @@ class UserLeagueRating(Base):
         nullable=False,
     )
     rating_value: Mapped[float | None] = mapped_column(Float, nullable=True)
-    rating_state: Mapped[dict[str, Any] | None] = mapped_column(
-        JSONB, nullable=True
-    )
+    rating_state: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

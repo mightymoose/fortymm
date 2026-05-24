@@ -3,12 +3,13 @@ import logging
 import os
 import secrets
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
 from coolname import generate_slug
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response, status
 from fastapi_limiter.depends import RateLimiter
+from rq.job import Job
 from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,6 +24,7 @@ from app.ratings.jobs import RECOMPUTE_AFTER_MERGE_JOB
 from app.schemas.session import (
     ConfirmEmailRequest,
     ConsumeLoginRequest,
+    LoginRequestAccepted,
     MergeSummary,
     RequestLoginRequest,
     ResendEmailRequest,
@@ -96,9 +98,7 @@ async def _email_ip_rate_limit_key(request: Request) -> str:
 #   - looser per-IP ceiling so an attacker can't trivially multiply their
 #     budget by rotating guest sessions (each `GET /v1/session` mints a new
 #     one for free).
-email_send_rate_limit = RateLimiter(
-    times=5, hours=1, identifier=_email_rate_limit_key
-)
+email_send_rate_limit = RateLimiter(times=5, hours=1, identifier=_email_rate_limit_key)
 email_send_ip_rate_limit = RateLimiter(
     times=20, hours=1, identifier=_email_ip_rate_limit_key
 )
@@ -132,9 +132,7 @@ def _hash_token(raw_token: str) -> bytes:
 async def _generate_username(db: AsyncSession) -> str:
     base = generate_slug(2)
     result = await db.execute(
-        select(User.username).where(
-            User.username.ilike(f"{base}%", escape="\\")
-        )
+        select(User.username).where(User.username.ilike(f"{base}%", escape="\\"))
     )
     taken = {u.lower() for u in result.scalars().all()}
     if base not in taken:
@@ -206,7 +204,7 @@ async def _maybe_merge_prior_session(
     return MergeSummary(matches_moved=summary.matches_moved)
 
 
-async def _load_permissions(db: AsyncSession, user_id) -> list[str]:
+async def _load_permissions(db: AsyncSession, user_id: uuid.UUID) -> list[str]:
     result = await db.execute(
         select(Permission.name)
         .join(RolePermission, RolePermission.permission_id == Permission.id)
@@ -254,9 +252,7 @@ def _set_session_cookie(response: Response, raw_token: str) -> None:
 @router.get("/v1/session", response_model=SessionResponse)
 async def get_session_endpoint(
     response: Response,
-    session_cookie: Annotated[
-        str | None, Cookie(alias=SESSION_COOKIE_NAME)
-    ] = None,
+    session_cookie: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None,
     db: AsyncSession = Depends(get_session),
 ) -> SessionResponse:
     user: User | None = None
@@ -269,9 +265,7 @@ async def get_session_endpoint(
 
 
 async def get_current_user(
-    session_cookie: Annotated[
-        str | None, Cookie(alias=SESSION_COOKIE_NAME)
-    ] = None,
+    session_cookie: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None,
     db: AsyncSession = Depends(get_session),
 ) -> User:
     """Resolve the authenticated user from the session cookie.
@@ -280,9 +274,7 @@ async def get_current_user(
     endpoints that create or mutate data require an already-established
     session and respond ``401`` otherwise.
     """
-    user = (
-        await _find_session_user(db, session_cookie) if session_cookie else None
-    )
+    user = await _find_session_user(db, session_cookie) if session_cookie else None
     if user is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -319,7 +311,7 @@ async def update_current_user(
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="Username already taken.",
-            )
+            ) from None
         await db.refresh(current_user)
 
     return await _build_session_response(db, current_user)
@@ -334,7 +326,7 @@ async def _verify_captcha_or_400(captcha_token: str) -> None:
 
 
 async def _pending_change_token(
-    db: AsyncSession, user_id
+    db: AsyncSession, user_id: uuid.UUID
 ) -> UserToken | None:
     """Return the user's pending email-change token, if any. Resend needs
     both the prior ``context`` (audit trail) and ``sent_to`` (where to
@@ -378,7 +370,7 @@ async def _issue_confirmation_token(
 
 def _enqueue_email_job(
     job_func: str, to_email: str, raw_token: str, username: str
-):
+) -> Job:
     # result_ttl=60 / failure_ttl=300 shrinks the window during which the raw
     # token (pickled into the RQ job hash in Redis) is recoverable from a
     # snapshot or dashboard. Defaults are 8m / 1 year respectively.
@@ -392,13 +384,13 @@ def _enqueue_email_job(
     )
 
 
-def _enqueue_confirmation_email(to_email: str, raw_token: str, username: str):
+def _enqueue_confirmation_email(to_email: str, raw_token: str, username: str) -> Job:
     return _enqueue_email_job(
         "app.email.send_confirmation_email", to_email, raw_token, username
     )
 
 
-def _enqueue_login_email(to_email: str, raw_token: str, username: str):
+def _enqueue_login_email(to_email: str, raw_token: str, username: str) -> Job:
     return _enqueue_email_job(
         "app.email.send_login_email", to_email, raw_token, username
     )
@@ -471,16 +463,14 @@ async def set_email(
     # user silently un-verified with no link sent. If enqueue fails, rollback
     # restores in-memory + on-disk state.
     try:
-        job = _enqueue_confirmation_email(
-            email, raw_token, current_user.username
-        )
+        job = _enqueue_confirmation_email(email, raw_token, current_user.username)
     except Exception:
         await db.rollback()
         await db.refresh(current_user)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Email service unavailable. Try again in a moment.",
-        )
+        ) from None
 
     try:
         await db.commit()
@@ -538,7 +528,7 @@ async def resend_email_confirmation(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Email service unavailable. Try again in a moment.",
-        )
+        ) from None
     try:
         await db.commit()
     except Exception:
@@ -555,9 +545,7 @@ async def resend_email_confirmation(
 async def confirm_email(
     payload: ConfirmEmailRequest,
     response: Response,
-    session_cookie: Annotated[
-        str | None, Cookie(alias=SESSION_COOKIE_NAME)
-    ] = None,
+    session_cookie: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None,
     db: AsyncSession = Depends(get_session),
 ) -> SessionResponse:
     """Consume an email-change token: stamp the new email + ``confirmed_at``.
@@ -619,7 +607,7 @@ async def confirm_email(
     raw_session = secrets.token_urlsafe(32)
     try:
         user.email = token_row.sent_to
-        user.confirmed_at = datetime.now(timezone.utc)
+        user.confirmed_at = datetime.now(UTC)
         await db.delete(token_row)
         merged = await _maybe_merge_prior_session(db, session_cookie, user)
         db.add(
@@ -635,7 +623,7 @@ async def confirm_email(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="That confirmation link is invalid or expired.",
-        )
+        ) from None
     if merged is not None and merged.matches_moved > 0:
         _enqueue_rating_recompute_after_merge(user.id)
     _set_session_cookie(response, raw_session)
@@ -645,6 +633,7 @@ async def confirm_email(
 @router.post(
     "/v1/login/request",
     status_code=status.HTTP_202_ACCEPTED,
+    response_model=LoginRequestAccepted,
     dependencies=[
         Depends(email_send_ip_rate_limit),
         Depends(email_send_rate_limit),
@@ -653,7 +642,7 @@ async def confirm_email(
 async def request_login_email(
     payload: RequestLoginRequest,
     db: AsyncSession = Depends(get_session),
-) -> dict:
+) -> LoginRequestAccepted:
     """Mint a magic-link sign-in token and email it.
 
     Always returns the same 202 shape regardless of whether the address
@@ -671,7 +660,7 @@ async def request_login_email(
     email = payload.email.lower()
 
     if payload.fmm_hp_token.strip():
-        return {"email": email}
+        return LoginRequestAccepted(email=email)
 
     await _verify_captcha_or_400(payload.captcha_token)
 
@@ -679,19 +668,17 @@ async def request_login_email(
         await db.execute(select(User).where(User.email == email))
     ).scalar_one_or_none()
     if user is None:
-        return {"email": email}
+        return LoginRequestAccepted(email=email)
 
     if user.confirmed_at is None:
         await _issue_and_send_confirmation_email(db, user, email)
-        return {"email": email}
+        return LoginRequestAccepted(email=email)
 
     await _issue_and_send_login_email(db, user, email)
-    return {"email": email}
+    return LoginRequestAccepted(email=email)
 
 
-async def _issue_and_send_login_email(
-    db: AsyncSession, user: User, email: str
-) -> None:
+async def _issue_and_send_login_email(db: AsyncSession, user: User, email: str) -> None:
     """Replace any live login token for this user with a fresh one and
     enqueue the sign-in email. Enqueue before commit so a Redis flap
     rolls the DB write back instead of stranding a tokenless user."""
@@ -717,7 +704,7 @@ async def _issue_and_send_login_email(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Email service unavailable. Try again in a moment.",
-        )
+        ) from None
     try:
         await db.commit()
     except Exception:
@@ -746,7 +733,7 @@ async def _issue_and_send_confirmation_email(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Email service unavailable. Try again in a moment.",
-        )
+        ) from None
     try:
         await db.commit()
     except Exception:
@@ -766,9 +753,7 @@ async def _issue_and_send_confirmation_email(
 async def consume_login_token(
     payload: ConsumeLoginRequest,
     response: Response,
-    session_cookie: Annotated[
-        str | None, Cookie(alias=SESSION_COOKIE_NAME)
-    ] = None,
+    session_cookie: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None,
     db: AsyncSession = Depends(get_session),
 ) -> SessionResponse:
     """Verify a magic-link token and rotate the caller's session cookie.
@@ -794,8 +779,8 @@ async def consume_login_token(
 
     issued_at = token_row.created_at
     if issued_at.tzinfo is None:
-        issued_at = issued_at.replace(tzinfo=timezone.utc)
-    if datetime.now(timezone.utc) - issued_at > LOGIN_TOKEN_LIFETIME:
+        issued_at = issued_at.replace(tzinfo=UTC)
+    if datetime.now(UTC) - issued_at > LOGIN_TOKEN_LIFETIME:
         await db.delete(token_row)
         await db.commit()
         raise HTTPException(

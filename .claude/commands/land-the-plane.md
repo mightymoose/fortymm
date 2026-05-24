@@ -24,7 +24,7 @@ Apply any fixes it identifies. When `simplify` produces edits, stage and commit 
 
 Run each suite the project ships. Use the project root as cwd. Run independent suites in parallel via separate Bash tool calls in one message. Skip any suite whose directory is absent.
 
-- **API (pytest):** `cd api && pytest` (matches CI in `.github/workflows/api.yml`; assumes `pip install -e '.[dev]'` has been run in `api/.venv`. If pytest isn't on PATH, use `api/.venv/bin/pytest`.)
+- **API (ruff + mypy + pytest):** from `api/`, run the same gates as CI (`.github/workflows/api.yml`) **in order** — `ruff check app tests`, `ruff format --check app tests`, `mypy` (strict; config in `pyproject.toml`), then `pytest`. Assumes `pip install -e '.[dev]'` has been run in `api/.venv`; if the tools aren't on PATH, prefix with `api/.venv/bin/` (e.g. `api/.venv/bin/mypy`). A ruff failure is usually auto-fixable (`ruff check --fix`, `ruff format`) — apply, then re-run; mypy/pytest failures stop the workflow.
 - **Web client unit tests (vitest):** `cd web-client && npm run test:run`
 - **Web client lint + typecheck/build:** `cd web-client && npm run lint && npm run build` (the `build` script is `tsc -b && vite build` — it's the only typecheck.)
 - **Web client e2e (Playwright):** `cd web-client && npm run test:e2e`. Playwright defaults to port 5174 which collides with the dev compose web-client; set `PLAYWRIGHT_PORT` to a free port when the dev compose stack is up.

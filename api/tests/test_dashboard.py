@@ -1,4 +1,5 @@
 import uuid
+from datetime import UTC
 
 from httpx import AsyncClient
 from sqlalchemy import select, text
@@ -17,9 +18,7 @@ from app.models import (
 from tests._helpers import make_client, make_user, start_session
 
 
-async def _create_match(
-    client: AsyncClient, opponent_id, best_of: int = 5
-) -> dict:
+async def _create_match(client: AsyncClient, opponent_id, best_of: int = 5) -> dict:
     response = await client.post(
         "/v1/matches",
         json={
@@ -259,9 +258,7 @@ async def test_dashboard_rating_percentile_against_league_peers(
     bottom of the leaderboard until they actually beat someone."""
     me = await start_session(api_client, db_session)
     default_league = (
-        await db_session.execute(
-            select(League).where(League.is_default.is_(True))
-        )
+        await db_session.execute(select(League).where(League.is_default.is_(True)))
     ).scalar_one()
     # Seed 4 peers at varying ratings without playing any matches against me.
     for name, value in [
@@ -271,9 +268,7 @@ async def test_dashboard_rating_percentile_against_league_peers(
         ("high", 1800.0),
     ]:
         peer = await make_user(db_session, name)
-        db_session.add(
-            LeagueMembership(league_id=default_league.id, user_id=peer.id)
-        )
+        db_session.add(LeagueMembership(league_id=default_league.id, user_id=peer.id))
         db_session.add(
             UserLeagueRating(
                 league_id=default_league.id,
@@ -296,13 +291,11 @@ async def test_dashboard_sparkline_returns_most_recent_points(
     """When the user has more rating-history rows than SPARK_MAX_POINTS in
     the 30-day window, the sparkline should be the *most recent* points in
     chronological order — not the oldest 30."""
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
 
     me = await start_session(api_client, db_session)
     default_league = (
-        await db_session.execute(
-            select(League).where(League.is_default.is_(True))
-        )
+        await db_session.execute(select(League).where(League.is_default.is_(True)))
     ).scalar_one()
     strategy = (
         await db_session.execute(
@@ -312,7 +305,7 @@ async def test_dashboard_sparkline_returns_most_recent_points(
     # The signup seed event sits before any match, so push it back behind the
     # 40 rows below; otherwise it would be the most-recent point and skew the
     # truncation this test is checking.
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     await db_session.execute(
         text(
             "UPDATE rating_history SET created_at = :ts "
@@ -357,9 +350,7 @@ async def test_dashboard_rating_is_null_for_manual_league(
         )
     ).scalar_one()
     default = (
-        await db_session.execute(
-            select(League).where(League.is_default.is_(True))
-        )
+        await db_session.execute(select(League).where(League.is_default.is_(True)))
     ).scalar_one()
     default.rating_strategy_id = manual.id
     await db_session.commit()

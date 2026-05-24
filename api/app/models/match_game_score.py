@@ -26,9 +26,7 @@ class MatchGameScore(Base):
 
     __tablename__ = "match_game_scores"
     __table_args__ = (
-        UniqueConstraint(
-            "match_game_id", name="uq_match_game_scores_match_game_id"
-        ),
+        UniqueConstraint("match_game_id", name="uq_match_game_scores_match_game_id"),
         CheckConstraint(
             "side_1_points >= 0", name="ck_match_game_scores_side_1_points"
         ),

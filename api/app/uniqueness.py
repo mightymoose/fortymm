@@ -2,12 +2,13 @@ import uuid
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import InstrumentedAttribute
 
 
 async def name_taken(
     db: AsyncSession,
-    id_col,
-    name_col,
+    id_col: InstrumentedAttribute[uuid.UUID],
+    name_col: InstrumentedAttribute[str] | InstrumentedAttribute[str | None],
     name: str,
     *,
     exclude_id: uuid.UUID | None = None,

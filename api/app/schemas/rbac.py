@@ -18,9 +18,7 @@ class PermissionBase(BaseModel):
 class PermissionCreate(PermissionBase):
     # Pattern is enforced on write only — historical rows that predate this
     # constraint must still serialize cleanly through PermissionRead.
-    name: str = Field(
-        min_length=1, max_length=255, pattern=PERMISSION_NAME_PATTERN
-    )
+    name: str = Field(min_length=1, max_length=255, pattern=PERMISSION_NAME_PATTERN)
 
 
 class PermissionUpdate(BaseModel):

@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,7 +16,7 @@ from app.models import (
 from tests._helpers import make_user, start_session
 
 # A fixed anchor so recency-ordering assertions don't depend on wall-clock time.
-BASE_TIME = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+BASE_TIME = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
 
 
 async def _record_match(
@@ -153,7 +153,7 @@ async def test_recent_opponents_is_empty_without_other_users(
 async def test_recent_opponents_respects_the_limit(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    me = await start_session(api_client, db_session)
+    await start_session(api_client, db_session)
     for name in ("ana", "bo", "cy", "di"):
         await make_user(db_session, name)
 
@@ -206,9 +206,7 @@ async def test_search_excludes_the_current_user(
 ):
     me = await start_session(api_client, db_session)
 
-    response = await api_client.get(
-        "/v1/players/search", params={"q": me.username}
-    )
+    response = await api_client.get("/v1/players/search", params={"q": me.username})
     assert response.status_code == 200
     assert me.username not in _usernames(response)
 
@@ -230,9 +228,7 @@ async def test_search_with_no_match_returns_empty(
     await start_session(api_client, db_session)
     await make_user(db_session, "ada.lovelace")
 
-    response = await api_client.get(
-        "/v1/players/search", params={"q": "nobody-here"}
-    )
+    response = await api_client.get("/v1/players/search", params={"q": "nobody-here"})
     assert response.status_code == 200
     assert response.json() == []
 
@@ -289,9 +285,9 @@ async def test_search_orders_results_alphabetically(
 async def test_search_includes_rating_for_default_league(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    me = await start_session(api_client, db_session)
+    await start_session(api_client, db_session)
     rival = await make_user(db_session, "ratedrival")
-    unrated = await make_user(db_session, "freshface")
+    await make_user(db_session, "freshface")
 
     league = await get_default_league(db_session)
     db_session.add(

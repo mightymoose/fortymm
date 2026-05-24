@@ -12,6 +12,8 @@ retried call lands on the same result.
 """
 
 import uuid
+from datetime import datetime
+from typing import Any
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,6 +28,7 @@ from app.models import (
     MatchStatus,
     RatingHistory,
     RatingHistorySource,
+    RatingStrategy,
     UserLeagueRating,
 )
 from app.ratings.base import state_rating_value
@@ -97,9 +100,7 @@ async def recompute_league_ratings(
                     MatchSettings.affects_rating.is_(True),
                     MatchSettings.team_size == 1,
                 )
-                .options(
-                    selectinload(Match.sides).selectinload(MatchSide.players)
-                )
+                .options(selectinload(Match.sides).selectinload(MatchSide.players))
                 .order_by(Match.updated_at.asc(), Match.id.asc())
             )
         )
@@ -216,9 +217,9 @@ async def _seed_states(
     db: AsyncSession,
     league_id: uuid.UUID,
     user_ids: set[uuid.UUID],
-    t_start,
-    strategy,
-) -> dict[uuid.UUID, dict]:
+    t_start: datetime,
+    strategy: RatingStrategy,
+) -> dict[uuid.UUID, dict[str, Any]]:
     """Per-user rating state as of the moment just before ``t_start``: the
     user's most recent ``rating_history`` row in this league, or the
     strategy's initial state if they have none. Users with no history and no
@@ -247,7 +248,7 @@ async def _seed_states(
         select(subq.c.user_id, subq.c.rating_state).where(subq.c.rn == 1)
     )
 
-    states: dict[uuid.UUID, dict] = {
+    states: dict[uuid.UUID, dict[str, Any]] = {
         user_id: dict(state) for user_id, state in latest_per_user.all()
     }
     if strategy.initial_state is not None:

@@ -116,9 +116,7 @@ async def list_recent_opponents(
         opponents.extend(backfill)
 
     league = await resolve_league(db, league_id)
-    ratings = await _load_player_ratings(
-        db, league.id, (user.id for user in opponents)
-    )
+    ratings = await _load_player_ratings(db, league.id, (user.id for user in opponents))
     return _serialize(opponents, ratings)
 
 
@@ -152,7 +150,5 @@ async def search_players(
     )
     users = result.scalars().all()
     league = await resolve_league(db, league_id)
-    ratings = await _load_player_ratings(
-        db, league.id, (user.id for user in users)
-    )
+    ratings = await _load_player_ratings(db, league.id, (user.id for user in users))
     return _serialize(users, ratings)

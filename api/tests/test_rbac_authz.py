@@ -61,9 +61,7 @@ def _build_client(db_session: AsyncSession, user: User | None) -> AsyncClient:
 
     app.dependency_overrides[get_session] = _override_session
     app.dependency_overrides[get_current_user] = _override_user
-    return AsyncClient(
-        transport=ASGITransport(app=app), base_url="https://testserver"
-    )
+    return AsyncClient(transport=ASGITransport(app=app), base_url="https://testserver")
 
 
 @pytest_asyncio.fixture
