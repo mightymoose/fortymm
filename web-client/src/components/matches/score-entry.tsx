@@ -202,21 +202,33 @@ function ScoreEntryInner({
   const inputsLocked = mutation.isPending || lockedReason !== null
   const isEdit = mode.kind === 'edit'
 
+  // A typed, legal score that pushes either side to games_to_win clinches the
+  // match — even if more games would otherwise remain (e.g. 3-0 in a Bo5).
+  const gamesToWin = data.games_to_win
+  const willClinch =
+    inputsValid &&
+    (Number(me) > Number(opp)
+      ? meWins + 1 >= gamesToWin
+      : oppWins + 1 >= gamesToWin)
+  const isFinalGame = willClinch || gameNumber === bestOf
+
   const heading = isEdit
     ? `Edit game ${gameNumber} score.`
     : `Enter game ${gameNumber} score.`
   const subtitle = isEdit
     ? 'Save updates the score for this game.'
-    : gameNumber < bestOf
-      ? `Save this game to continue to game ${gameNumber + 1}.`
-      : 'Final game. Save to finish the match.'
+    : willClinch
+      ? 'Save to finish the match.'
+      : gameNumber < bestOf
+        ? `Save this game to continue to game ${gameNumber + 1}.`
+        : 'Final game. Save to finish the match.'
   const saveLabel = mutation.isPending
     ? 'Saving…'
     : isEdit
       ? 'Save changes →'
-      : gameNumber < bestOf
-        ? 'Save game & next →'
-        : 'Save final game →'
+      : isFinalGame
+        ? 'Save & finish match →'
+        : 'Save game & next →'
 
   return (
     <AppShell>

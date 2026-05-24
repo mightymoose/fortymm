@@ -258,6 +258,62 @@ describe('ScoreEntry — create', () => {
     )
   })
 
+  it('flips Save copy to "finish the match" when the typed score would clinch early', async () => {
+    // Bo5, 2-0 on the board, entering G3. A 11-3 win here clinches at 3-0,
+    // so the messaging must not promise a non-existent G4. (Bug #12.)
+    const user = userEvent.setup()
+    server.use(
+      http.get('*/v1/matches/m-1', () =>
+        HttpResponse.json(
+          inProgressMatch({
+            sides: participantSides({ meWins: 2, oppWins: 0 }),
+            games: [
+              { id: 'g-1', game_number: 1, score: score('s-1', 11, 4) },
+              { id: 'g-2', game_number: 2, score: score('s-2', 11, 6) },
+              { id: 'g-3', game_number: 3, score: null },
+            ],
+            current_game: { id: 'g-3', game_number: 3 },
+          }),
+        ),
+      ),
+    )
+
+    renderScoreEntry({ kind: 'create', matchId: 'm-1', gameId: 'g-3' })
+    const meInput = await screen.findByRole('textbox', { name: 'rita.kovac score' })
+    const oppInput = screen.getByRole('textbox', { name: 'nguyen.t score' })
+
+    // Pre-typing the message is still the generic "continue to game 4" hint.
+    expect(
+      screen.getByText(/save this game to continue to game 4/i),
+    ).toBeInTheDocument()
+
+    await user.type(meInput, '11')
+    await user.type(oppInput, '3')
+
+    expect(
+      screen.getByText(/save to finish the match/i),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByText(/continue to game 4/i),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: /save & finish match/i }),
+    ).toBeInTheDocument()
+
+    // A non-clinching score (opponent wins G3, taking the match to 2-1)
+    // restores the "continue to game 4" hint.
+    await user.clear(meInput)
+    await user.type(meInput, '5')
+    await user.clear(oppInput)
+    await user.type(oppInput, '11')
+    expect(
+      screen.getByText(/save this game to continue to game 4/i),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: /save game & next/i }),
+    ).toBeInTheDocument()
+  })
+
   it('blocks an illegal final score client-side without hitting the server', async () => {
     const user = userEvent.setup()
     let posted = 0
