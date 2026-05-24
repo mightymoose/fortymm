@@ -58,3 +58,17 @@ async def test_public_user_by_username_404_when_missing(
     assert response.status_code == 404
     assert api_client is not None
     assert db_session is not None
+
+
+async def test_public_user_by_username_is_rate_limited_per_ip(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """After 60 requests in the same minute from one IP, the 61st returns 429."""
+    await make_user(db_session, "rl.target")
+    async with make_client() as client:
+        for i in range(60):
+            response = await client.get("/v1/p/users/rl.target")
+            assert response.status_code == 200, (i, response.text)
+        over = await client.get("/v1/p/users/rl.target")
+    assert over.status_code == 429
+    assert api_client is not None
