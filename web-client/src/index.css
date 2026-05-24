@@ -1627,6 +1627,10 @@ body.dark.fortymm-theme {
   font-weight: 400;
   -webkit-text-fill-color: var(--ink-500);
 }
+.fortymm-theme .big-input:focus::placeholder {
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+}
 .fortymm-theme .big-input:focus {
   color: var(--ball-500);
   -webkit-text-fill-color: var(--ball-500);
