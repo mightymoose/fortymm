@@ -21,6 +21,7 @@ from app.models import (
     UserLeagueRating,
 )
 from app.schemas.player import (
+    PlayerDetail,
     PlayerListResponse,
     PlayerMatchListResponse,
     PlayerMatchOpponent,
@@ -392,43 +393,58 @@ async def _summarize_one_player(
     return summaries[0]
 
 
-@router.get("/players/{player_id}", response_model=PlayerSummary)
+async def _player_detail(
+    db: AsyncSession, user: User, league_id: uuid.UUID
+) -> PlayerDetail:
+    """Shared body for both `/v1/players/{id}` and
+    `/v1/p/players/{username}` — bundles the hero summary with the first
+    page of matches so the profile page paints in one round trip. The FE
+    seeds the matches-query cache from the embedded ``matches`` field;
+    page 2+ falls through to `/v1/players/{id}/matches`."""
+    summary = await _summarize_one_player(db, user, league_id)
+    matches = await _paginated_player_matches(
+        db, user.id, page=1, page_size=LIST_DEFAULT_PAGE_SIZE
+    )
+    return PlayerDetail(**summary.model_dump(), matches=matches)
+
+
+@router.get("/players/{player_id}", response_model=PlayerDetail)
 async def get_player(
     player_id: uuid.UUID,
     league_id: uuid.UUID | None = Query(default=None),
     _current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_session),
-) -> PlayerSummary:
-    """Authed profile hero for `/players/$userId`. Same shape as a list row
-    so the FE can reuse the cache key after navigating from the list."""
+) -> PlayerDetail:
+    """Authed profile bundle for `/players/$userId` — hero + first page of
+    matches in one response."""
     user = await _load_player_by_id(db, player_id)
     if user is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Player not found."
         )
     league = await resolve_league(db, league_id)
-    return await _summarize_one_player(db, user, league.id)
+    return await _player_detail(db, user, league.id)
 
 
 @router.get(
     "/p/players/{username}",
-    response_model=PlayerSummary,
+    response_model=PlayerDetail,
     dependencies=[Depends(public_player_ip_rate_limit)],
 )
 async def get_public_player(
     username: str,
     league_id: uuid.UUID | None = Query(default=None),
     db: AsyncSession = Depends(get_session),
-) -> PlayerSummary:
-    """Public profile hero for `/p/players/$username` — no session required,
-    rate-limited per-IP to keep the user table from being scraped."""
+) -> PlayerDetail:
+    """Public profile bundle for `/p/players/$username` — same shape as
+    the authed endpoint. No session required, rate-limited per-IP."""
     user = await _load_player_by_username(db, username)
     if user is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Player not found."
         )
     league = await resolve_league(db, league_id)
-    return await _summarize_one_player(db, user, league.id)
+    return await _player_detail(db, user, league.id)
 
 
 def _player_matches_eager() -> tuple[ExecutableOption, ...]:
@@ -505,23 +521,16 @@ def _serialize_player_match(match: Match, player_id: uuid.UUID) -> PlayerMatchRo
     )
 
 
-@router.get("/players/{player_id}/matches", response_model=PlayerMatchListResponse)
-async def list_player_matches(
+async def _paginated_player_matches(
+    db: AsyncSession,
     player_id: uuid.UUID,
-    page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=LIST_DEFAULT_PAGE_SIZE, ge=1, le=LIST_MAX_PAGE_SIZE),
-    _current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_session),
+    page: int,
+    page_size: int,
 ) -> PlayerMatchListResponse:
-    """Paginated per-player match history backing the profile-page match
-    table. Newest-first by ``created_at``. Sets are projected from the
-    player's perspective so the FE renders them without flipping sides."""
-    user = await _load_player_by_id(db, player_id)
-    if user is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Player not found."
-        )
-
+    """Shared body for both `/v1/players/{id}/matches` and
+    `/v1/p/players/{username}/matches`. The two endpoints differ only in
+    how they resolve the player; the matches list shape, ordering, and
+    perspective flip are identical."""
     participant = (
         select(MatchSidePlayer.id)
         .where(
@@ -530,11 +539,9 @@ async def list_player_matches(
         )
         .exists()
     )
-
     total = (
         await db.execute(select(func.count()).select_from(Match).where(participant))
     ).scalar_one()
-
     matches = list(
         (
             await db.execute(
@@ -549,8 +556,37 @@ async def list_player_matches(
         .scalars()
         .all()
     )
-
     items = [_serialize_player_match(match, player_id) for match in matches]
     return PlayerMatchListResponse(
         items=items, page=page, page_size=page_size, total=total
     )
+
+
+@router.get(
+    "/players/{player_id}/matches",
+    response_model=PlayerMatchListResponse,
+    dependencies=[Depends(public_player_ip_rate_limit)],
+)
+async def list_player_matches(
+    player_id: uuid.UUID,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=LIST_DEFAULT_PAGE_SIZE, ge=1, le=LIST_MAX_PAGE_SIZE),
+    db: AsyncSession = Depends(get_session),
+) -> PlayerMatchListResponse:
+    """Paginated per-player match history backing the profile-page match
+    table on BOTH the authed (`/players/$userId`) and public
+    (`/p/players/$username`) surfaces — the public page has already
+    resolved username → id via `/v1/p/players/{username}`, so it has the
+    id to hit this endpoint with.
+
+    Public — no session required, IP-rate-limited (60/min) so the match
+    history can't be scraped from a single source. Newest-first by
+    ``created_at``. Sets are projected from the player's perspective so
+    the FE renders them without flipping sides.
+    """
+    user = await _load_player_by_id(db, player_id)
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Player not found."
+        )
+    return await _paginated_player_matches(db, player_id, page, page_size)

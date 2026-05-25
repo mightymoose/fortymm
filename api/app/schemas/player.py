@@ -90,3 +90,17 @@ class PlayerMatchListResponse(BaseModel):
     page: int
     page_size: int
     total: int
+
+
+class PlayerDetail(PlayerSummary):
+    """Profile-page bundle: the hero (`PlayerSummary` fields) plus the
+    first page of matches inline. Saves a round trip on initial load —
+    `GET /v1/players/{id}` (and the public `/v1/p/players/{username}`
+    variant) returns this so the profile page paints with one request.
+
+    Pagination beyond page 1 still hits `GET /v1/players/{id}/matches`
+    directly; the FE seeds page 1's cache from this `matches` field via
+    TanStack Query's `initialData`.
+    """
+
+    matches: PlayerMatchListResponse

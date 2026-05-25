@@ -460,8 +460,8 @@ export interface paths {
         };
         /**
          * Get Player
-         * @description Authed profile hero for `/players/$userId`. Same shape as a list row
-         *     so the FE can reuse the cache key after navigating from the list.
+         * @description Authed profile bundle for `/players/$userId` — hero + first page of
+         *     matches in one response.
          */
         get: operations["get_player_v1_players__player_id__get"];
         put?: never;
@@ -481,8 +481,8 @@ export interface paths {
         };
         /**
          * Get Public Player
-         * @description Public profile hero for `/p/players/$username` — no session required,
-         *     rate-limited per-IP to keep the user table from being scraped.
+         * @description Public profile bundle for `/p/players/$username` — same shape as
+         *     the authed endpoint. No session required, rate-limited per-IP.
          */
         get: operations["get_public_player_v1_p_players__username__get"];
         put?: never;
@@ -503,8 +503,15 @@ export interface paths {
         /**
          * List Player Matches
          * @description Paginated per-player match history backing the profile-page match
-         *     table. Newest-first by ``created_at``. Sets are projected from the
-         *     player's perspective so the FE renders them without flipping sides.
+         *     table on BOTH the authed (`/players/$userId`) and public
+         *     (`/p/players/$username`) surfaces — the public page has already
+         *     resolved username → id via `/v1/p/players/{username}`, so it has the
+         *     id to hit this endpoint with.
+         *
+         *     Public — no session required, IP-rate-limited (60/min) so the match
+         *     history can't be scraped from a single source. Newest-first by
+         *     ``created_at``. Sets are projected from the player's perspective so
+         *     the FE renders them without flipping sides.
          */
         get: operations["list_player_matches_v1_players__player_id__matches_get"];
         put?: never;
@@ -1043,6 +1050,44 @@ export interface components {
             name?: string | null;
             /** Description */
             description?: string | null;
+        };
+        /**
+         * PlayerDetail
+         * @description Profile-page bundle: the hero (`PlayerSummary` fields) plus the
+         *     first page of matches inline. Saves a round trip on initial load —
+         *     `GET /v1/players/{id}` (and the public `/v1/p/players/{username}`
+         *     variant) returns this so the profile page paints with one request.
+         *
+         *     Pagination beyond page 1 still hits `GET /v1/players/{id}/matches`
+         *     directly; the FE seeds page 1's cache from this `matches` field via
+         *     TanStack Query's `initialData`.
+         */
+        PlayerDetail: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Username */
+            username: string;
+            /** Rating */
+            rating?: number | null;
+            /**
+             * Wins
+             * @default 0
+             */
+            wins: number;
+            /**
+             * Losses
+             * @default 0
+             */
+            losses: number;
+            /**
+             * Form
+             * @default
+             */
+            form: string;
+            matches: components["schemas"]["PlayerMatchListResponse"];
         };
         /**
          * PlayerListResponse
@@ -2425,7 +2470,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["PlayerSummary"];
+                    "application/json": components["schemas"]["PlayerDetail"];
                 };
             };
             /** @description Validation Error */
@@ -2458,7 +2503,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["PlayerSummary"];
+                    "application/json": components["schemas"]["PlayerDetail"];
                 };
             };
             /** @description Validation Error */
@@ -2482,9 +2527,7 @@ export interface operations {
             path: {
                 player_id: string;
             };
-            cookie?: {
-                session?: string | null;
-            };
+            cookie?: never;
         };
         requestBody?: never;
         responses: {

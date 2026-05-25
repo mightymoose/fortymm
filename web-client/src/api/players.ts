@@ -4,6 +4,7 @@ import { api, unwrap } from './client'
 import type { components } from './schema'
 
 export type PlayerSummary = components['schemas']['PlayerSummary']
+export type PlayerDetail = components['schemas']['PlayerDetail']
 export type PlayerListResponse = components['schemas']['PlayerListResponse']
 export type PlayerMatchRow = components['schemas']['PlayerMatchRow']
 export type PlayerMatchListResponse =
@@ -78,12 +79,14 @@ export function usePlayerList(
   })
 }
 
-/** Authed profile-page hero. Cache key matches `playerQueryKey(id)` so the
- * cache primed by the list page can serve this view instantly. */
+/** Authed profile-page bundle — hero summary + first page of matches in one
+ * request. The FE seeds page 1 of the matches-query cache from
+ * `response.matches` via TanStack Query's `initialData` so the profile
+ * page paints in a single round trip. */
 export function playerByIdQueryOptions(playerId: string) {
   return queryOptions({
     queryKey: playerQueryKey(playerId),
-    queryFn: async (): Promise<PlayerSummary> =>
+    queryFn: async (): Promise<PlayerDetail> =>
       unwrap(
         'load player',
         await api.GET('/v1/players/{player_id}', {
@@ -102,12 +105,12 @@ export function usePlayerById(
   return useQuery({ ...playerByIdQueryOptions(playerId), ...options })
 }
 
-/** Public profile-page hero — same shape as the authed view, just keyed by
- * username and unauthenticated. */
+/** Public profile-page bundle — same shape as the authed view, just keyed
+ * by username. */
 export function publicPlayerByUsernameQueryOptions(username: string) {
   return queryOptions({
     queryKey: publicPlayerQueryKey(username),
-    queryFn: async (): Promise<PlayerSummary> =>
+    queryFn: async (): Promise<PlayerDetail> =>
       unwrap(
         'load public player',
         await api.GET('/v1/p/players/{username}', {
@@ -124,7 +127,11 @@ export function usePublicPlayerByUsername(username: string) {
 }
 
 /** Per-player paginated match list — pre-shaped from the player's
- * perspective so the FE doesn't have to flip set scores.
+ * perspective so the FE doesn't have to flip set scores. The backend
+ * endpoint is public (no session required) and IP-rate-limited, so this
+ * single hook serves BOTH the authed `/players/$userId` and the public
+ * `/p/players/$username` routes — they both already have the id by the
+ * time they call it.
  *
  * Intentionally NOT `throwOnError`: the profile page renders an inline
  * "Couldn't load matches · Try again" affordance for transient failures
@@ -133,7 +140,16 @@ export function usePublicPlayerByUsername(username: string) {
 export function usePlayerMatches(
   playerId: string,
   params: PlayerMatchListParams,
-  options: { enabled?: boolean } = {},
+  options: {
+    enabled?: boolean
+    /** Hydrate the cache with a previously-fetched page (e.g. the
+     * first-page matches embedded in the `PlayerDetail` profile
+     * response). Caller is responsible for only passing this for the
+     * matching page+page_size — the cache key includes them. When
+     * provided, the query skips the initial fetch and renders straight
+     * from this value. */
+    initialData?: PlayerMatchListResponse
+  } = {},
 ) {
   return useQuery({
     queryKey: playerMatchesQueryKey(playerId, params),
@@ -149,6 +165,16 @@ export function usePlayerMatches(
       ),
     enabled: options.enabled ?? true,
     placeholderData: keepPreviousData,
+    initialData: options.initialData,
+    // Stamp the seeded data with "just fetched" — the matches were embedded
+    // in the profile response in this same render cycle, so they're as
+    // fresh as a real fetch would be. Without this, TanStack would use
+    // `initialDataUpdatedAt: 0` (epoch) and the data would always be
+    // considered stale, triggering a background refetch on mount even
+    // within the QueryClient's 30s default `staleTime` (see main.tsx).
+    // Function form so the impurity (`Date.now()`) is deferred out of the
+    // hook's render — TanStack Query invokes it lazily.
+    initialDataUpdatedAt: options.initialData ? () => Date.now() : undefined,
     retry: false,
   })
 }
