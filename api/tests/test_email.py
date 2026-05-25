@@ -745,11 +745,21 @@ async def test_rate_limit_key_hashes_session_cookie(
 
     await _set_email(api_client)
 
-    keys = await rate_limiter_fakeredis.keys("*")
-    decoded = [k.decode() if isinstance(k, bytes) else k for k in keys]
-    for key in decoded:
-        assert raw_cookie not in key, (
-            f"raw session cookie leaked into Redis key: {key!r}"
+    def _decode(value: object) -> str:
+        return value.decode() if isinstance(value, bytes) else str(value)
+
+    # pyrate-limiter stores per-identifier state as ZSET members under the
+    # bucket_key. Scan both the keys themselves and every ZSET member so
+    # a cookie that landed in either surface fails the test.
+    keys = [_decode(k) for k in await rate_limiter_fakeredis.keys("*")]
+    members: list[str] = []
+    for key in keys:
+        for member in await rate_limiter_fakeredis.zrange(key, 0, -1):
+            members.append(_decode(member))
+
+    for token in keys + members:
+        assert raw_cookie not in token, (
+            f"raw session cookie leaked into Redis: {token!r}"
         )
 
 

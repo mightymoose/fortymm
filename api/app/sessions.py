@@ -8,7 +8,7 @@ from typing import Annotated
 
 from coolname import generate_slug
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response, status
-from fastapi_limiter.depends import RateLimiter
+from pyrate_limiter import Duration, Rate
 from rq.job import Job
 from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
@@ -20,6 +20,7 @@ from app.account_merge import merge_user
 from app.db import get_session
 from app.leagues import add_user_to_default_league
 from app.models import Permission, Role, RolePermission, User, UserRole, UserToken
+from app.rate_limiting import RedisRateLimiter
 from app.ratings.jobs import RECOMPUTE_AFTER_MERGE_JOB
 from app.schemas.session import (
     ConfirmEmailRequest,
@@ -98,15 +99,25 @@ async def _email_ip_rate_limit_key(request: Request) -> str:
 #   - looser per-IP ceiling so an attacker can't trivially multiply their
 #     budget by rotating guest sessions (each `GET /v1/session` mints a new
 #     one for free).
-email_send_rate_limit = RateLimiter(times=5, hours=1, identifier=_email_rate_limit_key)
-email_send_ip_rate_limit = RateLimiter(
-    times=20, hours=1, identifier=_email_ip_rate_limit_key
+email_send_rate_limit = RedisRateLimiter(
+    rates=[Rate(5, Duration.HOUR)],
+    bucket_key="email-send",
+    identifier=_email_rate_limit_key,
 )
-email_resend_rate_limit = RateLimiter(
-    times=3, hours=1, identifier=_email_rate_limit_key
+email_send_ip_rate_limit = RedisRateLimiter(
+    rates=[Rate(20, Duration.HOUR)],
+    bucket_key="email-send-ip",
+    identifier=_email_ip_rate_limit_key,
 )
-email_resend_ip_rate_limit = RateLimiter(
-    times=10, hours=1, identifier=_email_ip_rate_limit_key
+email_resend_rate_limit = RedisRateLimiter(
+    rates=[Rate(3, Duration.HOUR)],
+    bucket_key="email-resend",
+    identifier=_email_rate_limit_key,
+)
+email_resend_ip_rate_limit = RedisRateLimiter(
+    rates=[Rate(10, Duration.HOUR)],
+    bucket_key="email-resend-ip",
+    identifier=_email_ip_rate_limit_key,
 )
 
 
@@ -120,8 +131,10 @@ async def _login_consume_ip_rate_limit_key(request: Request) -> str:
 # Permissive ceiling on /v1/login/consume — the bearer token is 256 bits
 # of entropy, so this is defense-in-depth against floods rather than a
 # realistic brute-force barrier.
-login_consume_ip_rate_limit = RateLimiter(
-    times=60, hours=1, identifier=_login_consume_ip_rate_limit_key
+login_consume_ip_rate_limit = RedisRateLimiter(
+    rates=[Rate(60, Duration.HOUR)],
+    bucket_key="login-consume-ip",
+    identifier=_login_consume_ip_rate_limit_key,
 )
 
 
