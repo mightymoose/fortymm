@@ -690,7 +690,7 @@ function UsernameSection({ currentUsername }: { currentUsername: string }) {
             letterSpacing: '0.08em',
           }}
         >
-          {window.location.host}/p/users/{clientV.ok ? val : '—'}
+          {window.location.host}/p/players/{clientV.ok ? val : '—'}
         </span>
       </div>
     </SectionCard>

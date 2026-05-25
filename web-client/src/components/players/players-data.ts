@@ -78,7 +78,12 @@ export interface Player {
   form: string
 }
 
-export const PLAYERS: Player[] = [
+// Hand-crafted top of the roster — these 28 entries come straight from the
+// design handoff. `generatedMorePlayers()` below appends ~80 more procedurally-
+// generated players (seeds 29+, ratings strictly below the lowest hand-crafted
+// rating of 1881) so the /players list is long enough to demo pagination + the
+// in-page scroll. All-deterministic; reloads are byte-identical.
+const HANDCRAFTED_PLAYERS: Player[] = [
   { id: 'p01', name: 'Thanh Nguyen',     country: 'VN', club: 'Vinh TTC',           rating: 2487, delta:  18, w: 32, l:  6, seed:  1, hand: 'R', grip: 'Shakehand',       style: 'Offensive',      age: 24, status: 'live',       lastSeen: 'now',      event: 'Court 3 · QF',     form: 'WWWLW' },
   { id: 'p02', name: 'Rafael Silva',     country: 'BR', club: 'Rio Paddles',        rating: 2421, delta:  -9, w: 27, l:  9, seed:  2, hand: 'L', grip: 'Shakehand',       style: 'Counter-driver', age: 27, status: 'live',       lastSeen: 'now',      event: 'Court 3 · QF',     form: 'WLWWW' },
   { id: 'p03', name: 'David Okafor',     country: 'NG', club: 'Lagos Spin Club',    rating: 2398, delta:  24, w: 24, l:  8, seed:  3, hand: 'R', grip: 'Shakehand',       style: 'Offensive',      age: 22, status: 'live',       lastSeen: 'now',      event: 'Court 2 · QF',     form: 'WWLWW' },
@@ -109,6 +114,103 @@ export const PLAYERS: Player[] = [
   { id: 'p28', name: 'Karima Said',      country: 'EG', club: 'Cairo Pyramid',      rating: 1881, delta:  10, w:  3, l:  7, seed: 28, hand: 'R', grip: 'Shakehand',       style: 'Offensive',      age: 19, status: 'registered', lastSeen: 'tomorrow', event: 'R16 vs Ali',       form: 'WLWWW' },
 ]
 
+const FAKE_FIRST_NAMES = [
+  'Aisha', 'Bao', 'Cheng', 'Dmitri', 'Eli', 'Fatima', 'Gabriel', 'Hana',
+  'Ivan', 'Jasmine', 'Kai', 'Layla', 'Mateo', 'Nia', 'Omar', 'Pavel',
+  'Quynh', 'Raj', 'Sven', 'Tara', 'Ulises', 'Vera', 'Wen', 'Xiu',
+  'Yusuf', 'Zara',
+] as const
+
+const FAKE_LAST_NAMES = [
+  'Abadi', 'Bento', 'Carvalho', 'Demir', 'Erikson', 'Fonseca', 'Gallo',
+  'Halim', 'Iyer', 'Jansen', 'Khan', 'Liu', 'Moreau', 'Nazari', 'Okonkwo',
+  'Park', 'Quesada', 'Ramos', 'Sato', 'Tan', 'Ulrich', 'Vargas',
+  'Wilkinson', 'Xu', 'Yamada', 'Zhao',
+] as const
+
+const COUNTRY_CODES: CountryCode[] = Object.keys(COUNTRIES) as CountryCode[]
+const GRIP_OPTIONS: Grip[] = ['Shakehand', 'Penhold', 'Reverse penhold']
+const STYLE_OPTIONS: Style[] = ['Offensive', 'All-round', 'Defensive', 'Counter-driver']
+const STATUS_OPTIONS: PlayerStatus[] = ['idle', 'idle', 'idle', 'registered', 'idle', 'withdrawn']
+const HAND_OPTIONS: Hand[] = ['R', 'R', 'R', 'L'] // ~75% right-handed
+const LAST_SEEN_OPTIONS = ['1d', '2d', '3d', '4d', '6d', '1w', '2w'] as const
+
+/** Generates ~80 procedurally-generated players to pad the roster out for
+ * pagination + scroll demos. Seeded by index so the list is stable across
+ * reloads. Ratings live in [1280, 1880) — strictly below the lowest hand-
+ * crafted rating (1881) so the existing top-28 keep their seed order. */
+function generatedMorePlayers(): Player[] {
+  const list: Player[] = []
+  const COUNT = 80
+  const HANDCRAFTED_COUNT = HANDCRAFTED_PLAYERS.length
+  for (let i = 0; i < COUNT; i++) {
+    // Decorrelate first/last/club/country via different multiplier strides so
+    // we don't get sequential rotations that look obviously generated.
+    //
+    // Both name pools have 26 entries; without the suffix below, 80 players
+    // would only produce 26 unique `${first} ${last}` combos (gcd(7,26)=1 →
+    // period 26). Since `findPlayerByName` returns the first match, the
+    // duplicates would silently make 54 of the 80 generated players
+    // unreachable from the public `/p/players/$name` route.
+    const first = FAKE_FIRST_NAMES[i % FAKE_FIRST_NAMES.length]
+    const last = FAKE_LAST_NAMES[(i * 7 + 3) % FAKE_LAST_NAMES.length]
+    const lap = Math.floor(i / FAKE_FIRST_NAMES.length) // 0, 1, 2, …
+    const nameSuffix = lap > 0 ? ` ${'I'.repeat(lap + 1)}` : '' // II, III, …
+    const country = COUNTRY_CODES[(i * 5 + 2) % COUNTRY_CODES.length]
+    const club = CLUBS[(i * 3 + 1) % CLUBS.length]
+    const grip = GRIP_OPTIONS[i % GRIP_OPTIONS.length]
+    const style = STYLE_OPTIONS[(i * 2 + 1) % STYLE_OPTIONS.length]
+    const hand = HAND_OPTIONS[i % HAND_OPTIONS.length]
+    const status = STATUS_OPTIONS[i % STATUS_OPTIONS.length]
+    const lastSeen = LAST_SEEN_OPTIONS[i % LAST_SEEN_OPTIONS.length]
+    const rating = 1875 - i * 7 - (i % 5) // 1280..1875, mostly descending
+    const delta = ((i * 11) % 31) - 15 // -15..+15
+    const w = 2 + ((i * 3) % 14) // 2..15
+    const l = 3 + ((i * 5) % 12) // 3..14
+    const age = 18 + ((i * 7) % 25) // 18..42
+    const formChars: string[] = []
+    for (let k = 0; k < 5; k++) {
+      formChars.push((i + k * 3) % 7 < 4 ? 'W' : 'L')
+    }
+    const form = formChars.join('')
+    const event =
+      status === 'registered'
+        ? 'R32 vs TBD'
+        : status === 'withdrawn'
+          ? 'Withdrew · DNS'
+          : (i * 13) % 100 < 50
+            ? 'R64 — won'
+            : 'R64 — lost'
+
+    const seed = HANDCRAFTED_COUNT + i + 1
+    list.push({
+      id: `p${String(seed).padStart(3, '0')}`,
+      name: `${first} ${last}${nameSuffix}`,
+      country,
+      club,
+      rating,
+      delta,
+      w,
+      l,
+      seed,
+      hand,
+      grip,
+      style,
+      age,
+      status,
+      lastSeen,
+      event,
+      form,
+    })
+  }
+  return list
+}
+
+export const PLAYERS: Player[] = [
+  ...HANDCRAFTED_PLAYERS,
+  ...generatedMorePlayers(),
+]
+
 export type MatchResult = 'W' | 'L'
 
 export interface MatchRecord {
@@ -131,7 +233,13 @@ export interface MatchRecord {
 // Matches are written from the headline player (p01)'s perspective. For the
 // MVP we render the same list on every profile so the page never reads empty —
 // the design handoff only seeded matches for one player.
-export const MATCHES: MatchRecord[] = [
+//
+// The 19 entries below are hand-crafted from the design handoff. They're
+// followed by `generatedOlderMatches()` which appends ~100 procedurally-
+// generated older matches so the list is long enough to demo real pagination
+// + scrolling. Everything is deterministic (no Math.random) so screenshots
+// and tests stay stable.
+const HANDCRAFTED_MATCHES: MatchRecord[] = [
   { id: 'm01', date: '2026-05-23', time: '14:30', tournament: 'Spring Open',       round: 'QF',    opp: 'p02', oppRating: 2421, sets: [[11, 7], [9, 11], [11, 5], [11, 8]],          result: 'W', delta:  18, court: 3, duration: '38m' },
   { id: 'm02', date: '2026-05-23', time: '09:45', tournament: 'Spring Open',       round: 'R16',   opp: 'p11', oppRating: 2243, sets: [[11, 4], [11, 6], [11, 9]],                    result: 'W', delta:   9, court: 1, duration: '22m' },
   { id: 'm03', date: '2026-05-22', time: '19:10', tournament: 'Spring Open',       round: 'R32',   opp: 'p20', oppRating: 2061, sets: [[11, 8], [11, 6], [11, 7]],                    result: 'W', delta:   6, court: 4, duration: '24m' },
@@ -151,6 +259,113 @@ export const MATCHES: MatchRecord[] = [
   { id: 'm17', date: '2026-02-08', time: '14:20', tournament: 'Winter Cup',        round: 'Final', opp: 'p02', oppRating: 2421, sets: [[8, 11], [11, 9], [7, 11], [6, 11]],           result: 'L', delta: -15, court: 1, duration: '44m' },
   { id: 'm18', date: '2026-01-25', time: '11:50', tournament: 'Winter Cup',        round: 'SF',    opp: 'p03', oppRating: 2398, sets: [[11, 9], [8, 11], [11, 8], [11, 9]],           result: 'W', delta:  17, court: 1, duration: '42m' },
   { id: 'm19', date: '2026-01-12', time: '19:00', tournament: 'City League · W2',  round: 'R16',   opp: 'p22', oppRating: 2018, sets: [[11, 4], [11, 6], [11, 3]],                    result: 'W', delta:   2, court: 4, duration: '19m' },
+]
+
+const OLDER_TOURNAMENTS = [
+  'Winter Cup',
+  'Autumn Open',
+  'Hanoi Classic',
+  'Coastal Invite',
+  'Friendlies Cup',
+  'City League · W42',
+  'Vinh Invitational',
+  'North Cup',
+  'Spring Qualifier',
+  'Friendly',
+  'Junior National',
+  'Summer Slam',
+] as const
+
+const OLDER_ROUNDS = ['Final', 'SF', 'QF', 'R16', 'R32', 'R64', 'Match'] as const
+const OLDER_TIMES = ['09:00', '10:30', '12:00', '13:45', '15:20', '17:00', '18:30', '20:00'] as const
+
+/** Deterministic two-digit zero-padded date-time string. Avoids `new Date()`
+ * + `toISOString()` because the latter is UTC-anchored and would silently
+ * shift the calendar day for anyone west of UTC. */
+function formatYmd(year: number, month1: number, day: number): string {
+  return `${year}-${String(month1).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+}
+
+function stepBack(year: number, month1: number, day: number, days: number) {
+  const d = new Date(year, month1 - 1, day - days)
+  return { year: d.getFullYear(), month1: d.getMonth() + 1, day: d.getDate() }
+}
+
+/** Built once at module load. Generates a synthetic match history going back
+ * from late Dec 2025 (right before the hand-crafted m19 = 2026-01-12) through
+ * early 2024. All values derive from `seed` so reloads stay byte-identical. */
+function generatedOlderMatches(): MatchRecord[] {
+  const opponents = PLAYERS.filter((p) => p.id !== 'p01')
+  const list: MatchRecord[] = []
+  let { year, month1, day } = { year: 2025, month1: 12, day: 27 }
+  // ~22 months × ~4.6 matches/month ≈ 100 entries.
+  const COUNT = 100
+  for (let i = 0; i < COUNT; i++) {
+    const seed = i + 19 // continue the id space after m19
+    const opp = opponents[seed % opponents.length]
+    // ~75% win rate, deterministic across reloads.
+    const result: MatchResult = (seed * 17 + 11) % 100 < 75 ? 'W' : 'L'
+    // Most matches are best-of-3; every fourth is best-of-5 to break the cadence.
+    const bestOf = seed % 4 === 0 ? 5 : 3
+    const sets = synthesizeSets(bestOf, result, seed)
+    const tournament = OLDER_TOURNAMENTS[seed % OLDER_TOURNAMENTS.length]
+    const round = OLDER_ROUNDS[seed % OLDER_ROUNDS.length]
+    const time = OLDER_TIMES[seed % OLDER_TIMES.length]
+    const court = (seed % 6) + 1
+    const duration = `${18 + ((seed * 7) % 38)}m`
+    const delta = result === 'W' ? 2 + (seed % 19) : -(2 + (seed % 16))
+
+    list.push({
+      id: `m${String(seed + 1).padStart(3, '0')}`,
+      date: formatYmd(year, month1, day),
+      time,
+      tournament,
+      round,
+      opp: opp.id,
+      oppRating: opp.rating,
+      sets,
+      result,
+      delta,
+      court,
+      duration,
+    })
+    // Step back 3–9 days between matches.
+    ;({ year, month1, day } = stepBack(year, month1, day, 3 + (seed % 7)))
+  }
+  return list
+}
+
+/** Build a plausible set-score sequence for a match of `bestOf` games whose
+ * `result` is from the headline player's perspective. Deterministic on `seed`. */
+function synthesizeSets(
+  bestOf: number,
+  result: MatchResult,
+  seed: number,
+): [number, number][] {
+  const target = Math.ceil(bestOf / 2)
+  // 0 → sweep; 1 → one loser-set; 2 → two loser-sets (only Bo5).
+  const loserSets = seed % target
+  const totalSets = target + loserSets
+  const winnerMark: 'W' | 'L' = result
+  const loserMark: 'W' | 'L' = result === 'W' ? 'L' : 'W'
+  const sequence: ('W' | 'L')[] = []
+  for (let i = 0; i < totalSets - 1; i++) {
+    sequence.push(i < loserSets ? loserMark : winnerMark)
+  }
+  sequence.push(winnerMark) // closing set always goes to the match winner
+
+  return sequence.map((mark, i) => {
+    // Loser scores 3..9. Capped at 9 (not 10) so we never emit an 11-10
+    // set, which is impossible in standard TT scoring — a set at 10-10
+    // continues until one side leads by 2 (e.g. 12-10, 13-11).
+    const losing = 3 + ((seed * 3 + i * 2) % 7)
+    return mark === 'W' ? [11, losing] : [losing, 11]
+  })
+}
+
+export const MATCHES: MatchRecord[] = [
+  ...HANDCRAFTED_MATCHES,
+  ...generatedOlderMatches(),
 ]
 
 export function findPlayerById(id: string): Player | undefined {

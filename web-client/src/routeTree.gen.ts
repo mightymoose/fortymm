@@ -11,16 +11,16 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as SimulatorRouteImport } from './routes/simulator'
 import { Route as SettingsRouteImport } from './routes/settings'
-import { Route as PlayersRouteImport } from './routes/players'
 import { Route as DesignSystemRouteImport } from './routes/design-system'
 import { Route as DashboardRouteImport } from './routes/dashboard'
 import { Route as ConfirmEmailRouteImport } from './routes/confirm-email'
 import { Route as AdminRouteImport } from './routes/admin'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as PlayersIndexRouteImport } from './routes/players/index'
 import { Route as MatchesIndexRouteImport } from './routes/matches/index'
 import { Route as LoginIndexRouteImport } from './routes/login.index'
 import { Route as AdminIndexRouteImport } from './routes/admin.index'
-import { Route as UsersUserIdRouteImport } from './routes/users.$userId'
+import { Route as PlayersUserIdRouteImport } from './routes/players/$userId'
 import { Route as MatchesNewRouteImport } from './routes/matches/new'
 import { Route as LoginWelcomeRouteImport } from './routes/login.welcome'
 import { Route as LoginVerifyingRouteImport } from './routes/login.verifying'
@@ -29,7 +29,7 @@ import { Route as AdminUsersRouteImport } from './routes/admin.users'
 import { Route as AdminRolesRouteImport } from './routes/admin.roles'
 import { Route as AdminPermissionsRouteImport } from './routes/admin.permissions'
 import { Route as MatchesMatchIdIndexRouteImport } from './routes/matches.$matchId.index'
-import { Route as PUsersUsernameRouteImport } from './routes/p.users.$username'
+import { Route as PPlayersUsernameRouteImport } from './routes/p.players.$username'
 import { Route as MatchesMatchIdGamesGameIdScoresNewRouteImport } from './routes/matches.$matchId.games.$gameId.scores.new'
 import { Route as MatchesMatchIdGamesGameIdScoresScoreIdEditRouteImport } from './routes/matches.$matchId.games.$gameId.scores.$scoreId.edit'
 
@@ -41,11 +41,6 @@ const SimulatorRoute = SimulatorRouteImport.update({
 const SettingsRoute = SettingsRouteImport.update({
   id: '/settings',
   path: '/settings',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const PlayersRoute = PlayersRouteImport.update({
-  id: '/players',
-  path: '/players',
   getParentRoute: () => rootRouteImport,
 } as any)
 const DesignSystemRoute = DesignSystemRouteImport.update({
@@ -73,6 +68,11 @@ const IndexRoute = IndexRouteImport.update({
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const PlayersIndexRoute = PlayersIndexRouteImport.update({
+  id: '/players/',
+  path: '/players/',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const MatchesIndexRoute = MatchesIndexRouteImport.update({
   id: '/matches/',
   path: '/matches/',
@@ -88,9 +88,9 @@ const AdminIndexRoute = AdminIndexRouteImport.update({
   path: '/',
   getParentRoute: () => AdminRoute,
 } as any)
-const UsersUserIdRoute = UsersUserIdRouteImport.update({
-  id: '/users/$userId',
-  path: '/users/$userId',
+const PlayersUserIdRoute = PlayersUserIdRouteImport.update({
+  id: '/players/$userId',
+  path: '/players/$userId',
   getParentRoute: () => rootRouteImport,
 } as any)
 const MatchesNewRoute = MatchesNewRouteImport.update({
@@ -133,9 +133,9 @@ const MatchesMatchIdIndexRoute = MatchesMatchIdIndexRouteImport.update({
   path: '/matches/$matchId/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const PUsersUsernameRoute = PUsersUsernameRouteImport.update({
-  id: '/p/users/$username',
-  path: '/p/users/$username',
+const PPlayersUsernameRoute = PPlayersUsernameRouteImport.update({
+  id: '/p/players/$username',
+  path: '/p/players/$username',
   getParentRoute: () => rootRouteImport,
 } as any)
 const MatchesMatchIdGamesGameIdScoresNewRoute =
@@ -157,7 +157,6 @@ export interface FileRoutesByFullPath {
   '/confirm-email': typeof ConfirmEmailRoute
   '/dashboard': typeof DashboardRoute
   '/design-system': typeof DesignSystemRoute
-  '/players': typeof PlayersRoute
   '/settings': typeof SettingsRoute
   '/simulator': typeof SimulatorRoute
   '/admin/permissions': typeof AdminPermissionsRoute
@@ -167,11 +166,12 @@ export interface FileRoutesByFullPath {
   '/login/verifying': typeof LoginVerifyingRoute
   '/login/welcome': typeof LoginWelcomeRoute
   '/matches/new': typeof MatchesNewRoute
-  '/users/$userId': typeof UsersUserIdRoute
+  '/players/$userId': typeof PlayersUserIdRoute
   '/admin/': typeof AdminIndexRoute
   '/login/': typeof LoginIndexRoute
   '/matches/': typeof MatchesIndexRoute
-  '/p/users/$username': typeof PUsersUsernameRoute
+  '/players/': typeof PlayersIndexRoute
+  '/p/players/$username': typeof PPlayersUsernameRoute
   '/matches/$matchId/': typeof MatchesMatchIdIndexRoute
   '/matches/$matchId/games/$gameId/scores/new': typeof MatchesMatchIdGamesGameIdScoresNewRoute
   '/matches/$matchId/games/$gameId/scores/$scoreId/edit': typeof MatchesMatchIdGamesGameIdScoresScoreIdEditRoute
@@ -181,7 +181,6 @@ export interface FileRoutesByTo {
   '/confirm-email': typeof ConfirmEmailRoute
   '/dashboard': typeof DashboardRoute
   '/design-system': typeof DesignSystemRoute
-  '/players': typeof PlayersRoute
   '/settings': typeof SettingsRoute
   '/simulator': typeof SimulatorRoute
   '/admin/permissions': typeof AdminPermissionsRoute
@@ -191,11 +190,12 @@ export interface FileRoutesByTo {
   '/login/verifying': typeof LoginVerifyingRoute
   '/login/welcome': typeof LoginWelcomeRoute
   '/matches/new': typeof MatchesNewRoute
-  '/users/$userId': typeof UsersUserIdRoute
+  '/players/$userId': typeof PlayersUserIdRoute
   '/admin': typeof AdminIndexRoute
   '/login': typeof LoginIndexRoute
   '/matches': typeof MatchesIndexRoute
-  '/p/users/$username': typeof PUsersUsernameRoute
+  '/players': typeof PlayersIndexRoute
+  '/p/players/$username': typeof PPlayersUsernameRoute
   '/matches/$matchId': typeof MatchesMatchIdIndexRoute
   '/matches/$matchId/games/$gameId/scores/new': typeof MatchesMatchIdGamesGameIdScoresNewRoute
   '/matches/$matchId/games/$gameId/scores/$scoreId/edit': typeof MatchesMatchIdGamesGameIdScoresScoreIdEditRoute
@@ -207,7 +207,6 @@ export interface FileRoutesById {
   '/confirm-email': typeof ConfirmEmailRoute
   '/dashboard': typeof DashboardRoute
   '/design-system': typeof DesignSystemRoute
-  '/players': typeof PlayersRoute
   '/settings': typeof SettingsRoute
   '/simulator': typeof SimulatorRoute
   '/admin/permissions': typeof AdminPermissionsRoute
@@ -217,11 +216,12 @@ export interface FileRoutesById {
   '/login/verifying': typeof LoginVerifyingRoute
   '/login/welcome': typeof LoginWelcomeRoute
   '/matches/new': typeof MatchesNewRoute
-  '/users/$userId': typeof UsersUserIdRoute
+  '/players/$userId': typeof PlayersUserIdRoute
   '/admin/': typeof AdminIndexRoute
   '/login/': typeof LoginIndexRoute
   '/matches/': typeof MatchesIndexRoute
-  '/p/users/$username': typeof PUsersUsernameRoute
+  '/players/': typeof PlayersIndexRoute
+  '/p/players/$username': typeof PPlayersUsernameRoute
   '/matches/$matchId/': typeof MatchesMatchIdIndexRoute
   '/matches/$matchId/games/$gameId/scores/new': typeof MatchesMatchIdGamesGameIdScoresNewRoute
   '/matches/$matchId/games/$gameId/scores/$scoreId/edit': typeof MatchesMatchIdGamesGameIdScoresScoreIdEditRoute
@@ -234,7 +234,6 @@ export interface FileRouteTypes {
     | '/confirm-email'
     | '/dashboard'
     | '/design-system'
-    | '/players'
     | '/settings'
     | '/simulator'
     | '/admin/permissions'
@@ -244,11 +243,12 @@ export interface FileRouteTypes {
     | '/login/verifying'
     | '/login/welcome'
     | '/matches/new'
-    | '/users/$userId'
+    | '/players/$userId'
     | '/admin/'
     | '/login/'
     | '/matches/'
-    | '/p/users/$username'
+    | '/players/'
+    | '/p/players/$username'
     | '/matches/$matchId/'
     | '/matches/$matchId/games/$gameId/scores/new'
     | '/matches/$matchId/games/$gameId/scores/$scoreId/edit'
@@ -258,7 +258,6 @@ export interface FileRouteTypes {
     | '/confirm-email'
     | '/dashboard'
     | '/design-system'
-    | '/players'
     | '/settings'
     | '/simulator'
     | '/admin/permissions'
@@ -268,11 +267,12 @@ export interface FileRouteTypes {
     | '/login/verifying'
     | '/login/welcome'
     | '/matches/new'
-    | '/users/$userId'
+    | '/players/$userId'
     | '/admin'
     | '/login'
     | '/matches'
-    | '/p/users/$username'
+    | '/players'
+    | '/p/players/$username'
     | '/matches/$matchId'
     | '/matches/$matchId/games/$gameId/scores/new'
     | '/matches/$matchId/games/$gameId/scores/$scoreId/edit'
@@ -283,7 +283,6 @@ export interface FileRouteTypes {
     | '/confirm-email'
     | '/dashboard'
     | '/design-system'
-    | '/players'
     | '/settings'
     | '/simulator'
     | '/admin/permissions'
@@ -293,11 +292,12 @@ export interface FileRouteTypes {
     | '/login/verifying'
     | '/login/welcome'
     | '/matches/new'
-    | '/users/$userId'
+    | '/players/$userId'
     | '/admin/'
     | '/login/'
     | '/matches/'
-    | '/p/users/$username'
+    | '/players/'
+    | '/p/players/$username'
     | '/matches/$matchId/'
     | '/matches/$matchId/games/$gameId/scores/new'
     | '/matches/$matchId/games/$gameId/scores/$scoreId/edit'
@@ -309,17 +309,17 @@ export interface RootRouteChildren {
   ConfirmEmailRoute: typeof ConfirmEmailRoute
   DashboardRoute: typeof DashboardRoute
   DesignSystemRoute: typeof DesignSystemRoute
-  PlayersRoute: typeof PlayersRoute
   SettingsRoute: typeof SettingsRoute
   SimulatorRoute: typeof SimulatorRoute
   LoginSentRoute: typeof LoginSentRoute
   LoginVerifyingRoute: typeof LoginVerifyingRoute
   LoginWelcomeRoute: typeof LoginWelcomeRoute
   MatchesNewRoute: typeof MatchesNewRoute
-  UsersUserIdRoute: typeof UsersUserIdRoute
+  PlayersUserIdRoute: typeof PlayersUserIdRoute
   LoginIndexRoute: typeof LoginIndexRoute
   MatchesIndexRoute: typeof MatchesIndexRoute
-  PUsersUsernameRoute: typeof PUsersUsernameRoute
+  PlayersIndexRoute: typeof PlayersIndexRoute
+  PPlayersUsernameRoute: typeof PPlayersUsernameRoute
   MatchesMatchIdIndexRoute: typeof MatchesMatchIdIndexRoute
   MatchesMatchIdGamesGameIdScoresNewRoute: typeof MatchesMatchIdGamesGameIdScoresNewRoute
   MatchesMatchIdGamesGameIdScoresScoreIdEditRoute: typeof MatchesMatchIdGamesGameIdScoresScoreIdEditRoute
@@ -339,13 +339,6 @@ declare module '@tanstack/react-router' {
       path: '/settings'
       fullPath: '/settings'
       preLoaderRoute: typeof SettingsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/players': {
-      id: '/players'
-      path: '/players'
-      fullPath: '/players'
-      preLoaderRoute: typeof PlayersRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/design-system': {
@@ -383,6 +376,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/players/': {
+      id: '/players/'
+      path: '/players'
+      fullPath: '/players/'
+      preLoaderRoute: typeof PlayersIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/matches/': {
       id: '/matches/'
       path: '/matches'
@@ -404,11 +404,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminIndexRouteImport
       parentRoute: typeof AdminRoute
     }
-    '/users/$userId': {
-      id: '/users/$userId'
-      path: '/users/$userId'
-      fullPath: '/users/$userId'
-      preLoaderRoute: typeof UsersUserIdRouteImport
+    '/players/$userId': {
+      id: '/players/$userId'
+      path: '/players/$userId'
+      fullPath: '/players/$userId'
+      preLoaderRoute: typeof PlayersUserIdRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/matches/new': {
@@ -467,11 +467,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof MatchesMatchIdIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/p/users/$username': {
-      id: '/p/users/$username'
-      path: '/p/users/$username'
-      fullPath: '/p/users/$username'
-      preLoaderRoute: typeof PUsersUsernameRouteImport
+    '/p/players/$username': {
+      id: '/p/players/$username'
+      path: '/p/players/$username'
+      fullPath: '/p/players/$username'
+      preLoaderRoute: typeof PPlayersUsernameRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/matches/$matchId/games/$gameId/scores/new': {
@@ -513,17 +513,17 @@ const rootRouteChildren: RootRouteChildren = {
   ConfirmEmailRoute: ConfirmEmailRoute,
   DashboardRoute: DashboardRoute,
   DesignSystemRoute: DesignSystemRoute,
-  PlayersRoute: PlayersRoute,
   SettingsRoute: SettingsRoute,
   SimulatorRoute: SimulatorRoute,
   LoginSentRoute: LoginSentRoute,
   LoginVerifyingRoute: LoginVerifyingRoute,
   LoginWelcomeRoute: LoginWelcomeRoute,
   MatchesNewRoute: MatchesNewRoute,
-  UsersUserIdRoute: UsersUserIdRoute,
+  PlayersUserIdRoute: PlayersUserIdRoute,
   LoginIndexRoute: LoginIndexRoute,
   MatchesIndexRoute: MatchesIndexRoute,
-  PUsersUsernameRoute: PUsersUsernameRoute,
+  PlayersIndexRoute: PlayersIndexRoute,
+  PPlayersUsernameRoute: PPlayersUsernameRoute,
   MatchesMatchIdIndexRoute: MatchesMatchIdIndexRoute,
   MatchesMatchIdGamesGameIdScoresNewRoute:
     MatchesMatchIdGamesGameIdScoresNewRoute,

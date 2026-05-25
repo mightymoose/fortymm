@@ -43,7 +43,7 @@ const playersSearchSchema = z.object({
   page: z.coerce.number().int().min(2).optional().catch(undefined),
 })
 
-export const Route = createFileRoute('/players')({
+export const Route = createFileRoute('/players/')({
   head: () => ({
     meta: [{ title: pageTitle('Players') }],
   }),
@@ -51,7 +51,7 @@ export const Route = createFileRoute('/players')({
   component: PlayersPage,
 })
 
-const PAGE_SIZE = 12
+const PAGE_SIZE = 25
 
 function PlayersPage() {
   const search = Route.useSearch()
@@ -226,7 +226,7 @@ function PlayerTable({
 function PlayerRow({ player }: { player: Player }) {
   const navigate = useNavigate()
   const open = () =>
-    navigate({ to: '/users/$userId', params: { userId: player.id } })
+    navigate({ to: '/players/$userId', params: { userId: player.id } })
   return (
     <tr
       className="is-clickable"
