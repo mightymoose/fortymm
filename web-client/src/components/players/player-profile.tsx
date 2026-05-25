@@ -26,9 +26,9 @@ import {
 } from './players-data'
 
 /**
- * Profile surface shared by the authed `/users/:userId` route and the public
- * `/p/users/:username` route. Renders the design's Bebas hero plus a single
- * matches list — no tabs.
+ * Profile surface shared by the authed `/players/$userId` route and the
+ * public `/p/players/$username` route. Renders the design's Bebas hero plus
+ * a single matches list — no tabs.
  *
  * Data is hardcoded from the design fixture for now (see `players-data.ts`).
  * Once the backend has the right endpoints this swaps to live data without
@@ -40,22 +40,30 @@ export interface PlayerProfileProps {
    * static panels instead of links — there's nothing under /matches/:id to
    * navigate to without a session. */
   matchesAreLinks?: boolean
+  /** True when the component is rendered without AppShell (the public route).
+   * Zeros out the `--topbar-h` offset so the fixed-height layout fills the
+   * viewport instead of leaving a 64px dead strip at the bottom. */
+  standalone?: boolean
   /** 1-based page for the matches list. Owned by the route so pagination
    * state lives in the URL. Defaults to 1. */
   page?: number
   onPageChange?: (next: number) => void
 }
 
-const PAGE_SIZE = 10
+const PAGE_SIZE = 25
 
 export function PlayerProfile({
   player,
   matchesAreLinks = true,
+  standalone = false,
   page = 1,
   onPageChange,
 }: PlayerProfileProps) {
+  const rootClass =
+    'player-profile dark fortymm-theme' +
+    (standalone ? ' player-profile--standalone' : '')
   return (
-    <div className="player-profile dark fortymm-theme">
+    <div className={rootClass}>
       <Hero player={player} />
       <div className="player-profile__body">
         {player && (
@@ -165,21 +173,23 @@ function MatchesSection({
         <span className="player-profile__section-title">Matches</span>
         <span className="player-profile__section-count">{total}</span>
       </div>
-      <table className="matches">
-        <thead>
-          <tr>
-            <th style={{ width: 120 }}>Date</th>
-            <th>Opponent</th>
-            <th style={{ width: 260 }}>Score</th>
-            <th style={{ width: 90 }}>Result</th>
-          </tr>
-        </thead>
-        <tbody>
-          {visible.map((m) => (
-            <MatchRowComponent key={m.id} m={m} asLink={asLinks} />
-          ))}
-        </tbody>
-      </table>
+      <div className="player-profile__table-wrap">
+        <table className="matches">
+          <thead>
+            <tr>
+              <th style={{ width: 120 }}>Date</th>
+              <th>Opponent</th>
+              <th style={{ width: 260 }}>Score</th>
+              <th style={{ width: 90 }}>Result</th>
+            </tr>
+          </thead>
+          <tbody>
+            {visible.map((m) => (
+              <MatchRowComponent key={m.id} m={m} asLink={asLinks} />
+            ))}
+          </tbody>
+        </table>
+      </div>
       {total > PAGE_SIZE && (
         <PaginationFooter
           page={cur}

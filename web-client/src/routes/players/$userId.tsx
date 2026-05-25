@@ -13,15 +13,15 @@ const profileSearchSchema = z.object({
   page: z.coerce.number().int().min(2).optional().catch(undefined),
 })
 
-export const Route = createFileRoute('/users/$userId')({
+export const Route = createFileRoute('/players/$userId')({
   head: () => ({
-    meta: [{ title: pageTitle('User') }],
+    meta: [{ title: pageTitle('Player') }],
   }),
   validateSearch: zodValidator(profileSearchSchema),
-  component: UserRoute,
+  component: PlayerRoute,
 })
 
-function UserRoute() {
+function PlayerRoute() {
   const { userId } = Route.useParams()
   const search = Route.useSearch()
   const page = search.page ?? 1
@@ -34,7 +34,7 @@ function UserRoute() {
   const setPage = useCallback(
     (next: number) => {
       void navigate({
-        to: '/users/$userId',
+        to: '/players/$userId',
         params: { userId },
         replace: true,
         search: { page: next > 1 ? next : undefined },
@@ -49,7 +49,7 @@ function UserRoute() {
         <PlayerProfile player={player} page={page} onPageChange={setPage} />
       ) : (
         <div className="p-6 text-sm text-[color:var(--loss)]">
-          User not found.
+          Player not found.
         </div>
       )}
     </AppShell>

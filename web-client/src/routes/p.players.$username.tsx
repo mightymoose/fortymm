@@ -11,28 +11,28 @@ const profileSearchSchema = z.object({
   page: z.coerce.number().int().min(2).optional().catch(undefined),
 })
 
-export const Route = createFileRoute('/p/users/$username')({
+export const Route = createFileRoute('/p/players/$username')({
   head: () => ({
-    meta: [{ title: pageTitle('User') }],
+    meta: [{ title: pageTitle('Player') }],
   }),
   validateSearch: zodValidator(profileSearchSchema),
-  component: PublicUserRoute,
+  component: PublicPlayerRoute,
 })
 
-function PublicUserRoute() {
+function PublicPlayerRoute() {
   const { username } = Route.useParams()
   const search = Route.useSearch()
   const page = search.page ?? 1
   const navigate = useNavigate()
   // Hardcoded fixture for now — the design's "name" doubles as the URL slug
-  // here (e.g. /p/users/Thanh%20Nguyen). Will swap to real username lookup
+  // here (e.g. /p/players/Thanh%20Nguyen). Will swap to real username lookup
   // once the backend is wired.
   const player = findPlayerByName(username) ?? null
 
   const setPage = useCallback(
     (next: number) => {
       void navigate({
-        to: '/p/users/$username',
+        to: '/p/players/$username',
         params: { username },
         replace: true,
         search: { page: next > 1 ? next : undefined },
@@ -43,7 +43,9 @@ function PublicUserRoute() {
 
   if (!player) {
     return (
-      <div className="p-6 text-sm text-[color:var(--loss)]">User not found.</div>
+      <div className="p-6 text-sm text-[color:var(--loss)]">
+        Player not found.
+      </div>
     )
   }
   return (
@@ -53,6 +55,8 @@ function PublicUserRoute() {
       onPageChange={setPage}
       // Public route: match-detail links would 401 for anonymous viewers.
       matchesAreLinks={false}
+      // No AppShell on this route, so the layout shouldn't subtract a topbar.
+      standalone
     />
   )
 }
