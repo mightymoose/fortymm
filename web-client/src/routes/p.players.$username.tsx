@@ -1,10 +1,11 @@
 import { useCallback } from 'react'
-import { createFileRoute, useNavigate } from '@tanstack/react-router'
+import { createFileRoute, useNavigate, useRouter } from '@tanstack/react-router'
 import { zodValidator } from '@tanstack/zod-adapter'
 import { z } from 'zod'
 
+import { usePublicPlayerByUsername } from '@/api/players'
 import { PlayerProfile } from '@/components/players/player-profile'
-import { findPlayerByName } from '@/components/players/players-data'
+import { Button } from '@/components/ui/button'
 import { pageTitle } from '@/lib/page-title'
 
 const profileSearchSchema = z.object({
@@ -17,6 +18,7 @@ export const Route = createFileRoute('/p/players/$username')({
   }),
   validateSearch: zodValidator(profileSearchSchema),
   component: PublicPlayerRoute,
+  errorComponent: PublicPlayerError,
 })
 
 function PublicPlayerRoute() {
@@ -24,10 +26,10 @@ function PublicPlayerRoute() {
   const search = Route.useSearch()
   const page = search.page ?? 1
   const navigate = useNavigate()
-  // Hardcoded fixture for now — the design's "name" doubles as the URL slug
-  // here (e.g. /p/players/Thanh%20Nguyen). Will swap to real username lookup
-  // once the backend is wired.
-  const player = findPlayerByName(username) ?? null
+
+  // Public route — no session required; `throwOnError` flows non-2xx into
+  // `errorComponent` above.
+  const { data: player, isPending } = usePublicPlayerByUsername(username)
 
   const setPage = useCallback(
     (next: number) => {
@@ -41,16 +43,10 @@ function PublicPlayerRoute() {
     [navigate, username],
   )
 
-  if (!player) {
-    return (
-      <div className="p-6 text-sm text-[color:var(--loss)]">
-        Player not found.
-      </div>
-    )
-  }
   return (
     <PlayerProfile
-      player={player}
+      player={player ?? null}
+      isPending={isPending}
       page={page}
       onPageChange={setPage}
       // Public route: match-detail links would 401 for anonymous viewers.
@@ -58,5 +54,58 @@ function PublicPlayerRoute() {
       // No AppShell on this route, so the layout shouldn't subtract a topbar.
       standalone
     />
+  )
+}
+
+function PublicPlayerError({
+  error,
+  reset,
+}: {
+  error: Error
+  reset: () => void
+}) {
+  const router = useRouter()
+  const status =
+    typeof error === 'object' && error !== null && 'status' in error
+      ? (error as { status: number }).status
+      : 0
+  const notFound = status >= 400 && status < 500
+  return (
+    <div
+      role="alert"
+      style={{
+        minHeight: '100vh',
+        background: 'var(--bg-app)',
+        color: 'var(--fg-1)',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: '40px 24px',
+        textAlign: 'center',
+        gap: 8,
+      }}
+    >
+      <div style={{ fontSize: 18, fontWeight: 600, color: 'var(--fg-2)' }}>
+        {notFound ? 'Player not found.' : 'Couldn’t load this player.'}
+      </div>
+      <div style={{ fontSize: 13, color: 'var(--fg-3)' }}>
+        {notFound
+          ? 'The URL might be off, or this player has been removed.'
+          : 'Something went wrong reaching the server.'}
+      </div>
+      {!notFound && (
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => {
+            reset()
+            router.invalidate()
+          }}
+        >
+          Try again
+        </Button>
+      )}
+    </div>
   )
 }

@@ -426,6 +426,95 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/players": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Players
+         * @description Paginated roster backing the `/players` list page.
+         *
+         *     Sorted by default-league rating (highest first), with NULL ratings (i.e.
+         *     players who haven't played a rated match yet) sorted last so the top of
+         *     the list always shows ranked players. Falls back to alphabetic order for
+         *     ties.
+         */
+        get: operations["list_players_v1_players_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/players/{player_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Player
+         * @description Authed profile hero for `/players/$userId`. Same shape as a list row
+         *     so the FE can reuse the cache key after navigating from the list.
+         */
+        get: operations["get_player_v1_players__player_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/p/players/{username}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Public Player
+         * @description Public profile hero for `/p/players/$username` — no session required,
+         *     rate-limited per-IP to keep the user table from being scraped.
+         */
+        get: operations["get_public_player_v1_p_players__username__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/players/{player_id}/matches": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Player Matches
+         * @description Paginated per-player match history backing the profile-page match
+         *     table. Newest-first by ``created_at``. Sets are projected from the
+         *     player's perspective so the FE renders them without flipping sides.
+         */
+        get: operations["list_player_matches_v1_players__player_id__matches_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/dashboard": {
         parameters: {
             query?: never;
@@ -435,40 +524,6 @@ export interface paths {
         };
         /** Get Dashboard */
         get: operations["get_dashboard_v1_dashboard_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/users/{user_id}/profile": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get User By Id */
-        get: operations["get_user_by_id_v1_users__user_id__profile_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/p/users/{username}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Public User By Username */
-        get: operations["get_public_user_by_username_v1_p_users__username__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -990,13 +1045,87 @@ export interface components {
             description?: string | null;
         };
         /**
+         * PlayerListResponse
+         * @description Paginated `/v1/players` response backing the `/players` list page.
+         */
+        PlayerListResponse: {
+            /** Items */
+            items: components["schemas"]["PlayerSummary"][];
+            /** Page */
+            page: number;
+            /** Page Size */
+            page_size: number;
+            /** Total */
+            total: number;
+        };
+        /**
+         * PlayerMatchListResponse
+         * @description Paginated per-player match list backing the profile page's match
+         *     table.
+         */
+        PlayerMatchListResponse: {
+            /** Items */
+            items: components["schemas"]["PlayerMatchRow"][];
+            /** Page */
+            page: number;
+            /** Page Size */
+            page_size: number;
+            /** Total */
+            total: number;
+        };
+        /**
+         * PlayerMatchOpponent
+         * @description Compact opponent shape for a per-player match row. ``id`` and
+         *     ``username`` are both ``None`` for the player-less sentinel side
+         *     ("No opponent" matches).
+         */
+        PlayerMatchOpponent: {
+            /** Id */
+            id?: string | null;
+            /** Username */
+            username?: string | null;
+        };
+        /**
+         * PlayerMatchRow
+         * @description A single row in the per-player match list. Pre-shaped so the FE doesn't
+         *     have to join sides + games + flip perspective.
+         */
+        PlayerMatchRow: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            status: components["schemas"]["MatchStatus"];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            opponent: components["schemas"]["PlayerMatchOpponent"];
+            /** Sets */
+            sets: components["schemas"]["PlayerMatchSet"][];
+            /** Result */
+            result?: ("W" | "L") | null;
+        };
+        /**
+         * PlayerMatchSet
+         * @description A single game's score from the headline player's perspective.
+         */
+        PlayerMatchSet: {
+            /** Mine */
+            mine: number;
+            /** Theirs */
+            theirs: number;
+        };
+        /**
          * PlayerRead
          * @description A user the current player can pick as a match opponent.
          *
-         *     ``rating`` is the player's current ``rating_value`` in the league the
-         *     request was scoped to (defaulting to the default league) — None if they
-         *     haven't yet played a rated match in that league or, for manual-strategy
-         *     leagues, haven't been imported.
+         *     Used by the typeahead/opponent picker. ``rating`` is the player's current
+         *     ``rating_value`` in the league the request was scoped to (defaulting to
+         *     the default league) — None if they haven't yet played a rated match in
+         *     that league or, for manual-strategy leagues, haven't been imported.
          */
         PlayerRead: {
             /**
@@ -1008,6 +1137,41 @@ export interface components {
             username: string;
             /** Rating */
             rating?: number | null;
+        };
+        /**
+         * PlayerSummary
+         * @description Pre-shaped for the `/players` list and the profile-page hero.
+         *
+         *     Carries everything those surfaces render: the username + the default-
+         *     league rating + a career W-L from completed matches + a 5-character form
+         *     string (newest first) so the UI can render the form-dots without a
+         *     follow-up query.
+         */
+        PlayerSummary: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Username */
+            username: string;
+            /** Rating */
+            rating?: number | null;
+            /**
+             * Wins
+             * @default 0
+             */
+            wins: number;
+            /**
+             * Losses
+             * @default 0
+             */
+            losses: number;
+            /**
+             * Form
+             * @default
+             */
+            form: string;
         };
         /**
          * RatingChange
@@ -1156,19 +1320,6 @@ export interface components {
         };
         /** UpdateCurrentUserRequest */
         UpdateCurrentUserRequest: {
-            /** Username */
-            username: string;
-        };
-        /**
-         * UserProfile
-         * @description Minimal user shape for profile pages — public-safe (no email).
-         */
-        UserProfile: {
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
             /** Username */
             username: string;
         };
@@ -2217,6 +2368,146 @@ export interface operations {
             };
         };
     };
+    list_players_v1_players_get: {
+        parameters: {
+            query?: {
+                q?: string | null;
+                page?: number;
+                page_size?: number;
+                league_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlayerListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_player_v1_players__player_id__get: {
+        parameters: {
+            query?: {
+                league_id?: string | null;
+            };
+            header?: never;
+            path: {
+                player_id: string;
+            };
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlayerSummary"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_public_player_v1_p_players__username__get: {
+        parameters: {
+            query?: {
+                league_id?: string | null;
+            };
+            header?: never;
+            path: {
+                username: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlayerSummary"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_player_matches_v1_players__player_id__matches_get: {
+        parameters: {
+            query?: {
+                page?: number;
+                page_size?: number;
+            };
+            header?: never;
+            path: {
+                player_id: string;
+            };
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlayerMatchListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_dashboard_v1_dashboard_get: {
         parameters: {
             query?: never;
@@ -2235,70 +2526,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DashboardResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_user_by_id_v1_users__user_id__profile_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                user_id: string;
-            };
-            cookie?: {
-                session?: string | null;
-            };
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UserProfile"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_public_user_by_username_v1_p_users__username__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                username: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UserProfile"];
                 };
             };
             /** @description Validation Error */

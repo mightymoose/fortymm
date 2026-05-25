@@ -1,5 +1,5 @@
-import { useCallback, useMemo } from 'react'
-import { createFileRoute, useNavigate } from '@tanstack/react-router'
+import { useCallback } from 'react'
+import { createFileRoute, useNavigate, useRouter } from '@tanstack/react-router'
 import { zodValidator } from '@tanstack/zod-adapter'
 import {
   ChevronLeft,
@@ -11,12 +11,9 @@ import {
 } from 'lucide-react'
 import { z } from 'zod'
 
+import { usePlayerList, type PlayerSummary } from '@/api/players'
+import { useSession } from '@/api/session'
 import { AppShell } from '@/components/app-shell'
-import {
-  COUNTRIES,
-  PLAYERS,
-  type Player,
-} from '@/components/players/players-data'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
@@ -28,6 +25,7 @@ import {
 } from '@/components/ui/pagination'
 import { UserAvatar } from '@/components/ui/user-avatar'
 import { pageTitle } from '@/lib/page-title'
+import { useDebouncedValue } from '@/lib/use-debounced-value'
 
 // Reuse the matches list's scaffold (action bar, filter row, table chrome,
 // footer) so both pages stay visually identical — only the per-row cells
@@ -49,6 +47,7 @@ export const Route = createFileRoute('/players/')({
   }),
   validateSearch: zodValidator(playersSearchSchema),
   component: PlayersPage,
+  errorComponent: PlayersListError,
 })
 
 const PAGE_SIZE = 25
@@ -59,26 +58,22 @@ function PlayersPage() {
   const page = search.page ?? 1
   const navigate = useNavigate()
 
-  const filtered = useMemo(() => {
-    const list = PLAYERS.slice().sort((a, b) => b.rating - a.rating)
-    if (!q) return list
-    const qq = q.toLowerCase()
-    return list.filter(
-      (p) =>
-        p.name.toLowerCase().includes(qq) ||
-        p.club.toLowerCase().includes(qq) ||
-        // Match both the ISO code ("VN") and the human-readable name
-        // ("Vietnam") so typing the country in either form works.
-        p.country.toLowerCase().includes(qq) ||
-        COUNTRIES[p.country].name.toLowerCase().includes(qq),
-    )
-  }, [q])
+  // Debounce only the data fetch — URL updates synchronously so refresh /
+  // share / back stay accurate. Mirrors the pattern in `/matches`.
+  const debouncedQ = useDebouncedValue(q.trim(), 300)
 
-  const total = filtered.length
-  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
-  const cur = Math.min(page, totalPages)
-  const start = (cur - 1) * PAGE_SIZE
-  const visible = filtered.slice(start, start + PAGE_SIZE)
+  const session = useSession()
+  const list = usePlayerList(
+    { q: debouncedQ || undefined, page, page_size: PAGE_SIZE },
+    // Gate on the session so a first-visit direct-load doesn't race the
+    // session cookie and 401 into the error boundary.
+    { enabled: session.isSuccess },
+  )
+  const data = list.data
+  const isLoading = list.isPending
+  const items = data?.items ?? []
+  const total = data?.total ?? 0
+  const startIndex = (page - 1) * PAGE_SIZE
 
   // Rewrite the URL — `replace: true` keeps each keystroke from filling
   // browser history. Defaults are stripped so the URL stays clean.
@@ -109,18 +104,21 @@ function PlayersPage() {
     [setSearch],
   )
 
-  const liveCount = PLAYERS.filter((p) => p.status === 'live').length
-
   return (
     <AppShell>
       <div className="match-list-page">
-        <ActionBar liveCount={liveCount} />
+        <ActionBar total={total} />
         <FilterRow q={q} setQ={setQ} />
         <div className="table-wrap">
-          <PlayerTable rows={visible} onClear={onClear} />
+          <PlayerTable
+            rows={items}
+            isLoading={isLoading}
+            startIndex={startIndex}
+            onClear={onClear}
+          />
         </div>
         <PaginationFooter
-          page={cur}
+          page={page}
           setPage={setPage}
           total={total}
           pageSize={PAGE_SIZE}
@@ -130,17 +128,18 @@ function PlayersPage() {
   )
 }
 
-function ActionBar({ liveCount }: { liveCount: number }) {
+function ActionBar({ total }: { total: number }) {
   return (
     <div className="action-bar">
       <div className="action-bar-title">Players</div>
       <div className="action-bar-crumb">
         Tournament roster &amp; ratings
       </div>
-      <span className="live-pill">
-        <span className="live-dot" />
-        {liveCount} LIVE
-      </span>
+      {total > 0 && (
+        <span className="seg-count" style={{ marginLeft: 8 }}>
+          {total}
+        </span>
+      )}
       <div className="filter-spacer" />
     </div>
   )
@@ -159,7 +158,7 @@ function FilterRow({
         <Search className="ml-search-icon" size={16} strokeWidth={2} />
         <Input
           className="h-9 pl-9 pr-9"
-          placeholder="Search by name, club, country…"
+          placeholder="Search by username…"
           value={q}
           onChange={(e) => setQ(e.target.value)}
         />
@@ -180,18 +179,23 @@ function FilterRow({
 
 function PlayerTable({
   rows,
+  isLoading,
+  startIndex,
   onClear,
 }: {
-  rows: Player[]
+  rows: PlayerSummary[]
+  isLoading: boolean
+  startIndex: number
   onClear: () => void
 }) {
+  if (isLoading && rows.length === 0) {
+    return <SkeletonRows />
+  }
   if (rows.length === 0) {
     return (
       <div className="empty">
         <div className="empty-title">No players match</div>
-        <div className="empty-sub">
-          Try a different name, club, or country code.
-        </div>
+        <div className="empty-sub">Try a different username.</div>
         <Button
           variant="ghost"
           size="sm"
@@ -215,15 +219,40 @@ function PlayerTable({
         </tr>
       </thead>
       <tbody>
-        {rows.map((p) => (
-          <PlayerRow key={p.id} player={p} />
+        {rows.map((p, i) => (
+          <PlayerRow key={p.id} player={p} seed={startIndex + i + 1} />
         ))}
       </tbody>
     </table>
   )
 }
 
-function PlayerRow({ player }: { player: Player }) {
+function SkeletonRows() {
+  return (
+    <table className="matches" aria-busy="true">
+      <thead>
+        <tr>
+          <th style={{ width: 64 }}>Seed</th>
+          <th>Player</th>
+          <th style={{ width: 90 }}>Rating</th>
+          <th style={{ width: 80 }}>W–L</th>
+          <th style={{ width: 100 }}>Form · L5</th>
+        </tr>
+      </thead>
+      <tbody>
+        {Array.from({ length: 8 }).map((_, i) => (
+          <tr key={i} className="skeleton-row" aria-hidden="true">
+            <td colSpan={5}>
+              <div className="skeleton-line" />
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+}
+
+function PlayerRow({ player, seed }: { player: PlayerSummary; seed: number }) {
   const navigate = useNavigate()
   const open = () =>
     navigate({ to: '/players/$userId', params: { userId: player.id } })
@@ -232,7 +261,7 @@ function PlayerRow({ player }: { player: Player }) {
       className="is-clickable"
       role="link"
       tabIndex={0}
-      aria-label={`Open ${player.name} profile`}
+      aria-label={`Open ${player.username} profile`}
       onClick={() => void open()}
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') {
@@ -244,25 +273,25 @@ function PlayerRow({ player }: { player: Player }) {
       <td>
         <span
           className={
-            'players-seed' + (player.seed <= 4 ? ' players-seed--top' : '')
+            'players-seed' + (seed <= 4 ? ' players-seed--top' : '')
           }
         >
-          #{player.seed}
+          #{seed}
         </span>
       </td>
       <td>
         <div className="player">
-          <UserAvatar name={player.name} size={32} />
-          <span className="player-name">{player.name}</span>
+          <UserAvatar name={player.username} size={32} />
+          <span className="player-name">{player.username}</span>
         </div>
       </td>
       <td>
-        <span className="players-rating">{player.rating}</span>
+        <RatingCell rating={player.rating} />
       </td>
       <td>
         <span className="players-record">
-          {player.w}
-          <span className="players-record-loss"> – {player.l}</span>
+          {player.wins}
+          <span className="players-record-loss"> – {player.losses}</span>
         </span>
       </td>
       <td>
@@ -272,7 +301,35 @@ function PlayerRow({ player }: { player: Player }) {
   )
 }
 
+function RatingCell({ rating }: { rating: number | null | undefined }) {
+  // `null` / undefined rating === player hasn't played a rated match yet;
+  // render a dim em-dash so the column still aligns instead of collapsing.
+  if (rating === null || rating === undefined) {
+    return (
+      <span
+        className="players-rating"
+        style={{ color: 'var(--fg-3)', fontWeight: 500 }}
+      >
+        —
+      </span>
+    )
+  }
+  return <span className="players-rating">{Math.round(rating)}</span>
+}
+
 function FormDots({ form }: { form: string }) {
+  // Players with no completed matches yet get an empty form string; the
+  // column reads as a dash rather than a row of empty boxes.
+  if (form.length === 0) {
+    return (
+      <span
+        className="players-form"
+        style={{ color: 'var(--fg-3)', fontFamily: 'var(--font-mono)' }}
+      >
+        —
+      </span>
+    )
+  }
   return (
     <span
       className="players-form"
@@ -290,6 +347,34 @@ function FormDots({ form }: { form: string }) {
         </span>
       ))}
     </span>
+  )
+}
+
+/** Route-level error boundary fallback — the list query is `throwOnError`,
+ * so any non-2xx response or network failure flows here. Keeps the shell
+ * around so the user can navigate away. */
+function PlayersListError({ reset }: { error: Error; reset: () => void }) {
+  const router = useRouter()
+  return (
+    <AppShell>
+      <div role="alert" className="empty">
+        <div className="empty-title">Couldn’t load players</div>
+        <div className="empty-sub">
+          Something went wrong reaching the server.
+        </div>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="empty-clear"
+          onClick={() => {
+            reset()
+            router.invalidate()
+          }}
+        >
+          Try again
+        </Button>
+      </div>
+    </AppShell>
   )
 }
 
@@ -404,3 +489,4 @@ function PaginationFooter({
     </div>
   )
 }
+

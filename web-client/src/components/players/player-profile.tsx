@@ -1,4 +1,3 @@
-import { useMemo } from 'react'
 import {
   ChevronLeft,
   ChevronRight,
@@ -6,6 +5,11 @@ import {
   ChevronsRight,
 } from 'lucide-react'
 
+import {
+  usePlayerMatches,
+  type PlayerMatchRow,
+  type PlayerSummary,
+} from '@/api/players'
 import { Button } from '@/components/ui/button'
 import {
   Pagination,
@@ -17,25 +21,24 @@ import {
 import { UserAvatar } from '@/components/ui/user-avatar'
 
 import './player-profile.css'
-import {
-  COUNTRIES,
-  MATCHES,
-  PLAYERS,
-  type MatchRecord,
-  type Player,
-} from './players-data'
 
 /**
  * Profile surface shared by the authed `/players/$userId` route and the
- * public `/p/players/$username` route. Renders the design's Bebas hero plus
- * a single matches list — no tabs.
+ * public `/p/players/$username` route. Renders a Bebas hero (username +
+ * rating) and a per-player matches list — no tabs.
  *
- * Data is hardcoded from the design fixture for now (see `players-data.ts`).
- * Once the backend has the right endpoints this swaps to live data without
- * changing the component's visual shape.
+ * The route fetches the player and passes it in; this component fetches the
+ * matches itself (one query per loaded player.id). Both fetches are
+ * `throwOnError`, so the player query routes failures to the route-level
+ * `errorComponent`; the matches query renders its own inline retry inside
+ * the body so a transient match-fetch failure doesn't blank the whole page.
  */
 export interface PlayerProfileProps {
-  player: Player | null
+  /** The loaded player, or null while the route's profile query is pending. */
+  player: PlayerSummary | null
+  /** True while the route's profile query is pending — drives the hero
+   * skeleton. */
+  isPending: boolean
   /** When false (the public route, for anonymous viewers) match rows render as
    * static panels instead of links — there's nothing under /matches/:id to
    * navigate to without a session. */
@@ -45,32 +48,40 @@ export interface PlayerProfileProps {
    * viewport instead of leaving a 64px dead strip at the bottom. */
   standalone?: boolean
   /** 1-based page for the matches list. Owned by the route so pagination
-   * state lives in the URL. Defaults to 1. */
-  page?: number
-  onPageChange?: (next: number) => void
+   * state lives in the URL. */
+  page: number
+  onPageChange: (next: number) => void
 }
 
 const PAGE_SIZE = 25
 
 export function PlayerProfile({
   player,
+  isPending,
   matchesAreLinks = true,
   standalone = false,
-  page = 1,
+  page,
   onPageChange,
 }: PlayerProfileProps) {
   const rootClass =
     'player-profile dark fortymm-theme' +
     (standalone ? ' player-profile--standalone' : '')
+  // The matches endpoint (`/v1/players/{id}/matches`) requires a session, so
+  // the public route can't fetch it — a 401 would `throwOnError` straight to
+  // the route-level errorComponent and blank the whole profile with a
+  // misleading "Player not found" message. Hide the section there; the
+  // authed route still renders it.
+  const showMatches = player !== null && !standalone
   return (
     <div className={rootClass}>
-      <Hero player={player} />
+      <Hero player={player} isPending={isPending} />
       <div className="player-profile__body">
-        {player && (
+        {showMatches && (
           <MatchesSection
+            playerId={player.id}
             asLinks={matchesAreLinks}
             page={page}
-            onPageChange={onPageChange ?? (() => undefined)}
+            onPageChange={onPageChange}
           />
         )}
       </div>
@@ -78,13 +89,22 @@ export function PlayerProfile({
   )
 }
 
-function Hero({ player }: { player: Player | null }) {
-  if (!player) {
+function Hero({
+  player,
+  isPending,
+}: {
+  player: PlayerSummary | null
+  isPending: boolean
+}) {
+  if (isPending || player === null) {
     return (
-      <header className="player-profile__hero">
+      <header className="player-profile__hero" aria-busy="true">
         <div className="player-profile__hero-row">
           <div className="player-profile__avatar-ring">
-            <UserAvatar name="?" size={120} ring />
+            <span
+              className="player-profile__hero-avatar-skeleton"
+              aria-hidden="true"
+            />
             <span
               aria-hidden="true"
               className="player-profile__avatar-dashed"
@@ -92,56 +112,62 @@ function Hero({ player }: { player: Player | null }) {
           </div>
           <div className="player-profile__name-wrap">
             <div className="player-profile__overline">FortyMM Player</div>
-            <h1 className="player-profile__name player-profile__name--loading">
-              Loading…
-            </h1>
+            <div
+              className="player-profile__hero-name-skeleton"
+              aria-hidden="true"
+            />
+            <div
+              className="player-profile__hero-sub-skeleton"
+              aria-hidden="true"
+            />
+          </div>
+          <div className="player-profile__hero-rating">
+            <div className="player-profile__overline">FortyMM Rating</div>
+            <div
+              className="player-profile__hero-rating-chip player-profile__hero-rating-chip--skeleton"
+              aria-hidden="true"
+            />
           </div>
         </div>
       </header>
     )
   }
-  const country = COUNTRIES[player.country]
   return (
     <header className="player-profile__hero">
       <div className="player-profile__hero-row">
         <div className="player-profile__avatar-ring">
-          <UserAvatar name={player.name} size={120} ring />
+          <UserAvatar name={player.username} size={120} ring />
           <span aria-hidden="true" className="player-profile__avatar-dashed" />
         </div>
         <div className="player-profile__name-wrap">
           <div className="player-profile__overline">FortyMM Player</div>
           <h1 className="player-profile__name">
-            {player.name.toUpperCase()}
+            {player.username.toUpperCase()}
             <span className="player-profile__name-dot">.</span>
           </h1>
           <div className="player-profile__sub">
-            <span className="player-profile__sub-flag" aria-hidden="true">
-              {country.flag}
+            <span className="player-profile__sub-record">
+              <span className="player-profile__sub-record-mono">
+                {player.wins}
+              </span>
+              <span style={{ color: 'var(--fg-3)' }}> – </span>
+              <span className="player-profile__sub-record-mono">
+                {player.losses}
+              </span>
+              <span style={{ color: 'var(--fg-3)', marginLeft: 6 }}>
+                W–L
+              </span>
             </span>
-            <span>{country.name}</span>
-            <span className="player-profile__sub-sep" aria-hidden="true" />
-            <span>{player.club}</span>
-            <span className="player-profile__sub-sep" aria-hidden="true" />
-            <span>{player.age} yrs</span>
-            <span className="player-profile__sub-sep" aria-hidden="true" />
-            <span className="player-profile__sub-handle">#{player.seed}</span>
           </div>
         </div>
         <div className="player-profile__hero-rating">
           <div className="player-profile__overline">FortyMM Rating</div>
           <div className="player-profile__hero-rating-chip">
-            {player.rating}
+            {player.rating == null ? '—' : Math.round(player.rating)}
           </div>
-          <div className="player-profile__hero-rating-meta">
-            Peak{' '}
-            <span className="player-profile__hero-rating-meta-mono">
-              {player.rating}
-            </span>{' '}
-            · Season high{' '}
-            <span className="player-profile__hero-rating-meta-mono">
-              {player.rating}
-            </span>
-          </div>
+          {player.rating == null && (
+            <div className="player-profile__hero-rating-meta">Unrated</div>
+          )}
         </div>
       </div>
     </header>
@@ -149,50 +175,59 @@ function Hero({ player }: { player: Player | null }) {
 }
 
 function MatchesSection({
+  playerId,
   asLinks,
   page,
   onPageChange,
 }: {
+  playerId: string
   asLinks: boolean
   page: number
   onPageChange: (next: number) => void
 }) {
-  // The design seeded matches for one player (p01). For every other profile we
-  // render the same list as a stand-in so the page never reads empty during
-  // the hardcoded-fixture phase.
-  const all = useMemo<MatchRecord[]>(() => MATCHES, [])
-  const total = all.length
-  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
-  const cur = Math.min(page, totalPages)
-  const start = (cur - 1) * PAGE_SIZE
-  const visible = all.slice(start, start + PAGE_SIZE)
+  const { data, isPending, isError, refetch } = usePlayerMatches(playerId, {
+    page,
+    page_size: PAGE_SIZE,
+  })
+  const rows = data?.items ?? []
+  const total = data?.total ?? 0
 
   return (
     <section className="player-profile__section">
       <div className="player-profile__section-header">
         <span className="player-profile__section-title">Matches</span>
-        <span className="player-profile__section-count">{total}</span>
+        {data && (
+          <span className="player-profile__section-count">{total}</span>
+        )}
       </div>
       <div className="player-profile__table-wrap">
-        <table className="matches">
-          <thead>
-            <tr>
-              <th style={{ width: 120 }}>Date</th>
-              <th>Opponent</th>
-              <th style={{ width: 260 }}>Score</th>
-              <th style={{ width: 90 }}>Result</th>
-            </tr>
-          </thead>
-          <tbody>
-            {visible.map((m) => (
-              <MatchRowComponent key={m.id} m={m} asLink={asLinks} />
-            ))}
-          </tbody>
-        </table>
+        {isError ? (
+          <MatchesError onRetry={() => void refetch()} />
+        ) : isPending ? (
+          <MatchesSkeleton />
+        ) : rows.length === 0 ? (
+          <MatchesEmpty />
+        ) : (
+          <table className="matches">
+            <thead>
+              <tr>
+                <th style={{ width: 120 }}>Date</th>
+                <th>Opponent</th>
+                <th style={{ width: 260 }}>Score</th>
+                <th style={{ width: 90 }}>Result</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((m) => (
+                <MatchRowComponent key={m.id} m={m} asLink={asLinks} />
+              ))}
+            </tbody>
+          </table>
+        )}
       </div>
       {total > PAGE_SIZE && (
         <PaginationFooter
-          page={cur}
+          page={page}
           setPage={onPageChange}
           total={total}
           pageSize={PAGE_SIZE}
@@ -202,73 +237,206 @@ function MatchesSection({
   )
 }
 
+function MatchesSkeleton() {
+  return (
+    <table className="matches" aria-busy="true">
+      <thead>
+        <tr>
+          <th style={{ width: 120 }}>Date</th>
+          <th>Opponent</th>
+          <th style={{ width: 260 }}>Score</th>
+          <th style={{ width: 90 }}>Result</th>
+        </tr>
+      </thead>
+      <tbody>
+        {Array.from({ length: 6 }).map((_, i) => (
+          <tr key={i} className="skeleton-row" aria-hidden="true">
+            <td colSpan={4}>
+              <div className="skeleton-line" />
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+}
+
+function MatchesEmpty() {
+  return (
+    <div
+      style={{
+        padding: '56px 24px',
+        textAlign: 'center',
+        color: 'var(--fg-3)',
+      }}
+    >
+      <div
+        style={{
+          fontSize: 15,
+          fontWeight: 600,
+          color: 'var(--fg-2)',
+          marginBottom: 6,
+        }}
+      >
+        No matches yet
+      </div>
+      <div>This player hasn’t played any rated matches.</div>
+    </div>
+  )
+}
+
+function MatchesError({ onRetry }: { onRetry: () => void }) {
+  return (
+    <div
+      role="alert"
+      style={{
+        padding: '40px 24px',
+        textAlign: 'center',
+        color: 'var(--fg-3)',
+      }}
+    >
+      <div
+        style={{
+          fontSize: 14,
+          fontWeight: 600,
+          color: 'var(--fg-2)',
+          marginBottom: 6,
+        }}
+      >
+        Couldn’t load matches
+      </div>
+      <div style={{ marginBottom: 16, fontSize: 13 }}>
+        Something went wrong reaching the server.
+      </div>
+      <Button variant="ghost" size="sm" onClick={onRetry}>
+        Try again
+      </Button>
+    </div>
+  )
+}
+
 function MatchRowComponent({
   m,
   asLink,
 }: {
-  m: MatchRecord
+  m: PlayerMatchRow
   asLink: boolean
 }) {
-  // Match-detail routes aren't wired up in the hardcoded-fixture phase, so
-  // even when `asLink` is true the row renders as a static panel for now.
+  // Match-detail routes aren't wired up in this scope, so even when `asLink`
+  // is true the row renders as a static panel. The prop is kept for future
+  // route wiring (and so the public route can opt out).
   void asLink
-  const opponent = PLAYERS.find((p) => p.id === m.opp)
-  const opponentName = opponent?.name ?? 'Unknown opponent'
+  const opponentName = m.opponent.username ?? 'No opponent'
+  const isNoOpp = m.opponent.username === null
   const won = m.result === 'W'
+  const lost = m.result === 'L'
   return (
     <tr>
       <td>
         <span className="time-cell">
-          <span className="strong">{formatDate(m.date)}</span>
+          <span className="strong">{formatDate(m.created_at)}</span>
         </span>
       </td>
       <td>
         <div className="player">
-          <UserAvatar name={opponentName} size={26} />
-          <span className="player-name">{opponentName}</span>
+          {isNoOpp ? (
+            <UserAvatar name={null} size={26} />
+          ) : (
+            <UserAvatar name={opponentName} size={26} />
+          )}
+          <span
+            className="player-name"
+            style={isNoOpp ? { color: 'var(--fg-3)', fontStyle: 'italic' } : undefined}
+          >
+            {opponentName}
+          </span>
         </div>
       </td>
       <td>
-        <div className="player-profile__sets">
-          {m.sets.map((s, i) => {
-            const setWon = s[0] > s[1]
-            return (
-              <div
-                key={i}
-                className={
-                  'player-profile__set ' +
-                  (setWon
-                    ? 'player-profile__set--won'
-                    : 'player-profile__set--lost')
-                }
-              >
-                <span className="player-profile__set-mine">{s[0]}</span>
-                <span className="player-profile__set-theirs">{s[1]}</span>
-              </div>
-            )
-          })}
-        </div>
+        {m.sets.length === 0 ? (
+          <span style={{ color: 'var(--fg-3)', fontFamily: 'var(--font-mono)' }}>
+            —
+          </span>
+        ) : (
+          <div className="player-profile__sets">
+            {m.sets.map((s, i) => {
+              const setWon = s.mine > s.theirs
+              return (
+                <div
+                  key={i}
+                  className={
+                    'player-profile__set ' +
+                    (setWon
+                      ? 'player-profile__set--won'
+                      : 'player-profile__set--lost')
+                  }
+                >
+                  <span className="player-profile__set-mine">{s.mine}</span>
+                  <span className="player-profile__set-theirs">{s.theirs}</span>
+                </div>
+              )
+            })}
+          </div>
+        )}
       </td>
       <td>
-        <span
-          className={
-            'player-profile__result-chip player-profile__result-chip--' +
-            (won ? 'win' : 'loss')
-          }
-        >
-          {won ? 'WIN' : 'LOSS'}
-        </span>
+        <ResultChip status={m.status} won={won} lost={lost} />
       </td>
     </tr>
   )
 }
 
-// Parse YYYY-MM-DD as local-calendar components — bare `new Date('2026-05-23')`
-// is interpreted as UTC midnight, so anyone west of UTC sees the prior day.
+function ResultChip({
+  status,
+  won,
+  lost,
+}: {
+  status: PlayerMatchRow['status']
+  won: boolean
+  lost: boolean
+}) {
+  if (status === 'in_progress') {
+    return (
+      <span className="player-profile__result-chip player-profile__result-chip--live">
+        LIVE
+      </span>
+    )
+  }
+  if (status === 'pending') {
+    return (
+      <span className="player-profile__result-chip player-profile__result-chip--pending">
+        UP NEXT
+      </span>
+    )
+  }
+  if (won) {
+    return (
+      <span className="player-profile__result-chip player-profile__result-chip--win">
+        WIN
+      </span>
+    )
+  }
+  if (lost) {
+    return (
+      <span className="player-profile__result-chip player-profile__result-chip--loss">
+        LOSS
+      </span>
+    )
+  }
+  // Completed but undecided (disputed/voided/no-side-won). Neutral pill.
+  return (
+    <span className="player-profile__result-chip player-profile__result-chip--pending">
+      {status.toUpperCase()}
+    </span>
+  )
+}
+
 function formatDate(iso: string): string {
-  const [y, m, d] = iso.split('-').map(Number)
-  const date = new Date(y, (m ?? 1) - 1, d ?? 1)
-  return date.toLocaleDateString(undefined, { month: 'short', day: '2-digit' })
+  // The server emits ISO timestamps with TZ; rendering in local time is
+  // fine here since the column shows just month + day. (No bare YYYY-MM-DD
+  // strings — that's the pattern that bit us before.)
+  const d = new Date(iso)
+  return d.toLocaleDateString(undefined, { month: 'short', day: '2-digit' })
 }
 
 type PageToken = number | 'ellipsis'

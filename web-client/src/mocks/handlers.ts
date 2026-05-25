@@ -54,6 +54,151 @@ function matchHasPlayerLike(m: SeedMatch, q: string): boolean {
   )
 }
 
+// ----- /v1/players helpers --------------------------------------------------
+//
+// The dev/test mock roster + summary projector. Keeps the current user
+// (rita.kovac, MOCK_CURRENT_USER) findable so /players/$myId resolves, and
+// derives plausible W-L + form deterministically so reloads stay stable.
+
+type PlayerSummary = components['schemas']['PlayerSummary']
+type PlayerMatchRow = components['schemas']['PlayerMatchRow']
+
+const MOCK_CURRENT_PLAYER_ID = 'u-me' // matches MOCK_CURRENT_USER.id in match-store
+
+function mockPlayerRoster() {
+  const me = {
+    id: MOCK_CURRENT_PLAYER_ID,
+    username: mockSession.data.user.username,
+    rating: 1820,
+  }
+  return [me, ...mockPlayers]
+}
+
+function djb2(s: string): number {
+  let h = 5381
+  for (let i = 0; i < s.length; i += 1) {
+    h = ((h << 5) + h + s.charCodeAt(i)) | 0
+  }
+  return Math.abs(h)
+}
+
+function summarizePlayer(p: {
+  id: string
+  username: string
+  rating?: number | null
+}): PlayerSummary {
+  const rating = p.rating ?? null
+  // The current user gets real W-L derived from `mockMatches` so the
+  // self-profile feels live. Everyone else gets deterministic synthesis
+  // seeded by username — stable across reloads.
+  if (p.id === MOCK_CURRENT_PLAYER_ID) {
+    const completed = mockMatches.filter((m) => m.status === 'completed')
+    let wins = 0
+    let losses = 0
+    const recent: ('W' | 'L')[] = []
+    const sorted = completed.slice().sort((a, b) =>
+      (b.completed_at ?? b.created_at).localeCompare(
+        a.completed_at ?? a.created_at,
+      ),
+    )
+    for (const m of sorted) {
+      // Side 1 is always the current user in mocks (see match-store).
+      let s1 = 0
+      let s2 = 0
+      for (const g of m.games) {
+        if (!g.score) continue
+        if (g.score.side_1_points > g.score.side_2_points) s1 += 1
+        else if (g.score.side_2_points > g.score.side_1_points) s2 += 1
+      }
+      const target = Math.ceil(m.best_of / 2)
+      if (s1 >= target) {
+        wins += 1
+        if (recent.length < 5) recent.push('W')
+      } else if (s2 >= target) {
+        losses += 1
+        if (recent.length < 5) recent.push('L')
+      }
+    }
+    return {
+      id: p.id,
+      username: p.username,
+      rating,
+      wins,
+      losses,
+      form: recent.join(''),
+    }
+  }
+  const seed = djb2(p.username)
+  const wins = 5 + (seed % 25)
+  const losses = 2 + ((seed * 7) % 12)
+  const form = Array.from({ length: 5 }, (_, i) =>
+    (seed + i * 3) % 3 === 0 ? 'L' : 'W',
+  ).join('')
+  return {
+    id: p.id,
+    username: p.username,
+    rating,
+    wins,
+    losses,
+    form,
+  }
+}
+
+function projectPlayerMatches(player: {
+  id: string
+  username: string
+}): PlayerMatchRow[] {
+  // Real-match flow for the current user; for opponents, surface the same
+  // matches they appeared in (flipped to their perspective).
+  const isMe = player.id === MOCK_CURRENT_PLAYER_ID
+  const myMatches = isMe
+    ? mockMatches
+    : mockMatches.filter((m) => m.opponent?.id === player.id)
+
+  return myMatches
+    .slice()
+    .sort((a, b) => b.created_at.localeCompare(a.created_at))
+    .map((m): PlayerMatchRow => {
+      // The "perspective" player is on side 1 if they're the current user,
+      // side 2 otherwise (since mocks always put rita on side 1).
+      const onSide1 = isMe
+      const opponentUsername = onSide1
+        ? (m.opponent?.username ?? null)
+        : mockSession.data.user.username
+      const opponentId = onSide1
+        ? (m.opponent?.id ?? null)
+        : MOCK_CURRENT_PLAYER_ID
+      const sets = m.games
+        .filter((g): g is typeof g & { score: NonNullable<typeof g.score> } =>
+          g.score !== null,
+        )
+        .map((g) => ({
+          mine: onSide1 ? g.score.side_1_points : g.score.side_2_points,
+          theirs: onSide1 ? g.score.side_2_points : g.score.side_1_points,
+        }))
+      const target = Math.ceil(m.best_of / 2)
+      let s1 = 0
+      let s2 = 0
+      for (const s of sets) {
+        if (s.mine > s.theirs) s1 += 1
+        else if (s.theirs > s.mine) s2 += 1
+      }
+      let result: 'W' | 'L' | null = null
+      if (m.status === 'completed') {
+        if (s1 >= target) result = 'W'
+        else if (s2 >= target) result = 'L'
+      }
+      return {
+        id: m.id,
+        status: m.status,
+        created_at: m.created_at,
+        opponent: { id: opponentId, username: opponentUsername },
+        sets,
+        result,
+      }
+    })
+}
+
 async function readJson(request: Request): Promise<unknown> {
   try {
     const text = await request.clone().text()
@@ -144,25 +289,109 @@ export const handlers = [
     await delay(600)
     return HttpResponse.json(mockSession)
   }),
-  http.get('*/v1/users/:userId/profile', async ({ params }) => {
-    await delay(200)
-    const userId = String(params.userId)
-    const match = mockPlayers.find((p) => p.id === userId)
-    if (!match) return HttpResponse.json({ detail: 'User not found.' }, { status: 404 })
-    return HttpResponse.json({ id: match.id, username: match.username })
+  // ----- /v1/players list + per-player profile + per-player matches ------
+  // BFF endpoints — each returns exactly what its consumer page needs. The
+  // dev-only handlers below synthesize deterministic W-L + form so the
+  // /players list and profile hero render plausible numbers without a
+  // backend.
+  http.get('*/v1/players', async ({ request }) => {
+    await delay(250)
+    const url = new URL(request.url)
+    const q = url.searchParams.get('q')?.trim().toLowerCase() ?? ''
+    const page = Math.max(1, Number(url.searchParams.get('page') ?? '1'))
+    const pageSize = Math.max(
+      1,
+      Number(url.searchParams.get('page_size') ?? '25'),
+    )
+    const roster = mockPlayerRoster()
+    const filtered = q
+      ? roster.filter((p) => p.username.toLowerCase().includes(q))
+      : roster
+    // Mirror the backend's "rating desc, NULLs last" sort. Coerce
+    // undefined → null so the comparator treats both the same.
+    const sorted = filtered.slice().sort((a, b) => {
+      const ra = a.rating ?? null
+      const rb = b.rating ?? null
+      if (ra === null && rb === null) return a.username.localeCompare(b.username)
+      if (ra === null) return 1
+      if (rb === null) return -1
+      return rb - ra
+    })
+    const start = (page - 1) * pageSize
+    const slice = sorted.slice(start, start + pageSize)
+    return HttpResponse.json({
+      items: slice.map(summarizePlayer),
+      page,
+      page_size: pageSize,
+      total: filtered.length,
+    })
   }),
-  http.get('*/v1/p/users/:username', async ({ params }) => {
+  // Literal-path handlers must be registered before `:playerId` — MSW
+  // matches in declaration order, so otherwise `/v1/players/recent` and
+  // `/v1/players/search` would be caught as `playerId='recent'/'search'`
+  // and 404 in dev mode (the new-match opponent picker breaks).
+  http.get('*/v1/players/recent', async () => {
+    await delay(300)
+    return HttpResponse.json(mockRecentOpponents)
+  }),
+  http.get('*/v1/players/search', async ({ request }) => {
+    await delay(200)
+    const q = new URL(request.url).searchParams.get('q')?.trim().toLowerCase()
+    if (!q) return HttpResponse.json([])
+    return HttpResponse.json(
+      mockPlayers
+        .filter((p) => p.username.toLowerCase().includes(q))
+        .slice(0, 10),
+    )
+  }),
+  http.get('*/v1/players/:playerId', async ({ params }) => {
+    await delay(200)
+    const playerId = String(params.playerId)
+    const player = mockPlayerRoster().find((p) => p.id === playerId)
+    if (!player) {
+      return HttpResponse.json(
+        { detail: 'Player not found.' },
+        { status: 404 },
+      )
+    }
+    return HttpResponse.json(summarizePlayer(player))
+  }),
+  http.get('*/v1/p/players/:username', async ({ params }) => {
     await delay(200)
     const username = String(params.username)
-    if (username === mockSession.data.user.username) {
-      return HttpResponse.json({
-        id: 'me_mock',
-        username: mockSession.data.user.username,
-      })
+    const player = mockPlayerRoster().find((p) => p.username === username)
+    if (!player) {
+      return HttpResponse.json(
+        { detail: 'Player not found.' },
+        { status: 404 },
+      )
     }
-    const match = mockPlayers.find((p) => p.username === username)
-    if (!match) return HttpResponse.json({ detail: 'User not found.' }, { status: 404 })
-    return HttpResponse.json({ id: match.id, username: match.username })
+    return HttpResponse.json(summarizePlayer(player))
+  }),
+  http.get('*/v1/players/:playerId/matches', async ({ params, request }) => {
+    await delay(300)
+    const playerId = String(params.playerId)
+    const player = mockPlayerRoster().find((p) => p.id === playerId)
+    if (!player) {
+      return HttpResponse.json(
+        { detail: 'Player not found.' },
+        { status: 404 },
+      )
+    }
+    const url = new URL(request.url)
+    const page = Math.max(1, Number(url.searchParams.get('page') ?? '1'))
+    const pageSize = Math.max(
+      1,
+      Number(url.searchParams.get('page_size') ?? '25'),
+    )
+    const rows = projectPlayerMatches(player)
+    const start = (page - 1) * pageSize
+    return HttpResponse.json({
+      items: rows.slice(start, start + pageSize),
+      page,
+      page_size: pageSize,
+      total: rows.length,
+    })
   }),
   http.patch('*/v1/me', async ({ request }) => {
     const body = (await readJson(request)) as { username?: string } | undefined
@@ -260,21 +489,6 @@ export const handlers = [
     }
     return HttpResponse.json(mockSession)
   }),
-  http.get('*/v1/players/recent', async () => {
-    await delay(300)
-    return HttpResponse.json(mockRecentOpponents)
-  }),
-  http.get('*/v1/players/search', async ({ request }) => {
-    await delay(200)
-    const q = new URL(request.url).searchParams.get('q')?.trim().toLowerCase()
-    if (!q) return HttpResponse.json([])
-    return HttpResponse.json(
-      mockPlayers
-        .filter((p) => p.username.toLowerCase().includes(q))
-        .slice(0, 10),
-    )
-  }),
-
   // ----- matches ---------------------------------------------------------
   http.post('*/v1/matches', async ({ request }) => {
     await delay(400)
