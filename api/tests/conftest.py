@@ -76,18 +76,20 @@ def stub_captcha(monkeypatch):
 
 @pytest_asyncio.fixture(scope="session")
 async def _rate_limiter_redis():
-    """One fakeredis-backed FastAPILimiter for the whole test session — the
-    httpx ASGITransport never fires the app's lifespan, so we init here.
-    Per-test counter resets happen in ``rate_limiter_fakeredis`` below."""
+    """One fakeredis client published to ``app.rate_limiting`` for the whole
+    test session — the httpx ASGITransport never fires the app's lifespan, so
+    we init here. Per-test counter resets happen in ``rate_limiter_fakeredis``
+    below."""
     import fakeredis.aioredis
-    from fastapi_limiter import FastAPILimiter
+
+    from app.rate_limiting import init_rate_limit_redis, shutdown_rate_limit_redis
 
     fake = fakeredis.aioredis.FakeRedis(encoding="utf-8")
-    await FastAPILimiter.init(fake)
+    init_rate_limit_redis(fake)
     try:
         yield fake
     finally:
-        await FastAPILimiter.close()
+        shutdown_rate_limit_redis()
         await fake.aclose()
 
 

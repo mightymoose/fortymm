@@ -6,7 +6,6 @@ from contextlib import asynccontextmanager
 
 import redis.asyncio as redis_asyncio
 from fastapi import FastAPI
-from fastapi_limiter import FastAPILimiter
 from pydantic import BaseModel
 from sqlalchemy import text
 
@@ -14,6 +13,7 @@ from app import db, queue
 from app.dashboard import router as dashboard_router
 from app.matches import router as matches_router
 from app.players import router as players_router
+from app.rate_limiting import init_rate_limit_redis, shutdown_rate_limit_redis
 from app.rbac import router as rbac_router
 from app.sessions import router as sessions_router
 
@@ -24,21 +24,16 @@ log = logging.getLogger(__name__)
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
     connection = redis_asyncio.from_url(redis_url, encoding="utf-8")
-    initialized = False
     try:
-        await FastAPILimiter.init(connection)
-        initialized = True
-    except Exception as exc:
-        # Don't block startup if Redis is unreachable — offline tooling
-        # (regen-api-types, ad-hoc local runs) still needs /openapi.json
-        # and the unprotected routes. Rate-limited endpoints will 500 on
-        # first request until Redis comes back.
-        log.warning("Rate limiter disabled — Redis unreachable: %s", exc)
-    try:
+        # A no-op publishing the connection — individual ``RedisRateLimiter``
+        # dependencies build their pyrate-limiter buckets lazily on first
+        # request. If Redis is unreachable then, the limiter falls open and
+        # the request proceeds; offline tooling (regen-api-types, ad-hoc
+        # local runs) still needs /openapi.json and the unprotected routes.
+        init_rate_limit_redis(connection)
         yield
     finally:
-        if initialized:
-            await FastAPILimiter.close()
+        shutdown_rate_limit_redis()
         await connection.aclose()
 
 

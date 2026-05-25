@@ -3,7 +3,7 @@ from collections.abc import Iterable, Mapping
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from fastapi_limiter.depends import RateLimiter
+from pyrate_limiter import Duration, Rate
 from sqlalchemy import Select, and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased, selectinload
@@ -20,6 +20,7 @@ from app.models import (
     User,
     UserLeagueRating,
 )
+from app.rate_limiting import RedisRateLimiter
 from app.schemas.player import (
     PlayerListResponse,
     PlayerMatchListResponse,
@@ -202,8 +203,10 @@ async def _public_player_ip_key(request: Request) -> str:
 
 # 60/min per IP: comfortably above a human browsing several profiles in quick
 # succession, well below the volume needed to scrape the user table.
-public_player_ip_rate_limit = RateLimiter(
-    times=60, minutes=1, identifier=_public_player_ip_key
+public_player_ip_rate_limit = RedisRateLimiter(
+    rates=[Rate(60, Duration.MINUTE)],
+    bucket_key="public-player-ip",
+    identifier=_public_player_ip_key,
 )
 
 
