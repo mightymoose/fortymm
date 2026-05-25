@@ -2681,6 +2681,7 @@ body.dark.fortymm-theme {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 10px;
+  margin-top: auto;
   padding-top: 14px;
   border-top: 1px solid var(--border-subtle);
 }
