@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as SimulatorRouteImport } from './routes/simulator'
 import { Route as SettingsRouteImport } from './routes/settings'
+import { Route as PlayersRouteImport } from './routes/players'
 import { Route as DesignSystemRouteImport } from './routes/design-system'
 import { Route as DashboardRouteImport } from './routes/dashboard'
 import { Route as ConfirmEmailRouteImport } from './routes/confirm-email'
@@ -40,6 +41,11 @@ const SimulatorRoute = SimulatorRouteImport.update({
 const SettingsRoute = SettingsRouteImport.update({
   id: '/settings',
   path: '/settings',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PlayersRoute = PlayersRouteImport.update({
+  id: '/players',
+  path: '/players',
   getParentRoute: () => rootRouteImport,
 } as any)
 const DesignSystemRoute = DesignSystemRouteImport.update({
@@ -151,6 +157,7 @@ export interface FileRoutesByFullPath {
   '/confirm-email': typeof ConfirmEmailRoute
   '/dashboard': typeof DashboardRoute
   '/design-system': typeof DesignSystemRoute
+  '/players': typeof PlayersRoute
   '/settings': typeof SettingsRoute
   '/simulator': typeof SimulatorRoute
   '/admin/permissions': typeof AdminPermissionsRoute
@@ -174,6 +181,7 @@ export interface FileRoutesByTo {
   '/confirm-email': typeof ConfirmEmailRoute
   '/dashboard': typeof DashboardRoute
   '/design-system': typeof DesignSystemRoute
+  '/players': typeof PlayersRoute
   '/settings': typeof SettingsRoute
   '/simulator': typeof SimulatorRoute
   '/admin/permissions': typeof AdminPermissionsRoute
@@ -199,6 +207,7 @@ export interface FileRoutesById {
   '/confirm-email': typeof ConfirmEmailRoute
   '/dashboard': typeof DashboardRoute
   '/design-system': typeof DesignSystemRoute
+  '/players': typeof PlayersRoute
   '/settings': typeof SettingsRoute
   '/simulator': typeof SimulatorRoute
   '/admin/permissions': typeof AdminPermissionsRoute
@@ -225,6 +234,7 @@ export interface FileRouteTypes {
     | '/confirm-email'
     | '/dashboard'
     | '/design-system'
+    | '/players'
     | '/settings'
     | '/simulator'
     | '/admin/permissions'
@@ -248,6 +258,7 @@ export interface FileRouteTypes {
     | '/confirm-email'
     | '/dashboard'
     | '/design-system'
+    | '/players'
     | '/settings'
     | '/simulator'
     | '/admin/permissions'
@@ -272,6 +283,7 @@ export interface FileRouteTypes {
     | '/confirm-email'
     | '/dashboard'
     | '/design-system'
+    | '/players'
     | '/settings'
     | '/simulator'
     | '/admin/permissions'
@@ -297,6 +309,7 @@ export interface RootRouteChildren {
   ConfirmEmailRoute: typeof ConfirmEmailRoute
   DashboardRoute: typeof DashboardRoute
   DesignSystemRoute: typeof DesignSystemRoute
+  PlayersRoute: typeof PlayersRoute
   SettingsRoute: typeof SettingsRoute
   SimulatorRoute: typeof SimulatorRoute
   LoginSentRoute: typeof LoginSentRoute
@@ -326,6 +339,13 @@ declare module '@tanstack/react-router' {
       path: '/settings'
       fullPath: '/settings'
       preLoaderRoute: typeof SettingsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/players': {
+      id: '/players'
+      path: '/players'
+      fullPath: '/players'
+      preLoaderRoute: typeof PlayersRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/design-system': {
@@ -493,6 +513,7 @@ const rootRouteChildren: RootRouteChildren = {
   ConfirmEmailRoute: ConfirmEmailRoute,
   DashboardRoute: DashboardRoute,
   DesignSystemRoute: DesignSystemRoute,
+  PlayersRoute: PlayersRoute,
   SettingsRoute: SettingsRoute,
   SimulatorRoute: SimulatorRoute,
   LoginSentRoute: LoginSentRoute,
