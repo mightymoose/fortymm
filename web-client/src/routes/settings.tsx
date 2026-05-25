@@ -690,7 +690,7 @@ function UsernameSection({ currentUsername }: { currentUsername: string }) {
             letterSpacing: '0.08em',
           }}
         >
-          fortymm.app/p/{clientV.ok ? val : '—'}
+          {window.location.host}/p/users/{clientV.ok ? val : '—'}
         </span>
       </div>
     </SectionCard>
