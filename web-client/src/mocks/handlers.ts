@@ -144,6 +144,56 @@ function summarizePlayer(p: {
   }
 }
 
+/** Mirrors the backend's `LIST_DEFAULT_PAGE_SIZE` in `api/app/players.py`
+ * and the FE's `PAGE_SIZE` in `player-profile.tsx`. If those drift, the
+ * FE's `initialData` cache-key won't match the bundle's `page_size` and
+ * we'll waste a second fetch on mount — the whole point of bundling. */
+const BUNDLED_MATCHES_PAGE_SIZE = 25
+
+/** PlayerDetail = PlayerSummary + first-page matches. Both profile
+ * endpoints (`/v1/players/{id}` and `/v1/p/players/{username}`) return
+ * this so the FE paints the profile page in one round trip; pagination
+ * beyond page 1 falls through to `/v1/players/{id}/matches`. */
+function playerDetail(p: {
+  id: string
+  username: string
+  rating?: number | null
+}) {
+  const summary = summarizePlayer(p)
+  const rows = projectPlayerMatches({ id: p.id, username: p.username })
+  return {
+    ...summary,
+    matches: {
+      items: rows.slice(0, BUNDLED_MATCHES_PAGE_SIZE),
+      page: 1,
+      page_size: BUNDLED_MATCHES_PAGE_SIZE,
+      total: rows.length,
+    },
+  }
+}
+
+/** Shared by the authed and public per-player-matches handlers — projects
+ * the player's matches and slices to the requested page. */
+function paginatedMatches(
+  player: { id: string; username: string },
+  request: Request,
+) {
+  const url = new URL(request.url)
+  const page = Math.max(1, Number(url.searchParams.get('page') ?? '1'))
+  const pageSize = Math.max(
+    1,
+    Number(url.searchParams.get('page_size') ?? '25'),
+  )
+  const rows = projectPlayerMatches(player)
+  const start = (page - 1) * pageSize
+  return HttpResponse.json({
+    items: rows.slice(start, start + pageSize),
+    page,
+    page_size: pageSize,
+    total: rows.length,
+  })
+}
+
 function projectPlayerMatches(player: {
   id: string
   username: string
@@ -354,7 +404,7 @@ export const handlers = [
         { status: 404 },
       )
     }
-    return HttpResponse.json(summarizePlayer(player))
+    return HttpResponse.json(playerDetail(player))
   }),
   http.get('*/v1/p/players/:username', async ({ params }) => {
     await delay(200)
@@ -366,7 +416,7 @@ export const handlers = [
         { status: 404 },
       )
     }
-    return HttpResponse.json(summarizePlayer(player))
+    return HttpResponse.json(playerDetail(player))
   }),
   http.get('*/v1/players/:playerId/matches', async ({ params, request }) => {
     await delay(300)
@@ -378,20 +428,7 @@ export const handlers = [
         { status: 404 },
       )
     }
-    const url = new URL(request.url)
-    const page = Math.max(1, Number(url.searchParams.get('page') ?? '1'))
-    const pageSize = Math.max(
-      1,
-      Number(url.searchParams.get('page_size') ?? '25'),
-    )
-    const rows = projectPlayerMatches(player)
-    const start = (page - 1) * pageSize
-    return HttpResponse.json({
-      items: rows.slice(start, start + pageSize),
-      page,
-      page_size: pageSize,
-      total: rows.length,
-    })
+    return paginatedMatches(player, request)
   }),
   http.patch('*/v1/me', async ({ request }) => {
     const body = (await readJson(request)) as { username?: string } | undefined

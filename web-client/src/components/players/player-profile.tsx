@@ -7,8 +7,9 @@ import {
 
 import {
   usePlayerMatches,
+  type PlayerDetail,
+  type PlayerMatchListResponse,
   type PlayerMatchRow,
-  type PlayerSummary,
 } from '@/api/players'
 import { Button } from '@/components/ui/button'
 import {
@@ -34,8 +35,9 @@ import './player-profile.css'
  * the body so a transient match-fetch failure doesn't blank the whole page.
  */
 export interface PlayerProfileProps {
-  /** The loaded player, or null while the route's profile query is pending. */
-  player: PlayerSummary | null
+  /** The loaded player + bundled first-page matches, or null while the
+   * route's profile query is pending. */
+  player: PlayerDetail | null
   /** True while the route's profile query is pending — drives the hero
    * skeleton. */
   isPending: boolean
@@ -66,19 +68,17 @@ export function PlayerProfile({
   const rootClass =
     'player-profile dark fortymm-theme' +
     (standalone ? ' player-profile--standalone' : '')
-  // The matches endpoint (`/v1/players/{id}/matches`) requires a session, so
-  // the public route can't fetch it — a 401 would `throwOnError` straight to
-  // the route-level errorComponent and blank the whole profile with a
-  // misleading "Player not found" message. Hide the section there; the
-  // authed route still renders it.
-  const showMatches = player !== null && !standalone
   return (
     <div className={rootClass}>
       <Hero player={player} isPending={isPending} />
       <div className="player-profile__body">
-        {showMatches && (
+        {player && (
           <MatchesSection
             playerId={player.id}
+            // Bundled first-page matches from the profile endpoint —
+            // MatchesSection hydrates page 1 from this so we don't make
+            // a second request on initial load.
+            initialMatches={player.matches}
             asLinks={matchesAreLinks}
             page={page}
             onPageChange={onPageChange}
@@ -93,7 +93,9 @@ function Hero({
   player,
   isPending,
 }: {
-  player: PlayerSummary | null
+  // Only reads the PlayerSummary fields (id/username/rating/wins/losses);
+  // the embedded `matches` on PlayerDetail is consumed by MatchesSection.
+  player: PlayerDetail | null
   isPending: boolean
 }) {
   if (isPending || player === null) {
@@ -176,19 +178,27 @@ function Hero({
 
 function MatchesSection({
   playerId,
+  initialMatches,
   asLinks,
   page,
   onPageChange,
 }: {
   playerId: string
+  /** First-page matches from the profile bundle. Used as `initialData`
+   * for page 1 so the section paints synchronously on initial load.
+   * Page 2+ fetches normally — the bundled response only carries the
+   * first page, and its `page_size` agrees with the FE PAGE_SIZE
+   * (both default to 25). */
+  initialMatches: PlayerMatchListResponse
   asLinks: boolean
   page: number
   onPageChange: (next: number) => void
 }) {
-  const { data, isPending, isError, refetch } = usePlayerMatches(playerId, {
-    page,
-    page_size: PAGE_SIZE,
-  })
+  const { data, isPending, isError, refetch } = usePlayerMatches(
+    playerId,
+    { page, page_size: PAGE_SIZE },
+    { initialData: page === 1 ? initialMatches : undefined },
+  )
   const rows = data?.items ?? []
   const total = data?.total ?? 0
 
