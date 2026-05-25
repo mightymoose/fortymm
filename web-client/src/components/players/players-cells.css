@@ -1,0 +1,65 @@
+/* Player-row cell styles that don't have analogues in the matches list.
+ * Layout + table chrome come from matches/index.css (`.match-list-page`,
+ * `.matches`, footer, etc.) — both pages share that scaffold for parity. */
+
+.players-seed {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--fg-2);
+  letter-spacing: 0.02em;
+}
+
+.players-seed--top {
+  color: var(--ball-500);
+}
+
+.players-rating {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--fg-1);
+}
+
+.players-record {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg-2);
+}
+
+.players-record-loss {
+  color: var(--fg-3);
+}
+
+.players-form {
+  display: inline-flex;
+  gap: 3px;
+}
+
+.players-form-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.players-form-dot--w {
+  color: var(--serve-500);
+  background: rgba(0, 226, 154, 0.14);
+  border: 1px solid rgba(0, 226, 154, 0.35);
+}
+
+.players-form-dot--l {
+  color: var(--loss);
+  background: rgba(255, 77, 109, 0.1);
+  border: 1px solid rgba(255, 77, 109, 0.35);
+}

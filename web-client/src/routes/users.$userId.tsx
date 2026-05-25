@@ -1,36 +1,57 @@
-import { createFileRoute } from '@tanstack/react-router'
-import { sessionQueryOptions, useSession } from '@/api/session'
-import { useUserById } from '@/api/users'
+import { useCallback } from 'react'
+import { createFileRoute, useNavigate } from '@tanstack/react-router'
+import { zodValidator } from '@tanstack/zod-adapter'
+import { z } from 'zod'
+
 import { AppShell } from '@/components/app-shell'
+import { PlayerProfile } from '@/components/players/player-profile'
+import { findPlayerById } from '@/components/players/players-data'
 import { pageTitle } from '@/lib/page-title'
+
+// Matches list pagination lives in the URL so refresh / share / back works.
+const profileSearchSchema = z.object({
+  page: z.coerce.number().int().min(2).optional().catch(undefined),
+})
 
 export const Route = createFileRoute('/users/$userId')({
   head: () => ({
     meta: [{ title: pageTitle('User') }],
   }),
-  // Don't prefetch the profile here — it requires a session cookie, and on a
-  // direct-load the session prefetch hasn't landed yet. The component fires
-  // the profile query once `session.isSuccess`. See #144.
-  loader: ({ context: { queryClient } }) => {
-    void queryClient.prefetchQuery(sessionQueryOptions())
-  },
+  validateSearch: zodValidator(profileSearchSchema),
   component: UserRoute,
 })
 
 function UserRoute() {
   const { userId } = Route.useParams()
-  const session = useSession()
-  const { data, isPending, isError } = useUserById(userId, {
-    enabled: session.isSuccess,
-  })
+  const search = Route.useSearch()
+  const page = search.page ?? 1
+  const navigate = useNavigate()
+  // Hardcoded fixture for now (see players-data.ts). Anything outside the
+  // demo roster renders as "not found" — once we have the backend, this
+  // route swaps to fetching by id.
+  const player = findPlayerById(userId) ?? null
+
+  const setPage = useCallback(
+    (next: number) => {
+      void navigate({
+        to: '/users/$userId',
+        params: { userId },
+        replace: true,
+        search: { page: next > 1 ? next : undefined },
+      })
+    },
+    [navigate, userId],
+  )
 
   return (
     <AppShell>
-      <div className="p-6">
-        {isPending && <p className="text-sm text-muted-foreground">Loading…</p>}
-        {isError && <p className="text-sm text-[color:var(--loss)]">User not found.</p>}
-        {data && <h1 className="text-2xl font-semibold">{data.username}</h1>}
-      </div>
+      {player ? (
+        <PlayerProfile player={player} page={page} onPageChange={setPage} />
+      ) : (
+        <div className="p-6 text-sm text-[color:var(--loss)]">
+          User not found.
+        </div>
+      )}
     </AppShell>
   )
 }

@@ -88,6 +88,11 @@ const NAV_SECTIONS: NavSection[] = [
           </svg>
         ),
       },
+      {
+        label: 'Players',
+        to: '/players',
+        icon: <Users size={18} strokeWidth={2} />,
+      },
     ],
   },
   {
