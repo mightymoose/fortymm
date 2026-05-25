@@ -13,7 +13,7 @@ from app.models import (
     User,
     UserLeagueRating,
 )
-from tests._helpers import make_user, start_session
+from tests._helpers import make_client, make_user, start_session
 
 # A fixed anchor so recency-ordering assertions don't depend on wall-clock time.
 BASE_TIME = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
@@ -306,3 +306,274 @@ async def test_search_includes_rating_for_default_league(
 
     response = await api_client.get("/v1/players/search", params={"q": "rival"})
     assert _rating_for(response, "ratedrival") == 1750.0
+
+
+# ---------------------------------------------------------------------------
+# /v1/players list + per-player profile + per-player matches
+# ---------------------------------------------------------------------------
+
+
+async def _record_match_with_winner(
+    db_session: AsyncSession,
+    winner: User,
+    loser: User,
+    *,
+    created_at: datetime,
+    status: MatchStatus = MatchStatus.completed,
+) -> Match:
+    """Persist a singles match with explicit winner/loser so W-L and form
+    assertions are deterministic. Same shape as `_record_match` but flips
+    `MatchSide.won` on the right side."""
+    settings = MatchSettings(team_size=1, best_of=5, affects_rating=False)
+    league = await get_default_league(db_session)
+    match = Match(
+        match_settings=settings,
+        league=league,
+        created_by_user_id=winner.id,
+        status=status,
+        created_at=created_at,
+        updated_at=created_at,
+    )
+    side1 = MatchSide(match=match, side_number=1, won=True)
+    side1.players.append(MatchSidePlayer(match=match, user=winner))
+    side2 = MatchSide(match=match, side_number=2, won=False)
+    side2.players.append(MatchSidePlayer(match=match, user=loser))
+    db_session.add(match)
+    await db_session.commit()
+    return match
+
+
+async def test_list_players_requires_a_session(api_client: AsyncClient):
+    async with make_client() as client:
+        response = await client.get("/v1/players")
+    assert response.status_code == 401
+    assert api_client is not None
+
+
+async def test_list_players_returns_paginated_summary(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """Each item carries id/username/rating/wins/losses/form. Pagination
+    envelope reports page, page_size, total."""
+    await start_session(api_client, db_session)
+    alice = await make_user(db_session, "alice")
+    bob = await make_user(db_session, "bob")
+    await _record_match_with_winner(db_session, alice, bob, created_at=BASE_TIME)
+
+    response = await api_client.get("/v1/players", params={"page_size": 50})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["page"] == 1
+    assert body["page_size"] == 50
+    assert body["total"] >= 2
+    usernames = {p["username"] for p in body["items"]}
+    assert {"alice", "bob"}.issubset(usernames)
+    alice_row = next(p for p in body["items"] if p["username"] == "alice")
+    bob_row = next(p for p in body["items"] if p["username"] == "bob")
+    assert alice_row["wins"] == 1 and alice_row["losses"] == 0
+    assert alice_row["form"] == "W"
+    assert bob_row["wins"] == 0 and bob_row["losses"] == 1
+    assert bob_row["form"] == "L"
+
+
+async def test_list_players_filters_by_username_substring(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    await start_session(api_client, db_session)
+    await make_user(db_session, "vinh.player")
+    await make_user(db_session, "rio.player")
+    await make_user(db_session, "unrelated")
+
+    response = await api_client.get("/v1/players", params={"q": "player"})
+    assert response.status_code == 200
+    usernames = {p["username"] for p in response.json()["items"]}
+    assert usernames == {"vinh.player", "rio.player"}
+
+
+async def test_list_players_sorts_by_rating_descending_with_nulls_last(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """The /players list orders by rating so the top of the roster is the
+    most-skilled. Unrated players are sorted last so the leaderboard never
+    starts with NULL."""
+    await start_session(api_client, db_session)
+    league = await get_default_league(db_session)
+    high = await make_user(db_session, "rated.high")
+    low = await make_user(db_session, "rated.low")
+    unrated = await make_user(db_session, "rated.none")
+    db_session.add_all(
+        [
+            UserLeagueRating(
+                league_id=league.id,
+                user_id=high.id,
+                rating_value=2000.0,
+            ),
+            UserLeagueRating(
+                league_id=league.id,
+                user_id=low.id,
+                rating_value=1500.0,
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    response = await api_client.get("/v1/players", params={"q": "rated."})
+    usernames = [p["username"] for p in response.json()["items"]]
+    assert usernames == ["rated.high", "rated.low", "rated.none"]
+    assert unrated is not None  # silences unused warning
+
+
+async def test_list_players_pagination_respects_page_and_page_size(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    await start_session(api_client, db_session)
+    for i in range(7):
+        await make_user(db_session, f"pager.{i:02d}")
+
+    page1 = await api_client.get(
+        "/v1/players", params={"q": "pager.", "page": 1, "page_size": 3}
+    )
+    page2 = await api_client.get(
+        "/v1/players", params={"q": "pager.", "page": 2, "page_size": 3}
+    )
+    assert page1.status_code == 200
+    assert page2.status_code == 200
+    assert len(page1.json()["items"]) == 3
+    assert len(page2.json()["items"]) == 3
+    assert page1.json()["total"] == 7
+    page1_ids = {p["id"] for p in page1.json()["items"]}
+    page2_ids = {p["id"] for p in page2.json()["items"]}
+    assert page1_ids.isdisjoint(page2_ids)
+
+
+async def test_get_player_returns_summary(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    await start_session(api_client, db_session)
+    target = await make_user(db_session, "the.player")
+    opponent = await make_user(db_session, "an.opponent")
+    await _record_match_with_winner(db_session, target, opponent, created_at=BASE_TIME)
+    await _record_match_with_winner(
+        db_session, opponent, target, created_at=BASE_TIME + timedelta(days=1)
+    )
+
+    response = await api_client.get(f"/v1/players/{target.id}")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["id"] == str(target.id)
+    assert body["username"] == "the.player"
+    assert body["wins"] == 1
+    assert body["losses"] == 1
+    # Form is newest-first → most recent L, then W.
+    assert body["form"] == "LW"
+
+
+async def test_get_player_requires_a_session(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    target = await make_user(db_session, "needs.auth")
+    async with make_client() as client:
+        response = await client.get(f"/v1/players/{target.id}")
+    assert response.status_code == 401
+    assert api_client is not None
+
+
+async def test_get_player_404_when_missing(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    import uuid as _uuid
+
+    await start_session(api_client, db_session)
+    response = await api_client.get(f"/v1/players/{_uuid.uuid4()}")
+    assert response.status_code == 404
+
+
+async def test_get_public_player_does_not_require_session(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    target = await make_user(db_session, "public.player")
+    async with make_client() as client:
+        response = await client.get("/v1/p/players/public.player")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["id"] == str(target.id)
+    assert body["username"] == "public.player"
+    assert "session" not in response.cookies
+    assert api_client is not None
+
+
+async def test_get_public_player_404_when_missing(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    async with make_client() as client:
+        response = await client.get("/v1/p/players/nobody.here")
+    assert response.status_code == 404
+    assert api_client is not None
+    assert db_session is not None
+
+
+async def test_get_public_player_is_rate_limited_per_ip(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """After 60 requests in the same minute from one IP, the 61st returns 429."""
+    await make_user(db_session, "rl.public.player")
+    async with make_client() as client:
+        for i in range(60):
+            response = await client.get("/v1/p/players/rl.public.player")
+            assert response.status_code == 200, (i, response.text)
+        over = await client.get("/v1/p/players/rl.public.player")
+    assert over.status_code == 429
+    assert api_client is not None
+
+
+async def test_list_player_matches_returns_perspective_paginated(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """Matches are returned newest-first with the headline player's W/L plus
+    the opponent flattened (no need to find-my-side on the client)."""
+    await start_session(api_client, db_session)
+    target = await make_user(db_session, "match.target")
+    rival_a = await make_user(db_session, "rival.a")
+    rival_b = await make_user(db_session, "rival.b")
+    await _record_match_with_winner(db_session, target, rival_a, created_at=BASE_TIME)
+    await _record_match_with_winner(
+        db_session, rival_b, target, created_at=BASE_TIME + timedelta(days=1)
+    )
+
+    response = await api_client.get(f"/v1/players/{target.id}/matches")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 2
+    items = body["items"]
+    # Newest-first: the loss to rival.b first, then the win over rival.a.
+    assert items[0]["result"] == "L"
+    assert items[0]["opponent"]["username"] == "rival.b"
+    assert items[1]["result"] == "W"
+    assert items[1]["opponent"]["username"] == "rival.a"
+
+
+async def test_list_player_matches_excludes_other_players_matches(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    await start_session(api_client, db_session)
+    me = await make_user(db_session, "scoped.me")
+    them = await make_user(db_session, "scoped.them")
+    other = await make_user(db_session, "scoped.other")
+    await _record_match_with_winner(db_session, me, them, created_at=BASE_TIME)
+    # Match that doesn't involve `me` — must not appear in /me/matches.
+    await _record_match_with_winner(
+        db_session, them, other, created_at=BASE_TIME + timedelta(hours=1)
+    )
+
+    response = await api_client.get(f"/v1/players/{me.id}/matches")
+    assert response.json()["total"] == 1
+
+
+async def test_list_player_matches_404_when_player_missing(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    import uuid as _uuid
+
+    await start_session(api_client, db_session)
+    response = await api_client.get(f"/v1/players/{_uuid.uuid4()}/matches")
+    assert response.status_code == 404

@@ -160,6 +160,62 @@
   color: var(--fg-2);
 }
 
+/* ----- Hero skeletons (loading state) ----- */
+.player-profile__hero-avatar-skeleton {
+  display: block;
+  width: 120px;
+  height: 120px;
+  border-radius: 50%;
+  background: var(--bg-raised);
+  animation: player-profile-shimmer 1.4s ease-in-out infinite;
+}
+
+.player-profile__hero-name-skeleton {
+  width: clamp(220px, 45vw, 420px);
+  height: clamp(40px, 7vw, 64px);
+  border-radius: 6px;
+  background: var(--bg-raised);
+  animation: player-profile-shimmer 1.4s ease-in-out infinite;
+}
+
+.player-profile__hero-sub-skeleton {
+  width: 180px;
+  height: 14px;
+  border-radius: 4px;
+  margin-top: 14px;
+  background: var(--bg-raised);
+  animation: player-profile-shimmer 1.4s ease-in-out infinite;
+}
+
+.player-profile__hero-rating-chip--skeleton {
+  width: 96px;
+  height: 56px;
+  background: var(--bg-raised);
+  border-color: var(--bg-raised);
+  animation: player-profile-shimmer 1.4s ease-in-out infinite;
+}
+
+@keyframes player-profile-shimmer {
+  0%, 100% { opacity: 0.45; }
+  50% { opacity: 0.75; }
+}
+
+/* ----- Hero W-L stats line ----- */
+.player-profile__sub-record {
+  font-family: var(--font-ui);
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--fg-1);
+  display: inline-flex;
+  align-items: baseline;
+  gap: 2px;
+}
+
+.player-profile__sub-record-mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
 /* Loading variant of the hero. */
 .player-profile__name--loading {
   color: var(--fg-3);

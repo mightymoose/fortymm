@@ -16,7 +16,6 @@ from app.matches import router as matches_router
 from app.players import router as players_router
 from app.rbac import router as rbac_router
 from app.sessions import router as sessions_router
-from app.users import router as users_router
 
 log = logging.getLogger(__name__)
 
@@ -49,7 +48,6 @@ app.include_router(rbac_router)
 app.include_router(matches_router)
 app.include_router(players_router)
 app.include_router(dashboard_router)
-app.include_router(users_router)
 
 SOLVER_HEALTH_TIMEOUT = 10.0
 
