@@ -721,10 +721,16 @@ async def _add_signature_or_409(
     (same user racing themselves: rapid double-click, retry, browser
     back-button refire) to a clean 409 instead of bubbling a 500.
 
-    Flushing here, not at commit, is load-bearing: a later SELECT inside
-    the handler (e.g. ``_apply_rating_update``'s ``rating_history`` lookup)
-    would autoflush the pending insert mid-read and raise IntegrityError
-    from a context that doesn't have the helper's try/except around it."""
+    Flushing here, not at commit, is load-bearing: it forces the
+    IntegrityError to surface inside this helper's try/except no matter
+    what the caller does next, so it can't escape from a context the
+    handler isn't guarding. The sharpest case is ``confirm_match_result``,
+    which calls ``_apply_rating_update`` right after — that helper's
+    ``rating_history`` SELECT would otherwise autoflush the pending
+    insert mid-read and raise IntegrityError from outside the try/except.
+    ``post_match_result`` doesn't have an intervening SELECT, but the
+    same flush-first contract still makes the error surface consistently
+    across both call sites."""
     match.signatures.append(MatchSignature(user_id=user_id))
     try:
         await db.flush()
@@ -1450,6 +1456,11 @@ async def confirm_match_result(
 @router.post(
     "/matches/{match_id}/dispute",
     response_model=MatchDetails,
+    # 200 (not 201): dispute is delete-like — it clears signatures and
+    # rewinds side win flags rather than creating a new resource. Declared
+    # explicitly so the contrast with /results and /confirmation (both 201,
+    # both insert a signature) is intentional in the source, not a default.
+    status_code=status.HTTP_200_OK,
 )
 async def dispute_match_result(
     match_id: uuid.UUID,
