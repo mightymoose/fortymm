@@ -6,7 +6,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from pyrate_limiter import Duration, Rate
 from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased, selectinload
@@ -30,6 +31,7 @@ from app.models import (
     UserLeagueRating,
 )
 from app.players import escape_like
+from app.rate_limiting import RedisRateLimiter
 from app.ratings import get_calculator, state_rating_value, validate_state
 from app.schemas.match import (
     STATUS_LABELS,
@@ -50,7 +52,7 @@ from app.schemas.match import (
     MatchListRow,
 )
 from app.schemas.rating import RatingChange
-from app.sessions import get_current_user
+from app.sessions import get_current_user, get_optional_user
 
 router = APIRouter(prefix="/v1")
 
@@ -173,7 +175,7 @@ def current_unscored_game(match: Match) -> MatchGame | None:
 
 def _serialize_details(
     match: Match,
-    current_user_id: uuid.UUID,
+    current_user_id: uuid.UUID | None,
     extras: "ViewExtras | None" = None,
 ) -> MatchDetails:
     extras = extras or _EMPTY_EXTRAS
@@ -207,7 +209,10 @@ def _serialize_details(
     )
 
     sides_sorted = sorted(match.sides, key=lambda s: s.side_number)
-    is_participant = _is_participant(match, current_user_id)
+    # Anonymous viewers on the public route are never participants.
+    is_participant = current_user_id is not None and _is_participant(
+        match, current_user_id
+    )
 
     return MatchDetails(
         id=match.id,
@@ -515,19 +520,48 @@ def _matches_to_csv(rows: list[MatchListRow]) -> str:
     return buf.getvalue()
 
 
-@router.get("/matches/{match_id}", response_model=MatchDetails)
+async def _match_details_ip_key(request: Request) -> str:
+    """Per-IP key for the public match-details endpoint — applies to both
+    anonymous and signed-in callers so an open URL can't be scraped from a
+    single source."""
+    client = request.client
+    ip = client.host if client else "unknown"
+    return f"match-details-ip:{ip}"
+
+
+# 60/min per IP: matches the public-player endpoint's limiter. Comfortably
+# above a human opening several shared match links in quick succession, well
+# below scrape volume.
+match_details_ip_rate_limit = RedisRateLimiter(
+    rates=[Rate(60, Duration.MINUTE)],
+    bucket_key="match-details-ip",
+    identifier=_match_details_ip_key,
+)
+
+
+@router.get(
+    "/matches/{match_id}",
+    response_model=MatchDetails,
+    dependencies=[Depends(match_details_ip_rate_limit)],
+)
 async def get_match(
     match_id: uuid.UUID,
-    current_user: User = Depends(get_current_user),
+    current_user: User | None = Depends(get_optional_user),
     db: AsyncSession = Depends(get_session),
 ) -> MatchDetails:
-    # Open to any signed-in viewer. The serializer flags whether the current
-    # user is on a side; write paths below still gate on participation.
+    """Open to anyone, signed in or not. The same endpoint backs both the
+    authed `/matches/$matchId` route and the public `/p/matches/$matchId`
+    share route — a signed-in caller gets is_current_user / can_score flags;
+    an anonymous caller gets the same view with those flags off. Per-IP
+    rate-limited (60/min) so an open URL can't be scraped from one source.
+
+    The serializer flags whether the current user is on a side; write paths
+    below still gate on participation via `get_current_user`."""
     match = await _load_match(db, match_id)
     if match is None:
         raise HTTPException(status_code=404, detail="Match not found.")
     extras = await _load_view_extras(db, match)
-    return _serialize_details(match, current_user.id, extras)
+    return _serialize_details(match, current_user.id if current_user else None, extras)
 
 
 # ----- score writes --------------------------------------------------------
