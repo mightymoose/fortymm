@@ -93,7 +93,11 @@ function ScoreEntryInner({
   if (data.status === 'completed') {
     return <Navigate {...matchDetailRoute(matchId)} />
   }
-  if (gameNumber < 1 || gameNumber > data.best_of) {
+  if (
+    !Number.isInteger(gameNumber) ||
+    gameNumber < 1 ||
+    gameNumber > data.best_of
+  ) {
     return <Navigate {...matchDetailRoute(matchId)} />
   }
 
