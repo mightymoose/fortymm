@@ -567,6 +567,36 @@ async def test_list_player_matches_returns_perspective_paginated(
     assert items[1]["opponent"]["username"] == "rival.a"
 
 
+async def test_list_player_matches_result_visible_while_awaiting_confirmation(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """The posted result is public from the moment ``POST /results`` lands;
+    confirmation only ratifies it for ratings/finality. The W/L row carries
+    the outcome immediately — the awaiting-confirmation state is conveyed
+    by ``status`` (still ``in_progress``), not by hiding the result."""
+    await start_session(api_client, db_session)
+    target = await make_user(db_session, "awaiting.target")
+    rival = await make_user(db_session, "awaiting.rival")
+    # Post-/results, pre-/confirmation: won is set, status is still
+    # in_progress. ``_record_match_with_winner`` already writes won on each
+    # side — pass status=in_progress to land on the awaiting state.
+    await _record_match_with_winner(
+        db_session,
+        target,
+        rival,
+        created_at=BASE_TIME,
+        status=MatchStatus.in_progress,
+    )
+
+    response = await api_client.get(f"/v1/players/{target.id}/matches")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 1
+    row = body["items"][0]
+    assert row["status"] == "in_progress"
+    assert row["result"] == "W"
+
+
 async def test_list_player_matches_excludes_other_players_matches(
     api_client: AsyncClient, db_session: AsyncSession
 ):

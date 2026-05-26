@@ -508,6 +508,12 @@ def _serialize_player_match(match: Match, player_id: uuid.UUID) -> PlayerMatchRo
                 )
             )
 
+    # ``mine.won`` is set on /results (before /confirmation), and the posted
+    # result is considered public from the moment it lands — confirmation
+    # only ratifies it for ratings/finality. Surface W/L straight from
+    # ``mine.won``; the awaiting-confirmation state is conveyed by
+    # ``status`` + the "Awaiting confirmation" label, not by hiding the
+    # outcome.
     result: Literal["W", "L"] | None = None
     if mine.won is True:
         result = "W"

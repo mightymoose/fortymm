@@ -201,10 +201,10 @@ describe('ScoreEntry — create', () => {
     expect(captured).toEqual({ side_1_points: 11, side_2_points: 4 })
   })
 
-  it('flips the submit button to "Finalize match" when this score would decide the match', async () => {
+  it('flips the submit button to "Post result" when this score would decide the match', async () => {
     // Bo5, 2-0 on the board, entering G3. An 11-3 win clinches at 3-0, so
     // the single submit button should POST /results (atomically saving +
-    // finalizing) instead of /scores/new.
+    // posting the result for the opponent to confirm) instead of /scores/new.
     const user = userEvent.setup()
     let finalizedBody: unknown = null
     server.use(
@@ -258,15 +258,16 @@ describe('ScoreEntry — create', () => {
     await user.type(meInput, '11')
     await user.type(oppInput, '3')
 
-    // The same button morphs into "Finalize match" because saving this score
-    // would complete a decided best-of-5.
-    const finalizeBtn = screen.getByRole('button', { name: /finalize match/i })
-    expect(finalizeBtn).toBeInTheDocument()
+    // The same button morphs into "Post result" because saving this score
+    // posts the canonical result of a decided best-of-5; the match flips to
+    // "awaiting confirmation" until the opponent confirms.
+    const postBtn = screen.getByRole('button', { name: /post result/i })
+    expect(postBtn).toBeInTheDocument()
     expect(
       screen.queryByRole('button', { name: /save game & next/i }),
     ).not.toBeInTheDocument()
 
-    await user.click(finalizeBtn)
+    await user.click(postBtn)
 
     await waitFor(() =>
       expect(screen.getByText('match-page m-1')).toBeInTheDocument(),
@@ -403,7 +404,7 @@ describe('ScoreEntry — create', () => {
 
     await user.type(meInput, '11')
     await user.type(oppInput, '3')
-    await user.click(screen.getByRole('button', { name: /finalize match/i }))
+    await user.click(screen.getByRole('button', { name: /post result/i }))
 
     const alert = await screen.findByRole('alert')
     expect(alert).toHaveTextContent(/rejected by the server/i)

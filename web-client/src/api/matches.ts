@@ -255,23 +255,69 @@ export function useDeleteScore(matchId: string, gameNumber: number) {
 }
 
 /**
- * Finalizes the match. The payload is canon — the server obliterates any
- * scratchpad-saved games + scores, inserts these, validates the match as a
- * decided whole, and applies the rating update. Unlike the per-game writes,
- * this one's errors matter: pass `throwOnError`-style handling at the call
- * site so the user can see what went wrong (most often a 422 if local
- * validation drifted out of sync, or a 409 if the match is already
- * finalized).
+ * Posts the result of a match. The payload is canon — the server obliterates
+ * any scratchpad-saved games + scores, inserts these, validates the match as
+ * a decided whole, and records the caller's signature. For a non-solo match
+ * the status stays `in_progress` until the other side confirms via
+ * `POST /confirmation`; ratings apply on that final signature, not here.
+ * Solo matches finalize immediately (no second party to attest).
+ *
+ * Unlike the per-game writes, this one's errors matter: pass
+ * `throwOnError`-style handling at the call site so the user can see what
+ * went wrong (most often a 422 if local validation drifted out of sync, or a
+ * 409 if a result has already been posted).
  */
 export function useFinalizeMatch(matchId: string) {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: async (input: MatchResultsWrite): Promise<MatchDetails> =>
       unwrap(
-        'finalize match',
+        'post match result',
         await api.POST('/v1/matches/{match_id}/results', {
           params: { path: { match_id: matchId } },
           body: input,
+        }),
+      ),
+    onSuccess: (data) => applyScoreMutationCache(queryClient, matchId, data),
+  })
+}
+
+/**
+ * Confirms a posted result. Inserts the caller's signature; when every side
+ * has at least one signing player the server flips status to `completed` and
+ * applies the rating update — exactly once. Caller must be a participant who
+ * hasn't already signed (the BFF's `can_confirm` flag is the source of truth
+ * for whether the CTA is shown).
+ */
+export function useConfirmMatch(matchId: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (): Promise<MatchDetails> =>
+      unwrap(
+        'confirm match result',
+        await api.POST('/v1/matches/{match_id}/confirmation', {
+          params: { path: { match_id: matchId } },
+        }),
+      ),
+    onSuccess: (data) => applyScoreMutationCache(queryClient, matchId, data),
+  })
+}
+
+/**
+ * Disputes a posted result. Clears every signature on the match and resets
+ * `side.won` to `null`; the canonical games stay in place so the disputer
+ * can navigate to the contested game and PUT a corrected score. Status
+ * stays `in_progress`. Same `can_confirm` predicate gates this as
+ * `useConfirmMatch`.
+ */
+export function useDisputeMatch(matchId: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (): Promise<MatchDetails> =>
+      unwrap(
+        'dispute match result',
+        await api.POST('/v1/matches/{match_id}/dispute', {
+          params: { path: { match_id: matchId } },
         }),
       ),
     onSuccess: (data) => applyScoreMutationCache(queryClient, matchId, data),

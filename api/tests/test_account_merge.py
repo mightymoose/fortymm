@@ -14,6 +14,7 @@ from app.models import (
     MatchSettings,
     MatchSide,
     MatchSidePlayer,
+    MatchSignature,
     MatchStatus,
     RatingHistory,
     RatingHistorySource,
@@ -293,3 +294,72 @@ async def test_merge_with_user_league_rating_collision_drops_ephemeral(
         .all()
     )
     assert [r.user_id for r in rows] == [verified.id]
+
+
+async def test_merge_repoints_match_signatures(db_session: AsyncSession):
+    """``match_signatures`` is RESTRICT on user_id, so the merge must re-point
+    every signature row from the ephemeral user onto the verified user — same
+    contract as ``match_side_players``. Otherwise the final ephemeral-user
+    delete would either fail (RESTRICT block) or orphan the audit row."""
+    ephemeral = await _make_ephemeral(db_session, "drifting-grouse")
+    verified = await _make_verified(db_session, "rita@example.com")
+    opponent = await _make_ephemeral(db_session, "spinning-otter")
+    match = await _record_match(db_session, ephemeral, ephemeral, opponent)
+
+    db_session.add(MatchSignature(match_id=match.id, user_id=ephemeral.id))
+    db_session.add(MatchSignature(match_id=match.id, user_id=opponent.id))
+    await db_session.commit()
+
+    await merge_user(db_session, from_user_id=ephemeral.id, to_user_id=verified.id)
+    await db_session.commit()
+
+    sigs = (
+        (
+            await db_session.execute(
+                select(MatchSignature).where(MatchSignature.match_id == match.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    user_ids = {sig.user_id for sig in sigs}
+    assert user_ids == {verified.id, opponent.id}
+    # And the ephemeral user is gone (would have blocked on the RESTRICT FK
+    # otherwise).
+    ephemeral_row = (
+        await db_session.execute(select(User).where(User.id == ephemeral.id))
+    ).scalar_one_or_none()
+    assert ephemeral_row is None
+
+
+async def test_merge_with_match_signature_collision_drops_ephemeral(
+    db_session: AsyncSession,
+):
+    """If both users somehow already signed the same match, the NOT EXISTS
+    guard skips the re-point and the defensive DELETE in ``merge_user`` drops
+    the leftover ephemeral row so the user delete still succeeds."""
+    ephemeral = await _make_ephemeral(db_session, "drifting-grouse")
+    verified = await _make_verified(db_session, "rita@example.com")
+    opponent = await _make_ephemeral(db_session, "spinning-otter")
+    match = await _record_match(db_session, ephemeral, ephemeral, opponent)
+
+    # Both users carry a signature on the same match — impossible in normal
+    # flow but defended against here.
+    db_session.add(MatchSignature(match_id=match.id, user_id=ephemeral.id))
+    db_session.add(MatchSignature(match_id=match.id, user_id=verified.id))
+    await db_session.commit()
+
+    await merge_user(db_session, from_user_id=ephemeral.id, to_user_id=verified.id)
+    await db_session.commit()
+
+    sigs = (
+        (
+            await db_session.execute(
+                select(MatchSignature).where(MatchSignature.match_id == match.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    # Verified's pre-existing signature survives; ephemeral's is dropped.
+    assert [sig.user_id for sig in sigs] == [verified.id]

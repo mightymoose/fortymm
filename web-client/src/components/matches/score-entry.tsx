@@ -89,8 +89,10 @@ function ScoreEntryInner({
   }
 
   // Once a match is finalized every write path 409s — there's nothing to do
-  // here. Likewise for the rare bound-violation case.
-  if (data.status === 'completed') {
+  // here. Same goes once a result is posted and waiting on confirmation —
+  // scores are frozen until /confirmation or /dispute lands, and either
+  // option lives on the match-details page.
+  if (data.status === 'completed' || data.signatures.length > 0) {
     return <Navigate {...matchDetailRoute(matchId)} />
   }
   if (
@@ -274,16 +276,16 @@ function ScoreEntryInner({
     ? `Edit game ${gameNumber} score.`
     : `Enter game ${gameNumber} score.`
   const subtitle = wouldFinalize
-    ? 'This score finishes the match — submitting will finalize it.'
+    ? 'This score finishes the match — submitting posts the result for your opponent to confirm.'
     : isEdit
       ? 'Save updates the score for this game.'
       : gameNumber < bestOf
         ? `Save this game to continue to game ${gameNumber + 1}.`
-        : 'Final game. Save to finish the match.'
+        : 'Final game. Save to post the result.'
   const submitLabel = wouldFinalize
     ? finalizeMutation.isPending
-      ? 'Finalizing…'
-      : 'Finalize match'
+      ? 'Posting result…'
+      : 'Post result'
     : isEdit
       ? 'Save changes →'
       : gameNumber < bestOf

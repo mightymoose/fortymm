@@ -10,15 +10,6 @@ from app.schemas.rating import RatingChange
 # strict majority of games; the DB additionally enforces "odd and >= 1".
 ALLOWED_BEST_OF = (1, 3, 5, 7)
 
-# Maps the internal status enum to the label the BFF sends to clients.
-STATUS_LABELS: dict[MatchStatus, str] = {
-    MatchStatus.pending: "Scheduled",
-    MatchStatus.in_progress: "Live",
-    MatchStatus.completed: "Final",
-    MatchStatus.disputed: "Disputed",
-    MatchStatus.voided: "Voided",
-}
-
 
 class MatchCreate(BaseModel):
     """Request body for ``POST /v1/matches``.
@@ -146,6 +137,15 @@ class MatchDetailsH2H(BaseModel):
     recent_meetings: list[MatchDetailsH2HMeeting]
 
 
+class MatchSignatureView(BaseModel):
+    """One participant's sign-off on the posted result. Surfaced on
+    ``MatchDetails`` so the FE can render "Awaiting <opponent>'s confirmation"
+    without joining client-side."""
+
+    user_id: uuid.UUID
+    signed_at: datetime
+
+
 class MatchDetails(BaseModel):
     id: uuid.UUID
     status: MatchStatus
@@ -162,11 +162,22 @@ class MatchDetails(BaseModel):
     games: list[MatchDetailsGame]
     current_game: MatchDetailsCurrentGame | None
     can_score: bool
-    # True when the saved games form a decided, validly-ordered match and the
-    # current user is a participant on an in-progress match. The FE uses this
-    # to swap the scoring page's submit-button label and target endpoint
-    # between "save game" and "finalize match".
+    # True when the saved games form a decided, validly-ordered match, the
+    # current user is a participant on an in-progress match, AND no posted
+    # result is currently awaiting confirmation. The FE uses this to swap
+    # the scoring page's submit button between "save game" and "post result"
+    # (the latter calls ``POST /v1/matches/{id}/results``).
     can_finalize: bool
+    # True when the current user can confirm or dispute a posted result —
+    # i.e., the match is in_progress, at least one signature exists, the
+    # caller is a participant, and the caller hasn't signed yet. Same
+    # predicate gates both /confirmation and /dispute; the FE picks which
+    # CTA to show. False for anonymous / non-participants.
+    can_confirm: bool
+    # Always present (possibly empty). Default-factoried fields become
+    # ``optional`` in the generated TS types; declared as required keeps the
+    # FE from defending against ``undefined`` at every read.
+    signatures: list[MatchSignatureView]
     recent_form: list[MatchDetailsPlayerForm] = Field(default_factory=list)
     head_to_head: MatchDetailsH2H | None = None
 
@@ -187,6 +198,10 @@ class MatchListRow(BaseModel):
     # builds the route from (match_id, current_game_number).
     current_game_number: int | None
     can_score: bool
+    # Same semantic as ``MatchDetails.can_confirm`` — lets the matches list
+    # surface an "Awaiting your confirmation" CTA on rows the caller owes a
+    # signature on.
+    can_confirm: bool
 
 
 class MatchListResponse(BaseModel):

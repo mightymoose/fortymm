@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from app.models.match_game import MatchGame
     from app.models.match_side import MatchSide
     from app.models.match_side_player import MatchSidePlayer
+    from app.models.match_signature import MatchSignature
     from app.models.user import User
 
 
@@ -103,5 +104,10 @@ class Match(Base):
     side_players: Mapped[list["MatchSidePlayer"]] = relationship(
         back_populates="match",
         cascade="all",
+        passive_deletes=True,
+    )
+    signatures: Mapped[list["MatchSignature"]] = relationship(
+        back_populates="match",
+        cascade="all, delete-orphan",
         passive_deletes=True,
     )

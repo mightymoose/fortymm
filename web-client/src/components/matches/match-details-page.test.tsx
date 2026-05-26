@@ -1,4 +1,5 @@
 import { render, screen, waitFor, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import {
   RouterProvider,
   createMemoryHistory,
@@ -695,5 +696,108 @@ describe('MatchDetailsView', () => {
       'Result · rating change',
     )
     expect(container.querySelector('.md-rating-row')).toBeNull()
+  })
+
+  it('renders Confirm/Dispute CTAs when can_confirm is true', async () => {
+    const match = matchDetails({
+      id: 'm-confirm',
+      status: 'in_progress',
+      status_label: 'Awaiting confirmation',
+      sides: [
+        {
+          side_number: 1,
+          players: [
+            { user_id: 'u-me', username: 'me', is_current_user: true },
+          ],
+          games_won: 1,
+          won: false,
+          is_current_user_side: true,
+        },
+        {
+          side_number: 2,
+          players: [
+            { user_id: 'u-opp', username: 'nguyen.t', is_current_user: false },
+          ],
+          games_won: 2,
+          won: true,
+          is_current_user_side: false,
+        },
+      ],
+      can_confirm: true,
+      signatures: [{ user_id: 'u-opp', signed_at: '2026-05-26T12:00:00Z' }],
+    })
+    let confirmHits = 0
+    let disputeHits = 0
+    server.use(
+      http.get('*/v1/matches/m-confirm', () => HttpResponse.json(match)),
+      http.post('*/v1/matches/m-confirm/confirmation', () => {
+        confirmHits += 1
+        return HttpResponse.json(
+          { ...match, can_confirm: false, status: 'completed' },
+          { status: 201 },
+        )
+      }),
+      http.post('*/v1/matches/m-confirm/dispute', () => {
+        disputeHits += 1
+        return HttpResponse.json({ ...match, can_confirm: false })
+      }),
+    )
+
+    const user = userEvent.setup()
+    renderDetails('m-confirm')
+
+    const confirmBtn = await screen.findByRole('button', {
+      name: /confirm result/i,
+    })
+    const disputeBtn = screen.getByRole('button', { name: /^dispute$/i })
+    expect(confirmBtn).toBeInTheDocument()
+    expect(disputeBtn).toBeInTheDocument()
+
+    await user.click(confirmBtn)
+    await waitFor(() => expect(confirmHits).toBe(1))
+    expect(disputeHits).toBe(0)
+  })
+
+  it('renders an "Awaiting <opponent>" indicator when the viewer is the signer', async () => {
+    const match = matchDetails({
+      id: 'm-await',
+      status: 'in_progress',
+      status_label: 'Awaiting confirmation',
+      sides: [
+        {
+          side_number: 1,
+          players: [
+            { user_id: 'u-me', username: 'me', is_current_user: true },
+          ],
+          games_won: 3,
+          won: true,
+          is_current_user_side: true,
+        },
+        {
+          side_number: 2,
+          players: [
+            { user_id: 'u-opp', username: 'nguyen.t', is_current_user: false },
+          ],
+          games_won: 1,
+          won: false,
+          is_current_user_side: false,
+        },
+      ],
+      // We've signed (can_confirm false), the opponent hasn't.
+      can_confirm: false,
+      signatures: [{ user_id: 'u-me', signed_at: '2026-05-26T12:00:00Z' }],
+    })
+    server.use(
+      http.get('*/v1/matches/m-await', () => HttpResponse.json(match)),
+    )
+
+    renderDetails('m-await')
+
+    const callout = await screen.findByTestId('match-confirm-callout')
+    expect(callout).toHaveTextContent(/awaiting/i)
+    expect(callout).toHaveTextContent(/nguyen\.t/)
+    expect(
+      within(callout).queryByRole('button', { name: /confirm result/i }),
+    ).not.toBeInTheDocument()
   })
 })
