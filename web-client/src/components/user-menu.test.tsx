@@ -1,4 +1,13 @@
 import { render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import {
+  createMemoryHistory,
+  createRootRoute,
+  createRoute,
+  createRouter,
+  Outlet,
+  RouterProvider,
+} from '@tanstack/react-router'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { http, HttpResponse, delay } from 'msw'
 import { describe, expect, it } from 'vitest'
@@ -16,21 +25,40 @@ function renderWithClient(ui: React.ReactElement) {
       mutations: { retry: false },
     },
   })
-  return render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>)
+  const rootRoute = createRootRoute({ component: () => <Outlet /> })
+  const indexRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/',
+    component: () => <>{ui}</>,
+  })
+  const settingsRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/settings',
+    component: () => <div>Settings page</div>,
+  })
+  const router = createRouter({
+    routeTree: rootRoute.addChildren([indexRoute, settingsRoute]),
+    history: createMemoryHistory({ initialEntries: ['/'] }),
+  })
+  return render(
+    <QueryClientProvider client={client}>
+      <RouterProvider router={router} />
+    </QueryClientProvider>,
+  )
 }
 
 describe('UserMenu', () => {
   it('shows a loading skeleton while the session is fetching', async () => {
     server.use(
       http.get('*/v1/session', async () => {
-        await delay(50)
+        await delay(100)
         return HttpResponse.json(mockSession)
       }),
     )
 
     renderWithClient(<UserMenu />)
 
-    expect(screen.getByTestId('user-menu-skeleton')).toBeInTheDocument()
+    expect(await screen.findByTestId('user-menu-skeleton')).toBeInTheDocument()
     expect(screen.getByLabelText('Loading user menu')).toHaveAttribute(
       'aria-busy',
       'true',
@@ -81,5 +109,15 @@ describe('UserMenu', () => {
     const nameEl = await screen.findByText(longName)
     expect(nameEl).toHaveClass('app-shell__user-name--truncate')
     expect(nameEl).toHaveAttribute('title', longName)
+  })
+
+  it('opens a menu with a Settings link pointing at /settings', async () => {
+    renderWithClient(<UserMenu />)
+
+    const trigger = await screen.findByTestId('user-menu')
+    await userEvent.click(trigger)
+
+    const settings = await screen.findByRole('menuitem', { name: /settings/i })
+    expect(settings).toHaveAttribute('href', '/settings')
   })
 })

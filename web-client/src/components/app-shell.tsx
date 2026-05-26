@@ -4,7 +4,6 @@ import {
   ChevronDown,
   Gauge,
   Key,
-  Settings,
   Shield,
   TriangleAlert,
   Users,
@@ -36,12 +35,6 @@ type NavItem = {
 type NavSection = {
   label?: string
   items: NavItem[]
-}
-
-const SETTINGS_ITEM: NavItem = {
-  label: 'Settings',
-  to: '/settings',
-  icon: <Settings size={18} strokeWidth={2} />,
 }
 
 const NAV_SECTIONS: NavSection[] = [
@@ -287,11 +280,6 @@ export function AppShell({ children }: AppShellProps) {
             </div>
           ))}
         </nav>
-        <div className="app-shell__nav-footer">
-          <ul className="app-shell__nav-list">
-            {renderNavItem(SETTINGS_ITEM, pathname, closeOnMobile)}
-          </ul>
-        </div>
       </aside>
 
       <div className="app-shell__main">
