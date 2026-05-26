@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.models.match import MatchStatus
 from app.schemas.rating import RatingChange
@@ -83,7 +83,9 @@ class MatchDetailsGame(BaseModel):
 
 
 class MatchDetailsCurrentGame(BaseModel):
-    id: uuid.UUID
+    # The next game to score: lowest 1..best_of with no saved score. The row
+    # may not exist in `match_games` yet — game rows are created lazily on the
+    # first score write. Use ``game_number`` (not an id) for deeplinks.
     game_number: int
 
 
@@ -160,6 +162,11 @@ class MatchDetails(BaseModel):
     games: list[MatchDetailsGame]
     current_game: MatchDetailsCurrentGame | None
     can_score: bool
+    # True when the saved games form a decided, validly-ordered match and the
+    # current user is a participant on an in-progress match. The FE uses this
+    # to swap the scoring page's submit-button label and target endpoint
+    # between "save game" and "finalize match".
+    can_finalize: bool
     recent_form: list[MatchDetailsPlayerForm] = Field(default_factory=list)
     head_to_head: MatchDetailsH2H | None = None
 
@@ -175,7 +182,10 @@ class MatchListRow(BaseModel):
     sides: list[MatchDetailsSide]
     best_of: int
     created_at: datetime
-    current_game_id: uuid.UUID | None
+    # Game rows are created lazily on the first score write, so the deeplink
+    # target may not have an id yet. The list passes the game number; the FE
+    # builds the route from (match_id, current_game_number).
+    current_game_number: int | None
     can_score: bool
 
 
@@ -190,32 +200,76 @@ class MatchListResponse(BaseModel):
 # ----- score write (POST/PUT body) -----------------------------------------
 
 
+def validate_game_score(side_1_points: int, side_2_points: int) -> None:
+    """Table-tennis rules for a single completed game. Raises ``ValueError`` —
+    callers wrap as needed for Pydantic (`model_validator`) or as the
+    422 detail on a route handler.
+
+    Used both by the per-game score-write schema (one row at a time) and the
+    finalize-payload validator (per-game inside a full match)."""
+    a, b = side_1_points, side_2_points
+    winner, loser = max(a, b), min(a, b)
+    if winner < 11:
+        raise ValueError("The winning side must reach at least 11 points.")
+    if a == b:
+        raise ValueError("A game cannot end in a tie.")
+    if winner == 11 and loser > 9:
+        raise ValueError(
+            f"At 10–10 the game enters deuce; the winner must lead by 2. "
+            f"{winner}–{loser} is not a legal final score."
+        )
+    if winner > 11:
+        if loser < 10:
+            raise ValueError(
+                f"A game can only go past 11 points after both sides reach 10. "
+                f"{winner}–{loser} is not a legal final score."
+            )
+        if winner - loser != 2:
+            raise ValueError(
+                f"In a deuce game the winner leads by exactly 2 points. "
+                f"{winner}–{loser} is not a legal final score."
+            )
+
+
 class MatchGameScoreWrite(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     side_1_points: int = Field(ge=0, le=99)
     side_2_points: int = Field(ge=0, le=99)
 
     @model_validator(mode="after")
     def _table_tennis_rules(self) -> "MatchGameScoreWrite":
-        a, b = self.side_1_points, self.side_2_points
-        winner, loser = max(a, b), min(a, b)
-        if winner < 11:
-            raise ValueError("The winning side must reach at least 11 points.")
-        if a == b:
-            raise ValueError("A game cannot end in a tie.")
-        if winner == 11 and loser > 9:
-            raise ValueError(
-                f"At 10–10 the game enters deuce; the winner must lead by 2. "
-                f"{winner}–{loser} is not a legal final score."
-            )
-        if winner > 11:
-            if loser < 10:
-                raise ValueError(
-                    f"A game can only go past 11 points after both sides reach 10. "
-                    f"{winner}–{loser} is not a legal final score."
-                )
-            if winner - loser != 2:
-                raise ValueError(
-                    f"In a deuce game the winner leads by exactly 2 points. "
-                    f"{winner}–{loser} is not a legal final score."
-                )
+        validate_game_score(self.side_1_points, self.side_2_points)
         return self
+
+
+# ----- finalize body (POST /v1/matches/{id}/results) -----------------------
+
+
+class MatchResultsGameWrite(BaseModel):
+    """One game inside a finalize-the-match payload. Per-game point legality
+    is checked here; cross-game checks (contiguous numbering, decided result,
+    no scores past the decider) live in the handler against the full list."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    # Best-of caps at 7 (see ``ALLOWED_BEST_OF``); the handler additionally
+    # rejects any number greater than the match's own ``best_of``.
+    game_number: int = Field(ge=1, le=7)
+    side_1_points: int = Field(ge=0, le=99)
+    side_2_points: int = Field(ge=0, le=99)
+
+    @model_validator(mode="after")
+    def _table_tennis_rules(self) -> "MatchResultsGameWrite":
+        validate_game_score(self.side_1_points, self.side_2_points)
+        return self
+
+
+class MatchResultsWrite(BaseModel):
+    """Request body for ``POST /v1/matches/{match_id}/results``. The list is
+    canon: the handler deletes every existing game + score on the match and
+    re-inserts these rows. No merge."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    games: list[MatchResultsGameWrite] = Field(min_length=1)

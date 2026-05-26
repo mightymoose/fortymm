@@ -4,9 +4,18 @@ import math
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    Path,
+    Query,
+    Request,
+    Response,
+    status,
+)
 from pyrate_limiter import Duration, Rate
 from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -50,6 +59,8 @@ from app.schemas.match import (
     MatchLeague,
     MatchListResponse,
     MatchListRow,
+    MatchResultsGameWrite,
+    MatchResultsWrite,
 )
 from app.schemas.rating import RatingChange
 from app.sessions import get_current_user, get_optional_user
@@ -169,8 +180,22 @@ def side_win_counts(match: Match) -> dict[int, int]:
     return counts
 
 
-def current_unscored_game(match: Match) -> MatchGame | None:
-    return next((g for g in match.games if g.score is None), None)
+def current_game_number(match: Match) -> int | None:
+    """The next un-scored game number for an in-progress match. ``None`` once
+    every game in ``1..best_of`` has a saved score, or when the match isn't
+    in progress (finalized / disputed / voided / settings missing).
+
+    Game rows are created lazily by the score-write endpoints, so the next
+    game to score may not have a ``MatchGame`` row yet — this helper exposes
+    the number rather than an object so deeplinks work either way."""
+    if match.status != MatchStatus.in_progress:
+        return None
+    best_of = match.match_settings.best_of
+    scored = {g.game_number for g in match.games if g.score is not None}
+    for n in range(1, best_of + 1):
+        if n not in scored:
+            return n
+    return None
 
 
 def _serialize_details(
@@ -199,12 +224,10 @@ def _serialize_details(
         for game in games_sorted
     ]
 
-    current_game_obj = current_unscored_game(match)
+    next_number = current_game_number(match)
     current_game = (
-        MatchDetailsCurrentGame(
-            id=current_game_obj.id, game_number=current_game_obj.game_number
-        )
-        if current_game_obj is not None
+        MatchDetailsCurrentGame(game_number=next_number)
+        if next_number is not None
         else None
     )
 
@@ -234,6 +257,12 @@ def _serialize_details(
         # non-participants in the score endpoints below.
         can_score=(
             current_game is not None and len(match.sides) >= 2 and is_participant
+        ),
+        # True iff the saved games already form a decided, validly-ordered
+        # match — the FE flips the scoring page's submit button label to
+        # "Finalize match" when this is true.
+        can_finalize=(
+            is_participant and len(match.sides) >= 2 and _can_finalize(match)
         ),
         recent_form=extras.recent_form,
         head_to_head=extras.head_to_head,
@@ -347,9 +376,9 @@ async def create_match(
     # Always create side 2. With no opponent it's a player-less sentinel side,
     # which keeps the match scorable (two sides) while reading as "No opponent".
     _add_side(match, 2, opponent)
-    # The FE never creates a game — game 1 is written here so scoring routes
-    # always have a real entity to deep-link into.
-    match.games.append(MatchGame(game_number=1))
+    # Games are no longer pre-created at match-create time — they're written
+    # lazily by ``POST .../games/{n}/scores/new`` keyed on the game number, so
+    # the FE can deep-link to any 1..best_of without us guessing.
 
     db.add(match)
     await db.commit()
@@ -450,11 +479,11 @@ async def list_matches(
 def _list_row(match: Match, current_user_id: uuid.UUID) -> MatchListRow:
     side_wins = side_win_counts(match)
     sides_sorted = sorted(match.sides, key=lambda s: s.side_number)
-    current_game = current_unscored_game(match)
+    next_number = current_game_number(match)
     can_score = (
         match.status in {MatchStatus.pending, MatchStatus.in_progress}
         and len(match.sides) >= 2
-        and current_game is not None
+        and next_number is not None
         and _is_participant(match, current_user_id)
     )
 
@@ -466,7 +495,7 @@ def _list_row(match: Match, current_user_id: uuid.UUID) -> MatchListRow:
         sides=[_side_schema(side, side_wins, current_user_id) for side in sides_sorted],
         best_of=match.match_settings.best_of,
         created_at=match.created_at,
-        current_game_id=current_game.id if can_score and current_game else None,
+        current_game_number=next_number if can_score else None,
         can_score=can_score,
     )
 
@@ -573,7 +602,14 @@ def _enforce_scorable(match: Match) -> None:
             status_code=422,
             detail="This match has no opponent and can't be scored.",
         )
-    if match.status in {MatchStatus.disputed, MatchStatus.voided}:
+    # ``completed`` lives here too — once a match is finalized via
+    # ``POST /v1/matches/{id}/results`` it's read-only. The 409 covers the
+    # per-game write endpoints *and* the re-finalize attempt.
+    if match.status in {
+        MatchStatus.completed,
+        MatchStatus.disputed,
+        MatchStatus.voided,
+    }:
         raise HTTPException(status_code=409, detail="This match is no longer scorable.")
 
 
@@ -948,42 +984,117 @@ async def _apply_rating_update(db: AsyncSession, match: Match) -> None:
     )
 
 
-def _recompute_match(match: Match) -> None:
-    """Apply all post-score-write derivations on a loaded ``match``:
-    side ``score``, match ``status``, side ``won`` flags, and the trailing
-    un-scored game (deleted on completion; exactly one otherwise)."""
-    sides_by_number = {s.side_number: s for s in match.sides}
-    side_wins = side_win_counts(match)
-    target = _games_to_win(match.match_settings.best_of)
-    a_wins = side_wins.get(1, 0)
-    b_wins = side_wins.get(2, 0)
+# ----- finalize-payload validation + apply --------------------------------
 
+
+def _validate_finalize_games(games: list[MatchResultsGameWrite], best_of: int) -> int:
+    """Cross-game invariants for a finalize payload. Per-game point legality
+    is already enforced by ``MatchResultsGameWrite``. Returns the decided side
+    number (1 or 2); raises ``ValueError`` with a human-readable detail on any
+    failure (the route handler maps that to 422)."""
+    if not games:
+        raise ValueError("A match needs at least one game to finalize.")
+
+    numbers = [g.game_number for g in games]
+    if any(n > best_of for n in numbers):
+        raise ValueError(f"Each game_number must be ≤ best_of ({best_of}).")
+    if len(set(numbers)) != len(numbers):
+        raise ValueError("Duplicate game_number in payload.")
+    if sorted(numbers) != list(range(1, len(numbers) + 1)):
+        raise ValueError("Games must be numbered 1..N consecutively with no gaps.")
+
+    target = _games_to_win(best_of)
+    games_in_order = sorted(games, key=lambda g: g.game_number)
+    wins: dict[int, int] = {1: 0, 2: 0}
+    decided_at: int | None = None
+    decided_side: int | None = None
+    for g in games_in_order:
+        winner = 1 if g.side_1_points > g.side_2_points else 2
+        wins[winner] += 1
+        if decided_side is None and wins[winner] >= target:
+            decided_side = winner
+            decided_at = g.game_number
+
+    if decided_side is None or decided_at is None:
+        raise ValueError(
+            f"No side reached {target} game wins — the match isn't decided."
+        )
+    if decided_at != games_in_order[-1].game_number:
+        raise ValueError(
+            "Scored games extend past the deciding game; "
+            "drop any games after the decider."
+        )
+    return decided_side
+
+
+def _games_payload_from_match(match: Match) -> list[MatchResultsGameWrite]:
+    """Recast currently-saved scores as a finalize payload, so ``_can_finalize``
+    can reuse ``_validate_finalize_games`` instead of duplicating its rules."""
+    return [
+        MatchResultsGameWrite(
+            game_number=g.game_number,
+            side_1_points=g.score.side_1_points,
+            side_2_points=g.score.side_2_points,
+        )
+        for g in match.games
+        if g.score is not None
+    ]
+
+
+def _can_finalize(match: Match) -> bool:
+    """Whether ``POST /v1/matches/{id}/results`` would succeed on the
+    currently-saved scores (ignoring authorization). Drives the FE's
+    ``can_finalize`` flag and the submit button's adaptive label."""
+    if match.status != MatchStatus.in_progress:
+        return False
+    try:
+        _validate_finalize_games(
+            _games_payload_from_match(match), match.match_settings.best_of
+        )
+    except ValueError:
+        return False
+    return True
+
+
+async def _apply_finalized_match(
+    db: AsyncSession,
+    match: Match,
+    payload: MatchResultsWrite,
+    decided_side: int,
+) -> None:
+    """Replace ``match.games`` (and the attached score rows) with the canonical
+    payload and mark the match completed. The caller commits."""
+    # ``Match.games`` cascades ``all, delete-orphan``; clearing the collection
+    # marks each existing MatchGame (and via MatchGame.score's own cascade,
+    # the MatchGameScore) for delete. We must flush the deletes before
+    # inserting new games at the same numbers, otherwise the
+    # ``uq_match_games_match_id_game_number`` constraint trips during
+    # autoflush.
+    match.games.clear()
+    await db.flush()
+
+    for game in sorted(payload.games, key=lambda g: g.game_number):
+        match.games.append(
+            MatchGame(
+                game_number=game.game_number,
+                score=MatchGameScore(
+                    side_1_points=game.side_1_points,
+                    side_2_points=game.side_2_points,
+                ),
+            )
+        )
+
+    new_wins: dict[int, int] = {1: 0, 2: 0}
+    for g in payload.games:
+        new_wins[1 if g.side_1_points > g.side_2_points else 2] += 1
     for side in match.sides:
-        side.score = side_wins.get(side.side_number, 0)
+        side.score = new_wins.get(side.side_number, 0)
+        side.won = side.side_number == decided_side
 
-    decided = a_wins >= target or b_wins >= target
-    side_one = sides_by_number.get(1)
-    side_two = sides_by_number.get(2)
+    match.status = MatchStatus.completed
 
-    if decided:
-        match.status = MatchStatus.completed
-        if side_one is not None:
-            side_one.won = a_wins > b_wins
-        if side_two is not None:
-            side_two.won = b_wins > a_wins
-    else:
-        match.status = MatchStatus.in_progress
-        for side in match.sides:
-            side.won = None
 
-    games_sorted = sorted(match.games, key=lambda g: g.game_number)
-    trailing_unscored = [g for g in games_sorted if g.score is None]
-    if decided:
-        for game in trailing_unscored:
-            match.games.remove(game)
-    elif not trailing_unscored:
-        next_number = max((g.game_number for g in games_sorted), default=0) + 1
-        match.games.append(MatchGame(game_number=next_number))
+# ----- scoring endpoints ---------------------------------------------------
 
 
 async def _load_match_for_scoring(
@@ -997,25 +1108,42 @@ async def _load_match_for_scoring(
     return match
 
 
+# Per-game endpoints are addressed by ``game_number``: a game row may not
+# exist yet (the FE deeplinks straight into ``/games/N/scores/new``). The
+# create handler lookups-or-inserts the MatchGame; update and delete operate
+# on an existing score. All three are pure "save / clear scratchpad state" —
+# they never touch match.status, side wins, side.won, or ratings. The single
+# canonical commit happens in ``finalize_match`` below.
+
+
 @router.post(
-    "/matches/{match_id}/games/{game_id}/scores",
+    "/matches/{match_id}/games/{game_number}/scores/new",
     response_model=MatchDetails,
     status_code=status.HTTP_201_CREATED,
 )
 async def create_game_score(
     match_id: uuid.UUID,
-    game_id: uuid.UUID,
     payload: MatchGameScoreWrite,
+    game_number: Annotated[int, Path(ge=1, le=7)],
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_session),
 ) -> MatchDetails:
     match = await _load_match_for_scoring(db, match_id, current_user.id)
     _enforce_scorable(match)
+    if game_number > match.match_settings.best_of:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"This match is best of {match.match_settings.best_of}; "
+                f"game {game_number} can't exist."
+            ),
+        )
 
-    game = next((g for g in match.games if g.id == game_id), None)
+    game = next((g for g in match.games if g.game_number == game_number), None)
     if game is None:
-        raise HTTPException(status_code=404, detail="Game not found.")
-    if game.score is not None:
+        game = MatchGame(game_number=game_number)
+        match.games.append(game)
+    elif game.score is not None:
         raise HTTPException(
             status_code=409, detail="This game has already been scored."
         )
@@ -1025,8 +1153,6 @@ async def create_game_score(
         side_2_points=payload.side_2_points,
     )
 
-    _recompute_match(match)
-    await _apply_rating_update(db, match)
     await db.commit()
 
     reloaded = await _load_match(db, match.id)
@@ -1036,30 +1162,90 @@ async def create_game_score(
 
 
 @router.put(
-    "/matches/{match_id}/games/{game_id}/scores/{score_id}",
+    "/matches/{match_id}/games/{game_number}/scores",
     response_model=MatchDetails,
 )
 async def update_game_score(
     match_id: uuid.UUID,
-    game_id: uuid.UUID,
-    score_id: uuid.UUID,
     payload: MatchGameScoreWrite,
+    game_number: Annotated[int, Path(ge=1, le=7)],
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_session),
 ) -> MatchDetails:
     match = await _load_match_for_scoring(db, match_id, current_user.id)
     _enforce_scorable(match)
 
-    game = next((g for g in match.games if g.id == game_id), None)
-    if game is None:
-        raise HTTPException(status_code=404, detail="Game not found.")
-    if game.score is None or game.score.id != score_id:
+    game = next((g for g in match.games if g.game_number == game_number), None)
+    if game is None or game.score is None:
         raise HTTPException(status_code=404, detail="Score not found.")
 
     game.score.side_1_points = payload.side_1_points
     game.score.side_2_points = payload.side_2_points
 
-    _recompute_match(match)
+    await db.commit()
+
+    reloaded = await _load_match(db, match.id)
+    assert reloaded is not None
+    extras = await _load_view_extras(db, reloaded)
+    return _serialize_details(reloaded, current_user.id, extras)
+
+
+@router.delete(
+    "/matches/{match_id}/games/{game_number}/scores",
+    response_model=MatchDetails,
+)
+async def delete_game_score(
+    match_id: uuid.UUID,
+    game_number: Annotated[int, Path(ge=1, le=7)],
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+) -> MatchDetails:
+    match = await _load_match_for_scoring(db, match_id, current_user.id)
+    _enforce_scorable(match)
+
+    game = next((g for g in match.games if g.game_number == game_number), None)
+    if game is None or game.score is None:
+        raise HTTPException(status_code=404, detail="Score not found.")
+
+    # Drop the score; the MatchGame stays so a subsequent POST .../scores/new
+    # for the same number just attaches a fresh score row to the existing game.
+    # delete-orphan on ``MatchGame.score`` removes the row on flush.
+    game.score = None
+
+    await db.commit()
+
+    reloaded = await _load_match(db, match.id)
+    assert reloaded is not None
+    extras = await _load_view_extras(db, reloaded)
+    return _serialize_details(reloaded, current_user.id, extras)
+
+
+@router.post(
+    "/matches/{match_id}/results",
+    response_model=MatchDetails,
+    status_code=status.HTTP_201_CREATED,
+)
+async def finalize_match(
+    match_id: uuid.UUID,
+    payload: MatchResultsWrite,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+) -> MatchDetails:
+    """Take the request body as canon. Any previously-saved per-game scores
+    on this match are discarded; the payload's games (validated as a complete,
+    decided match) become the match's games + scores. Then we mark completed
+    and apply the rating update — exactly once."""
+    match = await _load_match_for_scoring(db, match_id, current_user.id)
+    _enforce_scorable(match)
+
+    try:
+        decided_side = _validate_finalize_games(
+            payload.games, match.match_settings.best_of
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    await _apply_finalized_match(db, match, payload, decided_side)
     await _apply_rating_update(db, match)
     await db.commit()
 

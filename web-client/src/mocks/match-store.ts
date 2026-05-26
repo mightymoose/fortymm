@@ -96,36 +96,54 @@ function sideWinCounts(seed: SeedMatch): { side1: number; side2: number } {
   return { side1: s1, side2: s2 }
 }
 
-function currentUnscored(seed: SeedMatch): SeedGame | null {
-  return seed.games.find((g) => g.score === null) ?? null
+/** Lowest 1..best_of game number with no saved score, or null when every
+ * game in [1, best_of] is scored / the match isn't in progress. Mirrors the
+ * server's ``current_game_number`` derivation in api/app/matches.py. */
+function currentGameNumber(seed: SeedMatch): number | null {
+  if (seed.status !== 'in_progress') return null
+  const scored = new Set(
+    seed.games.filter((g) => g.score !== null).map((g) => g.game_number),
+  )
+  for (let n = 1; n <= seed.best_of; n += 1) {
+    if (!scored.has(n)) return n
+  }
+  return null
 }
 
-/** Mirrors the API's `_recompute_match`: derive status / side `won`, drop any
- * trailing unscored game on completion, append one when still in progress. */
-export function reconcile(seed: SeedMatch): void {
-  const { side1, side2 } = sideWinCounts(seed)
+/** Whether the currently-saved scores form a complete, validly-ordered,
+ * decided match — i.e. POST /results would succeed against the current
+ * scratchpad state. Mirrors the server's ``_can_finalize`` predicate. */
+function canFinalizeSeed(seed: SeedMatch): boolean {
+  if (seed.status !== 'in_progress') return false
+  const scored = seed.games
+    .filter((g) => g.score !== null)
+    .map((g) => ({
+      game_number: g.game_number,
+      side_1_points: g.score!.side_1_points,
+      side_2_points: g.score!.side_2_points,
+    }))
+  if (scored.length === 0) return false
+  const numbers = scored.map((g) => g.game_number).sort((a, b) => a - b)
+  if (numbers[numbers.length - 1] > seed.best_of) return false
+  for (let i = 0; i < numbers.length; i += 1) {
+    if (numbers[i] !== i + 1) return false
+  }
   const target = gamesToWin(seed.best_of)
-  const decided = side1 >= target || side2 >= target
-
-  if (decided) {
-    seed.status = 'completed'
-    // Runtime-completed matches need a fresh timestamp so dashboard's
-    // recent-results sort puts them ahead of pre-seeded older matches.
-    if (seed.completed_at === null) seed.completed_at = new Date().toISOString()
-    seed.games = seed.games.filter((g) => g.score !== null)
-  } else {
-    seed.status = 'in_progress'
-    seed.completed_at = null
-    if (currentUnscored(seed) === null) {
-      const nextNumber =
-        seed.games.reduce((max, g) => Math.max(max, g.game_number), 0) + 1
-      seed.games.push({
-        id: `g-${seed.id}-${nextNumber}`,
-        game_number: nextNumber,
-        score: null,
-      })
+  const ordered = scored
+    .slice()
+    .sort((a, b) => a.game_number - b.game_number)
+  let wins1 = 0
+  let wins2 = 0
+  let decidedAt: number | null = null
+  for (const g of ordered) {
+    if (g.side_1_points > g.side_2_points) wins1 += 1
+    else if (g.side_2_points > g.side_1_points) wins2 += 1
+    if (decidedAt === null && (wins1 >= target || wins2 >= target)) {
+      decidedAt = g.game_number
     }
   }
+  if (decidedAt === null) return false
+  return decidedAt === ordered[ordered.length - 1].game_number
 }
 
 function projectSides(seed: SeedMatch): {
@@ -194,7 +212,7 @@ export function projectMatchDetails(seed: SeedMatch): MatchDetails {
         : null,
     }))
 
-  const current = currentUnscored(seed)
+  const nextNumber = currentGameNumber(seed)
   const priors = priorCompleted(seed)
   return {
     id: seed.id,
@@ -208,10 +226,9 @@ export function projectMatchDetails(seed: SeedMatch): MatchDetails {
     created_at: seed.created_at,
     sides: [mySide, opponentSide],
     games,
-    current_game: current
-      ? { id: current.id, game_number: current.game_number }
-      : null,
-    can_score: current !== null,
+    current_game: nextNumber !== null ? { game_number: nextNumber } : null,
+    can_score: nextNumber !== null,
+    can_finalize: canFinalizeSeed(seed),
     recent_form: projectRecentForm(seed, priors),
     head_to_head: projectHeadToHead(seed, priors),
   }
@@ -342,10 +359,10 @@ function projectHeadToHead(
 
 export function projectListRow(seed: SeedMatch): MatchListRow {
   const { mySide, opponentSide } = projectSides(seed)
-  const current = currentUnscored(seed)
+  const nextNumber = currentGameNumber(seed)
   const scorable =
     (seed.status === 'pending' || seed.status === 'in_progress') &&
-    current !== null
+    nextNumber !== null
   return {
     id: seed.id,
     status: seed.status,
@@ -354,18 +371,18 @@ export function projectListRow(seed: SeedMatch): MatchListRow {
     sides: [mySide, opponentSide],
     best_of: seed.best_of,
     created_at: seed.created_at,
-    current_game_id: scorable ? current.id : null,
+    current_game_number: scorable ? nextNumber : null,
     can_score: scorable,
   }
 }
 
 export function projectScoreBanner(seed: SeedMatch): DashboardScoreBanner | null {
-  const current = currentUnscored(seed)
-  if (seed.status !== 'in_progress' || current === null) return null
+  const nextNumber = currentGameNumber(seed)
+  if (seed.status !== 'in_progress' || nextNumber === null) return null
   return {
     match_id: seed.id,
     opponent_username: seed.opponent?.username ?? null,
-    current_game_id: current.id,
+    current_game_number: nextNumber,
   }
 }
 
@@ -492,9 +509,7 @@ export function buildInitialSeeds(): SeedMatch[] {
       created_at: '2026-05-14T17:00:00Z',
       completed_at: null,
       opponent: { id: 'pl-okafor', username: 'okafor.d' },
-      games: [
-        { id: 'g-pending-1-1', game_number: 1, score: null },
-      ],
+      games: [],
     },
     {
       id: 'm-2207',
@@ -515,7 +530,6 @@ export function buildInitialSeeds(): SeedMatch[] {
           game_number: 2,
           score: { id: 's-2207-2', side_1_points: 9, side_2_points: 11 },
         },
-        { id: 'g-2207-3', game_number: 3, score: null },
       ],
     },
     {
@@ -638,7 +652,8 @@ export function validateScore(side1: number, side2: number): string | null {
   return null
 }
 
-/** Hardcoded current-user id used by `POST /v1/matches` to populate side 1. */
+/** Hardcoded current-user id used by `POST /v1/matches` to populate side 1.
+ * Games aren't pre-created — POST .../scores/new inserts them lazily. */
 export function newMatchSeed(input: {
   bestOf: number
   rated: boolean
@@ -654,7 +669,74 @@ export function newMatchSeed(input: {
     created_at: new Date().toISOString(),
     completed_at: null,
     opponent: input.opponent,
-    games: [{ id: `g-${id}-1`, game_number: 1, score: null }],
+    games: [],
   }
   return seed
+}
+
+/** POST /v1/matches/{id}/results: obliterate the existing games + scores,
+ * insert the payload's games, mark completed. Mirrors the server contract —
+ * the payload is canon. Returns null on validation failure, with a message
+ * suitable for a 422 detail. */
+export function finalizeSeed(
+  seed: SeedMatch,
+  games: Array<{
+    game_number: number
+    side_1_points: number
+    side_2_points: number
+  }>,
+): string | null {
+  if (games.length === 0) {
+    return 'A match needs at least one game to finalize.'
+  }
+  const numbers = games.map((g) => g.game_number)
+  if (numbers.some((n) => n > seed.best_of)) {
+    return `Each game_number must be ≤ best_of (${seed.best_of}).`
+  }
+  if (new Set(numbers).size !== numbers.length) {
+    return 'Duplicate game_number in payload.'
+  }
+  const sortedNumbers = numbers.slice().sort((a, b) => a - b)
+  for (let i = 0; i < sortedNumbers.length; i += 1) {
+    if (sortedNumbers[i] !== i + 1) {
+      return 'Games must be numbered 1..N consecutively with no gaps.'
+    }
+  }
+  for (const g of games) {
+    const message = validateScore(g.side_1_points, g.side_2_points)
+    if (message) return message
+  }
+  const ordered = games.slice().sort((a, b) => a.game_number - b.game_number)
+  const target = gamesToWin(seed.best_of)
+  let wins1 = 0
+  let wins2 = 0
+  let decidedAt: number | null = null
+  let decidedSide: 1 | 2 | null = null
+  for (const g of ordered) {
+    if (g.side_1_points > g.side_2_points) wins1 += 1
+    else wins2 += 1
+    if (decidedSide === null && (wins1 >= target || wins2 >= target)) {
+      decidedSide = wins1 >= target ? 1 : 2
+      decidedAt = g.game_number
+    }
+  }
+  if (decidedSide === null) {
+    return `No side reached ${target} game wins — the match isn't decided.`
+  }
+  if (decidedAt !== ordered[ordered.length - 1].game_number) {
+    return 'Scored games extend past the deciding game; drop any games after the decider.'
+  }
+
+  seed.games = ordered.map((g) => ({
+    id: `g-${seed.id}-${g.game_number}`,
+    game_number: g.game_number,
+    score: {
+      id: `s-${seed.id}-${g.game_number}`,
+      side_1_points: g.side_1_points,
+      side_2_points: g.side_2_points,
+    },
+  }))
+  seed.status = 'completed'
+  seed.completed_at = new Date().toISOString()
+  return null
 }

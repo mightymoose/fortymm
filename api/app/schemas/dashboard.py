@@ -10,7 +10,10 @@ from app.schemas.rating import RatingChange
 class DashboardScoreBanner(BaseModel):
     match_id: uuid.UUID
     opponent_username: str | None
-    current_game_id: uuid.UUID
+    # The next game to score (1..best_of). Game rows are created lazily by the
+    # score-write endpoints, so the dashboard surfaces the number — the FE
+    # builds the deeplink ``/matches/{id}/games/{n}/scores/new`` from it.
+    current_game_number: int
 
 
 class DashboardNextMatch(BaseModel):

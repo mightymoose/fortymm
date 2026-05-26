@@ -121,6 +121,9 @@ def test_validate_state_rejects_extra_keys(
 async def _score_to_completion(
     client: AsyncClient, opponent_id: uuid.UUID, best_of: int = 1
 ) -> dict:
+    """Create a rated match and finalize it — current_user (side 1) wins.
+    Per-game endpoints are scratchpad-only post the decouple-scoring refactor,
+    so completion only happens via POST /results."""
     create = await client.post(
         "/v1/matches",
         json={
@@ -131,12 +134,18 @@ async def _score_to_completion(
     )
     assert create.status_code == 201
     match = create.json()
-    score = await client.post(
-        f"/v1/matches/{match['id']}/games/{match['games'][0]['id']}/scores",
-        json={"side_1_points": 11, "side_2_points": 4},
+    needed = best_of // 2 + 1
+    finalize = await client.post(
+        f"/v1/matches/{match['id']}/results",
+        json={
+            "games": [
+                {"game_number": n, "side_1_points": 11, "side_2_points": 4}
+                for n in range(1, needed + 1)
+            ]
+        },
     )
-    assert score.status_code == 201
-    return score.json()
+    assert finalize.status_code == 201
+    return finalize.json()
 
 
 async def test_completing_a_rated_match_writes_rating_history(
@@ -212,11 +221,15 @@ async def test_unrated_match_does_not_move_ratings(
         },
     )
     match = create.json()
-    score = await api_client.post(
-        f"/v1/matches/{match['id']}/games/{match['games'][0]['id']}/scores",
-        json={"side_1_points": 11, "side_2_points": 4},
+    finalize = await api_client.post(
+        f"/v1/matches/{match['id']}/results",
+        json={
+            "games": [
+                {"game_number": 1, "side_1_points": 11, "side_2_points": 4},
+            ]
+        },
     )
-    body = score.json()
+    body = finalize.json()
     for side in body["sides"]:
         assert side["rating_change"] is None
 
@@ -271,22 +284,32 @@ async def test_manual_strategy_league_skips_rating_updates(
     assert ratings[0].rating_state is None
 
 
-async def test_rating_update_is_idempotent_across_score_edits(
+async def test_finalized_match_rejects_score_edits_and_keeps_rating_history(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    """Editing a score on an already-completed match doesn't write a second
-    set of history rows. Re-application across edits is its own feature
-    (tied to dispute/void flows) and explicitly out of scope for v1."""
+    """Once a match is finalized, every write path 409s — there's no way to
+    silently re-apply (or duplicate) the rating update. Re-applying ratings
+    after a correction is its own feature (tied to dispute/void flows),
+    explicitly out of scope for v1."""
     await start_session(api_client, db_session)
     opp = await make_user(db_session, "rival")
     body = await _score_to_completion(api_client, opp.id)
-    score_id = body["games"][0]["score"]["id"]
 
-    edited = await api_client.put(
-        f"/v1/matches/{body['id']}/games/{body['games'][0]['id']}/scores/{score_id}",
+    # Every score-write path is locked once the match is finalized.
+    put = await api_client.put(
+        f"/v1/matches/{body['id']}/games/1/scores",
         json={"side_1_points": 11, "side_2_points": 5},
     )
-    assert edited.status_code == 200
+    assert put.status_code == 409
+    re_finalize = await api_client.post(
+        f"/v1/matches/{body['id']}/results",
+        json={
+            "games": [
+                {"game_number": 1, "side_1_points": 11, "side_2_points": 5},
+            ]
+        },
+    )
+    assert re_finalize.status_code == 409
 
     rows = (
         (
@@ -299,7 +322,7 @@ async def test_rating_update_is_idempotent_across_score_edits(
         .scalars()
         .all()
     )
-    assert len(rows) == 2  # still just the original pair
+    assert len(rows) == 2  # still just the original pair from finalize
 
 
 async def test_new_session_seeds_rating_for_default_league(

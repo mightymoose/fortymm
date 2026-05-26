@@ -14,6 +14,8 @@ export type MatchDetails = components['schemas']['MatchDetails']
 export type MatchListResponse = components['schemas']['MatchListResponse']
 export type MatchListRow = components['schemas']['MatchListRow']
 export type MatchGameScoreWrite = components['schemas']['MatchGameScoreWrite']
+export type MatchResultsWrite = components['schemas']['MatchResultsWrite']
+export type MatchResultsGameWrite = components['schemas']['MatchResultsGameWrite']
 export type MatchStatus = components['schemas']['MatchStatus']
 
 export type MatchListParams = {
@@ -180,52 +182,97 @@ function applyScoreMutationCache(
 }
 
 /**
- * Writes the first score for a game. The scoring route surfaces errors
- * inline, so `throwOnError` is intentionally omitted — callers branch on
- * `mutation.error`.
+ * Writes the first score for a game (lazily inserting the MatchGame row).
+ * Fire-and-forget: per-game writes are scratchpad-only — the canonical commit
+ * lives in `POST .../results`, which obliterates and replaces the saved
+ * scores. So we don't surface errors on these mutations.
  */
-export function useCreateScore(matchId: string, gameId: string) {
+export function useCreateScore(matchId: string, gameNumber: number) {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: async (input: MatchGameScoreWrite): Promise<MatchDetails> =>
       unwrap(
         'submit score',
-        await api.POST('/v1/matches/{match_id}/games/{game_id}/scores', {
-          params: { path: { match_id: matchId, game_id: gameId } },
-          body: input,
-        }),
+        await api.POST(
+          '/v1/matches/{match_id}/games/{game_number}/scores/new',
+          {
+            params: {
+              path: { match_id: matchId, game_number: gameNumber },
+            },
+            body: input,
+          },
+        ),
       ),
     onSuccess: (data) => applyScoreMutationCache(queryClient, matchId, data),
   })
 }
 
 /**
- * Edits an existing score. Same cache work and same no-throw posture as
- * `useCreateScore` — the edit route handles errors inline.
+ * Edits the saved score for a game. Same scratchpad-write posture as
+ * `useCreateScore`.
  */
-export function useUpdateScore(
-  matchId: string,
-  gameId: string,
-  scoreId: string,
-) {
+export function useUpdateScore(matchId: string, gameNumber: number) {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: async (input: MatchGameScoreWrite): Promise<MatchDetails> =>
       unwrap(
         'update score',
         await api.PUT(
-          '/v1/matches/{match_id}/games/{game_id}/scores/{score_id}',
+          '/v1/matches/{match_id}/games/{game_number}/scores',
           {
             params: {
-              path: {
-                match_id: matchId,
-                game_id: gameId,
-                score_id: scoreId,
-              },
+              path: { match_id: matchId, game_number: gameNumber },
             },
             body: input,
           },
         ),
+      ),
+    onSuccess: (data) => applyScoreMutationCache(queryClient, matchId, data),
+  })
+}
+
+/**
+ * Clears the saved score for a game. Same scratchpad-write posture — failures
+ * heal at finalize (the canonical /results POST is the source of truth).
+ */
+export function useDeleteScore(matchId: string, gameNumber: number) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (): Promise<MatchDetails> =>
+      unwrap(
+        'clear score',
+        await api.DELETE(
+          '/v1/matches/{match_id}/games/{game_number}/scores',
+          {
+            params: {
+              path: { match_id: matchId, game_number: gameNumber },
+            },
+          },
+        ),
+      ),
+    onSuccess: (data) => applyScoreMutationCache(queryClient, matchId, data),
+  })
+}
+
+/**
+ * Finalizes the match. The payload is canon — the server obliterates any
+ * scratchpad-saved games + scores, inserts these, validates the match as a
+ * decided whole, and applies the rating update. Unlike the per-game writes,
+ * this one's errors matter: pass `throwOnError`-style handling at the call
+ * site so the user can see what went wrong (most often a 422 if local
+ * validation drifted out of sync, or a 409 if the match is already
+ * finalized).
+ */
+export function useFinalizeMatch(matchId: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (input: MatchResultsWrite): Promise<MatchDetails> =>
+      unwrap(
+        'finalize match',
+        await api.POST('/v1/matches/{match_id}/results', {
+          params: { path: { match_id: matchId } },
+          body: input,
+        }),
       ),
     onSuccess: (data) => applyScoreMutationCache(queryClient, matchId, data),
   })
@@ -241,31 +288,27 @@ export function matchDetailRoute(matchId: string) {
   }
 }
 
-export function scoringNewRoute(matchId: string, gameId: string) {
+export function scoringNewRoute(matchId: string, gameNumber: number) {
   return {
-    to: '/matches/$matchId/games/$gameId/scores/new' as const,
-    params: { matchId, gameId },
+    to: '/matches/$matchId/games/$gameNumber/scores/new' as const,
+    params: { matchId, gameNumber: String(gameNumber) },
   }
 }
 
-export function scoringEditRoute(
-  matchId: string,
-  gameId: string,
-  scoreId: string,
-) {
+export function scoringEditRoute(matchId: string, gameNumber: number) {
   return {
-    to: '/matches/$matchId/games/$gameId/scores/$scoreId/edit' as const,
-    params: { matchId, gameId, scoreId },
+    to: '/matches/$matchId/games/$gameNumber/scores/edit' as const,
+    params: { matchId, gameNumber: String(gameNumber) },
   }
 }
 
-/** Where to land after writing a match — score the trailing un-scored game,
- * or fall back to the match details page when the match is decided (per the
- * invariant `current_game !== null iff status !== completed`). */
+/** Where to land after writing a per-game score — the next un-scored slot, or
+ * the match detail page when there's no next game (match finalized, or every
+ * game has a saved score). */
 export function nextScoringDestination(
   match: Pick<MatchDetails, 'id' | 'current_game'>,
 ) {
   return match.current_game
-    ? scoringNewRoute(match.id, match.current_game.id)
+    ? scoringNewRoute(match.id, match.current_game.game_number)
     : matchDetailRoute(match.id)
 }

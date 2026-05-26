@@ -109,7 +109,7 @@ type MatchView = {
   games: GameView[]
   currentGameNumber: number | null
   canScore: boolean
-  scoreCta: { matchId: string; gameId: string } | null
+  scoreCta: { matchId: string; gameNumber: number } | null
   headToHead: H2HView | null
 }
 
@@ -242,7 +242,7 @@ function projectMatchView(data: MatchDetails, matchId: string): MatchView {
     .map((g) => projectGame(g, leftView.sideNumber))
   const scoreCta =
     data.can_score && data.current_game
-      ? { matchId, gameId: data.current_game.id }
+      ? { matchId, gameNumber: data.current_game.game_number }
       : null
   return {
     state,
@@ -379,7 +379,10 @@ function MatchDetailsPage({
           <div className="md-header__right">
             {view.scoreCta && (
               <Link
-                {...scoringNewRoute(view.scoreCta.matchId, view.scoreCta.gameId)}
+                {...scoringNewRoute(
+                  view.scoreCta.matchId,
+                  view.scoreCta.gameNumber,
+                )}
                 className="md-btn md-btn--primary md-btn--sm"
               >
                 Score
@@ -728,9 +731,7 @@ function GameGridSide({
         const value =
           rowSide === 'left' ? g.score.leftPoints : g.score.rightPoints
         const editTo =
-          canEdit && g.scoreId
-            ? scoringEditRoute(matchId, g.id, g.scoreId)
-            : null
+          canEdit && g.scoreId ? scoringEditRoute(matchId, g.gameNumber) : null
         const className = cn(
           'md-games__cell',
           cellWin ? 'md-games__cell--win' : 'md-games__cell--loss',

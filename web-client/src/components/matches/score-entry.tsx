@@ -1,77 +1,71 @@
 import { useRef, useState } from 'react'
 import { Link, Navigate, useNavigate } from '@tanstack/react-router'
-import type { UseMutationResult } from '@tanstack/react-query'
 import { User as UserIcon } from 'lucide-react'
 import { ApiError } from '@/api/client'
 import {
   matchDetailRoute,
-  nextScoringDestination,
   scoringEditRoute,
+  scoringNewRoute,
+  useCreateScore,
+  useDeleteScore,
+  useFinalizeMatch,
   useMatch,
+  useUpdateScore,
   type MatchDetails,
   type MatchGameScoreWrite,
+  type MatchResultsGameWrite,
 } from '@/api/matches'
 import { AppShell } from '@/components/app-shell'
 import { cn, initialsOf } from '@/lib/utils'
-import { illegalScoreReason } from '@/lib/scoring'
+import { decidedSide, illegalScoreReason } from '@/lib/scoring'
 
-// Mirror the canonical placeholder on the match-details hero and form-history
-// rows. Solo-match scoring used to surface an "OP" avatar via initialsOf('Opponent') —
-// indistinguishable from a real two-letter monogram.
+// Placeholder for the opponent label on solo matches — mirrors the match
+// details hero. Distinct from `initialsOf('Opponent')` so users can tell
+// "no opponent" apart from a real two-letter monogram.
 const NO_OPPONENT_LABEL = 'No opponent'
 
-export type ScoreMutation = UseMutationResult<
-  MatchDetails,
-  Error,
-  MatchGameScoreWrite,
-  unknown
->
-
-export type ScoreEntryMode =
-  | { kind: 'create' }
-  | { kind: 'edit'; scoreId: string }
+export type ScoreEntryMode = { kind: 'create' } | { kind: 'edit' }
 
 export function ScoreEntry({
   matchId,
-  gameId,
+  gameNumber,
   mode,
-  mutation,
 }: {
   matchId: string
-  gameId: string
+  gameNumber: number
   mode: ScoreEntryMode
-  mutation: ScoreMutation
 }) {
-  // Remount whenever the URL targets a different game so the input state and
-  // mutation error don't leak across games.
+  // Remount whenever the URL targets a different game (or flips create/edit)
+  // so the typed-input state and finalize-error state don't leak across games.
   return (
     <ScoreEntryInner
-      key={`${gameId}:${mode.kind === 'edit' ? mode.scoreId : 'new'}`}
+      key={`${gameNumber}:${mode.kind}`}
       matchId={matchId}
-      gameId={gameId}
+      gameNumber={gameNumber}
       mode={mode}
-      mutation={mutation}
     />
   )
 }
 
 function ScoreEntryInner({
   matchId,
-  gameId,
+  gameNumber,
   mode,
-  mutation,
 }: {
   matchId: string
-  gameId: string
+  gameNumber: number
   mode: ScoreEntryMode
-  mutation: ScoreMutation
 }) {
   const navigate = useNavigate()
   const { data, isLoading } = useMatch(matchId)
+  const createMutation = useCreateScore(matchId, gameNumber)
+  const updateMutation = useUpdateScore(matchId, gameNumber)
+  const deleteMutation = useDeleteScore(matchId, gameNumber)
+  const finalizeMutation = useFinalizeMatch(matchId)
 
-  // `null` means "user hasn't typed anything yet" — render falls through to
-  // the persisted score in edit mode. This avoids a state-syncing effect
-  // (cascading-render anti-pattern) when `data` arrives after first render.
+  // `null` means "user hasn't typed anything yet" — we fall through to the
+  // persisted score in edit mode. Avoids a state-syncing effect when `data`
+  // arrives after first render.
   const [meTyped, setMeTyped] = useState<string | null>(null)
   const [oppTyped, setOppTyped] = useState<string | null>(null)
   const meRef = useRef<HTMLInputElement>(null)
@@ -87,33 +81,40 @@ function ScoreEntryInner({
 
   // The scoring screen is participant-only; spectators bounce back to the
   // read-only details page. The opponent side is always present — a real
-  // player, or the player-less placeholder for solo matches (rendered as
-  // "No opponent" with a ghost avatar below).
+  // player, or the player-less placeholder for solo matches.
   const mySide = data.sides.find((s) => s.is_current_user_side) ?? null
   const oppSide = data.sides.find((s) => !s.is_current_user_side) ?? null
   if (!mySide || !oppSide) {
     return <Navigate {...matchDetailRoute(matchId)} />
   }
 
-  const game = data.games.find((g) => g.id === gameId)
-  if (!game) {
+  // Once a match is finalized every write path 409s — there's nothing to do
+  // here. Likewise for the rare bound-violation case.
+  if (data.status === 'completed') {
+    return <Navigate {...matchDetailRoute(matchId)} />
+  }
+  if (
+    !Number.isInteger(gameNumber) ||
+    gameNumber < 1 ||
+    gameNumber > data.best_of
+  ) {
     return <Navigate {...matchDetailRoute(matchId)} />
   }
 
-  // Landing on /scores/new for a game that's already scored (e.g. browser
-  // Back after saving and advancing) would show empty inputs alongside the
-  // tally that already counts the win. Replace into the score's edit route
-  // so the form reflects reality and a Save can't create a duplicate.
-  if (mode.kind === 'create' && game.score) {
-    return (
-      <Navigate
-        {...scoringEditRoute(matchId, gameId, game.score.id)}
-        replace
-      />
-    )
+  const game = data.games.find((g) => g.game_number === gameNumber) ?? null
+  const persistedScore = game?.score ?? null
+
+  // Mode/URL/state alignment: in create mode but a score exists → swap to
+  // the edit URL so Save doesn't try to POST .../scores/new and 409. The
+  // inverse — edit mode but no saved score — swaps to the create URL.
+  if (mode.kind === 'create' && persistedScore) {
+    return <Navigate {...scoringEditRoute(matchId, gameNumber)} replace />
+  }
+  if (mode.kind === 'edit' && !persistedScore) {
+    return <Navigate {...scoringNewRoute(matchId, gameNumber)} replace />
   }
 
-  const mySideNumber = mySide.side_number === 2 ? 2 : 1
+  const mySideNumber: 1 | 2 = mySide.side_number === 2 ? 2 : 1
   const oppUsername = oppSide.players[0]?.username ?? null
   const oppName = oppUsername ?? NO_OPPONENT_LABEL
   const meName = mySide.players[0]?.username ?? 'You'
@@ -121,12 +122,9 @@ function ScoreEntryInner({
   const oppHasPlayer = oppUsername !== null
 
   const bestOf = data.best_of
-  const gameNumber = game.game_number
-
   const meWins = mySide.games_won
   const oppWins = oppSide.games_won
 
-  const persistedScore = mode.kind === 'edit' ? game.score : null
   const persistedMe =
     persistedScore &&
     (mySideNumber === 1
@@ -143,11 +141,11 @@ function ScoreEntryInner({
   const sanitize = (value: string) => value.replace(/[^0-9]/g, '').slice(0, 2)
   const onMeChange = (value: string) => {
     setMeTyped(sanitize(value))
-    if (mutation.error) mutation.reset()
+    if (finalizeMutation.error) finalizeMutation.reset()
   }
   const onOppChange = (value: string) => {
     setOppTyped(sanitize(value))
-    if (mutation.error) mutation.reset()
+    if (finalizeMutation.error) finalizeMutation.reset()
   }
 
   const bothFilled = me !== '' && opp !== ''
@@ -155,38 +153,106 @@ function ScoreEntryInner({
     ? illegalScoreReason(Number(me), Number(opp))
     : null
   const inputsValid = bothFilled && localScoreError === null
-  const apiError = mutation.error instanceof ApiError ? mutation.error : null
+
+  // Build the hypothetical full-match games list including the current input,
+  // so we can ask the scoring lib whether saving this entry would make the
+  // match finalize-able. If so, the single submit button swaps to "Finalize
+  // match" and posts /results instead of /scores/new.
+  const hypotheticalGames: MatchResultsGameWrite[] = inputsValid
+    ? [
+        ...data.games
+          .filter((g) => g.game_number !== gameNumber && g.score)
+          .map((g) => ({
+            game_number: g.game_number,
+            side_1_points: g.score!.side_1_points,
+            side_2_points: g.score!.side_2_points,
+          })),
+        mySideNumber === 1
+          ? {
+              game_number: gameNumber,
+              side_1_points: Number(me),
+              side_2_points: Number(opp),
+            }
+          : {
+              game_number: gameNumber,
+              side_1_points: Number(opp),
+              side_2_points: Number(me),
+            },
+      ]
+    : []
+  const wouldFinalize =
+    inputsValid && decidedSide(hypotheticalGames, bestOf) !== null
+
+  // Per the fire-and-forget posture: only finalize errors are surfaced. The
+  // per-game mutations (create / update / delete) self-heal at finalize, so
+  // their errors are intentionally hidden.
+  const finalizeApiError =
+    finalizeMutation.error instanceof ApiError ? finalizeMutation.error : null
   const showScoreError =
-    localScoreError !== null || (apiError !== null && apiError.status === 422)
+    localScoreError !== null ||
+    (finalizeApiError !== null && finalizeApiError.status === 422)
 
-  // 409 from the API means the game is either already scored (create) or the
-  // match isn't scorable. Both swap out the regular controls for a back-link.
-  const lockedReason =
-    apiError && apiError.status === 409
-      ? apiError.detail ?? apiError.message
-      : null
-
-  function toBody(mine: number, opponent: number): MatchGameScoreWrite {
-    return mySideNumber === 1
-      ? { side_1_points: mine, side_2_points: opponent }
-      : { side_1_points: opponent, side_2_points: mine }
+  function predictNextScoringRoute() {
+    if (!data) return matchDetailRoute(matchId)
+    const nowScored = new Set<number>([
+      ...data.games.filter((g) => g.score).map((g) => g.game_number),
+      gameNumber,
+    ])
+    for (let n = 1; n <= data.best_of; n += 1) {
+      if (!nowScored.has(n)) return scoringNewRoute(matchId, n)
+    }
+    return matchDetailRoute(matchId)
   }
 
-  function saveGame() {
+  function toBody(): MatchGameScoreWrite {
+    return mySideNumber === 1
+      ? { side_1_points: Number(me), side_2_points: Number(opp) }
+      : { side_1_points: Number(opp), side_2_points: Number(me) }
+  }
+
+  function onSubmit() {
     if (!inputsValid) return
-    mutation.mutate(toBody(Number(me), Number(opp)), {
-      onSuccess: (response) => navigate(nextScoringDestination(response)),
+    if (wouldFinalize) {
+      finalizeMutation.mutate(
+        { games: hypotheticalGames },
+        { onSuccess: () => navigate(matchDetailRoute(matchId)) },
+      )
+      return
+    }
+    const next = predictNextScoringRoute()
+    const args = toBody()
+    // Fire-and-forget — we don't surface per-game errors, and we navigate as
+    // soon as the request settles either way. Even on failure, the canonical
+    // POST /results will reconcile the score later.
+    const settle = { onSettled: () => navigate(next) }
+    if (mode.kind === 'edit') {
+      updateMutation.mutate(args, settle)
+    } else {
+      createMutation.mutate(args, settle)
+    }
+  }
+
+  function onClear() {
+    if (mode.kind !== 'edit') return
+    deleteMutation.mutate(undefined, {
+      // After clearing, land back on this game's create route so the user
+      // can re-enter — same page, just with empty inputs and create-mode
+      // semantics.
+      onSettled: () => navigate(scoringNewRoute(matchId, gameNumber)),
     })
   }
 
-  function handleKey(e: React.KeyboardEvent<HTMLInputElement>, side: 'me' | 'opp') {
+  function handleKey(
+    e: React.KeyboardEvent<HTMLInputElement>,
+    side: 'me' | 'opp',
+  ) {
     if (e.key === 'Enter') {
       e.preventDefault()
       if (side === 'me' && me !== '') {
         oppRef.current?.focus()
         oppRef.current?.select()
       } else if (side === 'opp') {
-        saveGame()
+        onSubmit()
       }
     } else if (e.key === 'ArrowRight' && side === 'me') {
       e.preventDefault()
@@ -199,48 +265,40 @@ function ScoreEntryInner({
     }
   }
 
-  const inputsLocked = mutation.isPending || lockedReason !== null
+  // Only finalize pending state locks inputs — per-game mutations are
+  // fire-and-forget, so we don't want to make the UI feel laggy on those.
+  const inputsLocked = finalizeMutation.isPending
   const isEdit = mode.kind === 'edit'
-
-  // A typed, legal score that pushes either side to games_to_win clinches the
-  // match — even if more games would otherwise remain (e.g. 3-0 in a Bo5).
-  const gamesToWin = data.games_to_win
-  const willClinch =
-    inputsValid &&
-    (Number(me) > Number(opp)
-      ? meWins + 1 >= gamesToWin
-      : oppWins + 1 >= gamesToWin)
-  const isFinalGame = willClinch || gameNumber === bestOf
 
   const heading = isEdit
     ? `Edit game ${gameNumber} score.`
     : `Enter game ${gameNumber} score.`
-  const subtitle = isEdit
-    ? 'Save updates the score for this game.'
-    : willClinch
-      ? 'Save to finish the match.'
+  const subtitle = wouldFinalize
+    ? 'This score finishes the match — submitting will finalize it.'
+    : isEdit
+      ? 'Save updates the score for this game.'
       : gameNumber < bestOf
         ? `Save this game to continue to game ${gameNumber + 1}.`
         : 'Final game. Save to finish the match.'
-  const saveLabel = mutation.isPending
-    ? 'Saving…'
+  const submitLabel = wouldFinalize
+    ? finalizeMutation.isPending
+      ? 'Finalizing…'
+      : 'Finalize match'
     : isEdit
       ? 'Save changes →'
-      : isFinalGame
-        ? 'Save & finish match →'
-        : 'Save game & next →'
+      : gameNumber < bestOf
+        ? 'Save game & next →'
+        : 'Save final game →'
 
   return (
     <AppShell>
       <div className="entry-wrap">
         <div className="entry-head">
           <h2>{heading}</h2>
-          {!lockedReason && (
-            <div className="hint">
-              <kbd>0</kbd>–<kbd>9</kbd> score &nbsp;·&nbsp; <kbd>Enter</kbd> next
-              / save game
-            </div>
-          )}
+          <div className="hint">
+            <kbd>0</kbd>–<kbd>9</kbd> score &nbsp;·&nbsp; <kbd>Enter</kbd> next
+            / save game
+          </div>
         </div>
 
         <div className="single-entry">
@@ -284,42 +342,39 @@ function ScoreEntryInner({
             role="alert"
             className="mt-1.5 text-xs text-[color:var(--loss)]"
           >
-            {localScoreError ?? apiError?.detail ?? apiError?.message}
+            {localScoreError ??
+              finalizeApiError?.detail ??
+              finalizeApiError?.message}
           </p>
         )}
 
         <div className="single-actions">
-          {lockedReason ? (
-            <>
-              <div className="result-line subtle" role="alert">
-                {lockedReason}
-              </div>
-              <div className="action-btns">
-                <Link {...matchDetailRoute(matchId)} className="btn primary">
-                  Back to match
-                </Link>
-              </div>
-            </>
-          ) : (
-            <>
-              <div className="result-line subtle">{subtitle}</div>
-              <div className="action-btns">
-                <button
-                  type="button"
-                  className="btn primary"
-                  disabled={!inputsValid || mutation.isPending}
-                  onClick={saveGame}
-                >
-                  {saveLabel}
-                </button>
-              </div>
-            </>
-          )}
+          <div className="result-line subtle">{subtitle}</div>
+          <div className="action-btns">
+            {isEdit && (
+              <button
+                type="button"
+                className="btn ghost"
+                onClick={onClear}
+                disabled={inputsLocked || deleteMutation.isPending}
+              >
+                Clear
+              </button>
+            )}
+            <button
+              type="button"
+              className="btn primary"
+              disabled={!inputsValid || inputsLocked}
+              onClick={onSubmit}
+            >
+              {submitLabel}
+            </button>
+          </div>
         </div>
 
         <Scoreline
           data={data}
-          activeGameId={gameId}
+          activeGameNumber={gameNumber}
           matchId={matchId}
           mySideNumber={mySideNumber}
         />
@@ -398,38 +453,26 @@ function ScoreSide({
 
 function Scoreline({
   data,
-  activeGameId,
+  activeGameNumber,
   matchId,
   mySideNumber,
 }: {
   data: MatchDetails
-  activeGameId: string
+  activeGameNumber: number
   matchId: string
   mySideNumber: 1 | 2
 }) {
-  const slots: Array<MatchDetails['games'][number] | null> = []
-  for (let n = 1; n <= data.best_of; n += 1) {
-    slots.push(data.games.find((g) => g.game_number === n) ?? null)
-  }
+  // Every cell links to its own scoring route — scored games go to edit,
+  // un-scored games go to /scores/new. Lets the user pick games in any
+  // order from the scoreline directly.
   return (
     <div className="scoreline">
       <div className="sl-label">SCORELINE</div>
       <div className="sl-cells">
-        {slots.map((g, i) => {
-          if (!g) {
-            return (
-              <div key={i} className={cn('sl-cell', 'pending')}>
-                <div className="sl-n">G{i + 1}</div>
-                <div className="sl-scores">
-                  <span className="s">—</span>
-                  <span className="dash">–</span>
-                  <span className="s">—</span>
-                </div>
-              </div>
-            )
-          }
-          const isActive = g.id === activeGameId
-          const score = g.score
+        {Array.from({ length: data.best_of }, (_, i) => i + 1).map((n) => {
+          const g = data.games.find((x) => x.game_number === n) ?? null
+          const score = g?.score ?? null
+          const isActive = n === activeGameNumber
           const cls = cn(
             'sl-cell',
             score ? 'done' : 'pending',
@@ -450,7 +493,7 @@ function Scoreline({
             : null
           const inner = (
             <>
-              <div className="sl-n">G{g.game_number}</div>
+              <div className="sl-n">G{n}</div>
               <div className="sl-scores">
                 <span className={cn('s', isMyWin === true && 'w')}>
                   {myPoints ?? '—'}
@@ -464,30 +507,21 @@ function Scoreline({
           )
           if (isActive) {
             return (
-              <div key={g.id} className={cls} aria-current="step">
+              <div key={n} className={cls} aria-current="step">
                 {inner}
               </div>
             )
           }
-          if (score) {
-            return (
-              <Link
-                key={g.id}
-                {...scoringEditRoute(matchId, g.id, score.id)}
-                className={cls}
-              >
-                {inner}
-              </Link>
-            )
-          }
+          const target = score
+            ? scoringEditRoute(matchId, n)
+            : scoringNewRoute(matchId, n)
           return (
-            <div key={g.id} className={cls}>
+            <Link key={n} {...target} className={cls}>
               {inner}
-            </div>
+            </Link>
           )
         })}
       </div>
     </div>
   )
 }
-

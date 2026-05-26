@@ -13,8 +13,9 @@ type Seed = {
 }
 
 // The seed shape exercised by the score-entry e2e. Mirrors `m-2207` from
-// `src/mocks/match-store.ts` (1-1 mid-match, game 3 unscored) so the asserts
-// can rely on the same stable ids.
+// `src/mocks/match-store.ts` (1-1 mid-match) so the asserts can rely on the
+// same stable id. Per the decouple-scoring refactor, only scored games have
+// rows — the next un-scored slot is exposed via current_game.game_number.
 function buildSeed(): Seed {
   return {
     id: SEED.matchId,
@@ -33,7 +34,6 @@ function buildSeed(): Seed {
         game_number: 2,
         score: { id: 's-2207-2', side_1_points: 9, side_2_points: 11 },
       },
-      { id: SEED.game3Id, game_number: 3, score: null },
     ],
   }
 }
@@ -53,22 +53,41 @@ function sideWins(seed: Seed): { s1: number; s2: number } {
   return { s1, s2 }
 }
 
-// Mirrors the API/MSW reconcile invariant: trail with one un-scored game iff
-// the match is still in progress; drop trailing un-scored game on completion.
-function reconcile(seed: Seed): void {
-  const { s1, s2 } = sideWins(seed)
+function currentGameNumber(seed: Seed): number | null {
+  if (seed.status !== 'in_progress') return null
+  const scored = new Set(
+    seed.games.filter((g) => g.score !== null).map((g) => g.game_number),
+  )
+  for (let n = 1; n <= seed.best_of; n += 1) {
+    if (!scored.has(n)) return n
+  }
+  return null
+}
+
+function canFinalizeSeed(seed: Seed): boolean {
+  if (seed.status !== 'in_progress') return false
+  const scored = seed.games.filter((g) => g.score !== null)
+  if (scored.length === 0) return false
+  const numbers = scored.map((g) => g.game_number).sort((a, b) => a - b)
+  if (numbers[numbers.length - 1] > seed.best_of) return false
+  for (let i = 0; i < numbers.length; i += 1) {
+    if (numbers[i] !== i + 1) return false
+  }
   const target = gamesToWin(seed.best_of)
-  if (s1 >= target || s2 >= target) {
-    seed.status = 'completed'
-    seed.games = seed.games.filter((g) => g.score !== null)
-    return
+  const { s1, s2 } = sideWins(seed)
+  if (s1 < target && s2 < target) return false
+  const ordered = scored.slice().sort((a, b) => a.game_number - b.game_number)
+  let wins1 = 0
+  let wins2 = 0
+  let decidedAt: number | null = null
+  for (const g of ordered) {
+    if (g.score!.side_1_points > g.score!.side_2_points) wins1 += 1
+    else wins2 += 1
+    if (decidedAt === null && (wins1 >= target || wins2 >= target)) {
+      decidedAt = g.game_number
+    }
   }
-  seed.status = s1 > 0 || s2 > 0 ? 'in_progress' : 'pending'
-  const trailing = seed.games.find((g) => g.score === null)
-  if (!trailing) {
-    const next = seed.games.reduce((m, g) => Math.max(m, g.game_number), 0) + 1
-    seed.games.push({ id: `g-${seed.id}-${next}`, game_number: next, score: null })
-  }
+  return decidedAt === ordered[ordered.length - 1].game_number
 }
 
 function projectMatchDetails(seed: Seed) {
@@ -90,11 +109,17 @@ function projectMatchDetails(seed: Seed) {
           }
         : null,
     }))
-  const current = seed.games.find((g) => g.score === null) ?? null
+  const nextNumber = currentGameNumber(seed)
   return {
     id: seed.id,
     status: seed.status,
-    status_label: { in_progress: 'Live', pending: 'Scheduled', completed: 'Final', disputed: 'Disputed', voided: 'Voided' }[seed.status],
+    status_label: {
+      in_progress: 'Live',
+      pending: 'Scheduled',
+      completed: 'Final',
+      disputed: 'Disputed',
+      voided: 'Voided',
+    }[seed.status],
     best_of: seed.best_of,
     games_to_win: gamesToWin(seed.best_of),
     team_size: 1,
@@ -125,10 +150,9 @@ function projectMatchDetails(seed: Seed) {
       },
     ],
     games,
-    current_game: current
-      ? { id: current.id, game_number: current.game_number }
-      : null,
-    can_score: current !== null,
+    current_game: nextNumber !== null ? { game_number: nextNumber } : null,
+    can_score: nextNumber !== null,
+    can_finalize: canFinalizeSeed(seed),
   }
 }
 
@@ -167,42 +191,92 @@ async function installApiMocks(page: Page, seed: Seed): Promise<void> {
   await page.route(`**/api/v1/matches/${seed.id}`, (route) =>
     route.fulfill(json(projectMatchDetails(seed))),
   )
+
+  // Per-game scratchpad endpoints (create/update/delete), addressed by game
+  // number. No status / side-wins side effects — only the scratchpad rows
+  // change.
   await page.route(
     new RegExp(
-      `/api/v1/matches/${seed.id}/games/[^/]+/scores(/[^/]+)?$`,
+      `/api/v1/matches/${seed.id}/games/(\\d+)/scores(?:/new)?$`,
     ),
     async (route) => {
+      const method = route.request().method()
       const url = new URL(route.request().url())
       const parts = url.pathname.split('/')
-      // .../matches/{id}/games/{gameId}/scores[/{scoreId}]
       const gamesIdx = parts.indexOf('games')
-      const gameId = parts[gamesIdx + 1]
-      const scoreId =
-        parts[gamesIdx + 3] === 'scores' && parts[gamesIdx + 4]
-          ? parts[gamesIdx + 4]
-          : null
+      const gameNumber = Number(parts[gamesIdx + 1])
+      const isCreate = parts[parts.length - 1] === 'new'
+
+      const upsertGame = () => {
+        let game = seed.games.find((g) => g.game_number === gameNumber)
+        if (!game) {
+          game = {
+            id: `g-${seed.id}-${gameNumber}`,
+            game_number: gameNumber,
+            score: null,
+          }
+          seed.games.push(game)
+        }
+        return game
+      }
+
+      if (method === 'DELETE') {
+        const game = seed.games.find((g) => g.game_number === gameNumber)
+        if (!game || game.score === null) {
+          return route.fulfill(json({ detail: 'Score not found.' }, 404))
+        }
+        game.score = null
+        return route.fulfill(json(projectMatchDetails(seed)))
+      }
+
       const body = JSON.parse(route.request().postData() ?? '{}') as {
         side_1_points: number
         side_2_points: number
       }
-      const game = seed.games.find((g) => g.id === gameId)
-      if (!game) {
-        return route.fulfill(json({ detail: 'Game not found.' }, 404))
+
+      if (method === 'POST' && isCreate) {
+        if (gameNumber > seed.best_of) {
+          return route.fulfill(
+            json(
+              {
+                detail: `This match is best of ${seed.best_of}; game ${gameNumber} can't exist.`,
+              },
+              422,
+            ),
+          )
+        }
+        const game = upsertGame()
+        if (game.score !== null) {
+          return route.fulfill(
+            json({ detail: 'This game has already been scored.' }, 409),
+          )
+        }
+        const message = validateScore(body.side_1_points, body.side_2_points)
+        if (message) return route.fulfill(json({ detail: message }, 422))
+        game.score = {
+          id: `s-${seed.id}-${gameNumber}`,
+          side_1_points: body.side_1_points,
+          side_2_points: body.side_2_points,
+        }
+        return route.fulfill(json(projectMatchDetails(seed), 201))
       }
-      if (scoreId === null && game.score !== null) {
-        return route.fulfill(
-          json({ detail: 'This game has already been scored.' }, 409),
-        )
+
+      if (method === 'PUT') {
+        const game = seed.games.find((g) => g.game_number === gameNumber)
+        if (!game || game.score === null) {
+          return route.fulfill(json({ detail: 'Score not found.' }, 404))
+        }
+        const message = validateScore(body.side_1_points, body.side_2_points)
+        if (message) return route.fulfill(json({ detail: message }, 422))
+        game.score = {
+          id: game.score.id,
+          side_1_points: body.side_1_points,
+          side_2_points: body.side_2_points,
+        }
+        return route.fulfill(json(projectMatchDetails(seed)))
       }
-      const message = validateScore(body.side_1_points, body.side_2_points)
-      if (message) return route.fulfill(json({ detail: message }, 422))
-      game.score = {
-        id: scoreId ?? `s-${seed.id}-${game.game_number}`,
-        side_1_points: body.side_1_points,
-        side_2_points: body.side_2_points,
-      }
-      reconcile(seed)
-      return route.fulfill(json(projectMatchDetails(seed)))
+
+      return route.fulfill(json({ detail: 'Method not allowed.' }, 405))
     },
   )
 }
@@ -241,12 +315,9 @@ test.describe('Score entry', () => {
     await scoreEntry.enterScores('11', '7')
     await scoreEntry.saveButton.click()
 
-    // The reconcile step appends a new trailing game whose id is derived
-    // from `${seed.id}-${gameNumber}` — same scheme the API/MSW use.
+    // After saving game 3, the next un-scored slot is game 4 (best-of-5).
     await expect(page).toHaveURL(
-      new RegExp(
-        `/matches/${SEED.matchId}/games/g-${SEED.matchId}-4/scores/new$`,
-      ),
+      new RegExp(`/matches/${SEED.matchId}/games/4/scores/new$`),
     )
     await expect(scoreEntry.heading).toHaveText('Enter game 4 score.')
   })
@@ -271,9 +342,7 @@ test.describe('Score entry', () => {
     await scoreEntry.cell(1).click()
 
     await expect(page).toHaveURL(
-      new RegExp(
-        `/matches/${SEED.matchId}/games/${SEED.game1Id}/scores/${SEED.score1Id}/edit$`,
-      ),
+      new RegExp(`/matches/${SEED.matchId}/games/1/scores/edit$`),
     )
     await expect(scoreEntry.heading).toHaveText('Edit game 1 score.')
     await expect(scoreEntry.meInput).toHaveValue('11')

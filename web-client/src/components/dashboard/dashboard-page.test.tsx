@@ -75,7 +75,7 @@ describe('DashboardPage', () => {
             score_banners: [
               dashboardScoreBanner({
                 match_id: 'm-banner',
-                current_game_id: 'g-banner-1',
+                current_game_number: 1,
                 opponent_username: 'nguyen.t',
               }),
             ],
@@ -226,7 +226,7 @@ describe('DashboardPage', () => {
             score_banners: [
               dashboardScoreBanner({
                 match_id: 'm-banner',
-                current_game_id: 'g-banner-1',
+                current_game_number: 1,
                 opponent_username: 'nguyen.t',
               }),
             ],
@@ -239,7 +239,7 @@ describe('DashboardPage', () => {
     const link = await screen.findByRole('link', { name: /enter final score/i })
     expect(link).toHaveAttribute(
       'href',
-      '/matches/m-banner/games/g-banner-1/scores/new',
+      '/matches/m-banner/games/1/scores/new',
     )
   })
 
@@ -251,12 +251,12 @@ describe('DashboardPage', () => {
             score_banners: [
               dashboardScoreBanner({
                 match_id: 'm-primary',
-                current_game_id: 'g-primary',
+                current_game_number: 1,
                 opponent_username: 'nguyen.t',
               }),
               dashboardScoreBanner({
                 match_id: 'm-secondary',
-                current_game_id: 'g-secondary',
+                current_game_number: 1,
                 opponent_username: 'holm.s',
               }),
             ],
@@ -274,7 +274,7 @@ describe('DashboardPage', () => {
     expect(compact).toHaveTextContent(/also pending/i)
     expect(within(compact).getByRole('link', { name: /enter score/i })).toHaveAttribute(
       'href',
-      '/matches/m-secondary/games/g-secondary/scores/new',
+      '/matches/m-secondary/games/1/scores/new',
     )
     expect(
       screen.queryByTestId('dashboard-score-banner-more'),

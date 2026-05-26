@@ -2,6 +2,7 @@ import { delay, http, HttpResponse } from 'msw'
 import type { components } from '@/api/schema'
 import { healthCheck, player, sessionResponse } from '@/test/factories'
 import {
+  finalizeSeed,
   findMatch,
   mockMatches,
   newMatchSeed,
@@ -11,7 +12,6 @@ import {
   projectRating,
   projectRecentResult,
   projectScoreBanner,
-  reconcile,
   statusCountsOf,
   validateScore,
   type SeedMatch,
@@ -285,45 +285,21 @@ const RBAC_PATHS = [
 
 type MatchCreateBody = components['schemas']['MatchCreate']
 type MatchScoreBody = components['schemas']['MatchGameScoreWrite']
+type MatchResultsBody = components['schemas']['MatchResultsWrite']
 
 function detail(message: string, status = 422) {
   return HttpResponse.json({ detail: message }, { status })
 }
 
-/** Apply a score write to an existing game, recompute the seed, and return
- * the projected MatchDetails. Validates against the same TT rules the API
- * enforces so the FE inline-error tests see the same messages. */
-function applyScore(
-  seed: SeedMatch,
-  gameId: string,
-  body: MatchScoreBody,
-  options: { scoreId?: string } = {},
-): Response {
-  // A no-opponent match is scorable against its player-less sentinel side
-  // (mirrors the API), so there's no opponent gate here.
-  if (seed.status === 'disputed' || seed.status === 'voided') {
+function enforceScorable(seed: SeedMatch): Response | null {
+  if (
+    seed.status === 'completed' ||
+    seed.status === 'disputed' ||
+    seed.status === 'voided'
+  ) {
     return detail('This match is no longer scorable.', 409)
   }
-  const game = seed.games.find((g) => g.id === gameId)
-  if (!game) return detail('Game not found.', 404)
-  if (options.scoreId !== undefined) {
-    if (game.score === null || game.score.id !== options.scoreId) {
-      return detail('Score not found.', 404)
-    }
-  } else if (game.score !== null) {
-    return detail('This game has already been scored.', 409)
-  }
-
-  const message = validateScore(body.side_1_points, body.side_2_points)
-  if (message) return detail(message, 422)
-
-  game.score = {
-    id: options.scoreId ?? `s-${seed.id}-${game.game_number}-${Date.now().toString(36)}`,
-    side_1_points: body.side_1_points,
-    side_2_points: body.side_2_points,
-  }
-  reconcile(seed)
-  return HttpResponse.json(projectMatchDetails(seed))
+  return null
 }
 
 function notNull<T>(value: T | null): value is T {
@@ -631,27 +607,107 @@ export const handlers = [
     return HttpResponse.json(projectMatchDetails(seed))
   }),
 
+  // Per-game scratchpad endpoints: write/edit/clear a single game's score.
+  // These never change match.status or side wins — finalization lives in
+  // POST .../results below.
+
   http.post(
-    '*/v1/matches/:matchId/games/:gameId/scores',
+    '*/v1/matches/:matchId/games/:gameNumber/scores/new',
     async ({ params, request }) => {
       await delay(250)
       const seed = findMatch(String(params.matchId))
       if (!seed) return detail('Match not found.', 404)
+      const gateError = enforceScorable(seed)
+      if (gateError) return gateError
+      const gameNumber = Number(params.gameNumber)
+      if (!Number.isInteger(gameNumber) || gameNumber < 1) {
+        return detail('Invalid game_number.', 422)
+      }
+      if (gameNumber > seed.best_of) {
+        return detail(
+          `This match is best of ${seed.best_of}; game ${gameNumber} can't exist.`,
+          422,
+        )
+      }
       const body = (await readJson(request)) as MatchScoreBody
-      return applyScore(seed, String(params.gameId), body)
+      const message = validateScore(body.side_1_points, body.side_2_points)
+      if (message) return detail(message, 422)
+
+      let game = seed.games.find((g) => g.game_number === gameNumber)
+      if (!game) {
+        game = {
+          id: `g-${seed.id}-${gameNumber}`,
+          game_number: gameNumber,
+          score: null,
+        }
+        seed.games.push(game)
+      } else if (game.score !== null) {
+        return detail('This game has already been scored.', 409)
+      }
+      game.score = {
+        id: `s-${seed.id}-${gameNumber}-${Date.now().toString(36)}`,
+        side_1_points: body.side_1_points,
+        side_2_points: body.side_2_points,
+      }
+      return HttpResponse.json(projectMatchDetails(seed), { status: 201 })
     },
   ),
 
   http.put(
-    '*/v1/matches/:matchId/games/:gameId/scores/:scoreId',
+    '*/v1/matches/:matchId/games/:gameNumber/scores',
     async ({ params, request }) => {
       await delay(250)
       const seed = findMatch(String(params.matchId))
       if (!seed) return detail('Match not found.', 404)
+      const gateError = enforceScorable(seed)
+      if (gateError) return gateError
+      const gameNumber = Number(params.gameNumber)
+      const game = seed.games.find((g) => g.game_number === gameNumber)
+      if (!game || game.score === null) {
+        return detail('Score not found.', 404)
+      }
       const body = (await readJson(request)) as MatchScoreBody
-      return applyScore(seed, String(params.gameId), body, {
-        scoreId: String(params.scoreId),
-      })
+      const message = validateScore(body.side_1_points, body.side_2_points)
+      if (message) return detail(message, 422)
+      game.score = {
+        id: game.score.id,
+        side_1_points: body.side_1_points,
+        side_2_points: body.side_2_points,
+      }
+      return HttpResponse.json(projectMatchDetails(seed))
+    },
+  ),
+
+  http.delete(
+    '*/v1/matches/:matchId/games/:gameNumber/scores',
+    async ({ params }) => {
+      await delay(250)
+      const seed = findMatch(String(params.matchId))
+      if (!seed) return detail('Match not found.', 404)
+      const gateError = enforceScorable(seed)
+      if (gateError) return gateError
+      const gameNumber = Number(params.gameNumber)
+      const game = seed.games.find((g) => g.game_number === gameNumber)
+      if (!game || game.score === null) {
+        return detail('Score not found.', 404)
+      }
+      game.score = null
+      return HttpResponse.json(projectMatchDetails(seed))
+    },
+  ),
+
+  http.post(
+    '*/v1/matches/:matchId/results',
+    async ({ params, request }) => {
+      await delay(250)
+      const seed = findMatch(String(params.matchId))
+      if (!seed) return detail('Match not found.', 404)
+      const gateError = enforceScorable(seed)
+      if (gateError) return gateError
+      const body = (await readJson(request)) as MatchResultsBody
+      const message = finalizeSeed(seed, body.games)
+      if (message) return detail(message, 422)
+      return HttpResponse.json(projectMatchDetails(seed), { status: 201 })
     },
   ),
 

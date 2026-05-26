@@ -12,7 +12,6 @@ type RbacUser = components['schemas']['RbacUserRead']
 type Player = components['schemas']['PlayerRead']
 type MatchDetails = components['schemas']['MatchDetails']
 type MatchDetailsSide = components['schemas']['MatchDetailsSide']
-type MatchDetailsGame = components['schemas']['MatchDetailsGame']
 type MatchListRow = components['schemas']['MatchListRow']
 type MatchListResponse = components['schemas']['MatchListResponse']
 type MatchStatus = components['schemas']['MatchStatus']
@@ -187,11 +186,6 @@ export function matchDetails(
   const { mySide, opponentSide } = defaultSides(
     faker.internet.username().toLowerCase(),
   )
-  const firstGame: MatchDetailsGame = {
-    id: nextId('g'),
-    game_number: 1,
-    score: null,
-  }
   return {
     id,
     status: 'in_progress',
@@ -203,9 +197,12 @@ export function matchDetails(
     affects_rating: false,
     created_at: ISO,
     sides: [mySide, opponentSide],
-    games: [firstGame],
-    current_game: { id: firstGame.id, game_number: 1 },
+    // Games are lazily inserted by the score-write endpoints; a fresh match
+    // has no game rows yet, but `current_game` still points at the next slot.
+    games: [],
+    current_game: { game_number: 1 },
     can_score: true,
+    can_finalize: false,
     recent_form: [mySide, opponentSide]
       .filter((s) => s.players.length > 0)
       .map((s) => ({
@@ -247,7 +244,7 @@ export function matchListRow(
     sides: [mySide, opponentSide],
     best_of: 5,
     created_at: ISO,
-    current_game_id: nextId('g'),
+    current_game_number: 1,
     can_score: true,
     ...rest,
   }
@@ -320,7 +317,7 @@ export function dashboardScoreBanner(
   return {
     match_id: nextId('m'),
     opponent_username: faker.internet.username().toLowerCase(),
-    current_game_id: nextId('g'),
+    current_game_number: 1,
     ...overrides,
   }
 }

@@ -17,3 +17,48 @@ export function illegalScoreReason(a: number, b: number): string | null {
   }
   return null
 }
+
+export type GamePoints = {
+  game_number: number
+  side_1_points: number
+  side_2_points: number
+}
+
+// Mirrors the server-side finalize-payload cross-game validator in
+// api/app/matches.py (_validate_finalize_games). Returns the decided side
+// number (1 or 2) when the given games form a complete, validly-ordered,
+// decided match for the given best_of — and null otherwise. Used by the
+// scoring page to decide whether the submit button should save-this-game or
+// finalize-the-match.
+export function decidedSide(
+  games: GamePoints[],
+  bestOf: number,
+): 1 | 2 | null {
+  if (games.length === 0) return null
+
+  const numbers = games.map((g) => g.game_number).sort((a, b) => a - b)
+  // No duplicates / gaps / numbers past best_of.
+  if (numbers[numbers.length - 1] > bestOf) return null
+  for (let i = 0; i < numbers.length; i += 1) {
+    if (numbers[i] !== i + 1) return null
+  }
+
+  const target = Math.ceil(bestOf / 2)
+  const ordered = [...games].sort((a, b) => a.game_number - b.game_number)
+  const wins: Record<1 | 2, number> = { 1: 0, 2: 0 }
+  let decidedAt: number | null = null
+  let decidedBy: 1 | 2 | null = null
+  for (const g of ordered) {
+    if (illegalScoreReason(g.side_1_points, g.side_2_points)) return null
+    const winner: 1 | 2 = g.side_1_points > g.side_2_points ? 1 : 2
+    wins[winner] += 1
+    if (decidedBy === null && wins[winner] >= target) {
+      decidedBy = winner
+      decidedAt = g.game_number
+    }
+  }
+  if (decidedBy === null) return null
+  // No scored games past the decider.
+  if (decidedAt !== ordered[ordered.length - 1].game_number) return null
+  return decidedBy
+}
