@@ -1632,6 +1632,36 @@ async def test_confirmation_409_after_already_finalized(
         assert again.status_code == 409
 
 
+async def test_signature_unique_violation_returns_409_not_500(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """The ``_enforce_*`` predicates catch a same-user double-sign before
+    the insert, but a racing in-flight transaction can still slip past
+    them and trip ``uq_match_signatures_match_id_user_id`` at commit. Map
+    that to a 409 instead of a 500 so the user sees a coherent error on a
+    rapid double-click / retry / browser-back refire.
+
+    Simulated here by stuffing a pre-existing signature into the DB
+    *after* the in-process handler's predicate read; commit then fails on
+    the unique constraint and the helper should translate to 409."""
+    from app.models import MatchSignature
+
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "race-opp") as (opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=3)
+        await _post_results(api_client, match["id"])
+
+        # Race surrogate: insert a duplicate opponent signature directly so
+        # the next /confirmation appends a second MatchSignature(opp.id)
+        # and 409s on the unique constraint at commit.
+        db_session.add(MatchSignature(match_id=uuid.UUID(match["id"]), user_id=opp.id))
+        await db_session.commit()
+
+        response = await opp_client.post(f"/v1/matches/{match['id']}/confirmation")
+        assert response.status_code == 409
+        assert "already" in response.json()["detail"].lower()
+
+
 async def test_dispute_then_repost_finalizes_with_fresh_signatures(
     api_client: AsyncClient, db_session: AsyncSession
 ):

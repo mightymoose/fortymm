@@ -18,6 +18,7 @@ from fastapi import (
 )
 from pyrate_limiter import Duration, Rate
 from sqlalchemy import Select, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased, selectinload
 from sqlalchemy.sql.base import ExecutableOption
@@ -712,6 +713,26 @@ def _enforce_confirmable(match: Match, user_id: uuid.UUID) -> None:
         raise HTTPException(status_code=409, detail="You've already signed this match.")
 
 
+async def _add_signature_or_409(
+    db: AsyncSession, match: Match, user_id: uuid.UUID, detail: str
+) -> None:
+    """Append a ``MatchSignature(user_id)`` to ``match`` and flush it
+    immediately. Maps the ``uq_match_signatures_match_id_user_id`` violation
+    (same user racing themselves: rapid double-click, retry, browser
+    back-button refire) to a clean 409 instead of bubbling a 500.
+
+    Flushing here, not at commit, is load-bearing: a later SELECT inside
+    the handler (e.g. ``_apply_rating_update``'s ``rating_history`` lookup)
+    would autoflush the pending insert mid-read and raise IntegrityError
+    from a context that doesn't have the helper's try/except around it."""
+    match.signatures.append(MatchSignature(user_id=user_id))
+    try:
+        await db.flush()
+    except IntegrityError as exc:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail=detail) from exc
+
+
 def _can_confirm(match: Match, user_id: uuid.UUID | None) -> bool:
     """Mirrors ``_enforce_confirmable`` as a boolean for the BFF surface.
     True iff a ``POST /confirmation`` or ``POST /dispute`` from ``user_id``
@@ -1383,7 +1404,9 @@ async def post_match_result(
     else:
         # Non-solo path: caller is the first signer. Status remains
         # in_progress until /confirmation lands the last needed signature.
-        match.signatures.append(MatchSignature(user_id=current_user.id))
+        await _add_signature_or_409(
+            db, match, current_user.id, "Result already posted; use /confirmation."
+        )
 
     await db.commit()
 
@@ -1409,8 +1432,9 @@ async def confirm_match_result(
     match = await _load_match_for_scoring(db, match_id, current_user.id)
     _enforce_confirmable(match, current_user.id)
 
-    match.signatures.append(MatchSignature(user_id=current_user.id))
-    # The new row is already visible in the collection (no flush needed).
+    await _add_signature_or_409(
+        db, match, current_user.id, "You've already signed this match."
+    )
     if _all_sides_signed(match):
         match.status = MatchStatus.completed
         await _apply_rating_update(db, match)
