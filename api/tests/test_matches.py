@@ -1702,6 +1702,51 @@ async def test_dispute_zeros_side_score_to_match_won_reset(
         assert [sides_by_number[n].score for n in (1, 2)] == [0, 0]
 
 
+async def test_awaiting_confirmation_response_keeps_won_and_scores_public(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """Locks the "unratified result is public" contract for both the authed
+    detail endpoint AND the anonymous public read path. From the moment
+    ``POST /results`` lands, ``side.won`` and ``games[].score`` are visible;
+    confirmation only ratifies the result for ratings/finality. The
+    awaiting state is conveyed by ``status_label="Awaiting confirmation"``,
+    NOT by hiding the outcome."""
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "shape-opp") as (_opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=3)
+        await _post_results(api_client, match["id"])
+
+        # Authed read (poster's perspective).
+        authed = (await api_client.get(f"/v1/matches/{match['id']}")).json()
+        assert authed["status"] == "in_progress"
+        assert authed["status_label"] == "Awaiting confirmation"
+        sides = sorted(authed["sides"], key=lambda s: s["side_number"])
+        assert [s["won"] for s in sides] == [True, False]
+        assert [s["games_won"] for s in sides] == [2, 0]
+        # Per-game scores stay visible — the opponent (and any third party)
+        # needs to see what's being attested to.
+        for g in sorted(authed["games"], key=lambda g: g["game_number"]):
+            assert g["score"] is not None
+            assert g["score"]["side_1_points"] > 0
+        assert len(authed["signatures"]) == 1
+
+        # Anonymous read (public share route via the same endpoint).
+        async with make_client() as anon:
+            anon_view = (await anon.get(f"/v1/matches/{match['id']}")).json()
+        assert anon_view["status"] == "in_progress"
+        assert anon_view["status_label"] == "Awaiting confirmation"
+        anon_sides = sorted(anon_view["sides"], key=lambda s: s["side_number"])
+        assert [s["won"] for s in anon_sides] == [True, False]
+        for g in sorted(anon_view["games"], key=lambda g: g["game_number"]):
+            assert g["score"] is not None
+        # Anonymous viewers see signatures (just user_id + signed_at — no PII).
+        assert len(anon_view["signatures"]) == 1
+        # No write affordances for the spectator.
+        assert anon_view["can_score"] is False
+        assert anon_view["can_finalize"] is False
+        assert anon_view["can_confirm"] is False
+
+
 async def test_list_status_label_reflects_awaiting_confirmation(
     api_client: AsyncClient, db_session: AsyncSession
 ):
