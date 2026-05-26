@@ -448,7 +448,10 @@ function ScoreBanner({ banner }: { banner: DashboardScoreBanner }) {
   const accent = C.ball500
   const opponent = banner.opponent_username
   const headline = opponent ? `vs ${opponent}` : NO_OPPONENT_LABEL
-  const scoringRoute = scoringNewRoute(banner.match_id, banner.current_game_id)
+  const scoringRoute = scoringNewRoute(
+    banner.match_id,
+    banner.current_game_number,
+  )
   return (
     <div
       data-testid="dashboard-score-banner"
@@ -594,7 +597,10 @@ function ScoreBanner({ banner }: { banner: DashboardScoreBanner }) {
 function CompactScoreBanner({ banner }: { banner: DashboardScoreBanner }) {
   const opponent = banner.opponent_username
   const headline = opponent ? `vs ${opponent}` : NO_OPPONENT_LABEL
-  const scoringRoute = scoringNewRoute(banner.match_id, banner.current_game_id)
+  const scoringRoute = scoringNewRoute(
+    banner.match_id,
+    banner.current_game_number,
+  )
   return (
     <div
       data-testid="dashboard-score-banner-compact"

@@ -1,10 +1,9 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { ScoreEntry } from '@/components/matches/score-entry'
-import { useCreateScore } from '@/api/matches'
 import { pageTitle } from '@/lib/page-title'
 
 export const Route = createFileRoute(
-  '/matches/$matchId/games/$gameId/scores/new',
+  '/matches/$matchId/games/$gameNumber/scores/new',
 )({
   head: () => ({
     meta: [{ title: pageTitle('Enter score') }],
@@ -13,14 +12,12 @@ export const Route = createFileRoute(
 })
 
 function ScoreCreateRoute() {
-  const { matchId, gameId } = Route.useParams()
-  const mutation = useCreateScore(matchId, gameId)
+  const { matchId, gameNumber } = Route.useParams()
   return (
     <ScoreEntry
       matchId={matchId}
-      gameId={gameId}
+      gameNumber={Number(gameNumber)}
       mode={{ kind: 'create' }}
-      mutation={mutation}
     />
   )
 }

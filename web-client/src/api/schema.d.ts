@@ -354,7 +354,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/matches/{match_id}/games/{game_id}/scores": {
+    "/v1/matches/{match_id}/games/{game_number}/scores/new": {
         parameters: {
             query?: never;
             header?: never;
@@ -364,14 +364,14 @@ export interface paths {
         get?: never;
         put?: never;
         /** Create Game Score */
-        post: operations["create_game_score_v1_matches__match_id__games__game_id__scores_post"];
+        post: operations["create_game_score_v1_matches__match_id__games__game_number__scores_new_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/v1/matches/{match_id}/games/{game_id}/scores/{score_id}": {
+    "/v1/matches/{match_id}/games/{game_number}/scores": {
         parameters: {
             query?: never;
             header?: never;
@@ -380,8 +380,32 @@ export interface paths {
         };
         get?: never;
         /** Update Game Score */
-        put: operations["update_game_score_v1_matches__match_id__games__game_id__scores__score_id__put"];
+        put: operations["update_game_score_v1_matches__match_id__games__game_number__scores_put"];
         post?: never;
+        /** Delete Game Score */
+        delete: operations["delete_game_score_v1_matches__match_id__games__game_number__scores_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/matches/{match_id}/results": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Finalize Match
+         * @description Take the request body as canon. Any previously-saved per-game scores
+         *     on this match are discarded; the payload's games (validated as a complete,
+         *     decided match) become the match's games + scores. Then we mark completed
+         *     and apply the rating update — exactly once.
+         */
+        post: operations["finalize_match_v1_matches__match_id__results_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -691,11 +715,8 @@ export interface components {
             match_id: string;
             /** Opponent Username */
             opponent_username: string | null;
-            /**
-             * Current Game Id
-             * Format: uuid
-             */
-            current_game_id: string;
+            /** Current Game Number */
+            current_game_number: number;
         };
         /** DashboardStreak */
         DashboardStreak: {
@@ -790,17 +811,14 @@ export interface components {
             current_game: components["schemas"]["MatchDetailsCurrentGame"] | null;
             /** Can Score */
             can_score: boolean;
+            /** Can Finalize */
+            can_finalize: boolean;
             /** Recent Form */
             recent_form?: components["schemas"]["MatchDetailsPlayerForm"][];
             head_to_head?: components["schemas"]["MatchDetailsH2H"] | null;
         };
         /** MatchDetailsCurrentGame */
         MatchDetailsCurrentGame: {
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
             /** Game Number */
             game_number: number;
         };
@@ -1005,10 +1023,34 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
-            /** Current Game Id */
-            current_game_id: string | null;
+            /** Current Game Number */
+            current_game_number: number | null;
             /** Can Score */
             can_score: boolean;
+        };
+        /**
+         * MatchResultsGameWrite
+         * @description One game inside a finalize-the-match payload. Per-game point legality
+         *     is checked here; cross-game checks (contiguous numbering, decided result,
+         *     no scores past the decider) live in the handler against the full list.
+         */
+        MatchResultsGameWrite: {
+            /** Game Number */
+            game_number: number;
+            /** Side 1 Points */
+            side_1_points: number;
+            /** Side 2 Points */
+            side_2_points: number;
+        };
+        /**
+         * MatchResultsWrite
+         * @description Request body for ``POST /v1/matches/{match_id}/results``. The list is
+         *     canon: the handler deletes every existing game + score on the match and
+         *     re-inserts these rows. No merge.
+         */
+        MatchResultsWrite: {
+            /** Games */
+            games: components["schemas"]["MatchResultsGameWrite"][];
         };
         /**
          * MatchStatus
@@ -2276,13 +2318,13 @@ export interface operations {
             };
         };
     };
-    create_game_score_v1_matches__match_id__games__game_id__scores_post: {
+    create_game_score_v1_matches__match_id__games__game_number__scores_new_post: {
         parameters: {
             query?: never;
             header?: never;
             path: {
                 match_id: string;
-                game_id: string;
+                game_number: number;
             };
             cookie?: {
                 session?: string | null;
@@ -2314,14 +2356,13 @@ export interface operations {
             };
         };
     };
-    update_game_score_v1_matches__match_id__games__game_id__scores__score_id__put: {
+    update_game_score_v1_matches__match_id__games__game_number__scores_put: {
         parameters: {
             query?: never;
             header?: never;
             path: {
                 match_id: string;
-                game_id: string;
-                score_id: string;
+                game_number: number;
             };
             cookie?: {
                 session?: string | null;
@@ -2335,6 +2376,77 @@ export interface operations {
         responses: {
             /** @description Successful Response */
             200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MatchDetails"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_game_score_v1_matches__match_id__games__game_number__scores_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                match_id: string;
+                game_number: number;
+            };
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MatchDetails"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    finalize_match_v1_matches__match_id__results_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                match_id: string;
+            };
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MatchResultsWrite"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
                 headers: {
                     [name: string]: unknown;
                 };

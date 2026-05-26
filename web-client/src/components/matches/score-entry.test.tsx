@@ -12,7 +12,6 @@ import { http, HttpResponse } from 'msw'
 import { describe, expect, it } from 'vitest'
 import { server } from '@/mocks/server'
 import { matchDetails } from '@/test/factories'
-import { useCreateScore, useUpdateScore } from '@/api/matches'
 import type { components } from '@/api/schema'
 import { ScoreEntry } from './score-entry'
 
@@ -67,8 +66,8 @@ function score(
 }
 
 type RouteSpec =
-  | { kind: 'create'; matchId: string; gameId: string }
-  | { kind: 'edit'; matchId: string; gameId: string; scoreId: string }
+  | { kind: 'create'; matchId: string; gameNumber: number }
+  | { kind: 'edit'; matchId: string; gameNumber: number }
 
 function renderScoreEntry(spec: RouteSpec, options: { path?: string } = {}) {
   const queryClient = new QueryClient({
@@ -79,48 +78,35 @@ function renderScoreEntry(spec: RouteSpec, options: { path?: string } = {}) {
     getParentRoute: () => rootRoute,
     path: '/entry',
     component: function Entry() {
-      // Mount the mutation hook inside the route component so it lives in the
-      // same QueryClient as the cached match data.
-      if (spec.kind === 'create') {
-        // eslint-disable-next-line react-hooks/rules-of-hooks
-        const mutation = useCreateScore(spec.matchId, spec.gameId)
-        return (
-          <ScoreEntry
-            matchId={spec.matchId}
-            gameId={spec.gameId}
-            mode={{ kind: 'create' }}
-            mutation={mutation}
-          />
-        )
-      }
-      // eslint-disable-next-line react-hooks/rules-of-hooks
-      const mutation = useUpdateScore(spec.matchId, spec.gameId, spec.scoreId)
       return (
         <ScoreEntry
           matchId={spec.matchId}
-          gameId={spec.gameId}
-          mode={{ kind: 'edit', scoreId: spec.scoreId }}
-          mutation={mutation}
+          gameNumber={spec.gameNumber}
+          mode={{ kind: spec.kind }}
         />
       )
     },
   })
   const scoringNew = createRoute({
     getParentRoute: () => rootRoute,
-    path: '/matches/$matchId/games/$gameId/scores/new',
+    path: '/matches/$matchId/games/$gameNumber/scores/new',
     component: function Stub() {
       const params = scoringNew.useParams()
-      return <div>scoring-new {params.matchId} {params.gameId}</div>
+      return (
+        <div>
+          scoring-new {params.matchId} {params.gameNumber}
+        </div>
+      )
     },
   })
   const scoringEdit = createRoute({
     getParentRoute: () => rootRoute,
-    path: '/matches/$matchId/games/$gameId/scores/$scoreId/edit',
+    path: '/matches/$matchId/games/$gameNumber/scores/edit',
     component: function Stub() {
       const params = scoringEdit.useParams()
       return (
         <div>
-          scoring-edit {params.matchId} {params.gameId} {params.scoreId}
+          scoring-edit {params.matchId} {params.gameNumber}
         </div>
       )
     },
@@ -129,9 +115,8 @@ function renderScoreEntry(spec: RouteSpec, options: { path?: string } = {}) {
     getParentRoute: () => rootRoute,
     path: '/matches/$matchId',
     component: function Stub() {
-      // Hard-code the rendered match id — the route's inferred params type
-      // narrows to `never` once sibling routes share the `$matchId` prefix,
-      // and the test only needs the literal id to assert on.
+      // Hard-code the rendered match id — sibling routes' `$matchId` prefix
+      // narrows params to `never`, and the test only needs the literal id.
       return <div>match-page {spec.matchId}</div>
     },
   })
@@ -152,7 +137,7 @@ function renderScoreEntry(spec: RouteSpec, options: { path?: string } = {}) {
 }
 
 function inProgressMatch(overrides: Parameters<typeof matchDetails>[0] = {}) {
-  // 3 games: 1-2 scored, 3 current.
+  // Best-of-5, 1-1 on the board, game 3 next up.
   return matchDetails({
     id: 'm-1',
     status: 'in_progress',
@@ -164,104 +149,64 @@ function inProgressMatch(overrides: Parameters<typeof matchDetails>[0] = {}) {
     games: [
       { id: 'g-1', game_number: 1, score: score('s-1', 11, 8) },
       { id: 'g-2', game_number: 2, score: score('s-2', 9, 11) },
-      { id: 'g-3', game_number: 3, score: null },
     ],
-    current_game: { id: 'g-3', game_number: 3 },
+    current_game: { game_number: 3 },
     can_score: true,
+    can_finalize: false,
     ...overrides,
   })
 }
 
 describe('ScoreEntry — create', () => {
-  it('POSTs the score and navigates to the new current_game on success', async () => {
+  it('POSTs the score (fire-and-forget) and lands on the next un-scored game', async () => {
     const user = userEvent.setup()
     let captured: unknown = null
     server.use(
       http.get('*/v1/matches/m-1', () => HttpResponse.json(inProgressMatch())),
       http.post(
-        '*/v1/matches/m-1/games/g-3/scores',
+        '*/v1/matches/m-1/games/3/scores/new',
         async ({ request }) => {
           captured = await request.json()
-          // After scoring game 3, an unscored game 4 is reconciled in.
-          const next = inProgressMatch({
-            sides: participantSides({ meWins: 2, oppWins: 1 }),
-            games: [
-              { id: 'g-1', game_number: 1, score: score('s-1', 11, 8) },
-              { id: 'g-2', game_number: 2, score: score('s-2', 9, 11) },
-              { id: 'g-3', game_number: 3, score: score('s-3', 11, 4) },
-              { id: 'g-4', game_number: 4, score: null },
-            ],
-            current_game: { id: 'g-4', game_number: 4 },
-          })
-          return HttpResponse.json(next)
+          return HttpResponse.json(
+            inProgressMatch({
+              sides: participantSides({ meWins: 2, oppWins: 1 }),
+              games: [
+                { id: 'g-1', game_number: 1, score: score('s-1', 11, 8) },
+                { id: 'g-2', game_number: 2, score: score('s-2', 9, 11) },
+                { id: 'g-3', game_number: 3, score: score('s-3', 11, 4) },
+              ],
+              current_game: { game_number: 4 },
+            }),
+          )
         },
       ),
     )
 
-    renderScoreEntry({ kind: 'create', matchId: 'm-1', gameId: 'g-3' })
+    renderScoreEntry({ kind: 'create', matchId: 'm-1', gameNumber: 3 })
 
     await screen.findByRole('heading', { name: /enter game 3 score/i })
-    await user.type(screen.getByRole('textbox', { name: 'rita.kovac score' }), '11')
-    await user.type(screen.getByRole('textbox', { name: 'nguyen.t score' }), '4')
-    await user.click(screen.getByRole('button', { name: /save/i }))
+    await user.type(
+      screen.getByRole('textbox', { name: 'rita.kovac score' }),
+      '11',
+    )
+    await user.type(
+      screen.getByRole('textbox', { name: 'nguyen.t score' }),
+      '4',
+    )
+    await user.click(screen.getByRole('button', { name: /save game & next/i }))
 
     await waitFor(() =>
-      expect(
-        screen.getByText('scoring-new m-1 g-4'),
-      ).toBeInTheDocument(),
+      expect(screen.getByText('scoring-new m-1 4')).toBeInTheDocument(),
     )
     expect(captured).toEqual({ side_1_points: 11, side_2_points: 4 })
   })
 
-  it('navigates to the match page when the deciding game closes out the match', async () => {
+  it('flips the submit button to "Finalize match" when this score would decide the match', async () => {
+    // Bo5, 2-0 on the board, entering G3. An 11-3 win clinches at 3-0, so
+    // the single submit button should POST /results (atomically saving +
+    // finalizing) instead of /scores/new.
     const user = userEvent.setup()
-    server.use(
-      http.get('*/v1/matches/m-1', () =>
-        HttpResponse.json(
-          inProgressMatch({
-            // Already 2-1 leading; this game decides it.
-            sides: participantSides({ meWins: 2, oppWins: 1 }),
-            games: [
-              { id: 'g-1', game_number: 1, score: score('s-1', 11, 4) },
-              { id: 'g-2', game_number: 2, score: score('s-2', 11, 6) },
-              { id: 'g-3', game_number: 3, score: score('s-3', 5, 11) },
-              { id: 'g-4', game_number: 4, score: null },
-            ],
-            current_game: { id: 'g-4', game_number: 4 },
-          }),
-        ),
-      ),
-      http.post('*/v1/matches/m-1/games/g-4/scores', () => {
-        const done = inProgressMatch({
-          status: 'completed',
-          status_label: 'Final',
-          sides: participantSides({ meWins: 3, oppWins: 1, meWon: true }),
-          games: [
-            { id: 'g-4', game_number: 4, score: score('s-4', 11, 7) },
-          ],
-          current_game: null,
-          can_score: false,
-        })
-        return HttpResponse.json(done)
-      }),
-    )
-
-    renderScoreEntry({ kind: 'create', matchId: 'm-1', gameId: 'g-4' })
-
-    await screen.findByRole('heading', { name: /enter game 4 score/i })
-    await user.type(screen.getByRole('textbox', { name: 'rita.kovac score' }), '11')
-    await user.type(screen.getByRole('textbox', { name: 'nguyen.t score' }), '7')
-    await user.click(screen.getByRole('button', { name: /save/i }))
-
-    await waitFor(() =>
-      expect(screen.getByText('match-page m-1')).toBeInTheDocument(),
-    )
-  })
-
-  it('flips Save copy to "finish the match" when the typed score would clinch early', async () => {
-    // Bo5, 2-0 on the board, entering G3. A 11-3 win here clinches at 3-0,
-    // so the messaging must not promise a non-existent G4. (Bug #12.)
-    const user = userEvent.setup()
+    let finalizedBody: unknown = null
     server.use(
       http.get('*/v1/matches/m-1', () =>
         HttpResponse.json(
@@ -270,48 +215,69 @@ describe('ScoreEntry — create', () => {
             games: [
               { id: 'g-1', game_number: 1, score: score('s-1', 11, 4) },
               { id: 'g-2', game_number: 2, score: score('s-2', 11, 6) },
-              { id: 'g-3', game_number: 3, score: null },
             ],
-            current_game: { id: 'g-3', game_number: 3 },
+            current_game: { game_number: 3 },
           }),
         ),
       ),
+      http.post('*/v1/matches/m-1/results', async ({ request }) => {
+        finalizedBody = await request.json()
+        return HttpResponse.json(
+          matchDetails({
+            id: 'm-1',
+            status: 'completed',
+            status_label: 'Final',
+            best_of: 5,
+            games_to_win: 3,
+            sides: participantSides({ meWins: 3, oppWins: 0, meWon: true }),
+            games: [
+              { id: 'g-1', game_number: 1, score: score('s-1', 11, 4) },
+              { id: 'g-2', game_number: 2, score: score('s-2', 11, 6) },
+              { id: 'g-3', game_number: 3, score: score('s-3', 11, 3) },
+            ],
+            current_game: null,
+            can_score: false,
+            can_finalize: false,
+          }),
+          { status: 201 },
+        )
+      }),
     )
 
-    renderScoreEntry({ kind: 'create', matchId: 'm-1', gameId: 'g-3' })
-    const meInput = await screen.findByRole('textbox', { name: 'rita.kovac score' })
+    renderScoreEntry({ kind: 'create', matchId: 'm-1', gameNumber: 3 })
+    const meInput = await screen.findByRole('textbox', {
+      name: 'rita.kovac score',
+    })
     const oppInput = screen.getByRole('textbox', { name: 'nguyen.t score' })
 
-    // Pre-typing the message is still the generic "continue to game 4" hint.
+    // Pre-typing the button is the generic save-and-continue label.
     expect(
-      screen.getByText(/save this game to continue to game 4/i),
+      screen.getByRole('button', { name: /save game & next/i }),
     ).toBeInTheDocument()
 
     await user.type(meInput, '11')
     await user.type(oppInput, '3')
 
+    // The same button morphs into "Finalize match" because saving this score
+    // would complete a decided best-of-5.
+    const finalizeBtn = screen.getByRole('button', { name: /finalize match/i })
+    expect(finalizeBtn).toBeInTheDocument()
     expect(
-      screen.getByText(/save to finish the match/i),
-    ).toBeInTheDocument()
-    expect(
-      screen.queryByText(/continue to game 4/i),
+      screen.queryByRole('button', { name: /save game & next/i }),
     ).not.toBeInTheDocument()
-    expect(
-      screen.getByRole('button', { name: /save & finish match/i }),
-    ).toBeInTheDocument()
 
-    // A non-clinching score (opponent wins G3, taking the match to 2-1)
-    // restores the "continue to game 4" hint.
-    await user.clear(meInput)
-    await user.type(meInput, '5')
-    await user.clear(oppInput)
-    await user.type(oppInput, '11')
-    expect(
-      screen.getByText(/save this game to continue to game 4/i),
-    ).toBeInTheDocument()
-    expect(
-      screen.getByRole('button', { name: /save game & next/i }),
-    ).toBeInTheDocument()
+    await user.click(finalizeBtn)
+
+    await waitFor(() =>
+      expect(screen.getByText('match-page m-1')).toBeInTheDocument(),
+    )
+    expect(finalizedBody).toEqual({
+      games: [
+        { game_number: 1, side_1_points: 11, side_2_points: 4 },
+        { game_number: 2, side_1_points: 11, side_2_points: 6 },
+        { game_number: 3, side_1_points: 11, side_2_points: 3 },
+      ],
+    })
   })
 
   it('blocks an illegal final score client-side without hitting the server', async () => {
@@ -319,26 +285,20 @@ describe('ScoreEntry — create', () => {
     let posted = 0
     server.use(
       http.get('*/v1/matches/m-1', () => HttpResponse.json(inProgressMatch())),
-      http.post('*/v1/matches/m-1/games/g-3/scores', () => {
+      http.post('*/v1/matches/m-1/games/3/scores/new', () => {
         posted += 1
-        return HttpResponse.json(
-          inProgressMatch({
-            games: [
-              { id: 'g-3', game_number: 3, score: score('s-3', 11, 9) },
-              { id: 'g-4', game_number: 4, score: null },
-            ],
-            current_game: { id: 'g-4', game_number: 4 },
-          }),
-        )
+        return HttpResponse.json(inProgressMatch(), { status: 201 })
       }),
     )
 
-    renderScoreEntry({ kind: 'create', matchId: 'm-1', gameId: 'g-3' })
-    const meInput = await screen.findByRole('textbox', { name: 'rita.kovac score' })
+    renderScoreEntry({ kind: 'create', matchId: 'm-1', gameNumber: 3 })
+    const meInput = await screen.findByRole('textbox', {
+      name: 'rita.kovac score',
+    })
     const oppInput = screen.getByRole('textbox', { name: 'nguyen.t score' })
 
-    // 11–10 is illegal (win-by-1). The button stays disabled and an inline
-    // hint explains why — no request is made.
+    // 11–10 is illegal (win-by-1). The submit button stays disabled and an
+    // inline hint explains why — no request is made.
     await user.type(meInput, '11')
     await user.type(oppInput, '10')
     const save = screen.getByRole('button', { name: /save/i })
@@ -352,196 +312,31 @@ describe('ScoreEntry — create', () => {
     await user.type(oppInput, '9')
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
     expect(save).toBeEnabled()
-
-    await user.click(save)
-    await waitFor(() =>
-      expect(screen.getByText('scoring-new m-1 g-4')).toBeInTheDocument(),
-    )
-    expect(posted).toBe(1)
-  })
-
-  it('renders a server 422 detail inline and clears it when the user edits an input', async () => {
-    const user = userEvent.setup()
-    let calls = 0
-    server.use(
-      http.get('*/v1/matches/m-1', () => HttpResponse.json(inProgressMatch())),
-      http.post('*/v1/matches/m-1/games/g-3/scores', () => {
-        calls += 1
-        if (calls === 1) {
-          // A client-legal score the server still rejects (e.g. for match
-          // state the client doesn't model) — exercises the 422 render path.
-          return HttpResponse.json(
-            { detail: 'This score was rejected by the server.' },
-            { status: 422 },
-          )
-        }
-        return HttpResponse.json(
-          inProgressMatch({
-            games: [
-              { id: 'g-3', game_number: 3, score: score('s-3', 11, 4) },
-              { id: 'g-4', game_number: 4, score: null },
-            ],
-            current_game: { id: 'g-4', game_number: 4 },
-          }),
-        )
-      }),
-    )
-
-    renderScoreEntry({ kind: 'create', matchId: 'm-1', gameId: 'g-3' })
-    const meInput = await screen.findByRole('textbox', { name: 'rita.kovac score' })
-    const oppInput = screen.getByRole('textbox', { name: 'nguyen.t score' })
-
-    await user.type(meInput, '11')
-    await user.type(oppInput, '4')
-    await user.click(screen.getByRole('button', { name: /save/i }))
-
-    const alert = await screen.findByRole('alert')
-    expect(alert).toHaveTextContent(/rejected by the server/i)
-    expect(meInput).toHaveAttribute('aria-invalid', 'true')
-    expect(oppInput).toHaveAttribute('aria-invalid', 'true')
-
-    // Editing either input clears the error and re-enables the field.
-    await user.clear(meInput)
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
-
-    await user.type(meInput, '11')
-    await user.click(screen.getByRole('button', { name: /save/i }))
-    await waitFor(() =>
-      expect(screen.getByText('scoring-new m-1 g-4')).toBeInTheDocument(),
-    )
-  })
-
-  it('locks the page when a concurrent scorer beat us to it and the server 409s (race)', async () => {
-    // The cache says the game is un-scored, but between our GET and POST
-    // another participant scored it. The cache-first "already scored" case
-    // is caught proactively by the redirect (see the next test); this test
-    // covers the post-submit race where game.score is null in the cache.
-    server.use(
-      http.get('*/v1/matches/m-1', () => HttpResponse.json(inProgressMatch())),
-      http.post('*/v1/matches/m-1/games/g-3/scores', () =>
-        HttpResponse.json(
-          { detail: 'This game has already been scored.' },
-          { status: 409 },
-        ),
-      ),
-    )
-
-    const user = userEvent.setup()
-    renderScoreEntry({ kind: 'create', matchId: 'm-1', gameId: 'g-3' })
-
-    const meInput = await screen.findByRole('textbox', { name: 'rita.kovac score' })
-    await user.type(meInput, '11')
-    await user.type(screen.getByRole('textbox', { name: 'nguyen.t score' }), '6')
-    await user.click(screen.getByRole('button', { name: /save/i }))
-
-    expect(
-      await screen.findByText(/already been scored/i),
-    ).toBeInTheDocument()
-    expect(
-      screen.getByRole('link', { name: 'Back to match' }),
-    ).toHaveAttribute('href', '/matches/m-1')
+    expect(posted).toBe(0)
   })
 
   it('redirects to the existing score\'s edit page when landing on /scores/new for an already-scored game', async () => {
-    // Simulates the browser-Back-after-save flow: the user advanced to game 3
-    // (scoring g-3), pressed Back to /games/g-1/scores/new, but g-1 already
-    // has a score on the server. Without the redirect the page would render
-    // empty inputs over a tally that already counts the win, and an enabled
-    // Save would either 409 or duplicate.
+    // Browser-Back-after-save flow: the user advanced to game 3, pressed
+    // Back to /games/1/scores/new, but game 1 already has a score. Without
+    // the redirect we'd render empty inputs over a tally that already counts
+    // the win.
     server.use(
       http.get('*/v1/matches/m-1', () => HttpResponse.json(inProgressMatch())),
     )
 
-    renderScoreEntry({ kind: 'create', matchId: 'm-1', gameId: 'g-1' })
+    renderScoreEntry({ kind: 'create', matchId: 'm-1', gameNumber: 1 })
 
     await waitFor(() =>
-      expect(screen.getByText('scoring-edit m-1 g-1 s-1')).toBeInTheDocument(),
+      expect(screen.getByText('scoring-edit m-1 1')).toBeInTheDocument(),
     )
-    // The /scores/new page must not have rendered its Save button.
     expect(
       screen.queryByRole('button', { name: /save/i }),
     ).not.toBeInTheDocument()
   })
 
-  it('disables the form and shows a back link when the match is no longer scorable (409)', async () => {
-    const user = userEvent.setup()
-    server.use(
-      http.get('*/v1/matches/m-1', () => HttpResponse.json(inProgressMatch())),
-      http.post('*/v1/matches/m-1/games/g-3/scores', () =>
-        HttpResponse.json(
-          { detail: 'This match is no longer scorable.' },
-          { status: 409 },
-        ),
-      ),
-    )
-
-    renderScoreEntry({ kind: 'create', matchId: 'm-1', gameId: 'g-3' })
-    await user.type(
-      await screen.findByRole('textbox', { name: 'rita.kovac score' }),
-      '11',
-    )
-    await user.type(screen.getByRole('textbox', { name: 'nguyen.t score' }), '6')
-    await user.click(screen.getByRole('button', { name: /save/i }))
-
-    const alert = await screen.findByText(/no longer scorable/i)
-    expect(alert).toBeInTheDocument()
-    expect(screen.getByRole('textbox', { name: 'rita.kovac score' })).toBeDisabled()
-    expect(screen.getByRole('textbox', { name: 'nguyen.t score' })).toBeDisabled()
-    // The primary "Back to match" CTA replaces the save button.
-    expect(
-      screen.getByRole('link', { name: 'Back to match' }),
-    ).toHaveAttribute('href', '/matches/m-1')
-  })
-})
-
-describe('ScoreEntry — edit', () => {
-  it('pre-populates inputs from the stored score and PUTs the new value', async () => {
-    const user = userEvent.setup()
-    let captured: unknown = null
-    server.use(
-      http.get('*/v1/matches/m-1', () => HttpResponse.json(inProgressMatch())),
-      http.put(
-        '*/v1/matches/m-1/games/g-1/scores/s-1',
-        async ({ request }) => {
-          captured = await request.json()
-          // After editing g-1, the current_game is still g-3 (per invariant).
-          return HttpResponse.json(inProgressMatch())
-        },
-      ),
-    )
-
-    renderScoreEntry({
-      kind: 'edit',
-      matchId: 'm-1',
-      gameId: 'g-1',
-      scoreId: 's-1',
-    })
-
-    const meInput = await screen.findByRole('textbox', {
-      name: 'rita.kovac score',
-    })
-    const oppInput = screen.getByRole('textbox', { name: 'nguyen.t score' })
-    await waitFor(() => expect(meInput).toHaveValue('11'))
-    expect(oppInput).toHaveValue('8')
-
-    await user.clear(meInput)
-    await user.type(meInput, '12')
-    await user.clear(oppInput)
-    await user.type(oppInput, '10')
-    await user.click(screen.getByRole('button', { name: /save/i }))
-
-    // After editing a past game, navigate to the current_game's /new — NOT
-    // to "the next-numbered game" (which would be g-2).
-    await waitFor(() =>
-      expect(screen.getByText('scoring-new m-1 g-3')).toBeInTheDocument(),
-    )
-    expect(captured).toEqual({ side_1_points: 12, side_2_points: 10 })
-  })
-
-  it('re-opens a completed match: navigates to the fresh current_game on the response', async () => {
-    const user = userEvent.setup()
-    // Mount in a "completed" match's edit page; the PUT response reflects the
-    // server having reconciled and appended a new trailing game.
+  it('redirects to the match page when the match is already finalized', async () => {
+    // Per-game endpoints 409 on completed matches — the FE bounces the user
+    // back to the read-only detail page instead of rendering scoring UI.
     server.use(
       http.get('*/v1/matches/m-1', () =>
         HttpResponse.json(
@@ -558,52 +353,151 @@ describe('ScoreEntry — edit', () => {
             ],
             current_game: null,
             can_score: false,
-          }),
-        ),
-      ),
-      http.put('*/v1/matches/m-1/games/g-2/scores/s-2', () =>
-        HttpResponse.json(
-          matchDetails({
-            id: 'm-1',
-            status: 'in_progress',
-            status_label: 'Live',
-            best_of: 3,
-            games_to_win: 2,
-            sides: participantSides({ meWins: 1, oppWins: 1 }),
-            games: [
-              { id: 'g-1', game_number: 1, score: score('s-1', 11, 4) },
-              { id: 'g-2', game_number: 2, score: score('s-2', 9, 11) },
-              { id: 'g-3', game_number: 3, score: null },
-            ],
-            current_game: { id: 'g-3', game_number: 3 },
-            can_score: true,
+            can_finalize: false,
           }),
         ),
       ),
     )
 
-    renderScoreEntry({
-      kind: 'edit',
-      matchId: 'm-1',
-      gameId: 'g-2',
-      scoreId: 's-2',
+    renderScoreEntry({ kind: 'create', matchId: 'm-1', gameNumber: 3 })
+
+    await waitFor(() =>
+      expect(screen.getByText('match-page m-1')).toBeInTheDocument(),
+    )
+    expect(
+      screen.queryByRole('button', { name: /save/i }),
+    ).not.toBeInTheDocument()
+  })
+
+  it('surfaces a server 422 inline when finalize fails validation', async () => {
+    // Per-game writes are fire-and-forget on errors. Finalize errors *do*
+    // surface inline — typically a 422 if local validation drifted out of
+    // sync with the server's.
+    const user = userEvent.setup()
+    server.use(
+      http.get('*/v1/matches/m-1', () =>
+        HttpResponse.json(
+          inProgressMatch({
+            sides: participantSides({ meWins: 2, oppWins: 0 }),
+            games: [
+              { id: 'g-1', game_number: 1, score: score('s-1', 11, 4) },
+              { id: 'g-2', game_number: 2, score: score('s-2', 11, 6) },
+            ],
+            current_game: { game_number: 3 },
+          }),
+        ),
+      ),
+      http.post('*/v1/matches/m-1/results', () =>
+        HttpResponse.json(
+          { detail: 'This payload was rejected by the server.' },
+          { status: 422 },
+        ),
+      ),
+    )
+
+    renderScoreEntry({ kind: 'create', matchId: 'm-1', gameNumber: 3 })
+    const meInput = await screen.findByRole('textbox', {
+      name: 'rita.kovac score',
     })
+    const oppInput = screen.getByRole('textbox', { name: 'nguyen.t score' })
+
+    await user.type(meInput, '11')
+    await user.type(oppInput, '3')
+    await user.click(screen.getByRole('button', { name: /finalize match/i }))
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent(/rejected by the server/i)
+    expect(meInput).toHaveAttribute('aria-invalid', 'true')
+    expect(oppInput).toHaveAttribute('aria-invalid', 'true')
+
+    // Editing either input clears the error.
+    await user.clear(meInput)
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+})
+
+describe('ScoreEntry — edit', () => {
+  it('pre-populates inputs from the stored score and PUTs the new value', async () => {
+    const user = userEvent.setup()
+    let captured: unknown = null
+    server.use(
+      http.get('*/v1/matches/m-1', () => HttpResponse.json(inProgressMatch())),
+      http.put(
+        '*/v1/matches/m-1/games/1/scores',
+        async ({ request }) => {
+          captured = await request.json()
+          return HttpResponse.json(inProgressMatch())
+        },
+      ),
+    )
+
+    renderScoreEntry({ kind: 'edit', matchId: 'm-1', gameNumber: 1 })
 
     const meInput = await screen.findByRole('textbox', {
       name: 'rita.kovac score',
     })
     const oppInput = screen.getByRole('textbox', { name: 'nguyen.t score' })
     await waitFor(() => expect(meInput).toHaveValue('11'))
-    // Flip game 2 to a legal opponent win (9–11) so the edit re-opens the match.
+    expect(oppInput).toHaveValue('8')
+
     await user.clear(meInput)
-    await user.type(meInput, '9')
+    await user.type(meInput, '12')
     await user.clear(oppInput)
-    await user.type(oppInput, '11')
-    await user.click(screen.getByRole('button', { name: /save/i }))
+    await user.type(oppInput, '10')
+    await user.click(screen.getByRole('button', { name: /save changes/i }))
+
+    // After editing a past game, navigate to the next un-scored slot — NOT
+    // to "the next-numbered game" (which would be game 2).
+    await waitFor(() =>
+      expect(screen.getByText('scoring-new m-1 3')).toBeInTheDocument(),
+    )
+    expect(captured).toEqual({ side_1_points: 12, side_2_points: 10 })
+  })
+
+  it('clears the saved score and lands back on the same game in create mode', async () => {
+    const user = userEvent.setup()
+    let deleted = false
+    server.use(
+      http.get('*/v1/matches/m-1', () => HttpResponse.json(inProgressMatch())),
+      http.delete('*/v1/matches/m-1/games/1/scores', () => {
+        deleted = true
+        return HttpResponse.json(inProgressMatch())
+      }),
+    )
+
+    renderScoreEntry({ kind: 'edit', matchId: 'm-1', gameNumber: 1 })
+
+    await screen.findByRole('textbox', { name: 'rita.kovac score' })
+    await user.click(screen.getByRole('button', { name: /clear/i }))
 
     await waitFor(() =>
-      expect(screen.getByText('scoring-new m-1 g-3')).toBeInTheDocument(),
+      expect(screen.getByText('scoring-new m-1 1')).toBeInTheDocument(),
+    )
+    expect(deleted).toBe(true)
+  })
+
+  it('redirects edit→new when the game has no saved score', async () => {
+    // Sometimes the user follows an /edit deeplink for a game whose score
+    // was cleared (or never written). The component swaps to /scores/new so
+    // the submit button targets the create endpoint.
+    server.use(
+      http.get('*/v1/matches/m-1', () =>
+        HttpResponse.json(
+          inProgressMatch({
+            games: [
+              { id: 'g-1', game_number: 1, score: score('s-1', 11, 8) },
+              { id: 'g-2', game_number: 2, score: score('s-2', 9, 11) },
+            ],
+            current_game: { game_number: 3 },
+          }),
+        ),
+      ),
+    )
+
+    renderScoreEntry({ kind: 'edit', matchId: 'm-1', gameNumber: 3 })
+
+    await waitFor(() =>
+      expect(screen.getByText('scoring-new m-1 3')).toBeInTheDocument(),
     )
   })
 })
-

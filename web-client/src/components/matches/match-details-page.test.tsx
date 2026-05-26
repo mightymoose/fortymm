@@ -31,12 +31,12 @@ function renderDetails(matchId: string) {
   // <Link>s in the page resolve at render time.
   const scoringNew = createRoute({
     getParentRoute: () => rootRoute,
-    path: '/matches/$matchId/games/$gameId/scores/new',
+    path: '/matches/$matchId/games/$gameNumber/scores/new',
     component: () => <div>scoring-new</div>,
   })
   const scoringEdit = createRoute({
     getParentRoute: () => rootRoute,
-    path: '/matches/$matchId/games/$gameId/scores/$scoreId/edit',
+    path: '/matches/$matchId/games/$gameNumber/scores/edit',
     component: () => <div>scoring-edit</div>,
   })
   const matchesList = createRoute({
@@ -125,7 +125,7 @@ describe('MatchDetailsView', () => {
       status: 'pending',
       status_label: 'Scheduled',
       games: [game1],
-      current_game: { id: 'g-1', game_number: 1 },
+      current_game: { game_number: 1 },
       can_score: true,
     })
     server.use(
@@ -137,7 +137,7 @@ describe('MatchDetailsView', () => {
     const scoreLink = await screen.findByRole('link', { name: 'Score' })
     expect(scoreLink).toHaveAttribute(
       'href',
-      '/matches/m-2/games/g-1/scores/new',
+      '/matches/m-2/games/1/scores/new',
     )
   })
 
@@ -164,7 +164,7 @@ describe('MatchDetailsView', () => {
     ).not.toBeInTheDocument()
   })
 
-  it('links each scored game cell on my row to its scores/$scoreId/edit route', async () => {
+  it('links each scored game cell on my row to its scores/edit route', async () => {
     const match = matchDetails({
       id: 'm-4',
       status: 'in_progress',
@@ -204,7 +204,7 @@ describe('MatchDetailsView', () => {
         },
         { id: 'g-2', game_number: 2, score: null },
       ],
-      current_game: { id: 'g-2', game_number: 2 },
+      current_game: { game_number: 2 },
       can_score: true,
     })
     server.use(
@@ -214,11 +214,11 @@ describe('MatchDetailsView', () => {
     renderDetails('m-4')
 
     await screen.findByRole('link', { name: 'Score' })
-    // The first-game cell on my row is a link to the edit route for s-1.
+    // The first-game cell on my row is a link to the edit route for game 1.
     const editLink = screen.getByRole('link', { name: '11' })
     expect(editLink).toHaveAttribute(
       'href',
-      '/matches/m-4/games/g-1/scores/s-1/edit',
+      '/matches/m-4/games/1/scores/edit',
     )
   })
 
@@ -284,7 +284,7 @@ describe('MatchDetailsView', () => {
         },
       ],
       games: [game1],
-      current_game: { id: game1.id, game_number: 1 },
+      current_game: { game_number: 1 },
       can_score: true,
     })
     server.use(
@@ -314,7 +314,7 @@ describe('MatchDetailsView', () => {
     // A no-opponent match is now scorable: the Score CTA is present.
     expect(
       await screen.findByRole('link', { name: 'Score' }),
-    ).toHaveAttribute('href', '/matches/m-solo/games/g-solo-1/scores/new')
+    ).toHaveAttribute('href', '/matches/m-solo/games/1/scores/new')
     // Did not bounce to the list.
     expect(screen.queryByText('matches-list')).not.toBeInTheDocument()
   })
@@ -357,7 +357,7 @@ describe('MatchDetailsView', () => {
         },
         { id: 'g-2', game_number: 2, score: null },
       ],
-      current_game: { id: 'g-2', game_number: 2 },
+      current_game: { game_number: 2 },
       // BFF returns false for non-participants regardless of game state.
       can_score: false,
     })

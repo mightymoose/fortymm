@@ -444,9 +444,9 @@ function MatchRow({
         <TimeCell iso={row.created_at} />
       </td>
       <td onClick={(e) => e.stopPropagation()}>
-        {row.current_game_id ? (
+        {row.current_game_number !== null ? (
           <Button asChild variant="default" size="sm">
-            <Link {...scoringNewRoute(row.id, row.current_game_id)}>
+            <Link {...scoringNewRoute(row.id, row.current_game_number)}>
               Score
             </Link>
           </Button>

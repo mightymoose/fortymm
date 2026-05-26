@@ -14,21 +14,21 @@ const SEED = [
     opponent: 'nguyen.t',
     status: 'in_progress',
     status_label: 'Live',
-    current_game_id: 'g-live-1-3',
+    current_game_number: 3,
   }),
   matchListRow({
     id: 'm-pending-1',
     opponent: 'okafor.d',
     status: 'pending',
     status_label: 'Scheduled',
-    current_game_id: 'g-pending-1-1',
+    current_game_number: 1,
   }),
   matchListRow({
     id: 'm-final-1',
     opponent: 'silva.r',
     status: 'completed',
     status_label: 'Final',
-    current_game_id: null,
+    current_game_number: null,
   }),
 ]
 

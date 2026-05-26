@@ -10,7 +10,7 @@ from sqlalchemy.orm import selectinload
 
 from app.db import get_session
 from app.matches import (
-    current_unscored_game,
+    current_game_number,
     match_eager_options,
     opponent_username,
     participant_filter,
@@ -136,14 +136,14 @@ def _build_score_banners(
 ) -> list[DashboardScoreBanner]:
     banners: list[DashboardScoreBanner] = []
     for match in in_progress:
-        current_game = current_unscored_game(match)
-        if current_game is None:
+        next_number = current_game_number(match)
+        if next_number is None:
             continue
         banners.append(
             DashboardScoreBanner(
                 match_id=match.id,
                 opponent_username=opponent_username(match, current_user_id),
-                current_game_id=current_game.id,
+                current_game_number=next_number,
             )
         )
     return banners

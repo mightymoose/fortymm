@@ -57,19 +57,17 @@ async def test_create_rated_match_with_registered_opponent(
     assert opp_side["players"][0]["user_id"] == str(opponent.id)
     assert opp_side["players"][0]["is_current_user"] is False
 
-    # Game 1 always exists from the moment a match is created.
-    assert len(body["games"]) == 1
-    assert body["games"][0]["game_number"] == 1
-    assert body["games"][0]["score"] is None
-    assert body["current_game"]["id"] == body["games"][0]["id"]
+    # Games are written lazily by the score-write endpoints — a freshly
+    # created match has no game rows yet, only the deeplink target.
+    assert body["games"] == []
     assert body["current_game"]["game_number"] == 1
     assert body["can_score"] is True
+    assert body["can_finalize"] is False
 
     match = (await db_session.execute(select(Match))).scalar_one()
     assert str(match.id) == body["id"]
     games = (await db_session.execute(select(MatchGame))).scalars().all()
-    assert len(games) == 1
-    assert games[0].game_number == 1
+    assert games == []
 
 
 async def test_create_unrated_match_with_opponent(
@@ -106,9 +104,11 @@ async def test_create_match_without_opponent_has_a_sentinel_opponent_side(
     assert [s["side_number"] for s in sides] == [1, 2]
     assert sides[0]["players"][0]["user_id"] == str(me.id)
     assert sides[1]["players"] == []
-    # The sentinel side makes the match scorable for its creator.
-    assert body["current_game"] is not None
+    # The sentinel side makes the match scorable for its creator. The first
+    # game number is still surfaced even though no MatchGame row exists yet.
+    assert body["current_game"] == {"game_number": 1}
     assert body["can_score"] is True
+    assert body["can_finalize"] is False
 
     rows = (await db_session.execute(select(MatchSide))).scalars().all()
     assert len(rows) == 2
@@ -122,26 +122,46 @@ async def test_match_without_opponent_can_be_scored_to_completion(
     match = (
         await api_client.post("/v1/matches", json={"best_of": 3, "rated": False})
     ).json()
-    # The creator is side 1; the sentinel opponent is side 2.
+    # Per-game scratchpad writes leave status untouched — the match isn't
+    # decided until POST /results.
     after_g1 = (
         await api_client.post(
-            f"/v1/matches/{match['id']}/games/{match['games'][0]['id']}/scores",
+            f"/v1/matches/{match['id']}/games/1/scores/new",
             json={"side_1_points": 11, "side_2_points": 4},
         )
     ).json()
     assert after_g1["status"] == "in_progress"
-    game_2 = after_g1["games"][1]
-    after_g2 = await api_client.post(
-        f"/v1/matches/{match['id']}/games/{game_2['id']}/scores",
-        json={"side_1_points": 11, "side_2_points": 7},
+    assert after_g1["can_finalize"] is False
+    after_g2 = (
+        await api_client.post(
+            f"/v1/matches/{match['id']}/games/2/scores/new",
+            json={"side_1_points": 11, "side_2_points": 7},
+        )
+    ).json()
+    assert after_g2["status"] == "in_progress"
+    # Two same-winner games in a best-of-3 → the saved scores form a decided
+    # match, so the FE's submit button will swap to "Finalize match".
+    assert after_g2["can_finalize"] is True
+
+    finalized = await api_client.post(
+        f"/v1/matches/{match['id']}/results",
+        json={
+            "games": [
+                {"game_number": 1, "side_1_points": 11, "side_2_points": 4},
+                {"game_number": 2, "side_1_points": 11, "side_2_points": 7},
+            ]
+        },
     )
-    assert after_g2.status_code == 201
-    body = after_g2.json()
+    assert finalized.status_code == 201
+    body = finalized.json()
     assert body["status"] == "completed"
     sides = sorted(body["sides"], key=lambda s: s["side_number"])
     assert [s["won"] for s in sides] == [True, False]
     # No rating moved — a player-less opponent can't be rated against.
     assert body["affects_rating"] is False
+    assert body["current_game"] is None
+    assert body["can_score"] is False
+    assert body["can_finalize"] is False
 
 
 async def test_rated_match_without_opponent_is_rejected(
@@ -396,11 +416,15 @@ async def test_list_filter_by_status(api_client: AsyncClient, db_session: AsyncS
     await start_session(api_client, db_session)
     opp = await make_user(db_session, "rival")
     in_progress = await _create_match(api_client, opp.id, best_of=1)
-    # Score game 1 to flip a separate match to completed.
+    # Finalize a separate match to flip it to completed.
     completed_match = await _create_match(api_client, opp.id, best_of=1)
     score_resp = await api_client.post(
-        f"/v1/matches/{completed_match['id']}/games/{completed_match['games'][0]['id']}/scores",
-        json={"side_1_points": 11, "side_2_points": 5},
+        f"/v1/matches/{completed_match['id']}/results",
+        json={
+            "games": [
+                {"game_number": 1, "side_1_points": 11, "side_2_points": 5},
+            ]
+        },
     )
     assert score_resp.status_code == 201
 
@@ -451,23 +475,26 @@ async def test_list_pagination(api_client: AsyncClient, db_session: AsyncSession
     } == set()
 
 
-async def test_list_row_carries_current_game_id_when_scorable(
+async def test_list_row_carries_current_game_number_when_scorable(
     api_client: AsyncClient, db_session: AsyncSession
 ):
     await start_session(api_client, db_session)
     opp = await make_user(db_session, "rival")
-    created = await _create_match(api_client, opp.id)
+    await _create_match(api_client, opp.id)
 
     listing = (await api_client.get("/v1/matches")).json()
     row = listing["items"][0]
-    assert row["current_game_id"] == created["games"][0]["id"]
+    # No games scored yet, so the next un-scored game is game 1. Game rows
+    # don't exist until the first POST .../scores/new, so the listing surfaces
+    # the number, not an id.
+    assert row["current_game_number"] == 1
     assert row["can_score"] is True
 
 
 async def test_list_row_hides_scoring_affordance_from_spectators(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    # Spectators get neither `can_score` nor `current_game_id` — the scoring
+    # Spectators get neither `can_score` nor `current_game_number` — the scoring
     # route 404s for them anyway, and the FE has no reason to deep-link.
     await start_session(api_client, db_session)
     async with make_client() as other_client:
@@ -477,7 +504,7 @@ async def test_list_row_hides_scoring_affordance_from_spectators(
 
     listing = (await api_client.get("/v1/matches")).json()
     row = next(r for r in listing["items"] if r["id"] == created["id"])
-    assert row["current_game_id"] is None
+    assert row["current_game_number"] is None
     assert row["can_score"] is False
 
 
@@ -512,7 +539,7 @@ async def test_table_tennis_scoring_rules(
     match = await _create_match(api_client, opp.id, best_of=5)
 
     response = await api_client.post(
-        f"/v1/matches/{match['id']}/games/{match['games'][0]['id']}/scores",
+        f"/v1/matches/{match['id']}/games/1/scores/new",
         json={"side_1_points": side_1, "side_2_points": side_2},
     )
     if is_valid:
@@ -521,10 +548,10 @@ async def test_table_tennis_scoring_rules(
         assert response.status_code == 422
 
 
-# ----- score lifecycle ----------------------------------------------------
+# ----- per-game score endpoints (scratchpad state) ------------------------
 
 
-async def test_scoring_game_1_keeps_in_progress_and_adds_game_2(
+async def test_score_create_lazily_inserts_the_game_row(
     api_client: AsyncClient, db_session: AsyncSession
 ):
     await start_session(api_client, db_session)
@@ -532,222 +559,173 @@ async def test_scoring_game_1_keeps_in_progress_and_adds_game_2(
     match = await _create_match(api_client, opp.id, best_of=5)
 
     response = await api_client.post(
-        f"/v1/matches/{match['id']}/games/{match['games'][0]['id']}/scores",
+        f"/v1/matches/{match['id']}/games/1/scores/new",
         json={"side_1_points": 11, "side_2_points": 4},
     )
     assert response.status_code == 201
     body = response.json()
+    # Match status, side wins, and side.won are untouched by per-game writes —
+    # finalization lives entirely in POST /results.
     assert body["status"] == "in_progress"
-    assert body["status_label"] == "Live"
     assert [s["games_won"] for s in body["sides"]] == [1, 0]
+    assert all(s["won"] is None for s in body["sides"])
+    # No trailing un-scored game auto-appended: only game 1 exists.
+    assert [g["game_number"] for g in body["games"]] == [1]
+    assert body["games"][0]["score"]["side_1_points"] == 11
+    # current_game advances to the next un-scored slot (lazy — no row yet).
+    assert body["current_game"] == {"game_number": 2}
+    assert body["can_score"] is True
+    assert body["can_finalize"] is False
 
-    # Game 2 has been opened.
-    assert len(body["games"]) == 2
-    assert body["games"][1]["game_number"] == 2
-    assert body["games"][1]["score"] is None
-    assert body["current_game"]["game_number"] == 2
-
-
-async def test_deciding_game_flips_to_completed_with_no_trailing_unscored(
-    api_client: AsyncClient, db_session: AsyncSession
-):
-    await start_session(api_client, db_session)
-    opp = await make_user(db_session, "rival")
-    match = await _create_match(api_client, opp.id, best_of=3)
-
-    # Win game 1, win game 2 → match completed (best of 3, need 2).
-    after_g1 = (
-        await api_client.post(
-            f"/v1/matches/{match['id']}/games/{match['games'][0]['id']}/scores",
-            json={"side_1_points": 11, "side_2_points": 4},
-        )
-    ).json()
-    game_2 = after_g1["games"][1]
-    after_g2 = (
-        await api_client.post(
-            f"/v1/matches/{match['id']}/games/{game_2['id']}/scores",
-            json={"side_1_points": 11, "side_2_points": 7},
-        )
-    ).json()
-
-    assert after_g2["status"] == "completed"
-    assert after_g2["status_label"] == "Final"
-    assert len(after_g2["games"]) == 2  # no trailing unscored game
-    assert after_g2["current_game"] is None
-    assert [s["won"] for s in after_g2["sides"]] == [True, False]
-    assert after_g2["can_score"] is False
+    games = (await db_session.execute(select(MatchGame))).scalars().all()
+    assert len(games) == 1
 
 
-async def test_post_score_409_when_game_already_scored(
+async def test_score_create_409_when_game_already_scored(
     api_client: AsyncClient, db_session: AsyncSession
 ):
     await start_session(api_client, db_session)
     opp = await make_user(db_session, "rival")
     match = await _create_match(api_client, opp.id, best_of=5)
-    game_id = match["games"][0]["id"]
     await api_client.post(
-        f"/v1/matches/{match['id']}/games/{game_id}/scores",
+        f"/v1/matches/{match['id']}/games/1/scores/new",
         json={"side_1_points": 11, "side_2_points": 4},
     )
 
     second = await api_client.post(
-        f"/v1/matches/{match['id']}/games/{game_id}/scores",
+        f"/v1/matches/{match['id']}/games/1/scores/new",
         json={"side_1_points": 11, "side_2_points": 5},
     )
     assert second.status_code == 409
     assert second.json()["detail"] == "This game has already been scored."
 
 
-async def test_put_edits_a_past_games_score(
+async def test_score_create_422_when_game_number_exceeds_best_of(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    await start_session(api_client, db_session)
+    opp = await make_user(db_session, "rival")
+    match = await _create_match(api_client, opp.id, best_of=3)
+
+    response = await api_client.post(
+        f"/v1/matches/{match['id']}/games/4/scores/new",
+        json={"side_1_points": 11, "side_2_points": 4},
+    )
+    assert response.status_code == 422
+    assert "best of 3" in response.json()["detail"]
+
+
+async def test_score_create_accepts_gaps(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    # The per-game endpoints are pure scratchpad — gaps are fine. Contiguity
+    # is enforced only when finalizing via POST /results.
+    await start_session(api_client, db_session)
+    opp = await make_user(db_session, "rival")
+    match = await _create_match(api_client, opp.id, best_of=5)
+
+    # Score game 3 before game 1 or 2 — the FE can let users enter games in
+    # any order.
+    response = await api_client.post(
+        f"/v1/matches/{match['id']}/games/3/scores/new",
+        json={"side_1_points": 11, "side_2_points": 9},
+    )
+    assert response.status_code == 201
+    body = response.json()
+    assert [g["game_number"] for g in body["games"]] == [3]
+    # current_game falls back to the lowest unscored slot — game 1.
+    assert body["current_game"] == {"game_number": 1}
+    assert body["can_finalize"] is False
+
+
+async def test_score_update_overwrites_in_place(
     api_client: AsyncClient, db_session: AsyncSession
 ):
     await start_session(api_client, db_session)
     opp = await make_user(db_session, "rival")
     match = await _create_match(api_client, opp.id, best_of=5)
-    game_1 = match["games"][0]
-    after_g1 = (
-        await api_client.post(
-            f"/v1/matches/{match['id']}/games/{game_1['id']}/scores",
-            json={"side_1_points": 11, "side_2_points": 4},
-        )
-    ).json()
-    score_id = after_g1["games"][0]["score"]["id"]
+    await api_client.post(
+        f"/v1/matches/{match['id']}/games/1/scores/new",
+        json={"side_1_points": 11, "side_2_points": 4},
+    )
 
     edited = await api_client.put(
-        f"/v1/matches/{match['id']}/games/{game_1['id']}/scores/{score_id}",
+        f"/v1/matches/{match['id']}/games/1/scores",
         json={"side_1_points": 5, "side_2_points": 11},
     )
     assert edited.status_code == 200
     body = edited.json()
+    # Side wins flip, but status / won / current_game stay untouched —
+    # nothing about the match is finalized just because a score changed.
     assert [s["games_won"] for s in body["sides"]] == [0, 1]
-    # Status stays in_progress; game 2 stays open.
-    assert body["status"] == "in_progress"
-
-
-async def test_put_reopens_a_completed_match(
-    api_client: AsyncClient, db_session: AsyncSession
-):
-    await start_session(api_client, db_session)
-    opp = await make_user(db_session, "rival")
-    match = await _create_match(api_client, opp.id, best_of=3)
-    after_g1 = (
-        await api_client.post(
-            f"/v1/matches/{match['id']}/games/{match['games'][0]['id']}/scores",
-            json={"side_1_points": 11, "side_2_points": 4},
-        )
-    ).json()
-    game_2 = after_g1["games"][1]
-    after_g2 = (
-        await api_client.post(
-            f"/v1/matches/{match['id']}/games/{game_2['id']}/scores",
-            json={"side_1_points": 11, "side_2_points": 7},
-        )
-    ).json()
-    assert after_g2["status"] == "completed"
-
-    # Flip game 2 so the opponent wins it → only game 1 has been won by me, 1-1.
-    g2_score_id = after_g2["games"][1]["score"]["id"]
-    reopened = await api_client.put(
-        f"/v1/matches/{match['id']}/games/{game_2['id']}/scores/{g2_score_id}",
-        json={"side_1_points": 7, "side_2_points": 11},
-    )
-    assert reopened.status_code == 200
-    body = reopened.json()
     assert body["status"] == "in_progress"
     assert all(s["won"] is None for s in body["sides"])
-    # Game 3 has been opened by reconciliation.
-    assert len(body["games"]) == 3
-    assert body["games"][2]["score"] is None
-    assert body["current_game"]["game_number"] == 3
+    assert body["current_game"] == {"game_number": 2}
+    # No new game row was created.
+    assert [g["game_number"] for g in body["games"]] == [1]
 
 
-async def test_put_closes_match_earlier_and_deletes_trailing_unscored(
-    api_client: AsyncClient, db_session: AsyncSession
-):
-    await start_session(api_client, db_session)
-    opp = await make_user(db_session, "rival")
-    match = await _create_match(api_client, opp.id, best_of=3)
-
-    # Game 1: opponent wins. Game 2: I win. Now 1-1 with game 3 open.
-    after_g1 = (
-        await api_client.post(
-            f"/v1/matches/{match['id']}/games/{match['games'][0]['id']}/scores",
-            json={"side_1_points": 5, "side_2_points": 11},
-        )
-    ).json()
-    game_2 = after_g1["games"][1]
-    after_g2 = (
-        await api_client.post(
-            f"/v1/matches/{match['id']}/games/{game_2['id']}/scores",
-            json={"side_1_points": 11, "side_2_points": 4},
-        )
-    ).json()
-    assert after_g2["status"] == "in_progress"
-    assert len(after_g2["games"]) == 3  # game 3 open
-
-    # Edit game 1 so I win it instead → 2-0 → match completed, game 3 deleted.
-    g1_score_id = after_g2["games"][0]["score"]["id"]
-    edited = await api_client.put(
-        f"/v1/matches/{match['id']}/games/{match['games'][0]['id']}/scores/{g1_score_id}",
-        json={"side_1_points": 11, "side_2_points": 6},
-    )
-    body = edited.json()
-    assert body["status"] == "completed"
-    assert len(body["games"]) == 2
-    assert body["current_game"] is None
-
-    # No orphan score rows or trailing games left behind in the DB.
-    games = (await db_session.execute(select(MatchGame))).scalars().all()
-    assert len(games) == 2
-    scores = (await db_session.execute(select(MatchGameScore))).scalars().all()
-    assert len(scores) == 2
-
-
-async def test_put_404_for_unknown_score_id(
+async def test_score_update_404_when_no_saved_score(
     api_client: AsyncClient, db_session: AsyncSession
 ):
     await start_session(api_client, db_session)
     opp = await make_user(db_session, "rival")
     match = await _create_match(api_client, opp.id, best_of=5)
-    game_id = match["games"][0]["id"]
-    await api_client.post(
-        f"/v1/matches/{match['id']}/games/{game_id}/scores",
-        json={"side_1_points": 11, "side_2_points": 4},
-    )
 
     response = await api_client.put(
-        f"/v1/matches/{match['id']}/games/{game_id}/scores/{uuid.uuid4()}",
+        f"/v1/matches/{match['id']}/games/1/scores",
         json={"side_1_points": 11, "side_2_points": 5},
     )
     assert response.status_code == 404
     assert response.json()["detail"] == "Score not found."
 
 
-async def test_put_404_for_mismatched_game_and_score(
+async def test_score_delete_clears_the_score_and_keeps_the_game(
     api_client: AsyncClient, db_session: AsyncSession
 ):
     await start_session(api_client, db_session)
     opp = await make_user(db_session, "rival")
     match = await _create_match(api_client, opp.id, best_of=5)
-    after_g1 = (
-        await api_client.post(
-            f"/v1/matches/{match['id']}/games/{match['games'][0]['id']}/scores",
-            json={"side_1_points": 11, "side_2_points": 4},
-        )
-    ).json()
-    score_id = after_g1["games"][0]["score"]["id"]
-    other_game_id = after_g1["games"][1]["id"]
-
-    response = await api_client.put(
-        f"/v1/matches/{match['id']}/games/{other_game_id}/scores/{score_id}",
-        json={"side_1_points": 11, "side_2_points": 5},
+    await api_client.post(
+        f"/v1/matches/{match['id']}/games/1/scores/new",
+        json={"side_1_points": 11, "side_2_points": 4},
     )
+
+    cleared = await api_client.delete(f"/v1/matches/{match['id']}/games/1/scores")
+    assert cleared.status_code == 200
+    body = cleared.json()
+    assert [s["games_won"] for s in body["sides"]] == [0, 0]
+    assert body["current_game"] == {"game_number": 1}
+
+    # A fresh POST .../scores/new at the same game number succeeds — the
+    # game row stays in place, just with no score attached.
+    again = await api_client.post(
+        f"/v1/matches/{match['id']}/games/1/scores/new",
+        json={"side_1_points": 11, "side_2_points": 9},
+    )
+    assert again.status_code == 201
+
+    scores = (await db_session.execute(select(MatchGameScore))).scalars().all()
+    assert len(scores) == 1
+    assert scores[0].side_2_points == 9
+
+
+async def test_score_delete_404_when_no_saved_score(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    await start_session(api_client, db_session)
+    opp = await make_user(db_session, "rival")
+    match = await _create_match(api_client, opp.id, best_of=5)
+
+    response = await api_client.delete(f"/v1/matches/{match['id']}/games/2/scores")
     assert response.status_code == 404
 
 
 async def test_non_participant_cannot_score(
     api_client: AsyncClient, db_session: AsyncSession
 ):
+    # 404 (not 403) — non-participants don't get to learn that the match
+    # exists from a write path.
     await start_session(api_client, db_session)
     async with make_client() as other_client:
         them = await start_session(other_client, db_session)
@@ -756,29 +734,27 @@ async def test_non_participant_cannot_score(
         del them
 
         post = await api_client.post(
-            f"/v1/matches/{created['id']}/games/{created['games'][0]['id']}/scores",
+            f"/v1/matches/{created['id']}/games/1/scores/new",
             json={"side_1_points": 11, "side_2_points": 4},
         )
         assert post.status_code == 404
         put = await api_client.put(
-            f"/v1/matches/{created['id']}/games/{created['games'][0]['id']}/scores/{uuid.uuid4()}",
+            f"/v1/matches/{created['id']}/games/1/scores",
             json={"side_1_points": 11, "side_2_points": 4},
         )
         assert put.status_code == 404
-
-
-async def test_scoring_an_unknown_game_404(
-    api_client: AsyncClient, db_session: AsyncSession
-):
-    await start_session(api_client, db_session)
-    opp = await make_user(db_session, "rival")
-    match = await _create_match(api_client, opp.id, best_of=5)
-    response = await api_client.post(
-        f"/v1/matches/{match['id']}/games/{uuid.uuid4()}/scores",
-        json={"side_1_points": 11, "side_2_points": 4},
-    )
-    assert response.status_code == 404
-    assert response.json()["detail"] == "Game not found."
+        delete = await api_client.delete(f"/v1/matches/{created['id']}/games/1/scores")
+        assert delete.status_code == 404
+        results = await api_client.post(
+            f"/v1/matches/{created['id']}/results",
+            json={
+                "games": [
+                    {"game_number": 1, "side_1_points": 11, "side_2_points": 4},
+                    {"game_number": 2, "side_1_points": 11, "side_2_points": 7},
+                ]
+            },
+        )
+        assert results.status_code == 404
 
 
 async def test_can_score_match_without_opponent(
@@ -789,7 +765,7 @@ async def test_can_score_match_without_opponent(
         await api_client.post("/v1/matches", json={"best_of": 5, "rated": False})
     ).json()
     response = await api_client.post(
-        f"/v1/matches/{created['id']}/games/{created['games'][0]['id']}/scores",
+        f"/v1/matches/{created['id']}/games/1/scores/new",
         json={"side_1_points": 11, "side_2_points": 4},
     )
     # The sentinel opponent side makes the match scorable.
@@ -797,6 +773,228 @@ async def test_can_score_match_without_opponent(
     body = response.json()
     sides = sorted(body["sides"], key=lambda s: s["side_number"])
     assert [s["games_won"] for s in sides] == [1, 0]
+
+
+# ----- finalize (POST /v1/matches/{id}/results) ---------------------------
+
+
+async def test_finalize_replaces_scores_and_marks_completed(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    await start_session(api_client, db_session)
+    opp = await make_user(db_session, "rival")
+    match = await _create_match(api_client, opp.id, best_of=3)
+
+    # Pre-finalize, the FE has scratched in a totally different game 1 score.
+    # The /results payload is canon — it should win.
+    await api_client.post(
+        f"/v1/matches/{match['id']}/games/1/scores/new",
+        json={"side_1_points": 5, "side_2_points": 11},
+    )
+
+    response = await api_client.post(
+        f"/v1/matches/{match['id']}/results",
+        json={
+            "games": [
+                {"game_number": 1, "side_1_points": 11, "side_2_points": 4},
+                {"game_number": 2, "side_1_points": 11, "side_2_points": 7},
+            ]
+        },
+    )
+    assert response.status_code == 201
+    body = response.json()
+    assert body["status"] == "completed"
+    assert body["status_label"] == "Final"
+    assert body["current_game"] is None
+    assert body["can_score"] is False
+    assert body["can_finalize"] is False
+    sides = sorted(body["sides"], key=lambda s: s["side_number"])
+    assert [s["games_won"] for s in sides] == [2, 0]
+    assert [s["won"] for s in sides] == [True, False]
+    # Games + scores reflect the payload, not the scratchpad.
+    games = sorted(body["games"], key=lambda g: g["game_number"])
+    assert [g["game_number"] for g in games] == [1, 2]
+    assert games[0]["score"]["side_1_points"] == 11
+    assert games[0]["score"]["side_2_points"] == 4
+
+    # DB-side sanity: no orphan score rows from the obliterated scratchpad.
+    game_rows = (await db_session.execute(select(MatchGame))).scalars().all()
+    score_rows = (await db_session.execute(select(MatchGameScore))).scalars().all()
+    assert len(game_rows) == 2
+    assert len(score_rows) == 2
+
+
+async def test_finalize_409_when_already_completed(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    await start_session(api_client, db_session)
+    opp = await make_user(db_session, "rival")
+    match = await _create_match(api_client, opp.id, best_of=3)
+
+    payload = {
+        "games": [
+            {"game_number": 1, "side_1_points": 11, "side_2_points": 4},
+            {"game_number": 2, "side_1_points": 11, "side_2_points": 7},
+        ]
+    }
+    first = await api_client.post(f"/v1/matches/{match['id']}/results", json=payload)
+    assert first.status_code == 201
+
+    second = await api_client.post(f"/v1/matches/{match['id']}/results", json=payload)
+    assert second.status_code == 409
+
+
+async def test_score_endpoints_409_once_match_is_completed(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    await start_session(api_client, db_session)
+    opp = await make_user(db_session, "rival")
+    match = await _create_match(api_client, opp.id, best_of=3)
+    await api_client.post(
+        f"/v1/matches/{match['id']}/results",
+        json={
+            "games": [
+                {"game_number": 1, "side_1_points": 11, "side_2_points": 4},
+                {"game_number": 2, "side_1_points": 11, "side_2_points": 7},
+            ]
+        },
+    )
+
+    # Every write path returns 409 once the match is finalized.
+    post = await api_client.post(
+        f"/v1/matches/{match['id']}/games/1/scores/new",
+        json={"side_1_points": 8, "side_2_points": 11},
+    )
+    assert post.status_code == 409
+    put = await api_client.put(
+        f"/v1/matches/{match['id']}/games/1/scores",
+        json={"side_1_points": 8, "side_2_points": 11},
+    )
+    assert put.status_code == 409
+    delete = await api_client.delete(f"/v1/matches/{match['id']}/games/1/scores")
+    assert delete.status_code == 409
+
+
+@pytest.mark.parametrize(
+    "games,reason_contains",
+    [
+        # Gap — games 1 and 3 with no game 2.
+        (
+            [
+                {"game_number": 1, "side_1_points": 11, "side_2_points": 4},
+                {"game_number": 3, "side_1_points": 11, "side_2_points": 7},
+            ],
+            "consecutively",
+        ),
+        # Duplicate game numbers.
+        (
+            [
+                {"game_number": 1, "side_1_points": 11, "side_2_points": 4},
+                {"game_number": 1, "side_1_points": 11, "side_2_points": 7},
+            ],
+            "Duplicate",
+        ),
+        # Undecided — 1-1 in best-of-3 (need 2 wins).
+        (
+            [
+                {"game_number": 1, "side_1_points": 11, "side_2_points": 4},
+                {"game_number": 2, "side_1_points": 4, "side_2_points": 11},
+            ],
+            "decided",
+        ),
+        # Scored games past the decider — won 2-0 in game 2 but a game 3 is
+        # also reported.
+        (
+            [
+                {"game_number": 1, "side_1_points": 11, "side_2_points": 4},
+                {"game_number": 2, "side_1_points": 11, "side_2_points": 7},
+                {"game_number": 3, "side_1_points": 11, "side_2_points": 9},
+            ],
+            "past the deciding game",
+        ),
+        # game_number > best_of.
+        (
+            [
+                {"game_number": 1, "side_1_points": 11, "side_2_points": 4},
+                {"game_number": 2, "side_1_points": 11, "side_2_points": 7},
+                {"game_number": 3, "side_1_points": 11, "side_2_points": 9},
+                {"game_number": 4, "side_1_points": 11, "side_2_points": 9},
+            ],
+            "best_of",
+        ),
+    ],
+)
+async def test_finalize_422_on_invalid_payload(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    games: list[dict[str, int]],
+    reason_contains: str,
+):
+    await start_session(api_client, db_session)
+    opp = await make_user(db_session, "rival")
+    match = await _create_match(api_client, opp.id, best_of=3)
+
+    response = await api_client.post(
+        f"/v1/matches/{match['id']}/results", json={"games": games}
+    )
+    assert response.status_code == 422
+    assert reason_contains in response.json()["detail"]
+
+
+async def test_finalize_422_on_illegal_per_game_score(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    # An individual game with an illegal score (11-10, no win-by-2) trips
+    # the per-game validator inside MatchResultsGameWrite.
+    await start_session(api_client, db_session)
+    opp = await make_user(db_session, "rival")
+    match = await _create_match(api_client, opp.id, best_of=3)
+
+    response = await api_client.post(
+        f"/v1/matches/{match['id']}/results",
+        json={
+            "games": [
+                {"game_number": 1, "side_1_points": 11, "side_2_points": 4},
+                {"game_number": 2, "side_1_points": 11, "side_2_points": 10},
+            ]
+        },
+    )
+    assert response.status_code == 422
+
+
+async def test_can_finalize_flag_tracks_saved_scores(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    await start_session(api_client, db_session)
+    opp = await make_user(db_session, "rival")
+    match = await _create_match(api_client, opp.id, best_of=3)
+
+    after_g1 = (
+        await api_client.post(
+            f"/v1/matches/{match['id']}/games/1/scores/new",
+            json={"side_1_points": 11, "side_2_points": 4},
+        )
+    ).json()
+    # One game in — not enough to decide a best-of-3.
+    assert after_g1["can_finalize"] is False
+
+    after_g2 = (
+        await api_client.post(
+            f"/v1/matches/{match['id']}/games/2/scores/new",
+            json={"side_1_points": 11, "side_2_points": 7},
+        )
+    ).json()
+    # Same winner in both — match is decided.
+    assert after_g2["can_finalize"] is True
+
+    # Splitting g1/g2 leaves the match 1-1: undecided.
+    edited = (
+        await api_client.put(
+            f"/v1/matches/{match['id']}/games/2/scores",
+            json={"side_1_points": 5, "side_2_points": 11},
+        )
+    ).json()
+    assert edited["can_finalize"] is False
 
 
 # ----- league binding -----------------------------------------------------
@@ -909,21 +1107,21 @@ async def _play_match_to_completion(
     best_of: int,
     side_1_wins: bool,
 ) -> dict:
-    """Create a match and score it to completion. The chosen side wins the
-    minimum number of games needed to clinch. Returns the final payload."""
+    """Create a match and finalize it. The chosen side wins the minimum
+    number of games needed to clinch. Returns the final payload."""
     match = await _create_match(client, opponent_id, best_of=best_of)
     needed = best_of // 2 + 1
-    body = match
-    for _ in range(needed):
-        current = body["current_game"]
-        assert current is not None
-        s1, s2 = (11, 5) if side_1_wins else (5, 11)
-        body = (
-            await client.post(
-                f"/v1/matches/{body['id']}/games/{current['id']}/scores",
-                json={"side_1_points": s1, "side_2_points": s2},
-            )
-        ).json()
+    s1, s2 = (11, 5) if side_1_wins else (5, 11)
+    response = await client.post(
+        f"/v1/matches/{match['id']}/results",
+        json={
+            "games": [
+                {"game_number": n, "side_1_points": s1, "side_2_points": s2}
+                for n in range(1, needed + 1)
+            ]
+        },
+    )
+    body = response.json()
     assert body["status"] == "completed"
     return body
 

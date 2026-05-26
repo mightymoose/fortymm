@@ -2,9 +2,9 @@ import { Locator, Page } from '@playwright/test'
 
 type NavigateOptions = {
   matchId?: string
-  gameId?: string
-  // When provided, navigates to the edit route instead of the create route.
-  scoreId?: string
+  gameNumber?: number
+  // When true, navigates to the edit route instead of the create route.
+  edit?: boolean
   // Pin the opponent username so the input aria-label resolves. The default
   // tracks the seed for `m-2207`.
   opponentUsername?: string
@@ -14,9 +14,10 @@ type NavigateOptions = {
 // Hard-coded here so the e2e doesn't have to reach into the mock module.
 export const SEED = {
   matchId: 'm-2207',
-  game3Id: 'g-2207-3',
-  game1Id: 'g-2207-1',
-  score1Id: 's-2207-1',
+  // After the decouple-scoring refactor games 1 + 2 are scratchpad scores;
+  // game 3 is the next un-scored slot. All addressing is by game number.
+  nextGameNumber: 3,
+  scoredGameNumber: 1,
   opponentUsername: 'nguyen.t',
   meUsername: 'rita.kovac',
 } as const
@@ -35,14 +36,14 @@ export class ScoreEntryPage {
     page: Page,
     {
       matchId = SEED.matchId,
-      gameId = SEED.game3Id,
-      scoreId,
+      gameNumber = SEED.nextGameNumber,
+      edit = false,
       opponentUsername = SEED.opponentUsername,
     }: NavigateOptions = {},
   ): Promise<ScoreEntryPage> {
-    const url = scoreId
-      ? `/matches/${matchId}/games/${gameId}/scores/${scoreId}/edit`
-      : `/matches/${matchId}/games/${gameId}/scores/new`
+    const url = edit
+      ? `/matches/${matchId}/games/${gameNumber}/scores/edit`
+      : `/matches/${matchId}/games/${gameNumber}/scores/new`
     await page.goto(url)
     return new ScoreEntryPage(page, opponentUsername)
   }

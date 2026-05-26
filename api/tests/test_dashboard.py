@@ -71,19 +71,18 @@ async def test_dashboard_returns_score_banner_for_in_progress_match(
     await start_session(api_client, db_session)
     opp = await make_user(db_session, "rival")
     match = await _create_match(api_client, opp.id, best_of=5)
-    after_g1 = (
-        await api_client.post(
-            f"/v1/matches/{match['id']}/games/{match['games'][0]['id']}/scores",
-            json={"side_1_points": 11, "side_2_points": 4},
-        )
-    ).json()
+    await api_client.post(
+        f"/v1/matches/{match['id']}/games/1/scores/new",
+        json={"side_1_points": 11, "side_2_points": 4},
+    )
 
     body = (await api_client.get("/v1/dashboard")).json()
     assert len(body["score_banners"]) == 1
     banner = body["score_banners"][0]
     assert banner["match_id"] == match["id"]
     assert banner["opponent_username"] == "rival"
-    assert banner["current_game_id"] == after_g1["current_game"]["id"]
+    # Game rows are created lazily; the dashboard deeplinks by game number.
+    assert banner["current_game_number"] == 2
     # An in-progress match is not "pending" so the next_match slot is empty.
     assert body["next_match"] is None
     assert body["recent_results"] == []
@@ -143,8 +142,12 @@ async def test_dashboard_returns_recent_results_for_completed_matches(
     opp = await make_user(db_session, "rival")
     match = await _create_match(api_client, opp.id, best_of=1)
     await api_client.post(
-        f"/v1/matches/{match['id']}/games/{match['games'][0]['id']}/scores",
-        json={"side_1_points": 11, "side_2_points": 4},
+        f"/v1/matches/{match['id']}/results",
+        json={
+            "games": [
+                {"game_number": 1, "side_1_points": 11, "side_2_points": 4},
+            ]
+        },
     )
 
     body = (await api_client.get("/v1/dashboard")).json()
@@ -190,11 +193,20 @@ async def _play_match(
     i_win: bool,
     best_of: int = 1,
 ) -> dict:
+    """Create a match, fast-forward through a deciding result via /results
+    (the per-game scratchpad endpoints don't finalize anymore — see the
+    decouple-scoring refactor)."""
     match = await _create_match(client, opponent_id, best_of=best_of)
     s1, s2 = (11, 4) if i_win else (4, 11)
+    games_to_win = best_of // 2 + 1
     await client.post(
-        f"/v1/matches/{match['id']}/games/{match['games'][0]['id']}/scores",
-        json={"side_1_points": s1, "side_2_points": s2},
+        f"/v1/matches/{match['id']}/results",
+        json={
+            "games": [
+                {"game_number": n, "side_1_points": s1, "side_2_points": s2}
+                for n in range(1, games_to_win + 1)
+            ]
+        },
     )
     return match
 

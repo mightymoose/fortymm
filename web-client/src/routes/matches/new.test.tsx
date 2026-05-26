@@ -21,8 +21,8 @@ const NewMatchPage = Route.options.component!
 function pendingMatch() {
   return matchDetails({
     id: 'm-test',
-    games: [{ id: 'g-test', game_number: 1, score: null }],
-    current_game: { id: 'g-test', game_number: 1 },
+    games: [],
+    current_game: { game_number: 1 },
   })
 }
 
@@ -43,10 +43,10 @@ function renderNewMatch() {
   })
   const scoringRoute = createRoute({
     getParentRoute: () => rootRoute,
-    path: '/matches/$matchId/games/$gameId/scores/new',
+    path: '/matches/$matchId/games/$gameNumber/scores/new',
     component: () => {
-      const { matchId, gameId } = scoringRoute.useParams()
-      return <div>Scoring route {matchId} game {gameId}</div>
+      const { matchId, gameNumber } = scoringRoute.useParams()
+      return <div>Scoring route {matchId} game {gameNumber}</div>
     },
   })
   const router = createRouter({
@@ -92,7 +92,7 @@ describe('NewMatchPage', () => {
 
     await waitFor(() =>
       expect(
-        screen.getByText('Scoring route m-test game g-test'),
+        screen.getByText('Scoring route m-test game 1'),
       ).toBeInTheDocument(),
     )
     expect(captured).toEqual({
@@ -121,7 +121,7 @@ describe('NewMatchPage', () => {
 
     await waitFor(() =>
       expect(
-        screen.getByText('Scoring route m-test game g-test'),
+        screen.getByText('Scoring route m-test game 1'),
       ).toBeInTheDocument(),
     )
     expect(captured).toEqual({
@@ -166,7 +166,7 @@ describe('NewMatchPage', () => {
     await user.click(screen.getByRole('button', { name: /start match/i }))
     await waitFor(() =>
       expect(
-        screen.getByText('Scoring route m-test game g-test'),
+        screen.getByText('Scoring route m-test game 1'),
       ).toBeInTheDocument(),
     )
     expect(captured).toEqual({
