@@ -18,7 +18,13 @@ import { Overline } from '@/components/overline'
 import { cn, initialsOf } from '@/lib/utils'
 import { fmtDateShort, fmtDateTimeShort } from '@/lib/dates'
 import { formatRatingDelta } from '@/lib/rating'
-import { scoringEditRoute, scoringNewRoute, useMatch } from '@/api/matches'
+import {
+  scoringEditRoute,
+  scoringNewRoute,
+  useConfirmMatch,
+  useDisputeMatch,
+  useMatch,
+} from '@/api/matches'
 import type { components } from '@/api/schema'
 import { ApiError } from '@/api/client'
 
@@ -111,6 +117,16 @@ type MatchView = {
   canScore: boolean
   scoreCta: { matchId: string; gameNumber: number } | null
   headToHead: H2HView | null
+  // True when the caller can hit either ``POST /confirmation`` or
+  // ``POST /dispute`` — surfaces the Confirm / Dispute CTAs.
+  canConfirm: boolean
+  // True when there's at least one signature AND the current user is among
+  // the signers — surfaces the passive "Awaiting <opponent>'s confirmation"
+  // indicator (we already signed; waiting on the other side).
+  viewerIsAwaitingOther: boolean
+  // The user whose signature we're waiting on, for the passive label. Null
+  // when there's no posted result, or when the viewer isn't a participant.
+  pendingSignerName: string | null
 }
 
 function projectSide(
@@ -244,6 +260,29 @@ function projectMatchView(data: MatchDetails, matchId: string): MatchView {
     data.can_score && data.current_game
       ? { matchId, gameNumber: data.current_game.game_number }
       : null
+
+  // Awaiting-confirmation indicator: which side hasn't signed yet, surfaced
+  // by username for the passive "Awaiting <opp>" copy when the viewer has
+  // already signed. Null when there's no posted result, or the viewer can't
+  // see this state (anonymous, non-participant, etc.).
+  const signers = new Set(data.signatures.map((sig) => sig.user_id))
+  const viewerUserId = viewerIsParticipant
+    ? (leftSide.players[0]?.user_id ?? null)
+    : null
+  const viewerHasSigned =
+    viewerUserId !== null && signers.has(viewerUserId)
+  const viewerIsAwaitingOther =
+    viewerIsParticipant && data.signatures.length > 0 && viewerHasSigned
+  // Find the participant who's missing from the signature set. With "at
+  // least one player per side" semantics, this picks the first un-signed
+  // player on the other side. Falls back to "your opponent" if we can't
+  // resolve a name.
+  let pendingSignerName: string | null = null
+  if (viewerIsAwaitingOther && rightSide) {
+    const missing = rightSide.players.find((p) => !signers.has(p.user_id))
+    pendingSignerName = missing?.username ?? 'your opponent'
+  }
+
   return {
     state,
     statusLabel: data.status_label,
@@ -258,6 +297,9 @@ function projectMatchView(data: MatchDetails, matchId: string): MatchView {
     canScore: data.can_score,
     scoreCta,
     headToHead: projectHeadToHead(data.head_to_head, leftView.sideNumber),
+    canConfirm: data.can_confirm,
+    viewerIsAwaitingOther,
+    pendingSignerName,
   }
 }
 
@@ -401,6 +443,8 @@ function MatchDetailsPage({
         </div>
 
         <HeroScoreboard view={view} matchId={matchId} />
+
+        <ConfirmationCallout view={view} matchId={matchId} />
 
         <div className="md-col-2">
           <div className="md-col-2__main">
@@ -1198,6 +1242,96 @@ function H2HRow({
 }
 
 function CommentsCard() {
+  return null
+}
+
+function ConfirmationCallout({
+  view,
+  matchId,
+}: {
+  view: MatchView
+  matchId: string
+}) {
+  const confirmMutation = useConfirmMatch(matchId)
+  const disputeMutation = useDisputeMatch(matchId)
+  const pending = confirmMutation.isPending || disputeMutation.isPending
+  // Without throwOnError, a 409 (race: opponent confirmed/disputed first,
+  // user double-clicked, etc.) would otherwise vanish — surface it inline
+  // so the button doesn't appear inert.
+  const mutationError =
+    (confirmMutation.error instanceof ApiError
+      ? confirmMutation.error
+      : null) ??
+    (disputeMutation.error instanceof ApiError ? disputeMutation.error : null)
+
+  if (view.canConfirm) {
+    return (
+      <section
+        className="md-confirm-callout"
+        data-testid="match-confirm-callout"
+      >
+        <div className="md-confirm-callout__copy">
+          <Overline as="h3">Posted result · awaiting your sign-off</Overline>
+          <p className="md-confirm-callout__body">
+            Your opponent has posted the result above. Confirm if the scores
+            are right, or dispute to send the match back to in-progress so the
+            wrong game can be re-scored.
+          </p>
+          {mutationError && (
+            <p
+              role="alert"
+              className="mt-1.5 text-xs text-[color:var(--loss)]"
+            >
+              {mutationError.detail ?? mutationError.message}
+            </p>
+          )}
+        </div>
+        <div className="md-confirm-callout__actions">
+          <button
+            type="button"
+            className="md-btn md-btn--ghost"
+            disabled={pending}
+            onClick={() => {
+              confirmMutation.reset()
+              disputeMutation.mutate()
+            }}
+          >
+            {disputeMutation.isPending ? 'Disputing…' : 'Dispute'}
+          </button>
+          <button
+            type="button"
+            className="md-btn md-btn--primary"
+            disabled={pending}
+            onClick={() => {
+              disputeMutation.reset()
+              confirmMutation.mutate()
+            }}
+          >
+            {confirmMutation.isPending ? 'Confirming…' : 'Confirm result'}
+          </button>
+        </div>
+      </section>
+    )
+  }
+
+  if (view.viewerIsAwaitingOther && view.pendingSignerName) {
+    return (
+      <section
+        className="md-confirm-callout md-confirm-callout--passive"
+        data-testid="match-confirm-callout"
+      >
+        <div className="md-confirm-callout__copy">
+          <Overline as="h3">Posted · awaiting confirmation</Overline>
+          <p className="md-confirm-callout__body">
+            You've signed off on this result. Waiting on{' '}
+            <strong>{view.pendingSignerName}</strong> to confirm or dispute
+            before the match is finalized.
+          </p>
+        </div>
+      </section>
+    )
+  }
+
   return null
 }
 

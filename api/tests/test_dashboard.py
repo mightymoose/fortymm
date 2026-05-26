@@ -15,7 +15,7 @@ from app.models import (
     RatingStrategy,
     UserLeagueRating,
 )
-from tests._helpers import make_client, make_user, start_session
+from tests._helpers import make_client, make_user, opponent_session, start_session
 
 
 async def _create_match(client: AsyncClient, opponent_id, best_of: int = 5) -> dict:
@@ -139,16 +139,19 @@ async def test_dashboard_returns_recent_results_for_completed_matches(
     api_client: AsyncClient, db_session: AsyncSession
 ):
     await start_session(api_client, db_session)
-    opp = await make_user(db_session, "rival")
-    match = await _create_match(api_client, opp.id, best_of=1)
-    await api_client.post(
-        f"/v1/matches/{match['id']}/results",
-        json={
-            "games": [
-                {"game_number": 1, "side_1_points": 11, "side_2_points": 4},
-            ]
-        },
-    )
+    async with opponent_session(db_session, "rival") as (opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=1)
+        post = await api_client.post(
+            f"/v1/matches/{match['id']}/results",
+            json={
+                "games": [
+                    {"game_number": 1, "side_1_points": 11, "side_2_points": 4},
+                ]
+            },
+        )
+        assert post.status_code == 201
+        confirm = await opp_client.post(f"/v1/matches/{match['id']}/confirmation")
+        assert confirm.status_code == 201
 
     body = (await api_client.get("/v1/dashboard")).json()
     assert len(body["recent_results"]) == 1
@@ -188,18 +191,19 @@ async def test_dashboard_scoped_to_current_user(
 
 async def _play_match(
     client: AsyncClient,
-    opponent_id,
+    opp_client: AsyncClient,
+    opp_id,
     *,
     i_win: bool,
     best_of: int = 1,
 ) -> dict:
-    """Create a match, fast-forward through a deciding result via /results
-    (the per-game scratchpad endpoints don't finalize anymore — see the
-    decouple-scoring refactor)."""
-    match = await _create_match(client, opponent_id, best_of=best_of)
+    """Create a match, post the result, and have the opponent confirm — the
+    full sign-off dance. Returns the create response (the test usually only
+    wants the match id)."""
+    match = await _create_match(client, opp_id, best_of=best_of)
     s1, s2 = (11, 4) if i_win else (4, 11)
     games_to_win = best_of // 2 + 1
-    await client.post(
+    post = await client.post(
         f"/v1/matches/{match['id']}/results",
         json={
             "games": [
@@ -208,6 +212,9 @@ async def _play_match(
             ]
         },
     )
+    assert post.status_code == 201
+    confirm = await opp_client.post(f"/v1/matches/{match['id']}/confirmation")
+    assert confirm.status_code == 201
     return match
 
 
@@ -215,8 +222,8 @@ async def test_dashboard_rating_reflects_completed_match(
     api_client: AsyncClient, db_session: AsyncSession
 ):
     await start_session(api_client, db_session)
-    opp = await make_user(db_session, "rival")
-    await _play_match(api_client, opp.id, i_win=True)
+    async with opponent_session(db_session, "rival") as (opp_client, opp):
+        await _play_match(api_client, opp_client, opp.id, i_win=True)
 
     rating = (await api_client.get("/v1/dashboard")).json()["rating"]
     # Glicko-2 lifts the winner above 1500 and tightens RD.
@@ -234,11 +241,11 @@ async def test_dashboard_streak_counts_consecutive_results(
     api_client: AsyncClient, db_session: AsyncSession
 ):
     await start_session(api_client, db_session)
-    opp = await make_user(db_session, "rival")
-    # W, W, L — streak should be the most-recent L of length 1.
-    await _play_match(api_client, opp.id, i_win=True)
-    await _play_match(api_client, opp.id, i_win=True)
-    await _play_match(api_client, opp.id, i_win=False)
+    async with opponent_session(db_session, "rival") as (opp_client, opp):
+        # W, W, L — streak should be the most-recent L of length 1.
+        await _play_match(api_client, opp_client, opp.id, i_win=True)
+        await _play_match(api_client, opp_client, opp.id, i_win=True)
+        await _play_match(api_client, opp_client, opp.id, i_win=False)
 
     rating = (await api_client.get("/v1/dashboard")).json()["rating"]
     assert rating["streak"] == {"kind": "L", "n": 1}
@@ -250,13 +257,13 @@ async def test_dashboard_rating_peak_holds_after_loss(
     api_client: AsyncClient, db_session: AsyncSession
 ):
     await start_session(api_client, db_session)
-    opp = await make_user(db_session, "rival")
-    await _play_match(api_client, opp.id, i_win=True)
-    rating_after_win = (await api_client.get("/v1/dashboard")).json()["rating"]
-    peak_after_win = rating_after_win["current"]
+    async with opponent_session(db_session, "rival") as (opp_client, opp):
+        await _play_match(api_client, opp_client, opp.id, i_win=True)
+        rating_after_win = (await api_client.get("/v1/dashboard")).json()["rating"]
+        peak_after_win = rating_after_win["current"]
 
-    await _play_match(api_client, opp.id, i_win=False)
-    rating_after_loss = (await api_client.get("/v1/dashboard")).json()["rating"]
+        await _play_match(api_client, opp_client, opp.id, i_win=False)
+        rating_after_loss = (await api_client.get("/v1/dashboard")).json()["rating"]
 
     assert rating_after_loss["current"] < peak_after_win
     assert rating_after_loss["peak"] == peak_after_win

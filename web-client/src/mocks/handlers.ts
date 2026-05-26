@@ -2,8 +2,11 @@ import { delay, http, HttpResponse } from 'msw'
 import type { components } from '@/api/schema'
 import { healthCheck, player, sessionResponse } from '@/test/factories'
 import {
+  confirmSeed,
+  disputeSeed,
   finalizeSeed,
   findMatch,
+  MOCK_CURRENT_USER,
   mockMatches,
   newMatchSeed,
   projectListRow,
@@ -298,6 +301,15 @@ function enforceScorable(seed: SeedMatch): Response | null {
     seed.status === 'voided'
   ) {
     return detail('This match is no longer scorable.', 409)
+  }
+  // Posted-but-unconfirmed results lock the scratchpad; the next action is
+  // /confirmation or /dispute, not another score write.
+  if (seed.signatures.length > 0) {
+    return detail(
+      'This match has a posted result awaiting confirmation. ' +
+        'Confirm or dispute it before editing scores.',
+      409,
+    )
   }
   return null
 }
@@ -708,6 +720,30 @@ export const handlers = [
       const message = finalizeSeed(seed, body.games)
       if (message) return detail(message, 422)
       return HttpResponse.json(projectMatchDetails(seed), { status: 201 })
+    },
+  ),
+
+  http.post(
+    '*/v1/matches/:matchId/confirmation',
+    async ({ params }) => {
+      await delay(250)
+      const seed = findMatch(String(params.matchId))
+      if (!seed) return detail('Match not found.', 404)
+      const message = confirmSeed(seed, MOCK_CURRENT_USER.id)
+      if (message) return detail(message, 409)
+      return HttpResponse.json(projectMatchDetails(seed), { status: 201 })
+    },
+  ),
+
+  http.post(
+    '*/v1/matches/:matchId/dispute',
+    async ({ params }) => {
+      await delay(250)
+      const seed = findMatch(String(params.matchId))
+      if (!seed) return detail('Match not found.', 404)
+      const message = disputeSeed(seed, MOCK_CURRENT_USER.id)
+      if (message) return detail(message, 409)
+      return HttpResponse.json(projectMatchDetails(seed))
     },
   ),
 

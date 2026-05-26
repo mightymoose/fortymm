@@ -2091,6 +2091,41 @@ body.dark.fortymm-theme {
   border: 1px solid var(--border-subtle);
   border-radius: var(--r-md);
 }
+
+/* Awaiting-confirmation callout that sits between the hero and the cards
+   row when a posted result needs the viewer's sign-off (or is waiting on
+   the opponent's). The accent stripe + warm hue echoes the "live" hero
+   chip so the urgency reads visually. */
+.fortymm-theme .md-confirm-callout {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  flex-wrap: wrap;
+  padding: 14px 18px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-left: 3px solid var(--ball-500);
+  border-radius: var(--r-md);
+}
+.fortymm-theme .md-confirm-callout--passive {
+  border-left-color: var(--ink-500);
+  opacity: 0.92;
+}
+.fortymm-theme .md-confirm-callout__copy {
+  flex: 1 1 320px;
+  min-width: 0;
+}
+.fortymm-theme .md-confirm-callout__body {
+  margin: 6px 0 0;
+  color: var(--fg-2);
+  font: 400 13px/1.45 var(--font-ui);
+}
+.fortymm-theme .md-confirm-callout__actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
 .fortymm-theme .md-card__hd {
   padding: 14px 18px 10px;
   border-bottom: 1px solid var(--ink-700);

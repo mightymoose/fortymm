@@ -10,6 +10,7 @@ type MatchDetailsH2H = components['schemas']['MatchDetailsH2H']
 type MatchDetailsH2HMeeting = components['schemas']['MatchDetailsH2HMeeting']
 type MatchListRow = components['schemas']['MatchListRow']
 type MatchLeague = components['schemas']['MatchLeague']
+type MatchSignatureView = components['schemas']['MatchSignatureView']
 type DashboardScoreBanner = components['schemas']['DashboardScoreBanner']
 type DashboardNextMatch = components['schemas']['DashboardNextMatch']
 type DashboardRecentResult = components['schemas']['DashboardRecentResult']
@@ -70,6 +71,11 @@ export type SeedGame = {
   score: { id: string; side_1_points: number; side_2_points: number } | null
 }
 
+export type SeedSignature = {
+  user_id: string
+  signed_at: string
+}
+
 export type SeedMatch = {
   id: string
   status: MatchStatus
@@ -79,6 +85,10 @@ export type SeedMatch = {
   completed_at: string | null
   opponent: { id: string; username: string } | null
   games: SeedGame[]
+  // Sign-offs on the posted canonical result. Empty until ``POST /results``
+  // lands the first signature; cleared by ``POST /dispute``; "full" (one row
+  // per side with players) once the match has been confirmed.
+  signatures: SeedSignature[]
 }
 
 function gamesToWin(bestOf: number): number {
@@ -101,6 +111,9 @@ function sideWinCounts(seed: SeedMatch): { side1: number; side2: number } {
  * server's ``current_game_number`` derivation in api/app/matches.py. */
 function currentGameNumber(seed: SeedMatch): number | null {
   if (seed.status !== 'in_progress') return null
+  // A posted-but-unconfirmed result locks the scratchpad — no game is
+  // "current" in a writable sense until the result is disputed.
+  if (seed.signatures.length > 0) return null
   const scored = new Set(
     seed.games.filter((g) => g.score !== null).map((g) => g.game_number),
   )
@@ -115,6 +128,9 @@ function currentGameNumber(seed: SeedMatch): number | null {
  * scratchpad state. Mirrors the server's ``_can_finalize`` predicate. */
 function canFinalizeSeed(seed: SeedMatch): boolean {
   if (seed.status !== 'in_progress') return false
+  // Once a result is posted, /confirmation or /dispute is the next action,
+  // not another /results.
+  if (seed.signatures.length > 0) return false
   const scored = seed.games
     .filter((g) => g.score !== null)
     .map((g) => ({
@@ -153,9 +169,14 @@ function projectSides(seed: SeedMatch): {
   opponentSide: MatchDetailsSide
 } {
   const { side1, side2 } = sideWinCounts(seed)
-  const decided = seed.status === 'completed'
+  // After ``POST /results`` (non-solo) the canonical games have decided the
+  // match even though status remains ``in_progress`` until the opponent
+  // confirms; mirror the API so the hero scoreboard renders the winner
+  // immediately rather than waiting on the confirmation round-trip.
+  const decided = seed.status === 'completed' || seed.signatures.length > 0
 
-  const showRatingChange = decided && seed.affects_rating && seed.opponent !== null
+  const showRatingChange =
+    seed.status === 'completed' && seed.affects_rating && seed.opponent !== null
   const myWon = side1 > side2
 
   const mySide: MatchDetailsSide = {
@@ -192,6 +213,31 @@ function projectSides(seed: SeedMatch): {
   return { mySide, opponentSide }
 }
 
+function seedStatusLabel(seed: SeedMatch): string {
+  if (seed.status === 'in_progress' && seed.signatures.length > 0) {
+    return 'Awaiting confirmation'
+  }
+  return STATUS_LABELS[seed.status]
+}
+
+function seedSignatureViews(seed: SeedMatch): MatchSignatureView[] {
+  return seed.signatures
+    .slice()
+    .sort((a, b) => a.signed_at.localeCompare(b.signed_at))
+    .map((sig) => ({ user_id: sig.user_id, signed_at: sig.signed_at }))
+}
+
+/** Mirrors the API's ``_can_confirm`` predicate from the mock current
+ * user's perspective: they're a participant on an awaiting-confirmation
+ * match (signatures non-empty, status in_progress, both sides have players)
+ * and they themselves haven't signed yet. */
+function canConfirmSeed(seed: SeedMatch): boolean {
+  if (seed.status !== 'in_progress') return false
+  if (seed.signatures.length === 0) return false
+  if (seed.opponent === null) return false
+  return !seed.signatures.some((sig) => sig.user_id === MOCK_CURRENT_USER.id)
+}
+
 export function projectMatchDetails(seed: SeedMatch): MatchDetails {
   const { mySide, opponentSide } = projectSides(seed)
 
@@ -217,7 +263,7 @@ export function projectMatchDetails(seed: SeedMatch): MatchDetails {
   return {
     id: seed.id,
     status: seed.status,
-    status_label: STATUS_LABELS[seed.status],
+    status_label: seedStatusLabel(seed),
     league: MOCK_DEFAULT_LEAGUE,
     best_of: seed.best_of,
     games_to_win: gamesToWin(seed.best_of),
@@ -229,6 +275,8 @@ export function projectMatchDetails(seed: SeedMatch): MatchDetails {
     current_game: nextNumber !== null ? { game_number: nextNumber } : null,
     can_score: nextNumber !== null,
     can_finalize: canFinalizeSeed(seed),
+    can_confirm: canConfirmSeed(seed),
+    signatures: seedSignatureViews(seed),
     recent_form: projectRecentForm(seed, priors),
     head_to_head: projectHeadToHead(seed, priors),
   }
@@ -366,13 +414,14 @@ export function projectListRow(seed: SeedMatch): MatchListRow {
   return {
     id: seed.id,
     status: seed.status,
-    status_label: STATUS_LABELS[seed.status],
+    status_label: seedStatusLabel(seed),
     league: MOCK_DEFAULT_LEAGUE,
     sides: [mySide, opponentSide],
     best_of: seed.best_of,
     created_at: seed.created_at,
     current_game_number: scorable ? nextNumber : null,
     can_score: scorable,
+    can_confirm: canConfirmSeed(seed),
   }
 }
 
@@ -510,6 +559,7 @@ export function buildInitialSeeds(): SeedMatch[] {
       completed_at: null,
       opponent: { id: 'pl-okafor', username: 'okafor.d' },
       games: [],
+      signatures: [],
     },
     {
       id: 'm-2207',
@@ -531,6 +581,7 @@ export function buildInitialSeeds(): SeedMatch[] {
           score: { id: 's-2207-2', side_1_points: 9, side_2_points: 11 },
         },
       ],
+      signatures: [],
     },
     {
       id: 'm-completed-win-1',
@@ -562,6 +613,11 @@ export function buildInitialSeeds(): SeedMatch[] {
           score: { id: 's-cw-1-4', side_1_points: 12, side_2_points: 10 },
         },
       ],
+      // Pre-signed completed match — both sides signed before completion.
+      signatures: [
+        { user_id: MOCK_CURRENT_USER.id, signed_at: '2026-05-10T18:42:00Z' },
+        { user_id: 'pl-silva', signed_at: '2026-05-10T18:43:00Z' },
+      ],
     },
     {
       id: 'm-completed-loss-1',
@@ -583,6 +639,10 @@ export function buildInitialSeeds(): SeedMatch[] {
           score: { id: 's-cl-1-2', side_1_points: 9, side_2_points: 11 },
         },
       ],
+      signatures: [
+        { user_id: 'pl-patel', signed_at: '2026-05-08T20:25:00Z' },
+        { user_id: MOCK_CURRENT_USER.id, signed_at: '2026-05-08T20:26:00Z' },
+      ],
     },
     {
       id: 'm-completed-win-2',
@@ -603,6 +663,10 @@ export function buildInitialSeeds(): SeedMatch[] {
           game_number: 2,
           score: { id: 's-cw-2-2', side_1_points: 11, side_2_points: 6 },
         },
+      ],
+      signatures: [
+        { user_id: MOCK_CURRENT_USER.id, signed_at: '2026-05-06T19:20:00Z' },
+        { user_id: 'pl-chen', signed_at: '2026-05-06T19:21:00Z' },
       ],
     },
   ]
@@ -670,14 +734,16 @@ export function newMatchSeed(input: {
     completed_at: null,
     opponent: input.opponent,
     games: [],
+    signatures: [],
   }
   return seed
 }
 
 /** POST /v1/matches/{id}/results: obliterate the existing games + scores,
- * insert the payload's games, mark completed. Mirrors the server contract —
- * the payload is canon. Returns null on validation failure, with a message
- * suitable for a 422 detail. */
+ * insert the payload's games, record the current user's signature, and
+ * (for solo matches) flip status to completed. Non-solo matches stay at
+ * ``in_progress`` until ``POST /confirmation`` lands the second signature.
+ * Returns null on validation success, or a 422-suitable detail string. */
 export function finalizeSeed(
   seed: SeedMatch,
   games: Array<{
@@ -686,6 +752,9 @@ export function finalizeSeed(
     side_2_points: number
   }>,
 ): string | null {
+  if (seed.signatures.length > 0) {
+    return 'Result already posted; use /confirmation.'
+  }
   if (games.length === 0) {
     return 'A match needs at least one game to finalize.'
   }
@@ -736,7 +805,76 @@ export function finalizeSeed(
       side_2_points: g.side_2_points,
     },
   }))
-  seed.status = 'completed'
-  seed.completed_at = new Date().toISOString()
+
+  if (seed.opponent === null) {
+    // Solo match — nobody else to sign, finalize immediately (mirror the API).
+    seed.status = 'completed'
+    seed.completed_at = new Date().toISOString()
+  } else {
+    seed.signatures.push({
+      user_id: MOCK_CURRENT_USER.id,
+      signed_at: new Date().toISOString(),
+    })
+  }
   return null
+}
+
+/** POST /v1/matches/{id}/confirmation: insert ``userId``'s signature. If
+ * every side now has at least one signing player, flip the seed to
+ * ``completed`` (mirroring ``_apply_rating_update``'s gate at the API).
+ * Returns null on success, or a 409-suitable detail string. */
+export function confirmSeed(seed: SeedMatch, userId: string): string | null {
+  const guard = confirmableGuard(seed, userId)
+  if (guard) return guard
+  seed.signatures.push({
+    user_id: userId,
+    signed_at: new Date().toISOString(),
+  })
+  if (allSidesSigned(seed)) {
+    seed.status = 'completed'
+    seed.completed_at = new Date().toISOString()
+  }
+  return null
+}
+
+/** POST /v1/matches/{id}/dispute: clear every signature; reset side win
+ * flags (derived in ``projectSides`` from ``signatures.length``, so just
+ * clearing signatures is enough). Returns null on success, or a 409-suitable
+ * detail string. */
+export function disputeSeed(seed: SeedMatch, userId: string): string | null {
+  const guard = confirmableGuard(seed, userId)
+  if (guard) return guard
+  seed.signatures = []
+  return null
+}
+
+/** Shared preconditions for confirm + dispute. ``userId`` is the FE's mock
+ * current user (handlers always pass MOCK_CURRENT_USER.id). Both endpoints
+ * 404 for non-participants, but the FE/MSW only models the current user, so
+ * we collapse to 409 for the user-facing cases (already signed, no result
+ * posted yet, etc.). */
+function confirmableGuard(seed: SeedMatch, userId: string): string | null {
+  if (seed.opponent === null) {
+    return "This match has no opponent and can't be signed."
+  }
+  if (seed.status !== 'in_progress') {
+    return 'This match is no longer awaiting confirmation.'
+  }
+  if (seed.signatures.length === 0) {
+    return 'No posted result to act on. Post the result first.'
+  }
+  if (seed.signatures.some((sig) => sig.user_id === userId)) {
+    return "You've already signed this match."
+  }
+  return null
+}
+
+function allSidesSigned(seed: SeedMatch): boolean {
+  // The mock only models singles, so side 1 is the current user and side 2
+  // is the (single) opponent. With "at least one player per side" semantics
+  // both users must appear in ``signatures``.
+  const signers = new Set(seed.signatures.map((sig) => sig.user_id))
+  if (!signers.has(MOCK_CURRENT_USER.id)) return false
+  if (seed.opponent === null) return false
+  return signers.has(seed.opponent.id)
 }

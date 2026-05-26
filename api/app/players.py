@@ -508,11 +508,16 @@ def _serialize_player_match(match: Match, player_id: uuid.UUID) -> PlayerMatchRo
                 )
             )
 
+    # ``mine.won`` is set on /results (before /confirmation) so it would
+    # otherwise leak the un-ratified outcome here; gate on the terminal
+    # status so an awaiting-confirmation match still reads as in_progress
+    # with no W/L (matches PlayerMatchRow.result's documented contract).
     result: Literal["W", "L"] | None = None
-    if mine.won is True:
-        result = "W"
-    elif mine.won is False:
-        result = "L"
+    if match.status == MatchStatus.completed:
+        if mine.won is True:
+            result = "W"
+        elif mine.won is False:
+            result = "L"
 
     return PlayerMatchRow(
         id=match.id,

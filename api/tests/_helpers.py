@@ -4,6 +4,9 @@ The leading underscore keeps pytest from auto-collecting this as a test module;
 fixtures still belong in ``conftest.py``.
 """
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -42,3 +45,32 @@ def make_client() -> AsyncClient:
         transport=ASGITransport(app=fastapi_app),
         base_url="https://testserver",
     )
+
+
+@asynccontextmanager
+async def opponent_session(
+    db_session: AsyncSession, username: str
+) -> AsyncIterator[tuple[AsyncClient, User]]:
+    """Async context manager that mints an ephemeral session on a fresh
+    client, renames the auto-generated user to ``username``, yields
+    ``(client, user)``, and closes the client on exit.
+
+    Used by signature-flow tests that need a second human who can act on the
+    match — typically ``POST /v1/matches/{id}/confirmation`` — without the
+    test setting up (and cleaning up) the session juggling itself.
+
+    Example::
+
+        async with opponent_session(db_session, "rival") as (opp_client, opp):
+            await _play_match_to_completion(
+                api_client, opp_client, opp.id, best_of=3, side_1_wins=True
+            )
+    """
+    client = make_client()
+    try:
+        user = await start_session(client, db_session)
+        user.username = username
+        await db_session.commit()
+        yield client, user
+    finally:
+        await client.aclose()

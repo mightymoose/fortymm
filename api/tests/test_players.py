@@ -567,6 +567,36 @@ async def test_list_player_matches_returns_perspective_paginated(
     assert items[1]["opponent"]["username"] == "rival.a"
 
 
+async def test_list_player_matches_result_is_null_while_awaiting_confirmation(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """``PlayerMatchRow.result`` is documented as ``None`` while in_progress.
+    The new signature flow sets ``MatchSide.won`` on ``POST /results`` (before
+    the opponent has confirmed), so the row would otherwise leak the
+    unratified outcome through ``/v1/players/{id}/matches``."""
+    await start_session(api_client, db_session)
+    target = await make_user(db_session, "awaiting.target")
+    rival = await make_user(db_session, "awaiting.rival")
+    # Simulate the post-/results, pre-/confirmation state: won is set, status
+    # is still in_progress. ``_record_match_with_winner`` already writes won
+    # on each side — pass status=in_progress to land on the awaiting state.
+    await _record_match_with_winner(
+        db_session,
+        target,
+        rival,
+        created_at=BASE_TIME,
+        status=MatchStatus.in_progress,
+    )
+
+    response = await api_client.get(f"/v1/players/{target.id}/matches")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 1
+    row = body["items"][0]
+    assert row["status"] == "in_progress"
+    assert row["result"] is None
+
+
 async def test_list_player_matches_excludes_other_players_matches(
     api_client: AsyncClient, db_session: AsyncSession
 ):

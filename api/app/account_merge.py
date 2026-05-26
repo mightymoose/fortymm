@@ -15,7 +15,7 @@ from typing import Any, cast
 from sqlalchemy import CursorResult, delete, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Match, MatchSidePlayer, RatingHistory, User
+from app.models import Match, MatchSidePlayer, MatchSignature, RatingHistory, User
 
 
 @dataclass(frozen=True)
@@ -38,6 +38,9 @@ async def merge_user(
       * ``from_user_id != to_user_id``.
     """
     matches_moved = await _repoint_match_side_players(
+        db, from_user_id=from_user_id, to_user_id=to_user_id
+    )
+    await _repoint_match_signatures(
         db, from_user_id=from_user_id, to_user_id=to_user_id
     )
 
@@ -97,6 +100,10 @@ async def merge_user(
     await db.execute(
         delete(MatchSidePlayer).where(MatchSidePlayer.user_id == from_user_id)
     )
+    # Same RESTRICT story for match_signatures — defensive drop after repoint.
+    await db.execute(
+        delete(MatchSignature).where(MatchSignature.user_id == from_user_id)
+    )
 
     # CASCADE cleans up user_tokens, user_roles, rating_history (user_id), and
     # any user_league_ratings / league_memberships rows that didn't re-point.
@@ -132,3 +139,30 @@ async def _repoint_match_side_players(
         {"from_id": from_user_id, "to_id": to_user_id},
     )
     return cast(CursorResult[Any], result).rowcount or 0
+
+
+async def _repoint_match_signatures(
+    db: AsyncSession,
+    *,
+    from_user_id: uuid.UUID,
+    to_user_id: uuid.UUID,
+) -> None:
+    """Re-point match_signatures from ephemeral → verified. UNIQUE(match_id,
+    user_id) collides only if both users somehow already signed the same
+    match — left out by NOT EXISTS; the ephemeral row will then be dropped by
+    the defensive ``DELETE`` in ``merge_user``."""
+    await db.execute(
+        text(
+            """
+            UPDATE match_signatures AS ms
+            SET user_id = :to_id
+            WHERE ms.user_id = :from_id
+              AND NOT EXISTS (
+                SELECT 1 FROM match_signatures other
+                WHERE other.user_id = :to_id
+                  AND other.match_id = ms.match_id
+              )
+            """
+        ),
+        {"from_id": from_user_id, "to_id": to_user_id},
+    )

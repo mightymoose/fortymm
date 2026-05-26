@@ -4,6 +4,7 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.models import (
     League,
@@ -13,7 +14,7 @@ from app.models import (
     MatchGameScore,
     MatchSide,
 )
-from tests._helpers import make_client, make_user, start_session
+from tests._helpers import make_client, make_user, opponent_session, start_session
 
 # ----- create -------------------------------------------------------------
 
@@ -414,19 +415,24 @@ async def test_list_q_filter_matches_caller_username(
 
 async def test_list_filter_by_status(api_client: AsyncClient, db_session: AsyncSession):
     await start_session(api_client, db_session)
-    opp = await make_user(db_session, "rival")
-    in_progress = await _create_match(api_client, opp.id, best_of=1)
-    # Finalize a separate match to flip it to completed.
-    completed_match = await _create_match(api_client, opp.id, best_of=1)
-    score_resp = await api_client.post(
-        f"/v1/matches/{completed_match['id']}/results",
-        json={
-            "games": [
-                {"game_number": 1, "side_1_points": 11, "side_2_points": 5},
-            ]
-        },
-    )
-    assert score_resp.status_code == 201
+    async with opponent_session(db_session, "rival") as (opp_client, opp):
+        in_progress = await _create_match(api_client, opp.id, best_of=1)
+        # Finalize a separate match to flip it to completed — post + confirm
+        # so the second signer's call lands the status transition.
+        completed_match = await _create_match(api_client, opp.id, best_of=1)
+        post = await api_client.post(
+            f"/v1/matches/{completed_match['id']}/results",
+            json={
+                "games": [
+                    {"game_number": 1, "side_1_points": 11, "side_2_points": 5},
+                ]
+            },
+        )
+        assert post.status_code == 201
+        confirm = await opp_client.post(
+            f"/v1/matches/{completed_match['id']}/confirmation"
+        )
+        assert confirm.status_code == 201
 
     listing = (
         await api_client.get("/v1/matches", params={"status": "in_progress"})
@@ -778,101 +784,158 @@ async def test_can_score_match_without_opponent(
 # ----- finalize (POST /v1/matches/{id}/results) ---------------------------
 
 
-async def test_finalize_replaces_scores_and_marks_completed(
+async def test_results_post_commits_canon_and_records_first_signature(
     api_client: AsyncClient, db_session: AsyncSession
 ):
+    """``POST /results`` commits the canonical games (obliterating the
+    scratchpad), sets ``side.won``, and inserts the caller's signature — but
+    leaves status at ``in_progress`` until the opponent confirms."""
     await start_session(api_client, db_session)
-    opp = await make_user(db_session, "rival")
-    match = await _create_match(api_client, opp.id, best_of=3)
+    async with opponent_session(db_session, "rival") as (opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=3)
 
-    # Pre-finalize, the FE has scratched in a totally different game 1 score.
-    # The /results payload is canon — it should win.
-    await api_client.post(
-        f"/v1/matches/{match['id']}/games/1/scores/new",
-        json={"side_1_points": 5, "side_2_points": 11},
-    )
+        # Pre-post, the FE has scratched in a totally different game 1 score.
+        # The /results payload is canon — it should win.
+        await api_client.post(
+            f"/v1/matches/{match['id']}/games/1/scores/new",
+            json={"side_1_points": 5, "side_2_points": 11},
+        )
 
-    response = await api_client.post(
-        f"/v1/matches/{match['id']}/results",
-        json={
+        response = await api_client.post(
+            f"/v1/matches/{match['id']}/results",
+            json={
+                "games": [
+                    {"game_number": 1, "side_1_points": 11, "side_2_points": 4},
+                    {"game_number": 2, "side_1_points": 11, "side_2_points": 7},
+                ]
+            },
+        )
+        assert response.status_code == 201
+        body = response.json()
+        # Status holds at in_progress with the awaiting-confirmation label —
+        # the result is on the table, the other side hasn't signed.
+        assert body["status"] == "in_progress"
+        assert body["status_label"] == "Awaiting confirmation"
+        assert body["can_score"] is False
+        assert body["can_finalize"] is False
+        assert body["can_confirm"] is False  # poster has already signed
+        assert len(body["signatures"]) == 1
+        sides = sorted(body["sides"], key=lambda s: s["side_number"])
+        # side.won is set on /results — the games show who won, irrespective
+        # of whether the result has been ratified yet.
+        assert [s["won"] for s in sides] == [True, False]
+        # Games + scores reflect the payload, not the scratchpad.
+        games = sorted(body["games"], key=lambda g: g["game_number"])
+        assert [g["game_number"] for g in games] == [1, 2]
+        assert games[0]["score"]["side_1_points"] == 11
+        assert games[0]["score"]["side_2_points"] == 4
+
+        # DB-side sanity: no orphan score rows from the obliterated scratchpad.
+        game_rows = (await db_session.execute(select(MatchGame))).scalars().all()
+        score_rows = (await db_session.execute(select(MatchGameScore))).scalars().all()
+        assert len(game_rows) == 2
+        assert len(score_rows) == 2
+
+        # The opponent confirms — match flips to completed.
+        confirm = await opp_client.post(f"/v1/matches/{match['id']}/confirmation")
+        assert confirm.status_code == 201
+        confirmed = confirm.json()
+        assert confirmed["status"] == "completed"
+        assert confirmed["status_label"] == "Final"
+        assert len(confirmed["signatures"]) == 2
+
+
+async def test_results_409_when_already_posted(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """A second ``POST /results`` on the same match (still awaiting
+    confirmation) bounces — the user should be calling /confirmation instead."""
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "rival") as (_opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=3)
+
+        payload = {
             "games": [
                 {"game_number": 1, "side_1_points": 11, "side_2_points": 4},
                 {"game_number": 2, "side_1_points": 11, "side_2_points": 7},
             ]
-        },
-    )
-    assert response.status_code == 201
-    body = response.json()
-    assert body["status"] == "completed"
-    assert body["status_label"] == "Final"
-    assert body["current_game"] is None
-    assert body["can_score"] is False
-    assert body["can_finalize"] is False
-    sides = sorted(body["sides"], key=lambda s: s["side_number"])
-    assert [s["games_won"] for s in sides] == [2, 0]
-    assert [s["won"] for s in sides] == [True, False]
-    # Games + scores reflect the payload, not the scratchpad.
-    games = sorted(body["games"], key=lambda g: g["game_number"])
-    assert [g["game_number"] for g in games] == [1, 2]
-    assert games[0]["score"]["side_1_points"] == 11
-    assert games[0]["score"]["side_2_points"] == 4
+        }
+        first = await api_client.post(
+            f"/v1/matches/{match['id']}/results", json=payload
+        )
+        assert first.status_code == 201
 
-    # DB-side sanity: no orphan score rows from the obliterated scratchpad.
-    game_rows = (await db_session.execute(select(MatchGame))).scalars().all()
-    score_rows = (await db_session.execute(select(MatchGameScore))).scalars().all()
-    assert len(game_rows) == 2
-    assert len(score_rows) == 2
+        second = await api_client.post(
+            f"/v1/matches/{match['id']}/results", json=payload
+        )
+        assert second.status_code == 409
 
 
-async def test_finalize_409_when_already_completed(
+async def test_score_endpoints_409_once_result_is_posted(
     api_client: AsyncClient, db_session: AsyncSession
 ):
+    """While awaiting confirmation, every per-game write returns 409.
+    Disputing rewinds: signatures clear, scores become editable again."""
     await start_session(api_client, db_session)
-    opp = await make_user(db_session, "rival")
-    match = await _create_match(api_client, opp.id, best_of=3)
+    async with opponent_session(db_session, "rival") as (_opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=3)
+        await api_client.post(
+            f"/v1/matches/{match['id']}/results",
+            json={
+                "games": [
+                    {"game_number": 1, "side_1_points": 11, "side_2_points": 4},
+                    {"game_number": 2, "side_1_points": 11, "side_2_points": 7},
+                ]
+            },
+        )
 
-    payload = {
-        "games": [
-            {"game_number": 1, "side_1_points": 11, "side_2_points": 4},
-            {"game_number": 2, "side_1_points": 11, "side_2_points": 7},
-        ]
-    }
-    first = await api_client.post(f"/v1/matches/{match['id']}/results", json=payload)
-    assert first.status_code == 201
-
-    second = await api_client.post(f"/v1/matches/{match['id']}/results", json=payload)
-    assert second.status_code == 409
+        # Every write path returns 409 while the posted result is awaiting
+        # confirmation.
+        post = await api_client.post(
+            f"/v1/matches/{match['id']}/games/1/scores/new",
+            json={"side_1_points": 8, "side_2_points": 11},
+        )
+        assert post.status_code == 409
+        put = await api_client.put(
+            f"/v1/matches/{match['id']}/games/1/scores",
+            json={"side_1_points": 8, "side_2_points": 11},
+        )
+        assert put.status_code == 409
+        delete = await api_client.delete(f"/v1/matches/{match['id']}/games/1/scores")
+        assert delete.status_code == 409
 
 
 async def test_score_endpoints_409_once_match_is_completed(
     api_client: AsyncClient, db_session: AsyncSession
 ):
+    """After /confirmation lands and the match is completed, every write
+    path 409s — there's no edit affordance on a finalized match."""
     await start_session(api_client, db_session)
-    opp = await make_user(db_session, "rival")
-    match = await _create_match(api_client, opp.id, best_of=3)
-    await api_client.post(
-        f"/v1/matches/{match['id']}/results",
-        json={
-            "games": [
-                {"game_number": 1, "side_1_points": 11, "side_2_points": 4},
-                {"game_number": 2, "side_1_points": 11, "side_2_points": 7},
-            ]
-        },
-    )
+    async with opponent_session(db_session, "rival") as (opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=3)
+        await api_client.post(
+            f"/v1/matches/{match['id']}/results",
+            json={
+                "games": [
+                    {"game_number": 1, "side_1_points": 11, "side_2_points": 4},
+                    {"game_number": 2, "side_1_points": 11, "side_2_points": 7},
+                ]
+            },
+        )
+        await opp_client.post(f"/v1/matches/{match['id']}/confirmation")
 
-    # Every write path returns 409 once the match is finalized.
-    post = await api_client.post(
-        f"/v1/matches/{match['id']}/games/1/scores/new",
-        json={"side_1_points": 8, "side_2_points": 11},
-    )
-    assert post.status_code == 409
-    put = await api_client.put(
-        f"/v1/matches/{match['id']}/games/1/scores",
-        json={"side_1_points": 8, "side_2_points": 11},
-    )
-    assert put.status_code == 409
-    delete = await api_client.delete(f"/v1/matches/{match['id']}/games/1/scores")
-    assert delete.status_code == 409
+        post = await api_client.post(
+            f"/v1/matches/{match['id']}/games/1/scores/new",
+            json={"side_1_points": 8, "side_2_points": 11},
+        )
+        assert post.status_code == 409
+        put = await api_client.put(
+            f"/v1/matches/{match['id']}/games/1/scores",
+            json={"side_1_points": 8, "side_2_points": 11},
+        )
+        assert put.status_code == 409
+        delete = await api_client.delete(f"/v1/matches/{match['id']}/games/1/scores")
+        assert delete.status_code == 409
 
 
 @pytest.mark.parametrize(
@@ -1103,16 +1166,18 @@ async def test_list_and_get_match_include_league(
 
 async def _play_match_to_completion(
     client: AsyncClient,
-    opponent_id: uuid.UUID,
+    opp_client: AsyncClient,
+    opp_id: uuid.UUID,
     best_of: int,
     side_1_wins: bool,
 ) -> dict:
-    """Create a match and finalize it. The chosen side wins the minimum
-    number of games needed to clinch. Returns the final payload."""
-    match = await _create_match(client, opponent_id, best_of=best_of)
+    """Create a match, post the result, and have the opponent confirm it —
+    the full sign-off dance. The chosen side wins the minimum number of games
+    needed to clinch. Returns the post-confirmation MatchDetails body."""
+    match = await _create_match(client, opp_id, best_of=best_of)
     needed = best_of // 2 + 1
     s1, s2 = (11, 5) if side_1_wins else (5, 11)
-    response = await client.post(
+    post = await client.post(
         f"/v1/matches/{match['id']}/results",
         json={
             "games": [
@@ -1121,7 +1186,10 @@ async def _play_match_to_completion(
             ]
         },
     )
-    body = response.json()
+    assert post.status_code == 201
+    confirm = await opp_client.post(f"/v1/matches/{match['id']}/confirmation")
+    assert confirm.status_code == 201
+    body = confirm.json()
     assert body["status"] == "completed"
     return body
 
@@ -1154,9 +1222,13 @@ async def test_details_recent_form_lists_each_player_previous_results(
     opp = await make_user(db_session, "form-rival")
     # Play two finished matches with a third party so each side has its own
     # prior history that's *not* a head-to-head meeting.
-    other = await make_user(db_session, "third-party")
-    await _play_match_to_completion(api_client, other.id, best_of=3, side_1_wins=True)
-    await _play_match_to_completion(api_client, other.id, best_of=3, side_1_wins=False)
+    async with opponent_session(db_session, "third-party") as (other_client, other):
+        await _play_match_to_completion(
+            api_client, other_client, other.id, best_of=3, side_1_wins=True
+        )
+        await _play_match_to_completion(
+            api_client, other_client, other.id, best_of=3, side_1_wins=False
+        )
     # Now start a head-to-head match and ask for its details.
     current = await _create_match(api_client, opp.id, best_of=3)
     detail = (await api_client.get(f"/v1/matches/{current['id']}")).json()
@@ -1174,11 +1246,11 @@ async def test_details_recent_form_excludes_the_current_match(
     api_client: AsyncClient, db_session: AsyncSession
 ):
     await start_session(api_client, db_session)
-    opp = await make_user(db_session, "exclude-rival")
     # Play to completion against this opp, then look up that match's detail.
-    finished = await _play_match_to_completion(
-        api_client, opp.id, best_of=3, side_1_wins=True
-    )
+    async with opponent_session(db_session, "exclude-rival") as (opp_client, opp):
+        finished = await _play_match_to_completion(
+            api_client, opp_client, opp.id, best_of=3, side_1_wins=True
+        )
 
     detail = (await api_client.get(f"/v1/matches/{finished['id']}")).json()
     forms = {f["user_id"]: f for f in detail["recent_form"]}
@@ -1194,17 +1266,20 @@ async def test_details_recent_form_excludes_matches_after_this_one(
     before this one was created counts; one completed after it does not."""
     me = await start_session(api_client, db_session)
     opp = await make_user(db_session, "after-rival")
-    other = await make_user(db_session, "after-third-party")
-    # A match I finished *before* the viewed match is created.
-    earlier = await _play_match_to_completion(
-        api_client, other.id, best_of=3, side_1_wins=True
-    )
-    # The match we'll view (in progress, so it stays "current" in time).
-    current = await _create_match(api_client, opp.id, best_of=3)
-    # A match I finish *after* the viewed match was created.
-    later = await _play_match_to_completion(
-        api_client, other.id, best_of=3, side_1_wins=False
-    )
+    async with opponent_session(db_session, "after-third-party") as (
+        other_client,
+        other,
+    ):
+        # A match I finished *before* the viewed match is created.
+        earlier = await _play_match_to_completion(
+            api_client, other_client, other.id, best_of=3, side_1_wins=True
+        )
+        # The match we'll view (in progress, so it stays "current" in time).
+        current = await _create_match(api_client, opp.id, best_of=3)
+        # A match I finish *after* the viewed match was created.
+        later = await _play_match_to_completion(
+            api_client, other_client, other.id, best_of=3, side_1_wins=False
+        )
 
     detail = (await api_client.get(f"/v1/matches/{current['id']}")).json()
     forms = {f["user_id"]: f for f in detail["recent_form"]}
@@ -1217,13 +1292,19 @@ async def test_details_head_to_head_counts_prior_meetings_per_side(
     api_client: AsyncClient, db_session: AsyncSession
 ):
     await start_session(api_client, db_session)
-    rival = await make_user(db_session, "h2h-rival")
-    # Three completed prior meetings: I win two, lose one.
-    await _play_match_to_completion(api_client, rival.id, best_of=3, side_1_wins=True)
-    await _play_match_to_completion(api_client, rival.id, best_of=3, side_1_wins=True)
-    await _play_match_to_completion(api_client, rival.id, best_of=3, side_1_wins=False)
-    # New in-progress match — H2H counts only completed *prior* meetings.
-    current = await _create_match(api_client, rival.id, best_of=5)
+    async with opponent_session(db_session, "h2h-rival") as (rival_client, rival):
+        # Three completed prior meetings: I win two, lose one.
+        await _play_match_to_completion(
+            api_client, rival_client, rival.id, best_of=3, side_1_wins=True
+        )
+        await _play_match_to_completion(
+            api_client, rival_client, rival.id, best_of=3, side_1_wins=True
+        )
+        await _play_match_to_completion(
+            api_client, rival_client, rival.id, best_of=3, side_1_wins=False
+        )
+        # New in-progress match — H2H counts only completed *prior* meetings.
+        current = await _create_match(api_client, rival.id, best_of=5)
 
     detail = (await api_client.get(f"/v1/matches/{current['id']}")).json()
     h2h = detail["head_to_head"]
@@ -1252,11 +1333,15 @@ async def test_details_recent_form_includes_pre_match_rating_and_career(
     api_client: AsyncClient, db_session: AsyncSession
 ):
     me = await start_session(api_client, db_session)
-    other = await make_user(db_session, "career-other")
-    # Two completed wins build up career stats *and* rating history before
-    # the head-to-head match is created.
-    await _play_match_to_completion(api_client, other.id, best_of=3, side_1_wins=True)
-    await _play_match_to_completion(api_client, other.id, best_of=3, side_1_wins=True)
+    async with opponent_session(db_session, "career-other") as (other_client, other):
+        # Two completed wins build up career stats *and* rating history before
+        # the head-to-head match is created.
+        await _play_match_to_completion(
+            api_client, other_client, other.id, best_of=3, side_1_wins=True
+        )
+        await _play_match_to_completion(
+            api_client, other_client, other.id, best_of=3, side_1_wins=True
+        )
 
     opp = await make_user(db_session, "pre-rating-opp")
     current = await _create_match(api_client, opp.id, best_of=3)
@@ -1288,10 +1373,10 @@ async def test_details_recent_form_excludes_self_from_career_count(
     their league-join seed (recorded before the match), but none of the
     match's own freshly-written rating rows leak into the pre-match view."""
     me = await start_session(api_client, db_session)
-    opp = await make_user(db_session, "self-exclude-opp")
-    finished = await _play_match_to_completion(
-        api_client, opp.id, best_of=3, side_1_wins=True
-    )
+    async with opponent_session(db_session, "self-exclude-opp") as (opp_client, opp):
+        finished = await _play_match_to_completion(
+            api_client, opp_client, opp.id, best_of=3, side_1_wins=True
+        )
 
     detail = (await api_client.get(f"/v1/matches/{finished['id']}")).json()
     forms = {f["user_id"]: f for f in detail["recent_form"]}
@@ -1307,12 +1392,13 @@ async def test_details_recent_form_excludes_self_from_career_count(
     assert mine["rating_before"] == 1500.0
     assert mine["rating_history"] == [1500.0]
 
-    # The opponent came in via make_user (no league join) and is only seeded
-    # when the match completes — after match creation — so they have no
-    # pre-match history.
+    # The opponent's session join seeded their rating too — but only the
+    # match-sourced rating row would predate the *next* match, and there
+    # isn't one — so their pre-match history for this match is just the
+    # seed (recorded before the match was created).
     opp_form = forms[str(opp.id)]
-    assert opp_form["rating_before"] is None
-    assert opp_form["rating_history"] == []
+    assert opp_form["rating_before"] == 1500.0
+    assert opp_form["rating_history"] == [1500.0]
 
 
 async def test_list_matches_csv_export(
@@ -1341,8 +1427,10 @@ async def test_list_matches_csv_includes_score_for_completed(
     api_client: AsyncClient, db_session: AsyncSession
 ):
     await start_session(api_client, db_session)
-    opp = await make_user(db_session, "csv-finished")
-    await _play_match_to_completion(api_client, opp.id, best_of=3, side_1_wins=True)
+    async with opponent_session(db_session, "csv-finished") as (opp_client, opp):
+        await _play_match_to_completion(
+            api_client, opp_client, opp.id, best_of=3, side_1_wins=True
+        )
 
     response = await api_client.get("/v1/matches.csv")
 
@@ -1366,3 +1454,289 @@ async def test_list_matches_csv_honors_status_filter(
     assert response.text.strip().splitlines() == [
         "Match ID,Created,Status,League,Side 1,Side 2,Score,Best of"
     ]
+
+
+# ----- signature flow (POST /confirmation + /dispute) ---------------------
+
+
+async def _post_results(client: AsyncClient, match_id: str, best_of: int = 3) -> dict:
+    """Caller wins the minimum games needed to clinch a best-of-N. Returns
+    the response body."""
+    needed = best_of // 2 + 1
+    response = await client.post(
+        f"/v1/matches/{match_id}/results",
+        json={
+            "games": [
+                {"game_number": n, "side_1_points": 11, "side_2_points": 4}
+                for n in range(1, needed + 1)
+            ]
+        },
+    )
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+async def test_confirmation_finalizes_and_lands_second_signature(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    me = await start_session(api_client, db_session)
+    async with opponent_session(db_session, "sig-opp") as (opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=3)
+        await _post_results(api_client, match["id"])
+
+        confirm = await opp_client.post(f"/v1/matches/{match['id']}/confirmation")
+        assert confirm.status_code == 201
+        body = confirm.json()
+        assert body["status"] == "completed"
+        assert body["status_label"] == "Final"
+        signers = {sig["user_id"] for sig in body["signatures"]}
+        assert signers == {str(me.id), str(opp.id)}
+        assert body["can_confirm"] is False
+
+
+async def test_dispute_clears_signatures_and_rewinds_to_in_progress(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """``POST /dispute`` deletes every signature on the match, drops the
+    side.won flags back to None, and leaves the canonical games in place so
+    the disputer can navigate to the contested game and PUT a correction."""
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "dispute-opp") as (opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=3)
+        await _post_results(api_client, match["id"])
+
+        dispute = await opp_client.post(f"/v1/matches/{match['id']}/dispute")
+        assert dispute.status_code == 200
+        body = dispute.json()
+        assert body["status"] == "in_progress"
+        assert body["status_label"] == "Live"
+        assert body["signatures"] == []
+        sides = sorted(body["sides"], key=lambda s: s["side_number"])
+        assert [s["won"] for s in sides] == [None, None]
+        # games_won still reflects the canonical scores (they're preserved so
+        # the disputer can edit just the contested one); only the "this side
+        # won" claim is rescinded.
+        assert [s["games_won"] for s in sides] == [2, 0]
+        # current_game must NOT point at a never-played game number — bo3
+        # decided 2-0 has no "game 3" to score, even though one slot is
+        # un-scored in 1..best_of. Otherwise the dashboard / list / scoring
+        # page deep-links into a phantom game.
+        assert body["current_game"] is None
+        assert body["can_score"] is False
+        # Canonical games stay around so the contested score can be edited.
+        games = sorted(body["games"], key=lambda g: g["game_number"])
+        assert [g["game_number"] for g in games] == [1, 2]
+        for g in games:
+            assert g["score"] is not None
+
+        # The disputer can now PUT a correction to flip the result.
+        put = await opp_client.put(
+            f"/v1/matches/{match['id']}/games/2/scores",
+            json={"side_1_points": 5, "side_2_points": 11},
+        )
+        assert put.status_code == 200
+
+
+async def test_results_on_solo_finalizes_with_no_signature_row(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """Solo matches (no opponent picked) keep today's auto-finalize behavior
+    on /results — there's no second party to attest, so the match flips
+    straight to completed and no signature row is inserted."""
+    await start_session(api_client, db_session)
+    match = (
+        await api_client.post("/v1/matches", json={"best_of": 1, "rated": False})
+    ).json()
+    body = await _post_results(api_client, match["id"], best_of=1)
+    assert body["status"] == "completed"
+    assert body["signatures"] == []
+
+
+async def test_confirmation_409_when_no_result_posted(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "early-confirm-opp") as (opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=3)
+        response = await opp_client.post(f"/v1/matches/{match['id']}/confirmation")
+        assert response.status_code == 409
+        assert "No posted result" in response.json()["detail"]
+
+
+async def test_dispute_409_when_no_signatures(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "early-dispute-opp") as (opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=3)
+        response = await opp_client.post(f"/v1/matches/{match['id']}/dispute")
+        assert response.status_code == 409
+
+
+async def test_signer_cannot_confirm_or_dispute_their_own_post(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """``/confirmation`` and ``/dispute`` both require the caller to be a
+    participant who *hasn't* yet signed. The first poster has already signed,
+    so they get 409 on both."""
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "self-sign-opp") as (_opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=3)
+        await _post_results(api_client, match["id"])
+
+        self_confirm = await api_client.post(f"/v1/matches/{match['id']}/confirmation")
+        assert self_confirm.status_code == 409
+        self_dispute = await api_client.post(f"/v1/matches/{match['id']}/dispute")
+        assert self_dispute.status_code == 409
+
+
+async def test_non_participant_cannot_confirm_or_dispute(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """A non-participant gets 404, mirroring the per-game write endpoints —
+    no way to learn the match exists from a write path."""
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "non-part-opp") as (opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=3)
+        await _post_results(api_client, match["id"])
+
+        # A third party — not the poster, not the opponent — can't sign.
+        async with make_client() as bystander_client:
+            await start_session(bystander_client, db_session)
+            confirm = await bystander_client.post(
+                f"/v1/matches/{match['id']}/confirmation"
+            )
+            assert confirm.status_code == 404
+            dispute = await bystander_client.post(f"/v1/matches/{match['id']}/dispute")
+            assert dispute.status_code == 404
+
+        # Sanity: the legit opponent can still confirm.
+        confirm = await opp_client.post(f"/v1/matches/{match['id']}/confirmation")
+        assert confirm.status_code == 201
+
+
+async def test_confirmation_409_after_already_finalized(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """Once both sides have signed and the match is completed, further
+    /confirmation calls 409. ``_enforce_confirmable`` catches it on the
+    ``status != in_progress`` gate."""
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "post-final-opp") as (opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=3)
+        await _post_results(api_client, match["id"])
+        first = await opp_client.post(f"/v1/matches/{match['id']}/confirmation")
+        assert first.status_code == 201
+
+        again = await opp_client.post(f"/v1/matches/{match['id']}/confirmation")
+        assert again.status_code == 409
+
+
+async def test_dispute_then_repost_finalizes_with_fresh_signatures(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """End-to-end: poster posts, opp disputes, poster re-posts, opp confirms.
+    The signature set after re-post contains exactly the new poster's row;
+    after confirm, both sides are present."""
+    me = await start_session(api_client, db_session)
+    async with opponent_session(db_session, "dispute-flow-opp") as (opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=3)
+        await _post_results(api_client, match["id"])
+
+        dispute = await opp_client.post(f"/v1/matches/{match['id']}/dispute")
+        assert dispute.status_code == 200
+        assert dispute.json()["signatures"] == []
+
+        # Re-post (same payload — doesn't matter what changed for this test).
+        re_post = await _post_results(api_client, match["id"])
+        assert re_post["status"] == "in_progress"
+        assert [sig["user_id"] for sig in re_post["signatures"]] == [str(me.id)]
+
+        confirm = await opp_client.post(f"/v1/matches/{match['id']}/confirmation")
+        assert confirm.status_code == 201
+        body = confirm.json()
+        assert body["status"] == "completed"
+        assert {sig["user_id"] for sig in body["signatures"]} == {
+            str(me.id),
+            str(opp.id),
+        }
+
+
+async def test_dispute_zeros_side_score_to_match_won_reset(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """The denormalized ``side.score`` column has to stay consistent with
+    ``side.won`` after a dispute. The BFF derives ``games_won`` from
+    ``match.games`` (so the API response keeps the canonical counts), but
+    any direct DB reader of ``side.score`` (analytics, future BFFs, the
+    rating recompute job) would otherwise see won=None alongside score>0
+    — a contradictory row state ``api/CLAUDE.md`` flags as a smell."""
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "side-score-opp") as (opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=3)
+        await _post_results(api_client, match["id"])
+        # After /results: side.score should reflect the win counts.
+        row = (
+            await db_session.execute(
+                select(Match)
+                .where(Match.id == uuid.UUID(match["id"]))
+                .options(selectinload(Match.sides))
+            )
+        ).scalar_one()
+        sides_by_number = {s.side_number: s for s in row.sides}
+        assert sides_by_number[1].score == 2
+        assert sides_by_number[2].score == 0
+
+        await opp_client.post(f"/v1/matches/{match['id']}/dispute")
+        db_session.expire_all()
+        row = (
+            await db_session.execute(
+                select(Match)
+                .where(Match.id == uuid.UUID(match["id"]))
+                .options(selectinload(Match.sides))
+            )
+        ).scalar_one()
+        sides_by_number = {s.side_number: s for s in row.sides}
+        # Both won AND score reset on dispute.
+        assert [sides_by_number[n].won for n in (1, 2)] == [None, None]
+        assert [sides_by_number[n].score for n in (1, 2)] == [0, 0]
+
+
+async def test_list_status_label_reflects_awaiting_confirmation(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """A list row for a match with a posted-but-unconfirmed result shows
+    the ``Awaiting confirmation`` label, even though ``status`` remains
+    ``in_progress`` — the FE renders the label directly."""
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "list-label-opp") as (_opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=3)
+        await _post_results(api_client, match["id"])
+
+    listing = (await api_client.get("/v1/matches")).json()
+    row = next(r for r in listing["items"] if r["id"] == match["id"])
+    assert row["status"] == "in_progress"
+    assert row["status_label"] == "Awaiting confirmation"
+
+
+async def test_list_row_can_confirm_flag_for_pending_signer(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """The matches list surfaces ``can_confirm`` so the FE can flag rows the
+    caller owes a signature on. The poster sees False (they signed); the
+    opponent sees True."""
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "list-can-confirm-opp") as (
+        opp_client,
+        opp,
+    ):
+        match = await _create_match(api_client, opp.id, best_of=3)
+        await _post_results(api_client, match["id"])
+
+        my_list = (await api_client.get("/v1/matches")).json()
+        my_row = next(r for r in my_list["items"] if r["id"] == match["id"])
+        assert my_row["can_confirm"] is False
+
+        opp_list = (await opp_client.get("/v1/matches")).json()
+        opp_row = next(r for r in opp_list["items"] if r["id"] == match["id"])
+        assert opp_row["can_confirm"] is True

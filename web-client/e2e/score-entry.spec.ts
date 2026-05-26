@@ -153,6 +153,8 @@ function projectMatchDetails(seed: Seed) {
     current_game: nextNumber !== null ? { game_number: nextNumber } : null,
     can_score: nextNumber !== null,
     can_finalize: canFinalizeSeed(seed),
+    can_confirm: false,
+    signatures: [],
   }
 }
 

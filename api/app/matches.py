@@ -32,6 +32,7 @@ from app.models import (
     MatchSettings,
     MatchSide,
     MatchSidePlayer,
+    MatchSignature,
     MatchStatus,
     RatingHistory,
     RatingHistorySource,
@@ -43,7 +44,6 @@ from app.players import escape_like
 from app.rate_limiting import RedisRateLimiter
 from app.ratings import get_calculator, state_rating_value, validate_state
 from app.schemas.match import (
-    STATUS_LABELS,
     MatchCreate,
     MatchDetails,
     MatchDetailsCurrentGame,
@@ -61,6 +61,7 @@ from app.schemas.match import (
     MatchListRow,
     MatchResultsGameWrite,
     MatchResultsWrite,
+    MatchSignatureView,
 )
 from app.schemas.rating import RatingChange
 from app.sessions import get_current_user, get_optional_user
@@ -108,12 +109,14 @@ def _side_schema(
 
 
 # Shared eager-load chain. Used by every read path that returns a hierarchical
-# match — async SQLAlchemy can't lazy-load mid-request, so all four collections
-# are pulled up front.
+# match — async SQLAlchemy can't lazy-load mid-request, so all collections are
+# pulled up front. Signatures are needed wherever ``can_finalize`` /
+# ``can_confirm`` / the awaiting-confirmation status label is computed.
 def match_eager_options() -> tuple[ExecutableOption, ...]:
     return (
         selectinload(Match.match_settings),
         selectinload(Match.league).selectinload(League.rating_strategy),
+        selectinload(Match.signatures),
         *_match_history_options(),
     )
 
@@ -161,6 +164,42 @@ def _is_participant(match: Match, user_id: uuid.UUID) -> bool:
     return my_side(match, user_id) is not None
 
 
+def _all_sides_have_players(match: Match) -> bool:
+    """Solo matches (no opponent picked) carry one player-less sentinel side.
+    The signature/confirmation flow needs a second human, so solo matches skip
+    it entirely; this is the predicate that detects that case."""
+    return len(match.sides) >= 2 and all(side.players for side in match.sides)
+
+
+def _all_sides_signed(match: Match) -> bool:
+    """True when every side has at least one of its players in
+    ``match.signatures``. Used to gate the in_progress → completed status
+    flip in ``POST /confirmation``."""
+    signers = {sig.user_id for sig in match.signatures}
+    return all(any(p.user_id in signers for p in side.players) for side in match.sides)
+
+
+def _status_label(match: Match) -> str:
+    """User-facing label for a match's lifecycle position. An ``in_progress``
+    match with at least one signature has a posted result waiting on the
+    other side — surface that distinctly so the FE doesn't need to know
+    about ``signatures`` to render it."""
+    if match.status == MatchStatus.in_progress and match.signatures:
+        return "Awaiting confirmation"
+    # Exhaustive — adding an enum member is a type error until handled.
+    match match.status:
+        case MatchStatus.pending:
+            return "Scheduled"
+        case MatchStatus.in_progress:
+            return "Live"
+        case MatchStatus.completed:
+            return "Final"
+        case MatchStatus.disputed:
+            return "Disputed"
+        case MatchStatus.voided:
+            return "Voided"
+
+
 def _games_to_win(best_of: int) -> int:
     return math.ceil(best_of / 2)
 
@@ -181,14 +220,27 @@ def side_win_counts(match: Match) -> dict[int, int]:
 
 
 def current_game_number(match: Match) -> int | None:
-    """The next un-scored game number for an in-progress match. ``None`` once
-    every game in ``1..best_of`` has a saved score, or when the match isn't
-    in progress (finalized / disputed / voided / settings missing).
+    """The next un-scored game number for an in-progress match. ``None`` when:
+
+    - the match isn't in progress (finalized / disputed / voided);
+    - a result is posted and awaiting confirmation (``match.signatures``
+      non-empty — score writes are locked);
+    - the currently-saved games already decide the match — even if some game
+      numbers in ``1..best_of`` were never played, there's no meaningful
+      "next game to play" (a bo3 won 2-0 has no game 3). Returning a
+      phantom number here would deep-link the dashboard / list / scoring
+      page to a game that doesn't exist.
 
     Game rows are created lazily by the score-write endpoints, so the next
     game to score may not have a ``MatchGame`` row yet — this helper exposes
     the number rather than an object so deeplinks work either way."""
     if match.status != MatchStatus.in_progress:
+        return None
+    if match.signatures:
+        return None
+    target = _games_to_win(match.match_settings.best_of)
+    wins = side_win_counts(match)
+    if any(c >= target for c in wins.values()):
         return None
     best_of = match.match_settings.best_of
     scored = {g.game_number for g in match.games if g.score is not None}
@@ -240,7 +292,7 @@ def _serialize_details(
     return MatchDetails(
         id=match.id,
         status=match.status,
-        status_label=STATUS_LABELS[match.status],
+        status_label=_status_label(match),
         league=MatchLeague(id=match.league.id, name=match.league.name),
         best_of=match.match_settings.best_of,
         games_to_win=_games_to_win(match.match_settings.best_of),
@@ -259,11 +311,21 @@ def _serialize_details(
             current_game is not None and len(match.sides) >= 2 and is_participant
         ),
         # True iff the saved games already form a decided, validly-ordered
-        # match — the FE flips the scoring page's submit button label to
-        # "Finalize match" when this is true.
+        # match AND no result is currently posted — the FE flips the scoring
+        # page's submit button label to "Post result" when this is true.
         can_finalize=(
             is_participant and len(match.sides) >= 2 and _can_finalize(match)
         ),
+        # True iff the current user can act on a posted result (Confirm or
+        # Dispute). Same predicate gates both endpoints; the FE picks which
+        # CTA to show based on whether the user has already signed.
+        can_confirm=(
+            current_user_id is not None and _can_confirm(match, current_user_id)
+        ),
+        signatures=[
+            MatchSignatureView(user_id=sig.user_id, signed_at=sig.signed_at)
+            for sig in sorted(match.signatures, key=lambda s: s.signed_at)
+        ],
         recent_form=extras.recent_form,
         head_to_head=extras.head_to_head,
     )
@@ -490,13 +552,14 @@ def _list_row(match: Match, current_user_id: uuid.UUID) -> MatchListRow:
     return MatchListRow(
         id=match.id,
         status=match.status,
-        status_label=STATUS_LABELS[match.status],
+        status_label=_status_label(match),
         league=MatchLeague(id=match.league.id, name=match.league.name),
         sides=[_side_schema(side, side_wins, current_user_id) for side in sides_sorted],
         best_of=match.match_settings.best_of,
         created_at=match.created_at,
         current_game_number=next_number if can_score else None,
         can_score=can_score,
+        can_confirm=_can_confirm(match, current_user_id),
     )
 
 
@@ -603,14 +666,69 @@ def _enforce_scorable(match: Match) -> None:
             detail="This match has no opponent and can't be scored.",
         )
     # ``completed`` lives here too — once a match is finalized via
-    # ``POST /v1/matches/{id}/results`` it's read-only. The 409 covers the
-    # per-game write endpoints *and* the re-finalize attempt.
+    # ``POST /v1/matches/{id}/results`` (and confirmed) it's read-only. The
+    # 409 covers the per-game write endpoints *and* re-posts of /results
+    # against a non-solo match that has either been finalized or is
+    # awaiting confirmation (the signatures branch below).
     if match.status in {
         MatchStatus.completed,
         MatchStatus.disputed,
         MatchStatus.voided,
     }:
         raise HTTPException(status_code=409, detail="This match is no longer scorable.")
+    # A posted result locks the scores until somebody calls /confirmation
+    # (finalize) or /dispute (rewind). Both per-game writes and a second
+    # /results call hit this branch.
+    if match.signatures:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "This match has a posted result awaiting confirmation. "
+                "Confirm or dispute it before editing scores."
+            ),
+        )
+
+
+def _enforce_confirmable(match: Match, user_id: uuid.UUID) -> None:
+    """Shared preconditions for ``POST /confirmation`` and ``POST /dispute``.
+    Caller is already known to be a participant (``_load_match_for_scoring``
+    handles the 404)."""
+    if not _all_sides_have_players(match):
+        raise HTTPException(
+            status_code=409,
+            detail="This match has no opponent and can't be signed.",
+        )
+    if match.status != MatchStatus.in_progress:
+        raise HTTPException(
+            status_code=409,
+            detail="This match is no longer awaiting confirmation.",
+        )
+    if not match.signatures:
+        raise HTTPException(
+            status_code=409,
+            detail="No posted result to act on. Post the result first.",
+        )
+    if any(sig.user_id == user_id for sig in match.signatures):
+        raise HTTPException(status_code=409, detail="You've already signed this match.")
+
+
+def _can_confirm(match: Match, user_id: uuid.UUID | None) -> bool:
+    """Mirrors ``_enforce_confirmable`` as a boolean for the BFF surface.
+    True iff a ``POST /confirmation`` or ``POST /dispute`` from ``user_id``
+    would currently succeed (ignoring transport-layer auth)."""
+    if user_id is None:
+        return False
+    if match.status != MatchStatus.in_progress:
+        return False
+    if not match.signatures:
+        return False
+    if not _all_sides_have_players(match):
+        return False
+    if not _is_participant(match, user_id):
+        return False
+    if any(sig.user_id == user_id for sig in match.signatures):
+        return False
+    return True
 
 
 async def _load_rating_changes(
@@ -1044,8 +1162,13 @@ def _games_payload_from_match(match: Match) -> list[MatchResultsGameWrite]:
 def _can_finalize(match: Match) -> bool:
     """Whether ``POST /v1/matches/{id}/results`` would succeed on the
     currently-saved scores (ignoring authorization). Drives the FE's
-    ``can_finalize`` flag and the submit button's adaptive label."""
+    ``can_finalize`` flag and the submit button's adaptive label.
+
+    Returns False once anyone has posted a result — the next action on a
+    signed match is /confirmation or /dispute, not another /results."""
     if match.status != MatchStatus.in_progress:
+        return False
+    if match.signatures:
         return False
     try:
         _validate_finalize_games(
@@ -1056,14 +1179,16 @@ def _can_finalize(match: Match) -> bool:
     return True
 
 
-async def _apply_finalized_match(
+async def _commit_canonical_games(
     db: AsyncSession,
     match: Match,
     payload: MatchResultsWrite,
     decided_side: int,
 ) -> None:
     """Replace ``match.games`` (and the attached score rows) with the canonical
-    payload and mark the match completed. The caller commits."""
+    payload and set ``side.score`` + ``side.won`` from it. **Does not change
+    ``match.status``** — the caller picks whether the result is final (solo)
+    or awaiting confirmation (non-solo)."""
     # ``Match.games`` cascades ``all, delete-orphan``; clearing the collection
     # marks each existing MatchGame (and via MatchGame.score's own cascade,
     # the MatchGameScore) for delete. We must flush the deletes before
@@ -1090,8 +1215,6 @@ async def _apply_finalized_match(
     for side in match.sides:
         side.score = new_wins.get(side.side_number, 0)
         side.won = side.side_number == decided_side
-
-    match.status = MatchStatus.completed
 
 
 # ----- scoring endpoints ---------------------------------------------------
@@ -1225,16 +1348,21 @@ async def delete_game_score(
     response_model=MatchDetails,
     status_code=status.HTTP_201_CREATED,
 )
-async def finalize_match(
+async def post_match_result(
     match_id: uuid.UUID,
     payload: MatchResultsWrite,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_session),
 ) -> MatchDetails:
-    """Take the request body as canon. Any previously-saved per-game scores
-    on this match are discarded; the payload's games (validated as a complete,
-    decided match) become the match's games + scores. Then we mark completed
-    and apply the rating update — exactly once."""
+    """Post the result of a match. Any previously-saved per-game scores are
+    discarded; the payload's games (validated as a complete, decided match)
+    become canon, and the caller's signature is recorded.
+
+    For a non-solo match the status stays ``in_progress`` until every side
+    signs — the other side acts on the posted result via ``POST /confirmation``
+    or ``POST /dispute``, and the rating update fires inside /confirmation
+    when the final signature lands. Solo matches (one side player-less)
+    finalize immediately here, since there's no second party to attest."""
     match = await _load_match_for_scoring(db, match_id, current_user.id)
     _enforce_scorable(match)
 
@@ -1245,8 +1373,85 @@ async def finalize_match(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    await _apply_finalized_match(db, match, payload, decided_side)
-    await _apply_rating_update(db, match)
+    await _commit_canonical_games(db, match, payload, decided_side)
+
+    if not _all_sides_have_players(match):
+        # Solo path: nobody else to sign — finalize immediately, no signature
+        # row inserted. Preserves today's solo-match behavior end-to-end.
+        match.status = MatchStatus.completed
+        await _apply_rating_update(db, match)
+    else:
+        # Non-solo path: caller is the first signer. Status remains
+        # in_progress until /confirmation lands the last needed signature.
+        match.signatures.append(MatchSignature(user_id=current_user.id))
+
+    await db.commit()
+
+    reloaded = await _load_match(db, match.id)
+    assert reloaded is not None
+    extras = await _load_view_extras(db, reloaded)
+    return _serialize_details(reloaded, current_user.id, extras)
+
+
+@router.post(
+    "/matches/{match_id}/confirmation",
+    response_model=MatchDetails,
+    status_code=status.HTTP_201_CREATED,
+)
+async def confirm_match_result(
+    match_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+) -> MatchDetails:
+    """Sign off on a posted result. When this is the last signature needed
+    (every side has at least one signing player) the match flips to
+    ``completed`` and the rating update runs — exactly once."""
+    match = await _load_match_for_scoring(db, match_id, current_user.id)
+    _enforce_confirmable(match, current_user.id)
+
+    match.signatures.append(MatchSignature(user_id=current_user.id))
+    # The new row is already visible in the collection (no flush needed).
+    if _all_sides_signed(match):
+        match.status = MatchStatus.completed
+        await _apply_rating_update(db, match)
+
+    await db.commit()
+
+    reloaded = await _load_match(db, match.id)
+    assert reloaded is not None
+    extras = await _load_view_extras(db, reloaded)
+    return _serialize_details(reloaded, current_user.id, extras)
+
+
+@router.post(
+    "/matches/{match_id}/dispute",
+    response_model=MatchDetails,
+)
+async def dispute_match_result(
+    match_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+) -> MatchDetails:
+    """Reject a posted result. Every signature is cleared and the side
+    win flags reset to ``None``; the canonical score rows themselves stay in
+    place so the disputer can navigate to the contested game and PUT a
+    corrected score. The per-game endpoints unblock automatically once
+    signatures are empty (see ``_enforce_scorable``)."""
+    match = await _load_match_for_scoring(db, match_id, current_user.id)
+    _enforce_confirmable(match, current_user.id)
+
+    match.signatures.clear()
+    for side in match.sides:
+        # Drop the "this side won" claim — the games stay around (so the
+        # disputer can edit the contested score), but until a fresh /results
+        # call ratifies a new outcome nobody has officially won. ``side.score``
+        # is the denormalized games-won mirror — keep it consistent with
+        # ``side.won`` here so a direct DB reader doesn't see won=None with
+        # score>0 (the games still imply 2-1 etc., but the BFF derives that
+        # from MatchGame, not from side.score).
+        side.won = None
+        side.score = 0
+
     await db.commit()
 
     reloaded = await _load_match(db, match.id)

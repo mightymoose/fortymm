@@ -399,13 +399,64 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Finalize Match
-         * @description Take the request body as canon. Any previously-saved per-game scores
-         *     on this match are discarded; the payload's games (validated as a complete,
-         *     decided match) become the match's games + scores. Then we mark completed
-         *     and apply the rating update — exactly once.
+         * Post Match Result
+         * @description Post the result of a match. Any previously-saved per-game scores are
+         *     discarded; the payload's games (validated as a complete, decided match)
+         *     become canon, and the caller's signature is recorded.
+         *
+         *     For a non-solo match the status stays ``in_progress`` until every side
+         *     signs — the other side acts on the posted result via ``POST /confirmation``
+         *     or ``POST /dispute``, and the rating update fires inside /confirmation
+         *     when the final signature lands. Solo matches (one side player-less)
+         *     finalize immediately here, since there's no second party to attest.
          */
-        post: operations["finalize_match_v1_matches__match_id__results_post"];
+        post: operations["post_match_result_v1_matches__match_id__results_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/matches/{match_id}/confirmation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Confirm Match Result
+         * @description Sign off on a posted result. When this is the last signature needed
+         *     (every side has at least one signing player) the match flips to
+         *     ``completed`` and the rating update runs — exactly once.
+         */
+        post: operations["confirm_match_result_v1_matches__match_id__confirmation_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/matches/{match_id}/dispute": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Dispute Match Result
+         * @description Reject a posted result. Every signature is cleared and the side
+         *     win flags reset to ``None``; the canonical score rows themselves stay in
+         *     place so the disputer can navigate to the contested game and PUT a
+         *     corrected score. The per-game endpoints unblock automatically once
+         *     signatures are empty (see ``_enforce_scorable``).
+         */
+        post: operations["dispute_match_result_v1_matches__match_id__dispute_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -813,6 +864,10 @@ export interface components {
             can_score: boolean;
             /** Can Finalize */
             can_finalize: boolean;
+            /** Can Confirm */
+            can_confirm: boolean;
+            /** Signatures */
+            signatures: components["schemas"]["MatchSignatureView"][];
             /** Recent Form */
             recent_form?: components["schemas"]["MatchDetailsPlayerForm"][];
             head_to_head?: components["schemas"]["MatchDetailsH2H"] | null;
@@ -1027,6 +1082,8 @@ export interface components {
             current_game_number: number | null;
             /** Can Score */
             can_score: boolean;
+            /** Can Confirm */
+            can_confirm: boolean;
         };
         /**
          * MatchResultsGameWrite
@@ -1051,6 +1108,24 @@ export interface components {
         MatchResultsWrite: {
             /** Games */
             games: components["schemas"]["MatchResultsGameWrite"][];
+        };
+        /**
+         * MatchSignatureView
+         * @description One participant's sign-off on the posted result. Surfaced on
+         *     ``MatchDetails`` so the FE can render "Awaiting <opponent>'s confirmation"
+         *     without joining client-side.
+         */
+        MatchSignatureView: {
+            /**
+             * User Id
+             * Format: uuid
+             */
+            user_id: string;
+            /**
+             * Signed At
+             * Format: date-time
+             */
+            signed_at: string;
         };
         /**
          * MatchStatus
@@ -2428,7 +2503,7 @@ export interface operations {
             };
         };
     };
-    finalize_match_v1_matches__match_id__results_post: {
+    post_match_result_v1_matches__match_id__results_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -2447,6 +2522,72 @@ export interface operations {
         responses: {
             /** @description Successful Response */
             201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MatchDetails"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    confirm_match_result_v1_matches__match_id__confirmation_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                match_id: string;
+            };
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MatchDetails"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    dispute_match_result_v1_matches__match_id__dispute_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                match_id: string;
+            };
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };

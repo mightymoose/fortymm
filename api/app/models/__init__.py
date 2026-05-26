@@ -6,6 +6,7 @@ from app.models.match_game_score import MatchGameScore
 from app.models.match_settings import MatchSettings, VerificationPolicy
 from app.models.match_side import MatchSide
 from app.models.match_side_player import MatchSidePlayer
+from app.models.match_signature import MatchSignature
 from app.models.permission import Permission
 from app.models.rating_history import RatingHistory, RatingHistorySource
 from app.models.rating_strategy import RatingStrategy
@@ -26,6 +27,7 @@ __all__ = [
     "MatchSettings",
     "MatchSide",
     "MatchSidePlayer",
+    "MatchSignature",
     "MatchStatus",
     "Permission",
     "RatingHistory",

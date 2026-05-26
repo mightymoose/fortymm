@@ -203,6 +203,8 @@ export function matchDetails(
     current_game: { game_number: 1 },
     can_score: true,
     can_finalize: false,
+    can_confirm: false,
+    signatures: [],
     recent_form: [mySide, opponentSide]
       .filter((s) => s.players.length > 0)
       .map((s) => ({
@@ -246,6 +248,7 @@ export function matchListRow(
     created_at: ISO,
     current_game_number: 1,
     can_score: true,
+    can_confirm: false,
     ...rest,
   }
 }

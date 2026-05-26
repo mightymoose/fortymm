@@ -23,7 +23,7 @@ from app.ratings import (
     validate_state,
 )
 from app.ratings.glicko2 import CALCULATOR as GLICKO2
-from tests._helpers import make_user, start_session
+from tests._helpers import make_user, opponent_session, start_session
 
 # ----- strategy seeding ----------------------------------------------------
 
@@ -119,15 +119,20 @@ def test_validate_state_rejects_extra_keys(
 
 
 async def _score_to_completion(
-    client: AsyncClient, opponent_id: uuid.UUID, best_of: int = 1
+    client: AsyncClient,
+    opp_client: AsyncClient,
+    opp_id: uuid.UUID,
+    best_of: int = 1,
 ) -> dict:
-    """Create a rated match and finalize it — current_user (side 1) wins.
-    Per-game endpoints are scratchpad-only post the decouple-scoring refactor,
-    so completion only happens via POST /results."""
+    """Create a rated match and run the full post + confirm dance —
+    ``client``'s user (side 1) wins. Rating updates apply on the confirm
+    call. Returns the post-finalization MatchDetails *as seen by* ``client``
+    (so ``is_current_user_side`` flags reflect the original poster, which is
+    what most callers want to assert against)."""
     create = await client.post(
         "/v1/matches",
         json={
-            "opponent_user_id": str(opponent_id),
+            "opponent_user_id": str(opp_id),
             "best_of": best_of,
             "rated": True,
         },
@@ -135,7 +140,7 @@ async def _score_to_completion(
     assert create.status_code == 201
     match = create.json()
     needed = best_of // 2 + 1
-    finalize = await client.post(
+    post = await client.post(
         f"/v1/matches/{match['id']}/results",
         json={
             "games": [
@@ -144,8 +149,14 @@ async def _score_to_completion(
             ]
         },
     )
-    assert finalize.status_code == 201
-    return finalize.json()
+    assert post.status_code == 201
+    confirm = await opp_client.post(f"/v1/matches/{match['id']}/confirmation")
+    assert confirm.status_code == 201
+    final = await client.get(f"/v1/matches/{match['id']}")
+    assert final.status_code == 200
+    body = final.json()
+    assert body["status"] == "completed"
+    return body
 
 
 async def test_completing_a_rated_match_writes_rating_history(
@@ -154,46 +165,103 @@ async def test_completing_a_rated_match_writes_rating_history(
     default_league: League,
 ):
     me = await start_session(api_client, db_session)
-    opp = await make_user(db_session, "rival")
-    body = await _score_to_completion(api_client, opp.id)
+    async with opponent_session(db_session, "rival") as (opp_client, opp):
+        body = await _score_to_completion(api_client, opp_client, opp.id)
 
-    # Two history rows, one per player, both linked to this match.
-    rows = (
-        (
-            await db_session.execute(
-                select(RatingHistory).where(
-                    RatingHistory.match_id == uuid.UUID(body["id"])
+        # Two history rows, one per player, both linked to this match.
+        rows = (
+            (
+                await db_session.execute(
+                    select(RatingHistory).where(
+                        RatingHistory.match_id == uuid.UUID(body["id"])
+                    )
                 )
             )
+            .scalars()
+            .all()
         )
-        .scalars()
-        .all()
-    )
-    assert len(rows) == 2
-    by_user = {row.user_id: row for row in rows}
-    winner = by_user[me.id]
-    loser = by_user[opp.id]
+        assert len(rows) == 2
+        by_user = {row.user_id: row for row in rows}
+        winner = by_user[me.id]
+        loser = by_user[opp.id]
 
-    assert winner.source == RatingHistorySource.match
-    assert loser.source == RatingHistorySource.match
-    assert winner.previous_rating_value == 1500.0
-    assert loser.previous_rating_value == 1500.0
-    assert winner.rating_value > 1500.0
-    assert loser.rating_value < 1500.0
-    assert winner.rating_strategy_id == default_league.rating_strategy_id
+        assert winner.source == RatingHistorySource.match
+        assert loser.source == RatingHistorySource.match
+        assert winner.previous_rating_value == 1500.0
+        assert loser.previous_rating_value == 1500.0
+        assert winner.rating_value > 1500.0
+        assert loser.rating_value < 1500.0
+        assert winner.rating_strategy_id == default_league.rating_strategy_id
 
-    # Current rating rows are upserted in lockstep.
-    ratings = (await db_session.execute(select(UserLeagueRating))).scalars().all()
-    assert {r.user_id for r in ratings} == {me.id, opp.id}
-    assert {r.league_id for r in ratings} == {default_league.id}
+        # Current rating rows are upserted in lockstep.
+        ratings = (await db_session.execute(select(UserLeagueRating))).scalars().all()
+        assert {r.user_id for r in ratings} >= {me.id, opp.id}
+        assert {r.league_id for r in ratings} == {default_league.id}
+
+
+async def test_ratings_only_apply_on_confirmation_not_results(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+):
+    """The post-#345 finalize moved ratings out of /results. With signatures
+    on top, ratings must hold off until the SECOND signature lands — the
+    /results call itself just records the first signer."""
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "delay-opp") as (opp_client, opp):
+        create = await api_client.post(
+            "/v1/matches",
+            json={
+                "opponent_user_id": str(opp.id),
+                "best_of": 1,
+                "rated": True,
+            },
+        )
+        match = create.json()
+        post = await api_client.post(
+            f"/v1/matches/{match['id']}/results",
+            json={
+                "games": [
+                    {"game_number": 1, "side_1_points": 11, "side_2_points": 4},
+                ]
+            },
+        )
+        assert post.status_code == 201
+        # No rating rows yet — opponent hasn't confirmed.
+        rows_after_post = (
+            (
+                await db_session.execute(
+                    select(RatingHistory).where(
+                        RatingHistory.match_id == uuid.UUID(match["id"])
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert rows_after_post == []
+
+        confirm = await opp_client.post(f"/v1/matches/{match['id']}/confirmation")
+        assert confirm.status_code == 201
+        rows_after_confirm = (
+            (
+                await db_session.execute(
+                    select(RatingHistory).where(
+                        RatingHistory.match_id == uuid.UUID(match["id"])
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(rows_after_confirm) == 2
 
 
 async def test_match_details_response_carries_rating_change(
     api_client: AsyncClient, db_session: AsyncSession
 ):
     await start_session(api_client, db_session)
-    opp = await make_user(db_session, "rival")
-    body = await _score_to_completion(api_client, opp.id)
+    async with opponent_session(db_session, "rival") as (opp_client, opp):
+        body = await _score_to_completion(api_client, opp_client, opp.id)
 
     my_side = next(s for s in body["sides"] if s["is_current_user_side"])
     opp_side = next(s for s in body["sides"] if not s["is_current_user_side"])
@@ -211,42 +279,45 @@ async def test_unrated_match_does_not_move_ratings(
     api_client: AsyncClient, db_session: AsyncSession
 ):
     await start_session(api_client, db_session)
-    opp = await make_user(db_session, "rival")
-    create = await api_client.post(
-        "/v1/matches",
-        json={
-            "opponent_user_id": str(opp.id),
-            "best_of": 1,
-            "rated": False,
-        },
-    )
-    match = create.json()
-    finalize = await api_client.post(
-        f"/v1/matches/{match['id']}/results",
-        json={
-            "games": [
-                {"game_number": 1, "side_1_points": 11, "side_2_points": 4},
-            ]
-        },
-    )
-    body = finalize.json()
-    for side in body["sides"]:
-        assert side["rating_change"] is None
+    async with opponent_session(db_session, "rival") as (opp_client, opp):
+        create = await api_client.post(
+            "/v1/matches",
+            json={
+                "opponent_user_id": str(opp.id),
+                "best_of": 1,
+                "rated": False,
+            },
+        )
+        match = create.json()
+        post = await api_client.post(
+            f"/v1/matches/{match['id']}/results",
+            json={
+                "games": [
+                    {"game_number": 1, "side_1_points": 11, "side_2_points": 4},
+                ]
+            },
+        )
+        assert post.status_code == 201
+        confirm = await opp_client.post(f"/v1/matches/{match['id']}/confirmation")
+        assert confirm.status_code == 201
+        body = confirm.json()
+        for side in body["sides"]:
+            assert side["rating_change"] is None
 
-    # The session user has an `initial` seed row from joining the league, but
-    # an unrated match must not produce any `match`-sourced history.
-    rows = (
-        (
-            await db_session.execute(
-                select(RatingHistory).where(
-                    RatingHistory.source == RatingHistorySource.match
+        # The session user has an `initial` seed row from joining the league,
+        # but an unrated match must not produce any `match`-sourced history.
+        rows = (
+            (
+                await db_session.execute(
+                    select(RatingHistory).where(
+                        RatingHistory.source == RatingHistorySource.match
+                    )
                 )
             )
+            .scalars()
+            .all()
         )
-        .scalars()
-        .all()
-    )
-    assert rows == []
+        assert rows == []
 
 
 async def test_manual_strategy_league_skips_rating_updates(
@@ -264,65 +335,71 @@ async def test_manual_strategy_league_skips_rating_updates(
     default.rating_strategy_id = rating_strategies["manual"].id
     await db_session.commit()
 
-    me = await start_session(api_client, db_session)
-    opp = await make_user(db_session, "rival")
-    body = await _score_to_completion(api_client, opp.id)
-    my_side = next(s for s in body["sides"] if s["is_current_user_side"])
-    assert my_side["rating_change"] is None
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "rival") as (opp_client, opp):
+        body = await _score_to_completion(api_client, opp_client, opp.id)
+        my_side = next(s for s in body["sides"] if s["is_current_user_side"])
+        assert my_side["rating_change"] is None
 
-    rows = (await db_session.execute(select(RatingHistory))).scalars().all()
-    assert rows == []
+        rows = (
+            (
+                await db_session.execute(
+                    select(RatingHistory).where(
+                        RatingHistory.source == RatingHistorySource.match
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert rows == []
 
-    # `me` joined the (now manual) default league via the session hook → has a
-    # row but with the manual strategy's null initial state. `rival` was
-    # created via ``make_user`` which doesn't route through league membership,
-    # so they have no row at all.
-    ratings = (await db_session.execute(select(UserLeagueRating))).scalars().all()
-    assert len(ratings) == 1
-    assert ratings[0].user_id == me.id
-    assert ratings[0].rating_value is None
-    assert ratings[0].rating_state is None
+        # Both session users have an `initial` seed row from joining the
+        # (now manual) default league, but with the strategy's null state.
+        ratings = (await db_session.execute(select(UserLeagueRating))).scalars().all()
+        assert all(r.rating_value is None for r in ratings)
+        assert all(r.rating_state is None for r in ratings)
 
 
 async def test_finalized_match_rejects_score_edits_and_keeps_rating_history(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    """Once a match is finalized, every write path 409s — there's no way to
-    silently re-apply (or duplicate) the rating update. Re-applying ratings
-    after a correction is its own feature (tied to dispute/void flows),
-    explicitly out of scope for v1."""
+    """Once a match is finalized (both signatures, status=completed) every
+    write path 409s — there's no way to silently re-apply (or duplicate) the
+    rating update. Re-applying ratings after a correction is its own feature
+    (tied to dispute/void flows), explicitly out of scope for v1."""
     await start_session(api_client, db_session)
-    opp = await make_user(db_session, "rival")
-    body = await _score_to_completion(api_client, opp.id)
+    async with opponent_session(db_session, "rival") as (opp_client, opp):
+        body = await _score_to_completion(api_client, opp_client, opp.id)
 
-    # Every score-write path is locked once the match is finalized.
-    put = await api_client.put(
-        f"/v1/matches/{body['id']}/games/1/scores",
-        json={"side_1_points": 11, "side_2_points": 5},
-    )
-    assert put.status_code == 409
-    re_finalize = await api_client.post(
-        f"/v1/matches/{body['id']}/results",
-        json={
-            "games": [
-                {"game_number": 1, "side_1_points": 11, "side_2_points": 5},
-            ]
-        },
-    )
-    assert re_finalize.status_code == 409
+        # Every score-write path is locked once the match is finalized.
+        put = await api_client.put(
+            f"/v1/matches/{body['id']}/games/1/scores",
+            json={"side_1_points": 11, "side_2_points": 5},
+        )
+        assert put.status_code == 409
+        re_finalize = await api_client.post(
+            f"/v1/matches/{body['id']}/results",
+            json={
+                "games": [
+                    {"game_number": 1, "side_1_points": 11, "side_2_points": 5},
+                ]
+            },
+        )
+        assert re_finalize.status_code == 409
 
-    rows = (
-        (
-            await db_session.execute(
-                select(RatingHistory).where(
-                    RatingHistory.match_id == uuid.UUID(body["id"])
+        rows = (
+            (
+                await db_session.execute(
+                    select(RatingHistory).where(
+                        RatingHistory.match_id == uuid.UUID(body["id"])
+                    )
                 )
             )
+            .scalars()
+            .all()
         )
-        .scalars()
-        .all()
-    )
-    assert len(rows) == 2  # still just the original pair from finalize
+        assert len(rows) == 2  # still just the original pair from finalize
 
 
 async def test_new_session_seeds_rating_for_default_league(
