@@ -261,31 +261,43 @@ function projectMatchView(data: MatchDetails, matchId: string): MatchView {
   }
 }
 
-export function MatchDetailsView({ matchId }: { matchId: string }) {
+export function MatchDetailsView({
+  matchId,
+  standalone = false,
+}: {
+  matchId: string
+  /** When true, render without AppShell — used by the public `/p/matches`
+   * route which has no signed-in user to drive the nav sidebar. Also
+   * suppresses the "Matches" breadcrumb crumb, which would 401 an anonymous
+   * viewer. */
+  standalone?: boolean
+}) {
   const { data, isLoading } = useMatch(matchId)
 
-  if (isLoading || !data) {
-    return (
-      <AppShell>
-        <MatchDetailsSkeleton />
-      </AppShell>
+  const body =
+    isLoading || !data ? (
+      <MatchDetailsSkeleton />
+    ) : (
+      <MatchDetailsPage
+        view={projectMatchView(data, matchId)}
+        matchId={matchId}
+        standalone={standalone}
+      />
     )
-  }
-
-  const view = projectMatchView(data, matchId)
-  return (
-    <AppShell>
-      <MatchDetailsPage view={view} matchId={matchId} />
-    </AppShell>
-  )
+  return standalone ? body : <AppShell>{body}</AppShell>
 }
 
 export function MatchDetailsError({
   error,
   reset,
+  standalone = false,
 }: {
   error: Error
   reset: () => void
+  /** Mirror of `MatchDetailsView`'s standalone — skip AppShell on the public
+   * route, and drop the "Back to matches" affordance (anonymous viewers
+   * can't reach /matches). */
+  standalone?: boolean
 }) {
   const router = useRouter()
   const status = error instanceof ApiError ? error.status : 0
@@ -297,29 +309,32 @@ export function MatchDetailsError({
   const message = notFound
     ? "We couldn't find that match."
     : 'Something went wrong loading this match.'
-  return (
-    <AppShell>
-      <div role="alert" className="md-error-state">
-        <div className="md-error-state__title">{message}</div>
-        {notFound ? (
+  const body = (
+    <div role="alert" className="md-error-state">
+      <div className="md-error-state__title">{message}</div>
+      {notFound ? (
+        // The public route has no /matches index to send anonymous viewers
+        // to; for them the 404 page stops at the message.
+        standalone ? null : (
           <Link to="/matches" className="md-btn md-btn--secondary">
             Back to matches
           </Link>
-        ) : (
-          <button
-            type="button"
-            className="md-btn md-btn--secondary"
-            onClick={() => {
-              reset()
-              router.invalidate()
-            }}
-          >
-            Try again
-          </button>
-        )}
-      </div>
-    </AppShell>
+        )
+      ) : (
+        <button
+          type="button"
+          className="md-btn md-btn--secondary"
+          onClick={() => {
+            reset()
+            router.invalidate()
+          }}
+        >
+          Try again
+        </button>
+      )}
+    </div>
   )
+  return standalone ? body : <AppShell>{body}</AppShell>
 }
 
 function MatchDetailsSkeleton() {
@@ -333,7 +348,15 @@ function MatchDetailsSkeleton() {
   )
 }
 
-function MatchDetailsPage({ view, matchId }: { view: MatchView; matchId: string }) {
+function MatchDetailsPage({
+  view,
+  matchId,
+  standalone,
+}: {
+  view: MatchView
+  matchId: string
+  standalone: boolean
+}) {
   const [shareOpen, setShareOpen] = useState(false)
   // Comments + share modal are still part of the design handoff but have no
   // real data behind them yet; gate them off and flip when each lands.
@@ -352,7 +375,7 @@ function MatchDetailsPage({ view, matchId }: { view: MatchView; matchId: string 
     <div className="match-details">
       <main className="md-page md-page--y">
         <div className="md-header">
-          <Breadcrumb matchId={matchId} />
+          <Breadcrumb matchId={matchId} standalone={standalone} />
           <div className="md-header__right">
             {view.scoreCta && (
               <Link
@@ -431,7 +454,24 @@ function Logo({ size = 26 }: { size?: number }) {
   )
 }
 
-function Breadcrumb({ matchId }: { matchId: string }) {
+function Breadcrumb({
+  matchId,
+  standalone,
+}: {
+  matchId: string
+  standalone: boolean
+}) {
+  // On the public route there's no /matches index for anonymous viewers, so
+  // collapse the breadcrumb to just the current match label.
+  if (standalone) {
+    return (
+      <div className="md-breadcrumb">
+        <span className="md-breadcrumb__current">
+          Match {matchId.slice(0, 6)}
+        </span>
+      </div>
+    )
+  }
   return (
     <div className="md-breadcrumb">
       <Link to="/matches">Matches</Link>

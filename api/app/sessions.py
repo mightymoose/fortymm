@@ -277,9 +277,25 @@ async def get_session_endpoint(
     return await _build_session_response(db, user)
 
 
-async def get_current_user(
+async def get_optional_user(
     session_cookie: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None,
     db: AsyncSession = Depends(get_session),
+) -> User | None:
+    """Resolve the user from the session cookie, returning ``None`` when no
+    valid session is present.
+
+    For endpoints that are open to anonymous callers but tailor their
+    response to a signed-in user when one is present (e.g. flagging the
+    current user's side in match details). Never mints a new session — that
+    behavior is reserved for ``GET /v1/session``.
+    """
+    if not session_cookie:
+        return None
+    return await _find_session_user(db, session_cookie)
+
+
+async def get_current_user(
+    user: Annotated[User | None, Depends(get_optional_user)],
 ) -> User:
     """Resolve the authenticated user from the session cookie.
 
@@ -287,7 +303,6 @@ async def get_current_user(
     endpoints that create or mutate data require an already-established
     session and respond ``401`` otherwise.
     """
-    user = await _find_session_user(db, session_cookie) if session_cookie else None
     if user is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

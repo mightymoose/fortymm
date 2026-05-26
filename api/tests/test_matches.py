@@ -285,6 +285,52 @@ async def test_get_unknown_match_is_404(
     assert response.status_code == 404
 
 
+# ----- anonymous viewer ---------------------------------------------------
+
+
+async def test_get_match_is_open_to_anonymous_callers(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """Same endpoint as the authed view backs the public `/p/matches/$id`
+    share route: anonymous callers get the same payload with no participant
+    flags and can_score=False."""
+    creator = await start_session(api_client, db_session)
+    opponent = await make_user(db_session, "anon.viewer.opp")
+    created = await _create_match(api_client, opponent.id)
+
+    async with make_client() as client:
+        response = await client.get(f"/v1/matches/{created['id']}")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["id"] == created["id"]
+    # An anonymous caller never gets a session minted just by viewing.
+    assert "session" not in response.cookies
+    # No current user → no participant flags, no Score CTA.
+    assert all(not s["is_current_user_side"] for s in body["sides"])
+    assert all(not p["is_current_user"] for s in body["sides"] for p in s["players"])
+    assert body["can_score"] is False
+    # The underlying players still appear on the two sides.
+    user_ids = {p["user_id"] for s in body["sides"] for p in s["players"]}
+    assert user_ids == {str(creator.id), str(opponent.id)}
+
+
+async def test_get_match_is_rate_limited_per_ip(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """Per-IP rate limit (60/min) protects the endpoint from being scraped
+    from a single source, now that anonymous callers can hit it."""
+    await start_session(api_client, db_session)
+    opponent = await make_user(db_session, "rl.match.opp")
+    created = await _create_match(api_client, opponent.id)
+
+    async with make_client() as client:
+        for i in range(60):
+            response = await client.get(f"/v1/matches/{created['id']}")
+            assert response.status_code == 200, (i, response.text)
+        over = await client.get(f"/v1/matches/{created['id']}")
+    assert over.status_code == 429
+
+
 # ----- list ---------------------------------------------------------------
 
 
