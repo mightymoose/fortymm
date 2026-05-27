@@ -46,6 +46,7 @@ async def test_dashboard_empty_when_user_has_no_matches(
     assert body["score_banners"] == []
     assert body["next_match"] is None
     assert body["recent_results"] == []
+    assert body["completed_match_count"] == 0
     # A fresh signup is auto-joined to the default Glicko-2 league with
     # initial state, so the rating widget lights up immediately with peak ==
     # current, a null streak, and a sparkline holding the lone seed point.
@@ -155,6 +156,7 @@ async def test_dashboard_returns_recent_results_for_completed_matches(
 
     body = (await api_client.get("/v1/dashboard")).json()
     assert len(body["recent_results"]) == 1
+    assert body["completed_match_count"] == 1
     result = body["recent_results"][0]
     assert result["match_id"] == match["id"]
     assert result["opponent_username"] == "rival"

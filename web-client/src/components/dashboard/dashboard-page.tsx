@@ -9,8 +9,9 @@ import type {
   DashboardScoreBanner,
 } from '@/api/dashboard'
 import { scoringNewRoute } from '@/api/matches'
-import { useSession } from '@/api/session'
+import { deriveEmailStatus, useSession } from '@/api/session'
 import { Overline } from '@/components/overline'
+import { GuestPersistBanner } from '@/components/dashboard/guest-persist-banner'
 import { fmtDateShort, fmtLongDate } from '@/lib/dates'
 import { formatRatingDelta } from '@/lib/rating'
 
@@ -1036,8 +1037,20 @@ export function DashboardPage() {
   const dashboard = useDashboard({ enabled: session.isSuccess })
   const isLoading = dashboard.isPending
   const data = dashboard.data
-  const username = session.data?.data.user.username
+  const user = session.data?.data.user
+  const username = user?.username
   const greeting = username ? `Hi, @${username}` : 'Hi'
+  // Guest with at least one completed match — "you have things to lose now".
+  // Zero-match guests and verified/pending-verification users never see this.
+  const showGuestPersistBanner =
+    user !== undefined &&
+    data !== undefined &&
+    deriveEmailStatus({
+      email: user.email ?? null,
+      confirmedAt: user.confirmed_at ?? null,
+      pendingEmail: user.pending_email ?? null,
+    }) === 'guest' &&
+    data.completed_match_count >= 1
   return (
     <div
       style={{
@@ -1048,6 +1061,12 @@ export function DashboardPage() {
         boxSizing: 'border-box',
       }}
     >
+      {showGuestPersistBanner && (
+        <GuestPersistBanner
+          matchCount={data.completed_match_count}
+          rating={data.rating ? Math.round(data.rating.current) : null}
+        />
+      )}
       <PageTitle greeting={greeting} />
       {isLoading ? (
         <SkeletonCard label="Loading score banner" height={140} />

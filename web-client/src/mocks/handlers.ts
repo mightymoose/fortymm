@@ -757,9 +757,8 @@ export const handlers = [
     const scoreBanners = mockMatches.map(projectScoreBanner).filter(notNull)
     const nextMatch =
       mockMatches.map(projectNextMatch).find(notNull) ?? null
-    const recentResults = mockMatches
-      .map(projectRecentResult)
-      .filter(notNull)
+    const completedMatches = mockMatches.map(projectRecentResult).filter(notNull)
+    const recentResults = completedMatches
       .sort((a, b) => b.completed_at.localeCompare(a.completed_at))
       .slice(0, 5)
     return HttpResponse.json({
@@ -767,6 +766,7 @@ export const handlers = [
       next_match: nextMatch,
       recent_results: recentResults,
       rating: projectRating(mockMatches),
+      completed_match_count: completedMatches.length,
     })
   }),
 

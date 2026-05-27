@@ -284,11 +284,15 @@ export function matchListResponse(
 export function dashboardResponse(
   overrides: Partial<DashboardResponse> = {},
 ): DashboardResponse {
+  const recent_results = overrides.recent_results ?? []
   return {
     score_banners: [],
     next_match: null,
-    recent_results: [],
+    recent_results,
     rating: dashboardRating(),
+    // Default mirrors the visible list. Override directly to model the
+    // "history exceeds the recent window" case the guest banner cares about.
+    completed_match_count: recent_results.length,
     ...overrides,
   }
 }

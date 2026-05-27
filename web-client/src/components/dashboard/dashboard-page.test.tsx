@@ -1,4 +1,5 @@
 import { render, screen, waitFor, within } from '@testing-library/react'
+import { userEvent } from '@testing-library/user-event'
 import {
   RouterProvider,
   createMemoryHistory,
@@ -8,7 +9,8 @@ import {
 } from '@tanstack/react-router'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { http, HttpResponse } from 'msw'
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { mockSession } from '@/mocks/handlers'
 import { server } from '@/mocks/server'
 import {
   dashboardRating,
@@ -16,6 +18,7 @@ import {
   dashboardResponse,
   dashboardScoreBanner,
 } from '@/test/factories'
+import { GUEST_PERSIST_DISMISS_KEY } from './guest-persist-banner'
 import { DashboardPage } from './dashboard-page'
 
 function renderDashboard() {
@@ -50,12 +53,18 @@ function renderDashboard() {
       )
     },
   })
+  const settingsRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/settings',
+    component: () => <div>Settings route</div>,
+  })
   const router = createRouter({
     routeTree: rootRoute.addChildren([
       dashboardRoute,
       newMatchRoute,
       matchesRoute,
       scoringRoute,
+      settingsRoute,
     ]),
     history: createMemoryHistory({ initialEntries: ['/dashboard'] }),
   })
@@ -314,5 +323,124 @@ describe('DashboardPage', () => {
     expect(more).toHaveTextContent('+2')
     expect(more).toHaveTextContent(/more pending/i)
     expect(more).toHaveAttribute('href', '/matches?q=rita.kovac&status=live')
+  })
+})
+
+describe('DashboardPage · guest persistence banner', () => {
+  // The mock session is module-shared mutable state; snapshot and restore it
+  // so the verified-user case doesn't bleed into other suites.
+  const originalConfirmedAt = mockSession.data.user.confirmed_at
+  const originalEmail = mockSession.data.user.email
+
+  beforeEach(() => {
+    window.sessionStorage.removeItem(GUEST_PERSIST_DISMISS_KEY)
+    mockSession.data.user.confirmed_at = originalConfirmedAt
+    mockSession.data.user.email = originalEmail
+  })
+
+  afterEach(() => {
+    window.sessionStorage.removeItem(GUEST_PERSIST_DISMISS_KEY)
+    mockSession.data.user.confirmed_at = originalConfirmedAt
+    mockSession.data.user.email = originalEmail
+  })
+
+  it("shows for a guest with one or more completed matches and quotes the user's history", async () => {
+    server.use(
+      http.get('*/v1/dashboard', () =>
+        HttpResponse.json(
+          dashboardResponse({
+            completed_match_count: 4,
+            rating: dashboardRating({ current: 1847 }),
+          }),
+        ),
+      ),
+    )
+    renderDashboard()
+
+    const banner = await screen.findByTestId('dashboard-guest-persist-banner')
+    expect(banner).toHaveTextContent('4')
+    expect(banner).toHaveTextContent(/matches and rating/i)
+    expect(banner).toHaveTextContent('1847')
+    expect(banner).toHaveTextContent(/live on this device only/i)
+    const cta = within(banner).getByRole('link', { name: /add an email/i })
+    expect(cta).toHaveAttribute('href', '/settings#sec-email')
+  })
+
+  it('drops the rating fragment when the user has no rated league', async () => {
+    server.use(
+      http.get('*/v1/dashboard', () =>
+        HttpResponse.json(
+          dashboardResponse({ completed_match_count: 1, rating: null }),
+        ),
+      ),
+    )
+    renderDashboard()
+
+    const banner = await screen.findByTestId('dashboard-guest-persist-banner')
+    expect(banner).toHaveTextContent('Your 1 match live on this device only.')
+    expect(banner).not.toHaveTextContent(/rating/i)
+  })
+
+  it('stays hidden for a zero-match guest — nothing to lose yet', async () => {
+    server.use(
+      http.get('*/v1/dashboard', () =>
+        HttpResponse.json(
+          dashboardResponse({ completed_match_count: 0, rating: null }),
+        ),
+      ),
+    )
+    renderDashboard()
+
+    // Wait until something else from the dashboard has rendered, then
+    // confirm the banner is absent.
+    await screen.findByRole('heading', { name: /Hi, @rita\.kovac/ })
+    expect(
+      screen.queryByTestId('dashboard-guest-persist-banner'),
+    ).not.toBeInTheDocument()
+  })
+
+  it('stays hidden for verified users regardless of match count', async () => {
+    mockSession.data.user.email = 'rita@example.com'
+    mockSession.data.user.confirmed_at = '2026-05-01T10:00:00Z'
+    server.use(
+      http.get('*/v1/dashboard', () =>
+        HttpResponse.json(dashboardResponse({ completed_match_count: 12 })),
+      ),
+    )
+    renderDashboard()
+
+    await screen.findByRole('heading', { name: /Hi, @rita\.kovac/ })
+    expect(
+      screen.queryByTestId('dashboard-guest-persist-banner'),
+    ).not.toBeInTheDocument()
+  })
+
+  it('disappears on dismiss and stays dismissed within the session', async () => {
+    server.use(
+      http.get('*/v1/dashboard', () =>
+        HttpResponse.json(dashboardResponse({ completed_match_count: 2 })),
+      ),
+    )
+    const { unmount } = renderDashboard()
+    const banner = await screen.findByTestId('dashboard-guest-persist-banner')
+    await userEvent.click(
+      within(banner).getByRole('button', { name: /dismiss/i }),
+    )
+    await waitFor(() =>
+      expect(
+        screen.queryByTestId('dashboard-guest-persist-banner'),
+      ).not.toBeInTheDocument(),
+    )
+    expect(
+      window.sessionStorage.getItem(GUEST_PERSIST_DISMISS_KEY),
+    ).toBe('1')
+
+    // Re-mount within the same "session" — the banner should remain hidden.
+    unmount()
+    renderDashboard()
+    await screen.findByRole('heading', { name: /Hi, @rita\.kovac/ })
+    expect(
+      screen.queryByTestId('dashboard-guest-persist-banner'),
+    ).not.toBeInTheDocument()
   })
 })

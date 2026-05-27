@@ -73,3 +73,7 @@ class DashboardResponse(BaseModel):
     next_match: DashboardNextMatch | None
     recent_results: list[DashboardRecentResult]
     rating: DashboardRating | None = None
+    # Total completed matches the current user participated in. The guest
+    # persistence banner uses this to reference history concretely ("Your N
+    # matches…") and to stay hidden until the user has any history at all.
+    completed_match_count: int
