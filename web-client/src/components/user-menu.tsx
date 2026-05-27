@@ -1,18 +1,19 @@
-import { Link } from '@tanstack/react-router'
-import { Settings } from 'lucide-react'
-import { useSession } from '@/api/session'
+import { Link, useNavigate } from '@tanstack/react-router'
+import { LogOut, Settings } from 'lucide-react'
+import { useLogout, useSession } from '@/api/session'
 import { UserAvatar } from '@/components/ui/user-avatar'
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 
 export function UserMenu() {
   const { data, isLoading, isError } = useSession()
+  const logout = useLogout()
+  const navigate = useNavigate()
 
   if (isLoading) {
     return (
@@ -49,13 +50,26 @@ export function UserMenu() {
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="min-w-44">
-        <DropdownMenuLabel className="truncate">{username}</DropdownMenuLabel>
-        <DropdownMenuSeparator />
         <DropdownMenuItem asChild>
           <Link to="/settings">
             <Settings />
             Settings
           </Link>
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem
+          variant="destructive"
+          data-testid="user-menu-logout"
+          onSelect={() => {
+            logout.mutate(undefined, {
+              onSuccess: () => {
+                void navigate({ to: '/dashboard' })
+              },
+            })
+          }}
+        >
+          <LogOut />
+          Log out
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>

@@ -36,8 +36,17 @@ function renderWithClient(ui: React.ReactElement) {
     path: '/settings',
     component: () => <div>Settings page</div>,
   })
+  const dashboardRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/dashboard',
+    component: () => <div>Dashboard page</div>,
+  })
   const router = createRouter({
-    routeTree: rootRoute.addChildren([indexRoute, settingsRoute]),
+    routeTree: rootRoute.addChildren([
+      indexRoute,
+      settingsRoute,
+      dashboardRoute,
+    ]),
     history: createMemoryHistory({ initialEntries: ['/'] }),
   })
   return render(
@@ -119,5 +128,27 @@ describe('UserMenu', () => {
 
     const settings = await screen.findByRole('menuitem', { name: /settings/i })
     expect(settings).toHaveAttribute('href', '/settings')
+  })
+
+  it('clicking Log out calls DELETE /v1/session and redirects to /dashboard', async () => {
+    let deleteCalls = 0
+    server.use(
+      http.delete('*/v1/session', () => {
+        deleteCalls += 1
+        return new HttpResponse(null, { status: 204 })
+      }),
+    )
+
+    renderWithClient(<UserMenu />)
+
+    await screen.findByText(mockSession.data.user.username)
+    await userEvent.click(screen.getByTestId('user-menu'))
+
+    await userEvent.click(await screen.findByTestId('user-menu-logout'))
+
+    await waitFor(() => {
+      expect(deleteCalls).toBe(1)
+    })
+    expect(await screen.findByText('Dashboard page')).toBeInTheDocument()
   })
 })

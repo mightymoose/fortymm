@@ -141,6 +141,21 @@ export function useRequestLogin() {
   })
 }
 
+export function useLogout() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (): Promise<void> => {
+      unwrap('sign out', await api.DELETE('/v1/session'), { allowEmpty: true })
+    },
+    // Drop ALL cached per-user data (matches, dashboard, players, ...), not
+    // just SESSION_QUERY_KEY — otherwise the prior user's BFF responses leak
+    // into the next ephemeral session.
+    onSuccess: () => {
+      qc.clear()
+    },
+  })
+}
+
 export function useConsumeLoginToken() {
   const qc = useQueryClient()
   return useMutation({

@@ -327,6 +327,10 @@ export const handlers = [
     await delay(600)
     return HttpResponse.json(mockSession)
   }),
+  http.delete('*/v1/session', async () => {
+    await delay(150)
+    return new HttpResponse(null, { status: 204 })
+  }),
   // ----- /v1/players list + per-player profile + per-player matches ------
   // BFF endpoints — each returns exactly what its consumer page needs. The
   // dev-only handlers below synthesize deterministic W-L + form so the

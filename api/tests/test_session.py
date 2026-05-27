@@ -99,6 +99,49 @@ async def test_creates_new_session_when_cookie_invalid(
     assert tokens[0].token == hashlib.sha256(new_token.encode("utf-8")).digest()
 
 
+def _assert_session_cookie_cleared(response) -> None:
+    # delete_cookie sets max-age=0 (and may also send expires=Thu, 01 Jan 1970...).
+    # Either signal is sufficient.
+    cookie_header = response.headers.get("set-cookie", "").lower()
+    assert "max-age=0" in cookie_header or "expires=thu, 01 jan 1970" in cookie_header
+
+
+async def test_delete_session_revokes_token_and_clears_cookie(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    first = await api_client.get("/v1/session")
+    raw_token = first.cookies.get(SESSION_COOKIE_NAME)
+    assert raw_token
+
+    response = await api_client.delete("/v1/session")
+    assert response.status_code == 204
+    _assert_session_cookie_cleared(response)
+
+    tokens = (await db_session.execute(select(UserToken))).scalars().all()
+    assert tokens == []
+
+
+@pytest.mark.parametrize(
+    "cookie_value",
+    [None, "not-a-real-token"],
+    ids=["no_cookie", "unknown_cookie"],
+)
+async def test_delete_session_is_idempotent(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    cookie_value: str | None,
+):
+    if cookie_value is not None:
+        api_client.cookies.set(SESSION_COOKIE_NAME, cookie_value, domain="testserver")
+    response = await api_client.delete("/v1/session")
+    assert response.status_code == 204
+    _assert_session_cookie_cleared(response)
+
+    # No prior GET — DELETE must not mint a user.
+    users = (await db_session.execute(select(User))).scalars().all()
+    assert users == []
+
+
 async def test_token_is_stored_hashed_not_plaintext(
     api_client: AsyncClient, db_session: AsyncSession
 ):
