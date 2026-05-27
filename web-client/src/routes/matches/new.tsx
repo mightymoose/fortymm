@@ -514,6 +514,9 @@ function RatedField({
           role="switch"
           aria-checked={effectiveRated}
           aria-label="Rated match"
+          aria-describedby={
+            effectiveRated && isGuest ? 'nm-rated-guest-hint' : undefined
+          }
           disabled={!ratable}
           onClick={() => ratable && setRated(!rated)}
         />
@@ -525,7 +528,7 @@ function RatedField({
         </div>
       </div>
       {effectiveRated && isGuest && (
-        <p className="nm-rated-guest-hint">
+        <p id="nm-rated-guest-hint" className="nm-rated-guest-hint">
           Your rating sticks around once you{' '}
           <Link to="/settings" hash="sec-email" className="nm-rated-guest-link">
             add an email
