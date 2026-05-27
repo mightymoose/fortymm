@@ -130,16 +130,52 @@ describe('SaveYourMatch', () => {
     expect(within(prompt).getByText(/TAKES 20s/)).toBeInTheDocument()
   })
 
-  it('hides on a live (not-yet-finalized) match', async () => {
+  it('also fires on a live (in-progress) match so a guest who closes the tab before sign-off still gets nudged', async () => {
     withSession({ user: { email: null, confirmed_at: null } })
     const live = matchDetails({
       id: 'm-live',
       status: 'in_progress',
       status_label: 'Live',
+      sides: [
+        {
+          side_number: 1,
+          players: [
+            { user_id: 'u-me', username: 'rita.kovac', is_current_user: true },
+          ],
+          games_won: 2,
+          won: null,
+          is_current_user_side: true,
+        },
+        {
+          side_number: 2,
+          players: [
+            { user_id: 'u-opp', username: 'okafor.d', is_current_user: false },
+          ],
+          games_won: 1,
+          won: null,
+          is_current_user_side: false,
+        },
+      ],
     })
     withMatch('m-live', live)
 
-    const { container } = renderDetails('m-live')
+    renderDetails('m-live')
+
+    expect(
+      await screen.findByRole('region', { name: PROMPT_REGION }),
+    ).toBeInTheDocument()
+  })
+
+  it('hides on an upcoming (not-yet-started) match', async () => {
+    withSession({ user: { email: null, confirmed_at: null } })
+    const upcoming = matchDetails({
+      id: 'm-upcoming',
+      status: 'pending',
+      status_label: 'Scheduled',
+    })
+    withMatch('m-upcoming', upcoming)
+
+    const { container } = renderDetails('m-upcoming')
 
     await waitFor(() =>
       expect(container.querySelector('.md-hero')).toBeInTheDocument(),
