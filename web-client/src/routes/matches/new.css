@@ -664,6 +664,21 @@
   line-height: 1.4;
   color: var(--fg-3);
 }
+.nm-rated-guest-hint {
+  margin: 8px 2px 0;
+  font: 400 12px var(--font-ui);
+  line-height: 1.4;
+  color: var(--fg-3);
+}
+.nm-rated-guest-link {
+  color: var(--ball-500);
+  text-decoration: underline;
+  text-decoration-color: rgba(255, 122, 26, 0.4);
+  text-underline-offset: 2px;
+}
+.nm-rated-guest-link:hover {
+  text-decoration-color: var(--ball-500);
+}
 
 /* --- Submit row --- */
 .nm-summary {

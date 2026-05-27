@@ -41,6 +41,11 @@ function renderNewMatch() {
     path: '/dashboard',
     component: () => <div>Dashboard route</div>,
   })
+  const settingsRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/settings',
+    component: () => <div>Settings route</div>,
+  })
   const scoringRoute = createRoute({
     getParentRoute: () => rootRoute,
     path: '/matches/$matchId/games/$gameNumber/scores/new',
@@ -53,6 +58,7 @@ function renderNewMatch() {
     routeTree: rootRoute.addChildren([
       newMatchRoute,
       dashboardRoute,
+      settingsRoute,
       scoringRoute,
     ]),
     history: createMemoryHistory({ initialEntries: ['/matches/new'] }),
@@ -319,6 +325,78 @@ describe('NewMatchPage — recent opponents', () => {
     expect(
       await screen.findByRole('button', { name: /ada\.lovelace/i }),
     ).toBeInTheDocument()
+  })
+})
+
+describe('NewMatchPage — rated guest hint', () => {
+  function recentWithOne() {
+    return http.get('*/v1/players/recent', () =>
+      HttpResponse.json([{ id: 'pl-1', username: 'ada.lovelace' }]),
+    )
+  }
+
+  it('shows a tip linking to the email settings when a guest flips Rated on', async () => {
+    const user = userEvent.setup()
+    server.use(recentWithOne())
+    renderNewMatch()
+
+    // No hint before the toggle is engaged — the moment of opt-in is the
+    // trigger, not page load.
+    await screen.findByRole('button', { name: /ada\.lovelace/i })
+    expect(screen.queryByRole('link', { name: /add an email/i })).toBeNull()
+
+    await user.click(screen.getByRole('button', { name: /ada\.lovelace/i }))
+    await user.click(screen.getByRole('switch', { name: /rated match/i }))
+
+    const link = await screen.findByRole('link', { name: /add an email/i })
+    expect(link).toHaveAttribute('href', '/settings#sec-email')
+  })
+
+  it('hides the tip again when Rated is toggled off', async () => {
+    const user = userEvent.setup()
+    server.use(recentWithOne())
+    renderNewMatch()
+
+    await user.click(
+      await screen.findByRole('button', { name: /ada\.lovelace/i }),
+    )
+    const ratedSwitch = screen.getByRole('switch', { name: /rated match/i })
+    await user.click(ratedSwitch)
+    expect(
+      await screen.findByRole('link', { name: /add an email/i }),
+    ).toBeInTheDocument()
+
+    await user.click(ratedSwitch)
+    expect(screen.queryByRole('link', { name: /add an email/i })).toBeNull()
+  })
+
+  it('does not show the tip for a user with a confirmed email', async () => {
+    const user = userEvent.setup()
+    server.use(
+      http.get('*/v1/session', () =>
+        HttpResponse.json(
+          sessionResponse({
+            user: {
+              email: 'rita@example.com',
+              confirmed_at: '2026-01-01T00:00:00Z',
+            },
+          }),
+        ),
+      ),
+      recentWithOne(),
+    )
+    renderNewMatch()
+
+    await user.click(
+      await screen.findByRole('button', { name: /ada\.lovelace/i }),
+    )
+    await user.click(screen.getByRole('switch', { name: /rated match/i }))
+
+    // The toggle is on, but the rating-durability question doesn't apply.
+    expect(
+      screen.getByRole('switch', { name: /rated match/i }),
+    ).toHaveAttribute('aria-checked', 'true')
+    expect(screen.queryByRole('link', { name: /add an email/i })).toBeNull()
   })
 })
 

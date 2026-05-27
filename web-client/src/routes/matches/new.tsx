@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
-import { createFileRoute, useNavigate } from '@tanstack/react-router'
+import { Link, createFileRoute, useNavigate } from '@tanstack/react-router'
 import { ArrowRight, Search } from 'lucide-react'
 import { z } from 'zod'
 
 import { AppShell } from '@/components/app-shell'
 import { ApiError } from '@/api/client'
-import { useSession } from '@/api/session'
+import { deriveEmailStatus, useSession } from '@/api/session'
 import {
   nextScoringDestination,
   useCreateMatch,
@@ -96,6 +96,16 @@ function MatchCard() {
   const [submitted, setSubmitted] = useState(false)
 
   const me = session?.data.user ?? null
+  // The hint nudges guests toward claiming an account so their rated history
+  // survives a cookie wipe. Mirror save-your-match.tsx by using the strictest
+  // 'guest' status — users with a pending or confirmed email don't need this.
+  const isGuest =
+    me != null &&
+    deriveEmailStatus({
+      email: me.email ?? null,
+      confirmedAt: me.confirmed_at ?? null,
+      pendingEmail: me.pending_email ?? null,
+    }) === 'guest'
 
   const validation = matchFormSchema.safeParse({
     hasOpponent: opponent !== null,
@@ -171,7 +181,12 @@ function MatchCard() {
 
       <div className="nm-settings">
         <BestOfField bestOf={bestOf} setBestOf={setBestOf} />
-        <RatedField rated={rated} setRated={setRated} opponent={opponent} />
+        <RatedField
+          rated={rated}
+          setRated={setRated}
+          opponent={opponent}
+          isGuest={isGuest}
+        />
       </div>
 
       <SubmitRow
@@ -467,10 +482,12 @@ function RatedField({
   rated,
   setRated,
   opponent,
+  isGuest,
 }: {
   rated: boolean
   setRated: (rated: boolean) => void
   opponent: Opponent | null
+  isGuest: boolean
 }) {
   const ratable = opponent !== null
   const effectiveRated = rated && ratable
@@ -497,6 +514,9 @@ function RatedField({
           role="switch"
           aria-checked={effectiveRated}
           aria-label="Rated match"
+          aria-describedby={
+            effectiveRated && isGuest ? 'nm-rated-guest-hint' : undefined
+          }
           disabled={!ratable}
           onClick={() => ratable && setRated(!rated)}
         />
@@ -507,6 +527,15 @@ function RatedField({
           <div className="d">{description}</div>
         </div>
       </div>
+      {effectiveRated && isGuest && (
+        <p id="nm-rated-guest-hint" className="nm-rated-guest-hint">
+          Your rating sticks around once you{' '}
+          <Link to="/settings" hash="sec-email" className="nm-rated-guest-link">
+            add an email
+          </Link>
+          .
+        </p>
+      )}
     </div>
   )
 }
