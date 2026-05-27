@@ -15,7 +15,14 @@ export interface paths {
         get: operations["get_session_endpoint_v1_session_get"];
         put?: never;
         post?: never;
-        delete?: never;
+        /**
+         * Delete Session Endpoint
+         * @description Sign the caller out *of this browser*. Revokes the token row tied to
+         *     the current cookie (other devices keep their own tokens) and clears the
+         *     cookie. Idempotent — a missing or already-invalid cookie still 204s and
+         *     clears whatever the browser is holding.
+         */
+        delete: operations["delete_session_endpoint_v1_session_delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1536,6 +1543,35 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["SessionResponse"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_session_endpoint_v1_session_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

@@ -262,6 +262,19 @@ def _set_session_cookie(response: Response, raw_token: str) -> None:
     )
 
 
+def _clear_session_cookie(response: Response) -> None:
+    # Must mirror _set_session_cookie's attributes — browsers match
+    # cookies on (name, path, domain) and silently drop a clearing cookie
+    # whose attributes don't match the original.
+    response.delete_cookie(
+        key=SESSION_COOKIE_NAME,
+        path="/",
+        httponly=True,
+        secure=_cookie_secure(),
+        samesite="lax",
+    )
+
+
 @router.get("/v1/session", response_model=SessionResponse)
 async def get_session_endpoint(
     response: Response,
@@ -275,6 +288,27 @@ async def get_session_endpoint(
         user, raw_token = await _create_session(db)
         _set_session_cookie(response, raw_token)
     return await _build_session_response(db, user)
+
+
+@router.delete("/v1/session", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_session_endpoint(
+    response: Response,
+    session_cookie: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None,
+    db: AsyncSession = Depends(get_session),
+) -> None:
+    """Sign the caller out *of this browser*. Revokes the token row tied to
+    the current cookie (other devices keep their own tokens) and clears the
+    cookie. Idempotent — a missing or already-invalid cookie still 204s and
+    clears whatever the browser is holding."""
+    if session_cookie:
+        await db.execute(
+            delete(UserToken).where(
+                UserToken.token == _hash_token(session_cookie),
+                UserToken.context == SESSION_TOKEN_CONTEXT,
+            )
+        )
+        await db.commit()
+    _clear_session_cookie(response)
 
 
 async def get_optional_user(
