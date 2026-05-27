@@ -2230,6 +2230,154 @@ body.dark.fortymm-theme {
   gap: 8px;
   flex-shrink: 0;
 }
+/* ---------- Save-your-match prompt (guest finalizer nudge) ----------
+   Sits above the hero scoreboard, which carries no top margin of its own;
+   md-save's margin-bottom supplies the gap below the prompt. (Spacing
+   between top-level page blocks is heterogeneous — see md-header's
+   margin-bottom, md-col-2's margin-top.) */
+.fortymm-theme .md-save,
+.fortymm-theme .md-save-receipt {
+  margin-bottom: 24px;
+}
+.fortymm-theme .md-save {
+  position: relative;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-lg);
+  padding: 22px 26px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  box-shadow: var(--shadow-sm);
+}
+.fortymm-theme .md-save__hd {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.fortymm-theme .md-save__kicker {
+  font: 600 11px var(--font-mono);
+  color: var(--ball-500);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.fortymm-theme .md-save__anchor {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font: 500 13px var(--font-ui);
+  color: var(--fg-2);
+}
+.fortymm-theme .md-save__avatar {
+  width: 28px;
+  height: 28px;
+  font-size: 11px;
+}
+.fortymm-theme .md-save__avatar.md-avatar--win {
+  box-shadow: none;
+}
+.fortymm-theme .md-save__blips {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.fortymm-theme .md-save__blip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: var(--r-sm);
+  background: var(--bg-panel);
+  color: var(--fg-3);
+  font: 700 12px var(--font-mono);
+  border: 1px solid var(--border-subtle);
+  font-variant-numeric: tabular-nums;
+}
+.fortymm-theme .md-save__blip--win {
+  background: rgba(0, 226, 154, 0.14);
+  color: var(--serve-500);
+  border-color: rgba(0, 226, 154, 0.3);
+}
+.fortymm-theme .md-save__blip-dash {
+  font: 500 11px var(--font-mono);
+  color: var(--fg-3);
+}
+.fortymm-theme .md-save__date {
+  font: 500 11px var(--font-mono);
+  color: var(--fg-3);
+  letter-spacing: 0.08em;
+  margin-left: 2px;
+}
+.fortymm-theme .md-save__headline {
+  margin: 0;
+  font: 700 22px var(--font-ui);
+  color: var(--fg-1);
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+}
+.fortymm-theme .md-save__body {
+  margin: 8px 0 0;
+  font: 400 13px/1.55 var(--font-ui);
+  color: var(--fg-3);
+  max-width: 520px;
+}
+.fortymm-theme .md-save__actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.fortymm-theme .md-save__hint {
+  font: 500 10px var(--font-mono);
+  color: var(--fg-3);
+  letter-spacing: 0.14em;
+  margin-left: auto;
+}
+
+.fortymm-theme .md-save-receipt {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 16px;
+  background: transparent;
+  border: 1px dashed var(--border-subtle);
+  border-radius: var(--r-md);
+  color: var(--fg-3);
+  font: 500 12px var(--font-ui);
+}
+.fortymm-theme .md-save-receipt__undo {
+  color: var(--fg-2);
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: var(--border-subtle);
+  text-underline-offset: 3px;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  font: inherit;
+}
+.fortymm-theme .md-save-receipt__undo:hover {
+  color: var(--fg-1);
+  text-decoration-color: var(--chalk-500);
+}
+
+@media (max-width: 560px) {
+  .fortymm-theme .md-save {
+    padding: 18px 18px;
+  }
+  .fortymm-theme .md-save__hint {
+    width: 100%;
+    margin-left: 0;
+  }
+}
+
 .fortymm-theme .md-card__hd {
   padding: 14px 18px 10px;
   border-bottom: 1px solid var(--ink-700);

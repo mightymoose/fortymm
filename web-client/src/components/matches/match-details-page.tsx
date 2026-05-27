@@ -28,6 +28,8 @@ import {
 import type { components } from '@/api/schema'
 import { ApiError } from '@/api/client'
 
+import { SaveYourMatch } from './save-your-match'
+
 type MatchDetails = components['schemas']['MatchDetails']
 type MatchDetailsGame = components['schemas']['MatchDetailsGame']
 type MatchDetailsSide = components['schemas']['MatchDetailsSide']
@@ -98,7 +100,7 @@ type H2HView = {
   recentMeetings: H2HMeetingView[]
 }
 
-type MatchView = {
+export type MatchView = {
   state: HeroState
   statusLabel: string
   bestOf: number
@@ -441,6 +443,8 @@ function MatchDetailsPage({
             )}
           </div>
         </div>
+
+        <SaveYourMatch key={matchId} view={view} matchId={matchId} />
 
         <HeroScoreboard view={view} matchId={matchId} />
 
