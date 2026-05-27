@@ -766,7 +766,7 @@ body.dark.fortymm-theme {
 }
 .app-shell__claim-account__sub {
   font-size: 11px;
-  color: var(--fg-muted);
+  color: var(--fg-3);
   line-height: 1.25;
 }
 .app-shell__user-name {

@@ -12,10 +12,12 @@ import { toast } from 'sonner'
 
 import { ApiError } from '@/api/client'
 import {
+  deriveEmailStatus,
   useResendEmailConfirmation,
   useSession,
   useSetEmail,
   useUpdateUsername,
+  type EmailStatus,
 } from '@/api/session'
 import { AppShell } from '@/components/app-shell'
 import { Turnstile, type TurnstileHandle } from '@/components/turnstile'
@@ -44,25 +46,6 @@ export const Route = createFileRoute('/settings')({
 /* ------------------------------------------------------------------ */
 /*  Types & helpers                                                   */
 /* ------------------------------------------------------------------ */
-
-type EmailStatus = 'guest' | 'pending' | 'verified'
-
-function deriveEmailStatus({
-  email,
-  confirmedAt,
-  pendingEmail,
-}: {
-  email: string | null
-  confirmedAt: string | null
-  pendingEmail: string | null
-}): EmailStatus {
-  // A pending change wins even when the user is already verified — the FE
-  // still has something to nudge them to complete.
-  if (pendingEmail) return 'pending'
-  if (confirmedAt) return 'verified'
-  if (email) return 'pending'
-  return 'guest'
-}
 
 // Mirrors api/app/schemas/session.py USERNAME_PATTERN. Client-side validation
 // is for fast feedback; the server still enforces the same rules and returns

@@ -1,6 +1,6 @@
 import { Link, useNavigate } from '@tanstack/react-router'
 import { ChevronDown, LogOut, Settings, UserPlus } from 'lucide-react'
-import { useLogout, useSession } from '@/api/session'
+import { deriveEmailStatus, useLogout, useSession } from '@/api/session'
 import { UserAvatar } from '@/components/ui/user-avatar'
 import {
   DropdownMenu,
@@ -31,7 +31,12 @@ export function UserMenu() {
 
   const user = !isError && data ? data.data.user : null
   const username = user ? user.username : 'Guest'
-  const isGuest = !user?.email
+  const isGuest =
+    deriveEmailStatus({
+      email: user?.email ?? null,
+      confirmedAt: user?.confirmed_at ?? null,
+      pendingEmail: user?.pending_email ?? null,
+    }) === 'guest'
 
   return (
     <DropdownMenu>
@@ -40,7 +45,11 @@ export function UserMenu() {
           type="button"
           className="app-shell__user-menu app-shell__user-menu--trigger"
           data-testid="user-menu"
-          aria-label={`Signed in as ${username}`}
+          aria-label={
+            isGuest
+              ? `Guest account ${username} — open menu to claim`
+              : `Signed in as ${username}`
+          }
         >
           <span className="app-shell__user-avatar-wrap">
             <UserAvatar name={username} size={30} dim={isGuest} />
@@ -63,10 +72,13 @@ export function UserMenu() {
           </span>
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="min-w-64">
+      <DropdownMenuContent
+        align="end"
+        className={isGuest ? 'min-w-64' : 'min-w-44'}
+      >
         {isGuest && (
           <>
-            <DropdownMenuItem asChild className="p-0 focus:bg-transparent">
+            <DropdownMenuItem asChild className="p-0">
               <Link
                 to="/settings"
                 hash="sec-email"
