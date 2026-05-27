@@ -184,6 +184,9 @@ async def test_dashboard_scoped_to_current_user(
     assert body["score_banners"] == []
     assert body["next_match"] is None
     assert body["recent_results"] == []
+    # Pin that completed_match_count also follows the participant filter —
+    # Bob's completed match must not bleed into Alice's history total.
+    assert body["completed_match_count"] == 0
     # Alice has her own seeded league row but no completed matches of her own
     # — the rating starts at the initial Glicko-2 values, untouched by Bob's
     # match.

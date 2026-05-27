@@ -1,6 +1,6 @@
 import { useState, type CSSProperties, type ReactNode } from 'react'
 import { Link } from '@tanstack/react-router'
-import { X } from 'lucide-react'
+import { Smartphone, X } from 'lucide-react'
 
 const C = {
   ink800: 'var(--ink-800)',
@@ -59,37 +59,6 @@ function Mono({
   )
 }
 
-function DeviceIcon({ size = 15, color }: { size?: number; color: string }) {
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      aria-hidden="true"
-      style={{ display: 'block' }}
-    >
-      <rect
-        x="6.5"
-        y="3"
-        width="11"
-        height="18"
-        rx="2.25"
-        fill="none"
-        stroke={color}
-        strokeWidth="1.75"
-      />
-      <path
-        d="M11 18h2"
-        fill="none"
-        stroke={color}
-        strokeWidth="1.75"
-        strokeLinecap="round"
-      />
-      <circle cx="12" cy="9.5" r="1.6" fill={color} />
-    </svg>
-  )
-}
-
 type GuestPersistBannerProps = {
   matchCount: number
   rating: number | null
@@ -135,7 +104,7 @@ export function GuestPersistBanner({
           flexShrink: 0,
         }}
       >
-        <DeviceIcon color={C.ball400} />
+        <Smartphone size={15} strokeWidth={1.75} color={C.ball400} aria-hidden />
       </div>
 
       <div
@@ -169,11 +138,8 @@ export function GuestPersistBanner({
             whiteSpace: 'nowrap',
           }}
         >
-          Add an email to keep them
+          Add an email to keep them →
         </Link>
-        <span style={{ color: C.ball400, fontWeight: 600, marginLeft: 5 }}>
-          →
-        </span>
       </div>
 
       <button

@@ -9,7 +9,7 @@ import {
 } from '@tanstack/react-router'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { http, HttpResponse } from 'msw'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it } from 'vitest'
 import { mockSession } from '@/mocks/handlers'
 import { server } from '@/mocks/server'
 import {
@@ -327,21 +327,17 @@ describe('DashboardPage', () => {
 })
 
 describe('DashboardPage · guest persistence banner', () => {
-  // The mock session is module-shared mutable state; snapshot and restore it
-  // so the verified-user case doesn't bleed into other suites.
+  // The mock session is module-shared mutable state; snapshot every field
+  // deriveEmailStatus reads so unrelated suites can't bleed into ours.
   const originalConfirmedAt = mockSession.data.user.confirmed_at
   const originalEmail = mockSession.data.user.email
+  const originalPendingEmail = mockSession.data.user.pending_email
 
   beforeEach(() => {
     window.sessionStorage.removeItem(GUEST_PERSIST_DISMISS_KEY)
     mockSession.data.user.confirmed_at = originalConfirmedAt
     mockSession.data.user.email = originalEmail
-  })
-
-  afterEach(() => {
-    window.sessionStorage.removeItem(GUEST_PERSIST_DISMISS_KEY)
-    mockSession.data.user.confirmed_at = originalConfirmedAt
-    mockSession.data.user.email = originalEmail
+    mockSession.data.user.pending_email = originalPendingEmail
   })
 
   it("shows for a guest with one or more completed matches and quotes the user's history", async () => {

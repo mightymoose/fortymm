@@ -1042,15 +1042,14 @@ export function DashboardPage() {
   const greeting = username ? `Hi, @${username}` : 'Hi'
   // Guest with at least one completed match — "you have things to lose now".
   // Zero-match guests and verified/pending-verification users never see this.
-  const showGuestPersistBanner =
+  const isGuest =
     user !== undefined &&
-    data !== undefined &&
     deriveEmailStatus({
       email: user.email ?? null,
       confirmedAt: user.confirmed_at ?? null,
       pendingEmail: user.pending_email ?? null,
-    }) === 'guest' &&
-    data.completed_match_count >= 1
+    }) === 'guest'
+  const showGuestPersistBanner = isGuest && (data?.completed_match_count ?? 0) >= 1
   return (
     <div
       style={{
@@ -1061,7 +1060,7 @@ export function DashboardPage() {
         boxSizing: 'border-box',
       }}
     >
-      {showGuestPersistBanner && (
+      {showGuestPersistBanner && data && (
         <GuestPersistBanner
           matchCount={data.completed_match_count}
           rating={data.rating ? Math.round(data.rating.current) : null}

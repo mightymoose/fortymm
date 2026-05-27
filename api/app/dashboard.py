@@ -80,17 +80,21 @@ async def get_dashboard(
         .order_by(Match.updated_at.desc())
         .limit(RECENT_RESULTS_LIMIT)
     )
-    # COUNT runs separately from the LIMIT-bound completed_q above so the
-    # banner can reference "Your N matches" even when N exceeds the recent
-    # window. Cheap enough to be unconditional — no FE feature flag.
-    completed_count_q = participant_filter(
-        select(func.count(Match.id)), current_user.id
-    ).where(Match.status == MatchStatus.completed)
 
     pending = (await db.execute(pending_q)).scalars().all()
     in_progress = (await db.execute(in_progress_q)).scalars().all()
     completed = (await db.execute(completed_q)).scalars().all()
-    completed_match_count = int((await db.execute(completed_count_q)).scalar_one())
+
+    # When completed_q didn't hit its LIMIT, we already have the exact count
+    # and can skip the extra round-trip; only the user-with-history case pays
+    # for a separate COUNT.
+    if len(completed) < RECENT_RESULTS_LIMIT:
+        completed_match_count = len(completed)
+    else:
+        completed_count_q = participant_filter(
+            select(func.count(Match.id)), current_user.id
+        ).where(Match.status == MatchStatus.completed)
+        completed_match_count = int((await db.execute(completed_count_q)).scalar_one())
 
     rating_changes = await _load_my_rating_changes(
         db, current_user.id, [m.id for m in completed]
