@@ -25,6 +25,25 @@ export function useSession() {
   return useQuery(sessionQueryOptions())
 }
 
+export type EmailStatus = 'guest' | 'pending' | 'verified'
+
+export function deriveEmailStatus({
+  email,
+  confirmedAt,
+  pendingEmail,
+}: {
+  email: string | null
+  confirmedAt: string | null
+  pendingEmail: string | null
+}): EmailStatus {
+  // A pending change wins even when the user is already verified — the FE
+  // still has something to nudge them to complete.
+  if (pendingEmail) return 'pending'
+  if (confirmedAt) return 'verified'
+  if (email) return 'pending'
+  return 'guest'
+}
+
 /** True when the current session carries `name` in its permissions list. */
 export function useHasPermission(name: string): boolean {
   const { data } = useSession()

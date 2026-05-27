@@ -674,6 +674,101 @@ body.dark.fortymm-theme {
   font-weight: 700;
   font-size: 12px;
 }
+.app-shell__user-avatar-wrap {
+  position: relative;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+.app-shell__user-menu-dot--pulse {
+  position: absolute;
+  top: -1px;
+  right: -1px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--ball-500);
+  border: 2px solid var(--ink-900);
+  animation: app-shell-nudge-pulse 2.4s ease-in-out infinite;
+  pointer-events: none;
+}
+@keyframes app-shell-nudge-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(255, 122, 26, 0.55);
+  }
+  50% {
+    box-shadow: 0 0 0 5px rgba(255, 122, 26, 0);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .app-shell__user-menu-dot--pulse {
+    animation: none;
+  }
+}
+.app-shell__user-menu-chev {
+  color: var(--fg-3);
+  display: grid;
+  place-items: center;
+  transition: transform 120ms ease;
+}
+.app-shell__user-menu--trigger[data-state='open'] .app-shell__user-menu-chev {
+  transform: rotate(180deg);
+}
+.app-shell__claim-account {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: var(--bg-accent-soft);
+  border: 1px solid rgba(255, 122, 26, 0.22);
+  text-decoration: none;
+  overflow: hidden;
+  color: var(--fg-1);
+  cursor: pointer;
+}
+.app-shell__claim-account::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  border-radius: 0 2px 2px 0;
+  background: var(--ball-500);
+  box-shadow: 0 0 8px rgba(255, 122, 26, 0.5);
+}
+.app-shell__claim-account__icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  color: var(--ball-400);
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  margin-left: 6px;
+}
+.app-shell__claim-account__body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.app-shell__claim-account__title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg-1);
+  line-height: 1.25;
+}
+.app-shell__claim-account__sub {
+  font-size: 11px;
+  color: var(--fg-3);
+  line-height: 1.25;
+}
 .app-shell__user-name {
   font-size: 13px;
   font-weight: 500;

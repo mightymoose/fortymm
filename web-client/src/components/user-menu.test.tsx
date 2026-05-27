@@ -84,9 +84,10 @@ describe('UserMenu', () => {
     expect(
       await screen.findByText(mockSession.data.user.username),
     ).toBeInTheDocument()
+    // Default mockSession has no email → guest aria-label nudges toward claiming.
     expect(screen.getByTestId('user-menu')).toHaveAttribute(
       'aria-label',
-      `Signed in as ${mockSession.data.user.username}`,
+      `Guest account ${mockSession.data.user.username} — open menu to claim`,
     )
   })
 
@@ -126,8 +127,76 @@ describe('UserMenu', () => {
     const trigger = await screen.findByTestId('user-menu')
     await userEvent.click(trigger)
 
-    const settings = await screen.findByRole('menuitem', { name: /settings/i })
+    const settings = await screen.findByRole('menuitem', { name: /^settings$/i })
     expect(settings).toHaveAttribute('href', '/settings')
+  })
+
+  it('shows the pulsing guest dot and Claim account item when the user has no email', async () => {
+    renderWithClient(<UserMenu />)
+
+    expect(await screen.findByTestId('user-menu-guest-dot')).toBeInTheDocument()
+
+    await userEvent.click(screen.getByTestId('user-menu'))
+
+    const claim = await screen.findByTestId('user-menu-claim-account')
+    expect(claim).toHaveAttribute('href', '/settings#sec-email')
+    expect(claim).toHaveTextContent('Claim account')
+    expect(claim).toHaveTextContent('Save your matches and rating.')
+  })
+
+  it('hides the guest nudge once a claim is mid-flight (pending_email set)', async () => {
+    const pending: SessionResponse = {
+      data: {
+        user: {
+          username: 'rita.kovac',
+          permissions: [],
+          email: null,
+          confirmed_at: null,
+          pending_email: 'rita@kovac.club',
+        },
+      },
+    }
+    server.use(http.get('*/v1/session', () => HttpResponse.json(pending)))
+
+    renderWithClient(<UserMenu />)
+
+    await screen.findByText('rita.kovac')
+    expect(screen.queryByTestId('user-menu-guest-dot')).not.toBeInTheDocument()
+
+    await userEvent.click(screen.getByTestId('user-menu'))
+    expect(
+      screen.queryByTestId('user-menu-claim-account'),
+    ).not.toBeInTheDocument()
+  })
+
+  it('hides the guest dot and Claim account item once the user has an email', async () => {
+    const verified: SessionResponse = {
+      data: {
+        user: {
+          username: 'rita.kovac',
+          permissions: [],
+          email: 'rita@kovac.club',
+          confirmed_at: '2026-05-01T00:00:00Z',
+        },
+      },
+    }
+    server.use(http.get('*/v1/session', () => HttpResponse.json(verified)))
+
+    renderWithClient(<UserMenu />)
+
+    await screen.findByText('rita.kovac')
+    expect(screen.queryByTestId('user-menu-guest-dot')).not.toBeInTheDocument()
+    expect(screen.getByTestId('user-menu')).toHaveAttribute(
+      'aria-label',
+      'Signed in as rita.kovac',
+    )
+
+    await userEvent.click(screen.getByTestId('user-menu'))
+
+    await screen.findByRole('menuitem', { name: /^settings$/i })
+    expect(
+      screen.queryByTestId('user-menu-claim-account'),
+    ).not.toBeInTheDocument()
   })
 
   it('clicking Log out calls DELETE /v1/session and redirects to /dashboard', async () => {
