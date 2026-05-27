@@ -763,6 +763,8 @@ export interface components {
             /** Recent Results */
             recent_results: components["schemas"]["DashboardRecentResult"][];
             rating?: components["schemas"]["DashboardRating"] | null;
+            /** Completed Match Count */
+            completed_match_count: number;
         };
         /** DashboardScoreBanner */
         DashboardScoreBanner: {

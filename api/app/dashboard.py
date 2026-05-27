@@ -85,6 +85,17 @@ async def get_dashboard(
     in_progress = (await db.execute(in_progress_q)).scalars().all()
     completed = (await db.execute(completed_q)).scalars().all()
 
+    # When completed_q didn't hit its LIMIT, we already have the exact count
+    # and can skip the extra round-trip; only the user-with-history case pays
+    # for a separate COUNT.
+    if len(completed) < RECENT_RESULTS_LIMIT:
+        completed_match_count = len(completed)
+    else:
+        completed_count_q = participant_filter(
+            select(func.count(Match.id)), current_user.id
+        ).where(Match.status == MatchStatus.completed)
+        completed_match_count = int((await db.execute(completed_count_q)).scalar_one())
+
     rating_changes = await _load_my_rating_changes(
         db, current_user.id, [m.id for m in completed]
     )
@@ -102,6 +113,7 @@ async def get_dashboard(
         next_match=next_match,
         recent_results=recent_results,
         rating=rating,
+        completed_match_count=completed_match_count,
     )
 
 

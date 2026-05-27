@@ -757,6 +757,13 @@ export const handlers = [
     const scoreBanners = mockMatches.map(projectScoreBanner).filter(notNull)
     const nextMatch =
       mockMatches.map(projectNextMatch).find(notNull) ?? null
+    // Match the real BFF's participant-filtered COUNT, which doesn't care
+    // whether the opponent slot is registered — projectRecentResult drops
+    // null-opponent matches from the *display* list, but they still count
+    // toward the user's history.
+    const completedMatchCount = mockMatches.filter(
+      (m) => m.status === 'completed',
+    ).length
     const recentResults = mockMatches
       .map(projectRecentResult)
       .filter(notNull)
@@ -767,6 +774,7 @@ export const handlers = [
       next_match: nextMatch,
       recent_results: recentResults,
       rating: projectRating(mockMatches),
+      completed_match_count: completedMatchCount,
     })
   }),
 

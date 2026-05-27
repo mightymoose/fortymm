@@ -351,9 +351,9 @@ def _add_side(match: Match, side_number: int, player: User | None) -> None:
 # ----- list helpers --------------------------------------------------------
 
 
-def participant_filter(
-    query: Select[tuple[Match]], current_user_id: uuid.UUID
-) -> Select[tuple[Match]]:
+def participant_filter[SelectT: Select[Any]](
+    query: SelectT, current_user_id: uuid.UUID
+) -> SelectT:
     me_in_match = (
         select(MatchSidePlayer.id)
         .where(
