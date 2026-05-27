@@ -108,7 +108,11 @@ export function SaveYourMatch({
   // mint a guest user via GET /v1/session) on the standalone public-share
   // route where the viewer is never the participant. The inner body owns the
   // hook tree so the conditional return here doesn't change hook order.
-  if (view.state !== 'final') return null
+  // Show as soon as the match is being played — we don't wait for opponent
+  // sign-off. The "save it before cookies clear" risk applies the moment the
+  // guest has invested any real time, not just at the rated-finalized
+  // boundary (which can be hours later, after the guest has closed the tab).
+  if (view.state === 'upcoming') return null
   if (!view.leftSide.isCurrentUser) return null
   if (!view.rightSide || view.rightSide.isGhost) return null
   return <SaveYourMatchActive view={view} matchId={matchId} />
