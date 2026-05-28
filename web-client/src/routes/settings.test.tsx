@@ -41,12 +41,8 @@ beforeEach(() => {
       }
     }
   }
-  // jsdom doesn't implement Element.prototype.scrollIntoView, which TanStack
-  // Router's hash-scroll restoration calls on initial render when a hash is
-  // present. Stubbing it keeps the route from blowing up the error boundary.
-  if (!Element.prototype.scrollIntoView) {
-    Element.prototype.scrollIntoView = function () {}
-  }
+  // jsdom lacks scrollIntoView; TanStack Router calls it for hash restoration.
+  Element.prototype.scrollIntoView = () => {}
   // Reset the shared session between tests so honeypot/email checks start fresh.
   mockSession.data.user.email = null
   mockSession.data.user.confirmed_at = null
@@ -134,7 +130,7 @@ describe('SettingsPage email section', () => {
     )
   })
 
-  it('focuses the email input when deep-linked via #sec-email', async () => {
+  it('focuses the email input when a guest is deep-linked via #sec-email', async () => {
     await renderSettings('/settings#sec-email')
     const emailInput = await screen.findByLabelText(/^email$/i)
     await waitFor(() => expect(emailInput).toHaveFocus())
@@ -143,8 +139,14 @@ describe('SettingsPage email section', () => {
   it("doesn't focus the email input on a plain /settings load", async () => {
     await renderSettings()
     const emailInput = await screen.findByLabelText(/^email$/i)
-    // Give the useEffect a tick to run; assert focus stayed off the field.
-    await new Promise((r) => setTimeout(r, 0))
+    expect(emailInput).not.toHaveFocus()
+  })
+
+  it("doesn't focus the email input for a verified user landing on #sec-email", async () => {
+    mockSession.data.user.email = 'rita@example.com'
+    mockSession.data.user.confirmed_at = '2026-01-01T00:00:00Z'
+    await renderSettings('/settings#sec-email')
+    const emailInput = await screen.findByLabelText(/^email$/i)
     expect(emailInput).not.toHaveFocus()
   })
 
