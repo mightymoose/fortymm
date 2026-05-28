@@ -237,12 +237,14 @@ function ScoreEntryInner({
   }
 
   // After any clear, drop focus into the first input that's still empty so
-  // the user can keep typing without grabbing the mouse.
+  // the user can keep typing without grabbing the mouse. Reads the controlled
+  // state, not the DOM — those are equal but the state is canonical and
+  // doesn't drift if React batches a render between mutate() and this call.
   function focusFirstEmpty() {
-    if (meRef.current && meRef.current.value === '') {
-      meRef.current.focus()
-    } else if (oppRef.current && oppRef.current.value === '') {
-      oppRef.current.focus()
+    if (me === '') {
+      meRef.current?.focus()
+    } else if (opp === '') {
+      oppRef.current?.focus()
     }
   }
 
@@ -401,6 +403,7 @@ function ScoreEntryInner({
           matchId={matchId}
           mySideNumber={mySideNumber}
           onClearCell={onClearCell}
+          clearDisabled={inputsLocked || cellDeleteMutation.isPending}
         />
       </div>
     </AppShell>
@@ -481,21 +484,28 @@ function Scoreline({
   matchId,
   mySideNumber,
   onClearCell,
+  clearDisabled,
 }: {
   data: MatchDetails
   activeGameNumber: number
   matchId: string
   mySideNumber: 1 | 2
   onClearCell: (gameNumber: number) => void
+  clearDisabled: boolean
 }) {
   // Every cell links to its own scoring route — scored games go to edit,
   // un-scored games go to /scores/new. Lets the user pick games in any
   // order from the scoreline directly. Logged cells also carry a ✕ button
   // (desktop hover; hidden on touch) that clears that game in place.
+  // `--sl-cell-count` drives the mobile grid template so the cells fit
+  // exactly the best-of width (the desktop layout flex-wraps regardless).
   return (
     <div className="scoreline">
       <div className="sl-label">SCORELINE</div>
-      <div className="sl-cells">
+      <div
+        className="sl-cells"
+        style={{ '--sl-cell-count': data.best_of } as React.CSSProperties}
+      >
         {Array.from({ length: data.best_of }, (_, i) => i + 1).map((n) => {
           const g = data.games.find((x) => x.game_number === n) ?? null
           const score = g?.score ?? null
@@ -524,9 +534,12 @@ function Scoreline({
               className="sl-clear"
               aria-label={`Clear game ${n}`}
               title={`Clear game ${n}`}
+              disabled={clearDisabled}
               onClick={(e) => {
                 // Stop the surrounding Link from navigating to /edit on the
-                // cell we just cleared.
+                // cell we just cleared. preventDefault is what blocks
+                // TanStack Router's nav (it checks defaultPrevented before
+                // dispatching) — stopPropagation is belt-and-suspenders.
                 e.preventDefault()
                 e.stopPropagation()
                 onClearCell(n)

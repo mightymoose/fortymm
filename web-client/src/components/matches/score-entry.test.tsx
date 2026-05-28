@@ -490,15 +490,10 @@ describe('ScoreEntry — edit', () => {
       http.get('*/v1/matches/m-1', () => HttpResponse.json(inProgressMatch())),
       http.delete('*/v1/matches/m-1/games/:gameNumber/scores', ({ params }) => {
         deletedGameNumber = Number(params.gameNumber)
-        return HttpResponse.json(
-          inProgressMatch({
-            sides: participantSides({ meWins: 0, oppWins: 1 }),
-            games: [
-              { id: 'g-2', game_number: 2, score: score('s-2', 9, 11) },
-            ],
-            current_game: { game_number: 1 },
-          }),
-        )
+        // Test only asserts the path param + that we stay on the page +
+        // focus — no response field is read, so any valid MatchDetails will
+        // do.
+        return HttpResponse.json(inProgressMatch())
       }),
     )
 
