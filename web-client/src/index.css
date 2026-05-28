@@ -1934,51 +1934,204 @@ body.dark.fortymm-theme {
   color: var(--fg-3);
 }
 
-/* ---------- Responsive ---------- */
-@media (max-width: 820px) {
+/* ---------- Per-cell ✕ clear button ----------
+   Desktop-only affordance on logged scoreline cells: small ✕ in the top-right,
+   revealed on hover/focus, fires a per-game DELETE. Hidden on touch + below
+   880px (where the main "Clear" button above is the real clear affordance and
+   ✕ becomes too small to tap reliably). */
+.fortymm-theme .sl-cell {
+  position: relative;
+}
+.fortymm-theme .sl-clear {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--fg-muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0;
+  transform: scale(0.85);
+  transition:
+    opacity var(--dur-fast, 120ms) var(--ease-out, cubic-bezier(0.2, 0.8, 0.2, 1)),
+    transform var(--dur-fast, 120ms) var(--ease-out, cubic-bezier(0.2, 0.8, 0.2, 1)),
+    background var(--dur-fast, 120ms),
+    color var(--dur-fast, 120ms),
+    border-color var(--dur-fast, 120ms);
+}
+.fortymm-theme .sl-cell:hover .sl-clear,
+.fortymm-theme .sl-cell:focus-within .sl-clear {
+  opacity: 1;
+  transform: scale(1);
+}
+.fortymm-theme .sl-clear:hover {
+  background: rgba(255, 77, 109, 0.12);
+  color: var(--loss);
+  border-color: rgba(255, 77, 109, 0.4);
+}
+.fortymm-theme .sl-clear:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(255, 77, 109, 0.5);
+  opacity: 1;
+  transform: scale(1);
+}
+/* Touch + small viewports — the main "Clear" button is the only clear
+   affordance there, the ✕ would be too small to tap safely. */
+@media (hover: none), (max-width: 880px) {
+  .fortymm-theme .sl-clear {
+    display: none;
+  }
+}
+
+/* ---------- Responsive ----------
+   Side-by-side three-column layout is kept down to phone widths so the whole
+   entry surface stays above the fold; the typography and avatars shrink to
+   fit instead of stacking. */
+@media (max-width: 880px) {
   .fortymm-theme .entry-wrap {
-    padding: 20px 16px;
+    padding: 16px 14px;
+    gap: 14px;
+  }
+  .fortymm-theme .entry-head {
+    margin-bottom: 4px;
+    gap: 8px;
+    align-items: center;
   }
   .fortymm-theme .entry-head h2 {
-    font-size: 32px;
+    font-size: 26px;
   }
   .fortymm-theme .entry-head .hint {
     display: none;
   }
+
   .fortymm-theme .single-entry {
-    grid-template-columns: 1fr;
+    grid-template-columns: 1fr auto 1fr;
+    gap: 0;
+  }
+  .fortymm-theme .se-side {
+    padding: 14px 12px 18px;
+    gap: 10px;
+  }
+  .fortymm-theme .se-head {
+    gap: 8px;
+    align-items: center;
+  }
+  .fortymm-theme .se-head .av {
+    width: 32px;
+    height: 32px;
+    font-size: 12px;
+  }
+  .fortymm-theme .se-head .nm {
+    font-size: 13px;
+    max-width: 120px;
+    line-height: 1.15;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .fortymm-theme .se-head .rt {
+    display: none;
   }
   .fortymm-theme .se-mid {
-    flex-direction: row;
-    gap: 16px;
-    border-left: none;
-    border-right: none;
-    border-top: 1px solid var(--ink-600);
-    border-bottom: 1px solid var(--ink-600);
-    padding: 14px;
+    padding: 14px 6px;
+    min-width: 36px;
+  }
+  .fortymm-theme .se-vs {
+    font-size: 14px;
+  }
+  .fortymm-theme .se-games {
+    font-size: 14px;
   }
   .fortymm-theme .big-input {
-    font-size: 120px;
+    font-size: 72px;
+    padding: 6px 0 0;
   }
-  .fortymm-theme .se-side.opp {
-    align-items: stretch;
-    text-align: left;
-  }
-  .fortymm-theme .se-head.right {
-    justify-content: flex-start;
-  }
+
+  /* Single row of buttons, equal-width, full-bleed across the card. */
   .fortymm-theme .single-actions {
-    flex-direction: column;
+    flex-direction: row;
     align-items: stretch;
-    gap: 16px;
+    flex-wrap: nowrap;
+    gap: 8px;
+    padding: 0;
+  }
+  .fortymm-theme .result-line {
+    display: none;
   }
   .fortymm-theme .action-btns {
-    justify-content: flex-end;
+    width: 100%;
+    gap: 8px;
+  }
+  .fortymm-theme .action-btns .btn {
+    flex: 1 1 0;
+    justify-content: center;
+    padding: 12px 10px;
+    font-size: 13px;
+    min-height: 44px;
+  }
+
+  /* Scoreline: tighter cells, wraps to a 5-up grid so all best-of-5 games
+     stay on one row on a 375px viewport. */
+  .fortymm-theme .scoreline {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+    padding: 12px 14px;
+  }
+  .fortymm-theme .sl-cells {
+    display: grid;
+    grid-template-columns: repeat(var(--sl-cell-count, 5), 1fr);
+    gap: 6px;
+  }
+  .fortymm-theme .sl-cell {
+    min-width: 0;
+    padding: 8px 4px;
+    gap: 3px;
+  }
+  .fortymm-theme .sl-cell .sl-n {
+    font-size: 9px;
+    letter-spacing: 0.14em;
+  }
+  .fortymm-theme .sl-cell .sl-scores {
+    font-size: 14px;
+    gap: 3px;
+  }
+}
+
+@media (max-width: 380px) {
+  .fortymm-theme .entry-head h2 {
+    font-size: 22px;
+  }
+  .fortymm-theme .se-head .nm {
+    font-size: 11px;
+    max-width: 80px;
+  }
+  .fortymm-theme .big-input {
+    font-size: 54px;
+  }
+  .fortymm-theme .se-mid {
+    min-width: 28px;
+    padding: 12px 4px;
+  }
+  .fortymm-theme .sl-cell .sl-scores {
+    font-size: 12px;
+  }
+  .fortymm-theme .action-btns .btn {
+    font-size: 12px;
+    padding: 11px 8px;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .fortymm-theme .sl-cell {
+  .fortymm-theme .sl-cell,
+  .fortymm-theme .sl-clear {
     transition: none !important;
   }
 }
