@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react'
 import { Link, Navigate, useNavigate } from '@tanstack/react-router'
-import { User as UserIcon } from 'lucide-react'
+import { User as UserIcon, X as XIcon } from 'lucide-react'
 import { ApiError } from '@/api/client'
 import {
   matchDetailRoute,
@@ -8,6 +8,7 @@ import {
   scoringNewRoute,
   useCreateScore,
   useDeleteScore,
+  useDeleteScoreForMatch,
   useFinalizeMatch,
   useMatch,
   useUpdateScore,
@@ -61,6 +62,7 @@ function ScoreEntryInner({
   const createMutation = useCreateScore(matchId, gameNumber)
   const updateMutation = useUpdateScore(matchId, gameNumber)
   const deleteMutation = useDeleteScore(matchId, gameNumber)
+  const cellDeleteMutation = useDeleteScoreForMatch(matchId)
   const finalizeMutation = useFinalizeMatch(matchId)
 
   // `null` means "user hasn't typed anything yet" — we fall through to the
@@ -234,14 +236,33 @@ function ScoreEntryInner({
     }
   }
 
+  // After any clear, drop focus into the first input that's still empty so
+  // the user can keep typing without grabbing the mouse.
+  function focusFirstEmpty() {
+    if (meRef.current && meRef.current.value === '') {
+      meRef.current.focus()
+    } else if (oppRef.current && oppRef.current.value === '') {
+      oppRef.current.focus()
+    }
+  }
+
   function onClear() {
     if (mode.kind !== 'edit') return
     deleteMutation.mutate(undefined, {
       // After clearing, land back on this game's create route so the user
       // can re-enter — same page, just with empty inputs and create-mode
-      // semantics.
+      // semantics. The remount's autoFocus puts focus on the me-input,
+      // which is the first empty input.
       onSettled: () => navigate(scoringNewRoute(matchId, gameNumber)),
     })
+  }
+
+  // Per-cell ✕ — clears the score for any logged game from the scoreline
+  // strip. Fire-and-forget like the per-game writes; we just refocus the
+  // first empty input on the current page so the user can keep typing.
+  function onClearCell(n: number) {
+    cellDeleteMutation.mutate(n)
+    focusFirstEmpty()
   }
 
   function handleKey(
@@ -379,6 +400,7 @@ function ScoreEntryInner({
           activeGameNumber={gameNumber}
           matchId={matchId}
           mySideNumber={mySideNumber}
+          onClearCell={onClearCell}
         />
       </div>
     </AppShell>
@@ -458,15 +480,18 @@ function Scoreline({
   activeGameNumber,
   matchId,
   mySideNumber,
+  onClearCell,
 }: {
   data: MatchDetails
   activeGameNumber: number
   matchId: string
   mySideNumber: 1 | 2
+  onClearCell: (gameNumber: number) => void
 }) {
   // Every cell links to its own scoring route — scored games go to edit,
   // un-scored games go to /scores/new. Lets the user pick games in any
-  // order from the scoreline directly.
+  // order from the scoreline directly. Logged cells also carry a ✕ button
+  // (desktop hover; hidden on touch) that clears that game in place.
   return (
     <div className="scoreline">
       <div className="sl-label">SCORELINE</div>
@@ -493,6 +518,23 @@ function Scoreline({
           const isMyWin = score
             ? score.winner_side_number === mySideNumber
             : null
+          const clearBtn = score ? (
+            <button
+              type="button"
+              className="sl-clear"
+              aria-label={`Clear game ${n}`}
+              title={`Clear game ${n}`}
+              onClick={(e) => {
+                // Stop the surrounding Link from navigating to /edit on the
+                // cell we just cleared.
+                e.preventDefault()
+                e.stopPropagation()
+                onClearCell(n)
+              }}
+            >
+              <XIcon size={14} strokeWidth={2.5} aria-hidden />
+            </button>
+          ) : null
           const inner = (
             <>
               <div className="sl-n">G{n}</div>
@@ -505,6 +547,7 @@ function Scoreline({
                   {oppPoints ?? '—'}
                 </span>
               </div>
+              {clearBtn}
             </>
           )
           if (isActive) {

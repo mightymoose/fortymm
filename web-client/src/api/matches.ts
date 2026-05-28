@@ -255,6 +255,30 @@ export function useDeleteScore(matchId: string, gameNumber: number) {
 }
 
 /**
+ * Same as `useDeleteScore` but the game number is supplied at mutate-call
+ * time — used by the scoreline's per-cell ✕, which needs to clear any logged
+ * game from a single hook (hooks rules forbid one per cell).
+ */
+export function useDeleteScoreForMatch(matchId: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (gameNumber: number): Promise<MatchDetails> =>
+      unwrap(
+        'clear score',
+        await api.DELETE(
+          '/v1/matches/{match_id}/games/{game_number}/scores',
+          {
+            params: {
+              path: { match_id: matchId, game_number: gameNumber },
+            },
+          },
+        ),
+      ),
+    onSuccess: (data) => applyScoreMutationCache(queryClient, matchId, data),
+  })
+}
+
+/**
  * Posts the result of a match. The payload is canon — the server obliterates
  * any scratchpad-saved games + scores, inserts these, validates the match as
  * a decided whole, and records the caller's signature. For a non-solo match

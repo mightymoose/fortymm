@@ -469,12 +469,56 @@ describe('ScoreEntry — edit', () => {
     renderScoreEntry({ kind: 'edit', matchId: 'm-1', gameNumber: 1 })
 
     await screen.findByRole('textbox', { name: 'rita.kovac score' })
-    await user.click(screen.getByRole('button', { name: /clear/i }))
+    // Match the standalone "Clear" button — the scoreline cells carry
+    // "Clear game N" labels and would otherwise collide with /clear/i.
+    await user.click(screen.getByRole('button', { name: /^clear$/i }))
 
     await waitFor(() =>
       expect(screen.getByText('scoring-new m-1 1')).toBeInTheDocument(),
     )
     expect(deleted).toBe(true)
+  })
+
+  it("✕ on another game's cell clears that game in place without leaving the page", async () => {
+    // User is entering game 3 in /new mode. Game 1 is already logged. They
+    // tap the ✕ on G1's scoreline cell: G1 is cleared via DELETE
+    // /v1/matches/m-1/games/1/scores, the page stays put (no redirect), and
+    // focus lands on the first empty input on the active game.
+    const user = userEvent.setup()
+    let deletedGameNumber: number | null = null
+    server.use(
+      http.get('*/v1/matches/m-1', () => HttpResponse.json(inProgressMatch())),
+      http.delete('*/v1/matches/m-1/games/:gameNumber/scores', ({ params }) => {
+        deletedGameNumber = Number(params.gameNumber)
+        return HttpResponse.json(
+          inProgressMatch({
+            sides: participantSides({ meWins: 0, oppWins: 1 }),
+            games: [
+              { id: 'g-2', game_number: 2, score: score('s-2', 9, 11) },
+            ],
+            current_game: { game_number: 1 },
+          }),
+        )
+      }),
+    )
+
+    renderScoreEntry({ kind: 'create', matchId: 'm-1', gameNumber: 3 })
+    const meInput = await screen.findByRole('textbox', {
+      name: 'rita.kovac score',
+    })
+    // Type something in the opp input so we can verify focus lands on the
+    // first *empty* input — which should still be the me input.
+    const oppInput = screen.getByRole('textbox', { name: 'nguyen.t score' })
+    await user.type(oppInput, '7')
+
+    await user.click(screen.getByRole('button', { name: /clear game 1/i }))
+
+    await waitFor(() => expect(deletedGameNumber).toBe(1))
+    // No redirect — still on the active game's entry route.
+    expect(
+      screen.queryByText(/scoring-(new|edit) m-1/),
+    ).not.toBeInTheDocument()
+    expect(meInput).toHaveFocus()
   })
 
   it('redirects edit→new when the game has no saved score', async () => {
