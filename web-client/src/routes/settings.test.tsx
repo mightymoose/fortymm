@@ -41,6 +41,8 @@ beforeEach(() => {
       }
     }
   }
+  // jsdom lacks scrollIntoView; TanStack Router calls it for hash restoration.
+  Element.prototype.scrollIntoView = () => {}
   // Reset the shared session between tests so honeypot/email checks start fresh.
   mockSession.data.user.email = null
   mockSession.data.user.confirmed_at = null
@@ -48,7 +50,7 @@ beforeEach(() => {
   mockSession.data.user.username = 'rita.kovac'
 })
 
-async function renderSettings() {
+async function renderSettings(initialEntry = '/settings') {
   const { Route } = await import('./settings')
   const SettingsPage = Route.options.component!
 
@@ -66,7 +68,7 @@ async function renderSettings() {
   })
   const router = createRouter({
     routeTree: rootRoute.addChildren([settingsRoute]),
-    history: createMemoryHistory({ initialEntries: ['/settings'] }),
+    history: createMemoryHistory({ initialEntries: [initialEntry] }),
   })
   return render(
     <QueryClientProvider client={queryClient}>
@@ -126,6 +128,26 @@ describe('SettingsPage email section', () => {
     await waitFor(() =>
       expect(mockSession.data.user.pending_email).toBeNull(),
     )
+  })
+
+  it('focuses the email input when a guest is deep-linked via #sec-email', async () => {
+    await renderSettings('/settings#sec-email')
+    const emailInput = await screen.findByLabelText(/^email$/i)
+    await waitFor(() => expect(emailInput).toHaveFocus())
+  })
+
+  it("doesn't focus the email input on a plain /settings load", async () => {
+    await renderSettings()
+    const emailInput = await screen.findByLabelText(/^email$/i)
+    expect(emailInput).not.toHaveFocus()
+  })
+
+  it("doesn't focus the email input for a verified user landing on #sec-email", async () => {
+    mockSession.data.user.email = 'rita@example.com'
+    mockSession.data.user.confirmed_at = '2026-01-01T00:00:00Z'
+    await renderSettings('/settings#sec-email')
+    const emailInput = await screen.findByLabelText(/^email$/i)
+    expect(emailInput).not.toHaveFocus()
   })
 
   it('requires the captcha before the submit button enables', async () => {

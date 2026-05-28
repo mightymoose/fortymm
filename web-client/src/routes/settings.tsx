@@ -970,6 +970,11 @@ function scrollToSection(id: string) {
   window.scrollTo({ top: y, behavior: 'smooth' })
 }
 
+function focusEmailInput() {
+  // preventScroll so focus() doesn't fight the smooth scroll above.
+  document.getElementById('email')?.focus({ preventScroll: true })
+}
+
 function SettingsPage() {
   const session = useSession()
   const sessionUser = session.data?.data.user
@@ -986,11 +991,19 @@ function SettingsPage() {
   })
   const claimed = effectiveStatus === 'verified'
 
-  // Honor /settings#sec-* deep links from external nav.
+  // Honor /settings#sec-* deep links from external nav. When the email
+  // section is the target and the account isn't already claimed, focus
+  // the input so users arriving from a recovery nudge can start typing.
+  // Wait for the session to resolve before deciding — otherwise verified
+  // users hitting a stale #sec-email URL would briefly look like guests
+  // and get their soft keyboard popped before we know better.
+  const sessionLoaded = !!sessionUser
   useEffect(() => {
     const id = hash.replace(/^#/, '')
-    if (id) scrollToSection(id)
-  }, [hash])
+    if (!id) return
+    scrollToSection(id)
+    if (id === 'sec-email' && sessionLoaded && !claimed) focusEmailInput()
+  }, [hash, sessionLoaded, claimed])
 
   return (
     <AppShell>
@@ -1002,7 +1015,10 @@ function SettingsPage() {
             <ClaimBanner
               status={effectiveStatus}
               email={sessionPendingEmail ?? sessionEmail ?? ''}
-              onJump={() => scrollToSection('sec-email')}
+              onJump={() => {
+                scrollToSection('sec-email')
+                focusEmailInput()
+              }}
             />
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
