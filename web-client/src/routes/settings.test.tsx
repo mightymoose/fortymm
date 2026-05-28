@@ -41,6 +41,12 @@ beforeEach(() => {
       }
     }
   }
+  // jsdom doesn't implement Element.prototype.scrollIntoView, which TanStack
+  // Router's hash-scroll restoration calls on initial render when a hash is
+  // present. Stubbing it keeps the route from blowing up the error boundary.
+  if (!Element.prototype.scrollIntoView) {
+    Element.prototype.scrollIntoView = function () {}
+  }
   // Reset the shared session between tests so honeypot/email checks start fresh.
   mockSession.data.user.email = null
   mockSession.data.user.confirmed_at = null
@@ -48,7 +54,7 @@ beforeEach(() => {
   mockSession.data.user.username = 'rita.kovac'
 })
 
-async function renderSettings() {
+async function renderSettings(initialEntry = '/settings') {
   const { Route } = await import('./settings')
   const SettingsPage = Route.options.component!
 
@@ -66,7 +72,7 @@ async function renderSettings() {
   })
   const router = createRouter({
     routeTree: rootRoute.addChildren([settingsRoute]),
-    history: createMemoryHistory({ initialEntries: ['/settings'] }),
+    history: createMemoryHistory({ initialEntries: [initialEntry] }),
   })
   return render(
     <QueryClientProvider client={queryClient}>
@@ -126,6 +132,20 @@ describe('SettingsPage email section', () => {
     await waitFor(() =>
       expect(mockSession.data.user.pending_email).toBeNull(),
     )
+  })
+
+  it('focuses the email input when deep-linked via #sec-email', async () => {
+    await renderSettings('/settings#sec-email')
+    const emailInput = await screen.findByLabelText(/^email$/i)
+    await waitFor(() => expect(emailInput).toHaveFocus())
+  })
+
+  it("doesn't focus the email input on a plain /settings load", async () => {
+    await renderSettings()
+    const emailInput = await screen.findByLabelText(/^email$/i)
+    // Give the useEffect a tick to run; assert focus stayed off the field.
+    await new Promise((r) => setTimeout(r, 0))
+    expect(emailInput).not.toHaveFocus()
   })
 
   it('requires the captcha before the submit button enables', async () => {

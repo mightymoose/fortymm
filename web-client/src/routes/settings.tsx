@@ -986,10 +986,18 @@ function SettingsPage() {
   })
   const claimed = effectiveStatus === 'verified'
 
-  // Honor /settings#sec-* deep links from external nav.
+  // Honor /settings#sec-* deep links from external nav. When the email
+  // section is the target — every account-recovery nudge points here —
+  // also focus the input so the user can start typing immediately. Pass
+  // preventScroll so focus() doesn't fight the smooth scroll above.
   useEffect(() => {
     const id = hash.replace(/^#/, '')
-    if (id) scrollToSection(id)
+    if (!id) return
+    scrollToSection(id)
+    if (id === 'sec-email') {
+      const input = document.getElementById('email') as HTMLInputElement | null
+      input?.focus({ preventScroll: true })
+    }
   }, [hash])
 
   return (
@@ -1002,7 +1010,11 @@ function SettingsPage() {
             <ClaimBanner
               status={effectiveStatus}
               email={sessionPendingEmail ?? sessionEmail ?? ''}
-              onJump={() => scrollToSection('sec-email')}
+              onJump={() => {
+                scrollToSection('sec-email')
+                const input = document.getElementById('email') as HTMLInputElement | null
+                input?.focus({ preventScroll: true })
+              }}
             />
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
