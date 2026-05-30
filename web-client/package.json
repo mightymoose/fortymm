@@ -13,7 +13,7 @@
     "test:ui": "vitest --ui",
     "test:e2e": "playwright test",
     "test:mutation": "stryker run",
-    "test:mutation:since": "stryker run --incremental --since=origin/main",
+    "test:mutation:changed": "bash scripts/mutation-changed.sh",
     "gen:api": "openapi-typescript ${API_URL:-http://localhost:8000}/openapi.json -o ./src/api/schema.d.ts"
   },
   "dependencies": {
