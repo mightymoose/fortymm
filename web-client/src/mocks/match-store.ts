@@ -562,6 +562,19 @@ export function buildInitialSeeds(): SeedMatch[] {
       signatures: [],
     },
     {
+      // No opponent yet: a player-less sentinel side, exercising the
+      // "No opponent" placeholder in the scoreboard header and line score.
+      id: 'm-open-1',
+      status: 'pending',
+      best_of: 5,
+      affects_rating: true,
+      created_at: '2026-05-14T17:00:00Z',
+      completed_at: null,
+      opponent: null,
+      games: [],
+      signatures: [],
+    },
+    {
       id: 'm-2207',
       status: 'in_progress',
       best_of: 5,

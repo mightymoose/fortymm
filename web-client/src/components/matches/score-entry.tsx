@@ -16,7 +16,8 @@ import {
   type MatchResultsGameWrite,
 } from '@/api/matches'
 import { AppShell } from '@/components/app-shell'
-import { cn, initialsOf } from '@/lib/utils'
+import { cn } from '@/lib/utils'
+import { initialsOf } from '@/lib/initials-of'
 import { decidedSide, illegalScoreReason } from '@/lib/scoring'
 
 // Placeholder for the opponent label on solo matches — mirrors the match

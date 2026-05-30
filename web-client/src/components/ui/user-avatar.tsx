@@ -1,7 +1,8 @@
 import type { CSSProperties } from 'react'
 import { User as UserIcon } from 'lucide-react'
 
-import { cn, initialsOf } from '@/lib/utils'
+import { cn } from '@/lib/utils'
+import { initialsOf } from '@/lib/initials-of'
 
 function hueFor(name: string): number {
   let hue = 0

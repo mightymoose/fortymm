@@ -6,7 +6,13 @@ import {
 } from '@tanstack/react-query'
 import { api, resolveBaseUrl, unwrap } from './client'
 import { DASHBOARD_QUERY_KEY } from './dashboard'
+import {
+  matchDetailsQuery,
+  matchQueryKey,
+} from '@/components/matches/match-details/match-details-query'
 import type { components } from './schema'
+
+export { matchQueryKey } from '@/components/matches/match-details/match-details-query'
 
 export type Player = components['schemas']['PlayerRead']
 export type MatchCreate = components['schemas']['MatchCreate']
@@ -37,10 +43,6 @@ export function playerSearchQueryKey(term: string) {
  * key so two different filters keep separate cache slots. */
 export function matchListQueryKey(params: MatchListParams) {
   return ['matches', 'list', params] as const
-}
-
-export function matchQueryKey(matchId: string) {
-  return ['matches', 'detail', matchId] as const
 }
 
 /**
@@ -154,18 +156,7 @@ export function matchesCsvUrl(
 
 /** Throws on failure so the surrounding boundary can render a retry. */
 export function useMatch(matchId: string) {
-  return useQuery({
-    queryKey: matchQueryKey(matchId),
-    queryFn: async (): Promise<MatchDetails> =>
-      unwrap(
-        'load match',
-        await api.GET('/v1/matches/{match_id}', {
-          params: { path: { match_id: matchId } },
-        }),
-      ),
-    retry: false,
-    throwOnError: true,
-  })
+  return useQuery(matchDetailsQuery(matchId))
 }
 
 /** Cache work shared by both score mutations: prime the detail cache from the
