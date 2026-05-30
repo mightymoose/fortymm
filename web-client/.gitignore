@@ -12,6 +12,12 @@ dist
 dist-ssr
 *.local
 
+# Stryker mutation testing
+reports/
+.stryker-tmp/
+stryker.log
+.stryker-incremental.json
+
 # Playwright
 /test-results/
 /playwright-report/
