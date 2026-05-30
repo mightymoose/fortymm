@@ -1,0 +1,58 @@
+name: web-client-mutation
+
+# Mutation testing (StrykerJS) for the web client. Separate from the blocking
+# `web-client` workflow on purpose: mutation runs are slower, and the score is
+# advisory — `thresholds.break` is null in stryker.config.mjs, so this job
+# reports a score but never fails the build. Make it gating later by setting a
+# `break` threshold and dropping `continue-on-error`.
+
+on:
+  # On PRs, mutate only the files that changed vs. the base branch — fast and
+  # relevant. Needs full history + the base ref for `--since` to diff.
+  pull_request:
+    paths:
+      - 'web-client/**'
+  # Manual full-suite run (mutates everything in stryker.config.mjs's `mutate`).
+  workflow_dispatch:
+
+defaults:
+  run:
+    working-directory: web-client
+
+jobs:
+  mutation:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # `stryker run --since` diffs against the merge base, so we need the
+          # base branch and full history, not the default shallow checkout.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '26.1.0'
+          cache: npm
+          cache-dependency-path: web-client/package-lock.json
+
+      - run: npm ci
+
+      # PR: incremental, changed-files-only against the base. Dispatch: full run.
+      - name: Run mutation tests (changed files)
+        if: github.event_name == 'pull_request'
+        run: |
+          git fetch origin "${{ github.base_ref }}" --depth=1
+          npm run test:mutation -- --incremental --since="origin/${{ github.base_ref }}"
+
+      - name: Run mutation tests (full)
+        if: github.event_name == 'workflow_dispatch'
+        run: npm run test:mutation
+
+      - name: Upload HTML report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutation-report
+          path: web-client/reports/mutation/
+          if-no-files-found: ignore

@@ -12,6 +12,8 @@
     "test:run": "vitest run",
     "test:ui": "vitest --ui",
     "test:e2e": "playwright test",
+    "test:mutation": "stryker run",
+    "test:mutation:since": "stryker run --incremental --since=origin/main",
     "gen:api": "openapi-typescript ${API_URL:-http://localhost:8000}/openapi.json -o ./src/api/schema.d.ts"
   },
   "dependencies": {
@@ -48,6 +50,9 @@
     "@eslint/js": "^10.0.1",
     "@faker-js/faker": "^10.4.0",
     "@playwright/test": "^1.60.0",
+    "@stryker-mutator/core": "^9.6.1",
+    "@stryker-mutator/typescript-checker": "^9.6.1",
+    "@stryker-mutator/vitest-runner": "^9.6.1",
     "@tanstack/react-query-devtools": "^5.100.14",
     "@tanstack/react-router-devtools": "^1.167.0",
     "@tanstack/router-plugin": "^1.168.11",
