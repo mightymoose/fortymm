@@ -17,6 +17,6 @@ export interface MatchHeaderDataDisplayProps {
 export const MatchHeaderDataDisplay = ({ matchHeaderData }: MatchHeaderDataDisplayProps) => {
     return <div>
         <Meta status={matchHeaderData.status} bestOf={matchHeaderData.bestOf} />
-        <MatchScore sides={matchHeaderData.sides} games={matchHeaderData.games} bestOf={matchHeaderData.bestOf} />
+        <MatchScore status={matchHeaderData.status} sides={matchHeaderData.sides} games={matchHeaderData.games} bestOf={matchHeaderData.bestOf} />
     </div>
 }

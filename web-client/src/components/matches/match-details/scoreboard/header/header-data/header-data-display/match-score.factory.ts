@@ -17,6 +17,10 @@ export const gameWonBy = (sideNumber: number): GameScore[] => [
 ];
 
 export const matchScoreFactory = (overrides: Partial<MatchScoreProps> = {}): MatchScoreProps => ({
+    // A played (final) match is the common "show a score" case; override `status`
+    // with `{ kind: "upcoming", ... }` for the VS layout or `{ kind: "live", ... }`
+    // for an in-progress match.
+    status: { kind: "final" },
     sides: [headerSideFactory(), headerSideFactory()],
     games: [],
     bestOf: 5,
