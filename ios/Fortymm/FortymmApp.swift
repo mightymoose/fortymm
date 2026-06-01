@@ -4,7 +4,7 @@ import SwiftUI
 struct FortymmApp: App {
     var body: some Scene {
         WindowGroup {
-            DesignSystemView()
+            LandingView()
                 .preferredColorScheme(.dark)
         }
     }
