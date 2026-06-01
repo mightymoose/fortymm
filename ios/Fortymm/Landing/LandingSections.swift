@@ -384,12 +384,8 @@ struct LandingCTA: View {
                     .font(FMFont.ui(FMFont.sm))
                     .foregroundStyle(FMColor.fg3)
                     .lineSpacing(2)
-                VStack(spacing: FMSpace.s3) {
-                    FMButton(title: "Start playing now", variant: .primary, size: .lg)
-                        .frame(maxWidth: .infinity)
-                    FMButton(title: "Get the iOS app", variant: .secondary, size: .lg)
-                        .frame(maxWidth: .infinity)
-                }
+                FMButton(title: "Start playing now", variant: .primary, size: .lg)
+                    .frame(maxWidth: .infinity)
                 Text("● Web is live · iOS in beta · Android in beta")
                     .font(FMFont.mono(FMFont.xs))
                     .foregroundStyle(FMColor.serve500)
