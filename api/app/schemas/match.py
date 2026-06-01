@@ -5,6 +5,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from app.models.match import MatchStatus
 from app.schemas.rating import RatingChange
+from app.schemas.view.match_details import MatchDetails as MatchDetailsView
 
 # Match lengths the client offers. All odd so one side can always reach a
 # strict majority of games; the DB additionally enforces "odd and >= 1".
@@ -180,6 +181,9 @@ class MatchDetails(BaseModel):
     signatures: list[MatchSignatureView]
     recent_form: list[MatchDetailsPlayerForm] = Field(default_factory=list)
     head_to_head: MatchDetailsH2H | None = None
+    # In-progress replacement view model, exposed alongside the current fields
+    # so the FE can adopt it incrementally. Always populated.
+    data: MatchDetailsView
 
 
 # ----- list (BFF for /matches) ---------------------------------------------

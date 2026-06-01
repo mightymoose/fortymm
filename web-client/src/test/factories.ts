@@ -10,7 +10,7 @@ type Permission = components['schemas']['PermissionRead']
 type Role = components['schemas']['RoleRead']
 type RbacUser = components['schemas']['RbacUserRead']
 type Player = components['schemas']['PlayerRead']
-type MatchDetails = components['schemas']['MatchDetails']
+type MatchDetails = components['schemas']['app__schemas__match__MatchDetails']
 type MatchDetailsSide = components['schemas']['MatchDetailsSide']
 type MatchListRow = components['schemas']['MatchListRow']
 type MatchListResponse = components['schemas']['MatchListResponse']
@@ -183,12 +183,17 @@ export function matchDetails(
 ): MatchDetails {
   const id = overrides.id ?? nextId('m')
   const bestOf = overrides.best_of ?? 5
+  const status = overrides.status ?? 'in_progress'
+  // Mirror the backend scoreboard-status mapping so an overridden `status`
+  // keeps the derived `data.scoreboard` in sync (disputed/voided → final).
+  const scoreboardStatus =
+    status === 'pending' ? 'scheduled' : status === 'in_progress' ? 'live' : 'final'
   const { mySide, opponentSide } = defaultSides(
     faker.internet.username().toLowerCase(),
   )
   return {
     id,
-    status: 'in_progress',
+    status,
     status_label: 'Live',
     league: MOCK_DEFAULT_LEAGUE,
     best_of: bestOf,
@@ -221,6 +226,7 @@ export function matchDetails(
       side_2_wins: 0,
       recent_meetings: [],
     },
+    data: { scoreboard: { status: scoreboardStatus } },
     ...overrides,
   }
 }

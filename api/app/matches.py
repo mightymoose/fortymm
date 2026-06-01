@@ -24,7 +24,9 @@ from sqlalchemy.orm import aliased, selectinload
 from sqlalchemy.sql.base import ExecutableOption
 
 from app.db import get_session
+from app.domain.match.models import Match as MatchModel
 from app.leagues import resolve_league
+from app.mappers.match_details_mapper import serialize_match_details
 from app.models import (
     League,
     Match,
@@ -65,6 +67,8 @@ from app.schemas.match import (
     MatchSignatureView,
 )
 from app.schemas.rating import RatingChange
+from app.services.dependencies import get_match_service
+from app.services.match_service import MatchService
 from app.sessions import get_current_user, get_optional_user
 
 router = APIRouter(prefix="/v1")
@@ -255,8 +259,14 @@ def _serialize_details(
     match: Match,
     current_user_id: uuid.UUID | None,
     extras: "ViewExtras | None" = None,
+    domain_match: MatchModel | None = None,
 ) -> MatchDetails:
     extras = extras or _EMPTY_EXTRAS
+    # The ``data`` view is built from the domain model. The match-details
+    # endpoint loads it through MatchService/MatchRepository and passes it in;
+    # the other serialize call sites already hold the full ORM row, so they
+    # derive it directly rather than firing a second query.
+    domain_match = domain_match or MatchModel.from_row(match)
     side_wins = side_win_counts(match)
 
     def _score_schema(score: MatchGameScore) -> MatchDetailsScore:
@@ -329,6 +339,7 @@ def _serialize_details(
         ],
         recent_form=extras.recent_form,
         head_to_head=extras.head_to_head,
+        data=serialize_match_details(domain_match),
     )
 
 
@@ -641,6 +652,7 @@ async def get_match(
     match_id: uuid.UUID,
     current_user: User | None = Depends(get_optional_user),
     db: AsyncSession = Depends(get_session),
+    match_service: MatchService = Depends(get_match_service),
 ) -> MatchDetails:
     """Open to anyone, signed in or not. The same endpoint backs both the
     authed `/matches/$matchId` route and the public `/p/matches/$matchId`
@@ -653,8 +665,16 @@ async def get_match(
     match = await _load_match(db, match_id)
     if match is None:
         raise HTTPException(status_code=404, detail="Match not found.")
+    domain_match = await match_service.get_match(match_id)
+    if domain_match is None:
+        raise HTTPException(status_code=404, detail="Match not found.")
     extras = await _load_view_extras(db, match)
-    return _serialize_details(match, current_user.id if current_user else None, extras)
+    return _serialize_details(
+        match,
+        current_user.id if current_user else None,
+        extras,
+        domain_match,
+    )
 
 
 # ----- score writes --------------------------------------------------------

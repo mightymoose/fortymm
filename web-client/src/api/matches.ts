@@ -10,7 +10,13 @@ import type { components } from './schema'
 
 export type Player = components['schemas']['PlayerRead']
 export type MatchCreate = components['schemas']['MatchCreate']
-export type MatchDetails = components['schemas']['MatchDetails']
+// Two backend classes are named `MatchDetails` (the page BFF response and the
+// new `data` view model), so openapi-typescript namespaces both by module path.
+export type MatchDetails =
+  components['schemas']['app__schemas__match__MatchDetails']
+export type MatchDetailsView =
+  components['schemas']['app__schemas__view__match_details__MatchDetails']
+export type ScoreboardStatus = components['schemas']['Status']
 export type MatchListResponse = components['schemas']['MatchListResponse']
 export type MatchListRow = components['schemas']['MatchListRow']
 export type MatchGameScoreWrite = components['schemas']['MatchGameScoreWrite']

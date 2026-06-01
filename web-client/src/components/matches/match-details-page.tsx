@@ -30,7 +30,7 @@ import { ApiError } from '@/api/client'
 
 import { SaveYourMatch } from './save-your-match'
 
-type MatchDetails = components['schemas']['MatchDetails']
+type MatchDetails = components['schemas']['app__schemas__match__MatchDetails']
 type MatchDetailsGame = components['schemas']['MatchDetailsGame']
 type MatchDetailsSide = components['schemas']['MatchDetailsSide']
 type MatchDetailsFormResult = components['schemas']['MatchDetailsFormResult']
@@ -232,10 +232,13 @@ function projectHeadToHead(
 }
 
 function projectMatchView(data: MatchDetails, matchId: string): MatchView {
+  // Hero state comes from the new scoreboard view model (data.data.scoreboard),
+  // which collapses the lifecycle to the same scheduled/live/final buckets the
+  // matches list uses — so disputed/voided read as `final`, not `upcoming`.
   const state: HeroState =
-    data.status === 'in_progress'
+    data.data.scoreboard.status === 'live'
       ? 'live'
-      : data.status === 'completed'
+      : data.data.scoreboard.status === 'final'
         ? 'final'
         : 'upcoming'
   const { leftSide, rightSide } = orderSides(data.sides)
