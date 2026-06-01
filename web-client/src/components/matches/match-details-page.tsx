@@ -273,8 +273,15 @@ function projectMatchView(data: MatchDetails, matchId: string): MatchView {
     : null
   const viewerHasSigned =
     viewerUserId !== null && signers.has(viewerUserId)
+  // Only an in-progress match can be awaiting confirmation. Once it's
+  // finalized (completed) or otherwise terminal, the signatures stay in the
+  // response as a historical record — guard on status so the passive
+  // "waiting on <opponent>" notice doesn't linger past the Final badge.
   const viewerIsAwaitingOther =
-    viewerIsParticipant && data.signatures.length > 0 && viewerHasSigned
+    data.status === 'in_progress' &&
+    viewerIsParticipant &&
+    data.signatures.length > 0 &&
+    viewerHasSigned
   // Find the participant who's missing from the signature set. With "at
   // least one player per side" semantics, this picks the first un-signed
   // player on the other side. Falls back to "your opponent" if we can't

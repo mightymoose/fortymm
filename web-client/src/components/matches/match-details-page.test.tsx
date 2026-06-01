@@ -800,4 +800,51 @@ describe('MatchDetailsView', () => {
       within(callout).queryByRole('button', { name: /confirm result/i }),
     ).not.toBeInTheDocument()
   })
+
+  it('drops the "awaiting confirmation" notice once the match is finalized', async () => {
+    // Regression for the stale-notice bug (#358): after the opponent confirms,
+    // the match is Final but the viewer's signature stays in the response.
+    // The passive "waiting on your opponent" callout must not linger.
+    const match = matchDetails({
+      id: 'm-final',
+      status: 'completed',
+      status_label: 'Final',
+      sides: [
+        {
+          side_number: 1,
+          players: [
+            { user_id: 'u-me', username: 'me', is_current_user: true },
+          ],
+          games_won: 3,
+          won: true,
+          is_current_user_side: true,
+        },
+        {
+          side_number: 2,
+          players: [
+            { user_id: 'u-opp', username: 'nguyen.t', is_current_user: false },
+          ],
+          games_won: 1,
+          won: false,
+          is_current_user_side: false,
+        },
+      ],
+      can_confirm: false,
+      // Both players have now signed; signatures persist as a historical record.
+      signatures: [
+        { user_id: 'u-me', signed_at: '2026-05-26T12:00:00Z' },
+        { user_id: 'u-opp', signed_at: '2026-05-26T12:05:00Z' },
+      ],
+    })
+    server.use(
+      http.get('*/v1/matches/m-final', () => HttpResponse.json(match)),
+    )
+
+    renderDetails('m-final')
+
+    // Wait for the page to render (the Final status is shown), then assert
+    // the stale awaiting-confirmation callout is gone.
+    await screen.findAllByText('Final')
+    expect(screen.queryByTestId('match-confirm-callout')).not.toBeInTheDocument()
+  })
 })
