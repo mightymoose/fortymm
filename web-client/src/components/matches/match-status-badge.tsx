@@ -17,7 +17,7 @@ const BADGES: {
   live: ({ gameNumber }) => <LiveMatchBadge gameNumber={gameNumber} />,
   'awaiting-confirmation': () => <AwaitingConfirmationBadge />,
   final: () => <FinalMatchBadge />,
-  upcoming: ({ label }) => <UpcomingMatchBadge label={label} />,
+  upcoming: () => <UpcomingMatchBadge />,
 }
 
 export function MatchStatusBadge({ status }: { status: StatusView }) {

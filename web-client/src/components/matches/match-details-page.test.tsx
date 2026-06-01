@@ -68,57 +68,6 @@ function renderDetails(matchId: string) {
 }
 
 describe('MatchDetailsView', () => {
-  it('renders the hero scoreline from the participant sides counts', async () => {
-    const match = matchDetails({
-      id: 'm-1',
-      status: 'completed',
-      status_label: 'Final',
-      sides: [
-        {
-          side_number: 1,
-          players: [
-            { user_id: 'u-me', username: 'me', is_current_user: true },
-          ],
-          games_won: 3,
-          won: true,
-          is_current_user_side: true,
-        },
-        {
-          side_number: 2,
-          players: [
-            { user_id: 'u-opp', username: 'nguyen.t', is_current_user: false },
-          ],
-          games_won: 1,
-          won: false,
-          is_current_user_side: false,
-        },
-      ],
-      games: [],
-      current_game: null,
-      can_score: false,
-    })
-    server.use(
-      http.get('*/v1/matches/m-1', () => HttpResponse.json(match)),
-    )
-
-    const { container } = renderDetails('m-1')
-
-    // Wait for the hero to render; each side's games_won shows up as the
-    // headline score number, current-user side on the left.
-    await waitFor(() =>
-      expect(container.querySelector('.md-hero__name')).toHaveTextContent(
-        'me',
-      ),
-    )
-    const leftScore = container.querySelector('.md-hero__score--l')
-    const rightScore = container.querySelector('.md-hero__score--r')
-    expect(leftScore).toHaveTextContent('3')
-    expect(rightScore).toHaveTextContent('1')
-    // My side won — the win modifier is on the left, not the right.
-    expect(leftScore).toHaveClass('md-hero__score--win')
-    expect(rightScore).not.toHaveClass('md-hero__score--win')
-  })
-
   it('shows a Score CTA only when can_score is true and links to current_game', async () => {
     const game1 = { id: 'g-1', game_number: 1, score: null }
     const match = matchDetails({
@@ -163,64 +112,6 @@ describe('MatchDetailsView', () => {
     expect(
       screen.queryByRole('link', { name: 'Score' }),
     ).not.toBeInTheDocument()
-  })
-
-  it('links each scored game cell on my row to its scores/edit route', async () => {
-    const match = matchDetails({
-      id: 'm-4',
-      status: 'in_progress',
-      status_label: 'Live',
-      best_of: 5,
-      games_to_win: 3,
-      sides: [
-        {
-          side_number: 1,
-          players: [
-            { user_id: 'u-me', username: 'me', is_current_user: true },
-          ],
-          games_won: 1,
-          won: null,
-          is_current_user_side: true,
-        },
-        {
-          side_number: 2,
-          players: [
-            { user_id: 'u-opp', username: 'opp', is_current_user: false },
-          ],
-          games_won: 0,
-          won: null,
-          is_current_user_side: false,
-        },
-      ],
-      games: [
-        {
-          id: 'g-1',
-          game_number: 1,
-          score: {
-            id: 's-1',
-            side_1_points: 11,
-            side_2_points: 4,
-            winner_side_number: 1,
-          },
-        },
-        { id: 'g-2', game_number: 2, score: null },
-      ],
-      current_game: { game_number: 2 },
-      can_score: true,
-    })
-    server.use(
-      http.get('*/v1/matches/m-4', () => HttpResponse.json(match)),
-    )
-
-    renderDetails('m-4')
-
-    await screen.findByRole('link', { name: 'Score' })
-    // The first-game cell on my row is a link to the edit route for game 1.
-    const editLink = screen.getByRole('link', { name: '11' })
-    expect(editLink).toHaveAttribute(
-      'href',
-      '/matches/m-4/games/1/scores/edit',
-    )
   })
 
   it('renders an error fallback when the match fails to load', async () => {

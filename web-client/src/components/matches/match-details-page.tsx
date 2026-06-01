@@ -3,7 +3,6 @@ import { Link, useRouter } from '@tanstack/react-router'
 import {
   Check,
   ChevronRight,
-  Clock,
   Copy,
   Download,
   Link2,
@@ -15,11 +14,11 @@ import {
 
 import { AppShell } from '@/components/app-shell'
 import { Overline } from '@/components/overline'
-import { cn, initialsOf } from '@/lib/utils'
+import { cn } from '@/lib/utils'
+import { initialsOf } from '@/lib/initials-of'
 import { fmtDateShort, fmtDateTimeShort } from '@/lib/dates'
 import { formatRatingDelta } from '@/lib/rating'
 import {
-  scoringEditRoute,
   scoringNewRoute,
   useConfirmMatch,
   useDisputeMatch,
@@ -29,6 +28,7 @@ import type { components } from '@/api/schema'
 import { ApiError } from '@/api/client'
 
 import { SaveYourMatch } from './save-your-match'
+import { Scoreboard } from './match-details/scoreboard'
 
 type MatchDetails = components['schemas']['MatchDetails']
 type MatchDetailsGame = components['schemas']['MatchDetailsGame']
@@ -446,7 +446,7 @@ function MatchDetailsPage({
 
         <SaveYourMatch key={matchId} view={view} matchId={matchId} />
 
-        <HeroScoreboard view={view} matchId={matchId} />
+        <Scoreboard matchId={matchId} />
 
         <ConfirmationCallout view={view} matchId={matchId} />
 
@@ -529,280 +529,6 @@ function Breadcrumb({
       <span>›</span>
       <span className="md-breadcrumb__current">Match {matchId.slice(0, 6)}</span>
     </div>
-  )
-}
-
-function HeroScoreboard({
-  view,
-  matchId,
-}: {
-  view: MatchView
-  matchId: string
-}) {
-  const isLive = view.state === 'live'
-  const isUpcoming = view.state === 'upcoming'
-
-  return (
-    <section className="md-hero">
-      <div className="md-hero__grid-bg" aria-hidden="true" />
-
-      <div className="md-hero__strip">
-        <div className="md-hero__strip-l">
-          {isLive && view.currentGameNumber !== null && (
-            <span className="md-chip md-chip--live">
-              <span className="dot" />
-              Live · Game {view.currentGameNumber}
-            </span>
-          )}
-          {view.state === 'final' && (
-            <span className="md-chip md-chip--final">
-              <span className="dot" />
-              Final
-            </span>
-          )}
-          {isUpcoming && (
-            <span className="md-chip md-chip--upcoming">
-              <span className="dot" />
-              {view.statusLabel}
-            </span>
-          )}
-        </div>
-        <div className="md-hero__strip-r">
-          <span className="md-hero__strip-meta">
-            SINGLES · BO{view.bestOf}
-          </span>
-          {!isUpcoming && (
-            <span className="md-hero__strip-meta md-hero__strip-meta--with-icon">
-              <Clock size={13} strokeWidth={1.75} />
-              First to {view.gamesToWin}
-            </span>
-          )}
-        </div>
-      </div>
-
-      <div className="md-hero__row">
-        <PlayerSide side={view.leftSide} pos="l" />
-        <div className="md-hero__score-block">
-          {isUpcoming ? (
-            <>
-              <div className="md-hero__vs-label">VS</div>
-              <div className="md-hero__vs-dash">—</div>
-              <div className="md-hero__vs-label">{view.statusLabel}</div>
-            </>
-          ) : (
-            <>
-              <div className="md-hero__score-row">
-                <div
-                  className={cn(
-                    'md-hero__score md-hero__score--l',
-                    view.leftSide.won && 'md-hero__score--win',
-                  )}
-                >
-                  {view.leftSide.gamesWon}
-                </div>
-                <div className="md-hero__score-dash">—</div>
-                <div
-                  className={cn(
-                    'md-hero__score md-hero__score--r',
-                    view.rightSide?.won && 'md-hero__score--win',
-                  )}
-                >
-                  {view.rightSide?.gamesWon ?? 0}
-                </div>
-              </div>
-              <div className="md-hero__score-caption">{view.statusLabel}</div>
-            </>
-          )}
-        </div>
-        {view.rightSide ? (
-          <PlayerSide side={view.rightSide} pos="r" />
-        ) : (
-          <NoOpponentSide pos="r" />
-        )}
-      </div>
-
-      {!isUpcoming && view.rightSide && (
-        <GameGrid view={view} matchId={matchId} />
-      )}
-    </section>
-  )
-}
-
-function PlayerSide({ side, pos }: { side: SideView; pos: 'l' | 'r' }) {
-  if (side.isGhost) return <NoOpponentSide pos={pos} />
-  const win = side.won === true
-  return (
-    <div className={`md-hero__player md-hero__player--${pos}`}>
-      <div className="md-hero__player-row">
-        <div
-          className={cn(
-            'md-avatar md-hero__avatar-singles',
-            win ? 'md-avatar--win' : 'md-avatar--loss',
-          )}
-        >
-          {side.initials}
-        </div>
-        <div className={`md-hero__player-text--${pos}`}>
-          <div className={cn('md-hero__name', win && 'md-hero__name--win')}>
-            {side.username}
-          </div>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function NoOpponentSide({ pos }: { pos: 'l' | 'r' }) {
-  return (
-    <div className={`md-hero__player md-hero__player--${pos}`}>
-      <div className="md-hero__player-row">
-        <div
-          className="md-avatar md-avatar--ghost md-hero__avatar-singles"
-          aria-hidden="true"
-        >
-          <User size={26} strokeWidth={1.75} />
-        </div>
-        <div className={`md-hero__player-text--${pos}`}>
-          <div className="md-hero__name md-hero__name--ghost">
-            {NO_OPPONENT_LABEL}
-          </div>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function GameGrid({ view, matchId }: { view: MatchView; matchId: string }) {
-  // Pad to best_of so the grid always renders the same number of cells.
-  const slots: Array<GameView | null> = []
-  for (let n = 1; n <= view.bestOf; n += 1) {
-    slots.push(view.games.find((g) => g.gameNumber === n) ?? null)
-  }
-  // Per-cell edit links are gated on participation — spectators can't write
-  // scores, so the row never wraps cells in `<Link>`s for them.
-  const canEdit = view.leftSide.isCurrentUser
-  return (
-    <div className="md-games">
-      <div
-        className="md-games__grid"
-        style={{ '--md-games-count': view.bestOf } as React.CSSProperties}
-      >
-        <div className="md-games__kicker">GAMES</div>
-        {slots.map((_, i) => (
-          <div key={`h-${i}`} className="md-games__col-label">
-            G{i + 1}
-          </div>
-        ))}
-        <div className="md-games__col-label">SETS</div>
-
-        <GameGridSide
-          side={view.leftSide}
-          slots={slots}
-          rowSide="left"
-          matchId={matchId}
-          currentGameNumber={view.currentGameNumber}
-          canEdit={canEdit}
-        />
-        {view.rightSide && (
-          <GameGridSide
-            side={view.rightSide}
-            slots={slots}
-            rowSide="right"
-            matchId={matchId}
-            currentGameNumber={view.currentGameNumber}
-            canEdit={false}
-          />
-        )}
-      </div>
-    </div>
-  )
-}
-
-function GameGridSide({
-  side,
-  slots,
-  rowSide,
-  matchId,
-  currentGameNumber,
-  canEdit,
-}: {
-  side: SideView
-  slots: Array<GameView | null>
-  rowSide: 'left' | 'right'
-  matchId: string
-  currentGameNumber: number | null
-  canEdit: boolean
-}) {
-  const won = side.won === true
-  return (
-    <>
-      <div className="md-games__player">
-        {side.isGhost ? (
-          <span className="md-avatar md-avatar--ghost" aria-hidden="true">
-            <User size={14} strokeWidth={1.75} />
-          </span>
-        ) : (
-          <span
-            className={cn('md-avatar', won ? 'md-avatar--win' : 'md-avatar--loss')}
-          >
-            {side.initials}
-          </span>
-        )}
-        <span className="md-games__player-name">
-          {side.isGhost ? NO_OPPONENT_LABEL : side.username}
-        </span>
-      </div>
-      {slots.map((g, i) => {
-        if (!g) {
-          return (
-            <div key={i} className="md-games__cell md-games__cell--empty">
-              —
-            </div>
-          )
-        }
-        if (!g.score) {
-          const isLiveCell = currentGameNumber === g.gameNumber
-          return (
-            <div
-              key={i}
-              className={cn(
-                'md-games__cell md-games__cell--empty',
-                isLiveCell && 'md-games__cell--live',
-              )}
-            >
-              —
-            </div>
-          )
-        }
-        const cellWin =
-          rowSide === 'left' ? g.score.leftWon : !g.score.leftWon
-        const value =
-          rowSide === 'left' ? g.score.leftPoints : g.score.rightPoints
-        const editTo =
-          canEdit && g.scoreId ? scoringEditRoute(matchId, g.gameNumber) : null
-        const className = cn(
-          'md-games__cell',
-          cellWin ? 'md-games__cell--win' : 'md-games__cell--loss',
-        )
-        // Only render the per-cell edit link on the participant's own row so
-        // the user doesn't see two stacked links over the same cell.
-        if (editTo) {
-          return (
-            <Link key={i} {...editTo} className={className}>
-              {value}
-            </Link>
-          )
-        }
-        return (
-          <div key={i} className={className}>
-            {value}
-          </div>
-        )
-      })}
-      <div className={cn('md-games__total', won && 'md-games__total--win')}>
-        {side.gamesWon}
-      </div>
-    </>
   )
 }
 
