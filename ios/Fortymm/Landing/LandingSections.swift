@@ -107,6 +107,8 @@ struct LandingFeatures: View {
 // MARK: - Tournaments
 
 struct LandingTournaments: View {
+    @EnvironmentObject private var router: Router
+
     private let steps: [(k: String, t: String)] = [
         ("01", "Import a player list — CSV, paste, or scan."),
         ("02", "Set constraints — courts, breaks, start times."),
@@ -143,8 +145,10 @@ struct LandingTournaments: View {
             LandingSolverCard()
 
             VStack(spacing: FMSpace.s3) {
-                FMButton(title: "Start a tournament", variant: .primary, size: .lg)
-                    .frame(maxWidth: .infinity)
+                FMButton(title: "Start a tournament", variant: .primary, size: .lg) {
+                    router.goToDashboard()
+                }
+                .frame(maxWidth: .infinity)
                 FMButton(title: "See a sample schedule", variant: .ghost, size: .lg)
                     .frame(maxWidth: .infinity)
             }
@@ -369,6 +373,8 @@ struct LandingFAQ: View {
 // MARK: - Final CTA
 
 struct LandingCTA: View {
+    @EnvironmentObject private var router: Router
+
     var body: some View {
         FMCard(featured: true) {
             VStack(alignment: .leading, spacing: FMSpace.s4) {
@@ -384,8 +390,10 @@ struct LandingCTA: View {
                     .font(FMFont.ui(FMFont.sm))
                     .foregroundStyle(FMColor.fg3)
                     .lineSpacing(2)
-                FMButton(title: "Start playing now", variant: .primary, size: .lg)
-                    .frame(maxWidth: .infinity)
+                FMButton(title: "Start playing now", variant: .primary, size: .lg) {
+                    router.goToDashboard()
+                }
+                .frame(maxWidth: .infinity)
                 Text("● Web is live · iOS in beta · Android in beta")
                     .font(FMFont.mono(FMFont.xs))
                     .foregroundStyle(FMColor.serve500)
@@ -457,5 +465,6 @@ struct LandingFooter: View {
         .padding(.vertical, FMSpace.s8)
     }
     .background(FMColor.bgApp)
+    .environmentObject(Router())
     .preferredColorScheme(.dark)
 }
