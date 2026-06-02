@@ -53,12 +53,18 @@ struct LandingSectionHeading: View {
 // MARK: - Nav
 
 private struct LandingNav: View {
+    @EnvironmentObject private var router: Router
+
     var body: some View {
         HStack(spacing: FMSpace.s3) {
             FMLogo(size: 24)
             Spacer(minLength: 0)
-            FMButton(title: "Sign in", variant: .ghost, size: .sm)
-            FMButton(title: "Start playing", variant: .primary, size: .sm)
+            FMButton(title: "Sign in", variant: .ghost, size: .sm) {
+                router.goToDashboard()
+            }
+            FMButton(title: "Start playing", variant: .primary, size: .sm) {
+                router.goToDashboard()
+            }
         }
         .padding(.horizontal, FMSpace.s5)
     }
@@ -67,6 +73,8 @@ private struct LandingNav: View {
 // MARK: - Hero
 
 private struct LandingHero: View {
+    @EnvironmentObject private var router: Router
+
     var body: some View {
         VStack(alignment: .leading, spacing: FMSpace.s6) {
             FMEyebrow(text: "No ads · No tracking · No subscriptions, ever")
@@ -86,10 +94,14 @@ private struct LandingHero: View {
                 .lineSpacing(3)
 
             VStack(spacing: FMSpace.s3) {
-                FMButton(title: "Start a match", variant: .primary, size: .lg)
-                    .frame(maxWidth: .infinity)
-                FMButton(title: "Run a tournament", variant: .secondary, size: .lg)
-                    .frame(maxWidth: .infinity)
+                FMButton(title: "Start a match", variant: .primary, size: .lg) {
+                    router.goToDashboard()
+                }
+                .frame(maxWidth: .infinity)
+                FMButton(title: "Run a tournament", variant: .secondary, size: .lg) {
+                    router.goToDashboard()
+                }
+                .frame(maxWidth: .infinity)
             }
 
             HStack(spacing: FMSpace.s4) {
@@ -263,5 +275,7 @@ private struct LandingScoreboard: View {
 }
 
 #Preview {
-    LandingView().preferredColorScheme(.dark)
+    LandingView()
+        .environmentObject(Router())
+        .preferredColorScheme(.dark)
 }
