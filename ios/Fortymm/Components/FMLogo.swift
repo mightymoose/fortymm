@@ -1,5 +1,30 @@
 import SwiftUI
 
+/// The glossy ball-orange disc on its own — the brand mark used in the iOS
+/// top bar where the full wordmark would be too wide. Shared by `FMLogo`.
+struct FMBall: View {
+    var size: CGFloat = 24
+
+    var body: some View {
+        Circle()
+            .fill(
+                RadialGradient(
+                    colors: [Color(hex: 0xFFB57A), FMColor.ball500, FMColor.ball700],
+                    center: UnitPoint(x: 0.35, y: 0.35),
+                    startRadius: 0,
+                    endRadius: size * 0.9
+                )
+            )
+            .frame(width: size, height: size)
+            .overlay(alignment: .topLeading) {
+                Ellipse()
+                    .fill(Color.white.opacity(0.22))
+                    .frame(width: size * 0.4, height: size * 0.24)
+                    .offset(x: size * 0.18, y: size * 0.18)
+            }
+    }
+}
+
 /// The FortyMM wordmark: a glossy ball-orange disc followed by the
 /// condensed-display "FORTYMM" wordmark with an accent period.
 struct FMLogo: View {
@@ -7,22 +32,7 @@ struct FMLogo: View {
 
     var body: some View {
         HStack(spacing: size * 0.36) {
-            Circle()
-                .fill(
-                    RadialGradient(
-                        colors: [Color(hex: 0xFFB57A), FMColor.ball500, FMColor.ball700],
-                        center: UnitPoint(x: 0.35, y: 0.35),
-                        startRadius: 0,
-                        endRadius: size * 0.9
-                    )
-                )
-                .frame(width: size, height: size)
-                .overlay(alignment: .topLeading) {
-                    Ellipse()
-                        .fill(Color.white.opacity(0.22))
-                        .frame(width: size * 0.4, height: size * 0.24)
-                        .offset(x: size * 0.18, y: size * 0.18)
-                }
+            FMBall(size: size)
 
             HStack(spacing: 0) {
                 Text("FORTYMM")
