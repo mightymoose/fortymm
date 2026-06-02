@@ -17,7 +17,6 @@ struct DashboardView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .background(FMColor.bgApp.ignoresSafeArea())
-        .navigationBarTitleDisplayMode(.inline)
         .task { await session.load() }
     }
 
