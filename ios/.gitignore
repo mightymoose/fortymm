@@ -18,3 +18,20 @@ Package.resolved
 # CocoaPods / Carthage (not used yet, but pre-empt)
 Pods/
 Carthage/Build/
+
+# fastlane
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/**/*.png
+fastlane/test_output/
+*.mobileprovision
+
+# fastlane secrets — never commit
+.env
+.env.local
+fastlane/*.p8
+AuthKey_*.p8
+
+# Bundler (gems installed locally via `bundle install --path vendor/bundle`)
+.bundle/
+vendor/bundle/

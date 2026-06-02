@@ -1,0 +1,2 @@
+app_identifier("com.fortymm.ios-client") # bundle identifier of the app
+team_id("3A8872P8KP")                    # Developer Portal team id
