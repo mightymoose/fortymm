@@ -39,6 +39,10 @@ struct APIClient {
 
     static let shared = APIClient()
 
+    /// Name of the auth cookie the API sets and reads. Centralised so the send
+    /// and capture sides can't drift.
+    private static let sessionCookieName = "session"
+
     private let session: URLSession
     private let decoder: JSONDecoder
     private let tokens: SessionTokenStore
@@ -78,7 +82,10 @@ struct APIClient {
         request.httpMethod = "GET"
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         if let token = await tokens.token() {
-            request.setValue("session=\(token)", forHTTPHeaderField: "Cookie")
+            request.setValue(
+                "\(Self.sessionCookieName)=\(token)",
+                forHTTPHeaderField: "Cookie"
+            )
         }
 
         let (data, response) = try await session.data(for: request)
@@ -107,7 +114,7 @@ struct APIClient {
             withResponseHeaderFields: ["Set-Cookie": header],
             for: url
         )
-        if let token = cookies.first(where: { $0.name == "session" })?.value {
+        if let token = cookies.first(where: { $0.name == Self.sessionCookieName })?.value {
             await tokens.update(token)
         }
     }

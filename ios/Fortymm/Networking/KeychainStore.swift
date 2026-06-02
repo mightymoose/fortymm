@@ -17,15 +17,14 @@ struct KeychainStore {
         self.account = account
     }
 
-    @discardableResult
-    func save(_ value: String) -> Bool {
+    func save(_ value: String) {
         // Delete any existing item first so SecItemAdd can't fail with
         // errSecDuplicateItem.
         SecItemDelete(baseQuery as CFDictionary)
         var attributes = baseQuery
         attributes[kSecValueData as String] = Data(value.utf8)
         attributes[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
-        return SecItemAdd(attributes as CFDictionary, nil) == errSecSuccess
+        _ = SecItemAdd(attributes as CFDictionary, nil)
     }
 
     func load() -> String? {

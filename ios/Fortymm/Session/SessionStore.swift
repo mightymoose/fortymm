@@ -20,11 +20,6 @@ final class SessionStore: ObservableObject {
         self.client = client
     }
 
-    var user: SessionUser? {
-        if case let .loaded(user) = state { return user }
-        return nil
-    }
-
     /// Create or resume the session. Skips the network call if a user is
     /// already loaded, so re-entering the dashboard doesn't refetch.
     func load(force: Bool = false) async {
