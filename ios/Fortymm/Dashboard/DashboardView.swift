@@ -1,48 +1,105 @@
 import SwiftUI
 
-/// The signed-in landing surface. For now it does one real thing: create (or
-/// resume) the session via `GET /v1/session` and show who you are. Everything
-/// else is deliberately left for later.
+/// The signed-in home surface. Shows the "Your game" widgets — the current
+/// rating card (with sparkline) and the recent-matches table — fed by the BFF
+/// endpoint `GET /v1/dashboard`. Mirrors the web dashboard's "Your game" row.
+///
+/// The session is resolved up front by `RootView` and shared through the
+/// environment, so the greeting reads the username from there rather than
+/// refetching it.
 struct DashboardView: View {
-    @StateObject private var session = SessionStore()
+    @EnvironmentObject private var session: SessionStore
+    @StateObject private var store = DashboardStore()
+
+    private static let longDate: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "EEEE, MMMM d"   // e.g. "Wednesday, June 3"
+        return f
+    }()
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: FMSpace.s6) {
-                header
+                header(greeting: greeting)
                 content
             }
             .padding(.horizontal, FMSpace.s5)
-            .padding(.vertical, FMSpace.s6)
+            // The shell's frosted top bar (~46pt) is laid over the top via the
+            // TabView's `.safeAreaInset`, and that inset doesn't fully reduce the
+            // scroll content's safe area inside the tab — so content renders under
+            // the bar. Clear it with a top pad of the bar height plus a small gap,
+            // otherwise the "Dashboard · <date>" overline is hidden behind the bar.
+            .padding(.top, 56)
+            .padding(.bottom, FMSpace.s6)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .background(FMColor.bgApp.ignoresSafeArea())
-        .task { await session.load() }
-    }
-
-    private var header: some View {
-        VStack(alignment: .leading, spacing: FMSpace.s3) {
-            FMEyebrow(text: "Dashboard")
-            VStack(alignment: .leading, spacing: 0) {
-                Text("Welcome to")
-                    .foregroundStyle(FMColor.fg1)
-                Text("FortyMM.")
-                    .foregroundStyle(FMColor.ball500)
-            }
-            .font(FMFont.display(40))
-        }
+        .refreshable { await store.load(force: true) }
+        .task { await store.load() }
     }
 
     @ViewBuilder
     private var content: some View {
-        switch session.state {
+        switch store.state {
         case .idle, .loading:
             loadingCard
-        case let .loaded(user):
-            sessionCard(user)
+        case let .loaded(dashboard):
+            yourGame(dashboard)
         case let .failed(message):
             errorCard(message)
         }
+    }
+
+    /// The greeting reads the username from the session `RootView` already
+    /// resolved; it falls back to a bare "Hi" only if the session somehow isn't
+    /// loaded (it always is by the time this screen renders).
+    private var greeting: String {
+        if case let .loaded(user) = session.state { return "Hi, @\(user.username)" }
+        return "Hi"
+    }
+
+    private func header(greeting: String) -> some View {
+        VStack(alignment: .leading, spacing: FMSpace.s2) {
+            DashOverline(text: "Dashboard · \(Self.longDate.string(from: Date()))")
+            (Text(greeting).foregroundStyle(FMColor.fg1)
+                + Text(".").foregroundStyle(FMColor.ball500))
+                .font(FMFont.ui(FMFont.xl2, weight: .bold))
+        }
+    }
+
+    @ViewBuilder
+    private func yourGame(_ data: DashboardResponse) -> some View {
+        VStack(alignment: .leading, spacing: FMSpace.s4) {
+            HStack(alignment: .firstTextBaseline, spacing: FMSpace.s3) {
+                Text("Your game")
+                    .font(FMFont.ui(FMFont.md, weight: .semibold))
+                    .foregroundStyle(FMColor.fg1)
+                Text(yourGameSubtitle(data.rating))
+                    .font(FMFont.ui(FMFont.sm))
+                    .foregroundStyle(FMColor.fgMuted)
+                Spacer()
+            }
+
+            if let rating = data.rating {
+                DashboardRatingCard(rating: rating)
+            } else {
+                FMCard {
+                    VStack(alignment: .leading, spacing: FMSpace.s3) {
+                        DashOverline(text: "Current rating")
+                        Text("Not in a rated league yet.")
+                            .font(FMFont.ui(FMFont.sm))
+                            .foregroundStyle(FMColor.fg3)
+                    }
+                }
+            }
+
+            DashboardRecentResultsCard(rows: data.recentResults)
+        }
+    }
+
+    private func yourGameSubtitle(_ rating: DashboardRating?) -> String {
+        guard let rating else { return "Last 30 days" }
+        return "\(rating.strategyLabel) · last 30 days"
     }
 
     private var loadingCard: some View {
@@ -50,7 +107,7 @@ struct DashboardView: View {
             HStack(spacing: FMSpace.s3) {
                 ProgressView()
                     .tint(FMColor.ball500)
-                Text("Creating your session…")
+                Text("Loading your dashboard…")
                     .font(FMFont.ui(FMFont.md))
                     .foregroundStyle(FMColor.fg3)
             }
@@ -58,42 +115,10 @@ struct DashboardView: View {
         }
     }
 
-    private func sessionCard(_ user: SessionUser) -> some View {
-        FMCard(featured: true) {
-            VStack(alignment: .leading, spacing: FMSpace.s4) {
-                HStack(spacing: FMSpace.s3) {
-                    FMAvatar(
-                        initials: initials(for: user.username),
-                        size: 44,
-                        color: FMColor.ball500,
-                        foreground: FMColor.fgInverse
-                    )
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(user.username)
-                            .font(FMFont.ui(FMFont.md, weight: .semibold))
-                            .foregroundStyle(FMColor.fg1)
-                        Text("Signed in")
-                            .font(FMFont.mono(FMFont.xs))
-                            .foregroundStyle(FMColor.fgMuted)
-                    }
-                    Spacer()
-                    FMBadge(text: badgeText(for: user.emailStatus), variant: .live)
-                }
-
-                Rectangle().fill(FMColor.borderSubtle).frame(height: 1)
-
-                Text(statusBlurb(for: user.emailStatus))
-                    .font(FMFont.ui(FMFont.sm))
-                    .foregroundStyle(FMColor.fg3)
-                    .lineSpacing(2)
-            }
-        }
-    }
-
     private func errorCard(_ message: String) -> some View {
         FMCard {
             VStack(alignment: .leading, spacing: FMSpace.s4) {
-                Text("Couldn't start your session")
+                Text("Couldn't load your dashboard")
                     .font(FMFont.ui(FMFont.md, weight: .semibold))
                     .foregroundStyle(FMColor.fg1)
                 Text(message)
@@ -101,37 +126,15 @@ struct DashboardView: View {
                     .foregroundStyle(FMColor.fg3)
                     .lineSpacing(2)
                 FMButton(title: "Try again", variant: .primary, size: .md) {
-                    Task { await session.load(force: true) }
+                    Task { await store.load(force: true) }
                 }
             }
-        }
-    }
-
-    private func initials(for username: String) -> String { username.fmInitials }
-
-    private func badgeText(for status: SessionUser.EmailStatus) -> String {
-        switch status {
-        case .guest: return "Guest"
-        case .pending: return "Pending"
-        case .verified: return "Verified"
-        }
-    }
-
-    private func statusBlurb(for status: SessionUser.EmailStatus) -> String {
-        switch status {
-        case .guest:
-            return "You're playing as a guest. Add an email later to keep your matches across devices."
-        case .pending:
-            return "Check your inbox to confirm your email and lock in your account."
-        case .verified:
-            return "Your account is verified. Your matches follow you everywhere."
         }
     }
 }
 
 #Preview {
-    NavigationStack {
-        DashboardView()
-    }
-    .preferredColorScheme(.dark)
+    DashboardView()
+        .environmentObject(SessionStore())
+        .preferredColorScheme(.dark)
 }

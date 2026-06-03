@@ -1,8 +1,10 @@
-import type { CSSProperties, ReactNode } from 'react'
+import type { ComponentProps, CSSProperties, ReactNode } from 'react'
 import { Link } from '@tanstack/react-router'
 import { ArrowRight, ChevronRight, Plus, X } from 'lucide-react'
 import { useDashboard } from '@/api/dashboard'
 import { UserAvatar } from '@/components/ui/user-avatar'
+import { Card as UICard } from '@/components/ui/card'
+import { cn } from '@/lib/utils'
 import type {
   DashboardRating,
   DashboardRecentResult,
@@ -14,6 +16,13 @@ import { Overline } from '@/components/overline'
 import { GuestPersistBanner } from '@/components/dashboard/guest-persist-banner'
 import { fmtDateShort, fmtLongDate } from '@/lib/dates'
 import { formatRatingDelta } from '@/lib/rating'
+import { useMediaQuery } from '@/lib/use-media-query'
+
+// Below this width the two-column "Your game" row stacks, the page title drops
+// its inline action button to its own line, and gutters tighten. Sits below the
+// app-shell's 960px sidebar-drawer breakpoint so tablet-width two-column
+// layouts are preserved.
+const COMPACT_QUERY = '(max-width: 640px)'
 
 // Used everywhere an opponent slot has no registered player — the form's
 // solo-match path produces this. Matches the label used on the match-details
@@ -151,11 +160,20 @@ function Sparkline({
   w = 280,
   h = 48,
   color = C.ball500,
+  fluid = false,
 }: {
   data: number[]
   w?: number
   h?: number
   color?: string
+  /**
+   * Fill the container width instead of rendering at the fixed `w`. Only set
+   * on narrow layouts where a fixed pixel width would push the rating card's
+   * grid column wider than the viewport and overflow the page. At full size we
+   * keep the fixed width so the trend line and end-point markers aren't
+   * stretched non-uniformly.
+   */
+  fluid?: boolean
 }) {
   const min = Math.min(...data)
   const max = Math.max(...data)
@@ -173,7 +191,15 @@ function Sparkline({
   const areaPath = `${path} L${last[0]} ${h} L${pad} ${h} Z`
   const gradId = `dash-spark-${color.replace(/[^a-z0-9]/gi, '')}`
   return (
-    <svg width={w} height={h} style={{ display: 'block', overflow: 'visible' }}>
+    <svg
+      width={fluid ? '100%' : w}
+      height={h}
+      viewBox={`0 0 ${w} ${h}`}
+      // Only stretch to fill when fluid — at fixed width the 1:1 mapping keeps
+      // the line shape and round end-point markers undistorted.
+      preserveAspectRatio={fluid ? 'none' : 'xMidYMid meet'}
+      style={{ display: 'block', overflow: 'visible' }}
+    >
       <defs>
         <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
           <stop offset="0%" stopColor={color} stopOpacity="0.35" />
@@ -287,28 +313,38 @@ function Button({
   )
 }
 
+// The shared design-system Card (`@/components/ui/card`). `display: 'block'`
+// neutralizes the shadcn Card's default flex/gap so callers keep full control of
+// their inner layout (e.g. RatingCard re-enables flex via its own style;
+// RecentResultsCard stays block). Pass `highlight` for the design-system
+// "Featured" treatment — an orange ring plus the accent glow shadow, and
+// nothing else.
 function Card({
   children,
   padding = 20,
   style,
+  highlight = false,
+  className,
+  ...rest
 }: {
   children: ReactNode
   padding?: number | string
-  style?: CSSProperties
-}) {
+  highlight?: boolean
+} & Omit<ComponentProps<'div'>, 'children'>) {
   return (
-    <div
+    <UICard
+      className={cn(highlight && 'ring-2 ring-[color:var(--ball-500)]', className)}
       style={{
-        background: C.ink800,
-        border: `1px solid ${C.ink600}`,
-        borderRadius: 10,
+        display: 'block',
         padding,
         position: 'relative',
+        ...(highlight ? { boxShadow: 'var(--shadow-glow)' } : null),
         ...style,
       }}
+      {...rest}
     >
       {children}
-    </div>
+    </UICard>
   )
 }
 
@@ -326,7 +362,15 @@ function SectionHeader({
   actionSearch?: Record<string, string | undefined>
 }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'baseline', marginBottom: 14, gap: 12 }}>
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'baseline',
+        marginBottom: 14,
+        gap: 12,
+        flexWrap: 'wrap',
+      }}
+    >
       <h2
         style={{
           margin: 0,
@@ -404,12 +448,22 @@ function EmptyCard({ overline, body }: { overline: string; body: string }) {
 function PageTitle({
   greeting,
   subtitle,
+  compact,
 }: {
   greeting: string
   subtitle?: string
+  compact: boolean
 }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'flex-end', marginBottom: 24, gap: 16 }}>
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: compact ? 'column' : 'row',
+        alignItems: compact ? 'stretch' : 'flex-end',
+        marginBottom: 24,
+        gap: 16,
+      }}
+    >
       <div>
         <Overline style={{ marginBottom: 8 }}>
           Dashboard · {fmtLongDate()}
@@ -417,7 +471,7 @@ function PageTitle({
         <h1
           style={{
             margin: 0,
-            font: `700 32px ${UI}`,
+            font: `700 ${compact ? 26 : 32}px ${UI}`,
             letterSpacing: '-0.015em',
             color: C.chalk50,
             lineHeight: 1.05,
@@ -432,11 +486,12 @@ function PageTitle({
           </div>
         )}
       </div>
-      <div style={{ flex: 1 }} />
+      {!compact && <div style={{ flex: 1 }} />}
       <Button
         kind="secondary"
         size="md"
         iconLeft={<Plus size={16} strokeWidth={1.75} />}
+        fullWidth={compact}
         to="/matches/new"
       >
         Log a match
@@ -445,7 +500,13 @@ function PageTitle({
   )
 }
 
-function ScoreBanner({ banner }: { banner: DashboardScoreBanner }) {
+function ScoreBanner({
+  banner,
+  compact,
+}: {
+  banner: DashboardScoreBanner
+  compact: boolean
+}) {
   const accent = C.ball500
   const opponent = banner.opponent_username
   const headline = opponent ? `vs ${opponent}` : NO_OPPONENT_LABEL
@@ -454,41 +515,8 @@ function ScoreBanner({ banner }: { banner: DashboardScoreBanner }) {
     banner.current_game_number,
   )
   return (
-    <div
-      data-testid="dashboard-score-banner"
-      className="banner-glow"
-      style={{
-        position: 'relative',
-        background: `linear-gradient(180deg, rgba(255,122,26,0.10) 0%, rgba(11,13,18,0) 100%), ${C.ink800}`,
-        border: '1px solid rgba(255,122,26,0.42)',
-        borderRadius: 14,
-        overflow: 'hidden',
-      }}
-    >
-      <div
-        style={{
-          position: 'absolute',
-          top: 0,
-          left: 0,
-          right: 0,
-          height: 3,
-          background: `linear-gradient(90deg, ${accent} 0%, ${accent} 60%, transparent 100%)`,
-        }}
-      />
-      <div
-        style={{
-          position: 'absolute',
-          inset: 0,
-          pointerEvents: 'none',
-          backgroundImage:
-            'radial-gradient(circle at center, rgba(255,122,26,0.09) 1.2px, transparent 1.8px)',
-          backgroundSize: '40px 40px',
-          maskImage: 'linear-gradient(180deg, rgba(0,0,0,0.7), transparent)',
-          WebkitMaskImage: 'linear-gradient(180deg, rgba(0,0,0,0.7), transparent)',
-        }}
-      />
-
-      <div style={{ position: 'relative', padding: '22px 26px' }}>
+    <Card highlight padding={0} data-testid="dashboard-score-banner">
+      <div style={{ position: 'relative', padding: compact ? '20px 18px' : '22px 26px' }}>
         <div
           style={{
             display: 'flex',
@@ -550,14 +578,15 @@ function ScoreBanner({ banner }: { banner: DashboardScoreBanner }) {
               flexDirection: 'column',
               alignItems: 'flex-end',
               gap: 8,
-              flex: '0 0 auto',
+              flex: compact ? '1 1 100%' : '0 0 auto',
             }}
           >
             <Button
               kind="primary"
               size="lg"
               iconRight={<ArrowRight size={18} strokeWidth={1.75} />}
-              style={{ minWidth: 220 }}
+              fullWidth={compact}
+              style={compact ? undefined : { minWidth: 220 }}
               {...scoringRoute}
             >
               Enter final score
@@ -587,7 +616,7 @@ function ScoreBanner({ banner }: { banner: DashboardScoreBanner }) {
       >
         <X size={14} strokeWidth={1.75} />
       </button>
-    </div>
+    </Card>
   )
 }
 
@@ -706,9 +735,11 @@ function MorePendingLink({
 function ScoreBannerStack({
   banners,
   username,
+  compact,
 }: {
   banners: DashboardScoreBanner[]
   username?: string
+  compact: boolean
 }) {
   if (banners.length === 0) return null
   const [primary, secondary, ...rest] = banners
@@ -721,7 +752,7 @@ function ScoreBannerStack({
         marginBottom: 32,
       }}
     >
-      <ScoreBanner banner={primary} />
+      <ScoreBanner banner={primary} compact={compact} />
       {secondary && <CompactScoreBanner banner={secondary} />}
       {rest.length > 0 && (
         <MorePendingLink count={rest.length} username={username} />
@@ -756,7 +787,13 @@ function Stat({
   )
 }
 
-function RatingCard({ rating }: { rating: DashboardRating }) {
+function RatingCard({
+  rating,
+  compact,
+}: {
+  rating: DashboardRating
+  compact: boolean
+}) {
   const { current, delta, peak, percentile, spark_data, streak, stats } = rating
   // Sparkline needs ≥2 points to draw a line; pad a single point so the
   // freshly-rated case still shows a level baseline.
@@ -813,7 +850,7 @@ function RatingCard({ rating }: { rating: DashboardRating }) {
           border: `1px solid ${C.ink700}`,
         }}
       >
-        <Sparkline data={sparkPoints} w={280} h={48} />
+        <Sparkline data={sparkPoints} w={280} h={48} fluid={compact} />
         <div
           style={{
             display: 'flex',
@@ -980,11 +1017,13 @@ function YourGameRow({
   recent,
   isLoading,
   username,
+  compact,
 }: {
   rating: DashboardRating | null
   recent: DashboardRecentResult[]
   isLoading: boolean
   username?: string
+  compact: boolean
 }) {
   return (
     <section style={{ marginBottom: 36 }}>
@@ -1002,14 +1041,14 @@ function YourGameRow({
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: '1.15fr 1.85fr',
+          gridTemplateColumns: compact ? '1fr' : '1.15fr 1.85fr',
           gap: 14,
         }}
       >
         {isLoading ? (
           <SkeletonCard label="Loading rating" height={260} />
         ) : rating ? (
-          <RatingCard rating={rating} />
+          <RatingCard rating={rating} compact={compact} />
         ) : (
           <EmptyCard
             overline="Current rating"
@@ -1034,6 +1073,7 @@ function ratingStrategyLabel(key: string): string {
 
 export function DashboardPage() {
   const session = useSession()
+  const compact = useMediaQuery(COMPACT_QUERY)
   const dashboard = useDashboard({ enabled: session.isSuccess })
   const isLoading = dashboard.isPending
   const data = dashboard.data
@@ -1055,7 +1095,7 @@ export function DashboardPage() {
       style={{
         maxWidth: 1280,
         margin: '0 auto',
-        padding: '28px 32px 40px',
+        padding: compact ? '20px 16px 32px' : '28px 32px 40px',
         width: '100%',
         boxSizing: 'border-box',
       }}
@@ -1066,17 +1106,22 @@ export function DashboardPage() {
           rating={data.rating ? Math.round(data.rating.current) : null}
         />
       )}
-      <PageTitle greeting={greeting} />
+      <PageTitle greeting={greeting} compact={compact} />
       {isLoading ? (
         <SkeletonCard label="Loading score banner" height={140} />
       ) : data?.score_banners?.length ? (
-        <ScoreBannerStack banners={data.score_banners} username={username} />
+        <ScoreBannerStack
+          banners={data.score_banners}
+          username={username}
+          compact={compact}
+        />
       ) : null}
       <YourGameRow
         rating={data?.rating ?? null}
         recent={data?.recent_results ?? []}
         isLoading={isLoading}
         username={username}
+        compact={compact}
       />
     </div>
   )

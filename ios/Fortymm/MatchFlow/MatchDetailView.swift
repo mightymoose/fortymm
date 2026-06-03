@@ -16,6 +16,10 @@ struct MatchDetailView: View {
     @State private var reveal = false
     @State private var live: FinalMatch?
 
+    /// A confirm/dispute request is in flight (blocks the footer + dims the UI).
+    @State private var actioning = false
+    @State private var actionError: String?
+
     /// What the screen renders: the freshest copy we have.
     private var match: FinalMatch { live ?? initial }
     private var need: Int { MatchRules.gamesToWin(bestOf: match.bestOf) }
@@ -40,12 +44,42 @@ struct MatchDetailView: View {
                 .padding(.bottom, 120)
             }
             footer
+            if actioning { FMBlockingSpinner() }
         }
         .onAppear {
             if reduceMotion { reveal = true }
             else { withAnimation(.spring(response: 0.42, dampingFraction: 0.5).delay(0.06)) { reveal = true } }
         }
         .task { await refresh() }
+        .alert(
+            "Something went wrong",
+            isPresented: Binding(
+                get: { actionError != nil },
+                set: { if !$0 { actionError = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(actionError ?? "")
+        }
+    }
+
+    /// Sign off on (or dispute) the posted result, then refresh from the server
+    /// so the screen reflects the new status (decided → celebration; disputed →
+    /// back to live). Surfaces an alert on failure and leaves the screen as-is.
+    private func confirm() async { await act { try await service.confirmMatch($0) } }
+    private func dispute() async { await act { try await service.disputeMatch($0) } }
+
+    private func act(_ run: (UUID) async throws -> FinalMatch) async {
+        guard !actioning, let id = UUID(uuidString: match.id) else { return }
+        actioning = true
+        defer { actioning = false }
+        do {
+            let updated = try await run(id)
+            withAnimation { live = updated }
+        } catch {
+            actionError = error.fmMessage
+        }
     }
 
     /// Pull the full detail (games, rating, head-to-head, current status) for
@@ -123,10 +157,13 @@ struct MatchDetailView: View {
                 playerColumn(match.opponent, name: match.opponent.handle, winnerSide: oppWon)
             }
 
-            if !match.decided && !match.solo {
-                Text("Result posted — awaiting \(match.opponent.handle)'s confirmation.")
+            if match.awaitingConfirmation {
+                Text(match.canConfirm
+                     ? "\(match.opponent.handle) posted this result. Confirm it to make it official, or dispute it."
+                     : "Result posted — awaiting \(match.opponent.handle)'s confirmation.")
                     .font(FMFont.ui(12, weight: .medium))
                     .foregroundStyle(FMColor.fg3)
+                    .multilineTextAlignment(.center)
                     .frame(maxWidth: .infinity, alignment: .center)
             }
         }
@@ -296,7 +333,35 @@ struct MatchDetailView: View {
 
     // MARK: Footer
 
+    @ViewBuilder
     private var footer: some View {
+        Group {
+            if match.canConfirm {
+                confirmFooter
+            } else {
+                defaultFooter
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 14)
+        .padding(.bottom, 30)
+        // Solid backing so scrolled content never shows through the bar or the
+        // outlined "Log another" button; the short fade above lets content
+        // dissolve as it scrolls up toward the bar.
+        .background {
+            FMColor.ink950
+                .ignoresSafeArea()
+                .overlay(alignment: .top) {
+                    LinearGradient(colors: [.clear, FMColor.ink950],
+                                   startPoint: .top, endPoint: .bottom)
+                        .frame(height: 24)
+                        .offset(y: -24)
+                }
+        }
+    }
+
+    /// Default footer: log another / back to the matches list.
+    private var defaultFooter: some View {
         HStack(spacing: 10) {
             Button(action: onAgain) {
                 Text("Log another")
@@ -319,21 +384,34 @@ struct MatchDetailView: View {
             }
             .buttonStyle(.plain)
         }
-        .padding(.horizontal, 16)
-        .padding(.top, 14)
-        .padding(.bottom, 30)
-        // Solid backing so scrolled content never shows through the bar or the
-        // outlined "Log another" button; the short fade above lets content
-        // dissolve as it scrolls up toward the bar.
-        .background {
-            FMColor.ink950
-                .ignoresSafeArea()
-                .overlay(alignment: .top) {
-                    LinearGradient(colors: [.clear, FMColor.ink950],
-                                   startPoint: .top, endPoint: .bottom)
-                        .frame(height: 24)
-                        .offset(y: -24)
-                }
+    }
+
+    /// Sign-off footer: shown when the current user owes a confirm/dispute on a
+    /// posted result. Dispute rewinds it; confirm makes the result official.
+    private var confirmFooter: some View {
+        HStack(spacing: 10) {
+            Button { Task { await dispute() } } label: {
+                Text("Dispute")
+                    .font(FMFont.ui(15, weight: .semibold))
+                    .foregroundStyle(FMColor.loss)
+                    .padding(.horizontal, 22)
+                    .frame(height: 50)
+                    .fmRoundedBorder(radius: 13, color: FMColor.loss.opacity(0.5))
+            }
+            .buttonStyle(.plain)
+            .disabled(actioning)
+            Button { Task { await confirm() } } label: {
+                Text("Confirm result")
+                    .font(FMFont.ui(16, weight: .bold))
+                    .foregroundStyle(FMColor.fgInverse)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 50)
+                    .background(BallGradient())
+                    .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+                    .shadow(color: FMColor.ball500.opacity(0.32), radius: 11, y: 8)
+            }
+            .buttonStyle(.plain)
+            .disabled(actioning)
         }
     }
 }
