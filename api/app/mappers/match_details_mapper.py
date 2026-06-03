@@ -7,8 +7,7 @@ from __future__ import annotations
 
 from app.domain.match.models import Match as MatchModel
 from app.models.match import MatchStatus
-from app.schemas.view.match_details import MatchDetails
-from app.schemas.view.match_details import Scoreboard, Status
+from app.schemas.view.match_details import MatchDetails, Scoreboard, Status
 
 
 def _scoreboard_status(status: MatchStatus) -> Status:
