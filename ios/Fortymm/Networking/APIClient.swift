@@ -97,6 +97,14 @@ struct APIClient {
         try await send("POST", path, body: body)
     }
 
+    /// Bodyless POST for endpoints that take no payload (e.g. confirm/dispute).
+    /// Mirrors `get`/`delete` by handing `send` a concrete `Optional<Empty>.none`
+    /// — which also sidesteps a swift-frontend codegen crash seen when the
+    /// defaulted opaque `body:` parameter above is resolved at a no-arg callsite.
+    func post<T: Decodable>(_ path: String) async throws -> T {
+        try await send("POST", path, body: Optional<Empty>.none)
+    }
+
     func put<T: Decodable>(
         _ path: String,
         body: (some Encodable)? = Optional<Empty>.none

@@ -66,6 +66,27 @@ struct MatchService {
         return Self.finalMatch(from: details)
     }
 
+    // MARK: Confirm / dispute
+
+    /// Sign off on a posted result (`POST /v1/matches/{id}/confirmation`). Once
+    /// every side has signed the match comes back `completed`; until then it
+    /// stays awaiting the remaining sign-off.
+    func confirmMatch(_ id: UUID) async throws -> FinalMatch {
+        let details: MatchDetailsDTO = try await client.post(
+            "/v1/matches/\(id.uuidString)/confirmation"
+        )
+        return Self.finalMatch(from: details)
+    }
+
+    /// Reject a posted result (`POST /v1/matches/{id}/dispute`). Clears the
+    /// signatures and rewinds the result, returning the match to `in_progress`.
+    func disputeMatch(_ id: UUID) async throws -> FinalMatch {
+        let details: MatchDetailsDTO = try await client.post(
+            "/v1/matches/\(id.uuidString)/dispute"
+        )
+        return Self.finalMatch(from: details)
+    }
+
     // MARK: Read
 
     /// Full detail for one match (`GET /v1/matches/{id}`).
@@ -174,6 +195,8 @@ struct MatchService {
         let decided = status == .completed
         let rated = ratedHint ?? (mine?.ratingChange != nil)
         let delta = mine?.ratingChange.map { Int($0.delta.rounded()) }
+        let resultPosted = (mine?.gamesWon ?? 0) + (theirs?.gamesWon ?? 0) > 0
+        let awaitingConfirmation = status == .inProgress && resultPosted
 
         return FinalMatch(
             id: id.uuidString,
@@ -190,6 +213,7 @@ struct MatchService {
             context: rated ? "Rated · \(league.name)" : "Casual",
             statusLabel: statusLabel,
             decided: decided,
+            awaitingConfirmation: awaitingConfirmation,
             canConfirm: canConfirm,
             h2h: h2h.map { mapH2H($0, mineIsSide1: mineIsSide1) }
         )
