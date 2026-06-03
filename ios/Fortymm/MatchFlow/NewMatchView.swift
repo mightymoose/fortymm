@@ -87,6 +87,11 @@ struct NewMatchView: View {
                     .foregroundStyle(FMColor.fgMuted)
             }
 
+            // Always surface the current pick — a player chosen from search
+            // isn't in the recent grid, so without this there'd be no sign the
+            // selection took.
+            if let opponent { selectedOpponentCard(opponent) }
+
             if searching {
                 searchField
                 searchResults
@@ -96,6 +101,35 @@ struct NewMatchView: View {
         }
         .padding(.horizontal, 16)
         .padding(.bottom, 20)
+    }
+
+    /// The chosen opponent, shown above the picker with a tap-to-clear control.
+    private func selectedOpponentCard(_ player: MatchPlayer) -> some View {
+        HStack(spacing: 10) {
+            MatchAvatar(player: player, size: 36)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(player.handle)
+                    .font(FMFont.ui(14, weight: .semibold))
+                    .foregroundStyle(FMColor.fg1)
+                    .lineLimit(1)
+                Text("SELECTED OPPONENT")
+                    .font(FMFont.ui(9, weight: .medium))
+                    .tracking(0.9)
+                    .foregroundStyle(FMColor.ball500)
+                    .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            Button { opponent = nil } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 20, weight: .medium))
+                    .foregroundStyle(FMColor.fgMuted)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 11)
+        .padding(.vertical, 10)
+        .background(FMColor.bgAccentSoft)
+        .fmRoundedBorder(radius: FMRadius.md, color: FMColor.ball500)
     }
 
     private var recentGrid: some View {

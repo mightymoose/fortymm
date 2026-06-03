@@ -106,6 +106,10 @@ struct FinalMatch: Identifiable {
     /// posted result is still awaiting the opponent's confirmation, so the
     /// W/L celebration and rating change are not yet real.
     var decided: Bool = true
+    /// True when a result has been posted but the match isn't decided yet — i.e.
+    /// it's genuinely awaiting a sign-off. Distinct from `!decided`, which is
+    /// also true for a freshly-created *live* match that has no posted result.
+    var awaitingConfirmation: Bool = false
     /// The current user owes a confirm/dispute on this posted result.
     var canConfirm: Bool = false
     /// Server head-to-head, when the detail BFF provided it.
