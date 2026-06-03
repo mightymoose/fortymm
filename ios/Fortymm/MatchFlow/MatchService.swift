@@ -136,7 +136,12 @@ struct MatchService {
             id: d.id, status: d.status, statusLabel: d.statusLabel,
             league: d.league, sides: d.sides, bestOf: d.bestOf,
             createdAt: d.createdAt, canConfirm: d.canConfirm,
-            ratedHint: d.affectsRating, games: d.games, h2h: d.headToHead
+            ratedHint: d.affectsRating, games: d.games, h2h: d.headToHead,
+            // The detail DTO carries the authoritative sign-off signal: a result
+            // is awaiting confirmation iff someone has signed. (A dispute clears
+            // signatures but keeps the game rows, so a games-won count alone
+            // would wrongly read as "result posted" afterwards.)
+            signaturesPosted: !d.signatures.isEmpty
         )
     }
 
@@ -145,7 +150,11 @@ struct MatchService {
             id: r.id, status: r.status, statusLabel: r.statusLabel,
             league: r.league, sides: r.sides, bestOf: r.bestOf,
             createdAt: r.createdAt, canConfirm: r.canConfirm,
-            ratedHint: nil, games: nil, h2h: nil
+            ratedHint: nil, games: nil, h2h: nil,
+            // The list row omits signatures; fall back to the games-won heuristic.
+            // This row is transient anyway — the detail view refetches on open and
+            // replaces it with the signature-accurate copy.
+            signaturesPosted: nil
         )
     }
 
@@ -156,7 +165,7 @@ struct MatchService {
         id: UUID, status: APIMatchStatus, statusLabel: String,
         league: MatchLeagueDTO, sides: [MatchSideDTO], bestOf: Int,
         createdAt: Date, canConfirm: Bool, ratedHint: Bool?,
-        games: [MatchGameDTO]?, h2h: H2HDTO?
+        games: [MatchGameDTO]?, h2h: H2HDTO?, signaturesPosted: Bool?
     ) -> FinalMatch {
         let mine = sides.first(where: \.isCurrentUserSide) ?? sides.first
         let theirs = sides.first { $0.sideNumber != mine?.sideNumber }
@@ -195,7 +204,9 @@ struct MatchService {
         let decided = status == .completed
         let rated = ratedHint ?? (mine?.ratingChange != nil)
         let delta = mine?.ratingChange.map { Int($0.delta.rounded()) }
-        let resultPosted = (mine?.gamesWon ?? 0) + (theirs?.gamesWon ?? 0) > 0
+        // Prefer the authoritative signatures signal (detail path); fall back to
+        // the games-won heuristic only when signatures aren't available (list row).
+        let resultPosted = signaturesPosted ?? ((mine?.gamesWon ?? 0) + (theirs?.gamesWon ?? 0) > 0)
         let awaitingConfirmation = status == .inProgress && resultPosted
 
         return FinalMatch(
