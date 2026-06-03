@@ -107,14 +107,7 @@ struct DashboardView: View {
         }
     }
 
-    private func initials(for username: String) -> String {
-        let letters = username
-            .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
-            .prefix(2)
-            .compactMap { $0.first }
-        let joined = String(letters).uppercased()
-        return joined.isEmpty ? "?" : joined
-    }
+    private func initials(for username: String) -> String { username.fmInitials }
 
     private func badgeText(for status: SessionUser.EmailStatus) -> String {
         switch status {

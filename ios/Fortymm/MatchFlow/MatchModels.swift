@@ -4,15 +4,48 @@ import SwiftUI
 
 /// A player in the match flow. `you` marks the signed-in player (orange avatar).
 struct MatchPlayer: Identifiable, Hashable {
-    var id: String { handle }
+    var id: String { userId?.uuidString ?? handle }
     let handle: String
     let initials: String
     var avatarColor: AvatarColor = .slate
     var rating: Int = 1500
     var you: Bool = false
+    /// The API user id, present for players that came from the server. Drives
+    /// `opponent_user_id` on match creation; nil for the solo "Guest" sentinel.
+    var userId: UUID? = nil
 
     /// The "Guest" placeholder shown on the opponent side of a solo match.
     static let guest = MatchPlayer(handle: "Guest", initials: "GU", avatarColor: .slate)
+
+    /// Build a picker/opponent player from an API `PlayerRead`, deriving the
+    /// initials and avatar colour (the API carries neither) deterministically
+    /// from the username so a given handle always looks the same.
+    init(api: PlayerReadDTO) {
+        self.handle = api.username
+        self.initials = api.username.fmInitials
+        self.avatarColor = MatchPlayer.avatarColor(for: api.username)
+        self.rating = api.rating.map { Int($0.rounded()) } ?? 1500
+        self.you = false
+        self.userId = api.id
+    }
+
+    /// Memberwise init kept available alongside the `api:` convenience init.
+    init(handle: String, initials: String, avatarColor: AvatarColor = .slate,
+         rating: Int = 1500, you: Bool = false, userId: UUID? = nil) {
+        self.handle = handle
+        self.initials = initials
+        self.avatarColor = avatarColor
+        self.rating = rating
+        self.you = you
+        self.userId = userId
+    }
+
+    /// Stable palette pick from the handle's code points (cosmetic only).
+    static func avatarColor(for handle: String) -> AvatarColor {
+        let palette: [AvatarColor] = [.purple, .green, .teal, .blue, .magenta, .slate]
+        let sum = handle.unicodeScalars.reduce(0) { $0 + Int($1.value) }
+        return palette[sum % palette.count]
+    }
 }
 
 /// Fixed avatar palette ported from the prototype (`AV_COLORS`). `you` players
@@ -65,6 +98,34 @@ struct FinalMatch: Identifiable {
     let ratingDelta: Int?
     let when: String
     let context: String
+    // --- server-backed extras (defaulted so the seed/local builders still
+    // compile; populated when the match comes from the API) ---
+    /// User-facing status, e.g. "Final" / "Awaiting confirmation" / "Live".
+    var statusLabel: String = "Final"
+    /// True once the result is official (match completed). When false, the
+    /// posted result is still awaiting the opponent's confirmation, so the
+    /// W/L celebration and rating change are not yet real.
+    var decided: Bool = true
+    /// The current user owes a confirm/dispute on this posted result.
+    var canConfirm: Bool = false
+    /// Server head-to-head, when the detail BFF provided it.
+    var h2h: MatchH2H? = nil
+}
+
+/// Head-to-head summary from the detail BFF, framed from the current user's
+/// perspective ("you" vs "them").
+struct MatchH2H {
+    let youWins: Int
+    let themWins: Int
+    let meetings: [Meeting]
+    var total: Int { youWins + themWins }
+
+    struct Meeting: Identifiable {
+        let id = UUID()
+        let when: String
+        let res: String   // games score, e.g. "3-1"
+        let win: Bool
+    }
 }
 
 /// Games-won tally for the two sides (a = you, b = opponent).
@@ -121,84 +182,14 @@ enum MatchRules {
     }
 }
 
-// MARK: - Seed data (UI-only stub — mirrors chrome.jsx)
+// MARK: - Seed data
 
 enum MatchSeed {
-    static let me = MatchPlayer(handle: "gentle-jackdaw", initials: "GJ",
-                                avatarColor: .slate, rating: 1847, you: true)
-
-    static let recent: [MatchPlayer] = [
-        MatchPlayer(handle: "awesome-sawfish", initials: "AS", avatarColor: .magenta, rating: 1798),
-        MatchPlayer(handle: "a3.b-c_d",        initials: "AB", avatarColor: .green,   rating: 1602),
-        MatchPlayer(handle: "arboreal-agama",  initials: "AA", avatarColor: .purple,  rating: 1910),
-        MatchPlayer(handle: "aromatic-grebe",  initials: "AG", avatarColor: .teal,    rating: 1735),
-        MatchPlayer(handle: "bipedal-owl",     initials: "BO", avatarColor: .blue,    rating: 1521),
-        MatchPlayer(handle: "blazing-bear",    initials: "BB", avatarColor: .magenta, rating: 2034),
-    ]
-
-    static let allPlayers: [MatchPlayer] = recent + [
-        MatchPlayer(handle: "crimson-tanager", initials: "CT", avatarColor: .magenta, rating: 1688),
-        MatchPlayer(handle: "dapper-marmot",   initials: "DM", avatarColor: .blue,    rating: 1455),
-        MatchPlayer(handle: "eager-lynx",      initials: "EL", avatarColor: .teal,    rating: 1972),
-        MatchPlayer(handle: "frosty-heron",    initials: "FH", avatarColor: .purple,  rating: 1610),
-        MatchPlayer(handle: "gilded-newt",     initials: "GN", avatarColor: .green,   rating: 1843),
-        MatchPlayer(handle: "humble-stoat",    initials: "HS", avatarColor: .slate,   rating: 1399),
-        MatchPlayer(handle: "ivory-shrike",    initials: "IS", avatarColor: .blue,    rating: 2110),
-        MatchPlayer(handle: "jovial-quokka",   initials: "JQ", avatarColor: .magenta, rating: 1564),
-        MatchPlayer(handle: "keen-osprey",     initials: "KO", avatarColor: .teal,    rating: 1726),
-        MatchPlayer(handle: "lucky-vole",      initials: "LV", avatarColor: .green,   rating: 1487),
-        MatchPlayer(handle: "mellow-earthworm",initials: "ME", avatarColor: .purple,  rating: 1662),
-        MatchPlayer(handle: "nimble-gecko",    initials: "NG", avatarColor: .blue,    rating: 1901),
-    ]
-
-    /// Seed match history for the Matches list, normalized into `FinalMatch`.
-    static let matches: [FinalMatch] = [
-        make("7C1A04", "awesome-sawfish", "AS", .magenta, true,  [[11,7],[11,9],[9,11],[11,6]], "Yesterday", "Club ladder", true, 14),
-        make("4F9B22", "a3.b-c_d",        "AB", .green,   true,  [[11,8],[8,11],[11,9],[6,11],[11,7]], "Yesterday", "Club ladder", true, 18),
-        make("2D7E51", "blazing-bear",    "BB", .magenta, false, [[7,11],[11,9],[6,11],[8,11]], "Sat Apr 12", "Friendly", false, -9),
-        make("9A3C18", "arboreal-agama",  "AA", .purple,  true,  [[11,5],[9,11],[11,7],[11,8]], "Fri Apr 11", "Club ladder", true, 11),
-        make("5B8F73", "bipedal-owl",     "BO", .blue,    true,  [[11,9],[11,7],[8,11],[11,6]], "Thu Apr 10", "Friendly", false, 8),
-        make("1E6D40", "aromatic-grebe",  "AG", .teal,    false, [[11,8],[9,11],[11,7],[7,11],[9,11]], "Tue Apr 8", "Club ladder", true, -6),
-    ]
-
-    private static func make(_ id: String, _ opp: String, _ oppInit: String, _ color: AvatarColor,
-                             _ win: Bool, _ scores: [[Int]], _ when: String, _ ctx: String,
-                             _ rated: Bool, _ delta: Int) -> FinalMatch {
-        let games = scores.map { Game(a: $0[0], b: $0[1]) }
-        let sw = MatchRules.setsWon(games)
-        let rating = recent.first { $0.handle == opp }?.rating ?? 1700
-        let bestOf = max(sw.a, sw.b) * 2 - 1
-        return FinalMatch(
-            id: id,
-            you: me,
-            opponent: MatchPlayer(handle: opp, initials: oppInit, avatarColor: color, rating: rating),
-            solo: false, games: games, bestOf: bestOf, rated: rated,
-            setsWon: sw, win: win, ratingDelta: rated ? delta : nil,
-            when: when, context: ctx
-        )
-    }
-}
-
-// MARK: - Season record
-
-struct SeasonRecord {
-    var wins: Int = 42
-    var losses: Int = 18
-    var streak: String = "4W"
-    var logged: Int = 128
-
-    var total: Int { wins + losses }
-    var winRate: Int { total == 0 ? 0 : Int((Double(wins) / Double(total) * 100).rounded()) }
-
-    /// Streak string like "4W" / "2L", extended or reset by a new result.
-    mutating func record(win: Bool) {
-        wins += win ? 1 : 0
-        losses += win ? 0 : 1
-        logged += 1
-        let scanner = Scanner(string: streak)
-        let n = scanner.scanInt() ?? 0
-        let last = scanner.scanCharacter().map(String.init) ?? "W"
-        let cur = win ? "W" : "L"
-        streak = "\(cur == last ? n + 1 : 1)\(cur)"
-    }
+    /// Stand-in for the signed-in player, used only on the live score-entry
+    /// scoreboard (the "you" panel) while a game is in progress. The session
+    /// doesn't surface the user's id/handle app-wide, so the entry screen
+    /// labels your side generically; the *posted* result and every list/detail
+    /// view render the real username from the API response.
+    static let me = MatchPlayer(handle: "You", initials: "YOU",
+                                avatarColor: .slate, rating: 1500, you: true)
 }

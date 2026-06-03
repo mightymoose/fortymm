@@ -4,14 +4,26 @@ import SwiftUI
 /// celebration (score scales in with a ball-bounce, plus a ball-dot burst),
 /// suppressed under Reduce Motion.
 struct MatchDetailView: View {
-    let match: FinalMatch
+    /// The match as first handed in — from a freshly posted result (already
+    /// full) or a list row (sparse: no games/H2H yet). `live` replaces it once
+    /// the detail BFF is fetched on appear.
+    let initial: FinalMatch
+    var service: MatchService = .shared
     var onBack: () -> Void
     var onAgain: () -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var reveal = false
+    @State private var live: FinalMatch?
 
+    /// What the screen renders: the freshest copy we have.
+    private var match: FinalMatch { live ?? initial }
     private var need: Int { MatchRules.gamesToWin(bestOf: match.bestOf) }
+
+    /// Highlight a winner only once the result is official; an unconfirmed
+    /// posted result shows a neutral, provisional scoreboard.
+    private var youWon: Bool { match.decided && match.win }
+    private var oppWon: Bool { match.decided && !match.win && !match.solo }
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -20,10 +32,10 @@ struct MatchDetailView: View {
                 VStack(alignment: .leading, spacing: 0) {
                     breadcrumb
                     hero
-                    gamesSection
+                    if !match.games.isEmpty { gamesSection }
                     if match.rated, let delta = match.ratingDelta { ratingSection(delta) }
                     infoSection
-                    if !match.solo { headToHeadSection }
+                    if let h2h = match.h2h, !match.solo { headToHeadSection(h2h) }
                 }
                 .padding(.bottom, 120)
             }
@@ -33,6 +45,16 @@ struct MatchDetailView: View {
             if reduceMotion { reveal = true }
             else { withAnimation(.spring(response: 0.42, dampingFraction: 0.5).delay(0.06)) { reveal = true } }
         }
+        .task { await refresh() }
+    }
+
+    /// Pull the full detail (games, rating, head-to-head, current status) for
+    /// the match. Skipped when we already hold the full payload (a freshly
+    /// posted result), or for non-server ids (e.g. SwiftUI previews); a list
+    /// row arrives without games, so that path fetches.
+    private func refresh() async {
+        guard initial.games.isEmpty, let id = UUID(uuidString: initial.id) else { return }
+        live = try? await service.matchDetails(id)
     }
 
     // MARK: Breadcrumb
@@ -48,7 +70,7 @@ struct MatchDetailView: View {
             .buttonStyle(.plain)
             (Text("MATCHES ").foregroundStyle(FMColor.fgMuted)
                 + Text("›  ").foregroundStyle(FMColor.ink500)
-                + Text("MATCH \(match.id)").foregroundStyle(FMColor.fg3))
+                + Text("MATCH \(shortID)").foregroundStyle(FMColor.fg3))
                 .font(FMFont.ui(11, weight: .semibold))
                 .tracking(1.2)
         }
@@ -62,15 +84,15 @@ struct MatchDetailView: View {
         VStack(spacing: 20) {
             HStack {
                 HStack(spacing: 7) {
-                    Circle().fill(FMColor.ball500).frame(width: 7, height: 7)
-                        .shadow(color: FMColor.ball500.opacity(0.55), radius: 5)
-                    Text("FINAL").font(FMFont.ui(11, weight: .semibold)).tracking(1.0)
+                    Circle().fill(statusColor).frame(width: 7, height: 7)
+                        .shadow(color: statusColor.opacity(0.55), radius: 5)
+                    Text(match.statusLabel.uppercased()).font(FMFont.ui(11, weight: .semibold)).tracking(1.0)
                 }
-                .foregroundStyle(FMColor.ball500)
+                .foregroundStyle(statusColor)
                 .padding(.horizontal, 11)
                 .padding(.vertical, 5)
                 .background(FMColor.bgAccentSoft)
-                .overlay(Capsule().stroke(FMColor.ball500.opacity(0.4), lineWidth: 1))
+                .overlay(Capsule().stroke(statusColor.opacity(0.4), lineWidth: 1))
                 .clipShape(Capsule())
                 Spacer()
                 Text("SINGLES · BO\(match.bestOf) · FIRST TO \(need)")
@@ -80,25 +102,32 @@ struct MatchDetailView: View {
             }
 
             HStack(spacing: 8) {
-                playerColumn(match.you, name: match.you.handle, winnerSide: match.win)
+                playerColumn(match.you, name: match.you.handle, winnerSide: youWon)
                 VStack(spacing: 6) {
                     HStack(spacing: 10) {
                         Text("\(match.setsWon.a)")
-                            .foregroundStyle(match.win ? FMColor.serve500 : FMColor.fg2)
+                            .foregroundStyle(youWon ? FMColor.serve500 : FMColor.fg2)
                         Text("-").font(FMFont.mono(30)).foregroundStyle(FMColor.fgMuted)
                         Text("\(match.setsWon.b)")
-                            .foregroundStyle(!match.win ? FMColor.serve500 : FMColor.fg2)
+                            .foregroundStyle(oppWon ? FMColor.serve500 : FMColor.fg2)
                     }
                     .font(FMFont.mono(60, weight: .bold))
                     .scaleEffect(reveal ? 1 : 0.7)
                     .opacity(reveal ? 1 : 0)
-                    Text("FINAL")
+                    Text(match.statusLabel.uppercased())
                         .font(FMFont.ui(11, weight: .medium))
                         .tracking(1.4)
                         .foregroundStyle(FMColor.fgMuted)
                 }
                 .frame(maxWidth: .infinity)
-                playerColumn(match.opponent, name: match.opponent.handle, winnerSide: !match.win && !match.solo)
+                playerColumn(match.opponent, name: match.opponent.handle, winnerSide: oppWon)
+            }
+
+            if !match.decided && !match.solo {
+                Text("Result posted — awaiting \(match.opponent.handle)'s confirmation.")
+                    .font(FMFont.ui(12, weight: .medium))
+                    .foregroundStyle(FMColor.fg3)
+                    .frame(maxWidth: .infinity, alignment: .center)
             }
         }
         .padding(.horizontal, 18)
@@ -106,10 +135,17 @@ struct MatchDetailView: View {
         .padding(.bottom, 22)
         .background(FMColor.ink900)
         .fmRoundedBorder(radius: 18, color: FMColor.borderSubtle)
-        .overlay { if reveal && !reduceMotion { BurstView().allowsHitTesting(false) } }
+        // Celebrate only an official win.
+        .overlay { if reveal && youWon && !reduceMotion { BurstView().allowsHitTesting(false) } }
         .padding(.horizontal, 16)
         .padding(.top, 8)
     }
+
+    /// Orange once the result is official; amber while it's still provisional.
+    private var statusColor: Color { match.decided ? FMColor.ball500 : FMColor.warn }
+
+    /// First segment of the match UUID — enough to identify it in the crumb.
+    private var shortID: String { String(match.id.prefix(8)).uppercased() }
 
     private func playerColumn(_ player: MatchPlayer, name: String, winnerSide: Bool) -> some View {
         VStack(spacing: 8) {
@@ -190,7 +226,7 @@ struct MatchDetailView: View {
             VStack(spacing: 0) {
                 InfoRow(key: "Format", value: "Best of \(match.bestOf), first to \(need)")
                 InfoRow(key: "Scoring", value: "To 11, win by 2")
-                InfoRow(key: "Status", value: "Final", valueColor: FMColor.ball500)
+                InfoRow(key: "Status", value: match.statusLabel, valueColor: statusColor)
                 InfoRow(key: "Rated", value: match.rated ? "Yes" : "No",
                         valueColor: match.rated ? FMColor.serve500 : FMColor.fg3, last: true)
             }
@@ -202,15 +238,11 @@ struct MatchDetailView: View {
 
     // MARK: Head to head
 
-    private var headToHeadSection: some View {
-        let past = MatchSeed.matches.filter { $0.opponent.handle == match.opponent.handle }
-        let w = past.filter(\.win).count + (match.win ? 1 : 0)
-        let l = past.filter { !$0.win }.count + (match.win ? 0 : 1)
-        let total = w + l
-        var meetings: [(when: String, res: String, win: Bool)] = [
-            (match.when, "\(match.setsWon.a)-\(match.setsWon.b)", match.win)
-        ]
-        meetings += past.prefix(3).map { ($0.when, "\($0.setsWon.a)-\($0.setsWon.b)", $0.win) }
+    private func headToHeadSection(_ h2h: MatchH2H) -> some View {
+        let w = h2h.youWins
+        let l = h2h.themWins
+        let total = h2h.total
+        let meetings = h2h.meetings.prefix(4)
 
         return VStack(alignment: .leading, spacing: 11) {
             HStack(alignment: .firstTextBaseline) {

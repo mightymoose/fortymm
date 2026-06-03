@@ -31,9 +31,7 @@ final class SessionStore: ObservableObject {
             let response = try await client.getSession()
             state = .loaded(response.data.user)
         } catch {
-            let message = (error as? LocalizedError)?.errorDescription
-                ?? error.localizedDescription
-            state = .failed(message)
+            state = .failed(error.fmMessage)
         }
     }
 }

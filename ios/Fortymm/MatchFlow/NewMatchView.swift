@@ -9,9 +9,21 @@ struct NewMatchView: View {
     var onStart: () -> Void
     var onCancel: () -> Void
 
+    var service: MatchService = .shared
+
     @State private var searching = false
     @State private var query = ""
     @FocusState private var searchFocused: Bool
+
+    // Recent-opponents grid, loaded from the API on appear.
+    @State private var recent: [MatchPlayer] = []
+    @State private var recentLoading = true
+    @State private var recentFailed = false
+
+    // Search results, refreshed (debounced) as the query changes.
+    @State private var results: [MatchPlayer] = []
+    @State private var searchLoading = false
+    @State private var searchTask: Task<Void, Never>?
 
     private var solo: Bool { opponent == nil }
     private var gamesToWin: Int { MatchRules.gamesToWin(bestOf: bestOf) }
@@ -28,6 +40,9 @@ struct NewMatchView: View {
         .background(FMColor.ink950.ignoresSafeArea())
         // Keep the solo ⇒ unrated invariant.
         .onChange(of: solo) { _, isSolo in if isSolo { rated = false } }
+        .task { await loadRecent() }
+        // Debounce the typeahead so a search fires only after typing settles.
+        .onChange(of: query) { _, q in scheduleSearch(q) }
     }
 
     private var content: some View {
@@ -97,12 +112,28 @@ struct NewMatchView: View {
                 }
                 .buttonStyle(.plain)
             }
-            LazyVGrid(columns: [GridItem(.flexible(), spacing: 9), GridItem(.flexible(), spacing: 9)], spacing: 9) {
-                ForEach(MatchSeed.recent) { p in
-                    OpponentCard(player: p, selected: opponent == p, showRating: false) { toggle(p) }
+            if recentLoading {
+                pickerNote("Loading players…")
+            } else if recentFailed {
+                pickerNote("Couldn't load players. Search to find an opponent.")
+            } else if recent.isEmpty {
+                pickerNote("No other players yet — start a solo match or search.")
+            } else {
+                LazyVGrid(columns: [GridItem(.flexible(), spacing: 9), GridItem(.flexible(), spacing: 9)], spacing: 9) {
+                    ForEach(recent) { p in
+                        OpponentCard(player: p, selected: opponent == p, showRating: false) { toggle(p) }
+                    }
                 }
             }
         }
+    }
+
+    private func pickerNote(_ text: String) -> some View {
+        Text(text)
+            .font(FMFont.ui(13, weight: .medium))
+            .foregroundStyle(FMColor.fgMuted)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 18)
     }
 
     private var searchField: some View {
@@ -134,17 +165,15 @@ struct NewMatchView: View {
     }
 
     private var searchResults: some View {
-        let results = MatchSeed.allPlayers.filter {
-            $0.handle.lowercased().contains(query.trimmingCharacters(in: .whitespaces).lowercased())
-        }
+        let trimmed = query.trimmingCharacters(in: .whitespaces)
         return ScrollView {
             VStack(spacing: 8) {
-                if results.isEmpty {
-                    Text("No players match “\(query)”.")
-                        .font(FMFont.ui(13, weight: .medium))
-                        .foregroundStyle(FMColor.fgMuted)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 30)
+                if trimmed.isEmpty {
+                    searchNote("Start typing to search all players.")
+                } else if searchLoading && results.isEmpty {
+                    searchNote("Searching…")
+                } else if results.isEmpty {
+                    searchNote("No players match “\(trimmed)”.")
                 } else {
                     ForEach(results) { p in
                         OpponentCard(player: p, selected: opponent == p, showRating: true) {
@@ -155,6 +184,14 @@ struct NewMatchView: View {
             }
         }
         .frame(height: 212)
+    }
+
+    private func searchNote(_ text: String) -> some View {
+        Text(text)
+            .font(FMFont.ui(13, weight: .medium))
+            .foregroundStyle(FMColor.fgMuted)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 30)
     }
 
     // MARK: Match length
@@ -271,7 +308,45 @@ struct NewMatchView: View {
     }
 
     private func toggle(_ p: MatchPlayer) { opponent = (opponent == p) ? nil : p }
-    private func closeSearch() { searching = false; query = ""; searchFocused = false }
+    private func closeSearch() {
+        searching = false; query = ""; searchFocused = false
+        searchTask?.cancel(); results = []; searchLoading = false
+    }
+
+    // MARK: Data
+
+    private func loadRecent() async {
+        // Only load once; re-entering the section keeps the fetched grid.
+        guard recentLoading else { return }
+        do {
+            recent = try await service.recentPlayers()
+            recentFailed = false
+        } catch {
+            recentFailed = true
+        }
+        recentLoading = false
+    }
+
+    /// Debounce: restart a 300ms timer on each keystroke; the last one wins.
+    private func scheduleSearch(_ raw: String) {
+        searchTask?.cancel()
+        let trimmed = raw.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { results = []; searchLoading = false; return }
+        searchLoading = true
+        searchTask = Task {
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            if Task.isCancelled { return }
+            do {
+                let found = try await service.searchPlayers(trimmed)
+                if Task.isCancelled { return }
+                results = found
+            } catch {
+                if Task.isCancelled { return }
+                results = []
+            }
+            searchLoading = false
+        }
+    }
 }
 
 // MARK: - Opponent card
