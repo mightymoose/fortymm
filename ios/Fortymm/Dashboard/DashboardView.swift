@@ -1,9 +1,14 @@
 import SwiftUI
 
-/// The signed-in landing surface. Shows the "Your game" widgets — the current
+/// The signed-in home surface. Shows the "Your game" widgets — the current
 /// rating card (with sparkline) and the recent-matches table — fed by the BFF
 /// endpoint `GET /v1/dashboard`. Mirrors the web dashboard's "Your game" row.
+///
+/// The session is resolved up front by `RootView` and shared through the
+/// environment, so the greeting reads the username from there rather than
+/// refetching it.
 struct DashboardView: View {
+    @EnvironmentObject private var session: SessionStore
     @StateObject private var store = DashboardStore()
 
     private static let longDate: DateFormatter = {
@@ -15,6 +20,7 @@ struct DashboardView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: FMSpace.s6) {
+                header(greeting: greeting)
                 content
             }
             .padding(.horizontal, FMSpace.s5)
@@ -36,15 +42,20 @@ struct DashboardView: View {
     private var content: some View {
         switch store.state {
         case .idle, .loading:
-            header(greeting: "Hi")
             loadingCard
-        case let .loaded(loaded):
-            header(greeting: "Hi, @\(loaded.username)")
-            yourGame(loaded.dashboard)
+        case let .loaded(dashboard):
+            yourGame(dashboard)
         case let .failed(message):
-            header(greeting: "Hi")
             errorCard(message)
         }
+    }
+
+    /// The greeting reads the username from the session `RootView` already
+    /// resolved; it falls back to a bare "Hi" only if the session somehow isn't
+    /// loaded (it always is by the time this screen renders).
+    private var greeting: String {
+        if case let .loaded(user) = session.state { return "Hi, @\(user.username)" }
+        return "Hi"
     }
 
     private func header(greeting: String) -> some View {
@@ -123,8 +134,7 @@ struct DashboardView: View {
 }
 
 #Preview {
-    NavigationStack {
-        DashboardView()
-    }
-    .preferredColorScheme(.dark)
+    DashboardView()
+        .environmentObject(SessionStore())
+        .preferredColorScheme(.dark)
 }
