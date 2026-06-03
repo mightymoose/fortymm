@@ -1,9 +1,9 @@
 import SwiftUI
 
 /// Screen 2 — live, game-by-game score entry, plus edit mode for completed
-/// games. Scores are native `.numberPad` text fields (no in-app keypad); the
-/// keyboard toolbar carries the "next / submit" action since numberPad has no
-/// return key.
+/// games. Scores are native `.numberPad` text fields (no in-app keypad);
+/// advancing between sides / submitting is done via the on-screen action row
+/// and by tapping a score field directly.
 struct ScoreEntryView: View {
     let config: MatchConfig
     var onPost: (FinalMatch) -> Void
@@ -53,9 +53,6 @@ struct ScoreEntryView: View {
             hint
         }
         .background(FMColor.ink950.ignoresSafeArea())
-        .toolbar {
-            ToolbarItemGroup(placement: .keyboard) { keyboardAccessory }
-        }
         .onAppear {
             if games.isEmpty { games = Array(repeating: Game(), count: config.bestOf) }
             focusYou()
@@ -208,28 +205,6 @@ struct ScoreEntryView: View {
             .padding(.bottom, 24)
     }
 
-    // MARK: Keyboard accessory (replaces the missing numberPad return key)
-
-    @ViewBuilder
-    private var keyboardAccessory: some View {
-        Spacer()
-        if focus == .you {
-            Button("Next") { focus = .opponent }
-                .font(FMFont.ui(15, weight: .semibold))
-                .tint(FMColor.ball500)
-        } else {
-            Button(submitLabel) { submitCurrent() }
-                .font(FMFont.ui(15, weight: .bold))
-                .tint(FMColor.ball500)
-                .disabled(!currentValid)
-        }
-    }
-
-    private var submitLabel: String {
-        if editing { return "Save changes" }
-        return deciding ? "Post result" : "Save & next"
-    }
-
     // MARK: Binding + actions
 
     /// Two-digit numeric binding for one side, clamped to 40 (matches prototype).
@@ -255,13 +230,6 @@ struct ScoreEntryView: View {
 
     private func focusYou() {
         DispatchQueue.main.async { focus = .you }
-    }
-
-    private func submitCurrent() {
-        guard currentValid else { return }
-        if editing { saveEdit() }
-        else if deciding { post() }
-        else { saveNext() }
     }
 
     private func saveNext() {
