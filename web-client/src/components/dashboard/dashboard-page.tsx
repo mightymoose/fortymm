@@ -1,8 +1,10 @@
-import type { CSSProperties, ReactNode } from 'react'
+import type { ComponentProps, CSSProperties, ReactNode } from 'react'
 import { Link } from '@tanstack/react-router'
 import { ArrowRight, ChevronRight, Plus, X } from 'lucide-react'
 import { useDashboard } from '@/api/dashboard'
 import { UserAvatar } from '@/components/ui/user-avatar'
+import { Card as UICard } from '@/components/ui/card'
+import { cn } from '@/lib/utils'
 import type {
   DashboardRating,
   DashboardRecentResult,
@@ -311,28 +313,38 @@ function Button({
   )
 }
 
+// The shared design-system Card (`@/components/ui/card`). `display: 'block'`
+// neutralizes the shadcn Card's default flex/gap so callers keep full control of
+// their inner layout (e.g. RatingCard re-enables flex via its own style;
+// RecentResultsCard stays block). Pass `highlight` for the design-system
+// "Featured" treatment — an orange ring plus the accent glow shadow, and
+// nothing else.
 function Card({
   children,
   padding = 20,
   style,
+  highlight = false,
+  className,
+  ...rest
 }: {
   children: ReactNode
   padding?: number | string
-  style?: CSSProperties
-}) {
+  highlight?: boolean
+} & Omit<ComponentProps<'div'>, 'children'>) {
   return (
-    <div
+    <UICard
+      className={cn(highlight && 'ring-2 ring-[color:var(--ball-500)]', className)}
       style={{
-        background: C.ink800,
-        border: `1px solid ${C.ink600}`,
-        borderRadius: 10,
+        display: 'block',
         padding,
         position: 'relative',
+        ...(highlight ? { boxShadow: 'var(--shadow-glow)' } : null),
         ...style,
       }}
+      {...rest}
     >
       {children}
-    </div>
+    </UICard>
   )
 }
 
@@ -503,40 +515,7 @@ function ScoreBanner({
     banner.current_game_number,
   )
   return (
-    <div
-      data-testid="dashboard-score-banner"
-      className="banner-glow"
-      style={{
-        position: 'relative',
-        background: `linear-gradient(180deg, rgba(255,122,26,0.10) 0%, rgba(11,13,18,0) 100%), ${C.ink800}`,
-        border: '1px solid rgba(255,122,26,0.42)',
-        borderRadius: 14,
-        overflow: 'hidden',
-      }}
-    >
-      <div
-        style={{
-          position: 'absolute',
-          top: 0,
-          left: 0,
-          right: 0,
-          height: 3,
-          background: `linear-gradient(90deg, ${accent} 0%, ${accent} 60%, transparent 100%)`,
-        }}
-      />
-      <div
-        style={{
-          position: 'absolute',
-          inset: 0,
-          pointerEvents: 'none',
-          backgroundImage:
-            'radial-gradient(circle at center, rgba(255,122,26,0.09) 1.2px, transparent 1.8px)',
-          backgroundSize: '40px 40px',
-          maskImage: 'linear-gradient(180deg, rgba(0,0,0,0.7), transparent)',
-          WebkitMaskImage: 'linear-gradient(180deg, rgba(0,0,0,0.7), transparent)',
-        }}
-      />
-
+    <Card highlight padding={0} data-testid="dashboard-score-banner">
       <div style={{ position: 'relative', padding: compact ? '20px 18px' : '22px 26px' }}>
         <div
           style={{
@@ -637,7 +616,7 @@ function ScoreBanner({
       >
         <X size={14} strokeWidth={1.75} />
       </button>
-    </div>
+    </Card>
   )
 }
 
