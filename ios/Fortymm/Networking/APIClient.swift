@@ -45,6 +45,7 @@ struct APIClient {
 
     private let session: URLSession
     private let decoder: JSONDecoder
+    private let encoder: JSONEncoder
     private let tokens: SessionTokenStore
 
     init(
@@ -55,7 +56,11 @@ struct APIClient {
         self.tokens = tokens
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
+        decoder.dateDecodingStrategy = .custom(APIClient.decodeDate)
         self.decoder = decoder
+        let encoder = JSONEncoder()
+        encoder.keyEncodingStrategy = .convertToSnakeCase
+        self.encoder = encoder
     }
 
     /// A session with cookie handling disabled — nothing is read from or
@@ -76,11 +81,66 @@ struct APIClient {
         try await get("/v1/session")
     }
 
-    private func get<T: Decodable>(_ path: String) async throws -> T {
-        let url = APIClient.baseURL.appendingPathComponent(path)
+    // MARK: - Verbs
+
+    func get<T: Decodable>(
+        _ path: String,
+        query: [URLQueryItem] = []
+    ) async throws -> T {
+        try await send("GET", path, query: query, body: Optional<Empty>.none)
+    }
+
+    func post<T: Decodable>(
+        _ path: String,
+        body: (some Encodable)? = Optional<Empty>.none
+    ) async throws -> T {
+        try await send("POST", path, body: body)
+    }
+
+    func put<T: Decodable>(
+        _ path: String,
+        body: (some Encodable)? = Optional<Empty>.none
+    ) async throws -> T {
+        try await send("PUT", path, body: body)
+    }
+
+    func delete<T: Decodable>(_ path: String) async throws -> T {
+        try await send("DELETE", path, body: Optional<Empty>.none)
+    }
+
+    /// Empty stand-in body for verbs that take no payload, so the generic
+    /// `body:` parameter has a concrete type to bind against.
+    private struct Empty: Encodable {}
+
+    // MARK: - Core
+
+    /// Single request path shared by every verb: attaches the session cookie,
+    /// encodes the optional JSON body, captures any rotated cookie, surfaces the
+    /// API's `{detail}` error message on non-2xx, and decodes the response.
+    private func send<T: Decodable>(
+        _ method: String,
+        _ path: String,
+        query: [URLQueryItem] = [],
+        body: (some Encodable)?
+    ) async throws -> T {
+        let base = APIClient.baseURL.appendingPathComponent(path)
+        guard var components = URLComponents(url: base, resolvingAgainstBaseURL: false) else {
+            throw APIError.invalidResponse
+        }
+        if !query.isEmpty { components.queryItems = query }
+        guard let url = components.url else { throw APIError.invalidResponse }
+
         var request = URLRequest(url: url)
-        request.httpMethod = "GET"
+        request.httpMethod = method
         request.setValue("application/json", forHTTPHeaderField: "Accept")
+        if let body {
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            do {
+                request.httpBody = try encoder.encode(body)
+            } catch {
+                throw APIError.decoding(error)
+            }
+        }
         if let token = await tokens.token() {
             request.setValue(
                 "\(Self.sessionCookieName)=\(token)",
@@ -94,13 +154,45 @@ struct APIClient {
         }
         await captureSessionCookie(from: http, url: url)
         guard (200..<300).contains(http.statusCode) else {
-            throw APIError.http(status: http.statusCode)
+            throw APIError.http(status: http.statusCode, detail: Self.detail(from: data))
         }
         do {
             return try decoder.decode(T.self, from: data)
         } catch {
             throw APIError.decoding(error)
         }
+    }
+
+    /// FastAPI serialises datetimes as ISO-8601, usually with fractional
+    /// seconds (`...T08:16:04.337123+00:00`). `ISO8601DateFormatter` won't
+    /// parse fractional seconds by default, so try the fractional formatter
+    /// first and fall back to the plain one.
+    private static let iso8601Fractional: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+    private static let iso8601Plain = ISO8601DateFormatter()
+
+    private static func decodeDate(_ decoder: Decoder) throws -> Date {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        if let date = iso8601Fractional.date(from: raw) ?? iso8601Plain.date(from: raw) {
+            return date
+        }
+        throw DecodingError.dataCorrupted(
+            .init(codingPath: decoder.codingPath,
+                  debugDescription: "Unrecognised date: \(raw)")
+        )
+    }
+
+    /// FastAPI errors come back as `{"detail": "..."}` (or `{"detail": [...]}`
+    /// for validation errors). Pull a human string out when we can.
+    private static func detail(from data: Data) -> String? {
+        struct StringDetail: Decodable { let detail: String }
+        if let parsed = try? JSONDecoder().decode(StringDetail.self, from: data) {
+            return parsed.detail
+        }
+        return nil
     }
 
     /// Pull a minted/rotated `session` cookie out of the response and persist
@@ -122,15 +214,16 @@ struct APIClient {
 
 enum APIError: LocalizedError {
     case invalidResponse
-    case http(status: Int)
+    case http(status: Int, detail: String? = nil)
     case decoding(Error)
 
     var errorDescription: String? {
         switch self {
         case .invalidResponse:
             return "The server returned an unexpected response."
-        case let .http(status):
-            return "The server returned an error (HTTP \(status))."
+        case let .http(status, detail):
+            // Prefer the API's own message when it sent one.
+            return detail ?? "The server returned an error (HTTP \(status))."
         case .decoding:
             return "Couldn't read the server's response."
         }

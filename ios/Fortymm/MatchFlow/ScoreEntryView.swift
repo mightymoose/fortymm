@@ -6,7 +6,9 @@ import SwiftUI
 /// and by tapping a score field directly.
 struct ScoreEntryView: View {
     let config: MatchConfig
-    var onPost: (FinalMatch) -> Void
+    /// Hand the completed games (in order, game 1…N) up to the coordinator,
+    /// which posts them to the API and renders the server's result.
+    var onPost: ([Game]) -> Void
     var onExit: () -> Void
 
     // One slot per game in the match; any slot can be entered or edited in any
@@ -292,25 +294,12 @@ struct ScoreEntryView: View {
 
     private func post() {
         guard currentValid else { return }
+        // The completed games in play order (game 1…N). The coordinator posts
+        // these to `POST /v1/matches/{id}/results`; the server computes sets
+        // won, the winner, and any rating change — so we don't here.
         let finalGames = games.filter(MatchRules.gameComplete)
-        let sw = MatchRules.setsWon(finalGames)
-        let win = sw.a > sw.b
-        let delta: Int? = config.rated
-            ? MatchRules.ratingDelta(won: win, yourRating: you.rating, oppRating: opp.rating)
-            : nil
-        let match = FinalMatch(
-            id: Self.newID(),
-            you: you, opponent: opp, solo: config.isSolo,
-            games: finalGames, bestOf: config.bestOf, rated: config.rated,
-            setsWon: sw, win: win, ratingDelta: delta,
-            when: "Just now", context: config.rated ? "Rated · Club ladder" : "Casual"
-        )
         focus = nil
-        onPost(match)
-    }
-
-    private static func newID() -> String {
-        String((0..<6).map { _ in "0123456789ABCDEF".randomElement()! })
+        onPost(finalGames)
     }
 }
 

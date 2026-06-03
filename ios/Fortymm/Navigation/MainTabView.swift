@@ -24,7 +24,6 @@ enum FMTab: Hashable {
 struct MainTabView: View {
     @State private var selection: FMTab = .home
     @State private var showingNewMatch = false
-    @StateObject private var matchStore = MatchFlowStore()
 
     var body: some View {
         TabView(selection: tabSelection) {
@@ -55,13 +54,11 @@ struct MainTabView: View {
         .safeAreaInset(edge: .top, spacing: 0) {
             FMTopBar(title: selection.title)
         }
-        .environmentObject(matchStore)
         .fullScreenCover(isPresented: $showingNewMatch) {
             MatchFlowView { toMatches in
                 showingNewMatch = false
                 if toMatches { selection = .matches }
             }
-            .environmentObject(matchStore)
         }
     }
 

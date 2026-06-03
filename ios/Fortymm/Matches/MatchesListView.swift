@@ -1,18 +1,28 @@
 import SwiftUI
 
-/// The Matches tab: season record header, a wins/losses filter, and the list of
-/// matches (newest first). Tapping a row opens its detail. Backed by the shared
-/// `MatchFlowStore` so a freshly posted result appears at the top.
+/// The Matches tab: season-record header, a wins/losses filter, and the list of
+/// the current user's matches (newest first). Tapping a row opens its detail.
+/// Backed by the API (`GET /v1/matches` for the list, the player profile for the
+/// record); pull-to-refresh and re-entering the tab re-fetch.
 struct MatchesListView: View {
-    @EnvironmentObject private var store: MatchFlowStore
+    var service: MatchService = .shared
+
     @State private var filter = 0   // 0 all · 1 wins · 2 losses
     @State private var selected: FinalMatch?
 
+    @State private var matches: [FinalMatch] = []
+    @State private var record: MyRecord?
+    @State private var loading = true
+    @State private var inFlight = false
+    @State private var errorMessage: String?
+
+    /// Wins/Losses filter only over *decided* matches; pending ones show only
+    /// under "All".
     private var shown: [FinalMatch] {
         switch filter {
-        case 1: return store.matches.filter(\.win)
-        case 2: return store.matches.filter { !$0.win }
-        default: return store.matches
+        case 1: return matches.filter { $0.decided && $0.win }
+        case 2: return matches.filter { $0.decided && !$0.win }
+        default: return matches
         }
     }
 
@@ -28,9 +38,33 @@ struct MatchesListView: View {
             .padding(.bottom, 24)
         }
         .background(FMColor.bgApp.ignoresSafeArea())
+        .refreshable { await load() }
+        // onAppear (not task) so returning to the tab after posting a match
+        // re-fetches and surfaces it at the top.
+        .onAppear { Task { await load() } }
         .fullScreenCover(item: $selected) { match in
-            MatchDetailView(match: match, onBack: { selected = nil }, onAgain: { selected = nil })
+            MatchDetailView(initial: match, onBack: { selected = nil }, onAgain: { selected = nil })
         }
+    }
+
+    /// Fetch the match list and the season record together. Shows a spinner
+    /// only on the first load; refreshes keep the existing content in place.
+    private func load() async {
+        guard !inFlight else { return }
+        inFlight = true
+        defer { inFlight = false }
+        if matches.isEmpty { loading = true }
+        do {
+            // Independent calls — run them concurrently.
+            async let list = service.listMatches()
+            async let rec = service.myRecord()
+            matches = try await list
+            record = try await rec
+            errorMessage = nil
+        } catch {
+            errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+        loading = false
     }
 
     private var recordCard: some View {
@@ -39,22 +73,22 @@ struct MatchesListView: View {
                 .padding(.bottom, 10)
             HStack(alignment: .top) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text("\(store.record.wins)").foregroundStyle(FMColor.fg1)
+                    Text("\(record?.wins ?? 0)").foregroundStyle(FMColor.fg1)
                     Text("–").foregroundStyle(FMColor.ink500)
-                    Text("\(store.record.losses)").foregroundStyle(FMColor.fg1)
+                    Text("\(record?.losses ?? 0)").foregroundStyle(FMColor.fg1)
                 }
                 .font(FMFont.mono(56, weight: .bold))
                 Spacer()
                 VStack(alignment: .trailing, spacing: 4) {
-                    Text("\(store.record.winRate)%")
+                    Text("\(record?.winRate ?? 0)%")
                         .font(FMFont.mono(28, weight: .bold))
                         .foregroundStyle(FMColor.serve500)
                     Eyebrow("Win rate")
                 }
             }
             HStack(spacing: 18) {
-                stat("Current streak", store.record.streak, FMColor.serve500)
-                stat("This season", "\(store.record.logged) logged", FMColor.fg1)
+                stat("Current streak", record?.streak ?? "—", FMColor.serve500)
+                stat("This season", "\(record?.total ?? 0) logged", FMColor.fg1)
             }
             .padding(.top, 14)
         }
@@ -93,12 +127,16 @@ struct MatchesListView: View {
     @ViewBuilder
     private var listCard: some View {
         VStack(spacing: 0) {
-            if shown.isEmpty {
-                Text("Nothing here yet. Go play.")
-                    .font(FMFont.ui(14, weight: .medium))
-                    .foregroundStyle(FMColor.fgMuted)
+            if loading {
+                ProgressView()
+                    .controlSize(.regular)
+                    .tint(FMColor.ball500)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 40)
+            } else if let errorMessage {
+                listNote(errorMessage)
+            } else if shown.isEmpty {
+                listNote(matches.isEmpty ? "Nothing here yet. Go play." : "No matches in this filter.")
             } else {
                 ForEach(Array(shown.enumerated()), id: \.element.id) { i, m in
                     MatchRow(match: m) { selected = m }
@@ -109,31 +147,52 @@ struct MatchesListView: View {
         .background(FMColor.ink800)
         .fmRoundedBorder(radius: 16, color: FMColor.borderSubtle)
     }
+
+    private func listNote(_ text: String) -> some View {
+        Text(text)
+            .font(FMFont.ui(14, weight: .medium))
+            .foregroundStyle(FMColor.fgMuted)
+            .multilineTextAlignment(.center)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 40)
+            .padding(.horizontal, 16)
+    }
 }
 
 private struct MatchRow: View {
     let match: FinalMatch
     let onOpen: () -> Void
 
+    /// Outcome tint: green win / red loss once decided, amber while pending.
+    private var tint: Color {
+        guard match.decided else { return FMColor.warn }
+        return match.win ? FMColor.serve500 : FMColor.loss
+    }
+    /// Single-glyph badge: W / L when decided, a dot while awaiting confirmation.
+    private var badge: String {
+        guard match.decided else { return "•" }
+        return match.win ? "W" : "L"
+    }
+
     var body: some View {
         Button(action: onOpen) {
             HStack(spacing: 13) {
                 ZStack {
                     RoundedRectangle(cornerRadius: 11, style: .continuous)
-                        .fill((match.win ? FMColor.serve500 : FMColor.loss).opacity(0.12))
+                        .fill(tint.opacity(0.12))
                         .overlay(RoundedRectangle(cornerRadius: 11, style: .continuous)
-                            .stroke((match.win ? FMColor.serve500 : FMColor.loss).opacity(0.2), lineWidth: 1))
+                            .stroke(tint.opacity(0.2), lineWidth: 1))
                         .frame(width: 42, height: 42)
-                    Text(match.win ? "W" : "L")
+                    Text(badge)
                         .font(FMFont.ui(15, weight: .bold))
-                        .foregroundStyle(match.win ? FMColor.serve500 : FMColor.loss)
+                        .foregroundStyle(tint)
                 }
                 VStack(alignment: .leading, spacing: 1) {
                     Text("vs \(match.opponent.handle)")
                         .font(FMFont.ui(15, weight: .semibold))
                         .foregroundStyle(FMColor.fg1)
                         .lineLimit(1)
-                    Text("\(match.when) · \(contextLabel)")
+                    Text("\(match.when) · \(subtitle)")
                         .font(FMFont.ui(12.5))
                         .foregroundStyle(FMColor.fg3)
                         .lineLimit(1)
@@ -164,7 +223,9 @@ private struct MatchRow: View {
         .buttonStyle(.plain)
     }
 
-    private var contextLabel: String {
+    /// Pending matches show their status; decided ones show the format label.
+    private var subtitle: String {
+        if !match.decided { return match.statusLabel }
         if match.context.contains("Rated") { return "Club ladder" }
         return match.context == "Casual" ? "Friendly" : match.context
     }
