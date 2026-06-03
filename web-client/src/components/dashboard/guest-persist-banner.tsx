@@ -1,17 +1,9 @@
 import { useState, type CSSProperties, type ReactNode } from 'react'
 import { Link } from '@tanstack/react-router'
 import { Smartphone, X } from 'lucide-react'
+import { Alert, AlertAction, AlertDescription } from '@/components/ui/alert'
+import { Button } from '@/components/ui/button'
 
-const C = {
-  ink800: 'var(--ink-800)',
-  chalk50: 'var(--chalk-50)',
-  chalk100: 'var(--chalk-100)',
-  chalk300: 'var(--chalk-300)',
-  chalk500: 'var(--chalk-500)',
-  ball400: 'var(--ball-400)',
-}
-
-const UI = "'Space Grotesk', ui-sans-serif, system-ui, sans-serif"
 const MONO = "'JetBrains Mono', ui-monospace, monospace"
 
 // Reappears every browser session. We don't gate harder than that — the
@@ -38,19 +30,13 @@ function rememberDismissal() {
   }
 }
 
-function Mono({
-  children,
-  color = C.chalk50,
-}: {
-  children: ReactNode
-  color?: string
-}) {
+function Mono({ children }: { children: ReactNode }) {
   return (
     <span
       style={{
         font: `600 14px ${MONO}`,
         fontVariantNumeric: 'tabular-nums',
-        color,
+        color: 'var(--chalk-50)',
         letterSpacing: '-0.01em',
       }}
     >
@@ -65,6 +51,11 @@ type GuestPersistBannerProps = {
   style?: CSSProperties
 }
 
+// A dismissible "your data is local-only" nudge for guests. Built on the
+// design-system Alert (it's a status message, not a content panel): bare
+// leading icon, AlertDescription for the copy, and the AlertAction slot for
+// the dismiss control. Tinted with the ball accent to match the rest of the
+// guest-conversion surface.
 export function GuestPersistBanner({
   matchCount,
   rating,
@@ -75,47 +66,14 @@ export function GuestPersistBanner({
   if (dismissed) return null
 
   return (
-    <div
+    <Alert
       data-testid="dashboard-guest-persist-banner"
       role="status"
-      style={{
-        position: 'relative',
-        background: `linear-gradient(180deg, rgba(255,122,26,0.055) 0%, rgba(255,122,26,0.02) 100%), ${C.ink800}`,
-        border: '1px solid rgba(255,122,26,0.22)',
-        borderRadius: 10,
-        display: 'flex',
-        alignItems: 'center',
-        gap: 14,
-        padding: '11px 12px 11px 14px',
-        marginBottom: 20,
-        overflow: 'hidden',
-        ...style,
-      }}
+      className="mb-5 border-[color:var(--ball-500)]/25 bg-[color:var(--ball-500)]/8"
+      style={style}
     >
-      <div
-        style={{
-          width: 30,
-          height: 30,
-          borderRadius: 7,
-          background: 'rgba(255,122,26,0.10)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          flexShrink: 0,
-        }}
-      >
-        <Smartphone size={15} strokeWidth={1.75} color={C.ball400} aria-hidden />
-      </div>
-
-      <div
-        style={{
-          flex: 1,
-          minWidth: 0,
-          font: `400 14px ${UI}`,
-          color: C.chalk100,
-          lineHeight: 1.4,
-        }}
-      >
+      <Smartphone className="text-[color:var(--ball-400)]" aria-hidden />
+      <AlertDescription className="text-[color:var(--fg-2)]">
         <span>Your </span>
         <Mono>{matchCount}</Mono>
         <span> {matchCount === 1 ? 'match' : 'matches'}</span>
@@ -125,46 +83,30 @@ export function GuestPersistBanner({
             <Mono>{rating}</Mono>
           </>
         )}
-        <span style={{ color: C.chalk300 }}> live on this device only. </span>
+        <span className="text-[color:var(--chalk-300)]"> live on this device only. </span>
         <Link
           to="/settings"
           hash="sec-email"
-          style={{
-            color: C.ball400,
-            fontWeight: 600,
-            textDecoration: 'none',
-            borderBottom: `1px solid ${C.ball400}`,
-            paddingBottom: 1,
-            whiteSpace: 'nowrap',
-          }}
+          className="font-semibold whitespace-nowrap text-[color:var(--ball-400)]"
         >
           Add an email to keep them →
         </Link>
-      </div>
-
-      <button
-        type="button"
-        aria-label="Dismiss for this session"
-        onClick={() => {
-          rememberDismissal()
-          setDismissed(true)
-        }}
-        style={{
-          width: 28,
-          height: 28,
-          borderRadius: 6,
-          background: 'transparent',
-          border: 'none',
-          color: C.chalk500,
-          cursor: 'pointer',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          flexShrink: 0,
-        }}
-      >
-        <X size={14} strokeWidth={1.75} />
-      </button>
-    </div>
+      </AlertDescription>
+      <AlertAction className="top-1/2 -translate-y-1/2">
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          aria-label="Dismiss for this session"
+          className="text-[color:var(--chalk-500)]"
+          onClick={() => {
+            rememberDismissal()
+            setDismissed(true)
+          }}
+        >
+          <X />
+        </Button>
+      </AlertAction>
+    </Alert>
   )
 }
