@@ -290,11 +290,19 @@ struct MatchDetailView: View {
         .padding(.horizontal, 16)
         .padding(.top, 14)
         .padding(.bottom, 30)
-        .background(
-            LinearGradient(colors: [.clear, FMColor.ink950.opacity(0.96)],
-                           startPoint: .top, endPoint: .bottom)
+        // Solid backing so scrolled content never shows through the bar or the
+        // outlined "Log another" button; the short fade above lets content
+        // dissolve as it scrolls up toward the bar.
+        .background {
+            FMColor.ink950
                 .ignoresSafeArea()
-        )
+                .overlay(alignment: .top) {
+                    LinearGradient(colors: [.clear, FMColor.ink950],
+                                   startPoint: .top, endPoint: .bottom)
+                        .frame(height: 24)
+                        .offset(y: -24)
+                }
+        }
     }
 }
 
