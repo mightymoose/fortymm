@@ -3,8 +3,12 @@ import { useMemo, useSyncExternalStore } from 'react'
 /**
  * Subscribe to a CSS media query and re-render when it starts/stops matching.
  * Used by inline-styled components (e.g. the dashboard) that can't lean on CSS
- * `@media` rules to swap layout. SSR-safe — returns `false` on the server and
- * before hydration, then settles to the real value on mount.
+ * `@media` rules to swap layout.
+ *
+ * Client-only: the `MediaQueryList` is built eagerly during render via
+ * `window.matchMedia`, so this must not run on a server. The `() => false`
+ * server snapshot is wired up for `useSyncExternalStore`'s contract, but it
+ * would never be reached under real SSR — guard the call before adopting SSR.
  */
 export function useMediaQuery(query: string): boolean {
   // Build the MediaQueryList once per query: React calls getSnapshot on every

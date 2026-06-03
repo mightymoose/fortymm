@@ -158,11 +158,20 @@ function Sparkline({
   w = 280,
   h = 48,
   color = C.ball500,
+  fluid = false,
 }: {
   data: number[]
   w?: number
   h?: number
   color?: string
+  /**
+   * Fill the container width instead of rendering at the fixed `w`. Only set
+   * on narrow layouts where a fixed pixel width would push the rating card's
+   * grid column wider than the viewport and overflow the page. At full size we
+   * keep the fixed width so the trend line and end-point markers aren't
+   * stretched non-uniformly.
+   */
+  fluid?: boolean
 }) {
   const min = Math.min(...data)
   const max = Math.max(...data)
@@ -180,14 +189,13 @@ function Sparkline({
   const areaPath = `${path} L${last[0]} ${h} L${pad} ${h} Z`
   const gradId = `dash-spark-${color.replace(/[^a-z0-9]/gi, '')}`
   return (
-    // Fluid width: the SVG fills its container and the fixed `w`/`h` only set
-    // the internal coordinate space. A fixed pixel width here would force the
-    // rating card's grid column wider than a phone screen and overflow the page.
     <svg
-      width="100%"
+      width={fluid ? '100%' : w}
       height={h}
       viewBox={`0 0 ${w} ${h}`}
-      preserveAspectRatio="none"
+      // Only stretch to fill when fluid — at fixed width the 1:1 mapping keeps
+      // the line shape and round end-point markers undistorted.
+      preserveAspectRatio={fluid ? 'none' : 'xMidYMid meet'}
       style={{ display: 'block', overflow: 'visible' }}
     >
       <defs>
@@ -800,7 +808,13 @@ function Stat({
   )
 }
 
-function RatingCard({ rating }: { rating: DashboardRating }) {
+function RatingCard({
+  rating,
+  compact,
+}: {
+  rating: DashboardRating
+  compact: boolean
+}) {
   const { current, delta, peak, percentile, spark_data, streak, stats } = rating
   // Sparkline needs ≥2 points to draw a line; pad a single point so the
   // freshly-rated case still shows a level baseline.
@@ -857,7 +871,7 @@ function RatingCard({ rating }: { rating: DashboardRating }) {
           border: `1px solid ${C.ink700}`,
         }}
       >
-        <Sparkline data={sparkPoints} w={280} h={48} />
+        <Sparkline data={sparkPoints} w={280} h={48} fluid={compact} />
         <div
           style={{
             display: 'flex',
@@ -1055,7 +1069,7 @@ function YourGameRow({
         {isLoading ? (
           <SkeletonCard label="Loading rating" height={260} />
         ) : rating ? (
-          <RatingCard rating={rating} />
+          <RatingCard rating={rating} compact={compact} />
         ) : (
           <EmptyCard
             overline="Current rating"
