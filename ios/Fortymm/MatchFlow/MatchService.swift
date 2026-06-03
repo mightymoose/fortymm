@@ -142,9 +142,11 @@ struct MatchService {
         let mineIsSide1 = (mine?.sideNumber ?? 1) == 1
         let solo = theirs?.players.isEmpty ?? true
 
+        let myName = mine?.players.first?.username ?? "You"
+        let theirName = theirs?.players.first?.username ?? "Opponent"
         let you = MatchPlayer(
-            handle: mine?.players.first?.username ?? "You",
-            initials: MatchPlayer.initials(for: mine?.players.first?.username ?? "You"),
+            handle: myName,
+            initials: myName.fmInitials,
             avatarColor: .slate,
             rating: mine?.ratingChange?.before.map { Int($0.rounded()) } ?? 1500,
             you: true,
@@ -153,9 +155,9 @@ struct MatchService {
         let opponent: MatchPlayer = solo
             ? .guest
             : MatchPlayer(
-                handle: theirs?.players.first?.username ?? "Opponent",
-                initials: MatchPlayer.initials(for: theirs?.players.first?.username ?? "Opponent"),
-                avatarColor: MatchPlayer.avatarColor(for: theirs?.players.first?.username ?? "Opponent"),
+                handle: theirName,
+                initials: theirName.fmInitials,
+                avatarColor: MatchPlayer.avatarColor(for: theirName),
                 rating: theirs?.ratingChange?.before.map { Int($0.rounded()) } ?? 1500,
                 userId: theirs?.players.first?.userId
             )
@@ -212,6 +214,14 @@ struct MatchService {
 
     // MARK: Dates
 
+    /// Reused across every row/meeting render — a `DateFormatter` is expensive
+    /// to build, so keep one.
+    private static let dayFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "EEE MMM d"
+        return f
+    }()
+
     /// Short, human "when" label for a match timestamp.
     static func relativeWhen(_ date: Date) -> String {
         let cal = Calendar.current
@@ -222,9 +232,7 @@ struct MatchService {
             return "Today"
         }
         if cal.isDateInYesterday(date) { return "Yesterday" }
-        let f = DateFormatter()
-        f.dateFormat = "EEE MMM d"
-        return f.string(from: date)
+        return dayFormatter.string(from: date)
     }
 }
 

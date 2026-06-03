@@ -62,7 +62,7 @@ struct MatchesListView: View {
             record = try await rec
             errorMessage = nil
         } catch {
-            errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            errorMessage = error.fmMessage
         }
         loading = false
     }

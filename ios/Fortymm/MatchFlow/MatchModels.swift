@@ -22,7 +22,7 @@ struct MatchPlayer: Identifiable, Hashable {
     /// from the username so a given handle always looks the same.
     init(api: PlayerReadDTO) {
         self.handle = api.username
-        self.initials = MatchPlayer.initials(for: api.username)
+        self.initials = api.username.fmInitials
         self.avatarColor = MatchPlayer.avatarColor(for: api.username)
         self.rating = api.rating.map { Int($0.rounded()) } ?? 1500
         self.you = false
@@ -38,20 +38,6 @@ struct MatchPlayer: Identifiable, Hashable {
         self.rating = rating
         self.you = you
         self.userId = userId
-    }
-
-    /// First letters of the first two handle segments (split on `- . _` etc.),
-    /// or the first two characters when there's only one segment. Mirrors the
-    /// seed data's two-letter initials.
-    static func initials(for handle: String) -> String {
-        let parts = handle.split { !($0.isLetter || $0.isNumber) }
-        let chars: [Character]
-        if parts.count >= 2 {
-            chars = parts.prefix(2).compactMap(\.first)
-        } else {
-            chars = Array((parts.first.map(String.init) ?? handle).prefix(2))
-        }
-        return String(chars).uppercased()
     }
 
     /// Stable palette pick from the handle's code points (cosmetic only).

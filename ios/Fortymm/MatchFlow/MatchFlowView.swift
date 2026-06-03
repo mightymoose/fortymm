@@ -86,12 +86,11 @@ struct MatchFlowView: View {
                 matchId = try await service.createMatch(
                     opponent: opponent, bestOf: bestOf, rated: config.rated
                 )
-                busy = false
                 withAnimation { step = .score }
             } catch {
-                busy = false
-                errorMessage = Self.message(for: error)
+                errorMessage = error.fmMessage
             }
+            busy = false
         }
     }
 
@@ -102,12 +101,11 @@ struct MatchFlowView: View {
         Task {
             do {
                 final = try await service.postResult(matchId: matchId, games: games)
-                busy = false
                 withAnimation { step = .detail }
             } catch {
-                busy = false
-                errorMessage = Self.message(for: error)
+                errorMessage = error.fmMessage
             }
+            busy = false
         }
     }
 
@@ -116,10 +114,6 @@ struct MatchFlowView: View {
         final = nil
         matchId = nil
         withAnimation { step = .setup }
-    }
-
-    private static func message(for error: Error) -> String {
-        (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
     }
 }
 

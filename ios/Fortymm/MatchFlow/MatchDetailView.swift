@@ -49,9 +49,11 @@ struct MatchDetailView: View {
     }
 
     /// Pull the full detail (games, rating, head-to-head, current status) for
-    /// the match. No-op for non-server ids (e.g. SwiftUI previews).
+    /// the match. Skipped when we already hold the full payload (a freshly
+    /// posted result), or for non-server ids (e.g. SwiftUI previews); a list
+    /// row arrives without games, so that path fetches.
     private func refresh() async {
-        guard let id = UUID(uuidString: initial.id) else { return }
+        guard initial.games.isEmpty, let id = UUID(uuidString: initial.id) else { return }
         live = try? await service.matchDetails(id)
     }
 

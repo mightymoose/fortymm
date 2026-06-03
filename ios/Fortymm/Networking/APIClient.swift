@@ -212,6 +212,16 @@ struct APIClient {
     }
 }
 
+extension Error {
+    /// A user-facing message: the API's own `errorDescription` when present
+    /// (e.g. `APIError`), otherwise the system description. Centralises the
+    /// `(self as? LocalizedError)?.errorDescription ?? localizedDescription`
+    /// dance used at every catch site.
+    var fmMessage: String {
+        (self as? LocalizedError)?.errorDescription ?? localizedDescription
+    }
+}
+
 enum APIError: LocalizedError {
     case invalidResponse
     case http(status: Int, detail: String? = nil)
