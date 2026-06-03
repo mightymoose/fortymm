@@ -1,9 +1,9 @@
 import SwiftUI
 
 /// Screen 2 — live, game-by-game score entry, plus edit mode for completed
-/// games. Scores are native `.numberPad` text fields (no in-app keypad); the
-/// keyboard toolbar carries the "next / submit" action since numberPad has no
-/// return key.
+/// games. Scores are native `.numberPad` text fields (no in-app keypad);
+/// advancing between sides / submitting is done via the on-screen action row
+/// and by tapping a score field directly.
 struct ScoreEntryView: View {
     let config: MatchConfig
     var onPost: (FinalMatch) -> Void
@@ -53,9 +53,6 @@ struct ScoreEntryView: View {
             hint
         }
         .background(FMColor.ink950.ignoresSafeArea())
-        .toolbar {
-            ToolbarItemGroup(placement: .keyboard) { keyboardAccessory }
-        }
         .onAppear {
             if games.isEmpty { games = Array(repeating: Game(), count: config.bestOf) }
             focusYou()
@@ -82,6 +79,8 @@ struct ScoreEntryView: View {
                 MetaChip(text: config.rated ? "Rated" : "Casual", accent: config.rated)
             }
             DisplayTitle(editing ? "EDIT GAME \(active + 1) SCORE" : "ENTER GAME \(active + 1) SCORE", size: 32)
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
                 .padding(.horizontal, 4)
                 .padding(.bottom, 14)
         }
@@ -148,36 +147,25 @@ struct ScoreEntryView: View {
 
     @ViewBuilder
     private var actionRow: some View {
-        if editing {
-            HStack(spacing: 10) {
-                Button(action: clearEdit) {
-                    Text("Clear")
-                        .font(FMFont.ui(15, weight: .semibold))
-                        .foregroundStyle(FMColor.fg2)
-                        .padding(.horizontal, 20)
-                        .frame(height: 48)
-                        .fmRoundedBorder(radius: 13, color: FMColor.borderDefault)
-                }
-                .buttonStyle(.plain)
-                PrimaryAction(title: "Save changes", filled: currentValid, enabled: currentValid, action: saveEdit)
-            }
-        } else if deciding {
+        if deciding {
+            // A valid result that reaches `need` ends the match — offer Post,
+            // whether reached by live entry or by editing an earlier game (e.g.
+            // fixing game 2 that turns out to clinch the match).
             HStack(spacing: 12) {
-                Text("This finishes the match — post the result.")
-                    .font(FMFont.ui(12, weight: .medium))
-                    .foregroundStyle(FMColor.fg3)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                Button(action: post) {
-                    Text("Post result")
-                        .font(FMFont.ui(16, weight: .bold))
-                        .foregroundStyle(FMColor.fgInverse)
-                        .padding(.horizontal, 26)
-                        .frame(height: 50)
-                        .background(BallGradient())
-                        .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
-                        .shadow(color: FMColor.ball500.opacity(0.32), radius: 11, y: 8)
+                if editing {
+                    clearButton
+                } else {
+                    Text("This finishes the match — post the result.")
+                        .font(FMFont.ui(12, weight: .medium))
+                        .foregroundStyle(FMColor.fg3)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .buttonStyle(.plain)
+                postButton(expand: editing)
+            }
+        } else if editing {
+            HStack(spacing: 10) {
+                clearButton
+                PrimaryAction(title: "Save changes", filled: currentValid, enabled: currentValid, action: saveEdit)
             }
         } else {
             // Neutral "save & next" — raised dark surface, not the hero gradient.
@@ -197,6 +185,35 @@ struct ScoreEntryView: View {
         }
     }
 
+    private var clearButton: some View {
+        Button(action: clearEdit) {
+            Text("Clear")
+                .font(FMFont.ui(15, weight: .semibold))
+                .foregroundStyle(FMColor.fg2)
+                .padding(.horizontal, 20)
+                .frame(height: 48)
+                .fmRoundedBorder(radius: 13, color: FMColor.borderDefault)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func postButton(expand: Bool) -> some View {
+        Button(action: post) {
+            HStack(spacing: 8) {
+                Text("Post result").font(FMFont.ui(16, weight: .bold))
+                if expand { Image(systemName: "arrow.right").font(.system(size: 15, weight: .bold)) }
+            }
+            .foregroundStyle(FMColor.fgInverse)
+            .padding(.horizontal, 26)
+            .frame(maxWidth: expand ? .infinity : nil)
+            .frame(height: 50)
+            .background(BallGradient())
+            .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+            .shadow(color: FMColor.ball500.opacity(0.32), radius: 11, y: 8)
+        }
+        .buttonStyle(.plain)
+    }
+
     private var hint: some View {
         Text("Tap a score to bring up the keypad.")
             .font(FMFont.ui(12, weight: .medium))
@@ -204,28 +221,6 @@ struct ScoreEntryView: View {
             .frame(maxWidth: .infinity)
             .padding(.horizontal, 28)
             .padding(.bottom, 24)
-    }
-
-    // MARK: Keyboard accessory (replaces the missing numberPad return key)
-
-    @ViewBuilder
-    private var keyboardAccessory: some View {
-        Spacer()
-        if focus == .you {
-            Button("Next") { focus = .opponent }
-                .font(FMFont.ui(15, weight: .semibold))
-                .tint(FMColor.ball500)
-        } else {
-            Button(submitLabel) { submitCurrent() }
-                .font(FMFont.ui(15, weight: .bold))
-                .tint(FMColor.ball500)
-                .disabled(!currentValid)
-        }
-    }
-
-    private var submitLabel: String {
-        if editing { return "Save changes" }
-        return deciding ? "Post result" : "Save & next"
     }
 
     // MARK: Binding + actions
@@ -253,13 +248,6 @@ struct ScoreEntryView: View {
 
     private func focusYou() {
         DispatchQueue.main.async { focus = .you }
-    }
-
-    private func submitCurrent() {
-        guard currentValid else { return }
-        if editing { saveEdit() }
-        else if deciding { post() }
-        else { saveNext() }
     }
 
     private func saveNext() {
@@ -402,9 +390,13 @@ private struct GameChip: View {
                     }
                 }
                 .font(FMFont.mono(13, weight: .bold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.5)
             }
+            // No fixed min width: chips share the row evenly and shrink to fit so
+            // a full best-of-7 scoreline never forces the screen wider than it is
+            // (which on narrow phones pushed the whole layout past both edges).
             .frame(maxWidth: .infinity)
-            .frame(minWidth: 52)
             .padding(.horizontal, 4)
             .padding(.top, 8)
             .padding(.bottom, 7)
