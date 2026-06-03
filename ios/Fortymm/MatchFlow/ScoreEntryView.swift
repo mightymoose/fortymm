@@ -147,36 +147,25 @@ struct ScoreEntryView: View {
 
     @ViewBuilder
     private var actionRow: some View {
-        if editing {
-            HStack(spacing: 10) {
-                Button(action: clearEdit) {
-                    Text("Clear")
-                        .font(FMFont.ui(15, weight: .semibold))
-                        .foregroundStyle(FMColor.fg2)
-                        .padding(.horizontal, 20)
-                        .frame(height: 48)
-                        .fmRoundedBorder(radius: 13, color: FMColor.borderDefault)
-                }
-                .buttonStyle(.plain)
-                PrimaryAction(title: "Save changes", filled: currentValid, enabled: currentValid, action: saveEdit)
-            }
-        } else if deciding {
+        if deciding {
+            // A valid result that reaches `need` ends the match — offer Post,
+            // whether reached by live entry or by editing an earlier game (e.g.
+            // fixing game 2 that turns out to clinch the match).
             HStack(spacing: 12) {
-                Text("This finishes the match — post the result.")
-                    .font(FMFont.ui(12, weight: .medium))
-                    .foregroundStyle(FMColor.fg3)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                Button(action: post) {
-                    Text("Post result")
-                        .font(FMFont.ui(16, weight: .bold))
-                        .foregroundStyle(FMColor.fgInverse)
-                        .padding(.horizontal, 26)
-                        .frame(height: 50)
-                        .background(BallGradient())
-                        .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
-                        .shadow(color: FMColor.ball500.opacity(0.32), radius: 11, y: 8)
+                if editing {
+                    clearButton
+                } else {
+                    Text("This finishes the match — post the result.")
+                        .font(FMFont.ui(12, weight: .medium))
+                        .foregroundStyle(FMColor.fg3)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .buttonStyle(.plain)
+                postButton(expand: editing)
+            }
+        } else if editing {
+            HStack(spacing: 10) {
+                clearButton
+                PrimaryAction(title: "Save changes", filled: currentValid, enabled: currentValid, action: saveEdit)
             }
         } else {
             // Neutral "save & next" — raised dark surface, not the hero gradient.
@@ -194,6 +183,35 @@ struct ScoreEntryView: View {
             .buttonStyle(.plain)
             .disabled(!currentValid)
         }
+    }
+
+    private var clearButton: some View {
+        Button(action: clearEdit) {
+            Text("Clear")
+                .font(FMFont.ui(15, weight: .semibold))
+                .foregroundStyle(FMColor.fg2)
+                .padding(.horizontal, 20)
+                .frame(height: 48)
+                .fmRoundedBorder(radius: 13, color: FMColor.borderDefault)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func postButton(expand: Bool) -> some View {
+        Button(action: post) {
+            HStack(spacing: 8) {
+                Text("Post result").font(FMFont.ui(16, weight: .bold))
+                if expand { Image(systemName: "arrow.right").font(.system(size: 15, weight: .bold)) }
+            }
+            .foregroundStyle(FMColor.fgInverse)
+            .padding(.horizontal, 26)
+            .frame(maxWidth: expand ? .infinity : nil)
+            .frame(height: 50)
+            .background(BallGradient())
+            .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+            .shadow(color: FMColor.ball500.opacity(0.32), radius: 11, y: 8)
+        }
+        .buttonStyle(.plain)
     }
 
     private var hint: some View {
