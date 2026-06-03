@@ -10,7 +10,10 @@ import {
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { http, HttpResponse } from 'msw'
+
 import { mockSession } from '@/mocks/handlers'
+import { server } from '@/mocks/server'
 
 // The real Turnstile widget loads a remote script that jsdom can't run.
 // Replace it with a stub that hands back a token on click, so the form
@@ -208,5 +211,32 @@ describe('SettingsPage username section', () => {
 
     const section = input.closest('section') as HTMLElement
     expect(within(section).getByText(/no spaces/i)).toBeInTheDocument()
+  })
+})
+
+describe('SettingsPage footer sign out', () => {
+  it('exposes Sign out as a real, keyboard-focusable button', async () => {
+    await renderSettings()
+    const signOut = await screen.findByTestId('settings-footer-sign-out')
+    // Regression for #378: must be an interactive <button>, not a dead <a>.
+    expect(signOut.tagName).toBe('BUTTON')
+    signOut.focus()
+    expect(signOut).toHaveFocus()
+  })
+
+  it('signs the user out via DELETE /v1/session when clicked', async () => {
+    const user = userEvent.setup()
+    let deleteCalled = false
+    server.use(
+      http.delete('*/v1/session', async () => {
+        deleteCalled = true
+        return new HttpResponse(null, { status: 204 })
+      }),
+    )
+
+    await renderSettings()
+    await user.click(await screen.findByTestId('settings-footer-sign-out'))
+
+    await waitFor(() => expect(deleteCalled).toBe(true))
   })
 })

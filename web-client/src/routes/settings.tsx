@@ -6,13 +6,18 @@ import {
   type CSSProperties,
   type ReactNode,
 } from 'react'
-import { createFileRoute, useRouterState } from '@tanstack/react-router'
+import {
+  createFileRoute,
+  useNavigate,
+  useRouterState,
+} from '@tanstack/react-router'
 import { Check, Mail } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { ApiError } from '@/api/client'
 import {
   deriveEmailStatus,
+  useLogout,
   useResendEmailConfirmation,
   useSession,
   useSetEmail,
@@ -977,6 +982,8 @@ function focusEmailInput() {
 
 function SettingsPage() {
   const session = useSession()
+  const logout = useLogout()
+  const navigate = useNavigate()
   const sessionUser = session.data?.data.user
   const sessionUsername = sessionUser?.username ?? ''
   const sessionEmail = sessionUser?.email ?? null
@@ -1050,11 +1057,44 @@ function SettingsPage() {
                 <a className="fmm-link" style={{ fontSize: 'var(--text-xs)' }}>
                   Privacy
                 </a>
-                <a className="fmm-link" style={{ fontSize: 'var(--text-xs)' }}>
-                  Sign out
-                </a>
               </div>
             </ComingSoon>
+            {/*
+              "Sign out" is a real, available action (the user-menu "Log out"
+              uses the same flow), so it lives outside the coming-soon footer
+              placeholder as a genuine, keyboard-focusable button. See #378.
+            */}
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'flex-end',
+                marginTop: 12,
+              }}
+            >
+              <button
+                type="button"
+                className="fmm-link"
+                data-testid="settings-footer-sign-out"
+                disabled={logout.isPending}
+                onClick={() => {
+                  logout.mutate(undefined, {
+                    onSuccess: () => {
+                      void navigate({ to: '/dashboard' })
+                    },
+                  })
+                }}
+                style={{
+                  fontSize: 'var(--text-xs)',
+                  fontFamily: 'inherit',
+                  letterSpacing: 'inherit',
+                  background: 'none',
+                  border: 'none',
+                  padding: 0,
+                }}
+              >
+                Sign out
+              </button>
+            </div>
           </div>
         </TooltipProvider>
       </div>
