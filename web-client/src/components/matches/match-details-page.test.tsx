@@ -800,4 +800,54 @@ describe('MatchDetailsView', () => {
       within(callout).queryByRole('button', { name: /confirm result/i }),
     ).not.toBeInTheDocument()
   })
+
+  it('drops the awaiting-confirmation notice once the match is finalized (#358)', async () => {
+    // The opponent has now confirmed: status flips to `completed` and both
+    // signatures are on record. The signer's passive "awaiting" notice must
+    // disappear rather than linger above the Final match.
+    const match = matchDetails({
+      id: 'm-final',
+      status: 'completed',
+      status_label: 'Final',
+      sides: [
+        {
+          side_number: 1,
+          players: [
+            { user_id: 'u-me', username: 'me', is_current_user: true },
+          ],
+          games_won: 3,
+          won: true,
+          is_current_user_side: true,
+        },
+        {
+          side_number: 2,
+          players: [
+            { user_id: 'u-opp', username: 'nguyen.t', is_current_user: false },
+          ],
+          games_won: 1,
+          won: false,
+          is_current_user_side: false,
+        },
+      ],
+      can_confirm: false,
+      signatures: [
+        { user_id: 'u-me', signed_at: '2026-05-26T12:00:00Z' },
+        { user_id: 'u-opp', signed_at: '2026-05-26T12:05:00Z' },
+      ],
+    })
+    server.use(
+      http.get('*/v1/matches/m-final', () => HttpResponse.json(match)),
+    )
+
+    const { container } = renderDetails('m-final')
+
+    // Wait for the match content to render, then assert the awaiting callout
+    // is gone (it must not linger above a Final match).
+    await waitFor(() =>
+      expect(container.querySelector('.md-card__hd h3')).toBeInTheDocument(),
+    )
+    expect(
+      screen.queryByTestId('match-confirm-callout'),
+    ).not.toBeInTheDocument()
+  })
 })
