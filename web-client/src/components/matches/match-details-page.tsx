@@ -268,11 +268,11 @@ function projectMatchView(data: MatchDetails, matchId: string): MatchView {
   // already signed. Null when there's no posted result, or the viewer can't
   // see this state (anonymous, non-participant, etc.).
   //
-  // Gated on ``in_progress``: a posted result keeps the match in_progress
-  // until the other side signs, at which point /confirmation flips it to
-  // ``completed``. Once finalized (or disputed/voided) the signatures still
-  // exist, so without this status check the passive notice would linger above
-  // a Final match — even across a reload. See #358.
+  // Gated on the live (``in_progress``) state: a posted result keeps the match
+  // in_progress until the other side signs, at which point /confirmation flips
+  // it to ``completed``. Once finalized (or disputed/voided) the signatures
+  // still exist, so without this status check the passive notice would linger
+  // above a Final match — even across a reload. See #358.
   const signers = new Set(data.signatures.map((sig) => sig.user_id))
   const viewerUserId = viewerIsParticipant
     ? (leftSide.players[0]?.user_id ?? null)
@@ -280,7 +280,7 @@ function projectMatchView(data: MatchDetails, matchId: string): MatchView {
   const viewerHasSigned =
     viewerUserId !== null && signers.has(viewerUserId)
   const viewerIsAwaitingOther =
-    data.status === 'in_progress' &&
+    state === 'live' &&
     viewerIsParticipant &&
     data.signatures.length > 0 &&
     viewerHasSigned
