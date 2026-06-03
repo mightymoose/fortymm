@@ -267,6 +267,12 @@ function projectMatchView(data: MatchDetails, matchId: string): MatchView {
   // by username for the passive "Awaiting <opp>" copy when the viewer has
   // already signed. Null when there's no posted result, or the viewer can't
   // see this state (anonymous, non-participant, etc.).
+  //
+  // Gated on the live (``in_progress``) state: a posted result keeps the match
+  // in_progress until the other side signs, at which point /confirmation flips
+  // it to ``completed``. Once finalized (or disputed/voided) the signatures
+  // still exist, so without this status check the passive notice would linger
+  // above a Final match — even across a reload. See #358.
   const signers = new Set(data.signatures.map((sig) => sig.user_id))
   const viewerUserId = viewerIsParticipant
     ? (leftSide.players[0]?.user_id ?? null)
@@ -274,7 +280,10 @@ function projectMatchView(data: MatchDetails, matchId: string): MatchView {
   const viewerHasSigned =
     viewerUserId !== null && signers.has(viewerUserId)
   const viewerIsAwaitingOther =
-    viewerIsParticipant && data.signatures.length > 0 && viewerHasSigned
+    state === 'live' &&
+    viewerIsParticipant &&
+    data.signatures.length > 0 &&
+    viewerHasSigned
   // Find the participant who's missing from the signature set. With "at
   // least one player per side" semantics, this picks the first un-signed
   // player on the other side. Falls back to "your opponent" if we can't
