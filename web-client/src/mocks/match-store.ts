@@ -221,8 +221,9 @@ function seedStatusLabel(seed: SeedMatch): string {
 }
 
 // Mirrors the backend scoreboard-status mapping (app/mappers/match_details_mapper.py):
-// disputed and voided collapse to `final`, not `live`.
-function seedScoreboardStatus(
+// disputed and voided collapse to `final`, not `live`. Exported so the test
+// factories derive `data.scoreboard.status` the same way instead of re-inlining it.
+export function seedScoreboardStatus(
   status: MatchStatus,
 ): components['schemas']['Status'] {
   switch (status) {

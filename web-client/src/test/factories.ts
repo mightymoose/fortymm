@@ -1,6 +1,6 @@
 import { faker } from '@faker-js/faker'
 import type { components } from '@/api/schema'
-import { MOCK_DEFAULT_LEAGUE } from '@/mocks/match-store'
+import { MOCK_DEFAULT_LEAGUE, seedScoreboardStatus } from '@/mocks/match-store'
 
 type ComponentHealth = components['schemas']['ComponentHealth']
 type HealthResponse = components['schemas']['HealthResponse']
@@ -184,10 +184,9 @@ export function matchDetails(
   const id = overrides.id ?? nextId('m')
   const bestOf = overrides.best_of ?? 5
   const status = overrides.status ?? 'in_progress'
-  // Mirror the backend scoreboard-status mapping so an overridden `status`
-  // keeps the derived `data.scoreboard` in sync (disputed/voided → final).
-  const scoreboardStatus =
-    status === 'pending' ? 'scheduled' : status === 'in_progress' ? 'live' : 'final'
+  // Derive `data.scoreboard.status` the same way the mock store (and backend
+  // mapper) do, so an overridden `status` stays in sync (disputed/voided → final).
+  const scoreboardStatus = seedScoreboardStatus(status)
   const { mySide, opponentSide } = defaultSides(
     faker.internet.username().toLowerCase(),
   )
