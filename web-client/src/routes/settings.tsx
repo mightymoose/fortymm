@@ -1069,9 +1069,6 @@ function SettingsPage() {
                 display: 'flex',
                 justifyContent: 'flex-end',
                 marginTop: 12,
-                fontSize: 'var(--text-xs)',
-                fontFamily: 'var(--font-mono)',
-                letterSpacing: '0.06em',
               }}
             >
               <button
