@@ -2,6 +2,33 @@
 node = "26.1.0"
 python = "3.13"
 
+[tasks.ios-testflight]
+description = "Build a signed iOS release and upload it to TestFlight (fastlane beta)"
+dir = "ios"
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Ruby 3.4.9 is pinned in ios/mise.toml; `mise exec` activates it for the
+# bundle/fastlane invocations regardless of where this task is launched from.
+
+# Load App Store Connect creds from the gitignored dotenv if the caller
+# hasn't already exported them (CI sets them as secrets in the environment).
+if [ -f fastlane/.env ]; then
+  set -a
+  # shellcheck disable=SC1091
+  . fastlane/.env
+  set +a
+fi
+
+: "${ASC_KEY_ID:?set ASC_KEY_ID (App Store Connect API key id)}"
+: "${ASC_ISSUER_ID:?set ASC_ISSUER_ID (App Store Connect issuer id)}"
+: "${ASC_KEY_PATH:?set ASC_KEY_PATH (path to the .p8 API key)}"
+
+mise exec -- bundle install --quiet
+mise exec -- bundle exec fastlane beta
+"""
+
 [tasks.regen-api-types]
 description = "Start API (if not running) and regenerate OpenAPI types for web-client"
 run = """
