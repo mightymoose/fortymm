@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  Universal Links. The API emails real https links to the web app
+	  (api/app/email.py): the magic-link sign-in (/login/verifying?token=…) and
+	  the email confirmation (/confirm-email?token=…). With this association,
+	  tapping one on the phone opens FortyMM instead of Safari — see
+	  Navigation/DeepLink.swift for the path matching and RootView for routing.
+
+	  The matching apple-app-site-association file is hosted at the domain:
+	  web-client/public/.well-known/apple-app-site-association.
+
+	  The app currently ships pointed at uat.fortymm.com; add a prod
+	  `applinks:fortymm.com` entry here (and its AASA) when prod goes live.
+	-->
+	<key>com.apple.developer.associated-domains</key>
+	<array>
+		<string>applinks:uat.fortymm.com</string>
+	</array>
+</dict>
+</plist>

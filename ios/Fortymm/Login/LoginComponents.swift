@@ -343,6 +343,28 @@ struct StatusBadge: View {
 
 // MARK: - Buttons & misc
 
+/// The top-right dismiss header shared by the modally-presented login-flow
+/// landings (`LoginFlowView`, `ConfirmEmailView`) — a trailing "✕" over the
+/// login background.
+struct LoginCloseHeader: View {
+    let onClose: () -> Void
+
+    var body: some View {
+        HStack {
+            Spacer()
+            Button(action: onClose) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(FMColor.fg3)
+                    .frame(width: 40, height: 40)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 6)
+    }
+}
+
 /// The login primary/ghost button. Primary is the ball-orange glow button with
 /// an in-flight spinner; ghost is bordered. Disabled primary dims to ink.
 struct LoginButton: View {

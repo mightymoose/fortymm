@@ -1,0 +1,21 @@
+{
+  "applinks": {
+    "details": [
+      {
+        "appIDs": ["3A8872P8KP.com.fortymm.ios-client"],
+        "components": [
+          {
+            "/": "/login/verifying",
+            "?": { "token": "?*" },
+            "comment": "Magic-link sign-in — opens the FortyMM app to verify."
+          },
+          {
+            "/": "/confirm-email",
+            "?": { "token": "?*" },
+            "comment": "Email confirmation — opens the FortyMM app to confirm."
+          }
+        ]
+      }
+    ]
+  }
+}
