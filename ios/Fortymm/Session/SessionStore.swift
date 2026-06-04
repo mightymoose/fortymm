@@ -14,10 +14,24 @@ final class SessionStore: ObservableObject {
 
     @Published private(set) var state: State = .idle
 
+    /// The signed-in user when the session has resolved, else nil. Lets screens
+    /// read the user without re-switching over `state` at every call site.
+    var user: SessionUser? {
+        if case let .loaded(user) = state { return user }
+        return nil
+    }
+
     private let client: APIClient
 
     init(client: APIClient = .shared) {
         self.client = client
+    }
+
+    /// Fold an updated user — returned by a profile mutation (username/email
+    /// change) — straight into the loaded state, so the UI reflects the change
+    /// without a second `GET /v1/session` round-trip.
+    func apply(_ user: SessionUser) {
+        state = .loaded(user)
     }
 
     /// Create or resume the session. Skips the network call if a user is

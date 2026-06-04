@@ -43,7 +43,7 @@ struct MainTabView: View {
                 .tabItem { Label("New match", systemImage: "plus") }
                 .tag(FMTab.newMatch)
 
-            FMComingSoon(title: "You")
+            ProfileView()
                 .fmTopBar(FMTab.profile.title)
                 .tabItem { Label("You", systemImage: "person.crop.circle") }
                 .tag(FMTab.profile)
