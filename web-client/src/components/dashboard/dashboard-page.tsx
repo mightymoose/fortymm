@@ -166,11 +166,12 @@ function Sparkline({
   h?: number
   color?: string
   /**
-   * Fill the container width instead of rendering at the fixed `w`. Only set
-   * on narrow layouts where a fixed pixel width would push the rating card's
-   * grid column wider than the viewport and overflow the page. At full size we
-   * keep the fixed width so the trend line and end-point markers aren't
-   * stretched non-uniformly.
+   * Fill the container width instead of rendering at the fixed `w`. Stretches
+   * the SVG with `preserveAspectRatio="none"`, so the trend line's geometry
+   * scales horizontally — fine for a sparkline (there's no canonical aspect),
+   * and the line *weight* stays uniform via `vector-effect="non-scaling-stroke"`.
+   * The end-point dot is drawn as an HTML overlay (below) rather than an SVG
+   * `<circle>` precisely so it stays round instead of stretching into an ellipse.
    */
   fluid?: boolean
 }) {
@@ -189,34 +190,78 @@ function Sparkline({
   const last = points[points.length - 1]
   const areaPath = `${path} L${last[0]} ${h} L${pad} ${h} Z`
   const gradId = `dash-spark-${color.replace(/[^a-z0-9]/gi, '')}`
+  // Position the end-point dot as a fraction of the box; since the overlay is a
+  // sibling of the (possibly stretched) SVG, percentages keep it pinned to the
+  // last data point regardless of the horizontal scale, while a fixed pixel
+  // size keeps it circular.
+  const dotLeft = `${(last[0] / w) * 100}%`
+  const dotTop = `${(last[1] / h) * 100}%`
   return (
-    <svg
-      width={fluid ? '100%' : w}
-      height={h}
-      viewBox={`0 0 ${w} ${h}`}
-      // Only stretch to fill when fluid — at fixed width the 1:1 mapping keeps
-      // the line shape and round end-point markers undistorted.
-      preserveAspectRatio={fluid ? 'none' : 'xMidYMid meet'}
-      style={{ display: 'block', overflow: 'visible' }}
+    <div
+      style={{
+        position: 'relative',
+        width: fluid ? '100%' : w,
+        height: h,
+        lineHeight: 0,
+      }}
     >
-      <defs>
-        <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor={color} stopOpacity="0.35" />
-          <stop offset="100%" stopColor={color} stopOpacity="0" />
-        </linearGradient>
-      </defs>
-      <path d={areaPath} fill={`url(#${gradId})`} />
-      <path
-        d={path}
-        fill="none"
-        stroke={color}
-        strokeWidth="1.75"
-        strokeLinecap="round"
-        strokeLinejoin="round"
+      <svg
+        width="100%"
+        height={h}
+        viewBox={`0 0 ${w} ${h}`}
+        // Stretch to fill when fluid; at fixed width the 1:1 mapping is undistorted.
+        preserveAspectRatio={fluid ? 'none' : 'xMidYMid meet'}
+        style={{ display: 'block', overflow: 'visible' }}
+      >
+        <defs>
+          <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={color} stopOpacity="0.35" />
+            <stop offset="100%" stopColor={color} stopOpacity="0" />
+          </linearGradient>
+        </defs>
+        <path d={areaPath} fill={`url(#${gradId})`} />
+        <path
+          d={path}
+          fill="none"
+          stroke={color}
+          strokeWidth="1.75"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          vectorEffect="non-scaling-stroke"
+        />
+      </svg>
+      <span
+        aria-hidden
+        style={{
+          position: 'absolute',
+          left: dotLeft,
+          top: dotTop,
+          width: 10,
+          height: 10,
+          marginLeft: -5,
+          marginTop: -5,
+          borderRadius: '50%',
+          background: color,
+          opacity: 0.25,
+          pointerEvents: 'none',
+        }}
       />
-      <circle cx={last[0]} cy={last[1]} r="2.6" fill={color} />
-      <circle cx={last[0]} cy={last[1]} r="5" fill={color} opacity="0.25" />
-    </svg>
+      <span
+        aria-hidden
+        style={{
+          position: 'absolute',
+          left: dotLeft,
+          top: dotTop,
+          width: 5.2,
+          height: 5.2,
+          marginLeft: -2.6,
+          marginTop: -2.6,
+          borderRadius: '50%',
+          background: color,
+          pointerEvents: 'none',
+        }}
+      />
+    </div>
   )
 }
 
