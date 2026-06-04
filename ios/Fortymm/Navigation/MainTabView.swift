@@ -1,9 +1,9 @@
 import SwiftUI
 
-/// The five bottom-nav slots. `newMatch` is an action slot, not a screen —
+/// The four bottom-nav slots. `newMatch` is an action slot, not a screen —
 /// selecting it triggers the new-match flow rather than switching tabs.
 enum FMTab: Hashable {
-    case home, matches, newMatch, tournaments, profile
+    case home, matches, newMatch, profile
 
     /// Title shown in the top bar for the tab.
     var title: String {
@@ -11,7 +11,6 @@ enum FMTab: Hashable {
         case .home: return "FortyMM"
         case .matches: return "Matches"
         case .newMatch: return "New match"
-        case .tournaments: return "Tournaments"
         case .profile: return "You"
         }
     }
@@ -43,11 +42,6 @@ struct MainTabView: View {
             Color.clear
                 .tabItem { Label("New match", systemImage: "plus") }
                 .tag(FMTab.newMatch)
-
-            FMComingSoon(title: "Tournaments")
-                .fmTopBar(FMTab.tournaments.title)
-                .tabItem { Label("Tournaments", systemImage: "trophy") }
-                .tag(FMTab.tournaments)
 
             FMComingSoon(title: "You")
                 .fmTopBar(FMTab.profile.title)
