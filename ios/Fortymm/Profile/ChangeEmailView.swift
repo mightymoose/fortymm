@@ -204,6 +204,9 @@ struct ChangeEmailView: View {
             let updated = try await service.resendEmailConfirmation(captchaToken: token)
             session.apply(updated)
             resetCaptcha()
+            // Drop any prior error so it doesn't linger under the field beside
+            // the success notice (the two render in separate regions).
+            serverError = nil
             notice = "Verification link re-sent to \(displayAddress)."
         } catch {
             resetCaptcha()
