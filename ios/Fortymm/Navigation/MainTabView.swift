@@ -26,7 +26,7 @@ struct MainTabView: View {
     @State private var showingNewMatch = false
 
     var body: some View {
-        TabView(selection: tabSelection) {
+        TabView(selection: $selection) {
             DashboardView()
                 .tabItem { Label("Home", systemImage: "house") }
                 .tag(FMTab.home)
@@ -35,7 +35,8 @@ struct MainTabView: View {
                 .tabItem { Label("Matches", systemImage: "sportscourt") }
                 .tag(FMTab.matches)
 
-            // Action slot — intercepted in `tabSelection`, never shown.
+            // Action slot — opens the new-match flow via `.onChange`; the bar is
+            // snapped off this tab immediately so its empty content never shows.
             Color.clear
                 .tabItem { Label("New match", systemImage: "plus") }
                 .tag(FMTab.newMatch)
@@ -51,6 +52,15 @@ struct MainTabView: View {
         .tint(FMColor.ball500)
         .toolbar(.hidden, for: .navigationBar)
         .navigationBarBackButtonHidden(true)
+        // "New match" is an action slot, not a destination: open the flow, then
+        // snap selection back to the tab we came from (`oldValue`) so the bar
+        // never rests on the empty action slot (which left the screen blank).
+        .onChange(of: selection) { oldValue, newValue in
+            if newValue == .newMatch {
+                showingNewMatch = true
+                selection = oldValue
+            }
+        }
         .safeAreaInset(edge: .top, spacing: 0) {
             FMTopBar(title: selection.title)
         }
@@ -60,18 +70,6 @@ struct MainTabView: View {
                 if toMatches { selection = .matches }
             }
         }
-    }
-
-    /// "New match" is an action slot, not a destination — tapping it opens the
-    /// flow cover and leaves the underlying tab selection unchanged.
-    private var tabSelection: Binding<FMTab> {
-        Binding(
-            get: { selection },
-            set: { newValue in
-                if newValue == .newMatch { showingNewMatch = true; return }
-                selection = newValue
-            }
-        )
     }
 }
 

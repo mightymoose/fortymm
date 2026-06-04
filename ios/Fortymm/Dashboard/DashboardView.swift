@@ -24,12 +24,8 @@ struct DashboardView: View {
                 content
             }
             .padding(.horizontal, FMSpace.s5)
-            // The shell's frosted top bar (~46pt) is laid over the top via the
-            // TabView's `.safeAreaInset`, and that inset doesn't fully reduce the
-            // scroll content's safe area inside the tab — so content renders under
-            // the bar. Clear it with a top pad of the bar height plus a small gap,
-            // otherwise the "Dashboard · <date>" overline is hidden behind the bar.
-            .padding(.top, 56)
+            // Clear the shell's frosted top bar (see `FMTopBar.contentInset`).
+            .padding(.top, FMTopBar.contentInset)
             .padding(.bottom, FMSpace.s6)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
