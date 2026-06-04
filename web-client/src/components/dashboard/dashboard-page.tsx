@@ -18,10 +18,9 @@ import { fmtDateShort, fmtLongDate } from '@/lib/dates'
 import { formatRatingDelta } from '@/lib/rating'
 import { useMediaQuery } from '@/lib/use-media-query'
 
-// Below this width the two-column "Your game" row stacks, the page title drops
-// its inline action button to its own line, and gutters tighten. Sits below the
-// app-shell's 960px sidebar-drawer breakpoint so tablet-width two-column
-// layouts are preserved.
+// Below this viewport width the page title drops its inline action button to its
+// own line and gutters tighten. Sits below the app-shell's 960px sidebar-drawer
+// breakpoint so tablet-width layouts keep the roomy chrome.
 const COMPACT_QUERY = '(max-width: 640px)'
 
 // Used everywhere an opponent slot has no registered player — the form's
@@ -423,6 +422,7 @@ function SkeletonCard({
         border: `1px solid ${C.ink600}`,
         borderRadius: 10,
         minHeight: height,
+        minWidth: 0,
       }}
     />
   )
@@ -430,7 +430,7 @@ function SkeletonCard({
 
 function EmptyCard({ overline, body }: { overline: string; body: string }) {
   return (
-    <Card>
+    <Card style={{ minWidth: 0 }}>
       <Overline>{overline}</Overline>
       <div
         style={{
@@ -789,10 +789,8 @@ function Stat({
 
 function RatingCard({
   rating,
-  compact,
 }: {
   rating: DashboardRating
-  compact: boolean
 }) {
   const { current, delta, peak, percentile, spark_data, streak, stats } = rating
   // Sparkline needs ≥2 points to draw a line; pad a single point so the
@@ -808,7 +806,12 @@ function RatingCard({
     ...stats,
   ].slice(0, 3)
   return (
-    <Card padding={20} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+    <Card
+      padding={20}
+      // minWidth:0 lets the card shrink to its grid track instead of forcing the
+      // track wider than its `fr` share (grid items default to min-width:auto).
+      style={{ display: 'flex', flexDirection: 'column', gap: 14, minWidth: 0 }}
+    >
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <Overline>Current rating</Overline>
         <div style={{ flex: 1 }} />
@@ -819,11 +822,15 @@ function RatingCard({
           </Pill>
         ) : null}
       </div>
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 12 }}>
+      {/* flexWrap so the delta/percentile column drops below the big number
+          rather than overflowing (and being clipped) in a narrow card. */}
+      <div
+        style={{ display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap', rowGap: 8 }}
+      >
         <Mono size={56} weight={700} color={C.chalk50} style={{ lineHeight: 0.9 }}>
           {Math.round(current)}
         </Mono>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
           <Pill tone={delta >= 0 ? 'win' : 'loss'} mono>
             {formatRatingDelta(delta)} last match
           </Pill>
@@ -850,7 +857,7 @@ function RatingCard({
           border: `1px solid ${C.ink700}`,
         }}
       >
-        <Sparkline data={sparkPoints} w={280} h={48} fluid={compact} />
+        <Sparkline data={sparkPoints} w={280} h={48} fluid />
         <div
           style={{
             display: 'flex',
@@ -865,7 +872,15 @@ function RatingCard({
           <span>Today · peak {Math.round(peak)}</span>
         </div>
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
+      {/* auto-fit so the tiles reflow to 2 (or 1) columns when the card is too
+          narrow for three, instead of overflowing the fixed 3-up grid. */}
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(84px, 1fr))',
+          gap: 8,
+        }}
+      >
         {tiles.map((tile) => (
           <Stat key={tile.label} label={tile.label} value={tile.value} />
         ))}
@@ -877,7 +892,7 @@ function RatingCard({
 function RecentResultsCard({ rows }: { rows: DashboardRecentResult[] }) {
   const wins = rows.filter((r) => r.is_win).length
   return (
-    <Card padding={0}>
+    <Card padding={0} style={{ minWidth: 0 }}>
       <div
         data-testid="dashboard-recent-results"
         style={{
@@ -1017,16 +1032,20 @@ function YourGameRow({
   recent,
   isLoading,
   username,
-  compact,
 }: {
   rating: DashboardRating | null
   recent: DashboardRecentResult[]
   isLoading: boolean
   username?: string
-  compact: boolean
 }) {
+  // The grid stacks vs. splits off the row's *container* width via a CSS
+  // container query (see `.your-game-grid` in index.css), not the viewport: the
+  // dashboard sits in the app-shell's content column beside a 256px sidebar, so
+  // just past the 960px sidebar breakpoint this column is only ~700px — too
+  // narrow for two columns. `container-type: inline-size` makes this <section>
+  // the query container.
   return (
-    <section style={{ marginBottom: 36 }}>
+    <section style={{ marginBottom: 36, containerType: 'inline-size' }}>
       <SectionHeader
         title="Your game"
         subtitle={
@@ -1038,17 +1057,11 @@ function YourGameRow({
         actionTo="/matches"
         actionSearch={{ q: username }}
       />
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: compact ? '1fr' : '1.15fr 1.85fr',
-          gap: 14,
-        }}
-      >
+      <div className="your-game-grid">
         {isLoading ? (
           <SkeletonCard label="Loading rating" height={260} />
         ) : rating ? (
-          <RatingCard rating={rating} compact={compact} />
+          <RatingCard rating={rating} />
         ) : (
           <EmptyCard
             overline="Current rating"
@@ -1121,7 +1134,6 @@ export function DashboardPage() {
         recent={data?.recent_results ?? []}
         isLoading={isLoading}
         username={username}
-        compact={compact}
       />
     </div>
   )
