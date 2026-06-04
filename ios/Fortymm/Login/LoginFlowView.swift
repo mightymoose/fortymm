@@ -39,25 +39,10 @@ struct LoginFlowView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            header
+            LoginCloseHeader(onClose: onClose)
             content
         }
         .background(LoginBackground())
-    }
-
-    private var header: some View {
-        HStack {
-            Spacer()
-            Button(action: onClose) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(FMColor.fg3)
-                    .frame(width: 40, height: 40)
-            }
-            .buttonStyle(.plain)
-        }
-        .padding(.horizontal, 12)
-        .padding(.top, 6)
     }
 
     @ViewBuilder

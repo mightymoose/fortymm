@@ -54,6 +54,30 @@ struct ProfileService {
         )
         return response.data.user
     }
+
+    /// Confirm an email-change token (`POST /v1/me/email/confirm`). Unlike the
+    /// other methods here it returns the full `SessionResponse`: the token is
+    /// the bearer credential, so the server rotates the caller's session to the
+    /// token's owner and reports — via `merged` — any guest matches folded in,
+    /// exactly like sign-in. That's why the confirm landing takes the whole
+    /// response, not just the user.
+    ///
+    /// Classifies failure the same way `LoginService.consume` does — and reuses
+    /// its `LoginConsumeError`: a `4xx` is a rejected token (invalid, expired,
+    /// already used) and terminal; anything else is transient and worth a retry.
+    /// Keeping that boundary-typing in the service, not the view, is the
+    /// convention the rest of the API layer follows.
+    func confirmEmail(token: String) async throws -> SessionResponse {
+        do {
+            return try await client.post(
+                "/v1/me/email/confirm", body: ConfirmEmailBody(token: token)
+            )
+        } catch let APIError.http(status, _) where (400..<500).contains(status) {
+            throw LoginConsumeError.rejected
+        } catch {
+            throw LoginConsumeError.unreachable
+        }
+    }
 }
 
 // MARK: - Request bodies
@@ -75,4 +99,8 @@ private struct SetEmailBody: Encodable {
 private struct ResendEmailBody: Encodable {
     let captchaToken: String
     let fmmHpToken: String
+}
+
+private struct ConfirmEmailBody: Encodable {
+    let token: String
 }

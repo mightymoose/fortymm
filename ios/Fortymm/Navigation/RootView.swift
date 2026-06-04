@@ -11,6 +11,10 @@ struct RootView: View {
         content
             .environmentObject(session)
             .task { await session.load() }
+            // Universal Links land here (cold launch or while running). The
+            // store parses + holds the link; the cover below presents it once
+            // the session has loaded.
+            .onOpenURL { session.handle($0) }
     }
 
     @ViewBuilder
@@ -20,8 +24,32 @@ struct RootView: View {
             LoadingView()
         case .loaded:
             MainTabView()
+                .fullScreenCover(item: $session.pendingDeepLink) { link in
+                    deepLinkDestination(link)
+                }
         case let .failed(message):
             sessionFailedView(message)
+        }
+    }
+
+    /// The flow a tapped email link opens. Both fold the resolved session back
+    /// into the store (no refetch) and clear the pending link to dismiss the
+    /// cover.
+    @ViewBuilder
+    private func deepLinkDestination(_ link: DeepLink) -> some View {
+        switch link {
+        case let .login(token):
+            LoginFlowView(
+                start: .verifying(token: token),
+                onClose: { session.pendingDeepLink = nil },
+                onSignedIn: { session.resolveDeepLink($0) }
+            )
+        case let .confirmEmail(token):
+            ConfirmEmailView(
+                token: token,
+                onConfirmed: { session.resolveDeepLink($0) },
+                onClose: { session.pendingDeepLink = nil }
+            )
         }
     }
 
