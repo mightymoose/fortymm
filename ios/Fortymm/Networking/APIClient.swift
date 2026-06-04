@@ -112,6 +112,13 @@ struct APIClient {
         try await send("PUT", path, body: body)
     }
 
+    func patch<T: Decodable>(
+        _ path: String,
+        body: (some Encodable)? = Optional<Empty>.none
+    ) async throws -> T {
+        try await send("PATCH", path, body: body)
+    }
+
     func delete<T: Decodable>(_ path: String) async throws -> T {
         try await send("DELETE", path, body: Optional<Empty>.none)
     }
