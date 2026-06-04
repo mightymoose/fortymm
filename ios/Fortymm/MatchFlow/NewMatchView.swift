@@ -28,6 +28,13 @@ struct NewMatchView: View {
     private var solo: Bool { opponent == nil }
     private var gamesToWin: Int { MatchRules.gamesToWin(bestOf: bestOf) }
 
+    // True when the picked opponent is one of the recent-grid players, so the
+    // grid highlights them itself and the confirmed card isn't needed.
+    private var inRecent: Bool {
+        guard let opponent else { return false }
+        return recent.contains { $0.handle == opponent.handle }
+    }
+
     private static let lengths: [(n: Int, label: String)] = [
         (1, "Single"), (3, "Short"), (5, "Std"), (7, "Long"),
     ]
@@ -87,11 +94,6 @@ struct NewMatchView: View {
                     .foregroundStyle(FMColor.fgMuted)
             }
 
-            // Always surface the current pick — a player chosen from search
-            // isn't in the recent grid, so without this there'd be no sign the
-            // selection took.
-            if let opponent { selectedOpponentCard(opponent) }
-
             if searching {
                 searchField
                 searchResults
@@ -103,39 +105,55 @@ struct NewMatchView: View {
         .padding(.bottom, 20)
     }
 
-    /// The chosen opponent, shown above the picker with a tap-to-clear control.
-    private func selectedOpponentCard(_ player: MatchPlayer) -> some View {
-        HStack(spacing: 10) {
-            MatchAvatar(player: player, size: 36)
-            VStack(alignment: .leading, spacing: 1) {
+    /// The chosen opponent when they aren't in the recent grid (e.g. picked from
+    /// search). Mirrors the web confirmation row: avatar, handle, rating chip,
+    /// and a Change button that reopens search.
+    private func confirmedOpponentCard(_ player: MatchPlayer) -> some View {
+        HStack(spacing: 12) {
+            MatchAvatar(player: player, size: 42)
+            VStack(alignment: .leading, spacing: 2) {
                 Text(player.handle)
-                    .font(FMFont.ui(14, weight: .semibold))
+                    .font(FMFont.ui(16, weight: .semibold))
                     .foregroundStyle(FMColor.fg1)
                     .lineLimit(1)
-                Text("SELECTED OPPONENT")
-                    .font(FMFont.ui(9, weight: .medium))
-                    .tracking(0.9)
-                    .foregroundStyle(FMColor.ball500)
+                Text("REGISTERED PLAYER")
+                    .font(FMFont.ui(9.5, weight: .medium))
+                    .tracking(1.1)
+                    .foregroundStyle(FMColor.fgMuted)
                     .lineLimit(1)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            Button { opponent = nil } label: {
-                Image(systemName: "xmark.circle.fill")
-                    .font(.system(size: 20, weight: .medium))
-                    .foregroundStyle(FMColor.fgMuted)
+            Text("★ \(player.rating)")
+                .font(FMFont.mono(11, weight: .bold))
+                .foregroundStyle(FMColor.ball500)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(FMColor.bgAccentSoft)
+                .clipShape(Capsule())
+            Button { searching = true; searchFocused = true } label: {
+                Text("Change")
+                    .font(FMFont.ui(13, weight: .semibold))
+                    .foregroundStyle(FMColor.fg2)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 7)
+                    .fmRoundedBorder(radius: 10, color: FMColor.borderDefault)
             }
             .buttonStyle(.plain)
         }
-        .padding(.horizontal, 11)
-        .padding(.vertical, 10)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 13)
         .background(FMColor.bgAccentSoft)
-        .fmRoundedBorder(radius: FMRadius.md, color: FMColor.ball500)
+        .fmRoundedBorder(radius: FMRadius.lg, color: FMColor.ball500)
     }
 
     private var recentGrid: some View {
         VStack(alignment: .leading, spacing: 11) {
+            if let opponent, !inRecent {
+                confirmedOpponentCard(opponent)
+                    .padding(.bottom, 3)
+            }
             HStack {
-                Eyebrow("Recent opponents")
+                Eyebrow(opponent != nil && !inRecent ? "Or pick a recent" : "Recent opponents")
                 Spacer()
                 Button { searching = true; searchFocused = true } label: {
                     HStack(spacing: 5) {

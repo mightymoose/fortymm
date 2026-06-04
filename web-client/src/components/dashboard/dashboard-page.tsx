@@ -18,10 +18,9 @@ import { fmtDateShort, fmtLongDate } from '@/lib/dates'
 import { formatRatingDelta } from '@/lib/rating'
 import { useMediaQuery } from '@/lib/use-media-query'
 
-// Below this width the two-column "Your game" row stacks, the page title drops
-// its inline action button to its own line, and gutters tighten. Sits below the
-// app-shell's 960px sidebar-drawer breakpoint so tablet-width two-column
-// layouts are preserved.
+// Below this viewport width the page title drops its inline action button to its
+// own line and gutters tighten. Sits below the app-shell's 960px sidebar-drawer
+// breakpoint so tablet-width layouts keep the roomy chrome.
 const COMPACT_QUERY = '(max-width: 640px)'
 
 // Used everywhere an opponent slot has no registered player — the form's
@@ -167,11 +166,12 @@ function Sparkline({
   h?: number
   color?: string
   /**
-   * Fill the container width instead of rendering at the fixed `w`. Only set
-   * on narrow layouts where a fixed pixel width would push the rating card's
-   * grid column wider than the viewport and overflow the page. At full size we
-   * keep the fixed width so the trend line and end-point markers aren't
-   * stretched non-uniformly.
+   * Fill the container width instead of rendering at the fixed `w`. Stretches
+   * the SVG with `preserveAspectRatio="none"`, so the trend line's geometry
+   * scales horizontally — fine for a sparkline (there's no canonical aspect),
+   * and the line *weight* stays uniform via `vector-effect="non-scaling-stroke"`.
+   * The end-point dot is drawn as an HTML overlay (below) rather than an SVG
+   * `<circle>` precisely so it stays round instead of stretching into an ellipse.
    */
   fluid?: boolean
 }) {
@@ -190,34 +190,78 @@ function Sparkline({
   const last = points[points.length - 1]
   const areaPath = `${path} L${last[0]} ${h} L${pad} ${h} Z`
   const gradId = `dash-spark-${color.replace(/[^a-z0-9]/gi, '')}`
+  // Position the end-point dot as a fraction of the box; since the overlay is a
+  // sibling of the (possibly stretched) SVG, percentages keep it pinned to the
+  // last data point regardless of the horizontal scale, while a fixed pixel
+  // size keeps it circular.
+  const dotLeft = `${(last[0] / w) * 100}%`
+  const dotTop = `${(last[1] / h) * 100}%`
   return (
-    <svg
-      width={fluid ? '100%' : w}
-      height={h}
-      viewBox={`0 0 ${w} ${h}`}
-      // Only stretch to fill when fluid — at fixed width the 1:1 mapping keeps
-      // the line shape and round end-point markers undistorted.
-      preserveAspectRatio={fluid ? 'none' : 'xMidYMid meet'}
-      style={{ display: 'block', overflow: 'visible' }}
+    <div
+      style={{
+        position: 'relative',
+        width: fluid ? '100%' : w,
+        height: h,
+        lineHeight: 0,
+      }}
     >
-      <defs>
-        <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor={color} stopOpacity="0.35" />
-          <stop offset="100%" stopColor={color} stopOpacity="0" />
-        </linearGradient>
-      </defs>
-      <path d={areaPath} fill={`url(#${gradId})`} />
-      <path
-        d={path}
-        fill="none"
-        stroke={color}
-        strokeWidth="1.75"
-        strokeLinecap="round"
-        strokeLinejoin="round"
+      <svg
+        width="100%"
+        height={h}
+        viewBox={`0 0 ${w} ${h}`}
+        // Stretch to fill when fluid; at fixed width the 1:1 mapping is undistorted.
+        preserveAspectRatio={fluid ? 'none' : 'xMidYMid meet'}
+        style={{ display: 'block', overflow: 'visible' }}
+      >
+        <defs>
+          <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={color} stopOpacity="0.35" />
+            <stop offset="100%" stopColor={color} stopOpacity="0" />
+          </linearGradient>
+        </defs>
+        <path d={areaPath} fill={`url(#${gradId})`} />
+        <path
+          d={path}
+          fill="none"
+          stroke={color}
+          strokeWidth="1.75"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          vectorEffect="non-scaling-stroke"
+        />
+      </svg>
+      <span
+        aria-hidden
+        style={{
+          position: 'absolute',
+          left: dotLeft,
+          top: dotTop,
+          width: 10,
+          height: 10,
+          marginLeft: -5,
+          marginTop: -5,
+          borderRadius: '50%',
+          background: color,
+          opacity: 0.25,
+          pointerEvents: 'none',
+        }}
       />
-      <circle cx={last[0]} cy={last[1]} r="2.6" fill={color} />
-      <circle cx={last[0]} cy={last[1]} r="5" fill={color} opacity="0.25" />
-    </svg>
+      <span
+        aria-hidden
+        style={{
+          position: 'absolute',
+          left: dotLeft,
+          top: dotTop,
+          width: 5.2,
+          height: 5.2,
+          marginLeft: -2.6,
+          marginTop: -2.6,
+          borderRadius: '50%',
+          background: color,
+          pointerEvents: 'none',
+        }}
+      />
+    </div>
   )
 }
 
@@ -423,6 +467,7 @@ function SkeletonCard({
         border: `1px solid ${C.ink600}`,
         borderRadius: 10,
         minHeight: height,
+        minWidth: 0,
       }}
     />
   )
@@ -430,7 +475,7 @@ function SkeletonCard({
 
 function EmptyCard({ overline, body }: { overline: string; body: string }) {
   return (
-    <Card>
+    <Card style={{ minWidth: 0 }}>
       <Overline>{overline}</Overline>
       <div
         style={{
@@ -789,10 +834,8 @@ function Stat({
 
 function RatingCard({
   rating,
-  compact,
 }: {
   rating: DashboardRating
-  compact: boolean
 }) {
   const { current, delta, peak, percentile, spark_data, streak, stats } = rating
   // Sparkline needs ≥2 points to draw a line; pad a single point so the
@@ -808,7 +851,12 @@ function RatingCard({
     ...stats,
   ].slice(0, 3)
   return (
-    <Card padding={20} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+    <Card
+      padding={20}
+      // minWidth:0 lets the card shrink to its grid track instead of forcing the
+      // track wider than its `fr` share (grid items default to min-width:auto).
+      style={{ display: 'flex', flexDirection: 'column', gap: 14, minWidth: 0 }}
+    >
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <Overline>Current rating</Overline>
         <div style={{ flex: 1 }} />
@@ -819,11 +867,15 @@ function RatingCard({
           </Pill>
         ) : null}
       </div>
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 12 }}>
+      {/* flexWrap so the delta/percentile column drops below the big number
+          rather than overflowing (and being clipped) in a narrow card. */}
+      <div
+        style={{ display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap', rowGap: 8 }}
+      >
         <Mono size={56} weight={700} color={C.chalk50} style={{ lineHeight: 0.9 }}>
           {Math.round(current)}
         </Mono>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
           <Pill tone={delta >= 0 ? 'win' : 'loss'} mono>
             {formatRatingDelta(delta)} last match
           </Pill>
@@ -850,7 +902,7 @@ function RatingCard({
           border: `1px solid ${C.ink700}`,
         }}
       >
-        <Sparkline data={sparkPoints} w={280} h={48} fluid={compact} />
+        <Sparkline data={sparkPoints} w={280} h={48} fluid />
         <div
           style={{
             display: 'flex',
@@ -865,7 +917,15 @@ function RatingCard({
           <span>Today · peak {Math.round(peak)}</span>
         </div>
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
+      {/* auto-fit so the tiles reflow to 2 (or 1) columns when the card is too
+          narrow for three, instead of overflowing the fixed 3-up grid. */}
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(84px, 1fr))',
+          gap: 8,
+        }}
+      >
         {tiles.map((tile) => (
           <Stat key={tile.label} label={tile.label} value={tile.value} />
         ))}
@@ -877,7 +937,7 @@ function RatingCard({
 function RecentResultsCard({ rows }: { rows: DashboardRecentResult[] }) {
   const wins = rows.filter((r) => r.is_win).length
   return (
-    <Card padding={0}>
+    <Card padding={0} style={{ minWidth: 0 }}>
       <div
         data-testid="dashboard-recent-results"
         style={{
@@ -1017,16 +1077,20 @@ function YourGameRow({
   recent,
   isLoading,
   username,
-  compact,
 }: {
   rating: DashboardRating | null
   recent: DashboardRecentResult[]
   isLoading: boolean
   username?: string
-  compact: boolean
 }) {
+  // The grid stacks vs. splits off the row's *container* width via a CSS
+  // container query (see `.your-game-grid` in index.css), not the viewport: the
+  // dashboard sits in the app-shell's content column beside a 256px sidebar, so
+  // just past the 960px sidebar breakpoint this column is only ~700px — too
+  // narrow for two columns. `container-type: inline-size` makes this <section>
+  // the query container.
   return (
-    <section style={{ marginBottom: 36 }}>
+    <section style={{ marginBottom: 36, containerType: 'inline-size' }}>
       <SectionHeader
         title="Your game"
         subtitle={
@@ -1038,17 +1102,11 @@ function YourGameRow({
         actionTo="/matches"
         actionSearch={{ q: username }}
       />
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: compact ? '1fr' : '1.15fr 1.85fr',
-          gap: 14,
-        }}
-      >
+      <div className="your-game-grid">
         {isLoading ? (
           <SkeletonCard label="Loading rating" height={260} />
         ) : rating ? (
-          <RatingCard rating={rating} compact={compact} />
+          <RatingCard rating={rating} />
         ) : (
           <EmptyCard
             overline="Current rating"
@@ -1121,7 +1179,6 @@ export function DashboardPage() {
         recent={data?.recent_results ?? []}
         isLoading={isLoading}
         username={username}
-        compact={compact}
       />
     </div>
   )

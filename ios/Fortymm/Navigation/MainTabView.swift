@@ -20,39 +20,51 @@ enum FMTab: Hashable {
 /// The signed-in app shell. Uses the system `TabView` so the bottom bar is the
 /// real iOS tab bar (free safe-area handling, accessibility, the standard look),
 /// tinted ball-orange for the active tab. Today only Home is a real screen. The
-/// shell owns the single top bar so each tab screen is just its content.
+/// shell lays the frosted top bar over each tab screen (`.fmTopBar`), so the
+/// screens carry only their own content.
 struct MainTabView: View {
     @State private var selection: FMTab = .home
     @State private var showingNewMatch = false
 
     var body: some View {
-        TabView(selection: tabSelection) {
+        TabView(selection: $selection) {
             DashboardView()
+                .fmTopBar(FMTab.home.title)
                 .tabItem { Label("Home", systemImage: "house") }
                 .tag(FMTab.home)
 
             MatchesListView()
+                .fmTopBar(FMTab.matches.title)
                 .tabItem { Label("Matches", systemImage: "sportscourt") }
                 .tag(FMTab.matches)
 
-            // Action slot — intercepted in `tabSelection`, never shown.
+            // Action slot — opens the new-match flow via `.onChange`; the bar is
+            // snapped off this tab immediately so its empty content never shows.
             Color.clear
                 .tabItem { Label("New match", systemImage: "plus") }
                 .tag(FMTab.newMatch)
 
             FMComingSoon(title: "Tournaments")
+                .fmTopBar(FMTab.tournaments.title)
                 .tabItem { Label("Tournaments", systemImage: "trophy") }
                 .tag(FMTab.tournaments)
 
             FMComingSoon(title: "You")
+                .fmTopBar(FMTab.profile.title)
                 .tabItem { Label("You", systemImage: "person.crop.circle") }
                 .tag(FMTab.profile)
         }
         .tint(FMColor.ball500)
         .toolbar(.hidden, for: .navigationBar)
         .navigationBarBackButtonHidden(true)
-        .safeAreaInset(edge: .top, spacing: 0) {
-            FMTopBar(title: selection.title)
+        // "New match" is an action slot, not a destination: open the flow, then
+        // snap selection back to the tab we came from (`oldValue`) so the bar
+        // never rests on the empty action slot (which left the screen blank).
+        .onChange(of: selection) { oldValue, newValue in
+            if newValue == .newMatch {
+                showingNewMatch = true
+                selection = oldValue
+            }
         }
         .fullScreenCover(isPresented: $showingNewMatch) {
             MatchFlowView { toMatches in
@@ -60,18 +72,6 @@ struct MainTabView: View {
                 if toMatches { selection = .matches }
             }
         }
-    }
-
-    /// "New match" is an action slot, not a destination — tapping it opens the
-    /// flow cover and leaves the underlying tab selection unchanged.
-    private var tabSelection: Binding<FMTab> {
-        Binding(
-            get: { selection },
-            set: { newValue in
-                if newValue == .newMatch { showingNewMatch = true; return }
-                selection = newValue
-            }
-        )
     }
 }
 
