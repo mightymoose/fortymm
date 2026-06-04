@@ -20,7 +20,8 @@ enum FMTab: Hashable {
 /// The signed-in app shell. Uses the system `TabView` so the bottom bar is the
 /// real iOS tab bar (free safe-area handling, accessibility, the standard look),
 /// tinted ball-orange for the active tab. Today only Home is a real screen. The
-/// shell owns the single top bar so each tab screen is just its content.
+/// shell lays the frosted top bar over each tab screen (`.fmTopBar`), so the
+/// screens carry only their own content.
 struct MainTabView: View {
     @State private var selection: FMTab = .home
     @State private var showingNewMatch = false
@@ -28,10 +29,12 @@ struct MainTabView: View {
     var body: some View {
         TabView(selection: $selection) {
             DashboardView()
+                .fmTopBar(FMTab.home.title)
                 .tabItem { Label("Home", systemImage: "house") }
                 .tag(FMTab.home)
 
             MatchesListView()
+                .fmTopBar(FMTab.matches.title)
                 .tabItem { Label("Matches", systemImage: "sportscourt") }
                 .tag(FMTab.matches)
 
@@ -42,10 +45,12 @@ struct MainTabView: View {
                 .tag(FMTab.newMatch)
 
             FMComingSoon(title: "Tournaments")
+                .fmTopBar(FMTab.tournaments.title)
                 .tabItem { Label("Tournaments", systemImage: "trophy") }
                 .tag(FMTab.tournaments)
 
             FMComingSoon(title: "You")
+                .fmTopBar(FMTab.profile.title)
                 .tabItem { Label("You", systemImage: "person.crop.circle") }
                 .tag(FMTab.profile)
         }
@@ -60,9 +65,6 @@ struct MainTabView: View {
                 showingNewMatch = true
                 selection = oldValue
             }
-        }
-        .safeAreaInset(edge: .top, spacing: 0) {
-            FMTopBar(title: selection.title)
         }
         .fullScreenCover(isPresented: $showingNewMatch) {
             MatchFlowView { toMatches in
