@@ -110,7 +110,7 @@ private struct AlphaInfoSheet: View {
         }
         .padding(20)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(FMColor.bgApp)
+        .background(FMColor.bgApp.ignoresSafeArea())
     }
 
     private func bullet(_ text: String) -> some View {
