@@ -2333,6 +2333,24 @@ body.dark.fortymm-theme {
   background: var(--warn);
 }
 
+/* ---------- Dashboard "Your game" row ---------- */
+/* The two cards split 1.15 / 1.85 when there's room, else stack. Queried off
+   the row's own width (its <section> sets `container-type: inline-size`), not
+   the viewport: the dashboard lives in the app-shell's content column beside a
+   256px sidebar, so just past the 960px sidebar breakpoint that column is only
+   ~700px — too narrow for two columns, which would overflow the rating card's
+   `overflow-hidden` boundary and clip. */
+.fortymm-theme .your-game-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 14px;
+}
+@container (min-width: 640px) {
+  .fortymm-theme .your-game-grid {
+    grid-template-columns: 1.15fr 1.85fr;
+  }
+}
+
 /* ---------- Overline ---------- */
 .fortymm-theme .fortymm-overline {
   font: 600 10px var(--font-ui);
