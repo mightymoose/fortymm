@@ -4,6 +4,15 @@ import SwiftUI
 /// title, and a translucent dark surface with a hairline bottom border. Laid
 /// over the top safe area via `.safeAreaInset` so content scrolls under it.
 struct FMTopBar: View {
+    /// Height of the bar itself.
+    static let barHeight: CGFloat = 46
+    /// Top padding a tab's scroll content needs to clear the bar. The bar is laid
+    /// over the top via the shell's `.safeAreaInset`, and that inset doesn't fully
+    /// reduce the scroll content's safe area inside the `TabView` — so content
+    /// renders under the bar unless each tab screen pads by the bar height plus a
+    /// small gap. Use this constant rather than hardcoding the value per screen.
+    static let contentInset: CGFloat = barHeight + 10
+
     let title: String
 
     var body: some View {
@@ -17,7 +26,7 @@ struct FMTopBar: View {
                 .foregroundStyle(FMColor.fg1)
         }
         .padding(.horizontal, 14)
-        .frame(height: 46)
+        .frame(height: Self.barHeight)
         .frame(maxWidth: .infinity)
         .background(alignment: .bottom) { barBackground }
     }
