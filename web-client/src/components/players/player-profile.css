@@ -48,7 +48,6 @@
   grid-template-columns: auto 1fr auto;
   align-items: center;
   gap: clamp(20px, 4vw, 28px);
-  max-width: 1280px;
 }
 
 .player-profile__avatar-ring {
