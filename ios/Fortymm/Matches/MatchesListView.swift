@@ -34,8 +34,7 @@ struct MatchesListView: View {
                 listCard
             }
             .padding(.horizontal, 16)
-            // Clear the shell's frosted top bar (see `FMTopBar.contentInset`).
-            .padding(.top, FMTopBar.contentInset)
+            // Top inset for the shell's frosted bar is reserved by `.fmTopBar`.
             .padding(.bottom, 24)
         }
         .background(FMColor.bgApp.ignoresSafeArea())

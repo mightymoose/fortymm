@@ -6,12 +6,6 @@ import SwiftUI
 struct FMTopBar: View {
     /// Height of the bar itself.
     static let barHeight: CGFloat = 46
-    /// Top padding a tab's scroll content needs to clear the bar. The bar is laid
-    /// over the top via the shell's `.safeAreaInset`, and that inset doesn't fully
-    /// reduce the scroll content's safe area inside the `TabView` — so content
-    /// renders under the bar unless each tab screen pads by the bar height plus a
-    /// small gap. Use this constant rather than hardcoding the value per screen.
-    static let contentInset: CGFloat = barHeight + 10
 
     let title: String
 
@@ -40,6 +34,19 @@ struct FMTopBar: View {
             Rectangle().fill(FMColor.borderSubtle).frame(height: 1)
         }
         .ignoresSafeArea(edges: .top)
+    }
+}
+
+extension View {
+    /// Lay the shell's frosted top bar over this screen, reserving safe area for it
+    /// (bar height plus a small gap) so the screen's own `ScrollView` automatically
+    /// insets its content below the bar — no per-screen top padding required.
+    ///
+    /// Attach this to each tab *screen*, not to the `TabView`: a `.safeAreaInset`
+    /// on a `TabView` doesn't propagate the inset into the per-tab scroll views, so
+    /// their content renders under the bar.
+    func fmTopBar(_ title: String) -> some View {
+        safeAreaInset(edge: .top, spacing: 10) { FMTopBar(title: title) }
     }
 }
 
