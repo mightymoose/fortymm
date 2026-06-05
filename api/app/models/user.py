@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, String, func
+from sqlalchemy import DateTime, ForeignKey, String, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -23,6 +23,20 @@ class User(Base):
         String(320), unique=True, nullable=True, index=True
     )
     confirmed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # Set when this (ephemeral) user has been folded into another account by the
+    # merge service. A live user has both NULL; a tombstoned guest has both set.
+    # The row is kept (not deleted) so its session token still resolves and the
+    # auth layer can tell the holder their session was merged. See
+    # ``app.account_merge.merge_user``.
+    merged_into_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    merged_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(

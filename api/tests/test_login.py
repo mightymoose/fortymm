@@ -502,9 +502,12 @@ async def test_consume_merges_ephemeral_matches_into_verified_account(
     ).scalar_one()
     assert creator_id == rita.id
 
-    assert (
+    # The guest is tombstoned (soft-delete), not dropped.
+    tombstoned = (
         await db_session.execute(select(User).where(User.id == guest.id))
-    ).scalar_one_or_none() is None
+    ).scalar_one_or_none()
+    assert tombstoned is not None
+    assert tombstoned.merged_into_user_id == rita.id
 
 
 async def test_consume_omits_merge_when_no_prior_session(

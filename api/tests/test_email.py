@@ -688,10 +688,12 @@ async def test_confirm_merge_signs_in_as_owner_and_moves_matches(
     assert body["data"]["user"]["email"] == "taken@example.com"
     assert body["merged"]["matches_moved"] == 1
 
-    # The guest row is gone — folded into the owner.
-    assert (
+    # The guest row is tombstoned — folded into the owner (soft-delete).
+    tombstoned = (
         await db_session.execute(select(User).where(User.id == guest.id))
-    ).scalar_one_or_none() is None
+    ).scalar_one_or_none()
+    assert tombstoned is not None
+    assert tombstoned.merged_into_user_id == owner.id
 
     # The match's player now points at the owner.
     player_ids = {
@@ -738,9 +740,11 @@ async def test_confirm_merge_works_cross_device_via_token_binding(
         assert response.json()["data"]["user"]["username"] == "owner"
         assert other.cookies.get("session")
 
-    assert (
+    tombstoned = (
         await db_session.execute(select(User).where(User.id == guest.id))
-    ).scalar_one_or_none() is None
+    ).scalar_one_or_none()
+    assert tombstoned is not None
+    assert tombstoned.merged_into_user_id == owner.id
 
 
 async def test_confirm_merge_rejected_when_owner_changed_email(
@@ -766,10 +770,12 @@ async def test_confirm_merge_rejected_when_owner_changed_email(
     response = await api_client.post("/v1/me/email/confirm", json={"token": raw_token})
     assert response.status_code == 400
 
-    # Guest survives (nothing merged) and the token is gone.
-    assert (
+    # Guest survives un-tombstoned (nothing merged) and the token is gone.
+    survivor = (
         await db_session.execute(select(User).where(User.id == guest.id))
-    ).scalar_one_or_none() is not None
+    ).scalar_one_or_none()
+    assert survivor is not None
+    assert survivor.merged_into_user_id is None
     tokens = (
         (
             await db_session.execute(
