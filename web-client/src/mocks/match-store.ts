@@ -1,7 +1,7 @@
 import type { components } from '@/api/schema'
 
 type MatchStatus = components['schemas']['MatchStatus']
-type MatchDetails = components['schemas']['MatchDetails']
+type MatchDetails = components['schemas']['app__schemas__match__MatchDetails']
 type MatchDetailsSide = components['schemas']['MatchDetailsSide']
 type MatchDetailsGame = components['schemas']['MatchDetailsGame']
 type MatchDetailsPlayerForm = components['schemas']['MatchDetailsPlayerForm']
@@ -220,6 +220,22 @@ function seedStatusLabel(seed: SeedMatch): string {
   return STATUS_LABELS[seed.status]
 }
 
+// Mirrors the backend scoreboard-status mapping (app/mappers/match_details_mapper.py):
+// disputed and voided collapse to `final`, not `live`. Exported so the test
+// factories derive `data.scoreboard.status` the same way instead of re-inlining it.
+export function seedScoreboardStatus(
+  status: MatchStatus,
+): components['schemas']['Status'] {
+  switch (status) {
+    case 'pending':
+      return 'scheduled'
+    case 'in_progress':
+      return 'live'
+    default:
+      return 'final'
+  }
+}
+
 function seedSignatureViews(seed: SeedMatch): MatchSignatureView[] {
   return seed.signatures
     .slice()
@@ -279,6 +295,7 @@ export function projectMatchDetails(seed: SeedMatch): MatchDetails {
     signatures: seedSignatureViews(seed),
     recent_form: projectRecentForm(seed, priors),
     head_to_head: projectHeadToHead(seed, priors),
+    data: { scoreboard: { status: seedScoreboardStatus(seed.status) } },
   }
 }
 

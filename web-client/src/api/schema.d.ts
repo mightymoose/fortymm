@@ -885,47 +885,6 @@ export interface components {
              */
             rated: boolean;
         };
-        /** MatchDetails */
-        MatchDetails: {
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-            status: components["schemas"]["MatchStatus"];
-            /** Status Label */
-            status_label: string;
-            league: components["schemas"]["MatchLeague"];
-            /** Best Of */
-            best_of: number;
-            /** Games To Win */
-            games_to_win: number;
-            /** Team Size */
-            team_size: number;
-            /** Affects Rating */
-            affects_rating: boolean;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /** Sides */
-            sides: components["schemas"]["MatchDetailsSide"][];
-            /** Games */
-            games: components["schemas"]["MatchDetailsGame"][];
-            current_game: components["schemas"]["MatchDetailsCurrentGame"] | null;
-            /** Can Score */
-            can_score: boolean;
-            /** Can Finalize */
-            can_finalize: boolean;
-            /** Can Confirm */
-            can_confirm: boolean;
-            /** Signatures */
-            signatures: components["schemas"]["MatchSignatureView"][];
-            /** Recent Form */
-            recent_form?: components["schemas"]["MatchDetailsPlayerForm"][];
-            head_to_head?: components["schemas"]["MatchDetailsH2H"] | null;
-        };
         /** MatchDetailsCurrentGame */
         MatchDetailsCurrentGame: {
             /** Game Number */
@@ -1535,6 +1494,10 @@ export interface components {
             /** Permission Ids */
             permission_ids?: string[] | null;
         };
+        /** Scoreboard */
+        Scoreboard: {
+            status: components["schemas"]["Status"];
+        };
         /** SessionData */
         SessionData: {
             user: components["schemas"]["SessionUser"];
@@ -1572,6 +1535,11 @@ export interface components {
              */
             email: string;
         };
+        /**
+         * Status
+         * @enum {string}
+         */
+        Status: "scheduled" | "live" | "final";
         /** UpdateCurrentUserRequest */
         UpdateCurrentUserRequest: {
             /** Username */
@@ -1589,6 +1557,52 @@ export interface components {
             input?: unknown;
             /** Context */
             ctx?: Record<string, never>;
+        };
+        /** MatchDetails */
+        app__schemas__match__MatchDetails: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            status: components["schemas"]["MatchStatus"];
+            /** Status Label */
+            status_label: string;
+            league: components["schemas"]["MatchLeague"];
+            /** Best Of */
+            best_of: number;
+            /** Games To Win */
+            games_to_win: number;
+            /** Team Size */
+            team_size: number;
+            /** Affects Rating */
+            affects_rating: boolean;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Sides */
+            sides: components["schemas"]["MatchDetailsSide"][];
+            /** Games */
+            games: components["schemas"]["MatchDetailsGame"][];
+            current_game: components["schemas"]["MatchDetailsCurrentGame"] | null;
+            /** Can Score */
+            can_score: boolean;
+            /** Can Finalize */
+            can_finalize: boolean;
+            /** Can Confirm */
+            can_confirm: boolean;
+            /** Signatures */
+            signatures: components["schemas"]["MatchSignatureView"][];
+            /** Recent Form */
+            recent_form?: components["schemas"]["MatchDetailsPlayerForm"][];
+            head_to_head?: components["schemas"]["MatchDetailsH2H"] | null;
+            data: components["schemas"]["app__schemas__view__match_details__MatchDetails"];
+        };
+        /** MatchDetails */
+        app__schemas__view__match_details__MatchDetails: {
+            scoreboard: components["schemas"]["Scoreboard"];
         };
     };
     responses: never;
@@ -2460,7 +2474,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["MatchDetails"];
+                    "application/json": components["schemas"]["app__schemas__match__MatchDetails"];
                 };
             };
             /** @description Validation Error */
@@ -2525,7 +2539,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["MatchDetails"];
+                    "application/json": components["schemas"]["app__schemas__match__MatchDetails"];
                 };
             };
             /** @description Validation Error */
@@ -2563,7 +2577,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["MatchDetails"];
+                    "application/json": components["schemas"]["app__schemas__match__MatchDetails"];
                 };
             };
             /** @description Validation Error */
@@ -2601,7 +2615,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["MatchDetails"];
+                    "application/json": components["schemas"]["app__schemas__match__MatchDetails"];
                 };
             };
             /** @description Validation Error */
@@ -2635,7 +2649,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["MatchDetails"];
+                    "application/json": components["schemas"]["app__schemas__match__MatchDetails"];
                 };
             };
             /** @description Validation Error */
@@ -2672,7 +2686,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["MatchDetails"];
+                    "application/json": components["schemas"]["app__schemas__match__MatchDetails"];
                 };
             };
             /** @description Validation Error */
@@ -2705,7 +2719,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["MatchDetails"];
+                    "application/json": components["schemas"]["app__schemas__match__MatchDetails"];
                 };
             };
             /** @description Validation Error */
@@ -2738,7 +2752,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["MatchDetails"];
+                    "application/json": components["schemas"]["app__schemas__match__MatchDetails"];
                 };
             };
             /** @description Validation Error */
