@@ -616,3 +616,155 @@ async def test_consume_skips_recompute_when_no_prior_session(
     assert response.status_code == 200
     assert response.json().get("merged") is None
     assert fake_ratings_queue.get_jobs() == []
+
+
+# ---- token-bound (cross-device) merge + preview --------------------------
+
+
+def _login_email_tokens(fake_email_queue) -> list[str]:
+    """Raw tokens handed to finished login-email jobs, oldest first."""
+    jobs = [
+        fake_email_queue.fetch_job(job_id)
+        for job_id in fake_email_queue.finished_job_registry.get_job_ids()
+    ]
+    jobs = [j for j in jobs if j is not None]
+    jobs.sort(key=lambda j: j.enqueued_at)
+    return [j.args[1] for j in jobs]
+
+
+async def _login_token_for(db_session: AsyncSession, user: User) -> UserToken:
+    return (
+        await db_session.execute(
+            select(UserToken).where(
+                UserToken.user_id == user.id,
+                UserToken.context.startswith(LOGIN_TOKEN_CONTEXT),
+            )
+        )
+    ).scalar_one()
+
+
+async def test_request_records_requesting_guest_on_login_token(
+    api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
+):
+    """A guest who requests a sign-in link for their existing email has their
+    id stamped on the token context, so the merge is token-bound."""
+    rita = await _make_confirmed_user(db_session, "rita@example.com")
+    guest = await start_session(api_client, db_session)
+
+    response = await api_client.post("/v1/login/request", json=REQUEST_BODY)
+    assert response.status_code == 202
+
+    token = await _login_token_for(db_session, rita)
+    assert token.context == f"{LOGIN_TOKEN_CONTEXT}:{guest.id}"
+
+
+async def test_token_bound_login_merges_cross_device(
+    api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
+):
+    """The guest requests on browser A (with matches); the link is opened on a
+    cookieless browser B. The guest's matches still follow into the account —
+    the merge is bound to the recorded guest, not B's (absent) session."""
+    rita = await _make_confirmed_user(db_session, "rita@example.com")
+    guest = await start_session(api_client, db_session)
+    opponent = await make_user(db_session, "opp-crossdev")
+    match = await _record_singles_match(db_session, guest, opponent)
+
+    await api_client.post("/v1/login/request", json=REQUEST_BODY)
+    raw = _login_email_tokens(fake_email_queue)[-1]
+
+    async with make_client() as cookieless:
+        response = await cookieless.post("/v1/login/consume", json={"token": raw})
+        assert response.status_code == 200
+        assert response.json()["data"]["user"]["username"] == "rita"
+        assert response.json()["merged"] == {"matches_moved": 1}
+
+    players = (
+        (
+            await db_session.execute(
+                select(MatchSidePlayer).where(MatchSidePlayer.match_id == match.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert {p.user_id for p in players} == {rita.id, opponent.id}
+
+
+async def test_merge_preview_for_login_token_does_not_consume(
+    api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
+):
+    await _make_confirmed_user(db_session, "rita@example.com")
+    guest = await start_session(api_client, db_session)
+    opponent = await make_user(db_session, "opp-preview")
+    await _record_singles_match(db_session, guest, opponent)
+    await api_client.post("/v1/login/request", json=REQUEST_BODY)
+    raw = _login_email_tokens(fake_email_queue)[-1]
+
+    async with make_client() as cookieless:
+        preview = await cookieless.post("/v1/merge/preview", json={"token": raw})
+        assert preview.status_code == 200
+        body = preview.json()
+        assert body["is_merge"] is True
+        assert body["owner_username"] == "rita"
+        assert body["guest_username"] == guest.username
+        assert body["guest_matches_count"] == 1
+
+        # Preview is side-effect-free: the token still signs in afterwards.
+        consume = await cookieless.post("/v1/login/consume", json={"token": raw})
+        assert consume.status_code == 200
+
+
+async def test_merge_preview_bare_login_is_not_a_merge(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    rita = await _make_confirmed_user(db_session, "rita@example.com")
+    raw = "raw-bare-login-preview"
+    await _issue_login_token(db_session, rita, raw)  # bare "login" context
+
+    response = await api_client.post("/v1/merge/preview", json={"token": raw})
+    assert response.status_code == 200
+    assert response.json()["is_merge"] is False
+
+
+async def test_merge_preview_unknown_token_is_not_a_merge(api_client: AsyncClient):
+    response = await api_client.post("/v1/merge/preview", json={"token": "nope"})
+    assert response.status_code == 200
+    assert response.json()["is_merge"] is False
+
+
+async def test_consume_skip_merge_signs_in_without_folding(
+    api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
+):
+    """The gate's "not now": sign in as the owner but leave the guest's matches
+    behind (guest stays a live, un-tombstoned session)."""
+    await _make_confirmed_user(db_session, "rita@example.com")
+    guest = await start_session(api_client, db_session)
+    opponent = await make_user(db_session, "opp-skip")
+    match = await _record_singles_match(db_session, guest, opponent)
+
+    await api_client.post("/v1/login/request", json=REQUEST_BODY)
+    raw = _login_email_tokens(fake_email_queue)[-1]
+
+    async with make_client() as cookieless:
+        response = await cookieless.post(
+            "/v1/login/consume", json={"token": raw, "skip_merge": True}
+        )
+        assert response.status_code == 200
+        assert response.json()["data"]["user"]["username"] == "rita"
+        assert response.json().get("merged") is None
+
+    # Match stayed on the guest; the guest is not tombstoned.
+    players = (
+        (
+            await db_session.execute(
+                select(MatchSidePlayer).where(MatchSidePlayer.match_id == match.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert guest.id in {p.user_id for p in players}
+    survivor = (
+        await db_session.execute(select(User).where(User.id == guest.id))
+    ).scalar_one()
+    assert survivor.merged_into_user_id is None

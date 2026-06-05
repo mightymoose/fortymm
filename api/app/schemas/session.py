@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 # Lowercase alphanumerics with optional dots/hyphens/underscores between them.
 # Must start and end with an alphanumeric so we don't store names that look
@@ -69,6 +69,10 @@ class ResendEmailRequest(CaptchaProtectedRequest):
 
 class ConfirmEmailRequest(BaseModel):
     token: str = Field(min_length=1, max_length=512)
+    # When the link would fold a guest into this account, the client can offer
+    # the owner a "sign in but don't bring those matches" choice. Defaults to
+    # merging (the common, desired path).
+    skip_merge: bool = False
 
 
 class RequestLoginRequest(CaptchaProtectedRequest):
@@ -85,3 +89,27 @@ class LoginRequestAccepted(BaseModel):
 
 class ConsumeLoginRequest(BaseModel):
     token: str = Field(min_length=1, max_length=512)
+    # See ConfirmEmailRequest.skip_merge — sign in without folding the recorded
+    # guest's matches in.
+    skip_merge: bool = False
+
+
+class MergePreviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    token: str = Field(min_length=1, max_length=512)
+
+
+class MergePreview(BaseModel):
+    """Side-effect-free look at an emailed link before it's consumed, so the
+    client can decide whether to show a "bring N matches over?" confirmation.
+
+    ``is_merge`` is true only for a link that would fold a guest into another
+    account (a settings merge token, or a sign-in token that recorded a
+    requesting guest). The client shows the gate only when there are matches to
+    carry (``guest_matches_count > 0``); otherwise it finalizes silently."""
+
+    is_merge: bool
+    owner_username: str | None = None
+    guest_username: str | None = None
+    guest_matches_count: int = 0
