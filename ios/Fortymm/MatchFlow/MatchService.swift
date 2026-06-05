@@ -96,36 +96,30 @@ struct MatchService {
     }
 
     /// The current user's matches, newest first (`GET /v1/matches`).
-    func listMatches(page: Int = 1, pageSize: Int = 50) async throws -> [FinalMatch] {
-        let response: MatchListResponseDTO = try await client.get(
-            "/v1/matches",
-            query: [
-                URLQueryItem(name: "page", value: String(page)),
-                URLQueryItem(name: "page_size", value: String(pageSize)),
-            ]
-        )
-        return response.items.map(Self.finalMatch(from:))
-    }
-
-    /// Current user's season record for the Matches-tab header. The session
-    /// doesn't expose the user's id, so we discover it from their own matches
-    /// (they appear as `is_current_user` on every row) and fetch the player
-    /// profile. Returns nil when the user has no matches yet (nothing to show).
-    func myRecord() async throws -> MyRecord? {
-        let response: MatchListResponseDTO = try await client.get(
-            "/v1/matches",
-            query: [URLQueryItem(name: "page_size", value: "1")]
-        )
-        let myId = response.items
-            .flatMap(\.sides).flatMap(\.players)
-            .first(where: \.isCurrentUser)?.userId
-        guard let myId else { return nil }
-        let player: PlayerDetailDTO = try await client.get("/v1/players/\(myId.uuidString)")
-        return MyRecord(
-            wins: player.wins,
-            losses: player.losses,
-            rating: player.rating.map { Int($0.rounded()) },
-            form: player.form
+    /// The global match feed, optionally narrowed by lifecycle `status` and a
+    /// player-name search `query` (both server-side, mirroring the web `/matches`
+    /// filters). Returns the rows plus the per-status counts that drive the tab
+    /// badges.
+    func listMatches(
+        status: APIMatchStatus? = nil,
+        query: String? = nil,
+        page: Int = 1,
+        pageSize: Int = 50
+    ) async throws -> MatchListPage {
+        var items: [URLQueryItem] = [
+            URLQueryItem(name: "page", value: String(page)),
+            URLQueryItem(name: "page_size", value: String(pageSize)),
+        ]
+        if let status {
+            items.append(URLQueryItem(name: "status", value: status.rawValue))
+        }
+        if let query, !query.trimmingCharacters(in: .whitespaces).isEmpty {
+            items.append(URLQueryItem(name: "q", value: query))
+        }
+        let response: MatchListResponseDTO = try await client.get("/v1/matches", query: items)
+        return MatchListPage(
+            items: response.items.map(Self.finalMatch(from:)),
+            statusCounts: response.statusCounts
         )
     }
 
@@ -167,6 +161,7 @@ struct MatchService {
         createdAt: Date, canConfirm: Bool, ratedHint: Bool?,
         games: [MatchGameDTO]?, h2h: H2HDTO?, signaturesPosted: Bool?
     ) -> FinalMatch {
+        let viewerIsParticipant = sides.contains(where: \.isCurrentUserSide)
         let mine = sides.first(where: \.isCurrentUserSide) ?? sides.first
         let theirs = sides.first { $0.sideNumber != mine?.sideNumber }
         let mineIsSide1 = (mine?.sideNumber ?? 1) == 1
@@ -191,6 +186,25 @@ struct MatchService {
                 rating: theirs?.ratingChange?.before.map { Int($0.rounded()) } ?? 1500,
                 userId: theirs?.players.first?.userId
             )
+
+        // Side-ordered players for the neutral list row — built straight from
+        // the side, independent of the viewer-relative you/them projection, so a
+        // spectator row shows both real participants rather than labelling side 1
+        // "You". This projection is deliberately viewer-agnostic, so `you` stays
+        // false; the viewer-relative `you`/`opponent` fields carry that flag
+        // instead. A player-less side (solo opponent) reads as the Guest sentinel.
+        func sidePlayer(_ side: MatchSideDTO?) -> MatchPlayer {
+            guard let p = side?.players.first else { return .guest }
+            return MatchPlayer(
+                handle: p.username,
+                initials: p.username.fmInitials,
+                avatarColor: MatchPlayer.avatarColor(for: p.username),
+                rating: side?.ratingChange?.before.map { Int($0.rounded()) } ?? 1500,
+                userId: p.userId
+            )
+        }
+        let side1 = sides.first { $0.sideNumber == 1 } ?? sides.first
+        let side2 = sides.first { $0.sideNumber == 2 }
 
         let mappedGames: [Game] = (games ?? [])
             .sorted { $0.gameNumber < $1.gameNumber }
@@ -219,14 +233,21 @@ struct MatchService {
             rated: rated,
             setsWon: SetScore(a: mine?.gamesWon ?? 0, b: theirs?.gamesWon ?? 0),
             win: mine?.won ?? false,
-            ratingDelta: (rated && decided) ? delta : nil,
+            // Rating delta is the viewer's own change — only meaningful when the
+            // viewer actually played in this match.
+            ratingDelta: (rated && decided && viewerIsParticipant) ? delta : nil,
             when: relativeWhen(createdAt),
             context: rated ? "Rated · \(league.name)" : "Casual",
             statusLabel: statusLabel,
             decided: decided,
             awaitingConfirmation: awaitingConfirmation,
             canConfirm: canConfirm,
-            h2h: h2h.map { mapH2H($0, mineIsSide1: mineIsSide1) }
+            h2h: h2h.map { mapH2H($0, mineIsSide1: mineIsSide1) },
+            sideA: sidePlayer(side1),
+            sideB: (side2?.players.isEmpty ?? true) ? .guest : sidePlayer(side2),
+            sideAGames: side1?.gamesWon ?? 0,
+            sideBGames: side2?.gamesWon ?? 0,
+            viewerIsParticipant: viewerIsParticipant
         )
     }
 
@@ -268,23 +289,5 @@ struct MatchService {
         }
         if cal.isDateInYesterday(date) { return "Yesterday" }
         return dayFormatter.string(from: date)
-    }
-}
-
-/// Current user's season record, derived from their player profile.
-struct MyRecord {
-    let wins: Int
-    let losses: Int
-    let rating: Int?
-    let form: String   // newest-first "WLWWL"
-
-    var total: Int { wins + losses }
-    var winRate: Int { total == 0 ? 0 : Int((Double(wins) / Double(total) * 100).rounded()) }
-
-    /// Leading run of the form string, e.g. "WWL" → "2W". "—" when no matches.
-    var streak: String {
-        guard let first = form.first else { return "—" }
-        let n = form.prefix { $0 == first }.count
-        return "\(n)\(first)"
     }
 }

@@ -338,7 +338,7 @@ function MatchTable({
         </div>
         <div className="empty-title">No matches yet</div>
         <div className="empty-sub">
-          Start a new match or clear the filters to see your history.
+          Start a new match or clear the filters to see what's being played.
         </div>
         <Button
           variant="ghost"
