@@ -142,3 +142,31 @@ def send_login_email(to_email: str, raw_token: str, username: str) -> None:
         log_url=login_url,
         dev_label="sign-in",
     )
+
+
+def send_merge_email(to_email: str, raw_token: str, username: str) -> None:
+    """Render and deliver the 'link your guest session to this account' email.
+
+    Sent when someone playing as a guest enters an address that already belongs
+    to ``username``'s account. The link redeems through the same
+    ``/confirm-email`` route as a normal confirmation, but the server folds the
+    guest's matches into this account and signs them in (see
+    ``app.sessions.confirm_email``)."""
+    confirm_url = _confirm_url(raw_token)
+    _deliver(
+        to_email=to_email,
+        subject="Sign in to your FortyMM account",
+        body=(
+            f"Hi @{username},\n\n"
+            "Someone — probably you — entered this email while playing FortyMM "
+            "as a guest. Click the link below to sign in to your existing "
+            "account. We'll bring any matches from that guest session along "
+            "with you.\n\n"
+            f"{confirm_url}\n\n"
+            "If this wasn't you, you can ignore this email. Nobody can sign in "
+            "or move anything without this link.\n"
+        ),
+        log_event="email_merge_link",
+        log_url=confirm_url,
+        dev_label="account-link",
+    )
