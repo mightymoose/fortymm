@@ -6,6 +6,25 @@ python = "3.13"
 description = "Rebuild and restart the fortymm-uat docker stack; smoke-check https://uat.fortymm.com"
 run = "./scripts/redeploy-uat.sh"
 
+[tasks.release-all]
+description = "Release everything: redeploy UAT, then build + upload the iOS app to TestFlight"
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+
+# UAT first: it's fast and local, so a failure here aborts before the long
+# iOS build/upload. iOS second: signs and uploads to TestFlight.
+echo "==> [1/2] Releasing UAT"
+mise run redeploy-uat
+
+echo
+echo "==> [2/2] Releasing iOS to TestFlight"
+mise run ios-testflight
+
+echo
+echo "==> Released: UAT (https://uat.fortymm.com) + iOS TestFlight"
+"""
+
 [tasks.ios-testflight]
 description = "Build a signed iOS release and upload it to TestFlight (fastlane beta)"
 dir = "ios"
