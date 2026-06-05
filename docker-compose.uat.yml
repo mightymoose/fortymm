@@ -12,6 +12,15 @@
 
 name: fortymm-uat
 
+# api and worker run the same image and load the same secrets; only their
+# environment/command/depends_on differ.
+x-api-service: &api-service
+  build:
+    context: ./api
+    dockerfile: Dockerfile.dev
+  env_file:
+    - .env
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -36,11 +45,7 @@ services:
       retries: 20
 
   api:
-    build:
-      context: ./api
-      dockerfile: Dockerfile.dev
-    env_file:
-      - .env
+    <<: *api-service
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/fortymm
       REDIS_URL: redis://redis:6379/0
@@ -63,11 +68,7 @@ services:
              uvicorn app.main:app --host 0.0.0.0 --port 8000"
 
   worker:
-    build:
-      context: ./api
-      dockerfile: Dockerfile.dev
-    env_file:
-      - .env
+    <<: *api-service
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/fortymm
       REDIS_URL: redis://redis:6379/0
