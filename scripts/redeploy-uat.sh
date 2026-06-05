@@ -3,10 +3,11 @@
 # https://uat.fortymm.com. Run from anywhere — the script cd's to the
 # repo root.
 #
-# Expected to run inside the `uat-deploy` worktree: that branch tracks
-# main + local UAT-only config (this script, docker-compose.uat.yml,
-# the nginx UAT confs, Dockerfile.uat). Each run fetches origin/main and
-# merges it in, so deploys always reflect the latest main.
+# Run from `main` or the legacy `uat-deploy` worktree. The UAT-only config
+# (this script, docker-compose.uat.yml, the nginx UAT confs, Dockerfile.uat)
+# now lives on main, so deploying straight from a main checkout works. Each
+# run fetches origin/main and merges it into the current branch, so deploys
+# always reflect the latest main.
 
 set -euo pipefail
 
@@ -17,21 +18,24 @@ COMPOSE=(docker compose -f docker-compose.uat.yml)
 UAT_URL="${UAT_URL:-https://uat.fortymm.com}"
 
 branch=$(git rev-parse --abbrev-ref HEAD)
-if [ "$branch" != "uat-deploy" ]; then
-  echo "ERROR: expected branch 'uat-deploy', got '$branch'" >&2
-  echo "This script keeps the deploy branch up to date with main; run it from the uat-deploy worktree." >&2
-  exit 1
-fi
+case "$branch" in
+  main | uat-deploy) ;;
+  *)
+    echo "ERROR: refusing to deploy from branch '$branch'; expected 'main' or 'uat-deploy'." >&2
+    echo "Check out main (or the uat-deploy worktree) before deploying." >&2
+    exit 1
+    ;;
+esac
 
-echo "==> Fetching origin/main and merging into uat-deploy"
+echo "==> Fetching origin/main and merging into $branch"
 git fetch origin main
 before=$(git rev-parse HEAD)
 git merge --no-edit origin/main
 after=$(git rev-parse HEAD)
 if [ "$before" = "$after" ]; then
-  echo "(uat-deploy already includes latest origin/main)"
+  echo "($branch already includes latest origin/main)"
 else
-  echo "(advanced uat-deploy: $before -> $after)"
+  echo "(advanced $branch: $before -> $after)"
 fi
 
 echo
