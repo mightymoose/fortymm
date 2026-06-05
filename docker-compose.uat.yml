@@ -39,6 +39,8 @@ services:
     build:
       context: ./api
       dockerfile: Dockerfile.dev
+    env_file:
+      - .env
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/fortymm
       REDIS_URL: redis://redis:6379/0
@@ -64,13 +66,15 @@ services:
     build:
       context: ./api
       dockerfile: Dockerfile.dev
+    env_file:
+      - .env
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/fortymm
       REDIS_URL: redis://redis:6379/0
     depends_on:
       redis:
         condition: service_healthy
-    command: rq worker --url redis://redis:6379/0 solver
+    command: rq worker --url redis://redis:6379/0 solver email ratings
 
   web-client:
     build:
