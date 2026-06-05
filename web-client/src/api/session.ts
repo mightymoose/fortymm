@@ -125,13 +125,36 @@ export function useResendEmailConfirmation() {
   })
 }
 
+export type MergePreview = components['schemas']['MergePreview']
+
+/** Side-effect-free look at an emailed link, to decide whether to show the
+ * "bring N matches over?" gate before finalizing. */
+export function useMergePreview() {
+  return useMutation({
+    mutationFn: async (token: string): Promise<MergePreview> =>
+      unwrap('check link', await api.POST('/v1/merge/preview', { body: { token } })),
+  })
+}
+
+/** Input for the finalize mutations. `skipMerge` is the gate's "not now": sign
+ * in without folding the guest's matches in. */
+export interface FinalizeTokenInput {
+  token: string
+  skipMerge?: boolean
+}
+
 export function useConfirmEmail() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: async (token: string): Promise<Session> =>
+    mutationFn: async ({
+      token,
+      skipMerge = false,
+    }: FinalizeTokenInput): Promise<Session> =>
       unwrap(
         'confirm email',
-        await api.POST('/v1/me/email/confirm', { body: { token } }),
+        await api.POST('/v1/me/email/confirm', {
+          body: { token, skip_merge: skipMerge },
+        }),
       ),
     onSuccess: (session) => {
       qc.setQueryData(SESSION_QUERY_KEY, session)
@@ -183,10 +206,15 @@ export function useLogout() {
 export function useConsumeLoginToken() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: async (token: string): Promise<Session> =>
+    mutationFn: async ({
+      token,
+      skipMerge = false,
+    }: FinalizeTokenInput): Promise<Session> =>
       unwrap(
         'sign in',
-        await api.POST('/v1/login/consume', { body: { token } }),
+        await api.POST('/v1/login/consume', {
+          body: { token, skip_merge: skipMerge },
+        }),
       ),
     onSuccess: (session) => {
       qc.setQueryData(SESSION_QUERY_KEY, session)

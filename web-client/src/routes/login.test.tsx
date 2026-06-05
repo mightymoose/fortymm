@@ -228,4 +228,71 @@ describe('/login/verifying flow', () => {
     })
     expect(toast.success).not.toHaveBeenCalled()
   })
+
+  it('shows the merge gate and consumes with the chosen skip_merge', async () => {
+    const user = userEvent.setup()
+    server.use(
+      http.post('*/v1/merge/preview', () =>
+        HttpResponse.json({
+          is_merge: true,
+          owner_username: 'rita',
+          guest_username: 'drifting-grouse',
+          guest_matches_count: 2,
+        }),
+      ),
+    )
+    const consumed: Array<{ skip_merge?: boolean }> = []
+    server.use(
+      http.post('*/v1/login/consume', async ({ request }) => {
+        consumed.push(
+          (await request.json()) as { skip_merge?: boolean },
+        )
+        return HttpResponse.json(mockSession)
+      }),
+    )
+
+    renderAt('/login/verifying?token=merge-token')
+
+    // Gate appears instead of auto-finalizing.
+    await screen.findByRole('heading', { name: /bring your matches over/i })
+    expect(screen.getByText(/2 matches/i)).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /bring them over/i }))
+
+    await waitFor(() =>
+      expect(screen.getByRole('heading', { name: /welcome back/i })).toBeInTheDocument(),
+    )
+    expect(consumed).toEqual([{ token: 'merge-token', skip_merge: false }])
+  })
+
+  it('signs in without merging when "not now" is chosen', async () => {
+    const user = userEvent.setup()
+    server.use(
+      http.post('*/v1/merge/preview', () =>
+        HttpResponse.json({
+          is_merge: true,
+          owner_username: 'rita',
+          guest_username: 'drifting-grouse',
+          guest_matches_count: 1,
+        }),
+      ),
+    )
+    const consumed: Array<{ skip_merge?: boolean }> = []
+    server.use(
+      http.post('*/v1/login/consume', async ({ request }) => {
+        consumed.push((await request.json()) as { skip_merge?: boolean })
+        return HttpResponse.json(mockSession)
+      }),
+    )
+
+    renderAt('/login/verifying?token=merge-token')
+
+    await screen.findByRole('heading', { name: /bring your matches over/i })
+    await user.click(screen.getByRole('button', { name: /not now/i }))
+
+    await waitFor(() =>
+      expect(screen.getByRole('heading', { name: /welcome back/i })).toBeInTheDocument(),
+    )
+    expect(consumed).toEqual([{ token: 'merge-token', skip_merge: true }])
+  })
 })
