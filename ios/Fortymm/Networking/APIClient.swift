@@ -39,6 +39,12 @@ struct APIClient {
 
     static let shared = APIClient()
 
+    /// Posted (from any request) when the API reports the caller's session was
+    /// merged away on another device — `401` with `{"detail":{"code":
+    /// "session_merged", ...}}`. `SessionStore` observes it and routes to
+    /// sign-in. `userInfo` carries `"message"` and (optionally) `"email"`.
+    static let sessionEndedNotification = Notification.Name("com.fortymm.sessionEnded")
+
     /// Name of the auth cookie the API sets and reads. Centralised so the send
     /// and capture sides can't drift.
     private static let sessionCookieName = "session"
@@ -169,6 +175,18 @@ struct APIClient {
         }
         await captureSessionCookie(from: http, url: url)
         guard (200..<300).contains(http.statusCode) else {
+            // A merged-away guest's cookie still resolves server-side, so this
+            // can land on *any* request — broadcast it (and drop the dead token)
+            // so the app routes to sign-in instead of acting as the ghost.
+            if http.statusCode == 401, let info = Self.mergedSessionInfo(from: data) {
+                await tokens.clear()
+                var userInfo: [String: Any] = ["message": info.message]
+                if let email = info.email { userInfo["email"] = email }
+                NotificationCenter.default.post(
+                    name: Self.sessionEndedNotification, object: nil, userInfo: userInfo
+                )
+                throw APIError.sessionMerged(message: info.message, email: info.email)
+            }
             throw APIError.http(status: http.statusCode, detail: Self.detail(from: data))
         }
         do {
@@ -210,6 +228,26 @@ struct APIClient {
         return nil
     }
 
+    /// Parse the structured `session_merged` 401 body — `{"detail":{"code":
+    /// "session_merged","message":...,"email":...}}` — returning the message and
+    /// the owning account's email (to prefill on sign-in). `nil` for any other 401.
+    private static func mergedSessionInfo(from data: Data) -> (message: String, email: String?)? {
+        struct Body: Decodable {
+            struct Detail: Decodable {
+                let code: String
+                let message: String?
+                let email: String?
+            }
+            let detail: Detail
+        }
+        guard let parsed = try? JSONDecoder().decode(Body.self, from: data),
+              parsed.detail.code == "session_merged" else { return nil }
+        return (
+            parsed.detail.message ?? "Your session has ended. Sign in to continue.",
+            parsed.detail.email
+        )
+    }
+
     /// Pull a minted/rotated `session` cookie out of the response and persist
     /// it. The API only ever sets the single `session` cookie, so folding
     /// multiple Set-Cookie headers isn't a concern here.
@@ -221,8 +259,15 @@ struct APIClient {
             withResponseHeaderFields: ["Set-Cookie": header],
             for: url
         )
-        if let token = cookies.first(where: { $0.name == Self.sessionCookieName })?.value {
-            await tokens.update(token)
+        guard let cookie = cookies.first(where: { $0.name == Self.sessionCookieName })
+        else { return }
+        if cookie.value.isEmpty {
+            // A clearing Set-Cookie (e.g. the session-merged 401 clears the dead
+            // cookie). Drop the stored token so the next call starts cookieless
+            // and mints a fresh guest.
+            await tokens.clear()
+        } else {
+            await tokens.update(cookie.value)
         }
     }
 }
@@ -240,6 +285,7 @@ extension Error {
 enum APIError: LocalizedError {
     case invalidResponse
     case http(status: Int, detail: String? = nil)
+    case sessionMerged(message: String, email: String?)
     case decoding(Error)
 
     var errorDescription: String? {
@@ -249,6 +295,8 @@ enum APIError: LocalizedError {
         case let .http(status, detail):
             // Prefer the API's own message when it sent one.
             return detail ?? "The server returned an error (HTTP \(status))."
+        case let .sessionMerged(message, _):
+            return message
         case .decoding:
             return "Couldn't read the server's response."
         }

@@ -1,23 +1,22 @@
 import { useEffect, useRef, useState } from 'react'
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
-import { useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 
-import { api, ApiError, unwrap } from '@/api/client'
-import { SESSION_QUERY_KEY, type Session } from '@/api/session'
+import { ApiError } from '@/api/client'
+import {
+  type MergePreview,
+  useConsumeLoginToken,
+  useMergePreview,
+} from '@/api/session'
 import {
   ScreenError,
   ScreenVerify,
   ScreenVerifyNetError,
 } from '@/components/login/login-screens'
+import { MergeGate } from '@/components/login/merge-gate'
 import { pageTitle } from '@/lib/page-title'
 
 type VerifyError = 'expired' | 'net'
-type ConsumeState =
-  | { status: 'idle' }
-  | { status: 'pending' }
-  | { status: 'success' }
-  | { status: 'error'; error: unknown }
 
 export const Route = createFileRoute('/login/verifying')({
   head: () => ({
@@ -36,67 +35,68 @@ export const Route = createFileRoute('/login/verifying')({
 function LoginVerifyingPage() {
   const { token, error } = Route.useSearch()
   const navigate = useNavigate()
-  const qc = useQueryClient()
-  const [state, setState] = useState<ConsumeState>({ status: 'idle' })
+  const preview = useMergePreview()
+  const consume = useConsumeLoginToken()
+  // Holds the preview only while the cross-device gate is up; everything else
+  // (previewing, consuming) renders the same verifying screen.
+  const [gate, setGate] = useState<MergePreview | null>(null)
   const fired = useRef(false)
 
-  // Fire the consume exactly once across mounts and pick up the result on
-  // whichever render observes it. We intentionally don't cancel from the
-  // effect cleanup: StrictMode's simulated unmount fires the cleanup before
-  // the response arrives, and a second mount whose effect early-returns
-  // would then never learn the outcome.
+  const runConsume = (skipMerge: boolean) => {
+    setGate(null)
+    consume.mutate(
+      { token, skipMerge },
+      {
+        onSuccess: (session) => {
+          const moved = session.merged?.matches_moved ?? 0
+          if (moved > 0) {
+            toast.success(
+              moved === 1
+                ? 'We brought your 1 match with you.'
+                : `We brought your ${moved} matches with you.`,
+            )
+          }
+          navigate({ to: '/login/welcome' })
+        },
+        onError: (err) => {
+          if (err instanceof ApiError && err.status >= 400 && err.status < 500) {
+            navigate({
+              to: '/login/verifying',
+              search: { token: '', error: 'expired' },
+            })
+          } else {
+            navigate({ to: '/login/verifying', search: { token, error: 'net' } })
+          }
+        },
+      },
+    )
+  }
+
+  // Preview first; a merge that would carry matches over waits at the gate,
+  // everything else signs in straight away. We don't cancel from cleanup so
+  // StrictMode's simulated unmount can't strand an in-flight request.
   useEffect(() => {
     if (fired.current || !token || error) return
     fired.current = true
-    setState({ status: 'pending' })
-    ;(async () => {
-      try {
-        const result = await api.POST('/v1/login/consume', { body: { token } })
-        const session = unwrap('sign in', result) as Session
-        qc.setQueryData(SESSION_QUERY_KEY, session)
-        const movedMatches = session.merged?.matches_moved ?? 0
-        if (movedMatches > 0) {
-          toast.success(
-            movedMatches === 1
-              ? 'We brought your 1 match with you.'
-              : `We brought your ${movedMatches} matches with you.`,
-          )
+    preview.mutate(token, {
+      onSuccess: (p) => {
+        if (p.is_merge && p.guest_matches_count > 0) {
+          setGate(p)
+        } else {
+          runConsume(false)
         }
-        setState({ status: 'success' })
-      } catch (err) {
-        setState({ status: 'error', error: err })
-      }
-    })()
-  }, [token, error, qc])
-
-  useEffect(() => {
-    if (state.status === 'success') {
-      navigate({ to: '/login/welcome' })
-    } else if (state.status === 'error') {
-      const err = state.error
-      if (err instanceof ApiError && err.status >= 400 && err.status < 500) {
-        navigate({
-          to: '/login/verifying',
-          search: { token: '', error: 'expired' },
-        })
-      } else {
-        navigate({
-          to: '/login/verifying',
-          search: { token, error: 'net' },
-        })
-      }
-    }
-  }, [state, navigate, token])
+      },
+      onError: () => runConsume(false),
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, error])
 
   if (!token && !error) {
     return (
       <ScreenError
         detail="This link is missing its token."
         onRequestNew={() =>
-          navigate({
-            to: '/login',
-            search: { error: undefined, email: undefined },
-          })
+          navigate({ to: '/login', search: { error: undefined, email: undefined } })
         }
       />
     )
@@ -106,10 +106,7 @@ function LoginVerifyingPage() {
     return (
       <ScreenError
         onRequestNew={() =>
-          navigate({
-            to: '/login',
-            search: { error: undefined, email: undefined },
-          })
+          navigate({ to: '/login', search: { error: undefined, email: undefined } })
         }
       />
     )
@@ -118,21 +115,28 @@ function LoginVerifyingPage() {
   if (error === 'net') {
     return (
       <ScreenVerifyNetError
-        retrying={state.status === 'pending'}
+        retrying={consume.isPending}
         onRetry={() => {
           fired.current = false
-          setState({ status: 'idle' })
-          navigate({
-            to: '/login/verifying',
-            search: { token, error: undefined },
-          })
+          setGate(null)
+          navigate({ to: '/login/verifying', search: { token, error: undefined } })
         }}
         onSendNewLink={() =>
-          navigate({
-            to: '/login',
-            search: { error: undefined, email: undefined },
-          })
+          navigate({ to: '/login', search: { error: undefined, email: undefined } })
         }
+      />
+    )
+  }
+
+  if (gate) {
+    return (
+      <MergeGate
+        ownerUsername={gate.owner_username ?? ''}
+        guestUsername={gate.guest_username ?? null}
+        matchesCount={gate.guest_matches_count}
+        busy={consume.isPending}
+        onBringThemOver={() => runConsume(false)}
+        onNotNow={() => runConsume(true)}
       />
     )
   }

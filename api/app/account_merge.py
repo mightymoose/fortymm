@@ -1,7 +1,14 @@
-"""Re-point ownership from an ephemeral user to a verified user, then delete
-the ephemeral user. Called from sign-in (``/v1/login/consume``) and email
-confirmation (``/v1/me/email/confirm``) when the browser arrived with a
-different ephemeral session than the target account.
+"""Re-point ownership from an ephemeral user to a verified user, then
+*tombstone* (soft-delete) the ephemeral user. Called from sign-in
+(``/v1/login/consume``) and email confirmation (``/v1/me/email/confirm``) when
+the browser arrived with a different ephemeral session than the target account.
+
+The ephemeral row is kept (``merged_into_user_id`` set) rather than dropped so
+its session token still resolves and the auth layer can tell the holder their
+session was merged instead of silently minting a fresh guest. Because we no
+longer rely on ``ON DELETE CASCADE``, the ephemeral user's owned rows
+(roles, leftover league rows, rating history, non-session tokens) are cleaned up
+explicitly here.
 
 Leaves the verified user's ``user_league_ratings`` and ``rating_history``
 stale relative to the freshly-moved matches — the caller enqueues the
@@ -10,12 +17,28 @@ stale relative to the freshly-moved matches — the caller enqueues the
 
 import uuid
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any, cast
 
 from sqlalchemy import CursorResult, delete, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Match, MatchSidePlayer, MatchSignature, RatingHistory, User
+from app.models import (
+    LeagueMembership,
+    Match,
+    MatchSidePlayer,
+    MatchSignature,
+    RatingHistory,
+    User,
+    UserLeagueRating,
+    UserRole,
+    UserToken,
+)
+
+# Must match ``app.sessions.SESSION_TOKEN_CONTEXT``. Hardcoded to avoid a
+# circular import (sessions imports this module). Session tokens are KEPT on the
+# tombstoned guest so its cookie still resolves; every other token is dropped.
+_SESSION_TOKEN_CONTEXT = "session"
 
 
 @dataclass(frozen=True)
@@ -29,8 +52,9 @@ async def merge_user(
     from_user_id: uuid.UUID,
     to_user_id: uuid.UUID,
 ) -> MergeSummary:
-    """Re-point ``from_user_id``'s data onto ``to_user_id`` and delete the
-    ephemeral row. Runs inside the caller's transaction — does not commit.
+    """Re-point ``from_user_id``'s data onto ``to_user_id`` and tombstone the
+    ephemeral row (``merged_into_user_id`` set; row kept). Runs inside the
+    caller's transaction — does not commit.
 
     Caller invariants:
       * ``from_user_id`` is ephemeral (``confirmed_at IS NULL``).
@@ -60,7 +84,7 @@ async def merge_user(
 
     # user_league_ratings / league_memberships both have UNIQUE(league_id,
     # user_id). Re-point only where the verified user has no row in that
-    # league; the leftover ephemeral rows cascade-delete with the user below.
+    # league; the leftover ephemeral rows are dropped explicitly below.
     # Don't try to merge JSONB rating state — a rating recompute against the
     # merged match list is the only correct reconciliation.
     await db.execute(
@@ -105,9 +129,32 @@ async def merge_user(
         delete(MatchSignature).where(MatchSignature.user_id == from_user_id)
     )
 
-    # CASCADE cleans up user_tokens, user_roles, rating_history (user_id), and
-    # any user_league_ratings / league_memberships rows that didn't re-point.
-    await db.execute(delete(User).where(User.id == from_user_id))
+    # We tombstone rather than DELETE the user, so the rows that used to ride
+    # ``ON DELETE CASCADE`` must be dropped explicitly. Order doesn't matter —
+    # none of these reference each other. Keep the guest's *session* tokens so
+    # its cookie still resolves to this (now-tombstoned) row.
+    await db.execute(delete(UserRole).where(UserRole.user_id == from_user_id))
+    await db.execute(delete(RatingHistory).where(RatingHistory.user_id == from_user_id))
+    await db.execute(
+        delete(UserLeagueRating).where(UserLeagueRating.user_id == from_user_id)
+    )
+    await db.execute(
+        delete(LeagueMembership).where(LeagueMembership.user_id == from_user_id)
+    )
+    await db.execute(
+        delete(UserToken).where(
+            UserToken.user_id == from_user_id,
+            UserToken.context != _SESSION_TOKEN_CONTEXT,
+        )
+    )
+
+    # Tombstone: keep the row (and its session tokens) so the guest's cookie
+    # still resolves and the auth layer can report the merge.
+    await db.execute(
+        update(User)
+        .where(User.id == from_user_id)
+        .values(merged_into_user_id=to_user_id, merged_at=datetime.now(UTC))
+    )
     await db.flush()
 
     return MergeSummary(matches_moved=matches_moved)

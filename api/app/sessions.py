@@ -10,7 +10,7 @@ from coolname import generate_slug
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response, status
 from pyrate_limiter import Duration, Rate
 from rq.job import Job
-from sqlalchemy import delete, select
+from sqlalchemy import ColumnElement, delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,13 +19,23 @@ from app import queue as queue_module
 from app.account_merge import merge_user
 from app.db import get_session
 from app.leagues import add_user_to_default_league
-from app.models import Permission, Role, RolePermission, User, UserRole, UserToken
+from app.models import (
+    MatchSidePlayer,
+    Permission,
+    Role,
+    RolePermission,
+    User,
+    UserRole,
+    UserToken,
+)
 from app.rate_limiting import RedisRateLimiter
 from app.ratings.jobs import RECOMPUTE_AFTER_MERGE_JOB
 from app.schemas.session import (
     ConfirmEmailRequest,
     ConsumeLoginRequest,
     LoginRequestAccepted,
+    MergePreview,
+    MergePreviewRequest,
     MergeSummary,
     RequestLoginRequest,
     ResendEmailRequest,
@@ -43,11 +53,22 @@ router = APIRouter()
 
 SESSION_COOKIE_NAME = "session"
 SESSION_TOKEN_CONTEXT = "session"
+# Stable `code` on the 401 we raise when a cookie resolves to a tombstoned
+# (merged-away) guest, so clients can tell "your session was merged, sign in"
+# apart from an ordinary auth failure and redirect to login (with the owner's
+# email prefilled) instead of looping.
+SESSION_MERGED_CODE = "session_merged"
 # Email-change confirmation tokens carry the *prior* address in their context
 # (e.g. "change:old@example.com", or "change:" on first-ever set). This gives
 # us an audit trail of what each token was changing away from. Look up
 # pending tokens by `context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX)`.
 EMAIL_CHANGE_CONTEXT_PREFIX = "change:"
+# A guest (no confirmed email of their own) who enters an address that already
+# belongs to a verified account gets a *merge* token rather than a plain change
+# token. Confirming it folds the guest's data into the owning account and signs
+# the browser in as that account — instead of stamping the address onto the
+# guest. The context records the owning account's id: "merge:<uuid>".
+EMAIL_MERGE_CONTEXT_PREFIX = "merge:"
 LOGIN_TOKEN_CONTEXT = "login"
 LOGIN_TOKEN_LIFETIME = timedelta(minutes=15)
 SESSION_LIFETIME = timedelta(days=30)
@@ -61,6 +82,124 @@ def _email_change_context(old_email: str | None) -> str:
 def _old_email_from_context(context: str) -> str | None:
     """Inverse of ``_email_change_context``."""
     return context.removeprefix(EMAIL_CHANGE_CONTEXT_PREFIX) or None
+
+
+def _merge_context(target_user_id: uuid.UUID) -> str:
+    return f"{EMAIL_MERGE_CONTEXT_PREFIX}{target_user_id}"
+
+
+def _target_id_from_merge_context(context: str) -> uuid.UUID | None:
+    """Inverse of ``_merge_context``. Returns ``None`` on a malformed id so a
+    corrupt context surfaces as an opaque "invalid link" rather than a 500."""
+    try:
+        return uuid.UUID(context.removeprefix(EMAIL_MERGE_CONTEXT_PREFIX))
+    except ValueError:
+        return None
+
+
+def _pending_email_token_clause() -> ColumnElement[bool]:
+    """Match either flavour of pending email token — a plain change token
+    (``change:OLD``) or a merge-into-existing-account token (``merge:<uuid>``).
+    Both drive the session's ``pending_email`` and both are consumed by
+    ``confirm_email``."""
+    return or_(
+        UserToken.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX),
+        UserToken.context.startswith(EMAIL_MERGE_CONTEXT_PREFIX),
+    )
+
+
+# A login token records the *requesting* guest in its context so the merge it
+# drives is token-bound (works cross-device) like the settings merge: bare
+# ``login`` when the requester wasn't an ephemeral guest, else
+# ``login:<guest-id>``.
+_LOGIN_CONTEXT_PREFIX = f"{LOGIN_TOKEN_CONTEXT}:"
+
+
+def _login_context(guest_id: uuid.UUID | None) -> str:
+    return (
+        LOGIN_TOKEN_CONTEXT
+        if guest_id is None
+        else f"{_LOGIN_CONTEXT_PREFIX}{guest_id}"
+    )
+
+
+def _guest_id_from_login_context(context: str) -> uuid.UUID | None:
+    """The requesting guest recorded on a login token, or ``None`` for a bare
+    ``login`` context (or a malformed id)."""
+    if not context.startswith(_LOGIN_CONTEXT_PREFIX):
+        return None
+    try:
+        return uuid.UUID(context.removeprefix(_LOGIN_CONTEXT_PREFIX))
+    except ValueError:
+        return None
+
+
+def _login_token_clause() -> ColumnElement[bool]:
+    """Match both login-token flavours (bare ``login`` and ``login:<guest>``)."""
+    return or_(
+        UserToken.context == LOGIN_TOKEN_CONTEXT,
+        UserToken.context.startswith(_LOGIN_CONTEXT_PREFIX),
+    )
+
+
+async def _guest_match_count(db: AsyncSession, guest_id: uuid.UUID) -> int:
+    """How many distinct matches the guest is on — what a merge would carry
+    over. ``UNIQUE(match_id, user_id)`` means one row per match, but count
+    distinct match ids defensively."""
+    return (
+        await db.execute(
+            select(func.count(func.distinct(MatchSidePlayer.match_id))).where(
+                MatchSidePlayer.user_id == guest_id
+            )
+        )
+    ).scalar_one()
+
+
+async def _merge_guest_into(
+    db: AsyncSession, *, guest: User | None, target: User
+) -> MergeSummary | None:
+    """Fold an ephemeral ``guest`` into ``target`` when it's safe, returning the
+    summary. ``None`` (no merge) when the guest is missing, is the target, has
+    verified an email of its own (would be data loss), or is already tombstoned.
+    Runs in the caller's transaction — does not commit.
+
+    The single guard used by every merge path: token-bound sign-in/confirm and
+    the browser-bound prior-session fold."""
+    if (
+        guest is None
+        or guest.id == target.id
+        or guest.confirmed_at is not None
+        or guest.merged_into_user_id is not None
+    ):
+        return None
+    summary = await merge_user(db, from_user_id=guest.id, to_user_id=target.id)
+    return MergeSummary(matches_moved=summary.matches_moved)
+
+
+async def _sign_in_after_merge(
+    db: AsyncSession,
+    response: Response,
+    user: User,
+    merged: MergeSummary | None,
+) -> SessionResponse:
+    """Mint a fresh session for ``user``, commit the pending transaction, fire
+    the rating recompute when matches moved, rotate the cookie, and return the
+    session. The shared tail of the token-bound merge sign-in paths
+    (``consume_login_token`` and ``_confirm_account_merge``): the caller stages
+    the token deletion + merge, this finalizes."""
+    raw_session = secrets.token_urlsafe(32)
+    db.add(
+        UserToken(
+            user_id=user.id,
+            context=SESSION_TOKEN_CONTEXT,
+            token=_hash_token(raw_session),
+        )
+    )
+    await db.commit()
+    if merged is not None and merged.matches_moved > 0:
+        _enqueue_rating_recompute_after_merge(user.id)
+    _set_session_cookie(response, raw_session)
+    return await _build_session_response(db, user, merged=merged)
 
 
 def _hash_cookie_for_key(cookie: str) -> str:
@@ -174,6 +313,45 @@ async def _find_session_user(db: AsyncSession, raw_token: str) -> User | None:
     return user_result.scalar_one_or_none()
 
 
+def _clear_cookie_header() -> dict[str, str]:
+    """A ``Set-Cookie`` that clears the session cookie, for attaching to the 401
+    we raise when a cookie resolves to a tombstoned guest. The cookie is
+    HttpOnly, so only the server can drop it — clearing it lets the holder start
+    a fresh guest from the login screen. Mirror ``_clear_session_cookie``'s
+    attributes so the browser actually matches and drops it."""
+    attrs = [
+        f"{SESSION_COOKIE_NAME}=",
+        "Path=/",
+        "Max-Age=0",
+        "HttpOnly",
+        "SameSite=lax",
+    ]
+    if _cookie_secure():
+        attrs.append("Secure")
+    return {"set-cookie": "; ".join(attrs)}
+
+
+async def _merged_session_exception(db: AsyncSession, user: User) -> HTTPException:
+    """Build the 401 for a cookie that resolves to a tombstoned (merged-away)
+    guest. Carries the stable ``SESSION_MERGED_CODE`` so clients redirect to
+    login rather than treating it as an ordinary auth failure, plus the owning
+    account's email to prefill — safe, since the holder is the one who entered
+    it. Also clears the dead cookie."""
+    owner = await db.get(User, user.merged_into_user_id)
+    detail: dict[str, str] = {
+        "code": SESSION_MERGED_CODE,
+        "message": "This guest session was merged into your account. "
+        "Sign in to continue.",
+    }
+    if owner is not None and owner.email:
+        detail["email"] = owner.email
+    return HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail=detail,
+        headers=_clear_cookie_header(),
+    )
+
+
 async def _build_session_response(
     db: AsyncSession, user: User, merged: MergeSummary | None = None
 ) -> SessionResponse:
@@ -196,25 +374,17 @@ async def _build_session_response(
 async def _maybe_merge_prior_session(
     db: AsyncSession, session_cookie: str | None, target_user: User
 ) -> MergeSummary | None:
-    """If the browser arrived with a session cookie identifying a *different*
-    ephemeral user than ``target_user``, fold that user's data into the target
-    and return a summary. Otherwise return None.
+    """Browser-bound fold: if the clicking browser arrived with an ephemeral
+    guest cookie, fold that guest into ``target_user``. The fallback used by
+    sign-in when the token didn't record a specific requesting guest.
 
-    Only runs for ephemeral prior users (``confirmed_at IS NULL``) — a verified
-    prior session means two real accounts share a browser, and silently
-    siphoning data out of one would be data loss.
+    ``_merge_guest_into`` enforces the safety guards (skip a verified prior —
+    two real accounts sharing a browser — or an already-tombstoned ghost).
     """
     if not session_cookie:
         return None
     prior_user = await _find_session_user(db, session_cookie)
-    if prior_user is None or prior_user.id == target_user.id:
-        return None
-    if prior_user.confirmed_at is not None:
-        return None
-    summary = await merge_user(
-        db, from_user_id=prior_user.id, to_user_id=target_user.id
-    )
-    return MergeSummary(matches_moved=summary.matches_moved)
+    return await _merge_guest_into(db, guest=prior_user, target=target_user)
 
 
 async def _load_permissions(db: AsyncSession, user_id: uuid.UUID) -> list[str]:
@@ -284,6 +454,12 @@ async def get_session_endpoint(
     user: User | None = None
     if session_cookie:
         user = await _find_session_user(db, session_cookie)
+        if user is not None and user.merged_into_user_id is not None:
+            # The cookie's guest was folded into another account. Don't silently
+            # mint a fresh guest (that would quietly swap identities) — tell the
+            # holder so they sign in. A no-cookie / garbage-cookie request still
+            # mints below, preserving the zero-friction first visit.
+            raise await _merged_session_exception(db, user)
     if user is None:
         user, raw_token = await _create_session(db)
         _set_session_cookie(response, raw_token)
@@ -325,18 +501,32 @@ async def get_optional_user(
     """
     if not session_cookie:
         return None
-    return await _find_session_user(db, session_cookie)
+    user = await _find_session_user(db, session_cookie)
+    if user is not None and user.merged_into_user_id is not None:
+        # Tombstoned guest → render anonymously on optional endpoints; the next
+        # required-auth call (or the session bootstrap) surfaces the redirect.
+        return None
+    return user
 
 
 async def get_current_user(
-    user: Annotated[User | None, Depends(get_optional_user)],
+    session_cookie: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None,
+    db: AsyncSession = Depends(get_session),
 ) -> User:
     """Resolve the authenticated user from the session cookie.
 
     Unlike ``GET /v1/session``, this dependency never mints a new session —
     endpoints that create or mutate data require an already-established
     session and respond ``401`` otherwise.
+
+    Resolves the cookie directly (rather than via ``get_optional_user``) so it
+    can tell a *tombstoned* guest — whose cookie still resolves — apart from no
+    session at all, and raise the structured ``session_merged`` 401 that sends
+    the holder to sign in instead of letting them act as a merged-away ghost.
     """
+    user = await _find_session_user(db, session_cookie) if session_cookie else None
+    if user is not None and user.merged_into_user_id is not None:
+        raise await _merged_session_exception(db, user)
     if user is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -399,7 +589,7 @@ async def _pending_change_token(
         select(UserToken)
         .where(
             UserToken.user_id == user_id,
-            UserToken.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX),
+            _pending_email_token_clause(),
         )
         .limit(1)
     )
@@ -415,7 +605,7 @@ async def _issue_confirmation_token(
     await db.execute(
         delete(UserToken).where(
             UserToken.user_id == user.id,
-            UserToken.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX),
+            _pending_email_token_clause(),
         )
     )
     raw_token = secrets.token_urlsafe(32)
@@ -458,6 +648,12 @@ def _enqueue_login_email(to_email: str, raw_token: str, username: str) -> Job:
     )
 
 
+def _enqueue_merge_email(to_email: str, raw_token: str, username: str) -> Job:
+    return _enqueue_email_job(
+        "app.email.send_merge_email", to_email, raw_token, username
+    )
+
+
 def _enqueue_rating_recompute_after_merge(user_id: uuid.UUID) -> None:
     """Fire-and-forget the rating recompute for ``user_id`` after a merge.
 
@@ -478,6 +674,49 @@ def _enqueue_rating_recompute_after_merge(user_id: uuid.UUID) -> None:
             "Failed to enqueue rating recompute after merge",
             extra={"user_id": str(user_id)},
         )
+
+
+async def _begin_account_merge(
+    db: AsyncSession, guest: User, email: str
+) -> SessionResponse:
+    """Issue a merge token for an ephemeral ``guest`` who entered an address
+    owned by an existing account, and email that account a sign-in link.
+
+    Mirrors ``set_email``'s issue/enqueue/commit dance, including the
+    enumeration-safe fallbacks: every exit returns the same 202 + session shape
+    as a first-time set, so the caller can't distinguish a taken address from a
+    free one."""
+    target = (
+        await db.execute(select(User).where(User.email == email))
+    ).scalar_one_or_none()
+    if target is None or target.id == guest.id:
+        # Lost the race (the owner just changed their address out from under
+        # us) or, impossibly, our own row — nothing to merge into.
+        return await _build_session_response(db, guest)
+
+    raw_token = await _issue_confirmation_token(
+        db, guest, email, _merge_context(target.id)
+    )
+    try:
+        job = _enqueue_merge_email(email, raw_token, target.username)
+    except Exception:
+        await db.rollback()
+        await db.refresh(guest)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Email service unavailable. Try again in a moment.",
+        ) from None
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        try:
+            job.cancel()
+        except Exception:
+            pass
+        await db.refresh(guest)
+        return await _build_session_response(db, guest)
+    return await _build_session_response(db, guest)
 
 
 @router.post(
@@ -509,12 +748,20 @@ async def set_email(
     if old_email != email and await name_taken(
         db, User.id, User.email, email, exclude_id=current_user.id
     ):
-        # Don't reveal that the email belongs to another user — that
-        # differential lets attackers enumerate the user base by cycling
-        # `GET /v1/session` for fresh rate-limit buckets. Return the same
-        # 202 + unchanged session shape as the success path. The legitimate
-        # owner is unaffected; the typo-on-someone-else's-address case sees
-        # a "sent" toast but never receives an email.
+        # The address already belongs to another account. A *guest* (no
+        # confirmed email of their own) almost certainly means "this is me —
+        # sign me into my real account and bring my guest matches along." Email
+        # the owner a merge link; clicking it folds this guest into their
+        # account (see ``confirm_email``'s merge branch). The response is the
+        # same 202 + pending_email shape as a first-time set, so an attacker
+        # still can't tell a taken address from a free one by cycling fresh
+        # `/v1/session` cookies.
+        #
+        # A caller who already has a confirmed email is *changing* addresses,
+        # not merging — silently absorbing their account into someone else's
+        # would be data loss, so keep the enumeration-safe no-op for them.
+        if current_user.confirmed_at is None:
+            return await _begin_account_merge(db, current_user, email)
         return await _build_session_response(db, current_user)
 
     raw_token = await _issue_confirmation_token(
@@ -582,9 +829,18 @@ async def resend_email_confirmation(
         pending.context,
     )
     try:
-        job = _enqueue_confirmation_email(
-            pending.sent_to, raw_token, current_user.username
-        )
+        # A merge token re-sends the "sign in to your existing account" email
+        # to the owner, not the plain confirmation copy — same /confirm-email
+        # link either way, but the wording has to match what's happening.
+        if pending.context.startswith(EMAIL_MERGE_CONTEXT_PREFIX):
+            target_id = _target_id_from_merge_context(pending.context)
+            target = await db.get(User, target_id) if target_id is not None else None
+            owner_username = target.username if target else current_user.username
+            job = _enqueue_merge_email(pending.sent_to, raw_token, owner_username)
+        else:
+            job = _enqueue_confirmation_email(
+                pending.sent_to, raw_token, current_user.username
+            )
     except Exception:
         await db.rollback()
         raise HTTPException(
@@ -623,12 +879,17 @@ async def confirm_email(
     orphan guest user on every cross-device click. The endpoint also
     rotates the caller's session cookie to the token's owner so the
     confirming browser ends up signed in as the right user.
+
+    A *merge* token (``merge:<uuid>``) is handled separately: instead of
+    stamping an address onto the guest that requested it, the guest is folded
+    into the account that owns the address and the caller is signed in as that
+    account. See ``_confirm_account_merge``.
     """
     token_row = (
         await db.execute(
             select(UserToken).where(
                 UserToken.token == _hash_token(payload.token),
-                UserToken.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX),
+                _pending_email_token_clause(),
             )
         )
     ).scalar_one_or_none()
@@ -636,6 +897,10 @@ async def confirm_email(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="That confirmation link is invalid or expired.",
+        )
+    if token_row.context.startswith(EMAIL_MERGE_CONTEXT_PREFIX):
+        return await _confirm_account_merge(
+            db, response, token_row, skip_merge=payload.skip_merge
         )
     user = (
         await db.execute(select(User).where(User.id == token_row.user_id))
@@ -692,6 +957,51 @@ async def confirm_email(
     return await _build_session_response(db, user, merged=merged)
 
 
+async def _confirm_account_merge(
+    db: AsyncSession,
+    response: Response,
+    token_row: UserToken,
+    *,
+    skip_merge: bool = False,
+) -> SessionResponse:
+    """Consume a merge token: fold the ephemeral guest that requested it into
+    the account that owns the target address, then rotate the caller's session
+    cookie to that account. The merge deletes the guest's non-session tokens
+    (this one included), so the link is single-use.
+
+    The merge is bound to the *requesting* guest recorded on the token, not to
+    whatever session the click arrives with, so it does the right thing across
+    devices (desktop request, phone click). ``skip_merge`` signs the owner in
+    without folding the guest (the gate's "not now")."""
+    target_id = _target_id_from_merge_context(token_row.context)
+    guest = await db.get(User, token_row.user_id)
+    target = await db.get(User, target_id) if target_id is not None else None
+    # The token is only trustworthy while the target still owns the address it
+    # was cut against. Reject (and burn the token) if the owner changed their
+    # email or is itself tombstoned — surfacing the opaque error so nothing leaks.
+    if (
+        target is None
+        or target.merged_into_user_id is not None
+        or target.email != token_row.sent_to
+    ):
+        await db.delete(token_row)
+        await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="That confirmation link is invalid or expired.",
+        )
+
+    merged = (
+        None if skip_merge else await _merge_guest_into(db, guest=guest, target=target)
+    )
+    if merged is None:
+        # Nothing folded (declined, or guest gone / already verified / tombstoned)
+        # — the inbox click still proves ownership, so sign them in as the owner.
+        # A merge would have deleted this token; do it explicitly to stay single-use.
+        await db.delete(token_row)
+    return await _sign_in_after_merge(db, response, target, merged)
+
+
 @router.post(
     "/v1/login/request",
     status_code=status.HTTP_202_ACCEPTED,
@@ -703,6 +1013,7 @@ async def confirm_email(
 )
 async def request_login_email(
     payload: RequestLoginRequest,
+    session_cookie: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None,
     db: AsyncSession = Depends(get_session),
 ) -> LoginRequestAccepted:
     """Mint a magic-link sign-in token and email it.
@@ -718,6 +1029,10 @@ async def request_login_email(
     someone sign in without proving control of the inbox; the confirmation
     link clears that hurdle and (per ``confirm_email``) rotates them into
     a session anyway.
+
+    Records the requesting browser's guest on the token so the merge it drives
+    is token-bound (follows the guest cross-device), mirroring the settings
+    merge flow.
     """
     email = payload.email.lower()
 
@@ -736,25 +1051,53 @@ async def request_login_email(
         await _issue_and_send_confirmation_email(db, user, email)
         return LoginRequestAccepted(email=email)
 
-    await _issue_and_send_login_email(db, user, email)
+    guest_id = await _requesting_guest_id(db, session_cookie, target=user)
+    await _issue_and_send_login_email(db, user, email, merge_from_guest_id=guest_id)
     return LoginRequestAccepted(email=email)
 
 
-async def _issue_and_send_login_email(db: AsyncSession, user: User, email: str) -> None:
+async def _requesting_guest_id(
+    db: AsyncSession, session_cookie: str | None, *, target: User
+) -> uuid.UUID | None:
+    """The id of the requesting browser's guest, when it's an ephemeral guest
+    distinct from ``target`` — so a sign-in can carry its matches over. ``None``
+    for a verified / tombstoned / absent requester."""
+    if not session_cookie:
+        return None
+    requester = await _find_session_user(db, session_cookie)
+    if (
+        requester is None
+        or requester.id == target.id
+        or requester.confirmed_at is not None
+        or requester.merged_into_user_id is not None
+    ):
+        return None
+    return requester.id
+
+
+async def _issue_and_send_login_email(
+    db: AsyncSession,
+    user: User,
+    email: str,
+    merge_from_guest_id: uuid.UUID | None = None,
+) -> None:
     """Replace any live login token for this user with a fresh one and
     enqueue the sign-in email. Enqueue before commit so a Redis flap
-    rolls the DB write back instead of stranding a tokenless user."""
+    rolls the DB write back instead of stranding a tokenless user.
+
+    ``merge_from_guest_id`` is recorded in the token context so consuming the
+    link folds that specific guest in (token-bound)."""
     await db.execute(
         delete(UserToken).where(
             UserToken.user_id == user.id,
-            UserToken.context == LOGIN_TOKEN_CONTEXT,
+            _login_token_clause(),
         )
     )
     raw_token = secrets.token_urlsafe(32)
     db.add(
         UserToken(
             user_id=user.id,
-            context=LOGIN_TOKEN_CONTEXT,
+            context=_login_context(merge_from_guest_id),
             token=_hash_token(raw_token),
             sent_to=email,
         )
@@ -829,7 +1172,7 @@ async def consume_login_token(
         await db.execute(
             select(UserToken).where(
                 UserToken.token == _hash_token(payload.token),
-                UserToken.context == LOGIN_TOKEN_CONTEXT,
+                _login_token_clause(),
             )
         )
     ).scalar_one_or_none()
@@ -872,19 +1215,81 @@ async def consume_login_token(
             detail="That sign-in link no longer matches your email.",
         )
 
+    # Token-bound merge: fold the guest recorded at request time (follows the
+    # user cross-device). Fall back to the clicking browser's guest when the
+    # token didn't record one (bare ``login``). ``skip_merge`` lets the owner
+    # sign in without bringing the guest's matches over (the gate's "not now").
+    recorded_guest_id = _guest_id_from_login_context(token_row.context)
     # Single-use: delete the link the moment we accept it.
     await db.delete(token_row)
-    merged = await _maybe_merge_prior_session(db, session_cookie, user)
-    raw_session = secrets.token_urlsafe(32)
-    db.add(
-        UserToken(
-            user_id=user.id,
-            context=SESSION_TOKEN_CONTEXT,
-            token=_hash_token(raw_session),
+    if payload.skip_merge:
+        merged = None
+    elif recorded_guest_id is not None:
+        guest = await db.get(User, recorded_guest_id)
+        merged = await _merge_guest_into(db, guest=guest, target=user)
+    else:
+        merged = await _maybe_merge_prior_session(db, session_cookie, user)
+    return await _sign_in_after_merge(db, response, user, merged)
+
+
+@router.post(
+    "/v1/merge/preview",
+    response_model=MergePreview,
+    dependencies=[Depends(login_consume_ip_rate_limit)],
+)
+async def preview_merge(
+    payload: MergePreviewRequest,
+    db: AsyncSession = Depends(get_session),
+) -> MergePreview:
+    """Side-effect-free look at an emailed link before it's consumed, so the
+    client can show a "bring N matches over?" confirmation. Never consumes,
+    rotates, or merges — a wrong/expired token simply returns ``is_merge=False``
+    and the client finalizes through the real confirm/consume endpoint.
+
+    Safe to return usernames + counts: the 256-bit token is the bearer
+    credential, so only someone holding the link can ask."""
+    token_row = (
+        await db.execute(
+            select(UserToken).where(
+                UserToken.token == _hash_token(payload.token),
+                or_(
+                    _login_token_clause(),
+                    UserToken.context.startswith(EMAIL_MERGE_CONTEXT_PREFIX),
+                ),
+            )
         )
+    ).scalar_one_or_none()
+    if token_row is None:
+        return MergePreview(is_merge=False)
+
+    if token_row.context.startswith(EMAIL_MERGE_CONTEXT_PREFIX):
+        # Settings merge token: lives on the *guest*; the owner is in the context.
+        owner_id = _target_id_from_merge_context(token_row.context)
+        owner = await db.get(User, owner_id) if owner_id is not None else None
+        guest = await db.get(User, token_row.user_id)
+    else:
+        # Login token: lives on the *owner*; a recorded guest is in the context.
+        owner = await db.get(User, token_row.user_id)
+        guest_id = _guest_id_from_login_context(token_row.context)
+        guest = await db.get(User, guest_id) if guest_id is not None else None
+
+    # Only a *mergeable* guest counts — mirror ``_merge_guest_into``'s guards so
+    # the preview matches what confirm/consume will actually do.
+    if (
+        owner is None
+        or guest is None
+        or guest.id == owner.id
+        or guest.confirmed_at is not None
+        or guest.merged_into_user_id is not None
+    ):
+        return MergePreview(
+            is_merge=False,
+            owner_username=owner.username if owner is not None else None,
+        )
+
+    return MergePreview(
+        is_merge=True,
+        owner_username=owner.username,
+        guest_username=guest.username,
+        guest_matches_count=await _guest_match_count(db, guest.id),
     )
-    await db.commit()
-    if merged is not None and merged.matches_moved > 0:
-        _enqueue_rating_recompute_after_merge(user.id)
-    _set_session_cookie(response, raw_session)
-    return await _build_session_response(db, user, merged=merged)

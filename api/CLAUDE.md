@@ -43,12 +43,16 @@ change, run from `api/`:
 
 When you add a model (or column) with a foreign key to `users.id`, also update
 the ephemeral→verified account-merge logic to handle the new FK — re-point it
-to the surviving user, or rely on `ON DELETE CASCADE` and let the ephemeral
-user's deletion clean it up. Grep for `merge_user` to find it.
+to the surviving user, or delete the ephemeral's rows explicitly. Grep for
+`merge_user` to find it.
 
-Skipping this means a merged user silently leaves orphan rows, or a `RESTRICT`
-FK blocks the final ephemeral-user delete and the whole merge transaction
-fails.
+`merge_user` **tombstones** (soft-deletes) the ephemeral user — sets
+`merged_into_user_id` and keeps the row so its session token still resolves —
+rather than `DELETE`ing it. So `ON DELETE CASCADE` does **not** fire on a merge:
+every owned table is cleaned up by an explicit statement in `merge_user`. A new
+FK you don't handle there will silently leave the merged user's rows pointing at
+a tombstoned ghost. (Auth-layer queries must also exclude tombstoned users —
+`merged_into_user_id IS NOT NULL` — so ghosts don't surface in listings/search.)
 
 ## Pre-deploy: edit migrations in place
 

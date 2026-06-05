@@ -9,9 +9,22 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_session
+from app.leagues import get_default_league
 from app.main import app
-from app.models import User, UserToken
-from app.sessions import EMAIL_CHANGE_CONTEXT_PREFIX
+from app.models import (
+    Match,
+    MatchSettings,
+    MatchSide,
+    MatchSidePlayer,
+    MatchStatus,
+    User,
+    UserToken,
+)
+from app.sessions import (
+    EMAIL_CHANGE_CONTEXT_PREFIX,
+    EMAIL_MERGE_CONTEXT_PREFIX,
+    _pending_email_token_clause,
+)
 from tests._helpers import start_session
 
 
@@ -39,6 +52,36 @@ VALID_BODY = {
 async def _set_email(client: AsyncClient, **overrides) -> "httpx.Response":  # noqa: F821
     body = {**VALID_BODY, **overrides}
     return await client.post("/v1/me/email", json=body)
+
+
+def _finished_send_jobs(fake_email_queue) -> list:
+    """Every finished email-send job, oldest first."""
+    jobs = [
+        fake_email_queue.fetch_job(job_id)
+        for job_id in fake_email_queue.finished_job_registry.get_job_ids()
+    ]
+    jobs = [j for j in jobs if j is not None]
+    jobs.sort(key=lambda j: j.enqueued_at)
+    return jobs
+
+
+async def _record_match(db: AsyncSession, creator: User, *players: User) -> Match:
+    """Minimal completed match so a merge has something to move."""
+    league = await get_default_league(db)
+    settings = MatchSettings(team_size=1, best_of=5, affects_rating=False)
+    match = Match(
+        match_settings=settings,
+        league=league,
+        created_by_user_id=creator.id,
+        status=MatchStatus.completed,
+    )
+    for side_number, player in enumerate(players, start=1):
+        side = MatchSide(match=match, side_number=side_number)
+        side.players.append(MatchSidePlayer(match=match, user=player))
+    db.add(match)
+    await db.commit()
+    await db.refresh(match)
+    return match
 
 
 # ---- set email ------------------------------------------------------------
@@ -164,30 +207,79 @@ async def test_set_email_rejects_failed_captcha(
     assert "Captcha" in response.json()["detail"]
 
 
-async def test_set_email_with_taken_address_is_enumeration_safe(
+async def test_set_email_taken_address_starts_merge_for_guest(
     api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
 ):
-    """Submitting an address belonging to someone else must look identical
-    to a no-op success — same 202, same session response shape, no token
-    issued, no email enqueued. Returning 409 would let an attacker cycle
-    fresh `/v1/session` cookies to enumerate the user base."""
-    db_session.add(User(username="other", email="taken@example.com"))
+    """A guest who enters an address owned by an existing account is offered a
+    merge: we email the owner a sign-in link (a ``merge:<owner-id>`` token) and
+    return the *same* 202 + ``pending_email`` shape as a first-time set. The
+    HTTP response is identical to a free-address submit, so an attacker still
+    can't enumerate accounts by cycling fresh `/v1/session` cookies."""
+    owner = User(
+        username="other", email="taken@example.com", confirmed_at=datetime.now(UTC)
+    )
+    db_session.add(owner)
     await db_session.commit()
+    await db_session.refresh(owner)
     me = await start_session(api_client, db_session)
+
+    response = await _set_email(api_client, email="taken@example.com")
+    assert response.status_code == 202
+    # Same outward shape as a normal pending set.
+    assert response.json()["data"]["user"]["pending_email"] == "taken@example.com"
+
+    await db_session.refresh(me)
+    # The guest's own row is untouched until they click the link.
+    assert me.email is None
+    assert me.confirmed_at is None
+
+    token = (
+        await db_session.execute(
+            select(UserToken).where(
+                UserToken.context.startswith(EMAIL_MERGE_CONTEXT_PREFIX),
+                UserToken.user_id == me.id,
+            )
+        )
+    ).scalar_one()
+    assert token.context == f"{EMAIL_MERGE_CONTEXT_PREFIX}{owner.id}"
+    assert token.sent_to == "taken@example.com"
+
+    # The owner got the "sign in to your account" email, addressed to them.
+    jobs = _finished_send_jobs(fake_email_queue)
+    assert len(jobs) == 1
+    assert jobs[0].func_name == "app.email.send_merge_email"
+    assert jobs[0].args[0] == "taken@example.com"
+    assert jobs[0].args[2] == owner.username
+
+
+async def test_set_email_taken_address_is_noop_for_verified_caller(
+    api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
+):
+    """A caller who already has a confirmed email is *changing* addresses, not
+    merging. Folding their established account into someone else's would be
+    data loss — so a taken address stays the enumeration-safe no-op: no token,
+    no email."""
+    db_session.add(
+        User(
+            username="other", email="taken@example.com", confirmed_at=datetime.now(UTC)
+        )
+    )
+    me = await start_session(api_client, db_session)
+    me.email = "mine@example.com"
+    me.confirmed_at = datetime.now(UTC)
+    await db_session.commit()
 
     response = await _set_email(api_client, email="taken@example.com")
     assert response.status_code == 202
 
     await db_session.refresh(me)
-    # Caller's own row is untouched.
-    assert me.email is None
-    assert me.confirmed_at is None
+    assert me.email == "mine@example.com"
 
     tokens = (
         (
             await db_session.execute(
                 select(UserToken).where(
-                    UserToken.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX),
+                    _pending_email_token_clause(),
                     UserToken.user_id == me.id,
                 )
             )
@@ -387,13 +479,7 @@ async def test_changing_email_preserves_prior_verification(
 def _all_send_tokens(fake_email_queue) -> list[str]:
     """Return every raw token handed to a finished email send job, ordered
     by enqueue time (oldest first)."""
-    jobs = [
-        fake_email_queue.fetch_job(job_id)
-        for job_id in fake_email_queue.finished_job_registry.get_job_ids()
-    ]
-    jobs = [j for j in jobs if j is not None]
-    jobs.sort(key=lambda j: j.enqueued_at)
-    return [j.args[1] for j in jobs]
+    return [j.args[1] for j in _finished_send_jobs(fake_email_queue)]
 
 
 async def _capture_raw_token(
@@ -570,6 +656,165 @@ async def test_token_is_stored_hashed_not_plaintext(
     ).scalar_one()
     assert token_row.token == hashlib.sha256(raw_token.encode("utf-8")).digest()
     assert token_row.token != raw_token.encode("utf-8")
+
+
+# ---- confirm: merge into an existing account ------------------------------
+
+
+async def test_confirm_merge_signs_in_as_owner_and_moves_matches(
+    api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
+):
+    """Clicking a merge link folds the requesting guest into the account that
+    owns the address, carries their matches over, and signs the browser in as
+    that account."""
+    owner = User(
+        username="owner", email="taken@example.com", confirmed_at=datetime.now(UTC)
+    )
+    opponent = User(username="opponent")
+    db_session.add_all([owner, opponent])
+    await db_session.commit()
+    await db_session.refresh(owner)
+
+    guest = await start_session(api_client, db_session)
+    match = await _record_match(db_session, guest, guest, opponent)
+
+    raw_token = await _capture_raw_token(
+        api_client, db_session, fake_email_queue, email="taken@example.com"
+    )
+    response = await api_client.post("/v1/me/email/confirm", json={"token": raw_token})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["data"]["user"]["username"] == "owner"
+    assert body["data"]["user"]["email"] == "taken@example.com"
+    assert body["merged"]["matches_moved"] == 1
+
+    # The guest row is tombstoned — folded into the owner (soft-delete).
+    tombstoned = (
+        await db_session.execute(select(User).where(User.id == guest.id))
+    ).scalar_one_or_none()
+    assert tombstoned is not None
+    assert tombstoned.merged_into_user_id == owner.id
+
+    # The match's player now points at the owner.
+    player_ids = {
+        p.user_id
+        for p in (
+            await db_session.execute(
+                select(MatchSidePlayer).where(MatchSidePlayer.match_id == match.id)
+            )
+        )
+        .scalars()
+        .all()
+    }
+    assert owner.id in player_ids
+    assert guest.id not in player_ids
+
+    # The browser's cookie now resolves to the owner.
+    whoami = await api_client.get("/v1/session")
+    assert whoami.json()["data"]["user"]["username"] == "owner"
+
+
+async def test_confirm_merge_works_cross_device_via_token_binding(
+    api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
+):
+    """The merge follows the *requesting* guest recorded on the token, not the
+    session that clicks the link — so a desktop request confirmed on a fresh
+    (cookieless) browser still merges the right guest."""
+    from tests._helpers import make_client
+
+    owner = User(
+        username="owner", email="taken@example.com", confirmed_at=datetime.now(UTC)
+    )
+    db_session.add(owner)
+    await db_session.commit()
+    await db_session.refresh(owner)
+
+    guest = await start_session(api_client, db_session)
+    raw_token = await _capture_raw_token(
+        api_client, db_session, fake_email_queue, email="taken@example.com"
+    )
+
+    async with make_client() as other:
+        response = await other.post("/v1/me/email/confirm", json={"token": raw_token})
+        assert response.status_code == 200
+        assert response.json()["data"]["user"]["username"] == "owner"
+        assert other.cookies.get("session")
+
+    tombstoned = (
+        await db_session.execute(select(User).where(User.id == guest.id))
+    ).scalar_one_or_none()
+    assert tombstoned is not None
+    assert tombstoned.merged_into_user_id == owner.id
+
+
+async def test_confirm_merge_rejected_when_owner_changed_email(
+    api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
+):
+    """The token is only good while the owner still holds the address it was
+    cut against. If they move off it, the merge link is burned and refused —
+    no guess about who owns what leaks."""
+    owner = User(
+        username="owner", email="taken@example.com", confirmed_at=datetime.now(UTC)
+    )
+    db_session.add(owner)
+    await db_session.commit()
+
+    guest = await start_session(api_client, db_session)
+    raw_token = await _capture_raw_token(
+        api_client, db_session, fake_email_queue, email="taken@example.com"
+    )
+
+    owner.email = "moved@example.com"
+    await db_session.commit()
+
+    response = await api_client.post("/v1/me/email/confirm", json={"token": raw_token})
+    assert response.status_code == 400
+
+    # Guest survives un-tombstoned (nothing merged) and the token is gone.
+    survivor = (
+        await db_session.execute(select(User).where(User.id == guest.id))
+    ).scalar_one_or_none()
+    assert survivor is not None
+    assert survivor.merged_into_user_id is None
+    tokens = (
+        (
+            await db_session.execute(
+                select(UserToken).where(
+                    UserToken.context.startswith(EMAIL_MERGE_CONTEXT_PREFIX)
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert tokens == []
+
+
+async def test_resend_merge_token_resends_the_merge_email(
+    api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
+):
+    """Resending a pending merge re-sends the 'sign in to your account' email
+    to the owner — not the plain confirmation copy."""
+    owner = User(
+        username="owner", email="taken@example.com", confirmed_at=datetime.now(UTC)
+    )
+    db_session.add(owner)
+    await db_session.commit()
+    await db_session.refresh(owner)
+
+    await start_session(api_client, db_session)
+    await _set_email(api_client, email="taken@example.com")
+
+    response = await api_client.post(
+        "/v1/me/email/resend",
+        json={"captcha_token": "x", "fmm_hp_token": ""},
+    )
+    assert response.status_code == 202
+
+    last = _finished_send_jobs(fake_email_queue)[-1]
+    assert last.func_name == "app.email.send_merge_email"
+    assert last.args[0] == "taken@example.com"
+    assert last.args[2] == owner.username
 
 
 # ---- resend ---------------------------------------------------------------

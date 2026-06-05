@@ -16,3 +16,11 @@ export function hasAppEntered(): boolean {
     return false
   }
 }
+
+export function clearAppEntered(): void {
+  try {
+    window.localStorage.removeItem(APP_ENTERED_KEY)
+  } catch {
+    // Best-effort — see markAppEntered.
+  }
+}

@@ -4,7 +4,7 @@ import {
   useQuery,
   useQueryClient,
 } from '@tanstack/react-query'
-import { api, unwrap } from './client'
+import { ApiError, api, unwrap } from './client'
 import type { components } from './schema'
 
 export type Session = components['schemas']['SessionResponse']
@@ -18,6 +18,11 @@ export function sessionQueryOptions() {
     queryFn: async (): Promise<Session> =>
       unwrap('load session', await api.GET('/v1/session')),
     staleTime: 1000 * 60 * 5,
+    // Don't retry a 401 (session merged away): the 401 already cleared the
+    // cookie, so a retry would silently mint a *new* guest and race the
+    // redirect-to-login. Transient errors still retry.
+    retry: (failureCount, error) =>
+      !(error instanceof ApiError && error.status === 401) && failureCount < 3,
   })
 }
 
@@ -120,13 +125,36 @@ export function useResendEmailConfirmation() {
   })
 }
 
+export type MergePreview = components['schemas']['MergePreview']
+
+/** Side-effect-free look at an emailed link, to decide whether to show the
+ * "bring N matches over?" gate before finalizing. */
+export function useMergePreview() {
+  return useMutation({
+    mutationFn: async (token: string): Promise<MergePreview> =>
+      unwrap('check link', await api.POST('/v1/merge/preview', { body: { token } })),
+  })
+}
+
+/** Input for the finalize mutations. `skipMerge` is the gate's "not now": sign
+ * in without folding the guest's matches in. */
+export interface FinalizeTokenInput {
+  token: string
+  skipMerge?: boolean
+}
+
 export function useConfirmEmail() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: async (token: string): Promise<Session> =>
+    mutationFn: async ({
+      token,
+      skipMerge = false,
+    }: FinalizeTokenInput): Promise<Session> =>
       unwrap(
         'confirm email',
-        await api.POST('/v1/me/email/confirm', { body: { token } }),
+        await api.POST('/v1/me/email/confirm', {
+          body: { token, skip_merge: skipMerge },
+        }),
       ),
     onSuccess: (session) => {
       qc.setQueryData(SESSION_QUERY_KEY, session)
@@ -178,10 +206,15 @@ export function useLogout() {
 export function useConsumeLoginToken() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: async (token: string): Promise<Session> =>
+    mutationFn: async ({
+      token,
+      skipMerge = false,
+    }: FinalizeTokenInput): Promise<Session> =>
       unwrap(
         'sign in',
-        await api.POST('/v1/login/consume', { body: { token } }),
+        await api.POST('/v1/login/consume', {
+          body: { token, skip_merge: skipMerge },
+        }),
       ),
     onSuccess: (session) => {
       qc.setQueryData(SESSION_QUERY_KEY, session)

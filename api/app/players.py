@@ -135,6 +135,7 @@ async def list_recent_opponents(
                     select(User)
                     .where(
                         User.id != current_user.id,
+                        User.merged_into_user_id.is_(None),
                         User.id.notin_(played_ids),
                     )
                     .order_by(User.username)
@@ -174,6 +175,8 @@ async def search_players(
         select(User)
         .where(
             User.id != current_user.id,
+            # Exclude tombstoned (merged-away) guests so ghosts never surface.
+            User.merged_into_user_id.is_(None),
             User.username.ilike(pattern, escape="\\"),
         )
         .order_by(User.username)
@@ -344,6 +347,7 @@ async def list_players(
 
     base = (
         select(User)
+        .where(User.merged_into_user_id.is_(None))
         .outerjoin(
             UserLeagueRating,
             and_(
@@ -362,7 +366,9 @@ async def list_players(
     # `total` keys the pagination footer + drives the "Showing N-M of T" line.
     # Build the count from the same `q` filter; an unfiltered roster total
     # would mislead users searching for a niche substring.
-    count_query: Select[tuple[int]] = select(func.count()).select_from(User)
+    count_query: Select[tuple[int]] = (
+        select(func.count()).select_from(User).where(User.merged_into_user_id.is_(None))
+    )
     if q and q.strip():
         count_query = _username_substring_filter(count_query, q)
     total = (await db.execute(count_query)).scalar_one()
@@ -379,13 +385,23 @@ async def list_players(
 
 async def _load_player_by_id(db: AsyncSession, player_id: uuid.UUID) -> User | None:
     return (
-        await db.execute(select(User).where(User.id == player_id))
+        await db.execute(
+            select(User).where(
+                User.id == player_id,
+                User.merged_into_user_id.is_(None),
+            )
+        )
     ).scalar_one_or_none()
 
 
 async def _load_player_by_username(db: AsyncSession, username: str) -> User | None:
     return (
-        await db.execute(select(User).where(User.username == username))
+        await db.execute(
+            select(User).where(
+                User.username == username,
+                User.merged_into_user_id.is_(None),
+            )
+        )
     ).scalar_one_or_none()
 
 
