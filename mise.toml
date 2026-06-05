@@ -6,8 +6,8 @@ python = "3.13"
 description = "Rebuild and restart the fortymm-uat docker stack; smoke-check https://uat.fortymm.com"
 run = "./scripts/redeploy-uat.sh"
 
-[tasks.release-all]
-description = "Release everything: redeploy UAT, then build + upload the iOS app to TestFlight"
+[tasks.release-beta]
+description = "Release to test channels: redeploy UAT, then build + upload the iOS app to TestFlight"
 run = """
 #!/usr/bin/env bash
 set -euo pipefail
