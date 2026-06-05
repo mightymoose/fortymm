@@ -27,6 +27,13 @@ struct RootView: View {
                 .fullScreenCover(item: $session.pendingDeepLink) { link in
                     deepLinkDestination(link)
                 }
+        case let .signedOut(reason, email):
+            SessionEndedView(
+                reason: reason,
+                email: email,
+                onSignedIn: { session.resolveDeepLink($0) },
+                onContinueAsGuest: { Task { await session.load(force: true) } }
+            )
         case let .failed(message):
             sessionFailedView(message)
         }

@@ -1,5 +1,6 @@
 import hashlib
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 
 import pytest
 import pytest_asyncio
@@ -11,7 +12,7 @@ from app.db import get_session
 from app.main import app
 from app.models import Permission, Role, RolePermission, User, UserRole, UserToken
 from app.sessions import SESSION_COOKIE_NAME, SESSION_TOKEN_CONTEXT
-from tests._helpers import make_client
+from tests._helpers import make_client, start_session
 
 
 @pytest_asyncio.fixture
@@ -361,3 +362,52 @@ async def test_update_username_preserves_user_id_and_permissions(
         await db_session.execute(select(User).where(User.username == "renamed"))
     ).scalar_one()
     assert refreshed.id == original_id
+
+
+# ---- tombstoned (merged-away) sessions ------------------------------------
+
+
+async def _tombstone(db_session: AsyncSession, guest: User, owner_email: str) -> User:
+    """Stand up a verified owner and fold ``guest`` into it (soft-delete)."""
+    owner = User(username="owner", email=owner_email, confirmed_at=datetime.now(UTC))
+    db_session.add(owner)
+    await db_session.commit()
+    await db_session.refresh(owner)
+    guest.merged_into_user_id = owner.id
+    guest.merged_at = datetime.now(UTC)
+    await db_session.commit()
+    return owner
+
+
+async def test_session_with_merged_cookie_401s_instead_of_minting(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """A cookie whose guest was merged away must not silently mint a fresh
+    guest — it returns the structured `session_merged` 401 (with the owner's
+    email to prefill) and clears the dead cookie."""
+    guest = await start_session(api_client, db_session)
+    await _tombstone(db_session, guest, "owner@example.com")
+
+    response = await api_client.get("/v1/session")
+    assert response.status_code == 401
+    detail = response.json()["detail"]
+    assert detail["code"] == "session_merged"
+    assert detail["email"] == "owner@example.com"
+    # The dead cookie is cleared so the holder can start fresh.
+    assert "max-age=0" in response.headers.get("set-cookie", "").lower()
+
+
+async def test_authed_endpoint_with_merged_cookie_401s(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """The check lives at the shared auth seam, so *any* authed request — not
+    just GET /v1/session — rejects a tombstoned cookie instead of acting as the
+    merged-away ghost."""
+    guest = await start_session(api_client, db_session)
+    await _tombstone(db_session, guest, "owner@example.com")
+
+    response = await api_client.patch("/v1/me", json={"username": "ghost-rename"})
+    assert response.status_code == 401
+    assert response.json()["detail"]["code"] == "session_merged"
+    # (A garbage / no-token cookie still mints — see
+    # test_creates_new_session_when_cookie_invalid — only tombstones 401.)

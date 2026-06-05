@@ -19,9 +19,11 @@ struct ConfirmEmailView: View {
     var onClose: () -> Void
 
     private let service = ProfileService.shared
+    private let loginService = LoginService.shared
 
     private enum Phase {
         case verifying
+        case gate(MergePreview)
         case success(SessionResponse)
         case expired
         case unreachable
@@ -34,13 +36,19 @@ struct ConfirmEmailView: View {
             content
         }
         .background(LoginBackground())
-        .task { await confirm() }
+        .task { await start() }
     }
 
     @ViewBuilder
     private var content: some View {
         switch phase {
         case .verifying: verifying
+        case let .gate(preview):
+            MergeGateView(
+                preview: preview,
+                onBringThemOver: { Task { await confirm(skipMerge: false) } },
+                onNotNow: { Task { await confirm(skipMerge: true) } }
+            )
         case let .success(response): success(response)
         case .expired: expired
         case .unreachable: unreachable
@@ -176,7 +184,7 @@ struct ConfirmEmailView: View {
                     )
                 }
                 HStack(spacing: 10) {
-                    LoginButton(title: "Retry") { Task { await confirm() } }
+                    LoginButton(title: "Retry") { Task { await confirm(skipMerge: false) } }
                     LoginButton(title: "Close", kind: .ghost, fullWidth: false) { onClose() }
                 }
             }
@@ -185,10 +193,23 @@ struct ConfirmEmailView: View {
 
     // MARK: Confirm
 
-    private func confirm() async {
+    /// Preview the link first; a merge that would carry matches over waits at
+    /// the gate, everything else confirms straight away.
+    private func start() async {
+        let preview = await loginService.mergePreview(token: token)
+        if preview.isMerge, preview.guestMatchesCount > 0 {
+            phase = .gate(preview)
+        } else {
+            await confirm(skipMerge: false)
+        }
+    }
+
+    private func confirm(skipMerge: Bool) async {
         phase = .verifying
         do {
-            phase = .success(try await service.confirmEmail(token: token))
+            phase = .success(
+                try await service.confirmEmail(token: token, skipMerge: skipMerge)
+            )
         } catch LoginConsumeError.rejected {
             // Invalid / expired / already-used link — terminal.
             phase = .expired

@@ -518,6 +518,16 @@ export const handlers = [
     }
     return HttpResponse.json(mockSession)
   }),
+  // Default: not a merge, so the verify/confirm screens finalize straight away.
+  // Tests that exercise the gate override this with `server.use(...)`.
+  http.post('*/v1/merge/preview', () =>
+    HttpResponse.json({
+      is_merge: false,
+      owner_username: null,
+      guest_username: null,
+      guest_matches_count: 0,
+    }),
+  ),
   // ----- matches ---------------------------------------------------------
   http.post('*/v1/matches', async ({ request }) => {
     await delay(400)

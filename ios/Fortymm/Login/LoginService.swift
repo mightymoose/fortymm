@@ -39,15 +39,36 @@ struct LoginService {
     /// used, wrong account) and terminal; anything else (server error, offline)
     /// is transient and worth a retry. Keeping that distinction here, not in the
     /// view, is the same boundary-typing the rest of the API layer follows.
-    func consume(token: String) async throws -> SessionResponse {
+    func consume(token: String, skipMerge: Bool = false) async throws -> SessionResponse {
         do {
             return try await client.post(
-                "/v1/login/consume", body: ConsumeLoginBody(token: token)
+                "/v1/login/consume",
+                body: ConsumeLoginBody(token: token, skipMerge: skipMerge)
             )
         } catch let APIError.http(status, _) where (400..<500).contains(status) {
             throw LoginConsumeError.rejected
         } catch {
             throw LoginConsumeError.unreachable
+        }
+    }
+
+    /// Side-effect-free preview of an emailed link (`POST /v1/merge/preview`),
+    /// used by both the sign-in and email-confirm landings to decide whether to
+    /// show the "bring N matches over?" gate before finalizing. Non-throwing: a
+    /// preview failure simply reports "not a merge" so the caller finalizes
+    /// straight away rather than blocking on a hiccup.
+    func mergePreview(token: String) async -> MergePreview {
+        do {
+            return try await client.post(
+                "/v1/merge/preview", body: MergePreviewBody(token: token)
+            )
+        } catch {
+            return MergePreview(
+                isMerge: false,
+                ownerUsername: nil,
+                guestUsername: nil,
+                guestMatchesCount: 0
+            )
         }
     }
 }
@@ -76,5 +97,10 @@ private struct RequestLoginBody: Encodable {
 }
 
 private struct ConsumeLoginBody: Encodable {
+    let token: String
+    let skipMerge: Bool
+}
+
+private struct MergePreviewBody: Encodable {
     let token: String
 }

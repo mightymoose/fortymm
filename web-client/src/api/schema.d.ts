@@ -103,6 +103,11 @@ export interface paths {
          *     orphan guest user on every cross-device click. The endpoint also
          *     rotates the caller's session cookie to the token's owner so the
          *     confirming browser ends up signed in as the right user.
+         *
+         *     A *merge* token (``merge:<uuid>``) is handled separately: instead of
+         *     stamping an address onto the guest that requested it, the guest is folded
+         *     into the account that owns the address and the caller is signed in as that
+         *     account. See ``_confirm_account_merge``.
          */
         post: operations["confirm_email_v1_me_email_confirm_post"];
         delete?: never;
@@ -135,6 +140,10 @@ export interface paths {
          *     someone sign in without proving control of the inbox; the confirmation
          *     link clears that hurdle and (per ``confirm_email``) rotates them into
          *     a session anyway.
+         *
+         *     Records the requesting browser's guest on the token so the merge it drives
+         *     is token-bound (follows the guest cross-device), mirroring the settings
+         *     merge flow.
          */
         post: operations["request_login_email_v1_login_request_post"];
         delete?: never;
@@ -162,6 +171,32 @@ export interface paths {
          *     which guest session (if any) the browser arrived with.
          */
         post: operations["consume_login_token_v1_login_consume_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/merge/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preview Merge
+         * @description Side-effect-free look at an emailed link before it's consumed, so the
+         *     client can show a "bring N matches over?" confirmation. Never consumes,
+         *     rotates, or merges — a wrong/expired token simply returns ``is_merge=False``
+         *     and the client finalizes through the real confirm/consume endpoint.
+         *
+         *     Safe to return usernames + counts: the 256-bit token is the bearer
+         *     credential, so only someone holding the link can ask.
+         */
+        post: operations["preview_merge_v1_merge_preview_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -665,11 +700,21 @@ export interface components {
         ConfirmEmailRequest: {
             /** Token */
             token: string;
+            /**
+             * Skip Merge
+             * @default false
+             */
+            skip_merge: boolean;
         };
         /** ConsumeLoginRequest */
         ConsumeLoginRequest: {
             /** Token */
             token: string;
+            /**
+             * Skip Merge
+             * @default false
+             */
+            skip_merge: boolean;
         };
         /** DashboardNextMatch */
         DashboardNextMatch: {
@@ -1141,6 +1186,34 @@ export interface components {
          * @enum {string}
          */
         MatchStatus: "pending" | "in_progress" | "completed" | "disputed" | "voided";
+        /**
+         * MergePreview
+         * @description Side-effect-free look at an emailed link before it's consumed, so the
+         *     client can decide whether to show a "bring N matches over?" confirmation.
+         *
+         *     ``is_merge`` is true only for a link that would fold a guest into another
+         *     account (a settings merge token, or a sign-in token that recorded a
+         *     requesting guest). The client shows the gate only when there are matches to
+         *     carry (``guest_matches_count > 0``); otherwise it finalizes silently.
+         */
+        MergePreview: {
+            /** Is Merge */
+            is_merge: boolean;
+            /** Owner Username */
+            owner_username?: string | null;
+            /** Guest Username */
+            guest_username?: string | null;
+            /**
+             * Guest Matches Count
+             * @default 0
+             */
+            guest_matches_count: number;
+        };
+        /** MergePreviewRequest */
+        MergePreviewRequest: {
+            /** Token */
+            token: string;
+        };
         /**
          * MergeSummary
          * @description Reported by sign-in / email-confirm responses when the call merged the
@@ -1731,7 +1804,9 @@ export interface operations {
             query?: never;
             header?: never;
             path?: never;
-            cookie?: never;
+            cookie?: {
+                session?: string | null;
+            };
         };
         requestBody: {
             content: {
@@ -1781,6 +1856,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SessionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    preview_merge_v1_merge_preview_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MergePreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MergePreview"];
                 };
             };
             /** @description Validation Error */

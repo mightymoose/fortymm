@@ -10,12 +10,17 @@ struct SignInView: View {
     private let service = LoginService.shared
     @State private var captcha = TurnstileController()
 
-    @State private var email = ""
+    @State private var email: String
     @State private var touched = false
     @State private var captchaToken: String?
     @State private var serverError: String?
     @State private var sending = false
     @FocusState private var focused: Bool
+
+    init(initialEmail: String = "", onSent: @escaping (String) -> Void) {
+        self.onSent = onSent
+        _email = State(initialValue: initialEmail)
+    }
 
     private var validation: FieldValidation { ProfileRules.email(email) }
     private var invalid: Bool { serverError != nil || (touched && !validation.ok) }

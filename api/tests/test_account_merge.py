@@ -104,9 +104,12 @@ async def test_merge_repoints_match_side_players_and_creator(
     assert creator_id == verified.id
 
 
-async def test_merge_deletes_ephemeral_user_and_cascades_tokens(
+async def test_merge_tombstones_ephemeral_user_keeping_session_token(
     db_session: AsyncSession,
 ):
+    """Soft-delete: the ephemeral row survives with ``merged_into_user_id`` set,
+    its *session* token is kept (so its cookie still resolves and the auth layer
+    can report the merge), and its non-session tokens are dropped."""
     ephemeral = await _make_ephemeral(db_session, "drifting-grouse")
     verified = await _make_verified(db_session, "rita@example.com")
 
@@ -117,15 +120,26 @@ async def test_merge_deletes_ephemeral_user_and_cascades_tokens(
             token=hashlib.sha256(b"raw").digest(),
         )
     )
+    db_session.add(
+        UserToken(
+            user_id=ephemeral.id,
+            context="login",
+            token=hashlib.sha256(b"login-raw").digest(),
+        )
+    )
     await db_session.commit()
 
     await merge_user(db_session, from_user_id=ephemeral.id, to_user_id=verified.id)
     await db_session.commit()
 
-    assert (
+    tombstoned = (
         await db_session.execute(select(User).where(User.id == ephemeral.id))
-    ).scalar_one_or_none() is None
-    leftover_tokens = (
+    ).scalar_one_or_none()
+    assert tombstoned is not None
+    assert tombstoned.merged_into_user_id == verified.id
+    assert tombstoned.merged_at is not None
+
+    leftover = (
         (
             await db_session.execute(
                 select(UserToken).where(UserToken.user_id == ephemeral.id)
@@ -134,7 +148,8 @@ async def test_merge_deletes_ephemeral_user_and_cascades_tokens(
         .scalars()
         .all()
     )
-    assert leftover_tokens == []
+    # Session token kept (tombstone key); the login token dropped.
+    assert [t.context for t in leftover] == [SESSION_TOKEN_CONTEXT]
 
 
 async def test_merge_moves_league_membership_when_target_has_none(
@@ -324,12 +339,13 @@ async def test_merge_repoints_match_signatures(db_session: AsyncSession):
     )
     user_ids = {sig.user_id for sig in sigs}
     assert user_ids == {verified.id, opponent.id}
-    # And the ephemeral user is gone (would have blocked on the RESTRICT FK
-    # otherwise).
+    # And the ephemeral user is tombstoned, not dropped — the RESTRICT FK on
+    # match_signatures.user_id was satisfied by the re-point above.
     ephemeral_row = (
         await db_session.execute(select(User).where(User.id == ephemeral.id))
     ).scalar_one_or_none()
-    assert ephemeral_row is None
+    assert ephemeral_row is not None
+    assert ephemeral_row.merged_into_user_id == verified.id
 
 
 async def test_merge_with_match_signature_collision_drops_ephemeral(

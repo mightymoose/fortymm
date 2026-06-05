@@ -3,7 +3,8 @@ import { Link, createFileRoute } from '@tanstack/react-router'
 import { toast } from 'sonner'
 
 import { ApiError } from '@/api/client'
-import { useConfirmEmail } from '@/api/session'
+import { useConfirmEmail, useMergePreview } from '@/api/session'
+import { MergeGate } from '@/components/login/merge-gate'
 import { pageTitle } from '@/lib/page-title'
 
 export const Route = createFileRoute('/confirm-email')({
@@ -18,14 +19,25 @@ export const Route = createFileRoute('/confirm-email')({
 
 function ConfirmEmailPage() {
   const { token } = Route.useSearch()
+  const preview = useMergePreview()
   const confirm = useConfirmEmail()
   const fired = useRef(false)
 
+  // Preview the link first. A merge that would carry matches over waits for the
+  // user at the gate; everything else (plain confirm, empty guest, or a preview
+  // failure) finalizes straight away.
   useEffect(() => {
     if (fired.current || !token) return
     fired.current = true
-    confirm.mutate(token)
-  }, [token, confirm])
+    preview.mutate(token, {
+      onSuccess: (p) => {
+        if (!(p.is_merge && p.guest_matches_count > 0)) {
+          confirm.mutate({ token })
+        }
+      },
+      onError: () => confirm.mutate({ token }),
+    })
+  }, [token, preview, confirm])
 
   useEffect(() => {
     if (!confirm.isSuccess) return
@@ -39,13 +51,19 @@ function ConfirmEmailPage() {
     }
   }, [confirm.isSuccess, confirm.data])
 
-  const status: 'missing-token' | 'confirming' | 'ok' | 'error' = !token
+  const p = preview.data
+  const showGate =
+    confirm.status === 'idle' && !!p && p.is_merge && p.guest_matches_count > 0
+
+  const status: 'missing-token' | 'gate' | 'confirming' | 'ok' | 'error' = !token
     ? 'missing-token'
     : confirm.isSuccess
       ? 'ok'
       : confirm.isError
         ? 'error'
-        : 'confirming'
+        : showGate
+          ? 'gate'
+          : 'confirming'
 
   const errorMsg =
     status === 'missing-token'
@@ -53,6 +71,19 @@ function ConfirmEmailPage() {
       : confirm.error instanceof ApiError && confirm.error.detail
         ? confirm.error.detail
         : 'Confirmation failed.'
+
+  if (status === 'gate' && p) {
+    return (
+      <MergeGate
+        ownerUsername={p.owner_username ?? ''}
+        guestUsername={p.guest_username ?? null}
+        matchesCount={p.guest_matches_count}
+        busy={confirm.isPending}
+        onBringThemOver={() => confirm.mutate({ token })}
+        onNotNow={() => confirm.mutate({ token, skipMerge: true })}
+      />
+    )
+  }
 
   // Intentionally NOT wrapped in <AppShell> — AppShell calls useSession()
   // on mount, and `GET /v1/session` auto-mints a guest user for cookieless

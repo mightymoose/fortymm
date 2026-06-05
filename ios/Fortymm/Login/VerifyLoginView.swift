@@ -18,6 +18,7 @@ struct VerifyLoginView: View {
 
     private enum Phase {
         case verifying
+        case gate(MergePreview)
         case success(SessionResponse)
         case expired
         case unreachable
@@ -28,12 +29,18 @@ struct VerifyLoginView: View {
         Group {
             switch phase {
             case .verifying: verifying
+            case let .gate(preview):
+                MergeGateView(
+                    preview: preview,
+                    onBringThemOver: { Task { await verify(skipMerge: false) } },
+                    onNotNow: { Task { await verify(skipMerge: true) } }
+                )
             case let .success(response): success(response)
             case .expired: expired
             case .unreachable: unreachable
             }
         }
-        .task { await verify() }
+        .task { await start() }
     }
 
     // MARK: Verifying
@@ -174,7 +181,7 @@ struct VerifyLoginView: View {
                     .init(status: "ERR", method: "···", path: "/auth/session", note: "gave up after 12s"),
                 ])
                 HStack(spacing: 10) {
-                    LoginButton(title: "Retry") { Task { await verify() } }
+                    LoginButton(title: "Retry") { Task { await verify(skipMerge: false) } }
                     LoginButton(title: "Send a new link", kind: .ghost, fullWidth: false) { onRestart() }
                 }
             }
@@ -183,10 +190,23 @@ struct VerifyLoginView: View {
 
     // MARK: Consume
 
-    private func verify() async {
+    /// Preview the link first; a merge that would carry matches over waits at
+    /// the gate, everything else signs in straight away.
+    private func start() async {
+        let preview = await service.mergePreview(token: token)
+        if preview.isMerge, preview.guestMatchesCount > 0 {
+            phase = .gate(preview)
+        } else {
+            await verify(skipMerge: false)
+        }
+    }
+
+    private func verify(skipMerge: Bool) async {
         phase = .verifying
         do {
-            phase = .success(try await service.consume(token: token))
+            phase = .success(
+                try await service.consume(token: token, skipMerge: skipMerge)
+            )
         } catch LoginConsumeError.rejected {
             phase = .expired
         } catch {

@@ -6,9 +6,10 @@ import SwiftUI
 /// `SessionStore`.
 struct LoginFlowView: View {
     /// Where the flow begins. `.verifying` is the deep-link entry — wire it to a
-    /// universal-link handler later; `.email` is the in-app entry used today.
+    /// universal-link handler later; `.email` is the in-app entry used today
+    /// (optionally prefilled, e.g. with the owner's email after a session merge).
     enum Start {
-        case email
+        case email(prefill: String = "")
         case verifying(token: String)
     }
 
@@ -16,22 +17,22 @@ struct LoginFlowView: View {
     var onSignedIn: (SessionResponse) -> Void
 
     private enum Step {
-        case email
+        case email(prefill: String)
         case sent(email: String)
         case verifying(token: String)
     }
     @State private var step: Step
 
     init(
-        start: Start = .email,
+        start: Start = .email(),
         onClose: @escaping () -> Void,
         onSignedIn: @escaping (SessionResponse) -> Void
     ) {
         self.onClose = onClose
         self.onSignedIn = onSignedIn
         switch start {
-        case .email:
-            _step = State(initialValue: .email)
+        case let .email(prefill):
+            _step = State(initialValue: .email(prefill: prefill))
         case let .verifying(token):
             _step = State(initialValue: .verifying(token: token))
         }
@@ -48,15 +49,15 @@ struct LoginFlowView: View {
     @ViewBuilder
     private var content: some View {
         switch step {
-        case .email:
-            SignInView { sentTo in step = .sent(email: sentTo) }
+        case let .email(prefill):
+            SignInView(initialEmail: prefill) { sentTo in step = .sent(email: sentTo) }
         case let .sent(email):
-            CheckInboxView(email: email) { step = .email }
+            CheckInboxView(email: email) { step = .email(prefill: "") }
         case let .verifying(token):
             VerifyLoginView(
                 token: token,
                 onSignedIn: onSignedIn,
-                onRestart: { step = .email }
+                onRestart: { step = .email(prefill: "") }
             )
         }
     }
