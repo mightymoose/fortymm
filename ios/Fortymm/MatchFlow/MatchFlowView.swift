@@ -54,8 +54,7 @@ struct MatchFlowView: View {
                 if let final {
                     MatchDetailView(
                         initial: final,
-                        onBack: { onClose(true) },
-                        onAgain: resetForAnother
+                        onBack: { onClose(true) }
                     )
                     .transition(.move(edge: .trailing).combined(with: .opacity))
                 }
@@ -107,13 +106,6 @@ struct MatchFlowView: View {
             }
             busy = false
         }
-    }
-
-    private func resetForAnother() {
-        opponent = nil
-        final = nil
-        matchId = nil
-        withAnimation { step = .setup }
     }
 }
 

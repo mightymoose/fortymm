@@ -123,6 +123,10 @@ struct MatchListResponseDTO: Decodable {
     let page: Int
     let pageSize: Int
     let total: Int
+    /// Per-status totals for the filter tabs, keyed by the raw API status string
+    /// ("pending", "in_progress", …). Honors the active `q` but not the status
+    /// filter, so the counts stay stable as the user switches tabs.
+    let statusCounts: [String: Int]
 }
 
 // MARK: - Players (opponent picker)
@@ -131,16 +135,6 @@ struct PlayerReadDTO: Decodable {
     let id: UUID
     let username: String
     let rating: Double?
-}
-
-/// `GET /v1/players/{id}` — current user's own record drives the season card.
-struct PlayerDetailDTO: Decodable {
-    let id: UUID
-    let username: String
-    let rating: Double?
-    let wins: Int
-    let losses: Int
-    let form: String   // newest-first "WLWWL", up to 5
 }
 
 // MARK: - Request bodies

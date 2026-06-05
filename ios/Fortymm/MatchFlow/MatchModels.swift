@@ -114,6 +114,27 @@ struct FinalMatch: Identifiable {
     var canConfirm: Bool = false
     /// Server head-to-head, when the detail BFF provided it.
     var h2h: MatchH2H? = nil
+    // --- neutral, side-ordered view (for the matches list, which is a global
+    // feed where the viewer often isn't a participant). `you`/`opponent`/`win`
+    // above are the viewer-relative projection used by the detail screen; the
+    // fields below are framed by side number instead so a row can show *both*
+    // participants without pretending side 1 is the viewer. ---
+    /// Side 1 and side 2 players, in canonical side-number order.
+    var sideA: MatchPlayer = MatchSeed.me
+    var sideB: MatchPlayer = .guest
+    /// Games won by side 1 / side 2.
+    var sideAGames: Int = 0
+    var sideBGames: Int = 0
+    /// True when the signed-in user is on one of the sides. When false the row
+    /// is a spectator view: the W/L badge and rating delta don't apply.
+    var viewerIsParticipant: Bool = true
+}
+
+/// A page of the match list plus the per-status counts that drive the filter
+/// tab badges. `statusCounts` is keyed by the raw API status string.
+struct MatchListPage {
+    let items: [FinalMatch]
+    let statusCounts: [String: Int]
 }
 
 /// Head-to-head summary from the detail BFF, framed from the current user's

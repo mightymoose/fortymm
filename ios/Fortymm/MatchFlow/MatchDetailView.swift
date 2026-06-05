@@ -10,7 +10,6 @@ struct MatchDetailView: View {
     let initial: FinalMatch
     var service: MatchService = .shared
     var onBack: () -> Void
-    var onAgain: () -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var reveal = false
@@ -345,9 +344,8 @@ struct MatchDetailView: View {
         .padding(.horizontal, 16)
         .padding(.top, 14)
         .padding(.bottom, 30)
-        // Solid backing so scrolled content never shows through the bar or the
-        // outlined "Log another" button; the short fade above lets content
-        // dissolve as it scrolls up toward the bar.
+        // Solid backing so scrolled content never shows through the footer bar;
+        // the short fade above lets content dissolve as it scrolls up toward it.
         .background {
             FMColor.ink950
                 .ignoresSafeArea()
@@ -360,30 +358,19 @@ struct MatchDetailView: View {
         }
     }
 
-    /// Default footer: log another / back to the matches list.
+    /// Default footer: back to the matches list.
     private var defaultFooter: some View {
-        HStack(spacing: 10) {
-            Button(action: onAgain) {
-                Text("Log another")
-                    .font(FMFont.ui(15, weight: .semibold))
-                    .foregroundStyle(FMColor.fg2)
-                    .padding(.horizontal, 22)
-                    .frame(height: 50)
-                    .fmRoundedBorder(radius: 13, color: FMColor.borderDefault)
-            }
-            .buttonStyle(.plain)
-            Button(action: onBack) {
-                Text("Back to matches")
-                    .font(FMFont.ui(16, weight: .bold))
-                    .foregroundStyle(FMColor.fgInverse)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 50)
-                    .background(BallGradient())
-                    .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
-                    .shadow(color: FMColor.ball500.opacity(0.32), radius: 11, y: 8)
-            }
-            .buttonStyle(.plain)
+        Button(action: onBack) {
+            Text("Back to matches")
+                .font(FMFont.ui(16, weight: .bold))
+                .foregroundStyle(FMColor.fgInverse)
+                .frame(maxWidth: .infinity)
+                .frame(height: 50)
+                .background(BallGradient())
+                .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+                .shadow(color: FMColor.ball500.opacity(0.32), radius: 11, y: 8)
         }
+        .buttonStyle(.plain)
     }
 
     /// Sign-off footer: shown when the current user owes a confirm/dispute on a
