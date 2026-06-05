@@ -3,7 +3,11 @@ import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { toast } from 'sonner'
 
 import { ApiError } from '@/api/client'
-import { useConsumeLoginToken, useMergePreview } from '@/api/session'
+import {
+  type MergePreview,
+  useConsumeLoginToken,
+  useMergePreview,
+} from '@/api/session'
 import {
   ScreenError,
   ScreenVerify,
@@ -13,7 +17,6 @@ import { MergeGate } from '@/components/login/merge-gate'
 import { pageTitle } from '@/lib/page-title'
 
 type VerifyError = 'expired' | 'net'
-type Phase = 'idle' | 'previewing' | 'gate' | 'consuming'
 
 export const Route = createFileRoute('/login/verifying')({
   head: () => ({
@@ -34,11 +37,13 @@ function LoginVerifyingPage() {
   const navigate = useNavigate()
   const preview = useMergePreview()
   const consume = useConsumeLoginToken()
-  const [phase, setPhase] = useState<Phase>('idle')
+  // Holds the preview only while the cross-device gate is up; everything else
+  // (previewing, consuming) renders the same verifying screen.
+  const [gate, setGate] = useState<MergePreview | null>(null)
   const fired = useRef(false)
 
   const runConsume = (skipMerge: boolean) => {
-    setPhase('consuming')
+    setGate(null)
     consume.mutate(
       { token, skipMerge },
       {
@@ -73,11 +78,10 @@ function LoginVerifyingPage() {
   useEffect(() => {
     if (fired.current || !token || error) return
     fired.current = true
-    setPhase('previewing')
     preview.mutate(token, {
       onSuccess: (p) => {
         if (p.is_merge && p.guest_matches_count > 0) {
-          setPhase('gate')
+          setGate(p)
         } else {
           runConsume(false)
         }
@@ -114,7 +118,7 @@ function LoginVerifyingPage() {
         retrying={consume.isPending}
         onRetry={() => {
           fired.current = false
-          setPhase('idle')
+          setGate(null)
           navigate({ to: '/login/verifying', search: { token, error: undefined } })
         }}
         onSendNewLink={() =>
@@ -124,13 +128,12 @@ function LoginVerifyingPage() {
     )
   }
 
-  if (phase === 'gate' && preview.data) {
-    const p = preview.data
+  if (gate) {
     return (
       <MergeGate
-        ownerUsername={p.owner_username ?? ''}
-        guestUsername={p.guest_username ?? null}
-        matchesCount={p.guest_matches_count}
+        ownerUsername={gate.owner_username ?? ''}
+        guestUsername={gate.guest_username ?? null}
+        matchesCount={gate.guest_matches_count}
         busy={consume.isPending}
         onBringThemOver={() => runConsume(false)}
         onNotNow={() => runConsume(true)}

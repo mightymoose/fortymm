@@ -29,7 +29,12 @@ struct VerifyLoginView: View {
         Group {
             switch phase {
             case .verifying: verifying
-            case let .gate(preview): gate(preview)
+            case let .gate(preview):
+                MergeGateView(
+                    preview: preview,
+                    onBringThemOver: { Task { await verify(skipMerge: false) } },
+                    onNotNow: { Task { await verify(skipMerge: true) } }
+                )
             case let .success(response): success(response)
             case .expired: expired
             case .unreachable: unreachable
@@ -178,43 +183,6 @@ struct VerifyLoginView: View {
                 HStack(spacing: 10) {
                     LoginButton(title: "Retry") { Task { await verify(skipMerge: false) } }
                     LoginButton(title: "Send a new link", kind: .ghost, fullWidth: false) { onRestart() }
-                }
-            }
-        }
-    }
-
-    // MARK: Gate (cross-device confirm)
-
-    private func gate(_ preview: MergePreview) -> some View {
-        let count = preview.guestMatchesCount
-        let matchLabel = count == 1 ? "1 match" : "\(count) matches"
-        let from = preview.guestUsername.map { "@\($0)" } ?? "your guest session"
-        return LoginScaffold(
-            eyebrow: "Bring your matches",
-            eyebrowColor: FMColor.serve500,
-            line1: "Bring your",
-            line2: "matches over?",
-            accent: FMColor.serve500,
-            stepNo: "03",
-            stepLabel: "Confirm merge",
-            title: "Bring your matches over?",
-            subtitle: "Signing in as @\(preview.ownerUsername ?? "your account"). "
-                + "We can bring the \(matchLabel) from \(from) into this account."
-        ) {
-            VStack(alignment: .leading, spacing: 14) {
-                ReceiptCard(tint: FMColor.serve500.opacity(0.6), glow: true) {
-                    ReceiptHeader(
-                        badge: { StatusBadge(kind: .success) },
-                        eyebrow: "● BRING MATCHES",
-                        eyebrowColor: FMColor.serve500,
-                        title: "\(matchLabel) from \(from)"
-                    )
-                }
-                LoginButton(title: "Bring them over") {
-                    Task { await verify(skipMerge: false) }
-                }
-                LoginButton(title: "Not now — just sign me in", kind: .ghost) {
-                    Task { await verify(skipMerge: true) }
                 }
             }
         }

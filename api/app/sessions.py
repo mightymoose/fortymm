@@ -176,6 +176,32 @@ async def _merge_guest_into(
     return MergeSummary(matches_moved=summary.matches_moved)
 
 
+async def _sign_in_after_merge(
+    db: AsyncSession,
+    response: Response,
+    user: User,
+    merged: MergeSummary | None,
+) -> SessionResponse:
+    """Mint a fresh session for ``user``, commit the pending transaction, fire
+    the rating recompute when matches moved, rotate the cookie, and return the
+    session. The shared tail of the token-bound merge sign-in paths
+    (``consume_login_token`` and ``_confirm_account_merge``): the caller stages
+    the token deletion + merge, this finalizes."""
+    raw_session = secrets.token_urlsafe(32)
+    db.add(
+        UserToken(
+            user_id=user.id,
+            context=SESSION_TOKEN_CONTEXT,
+            token=_hash_token(raw_session),
+        )
+    )
+    await db.commit()
+    if merged is not None and merged.matches_moved > 0:
+        _enqueue_rating_recompute_after_merge(user.id)
+    _set_session_cookie(response, raw_session)
+    return await _build_session_response(db, user, merged=merged)
+
+
 def _hash_cookie_for_key(cookie: str) -> str:
     """Hash the raw session cookie before putting it into a Redis key. The
     cookie is a bearer credential; if it lands in Redis verbatim (snapshots,
@@ -965,7 +991,6 @@ async def _confirm_account_merge(
             detail="That confirmation link is invalid or expired.",
         )
 
-    raw_session = secrets.token_urlsafe(32)
     merged = (
         None if skip_merge else await _merge_guest_into(db, guest=guest, target=target)
     )
@@ -974,18 +999,7 @@ async def _confirm_account_merge(
         # — the inbox click still proves ownership, so sign them in as the owner.
         # A merge would have deleted this token; do it explicitly to stay single-use.
         await db.delete(token_row)
-    db.add(
-        UserToken(
-            user_id=target.id,
-            context=SESSION_TOKEN_CONTEXT,
-            token=_hash_token(raw_session),
-        )
-    )
-    await db.commit()
-    if merged is not None and merged.matches_moved > 0:
-        _enqueue_rating_recompute_after_merge(target.id)
-    _set_session_cookie(response, raw_session)
-    return await _build_session_response(db, target, merged=merged)
+    return await _sign_in_after_merge(db, response, target, merged)
 
 
 @router.post(
@@ -1215,19 +1229,7 @@ async def consume_login_token(
         merged = await _merge_guest_into(db, guest=guest, target=user)
     else:
         merged = await _maybe_merge_prior_session(db, session_cookie, user)
-    raw_session = secrets.token_urlsafe(32)
-    db.add(
-        UserToken(
-            user_id=user.id,
-            context=SESSION_TOKEN_CONTEXT,
-            token=_hash_token(raw_session),
-        )
-    )
-    await db.commit()
-    if merged is not None and merged.matches_moved > 0:
-        _enqueue_rating_recompute_after_merge(user.id)
-    _set_session_cookie(response, raw_session)
-    return await _build_session_response(db, user, merged=merged)
+    return await _sign_in_after_merge(db, response, user, merged)
 
 
 @router.post(
