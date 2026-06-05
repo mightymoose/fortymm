@@ -67,10 +67,11 @@ struct ProfileService {
     /// already used) and terminal; anything else is transient and worth a retry.
     /// Keeping that boundary-typing in the service, not the view, is the
     /// convention the rest of the API layer follows.
-    func confirmEmail(token: String) async throws -> SessionResponse {
+    func confirmEmail(token: String, skipMerge: Bool = false) async throws -> SessionResponse {
         do {
             return try await client.post(
-                "/v1/me/email/confirm", body: ConfirmEmailBody(token: token)
+                "/v1/me/email/confirm",
+                body: ConfirmEmailBody(token: token, skipMerge: skipMerge)
             )
         } catch let APIError.http(status, _) where (400..<500).contains(status) {
             throw LoginConsumeError.rejected
@@ -103,4 +104,5 @@ private struct ResendEmailBody: Encodable {
 
 private struct ConfirmEmailBody: Encodable {
     let token: String
+    let skipMerge: Bool
 }

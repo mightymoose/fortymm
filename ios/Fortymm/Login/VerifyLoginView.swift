@@ -18,6 +18,7 @@ struct VerifyLoginView: View {
 
     private enum Phase {
         case verifying
+        case gate(MergePreview)
         case success(SessionResponse)
         case expired
         case unreachable
@@ -28,12 +29,13 @@ struct VerifyLoginView: View {
         Group {
             switch phase {
             case .verifying: verifying
+            case let .gate(preview): gate(preview)
             case let .success(response): success(response)
             case .expired: expired
             case .unreachable: unreachable
             }
         }
-        .task { await verify() }
+        .task { await start() }
     }
 
     // MARK: Verifying
@@ -174,8 +176,45 @@ struct VerifyLoginView: View {
                     .init(status: "ERR", method: "···", path: "/auth/session", note: "gave up after 12s"),
                 ])
                 HStack(spacing: 10) {
-                    LoginButton(title: "Retry") { Task { await verify() } }
+                    LoginButton(title: "Retry") { Task { await verify(skipMerge: false) } }
                     LoginButton(title: "Send a new link", kind: .ghost, fullWidth: false) { onRestart() }
+                }
+            }
+        }
+    }
+
+    // MARK: Gate (cross-device confirm)
+
+    private func gate(_ preview: MergePreview) -> some View {
+        let count = preview.guestMatchesCount
+        let matchLabel = count == 1 ? "1 match" : "\(count) matches"
+        let from = preview.guestUsername.map { "@\($0)" } ?? "your guest session"
+        return LoginScaffold(
+            eyebrow: "Bring your matches",
+            eyebrowColor: FMColor.serve500,
+            line1: "Bring your",
+            line2: "matches over?",
+            accent: FMColor.serve500,
+            stepNo: "03",
+            stepLabel: "Confirm merge",
+            title: "Bring your matches over?",
+            subtitle: "Signing in as @\(preview.ownerUsername ?? "your account"). "
+                + "We can bring the \(matchLabel) from \(from) into this account."
+        ) {
+            VStack(alignment: .leading, spacing: 14) {
+                ReceiptCard(tint: FMColor.serve500.opacity(0.6), glow: true) {
+                    ReceiptHeader(
+                        badge: { StatusBadge(kind: .success) },
+                        eyebrow: "● BRING MATCHES",
+                        eyebrowColor: FMColor.serve500,
+                        title: "\(matchLabel) from \(from)"
+                    )
+                }
+                LoginButton(title: "Bring them over") {
+                    Task { await verify(skipMerge: false) }
+                }
+                LoginButton(title: "Not now — just sign me in", kind: .ghost) {
+                    Task { await verify(skipMerge: true) }
                 }
             }
         }
@@ -183,10 +222,23 @@ struct VerifyLoginView: View {
 
     // MARK: Consume
 
-    private func verify() async {
+    /// Preview the link first; a merge that would carry matches over waits at
+    /// the gate, everything else signs in straight away.
+    private func start() async {
+        let preview = await service.mergePreview(token: token)
+        if preview.isMerge, preview.guestMatchesCount > 0 {
+            phase = .gate(preview)
+        } else {
+            await verify(skipMerge: false)
+        }
+    }
+
+    private func verify(skipMerge: Bool) async {
         phase = .verifying
         do {
-            phase = .success(try await service.consume(token: token))
+            phase = .success(
+                try await service.consume(token: token, skipMerge: skipMerge)
+            )
         } catch LoginConsumeError.rejected {
             phase = .expired
         } catch {
