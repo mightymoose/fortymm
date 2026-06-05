@@ -9,6 +9,10 @@ final class SessionStore: ObservableObject {
         case idle
         case loading
         case loaded(SessionUser)
+        /// The cookie's guest was merged into another account (on this or another
+        /// device). Route to sign-in with the reason + the owner's email to
+        /// prefill — never silently mint a different guest.
+        case signedOut(reason: String, email: String?)
         case failed(String)
     }
 
@@ -44,9 +48,29 @@ final class SessionStore: ObservableObject {
     }
 
     private let client: APIClient
+    private var cancellables = Set<AnyCancellable>()
 
     init(client: APIClient = .shared) {
         self.client = client
+        // Any request can report the session was merged away (the dead cookie
+        // still resolves server-side). Listen globally and route to sign-in.
+        NotificationCenter.default
+            .publisher(for: APIClient.sessionEndedNotification)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] note in
+                let reason = (note.userInfo?["message"] as? String)
+                    ?? "Your session has ended. Sign in to continue."
+                let email = note.userInfo?["email"] as? String
+                Task { @MainActor in self?.signedOut(reason: reason, email: email) }
+            }
+            .store(in: &cancellables)
+    }
+
+    /// Drop into the signed-out state (merged away). Clears any pending deep
+    /// link so its cover doesn't sit over the sign-in screen.
+    func signedOut(reason: String, email: String?) {
+        pendingDeepLink = nil
+        state = .signedOut(reason: reason, email: email)
     }
 
     /// Fold an updated user — returned by a profile mutation (username/email
@@ -66,6 +90,8 @@ final class SessionStore: ObservableObject {
         do {
             let response = try await client.getSession()
             state = .loaded(response.data.user)
+        } catch let APIError.sessionMerged(message, email) {
+            signedOut(reason: message, email: email)
         } catch {
             state = .failed(error.fmMessage)
         }

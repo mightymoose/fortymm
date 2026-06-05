@@ -3,9 +3,13 @@ import { createRoot } from 'react-dom/client'
 import { RouterProvider, createRouter } from '@tanstack/react-router'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { ReactQueryDevtools } from '@tanstack/react-query-devtools'
+import { toast } from 'sonner'
 import './index.css'
 import { Toaster } from '@/components/ui/sonner'
 import { NotFoundPage } from '@/components/not-found-page'
+import { setSessionEndedHandler } from '@/api/client'
+import { SESSION_QUERY_KEY } from '@/api/session'
+import { clearAppEntered } from '@/lib/landing-redirect'
 import { routeTree } from './routeTree.gen'
 
 const queryClient = new QueryClient({
@@ -27,6 +31,15 @@ declare module '@tanstack/react-router' {
     router: typeof router
   }
 }
+
+// When any request reports the session was merged away on another device, drop
+// the stale session, flash the reason, and route to sign-in (email prefilled).
+setSessionEndedHandler(({ message, email }) => {
+  clearAppEntered()
+  queryClient.removeQueries({ queryKey: SESSION_QUERY_KEY })
+  toast.message(message)
+  void router.navigate({ to: '/login', search: { email, error: undefined } })
+})
 
 async function unregisterServiceWorkers() {
   if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return

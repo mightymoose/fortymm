@@ -43,6 +43,11 @@ router = APIRouter()
 
 SESSION_COOKIE_NAME = "session"
 SESSION_TOKEN_CONTEXT = "session"
+# Stable `code` on the 401 we raise when a cookie resolves to a tombstoned
+# (merged-away) guest, so clients can tell "your session was merged, sign in"
+# apart from an ordinary auth failure and redirect to login (with the owner's
+# email prefilled) instead of looping.
+SESSION_MERGED_CODE = "session_merged"
 # Email-change confirmation tokens carry the *prior* address in their context
 # (e.g. "change:old@example.com", or "change:" on first-ever set). This gives
 # us an audit trail of what each token was changing away from. Look up
@@ -204,6 +209,45 @@ async def _find_session_user(db: AsyncSession, raw_token: str) -> User | None:
     return user_result.scalar_one_or_none()
 
 
+def _clear_cookie_header() -> dict[str, str]:
+    """A ``Set-Cookie`` that clears the session cookie, for attaching to the 401
+    we raise when a cookie resolves to a tombstoned guest. The cookie is
+    HttpOnly, so only the server can drop it — clearing it lets the holder start
+    a fresh guest from the login screen. Mirror ``_clear_session_cookie``'s
+    attributes so the browser actually matches and drops it."""
+    attrs = [
+        f"{SESSION_COOKIE_NAME}=",
+        "Path=/",
+        "Max-Age=0",
+        "HttpOnly",
+        "SameSite=lax",
+    ]
+    if _cookie_secure():
+        attrs.append("Secure")
+    return {"set-cookie": "; ".join(attrs)}
+
+
+async def _merged_session_exception(db: AsyncSession, user: User) -> HTTPException:
+    """Build the 401 for a cookie that resolves to a tombstoned (merged-away)
+    guest. Carries the stable ``SESSION_MERGED_CODE`` so clients redirect to
+    login rather than treating it as an ordinary auth failure, plus the owning
+    account's email to prefill — safe, since the holder is the one who entered
+    it. Also clears the dead cookie."""
+    owner = await db.get(User, user.merged_into_user_id)
+    detail: dict[str, str] = {
+        "code": SESSION_MERGED_CODE,
+        "message": "This guest session was merged into your account. "
+        "Sign in to continue.",
+    }
+    if owner is not None and owner.email:
+        detail["email"] = owner.email
+    return HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail=detail,
+        headers=_clear_cookie_header(),
+    )
+
+
 async def _build_session_response(
     db: AsyncSession, user: User, merged: MergeSummary | None = None
 ) -> SessionResponse:
@@ -239,7 +283,13 @@ async def _maybe_merge_prior_session(
     prior_user = await _find_session_user(db, session_cookie)
     if prior_user is None or prior_user.id == target_user.id:
         return None
-    if prior_user.confirmed_at is not None:
+    # Skip a verified prior (two real accounts share a browser — siphoning one
+    # would be data loss) and an already-tombstoned prior (a ghost; never
+    # re-merge it).
+    if (
+        prior_user.confirmed_at is not None
+        or prior_user.merged_into_user_id is not None
+    ):
         return None
     summary = await merge_user(
         db, from_user_id=prior_user.id, to_user_id=target_user.id
@@ -314,6 +364,12 @@ async def get_session_endpoint(
     user: User | None = None
     if session_cookie:
         user = await _find_session_user(db, session_cookie)
+        if user is not None and user.merged_into_user_id is not None:
+            # The cookie's guest was folded into another account. Don't silently
+            # mint a fresh guest (that would quietly swap identities) — tell the
+            # holder so they sign in. A no-cookie / garbage-cookie request still
+            # mints below, preserving the zero-friction first visit.
+            raise await _merged_session_exception(db, user)
     if user is None:
         user, raw_token = await _create_session(db)
         _set_session_cookie(response, raw_token)
@@ -355,18 +411,32 @@ async def get_optional_user(
     """
     if not session_cookie:
         return None
-    return await _find_session_user(db, session_cookie)
+    user = await _find_session_user(db, session_cookie)
+    if user is not None and user.merged_into_user_id is not None:
+        # Tombstoned guest → render anonymously on optional endpoints; the next
+        # required-auth call (or the session bootstrap) surfaces the redirect.
+        return None
+    return user
 
 
 async def get_current_user(
-    user: Annotated[User | None, Depends(get_optional_user)],
+    session_cookie: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None,
+    db: AsyncSession = Depends(get_session),
 ) -> User:
     """Resolve the authenticated user from the session cookie.
 
     Unlike ``GET /v1/session``, this dependency never mints a new session —
     endpoints that create or mutate data require an already-established
     session and respond ``401`` otherwise.
+
+    Resolves the cookie directly (rather than via ``get_optional_user``) so it
+    can tell a *tombstoned* guest — whose cookie still resolves — apart from no
+    session at all, and raise the structured ``session_merged`` 401 that sends
+    the holder to sign in instead of letting them act as a merged-away ghost.
     """
+    user = await _find_session_user(db, session_cookie) if session_cookie else None
+    if user is not None and user.merged_into_user_id is not None:
+        raise await _merged_session_exception(db, user)
     if user is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -818,6 +888,8 @@ async def _confirm_account_merge(
         or target is None
         or guest.id == target.id
         or guest.confirmed_at is not None
+        or guest.merged_into_user_id is not None
+        or target.merged_into_user_id is not None
         or target.email != token_row.sent_to
     ):
         await db.delete(token_row)

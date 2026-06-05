@@ -4,7 +4,7 @@ import {
   useQuery,
   useQueryClient,
 } from '@tanstack/react-query'
-import { api, unwrap } from './client'
+import { ApiError, api, unwrap } from './client'
 import type { components } from './schema'
 
 export type Session = components['schemas']['SessionResponse']
@@ -18,6 +18,11 @@ export function sessionQueryOptions() {
     queryFn: async (): Promise<Session> =>
       unwrap('load session', await api.GET('/v1/session')),
     staleTime: 1000 * 60 * 5,
+    // Don't retry a 401 (session merged away): the 401 already cleared the
+    // cookie, so a retry would silently mint a *new* guest and race the
+    // redirect-to-login. Transient errors still retry.
+    retry: (failureCount, error) =>
+      !(error instanceof ApiError && error.status === 401) && failureCount < 3,
   })
 }
 
