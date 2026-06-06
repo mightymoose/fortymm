@@ -157,7 +157,10 @@ function SaveYourMatchActive({
   }
 
   return (
-    <section className="md-save" aria-label="Save this match">
+    <section
+      className={cn('md-save', view.canConfirm && 'md-save--soft')}
+      aria-label="Save this match"
+    >
       <div className="md-save__hd">
         <div className="md-save__kicker">
           <span className="ball-dot" aria-hidden="true" /> Nice match

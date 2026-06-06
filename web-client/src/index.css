@@ -2453,6 +2453,13 @@ body.dark.fortymm-theme {
   gap: 16px;
   box-shadow: var(--shadow-glow);
 }
+/* When the featured sign-off callout leads the page above this card, step the
+   save nudge down to the plain card treatment so two Featured glows don't
+   compete — the sign-off action stays the single point of emphasis. */
+.fortymm-theme .md-save--soft {
+  border-color: var(--border-subtle);
+  box-shadow: var(--shadow-sm);
+}
 .fortymm-theme .md-save__hd {
   display: flex;
   align-items: center;
