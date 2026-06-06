@@ -545,6 +545,18 @@ function PageTitle({
   )
 }
 
+// Shared derivation for both the primary and compact score banners: the orange
+// accent, the "vs <opponent>" headline, and the route into scoring.
+function scoreBannerView(banner: DashboardScoreBanner) {
+  const opponent = banner.opponent_username
+  return {
+    accent: C.ball500,
+    opponent,
+    headline: opponent ? `vs ${opponent}` : NO_OPPONENT_LABEL,
+    scoringRoute: scoringNewRoute(banner.match_id, banner.current_game_number),
+  }
+}
+
 function ScoreBanner({
   banner,
   compact,
@@ -552,13 +564,7 @@ function ScoreBanner({
   banner: DashboardScoreBanner
   compact: boolean
 }) {
-  const accent = C.ball500
-  const opponent = banner.opponent_username
-  const headline = opponent ? `vs ${opponent}` : NO_OPPONENT_LABEL
-  const scoringRoute = scoringNewRoute(
-    banner.match_id,
-    banner.current_game_number,
-  )
+  const { accent, opponent, headline, scoringRoute } = scoreBannerView(banner)
   return (
     <Card highlight padding={0} data-testid="dashboard-score-banner">
       <div style={{ position: 'relative', padding: compact ? '20px 18px' : '22px 26px' }}>
@@ -665,48 +671,25 @@ function ScoreBanner({
   )
 }
 
-// Used when a player has more than one match waiting for their score. The
-// primary ScoreBanner above keeps the single hero-orange CTA; this strip
-// uses an amber accent so a second pending match is impossible to miss
-// without dimming the priority of the headline match.
+// Used when a player has more than one match waiting for their score. Wraps the
+// shared design-system Card with the same "Featured" highlight (orange ring +
+// glow) as the primary ScoreBanner above, just in a compact single-row layout.
 function CompactScoreBanner({ banner }: { banner: DashboardScoreBanner }) {
-  const opponent = banner.opponent_username
-  const headline = opponent ? `vs ${opponent}` : NO_OPPONENT_LABEL
-  const scoringRoute = scoringNewRoute(
-    banner.match_id,
-    banner.current_game_number,
-  )
+  const { accent, opponent, headline, scoringRoute } = scoreBannerView(banner)
   return (
-    <div
+    <Card
+      highlight
+      padding="14px 18px"
       data-testid="dashboard-score-banner-compact"
-      style={{
-        position: 'relative',
-        background: `linear-gradient(180deg, rgba(255,196,61,0.06) 0%, rgba(11,13,18,0) 100%), ${C.ink800}`,
-        border: '1px solid rgba(255,196,61,0.24)',
-        borderRadius: 12,
-        padding: '14px 18px',
-        display: 'flex',
-        alignItems: 'center',
-        gap: 16,
-      }}
+      style={{ display: 'flex', alignItems: 'center', gap: 16 }}
     >
-      <div
-        style={{
-          position: 'absolute',
-          top: 0,
-          left: 0,
-          right: 0,
-          height: 2,
-          background: `linear-gradient(90deg, ${C.warn} 0%, ${C.warn} 50%, transparent 100%)`,
-        }}
-      />
-      <BallDot live color={C.warn} size={8} />
-      <UserAvatar name={opponent} size={36} />
+      <BallDot live color={accent} size={8} />
+      <UserAvatar name={opponent} size={36} ring ringColor={accent} />
       <div style={{ flex: 1, minWidth: 0 }}>
         <div
           style={{
             font: `700 10px ${MONO}`,
-            color: C.warn,
+            color: accent,
             letterSpacing: '0.16em',
             marginBottom: 2,
           }}
@@ -730,12 +713,11 @@ function CompactScoreBanner({ banner }: { banner: DashboardScoreBanner }) {
         kind="secondary"
         size="md"
         iconRight={<ArrowRight size={14} strokeWidth={1.75} />}
-        style={{ borderColor: 'rgba(255,196,61,0.4)', color: C.warn }}
         {...scoringRoute}
       >
         Enter score
       </Button>
-    </div>
+    </Card>
   )
 }
 
