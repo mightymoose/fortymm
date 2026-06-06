@@ -1,11 +1,15 @@
+import asyncio
 import uuid
+from collections.abc import Awaitable, Callable
 
 import pytest
+from fastapi import HTTPException
 from httpx import AsyncClient
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 
+from app.matches import confirm_match_result, dispute_match_result
 from app.models import (
     League,
     LeagueVisibility,
@@ -13,6 +17,8 @@ from app.models import (
     MatchGame,
     MatchGameScore,
     MatchSide,
+    MatchStatus,
+    User,
 )
 from tests._helpers import make_client, make_user, opponent_session, start_session
 
@@ -1815,3 +1821,78 @@ async def test_list_row_can_confirm_flag_for_pending_signer(
         opp_list = (await opp_client.get("/v1/matches")).json()
         opp_row = next(r for r in opp_list["items"] if r["id"] == match["id"])
         assert opp_row["can_confirm"] is True
+
+
+async def test_concurrent_confirm_and_dispute_serialize(
+    api_client: AsyncClient, db_session: AsyncSession, engine: AsyncEngine
+):
+    """Regression for #365. The opponent firing ``POST /confirmation`` and
+    ``POST /dispute`` at the same instant must not corrupt the match.
+
+    Before the row lock in ``_load_match_for_scoring(..., lock=True)`` both
+    transactions read the same pre-image, both passed ``_enforce_confirmable``,
+    and both committed — leaving a ``completed`` match with ``won=None`` on
+    both sides, a single signature, and a rating change applied. The lock
+    serializes them: exactly one transition wins, the other re-reads the
+    committed post-image and 409s, and the match invariants always hold.
+
+    This drives the two route handlers on *separate* DB sessions (real
+    distinct Postgres connections) via ``asyncio.gather`` so the ``FOR UPDATE``
+    actually blocks — the shared ``db_session`` override can't surface the race.
+    """
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "race-opp") as (_opp_client, opp):
+        # Set up a rated best-of-1 in "Awaiting confirmation": creator posts a
+        # decided result, leaving the opponent owing a signature. These HTTP
+        # calls commit, so fresh sessions on the same engine see the rows.
+        match = await _create_match(api_client, opp.id, best_of=1)
+        await _post_results(api_client, match["id"], best_of=1)
+        match_id = uuid.UUID(match["id"])
+        opp_id = opp.id
+
+        make_session = async_sessionmaker(engine, expire_on_commit=False)
+
+        async def run(
+            handler: Callable[[uuid.UUID, User, AsyncSession], Awaitable[object]],
+        ) -> object:
+            # Each racer gets its own session/connection, mirroring two
+            # concurrent requests. Return the HTTP status on rejection so the
+            # assertions can tell winner from loser.
+            async with make_session() as session:
+                opp_user = (
+                    await session.execute(select(User).where(User.id == opp_id))
+                ).scalar_one()
+                try:
+                    await handler(match_id, opp_user, session)
+                    return "ok"
+                except HTTPException as exc:
+                    return exc.status_code
+
+        outcomes = await asyncio.gather(
+            run(confirm_match_result), run(dispute_match_result)
+        )
+
+        # Exactly one transition wins; the other is cleanly rejected (409),
+        # never a second silent success.
+        assert sorted(str(o) for o in outcomes) == ["409", "ok"], outcomes
+
+        # The committed match holds its invariants no matter which won.
+        async with make_session() as verify:
+            final = (
+                await verify.execute(
+                    select(Match)
+                    .where(Match.id == match_id)
+                    .options(selectinload(Match.sides), selectinload(Match.signatures))
+                )
+            ).scalar_one()
+            sides = sorted(final.sides, key=lambda s: s.side_number)
+            if final.status == MatchStatus.completed:
+                # Confirm won: a real outcome and both signatures present.
+                assert {s.won for s in sides} == {True, False}, [s.won for s in sides]
+                assert len(final.signatures) == 2
+            else:
+                # Dispute won: rewound to in_progress with no live signatures
+                # and no recorded winner.
+                assert final.status == MatchStatus.in_progress
+                assert final.signatures == []
+                assert [s.won for s in sides] == [None, None]
