@@ -1279,12 +1279,14 @@ async def _lock_match_row(db: AsyncSession, match_id: uuid.UUID) -> None:
     forces the second transaction to wait for the first to commit and then
     re-read the post-image, so its guard returns a clean 409.
 
-    It's a thin ``SELECT matches.id ... FOR UPDATE`` rather than locking the
-    full eager query: ``match_eager_options`` outer-joins nullable child rows
-    (sides without players, gameless matches), which Postgres refuses to lock
-    (``FOR UPDATE cannot be applied to the nullable side of an outer join``).
-    Locking just the parent row is enough — every sign-off transition reads
-    and writes that match's children under cover of this lock."""
+    It's a thin ``SELECT matches.id ... FOR UPDATE`` rather than adding
+    ``.with_for_update()`` to the eager ``_load_match`` query: a narrow
+    lock-only select is cheaper than re-running ``match_eager_options`` (which
+    fans out into a selectinload query per relationship) just to take the lock,
+    and acquiring it on its own line makes the lock-then-read ordering explicit
+    — the subsequent load sees the serialized state. Locking just the parent
+    row is enough — every sign-off transition reads and writes that match's
+    children under cover of this lock."""
     await db.execute(select(Match.id).where(Match.id == match_id).with_for_update())
 
 
