@@ -128,6 +128,53 @@ struct FinalMatch: Identifiable {
     /// True when the signed-in user is on one of the sides. When false the row
     /// is a spectator view: the W/L badge and rating delta don't apply.
     var viewerIsParticipant: Bool = true
+    /// True while the match is live (`in_progress`) — not yet decided or voided.
+    var inProgress: Bool = false
+    /// The viewer can enter/continue scores: a participant on a live match with
+    /// no posted result currently awaiting confirmation. Drives the "resume
+    /// scoring" affordances on the detail, list, and dashboard surfaces.
+    var canScore: Bool = false
+    /// The saved games already form a decided, valid match and the viewer can
+    /// post the result. True for a match scored to a decision but never posted
+    /// (e.g. a web user entered the games then left) — which `canScore` is
+    /// *false* for, since there's no next game to enter. Drives the detail
+    /// screen's "Post result" recovery path.
+    var canFinalize: Bool = false
+    /// The viewer's side number (1 or 2). Used to orient entered scores back to
+    /// the canonical side-1/side-2 axis when resuming a match the viewer didn't
+    /// create. Defaults to side 1 (the match creator).
+    var yourSideNumber: Int = 1
+
+    /// The viewer can resume entering scores: a participant on a live match with
+    /// no posted result awaiting confirmation. Single source of truth for the
+    /// "Score" affordances on the list, detail, and dashboard surfaces.
+    var canResume: Bool { canScore && inProgress && !awaitingConfirmation }
+
+    /// Context for resuming live scoring, or `nil` when the viewer can't (or
+    /// needn't) continue this match. Built from the viewer-relative projection
+    /// so `you` stays side `yourSideNumber` and the entered games re-orient
+    /// correctly on post.
+    var resumeContext: ResumeScoring? {
+        guard canResume, let uuid = UUID(uuidString: id) else { return nil }
+        return ResumeScoring(
+            matchId: uuid,
+            config: MatchConfig(opponent: solo ? nil : opponent, bestOf: bestOf, rated: rated),
+            games: games,
+            yourSideNumber: yourSideNumber
+        )
+    }
+}
+
+/// Everything the scoring flow needs to resume an existing in-progress match:
+/// its server id, the match config (opponent / best-of / rated), the games
+/// already entered, and which side the viewer is on. `Identifiable` so it can
+/// drive a `.fullScreenCover(item:)` straight into the score-entry screen.
+struct ResumeScoring: Identifiable {
+    let matchId: UUID
+    let config: MatchConfig
+    let games: [Game]
+    var yourSideNumber: Int = 1
+    var id: UUID { matchId }
 }
 
 /// A page of the match list plus the per-status counts that drive the filter

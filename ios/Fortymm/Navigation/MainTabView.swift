@@ -24,15 +24,21 @@ enum FMTab: Hashable {
 struct MainTabView: View {
     @State private var selection: FMTab = .home
     @State private var showingNewMatch = false
+    /// A filter the Matches list should adopt when another tab routes to it
+    /// (the dashboard's "+N more to score" link → the user's live matches).
+    @State private var matchesFilter: MatchesFilter?
 
     var body: some View {
         TabView(selection: $selection) {
-            DashboardView()
+            DashboardView(onShowAllScores: { username in
+                matchesFilter = MatchesFilter(status: .inProgress, query: username ?? "")
+                selection = .matches
+            })
                 .fmTopBar(FMTab.home.title)
                 .tabItem { Label("Home", systemImage: "house") }
                 .tag(FMTab.home)
 
-            MatchesListView()
+            MatchesListView(pendingFilter: $matchesFilter)
                 .fmTopBar(FMTab.matches.title)
                 .tabItem { Label("Matches", systemImage: "sportscourt") }
                 .tag(FMTab.matches)

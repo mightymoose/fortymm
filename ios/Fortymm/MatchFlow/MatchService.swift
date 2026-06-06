@@ -51,13 +51,18 @@ struct MatchService {
     /// Post the canonical result (`POST /v1/matches/{id}/results`) and return
     /// the resulting match. For a solo match this comes back `completed`; for a
     /// two-player match it stays awaiting the opponent's confirmation.
-    func postResult(matchId: UUID, games: [Game]) async throws -> FinalMatch {
+    /// `yourSideNumber` orients the entered scores (`a` = you, `b` = them) back
+    /// to the canonical side-1/side-2 axis the API expects. A freshly created
+    /// match puts the creator on side 1; resuming a match the viewer didn't
+    /// create may put them on side 2, in which case the points are swapped.
+    func postResult(matchId: UUID, games: [Game], yourSideNumber: Int = 1) async throws -> FinalMatch {
+        let youAreSide1 = yourSideNumber != 2
         let payload = PostResultsBody(games: games.enumerated().compactMap { i, g in
             guard let a = g.a, let b = g.b else { return nil }
-            // `a` is always the current user's (side-1) points: a freshly
-            // created match puts the creator on side 1.
             return PostResultsBody.GameWrite(
-                gameNumber: i + 1, side1Points: a, side2Points: b
+                gameNumber: i + 1,
+                side1Points: youAreSide1 ? a : b,
+                side2Points: youAreSide1 ? b : a
             )
         })
         let details: MatchDetailsDTO = try await client.post(
@@ -129,7 +134,8 @@ struct MatchService {
         common(
             id: d.id, status: d.status, statusLabel: d.statusLabel,
             league: d.league, sides: d.sides, bestOf: d.bestOf,
-            createdAt: d.createdAt, canConfirm: d.canConfirm,
+            createdAt: d.createdAt, canConfirm: d.canConfirm, canScore: d.canScore,
+            canFinalize: d.canFinalize,
             ratedHint: d.affectsRating, games: d.games, h2h: d.headToHead,
             // The detail DTO carries the authoritative sign-off signal: a result
             // is awaiting confirmation iff someone has signed. (A dispute clears
@@ -143,7 +149,10 @@ struct MatchService {
         common(
             id: r.id, status: r.status, statusLabel: r.statusLabel,
             league: r.league, sides: r.sides, bestOf: r.bestOf,
-            createdAt: r.createdAt, canConfirm: r.canConfirm,
+            createdAt: r.createdAt, canConfirm: r.canConfirm, canScore: r.canScore,
+            // The list row omits can_finalize; the detail refetch (on open) fills
+            // in the authoritative value and surfaces the "Post result" path.
+            canFinalize: false,
             ratedHint: nil, games: nil, h2h: nil,
             // The list row omits signatures; fall back to the games-won heuristic.
             // This row is transient anyway — the detail view refetches on open and
@@ -158,8 +167,8 @@ struct MatchService {
     private static func common(
         id: UUID, status: APIMatchStatus, statusLabel: String,
         league: MatchLeagueDTO, sides: [MatchSideDTO], bestOf: Int,
-        createdAt: Date, canConfirm: Bool, ratedHint: Bool?,
-        games: [MatchGameDTO]?, h2h: H2HDTO?, signaturesPosted: Bool?
+        createdAt: Date, canConfirm: Bool, canScore: Bool, canFinalize: Bool,
+        ratedHint: Bool?, games: [MatchGameDTO]?, h2h: H2HDTO?, signaturesPosted: Bool?
     ) -> FinalMatch {
         let viewerIsParticipant = sides.contains(where: \.isCurrentUserSide)
         let mine = sides.first(where: \.isCurrentUserSide) ?? sides.first
@@ -247,7 +256,14 @@ struct MatchService {
             sideB: (side2?.players.isEmpty ?? true) ? .guest : sidePlayer(side2),
             sideAGames: side1?.gamesWon ?? 0,
             sideBGames: side2?.gamesWon ?? 0,
-            viewerIsParticipant: viewerIsParticipant
+            viewerIsParticipant: viewerIsParticipant,
+            inProgress: status == .inProgress,
+            // The server already encodes the full predicate (participant on a
+            // live match, no result awaiting confirmation); the `awaitingConfirmation`
+            // guard in `resumeContext` is a belt-and-suspenders local check.
+            canScore: canScore && viewerIsParticipant,
+            canFinalize: canFinalize && viewerIsParticipant,
+            yourSideNumber: mine?.sideNumber ?? 1
         )
     }
 

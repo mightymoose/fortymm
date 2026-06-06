@@ -115,6 +115,12 @@ struct MatchListRowDTO: Decodable {
     let sides: [MatchSideDTO]
     let bestOf: Int
     let createdAt: Date
+    /// Next game to score; nil once every game is scored or the match is
+    /// finalized. Game rows are created lazily, so this is a number, not an id.
+    let currentGameNumber: Int?
+    /// The viewer can enter scores for this (live) match — drives the row's
+    /// "Score" affordance.
+    let canScore: Bool
     let canConfirm: Bool
 }
 
