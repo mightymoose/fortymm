@@ -681,7 +681,7 @@ function CompactScoreBanner({ banner }: { banner: DashboardScoreBanner }) {
       highlight
       padding="14px 18px"
       data-testid="dashboard-score-banner-compact"
-      style={{ display: 'flex', alignItems: 'center', gap: 16 }}
+      style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 16 }}
     >
       <BallDot live color={accent} size={8} />
       <UserAvatar name={opponent} size={36} ring ringColor={accent} />
