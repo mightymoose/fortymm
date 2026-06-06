@@ -1528,7 +1528,14 @@ async def test_dispute_clears_signatures_and_rewinds_to_in_progress(
         # un-scored in 1..best_of. Otherwise the dashboard / list / scoring
         # page deep-links into a phantom game.
         assert body["current_game"] is None
-        assert body["can_score"] is False
+        # ...but the match IS scorable again: clearing the signatures reopens
+        # the scratchpad, so can_score is True even though there's no next game
+        # to play (the disputer edits the contested game in place). Editability
+        # follows the signature, not whether the board currently decides it.
+        assert body["can_score"] is True
+        # The saved scores are still valid + decided, so a mistaken dispute can
+        # be undone by re-posting them unchanged (back into the sign-off flow).
+        assert body["can_finalize"] is True
         # Canonical games stay around so the contested score can be edited.
         games = sorted(body["games"], key=lambda g: g["game_number"])
         assert [g["game_number"] for g in games] == [1, 2]

@@ -114,6 +114,12 @@ function currentGameNumber(seed: SeedMatch): number | null {
   // A posted-but-unconfirmed result locks the scratchpad — no game is
   // "current" in a writable sense until the result is disputed.
   if (seed.signatures.length > 0) return null
+  // A decided board has no "next game to play" even if a slot in [1, best_of]
+  // is still un-scored (a bo3 won 2-0 has no game 3). Mirrors the server's
+  // decided-check so a disputed-but-decided board reports current_game = null.
+  const target = gamesToWin(seed.best_of)
+  const { side1, side2 } = sideWinCounts(seed)
+  if (side1 >= target || side2 >= target) return null
   const scored = new Set(
     seed.games.filter((g) => g.score !== null).map((g) => g.game_number),
   )
@@ -121,6 +127,19 @@ function currentGameNumber(seed: SeedMatch): number | null {
     if (!scored.has(n)) return n
   }
   return null
+}
+
+/** Whether the saved scores are editable — the no-signature scratchpad rule.
+ * Mirrors the server's ``_is_scorable``: a non-terminal match with no posted
+ * result, regardless of whether the board already decides the match. (The mock
+ * seeds always carry two sides and view the match as a participant.) */
+function scorableSeed(seed: SeedMatch): boolean {
+  return (
+    seed.status !== 'completed' &&
+    seed.status !== 'disputed' &&
+    seed.status !== 'voided' &&
+    seed.signatures.length === 0
+  )
 }
 
 /** Whether the currently-saved scores form a complete, validly-ordered,
@@ -289,7 +308,7 @@ export function projectMatchDetails(seed: SeedMatch): MatchDetails {
     sides: [mySide, opponentSide],
     games,
     current_game: nextNumber !== null ? { game_number: nextNumber } : null,
-    can_score: nextNumber !== null,
+    can_score: scorableSeed(seed),
     can_finalize: canFinalizeSeed(seed),
     can_confirm: canConfirmSeed(seed),
     signatures: seedSignatureViews(seed),
@@ -425,9 +444,6 @@ function projectHeadToHead(
 export function projectListRow(seed: SeedMatch): MatchListRow {
   const { mySide, opponentSide } = projectSides(seed)
   const nextNumber = currentGameNumber(seed)
-  const scorable =
-    (seed.status === 'pending' || seed.status === 'in_progress') &&
-    nextNumber !== null
   return {
     id: seed.id,
     status: seed.status,
@@ -436,8 +452,10 @@ export function projectListRow(seed: SeedMatch): MatchListRow {
     sides: [mySide, opponentSide],
     best_of: seed.best_of,
     created_at: seed.created_at,
-    current_game_number: scorable ? nextNumber : null,
-    can_score: scorable,
+    // The next-playable-game deep-link target (null when decided/signed); the
+    // editable flag follows the no-signature rule independently of it.
+    current_game_number: nextNumber,
+    can_score: scorableSeed(seed),
     can_confirm: canConfirmSeed(seed),
   }
 }

@@ -850,4 +850,102 @@ describe('MatchDetailsView', () => {
       screen.queryByTestId('match-confirm-callout'),
     ).not.toBeInTheDocument()
   })
+
+  it('offers one-click "Post result" resubmit on a decided, unsigned board (post-dispute)', async () => {
+    // A dispute clears signatures but keeps the games. The board still decides
+    // the match (so there's no next game / Score CTA), but it's editable again
+    // (can_score) and re-postable as-is (can_finalize) — the resubmit path for
+    // a mistaken dispute.
+    const match = matchDetails({
+      id: 'm-resubmit',
+      status: 'in_progress',
+      status_label: 'Live',
+      sides: [
+        {
+          side_number: 1,
+          players: [{ user_id: 'u-me', username: 'me', is_current_user: true }],
+          games_won: 2,
+          won: null,
+          is_current_user_side: true,
+        },
+        {
+          side_number: 2,
+          players: [
+            { user_id: 'u-opp', username: 'nguyen.t', is_current_user: false },
+          ],
+          games_won: 0,
+          won: null,
+          is_current_user_side: false,
+        },
+      ],
+      games: [
+        {
+          id: 'g1',
+          game_number: 1,
+          score: {
+            id: 's1',
+            side_1_points: 11,
+            side_2_points: 4,
+            winner_side_number: 1,
+          },
+        },
+        {
+          id: 'g2',
+          game_number: 2,
+          score: {
+            id: 's2',
+            side_1_points: 11,
+            side_2_points: 7,
+            winner_side_number: 1,
+          },
+        },
+      ],
+      current_game: null,
+      can_score: true,
+      can_finalize: true,
+      can_confirm: false,
+      signatures: [],
+    })
+    let postedGames: unknown = null
+    server.use(
+      http.get('*/v1/matches/m-resubmit', () => HttpResponse.json(match)),
+      http.post('*/v1/matches/m-resubmit/results', async ({ request }) => {
+        postedGames = ((await request.json()) as { games: unknown }).games
+        return HttpResponse.json(
+          {
+            ...match,
+            can_finalize: false,
+            can_confirm: false,
+            signatures: [{ user_id: 'u-me', signed_at: '2026-05-26T12:00:00Z' }],
+            status_label: 'Awaiting confirmation',
+          },
+          { status: 201 },
+        )
+      }),
+    )
+
+    const user = userEvent.setup()
+    renderDetails('m-resubmit')
+
+    const callout = await screen.findByTestId('match-finalize-callout')
+    const postBtn = within(callout).getByRole('button', {
+      name: /post result/i,
+    })
+    await user.click(postBtn)
+
+    // Re-posts exactly the saved (canonical side-1/side-2) scores, unchanged.
+    await waitFor(() =>
+      expect(postedGames).toEqual([
+        { game_number: 1, side_1_points: 11, side_2_points: 4 },
+        { game_number: 2, side_1_points: 11, side_2_points: 7 },
+      ]),
+    )
+    // Once posted, the resubmit callout gives way to the awaiting-confirmation
+    // state (the finalize callout is gone).
+    await waitFor(() =>
+      expect(
+        screen.queryByTestId('match-finalize-callout'),
+      ).not.toBeInTheDocument(),
+    )
+  })
 })

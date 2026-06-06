@@ -419,12 +419,29 @@ struct MatchDetailView: View {
         footerButton("Back to matches", showArrow: false, action: onBack)
     }
 
-    /// Finalize footer: shown for a match scored to a decision but never posted.
-    /// This is the recovery path for a match stranded *past* the decider (issue
-    /// #445) — `can_score` is false (no next game), so "Post result" is the only
-    /// way forward. One tap posts the saved games.
+    /// Finalize footer: a decided, unsigned board. The primary action re-posts
+    /// the saved games into the sign-off flow — both the recovery path for a
+    /// match stranded *past* the decider (issue #445) and the one-tap fix for a
+    /// mistaken dispute (resubmit the scores unchanged). Because the scores are
+    /// a scratchpad until someone signs, the board is also still editable, so we
+    /// also offer "Edit scores" to correct a game before posting.
+    @ViewBuilder
     private var finalizeFooter: some View {
-        footerButton("Post result", disabled: actioning) { Task { await finalize() } }
+        VStack(spacing: 10) {
+            footerButton("Post result", disabled: actioning) { Task { await finalize() } }
+            if let ctx = match.resumeContext {
+                Button { resuming = ctx } label: {
+                    Text("Edit scores")
+                        .font(FMFont.ui(15, weight: .semibold))
+                        .foregroundStyle(FMColor.fg2)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 48)
+                        .fmRoundedBorder(radius: 13, color: FMColor.borderDefault)
+                }
+                .buttonStyle(.plain)
+                .disabled(actioning)
+            }
+        }
     }
 
     /// Resume footer: shown for a live match the viewer can still score. This is
