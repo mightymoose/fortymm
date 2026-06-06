@@ -258,9 +258,10 @@ struct MatchService {
             sideBGames: side2?.gamesWon ?? 0,
             viewerIsParticipant: viewerIsParticipant,
             inProgress: status == .inProgress,
-            // The server already encodes the full predicate (participant on a
-            // live match, no result awaiting confirmation); the `awaitingConfirmation`
-            // guard in `resumeContext` is a belt-and-suspenders local check.
+            // `canScore` is the server's authoritative "there's a next game to
+            // enter" signal (already false once a result is awaiting
+            // confirmation); `canResume` is built on it, so it stays correct on
+            // the list surface where `awaitingConfirmation` is only a heuristic.
             canScore: canScore && viewerIsParticipant,
             canFinalize: canFinalize && viewerIsParticipant,
             yourSideNumber: mine?.sideNumber ?? 1

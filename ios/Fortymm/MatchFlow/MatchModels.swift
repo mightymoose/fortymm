@@ -145,10 +145,13 @@ struct FinalMatch: Identifiable {
     /// create. Defaults to side 1 (the match creator).
     var yourSideNumber: Int = 1
 
-    /// The viewer can resume entering scores: a participant on a live match with
-    /// no posted result awaiting confirmation. Single source of truth for the
-    /// "Score" affordances on the list, detail, and dashboard surfaces.
-    var canResume: Bool { canScore && inProgress && !awaitingConfirmation }
+    /// The viewer can resume entering scores. Relies solely on the server's
+    /// `canScore`, which is already false once a result is awaiting confirmation
+    /// (the BFF only exposes a next game while one exists) — so this stays
+    /// correct on the *list* surface too, where `awaitingConfirmation` is only a
+    /// games-won guess (the list row carries no signatures). Single source of
+    /// truth for the "Score" affordances on the list, detail, and dashboard.
+    var canResume: Bool { canScore && inProgress }
 
     /// Context for resuming live scoring, or `nil` when the viewer can't (or
     /// needn't) continue this match. Built from the viewer-relative projection
