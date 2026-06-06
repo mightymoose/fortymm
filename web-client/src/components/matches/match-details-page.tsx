@@ -456,11 +456,11 @@ function MatchDetailsPage({
           </div>
         </div>
 
+        <ConfirmationCallout view={view} matchId={matchId} />
+
         <SaveYourMatch key={matchId} view={view} matchId={matchId} />
 
         <HeroScoreboard view={view} matchId={matchId} />
-
-        <ConfirmationCallout view={view} matchId={matchId} />
 
         <div className="md-col-2">
           <div className="md-col-2__main">
@@ -1283,13 +1283,19 @@ function ConfirmationCallout({
   if (view.canConfirm) {
     return (
       <section
-        className="md-confirm-callout"
+        className="md-confirm-callout md-confirm-callout--featured"
         data-testid="match-confirm-callout"
       >
         <div className="md-confirm-callout__copy">
-          <Overline as="h3">Posted result · awaiting your sign-off</Overline>
+          <div className="md-confirm-callout__kicker">
+            <span className="ball-dot" aria-hidden="true" /> Posted result ·
+            awaiting your sign-off
+          </div>
+          <h3 className="md-confirm-callout__headline">
+            Confirm the result to finalize this match.
+          </h3>
           <p className="md-confirm-callout__body">
-            Your opponent has posted the result above. Confirm if the scores
+            Your opponent has posted the result below. Confirm if the scores
             are right, or dispute to send the match back to in-progress so the
             wrong game can be re-scored.
           </p>

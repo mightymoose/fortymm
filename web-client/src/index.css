@@ -2367,16 +2367,19 @@ body.dark.fortymm-theme {
   border-radius: var(--r-md);
 }
 
-/* Awaiting-confirmation callout that sits between the hero and the cards
-   row when a posted result needs the viewer's sign-off (or is waiting on
-   the opponent's). The accent stripe + warm hue echoes the "live" hero
-   chip so the urgency reads visually. */
+/* Sign-off callout that leads the match-details page when a posted result
+   needs the viewer's action (or is waiting on the opponent's). The active
+   "your sign-off" state is a Featured card (orange ring + accent glow, the
+   same treatment as the dashboard score banner) so the one thing the viewer
+   must do is the first thing they see; the passive "waiting on them" state
+   stays a quiet accent-stripe note. */
 .fortymm-theme .md-confirm-callout {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 18px;
   flex-wrap: wrap;
+  margin-bottom: 24px;
   padding: 14px 18px;
   background: var(--bg-card);
   border: 1px solid var(--border-subtle);
@@ -2387,14 +2390,43 @@ body.dark.fortymm-theme {
   border-left-color: var(--ink-500);
   opacity: 0.92;
 }
+/* Featured treatment for the active sign-off state. */
+.fortymm-theme .md-confirm-callout--featured {
+  align-items: center;
+  padding: 22px 26px;
+  border: 1px solid var(--ball-500);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-glow);
+}
 .fortymm-theme .md-confirm-callout__copy {
   flex: 1 1 320px;
   min-width: 0;
+}
+.fortymm-theme .md-confirm-callout__kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font: 600 11px var(--font-mono);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ball-500);
+}
+.fortymm-theme .md-confirm-callout__headline {
+  margin: 12px 0 0;
+  font: 700 22px var(--font-ui);
+  color: var(--fg-1);
+  letter-spacing: -0.01em;
+  line-height: 1.2;
 }
 .fortymm-theme .md-confirm-callout__body {
   margin: 6px 0 0;
   color: var(--fg-2);
   font: 400 13px/1.45 var(--font-ui);
+}
+.fortymm-theme .md-confirm-callout--featured .md-confirm-callout__body {
+  margin-top: 8px;
+  max-width: 520px;
+  color: var(--fg-3);
 }
 .fortymm-theme .md-confirm-callout__actions {
   display: flex;
@@ -2413,13 +2445,13 @@ body.dark.fortymm-theme {
 .fortymm-theme .md-save {
   position: relative;
   background: var(--bg-card);
-  border: 1px solid var(--border-subtle);
+  border: 1px solid var(--ball-500);
   border-radius: var(--r-lg);
   padding: 22px 26px;
   display: flex;
   flex-direction: column;
   gap: 16px;
-  box-shadow: var(--shadow-sm);
+  box-shadow: var(--shadow-glow);
 }
 .fortymm-theme .md-save__hd {
   display: flex;
