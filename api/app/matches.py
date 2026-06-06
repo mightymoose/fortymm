@@ -1267,11 +1267,38 @@ async def _commit_canonical_games(
 # ----- scoring endpoints ---------------------------------------------------
 
 
+async def _lock_match_row(db: AsyncSession, match_id: uuid.UUID) -> None:
+    """Take a transaction-scoped row lock on the ``matches`` row so the
+    sign-off transitions (``/results``, ``/confirmation``, ``/dispute``)
+    serialize against each other.
+
+    Without this, a participant firing ``/confirmation`` and ``/dispute``
+    concurrently lets both transactions pass ``_enforce_confirmable`` on the
+    same pre-image and both commit — finalizing the match with ``won=None``,
+    a single signature, and a rating change applied (issue #365). The lock
+    forces the second transaction to wait for the first to commit and then
+    re-read the post-image, so its guard returns a clean 409.
+
+    It's a thin ``SELECT matches.id ... FOR UPDATE`` rather than locking the
+    full eager query: ``match_eager_options`` outer-joins nullable child rows
+    (sides without players, gameless matches), which Postgres refuses to lock
+    (``FOR UPDATE cannot be applied to the nullable side of an outer join``).
+    Locking just the parent row is enough — every sign-off transition reads
+    and writes that match's children under cover of this lock."""
+    await db.execute(select(Match.id).where(Match.id == match_id).with_for_update())
+
+
 async def _load_match_for_scoring(
     db: AsyncSession,
     match_id: uuid.UUID,
     current_user_id: uuid.UUID,
+    *,
+    lock: bool = False,
 ) -> Match:
+    # ``lock`` callers (the sign-off transitions) take the row lock *before*
+    # the eager load so the match state they read is the serialized one.
+    if lock:
+        await _lock_match_row(db, match_id)
     match = await _load_match(db, match_id)
     if match is None or not _is_participant(match, current_user_id):
         raise HTTPException(status_code=404, detail="Match not found.")
@@ -1410,7 +1437,7 @@ async def post_match_result(
     or ``POST /dispute``, and the rating update fires inside /confirmation
     when the final signature lands. Solo matches (one side player-less)
     finalize immediately here, since there's no second party to attest."""
-    match = await _load_match_for_scoring(db, match_id, current_user.id)
+    match = await _load_match_for_scoring(db, match_id, current_user.id, lock=True)
     _enforce_scorable(match)
 
     try:
@@ -1455,7 +1482,7 @@ async def confirm_match_result(
     """Sign off on a posted result. When this is the last signature needed
     (every side has at least one signing player) the match flips to
     ``completed`` and the rating update runs — exactly once."""
-    match = await _load_match_for_scoring(db, match_id, current_user.id)
+    match = await _load_match_for_scoring(db, match_id, current_user.id, lock=True)
     _enforce_confirmable(match, current_user.id)
 
     await _add_signature_or_409(
@@ -1492,7 +1519,7 @@ async def dispute_match_result(
     place so the disputer can navigate to the contested game and PUT a
     corrected score. The per-game endpoints unblock automatically once
     signatures are empty (see ``_enforce_scorable``)."""
-    match = await _load_match_for_scoring(db, match_id, current_user.id)
+    match = await _load_match_for_scoring(db, match_id, current_user.id, lock=True)
     _enforce_confirmable(match, current_user.id)
 
     match.signatures.clear()
