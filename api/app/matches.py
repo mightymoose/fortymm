@@ -316,11 +316,13 @@ def _serialize_details(
         ],
         games=games,
         current_game=current_game,
-        # Spectators see scores, never the Score CTA — writes still 404 for
-        # non-participants in the score endpoints below.
-        can_score=(
-            current_game is not None and len(match.sides) >= 2 and is_participant
-        ),
+        # "This participant may edit scores" — true whenever the match is
+        # scorable (no signature; see ``_is_scorable``), *independent* of
+        # whether there's a next un-played game. A decided-but-unsigned board
+        # (e.g. just after a dispute) is still editable, so this is True while
+        # ``current_game`` is None. Spectators get the read-only view — writes
+        # 404 for non-participants in the score endpoints regardless.
+        can_score=(is_participant and _is_scorable(match)),
         # True iff the saved games already form a decided, validly-ordered
         # match AND no result is currently posted — the FE flips the scoring
         # page's submit button label to "Post result" when this is true.
@@ -554,12 +556,12 @@ def _list_row(match: Match, current_user_id: uuid.UUID) -> MatchListRow:
     side_wins = side_win_counts(match)
     sides_sorted = sorted(match.sides, key=lambda s: s.side_number)
     next_number = current_game_number(match)
-    can_score = (
-        match.status in {MatchStatus.pending, MatchStatus.in_progress}
-        and len(match.sides) >= 2
-        and next_number is not None
-        and _is_participant(match, current_user_id)
-    )
+    is_participant = _is_participant(match, current_user_id)
+    # Editability follows the no-signature scratchpad rule (``_is_scorable``),
+    # not whether a next game exists — so a decided-but-unsigned row still reads
+    # as scorable. ``current_game_number`` stays the next-playable-game
+    # deep-link target (None when decided or signed); suppressed for spectators.
+    can_score = is_participant and _is_scorable(match)
 
     return MatchListRow(
         id=match.id,
@@ -569,7 +571,7 @@ def _list_row(match: Match, current_user_id: uuid.UUID) -> MatchListRow:
         sides=[_side_schema(side, side_wins, current_user_id) for side in sides_sorted],
         best_of=match.match_settings.best_of,
         created_at=match.created_at,
-        current_game_number=next_number if can_score else None,
+        current_game_number=next_number if is_participant else None,
         can_score=can_score,
         can_confirm=_can_confirm(match, current_user_id),
     )
@@ -680,23 +682,47 @@ async def get_match(
 # ----- score writes --------------------------------------------------------
 
 
+# A match that has reached one of these states is read-only — never scorable.
+_TERMINAL_STATUSES = {
+    MatchStatus.completed,
+    MatchStatus.disputed,
+    MatchStatus.voided,
+}
+
+
+def _is_scorable(match: Match) -> bool:
+    """Whether a match accepts score writes right now (ignoring who's asking).
+
+    The saved games are a provisional *scratchpad* until somebody signs the
+    result: editable regardless of whether they already decide the match. So
+    the only gates are structural — two sides, a non-terminal status, and **no
+    signature**. A posted result (≥1 signature) locks the scores until it's
+    confirmed or disputed; a dispute clears the signatures and the match is
+    scorable again with its games intact.
+
+    Single source of truth shared by the write-path guard
+    (``_enforce_scorable``) and the BFF ``can_score`` flag, so the flag the
+    clients trust can never disagree with what the score endpoints accept."""
+    return (
+        len(match.sides) >= 2
+        and match.status not in _TERMINAL_STATUSES
+        and not match.signatures
+    )
+
+
 def _enforce_scorable(match: Match) -> None:
+    """Raise when a match can't be scored. ``_is_scorable`` owns the *decision*;
+    this only picks the reason-specific status/message for a rejection, so the
+    write guard can't drift from the ``can_score`` flag — a future gate added to
+    ``_is_scorable`` falls through to the catch-all 409 rather than being
+    silently accepted."""
+    if _is_scorable(match):
+        return
     if len(match.sides) < 2:
         raise HTTPException(
             status_code=422,
             detail="This match has no opponent and can't be scored.",
         )
-    # ``completed`` lives here too — once a match is finalized via
-    # ``POST /v1/matches/{id}/results`` (and confirmed) it's read-only. The
-    # 409 covers the per-game write endpoints *and* re-posts of /results
-    # against a non-solo match that has either been finalized or is
-    # awaiting confirmation (the signatures branch below).
-    if match.status in {
-        MatchStatus.completed,
-        MatchStatus.disputed,
-        MatchStatus.voided,
-    }:
-        raise HTTPException(status_code=409, detail="This match is no longer scorable.")
     # A posted result locks the scores until somebody calls /confirmation
     # (finalize) or /dispute (rewind). Both per-game writes and a second
     # /results call hit this branch.
@@ -708,6 +734,9 @@ def _enforce_scorable(match: Match) -> None:
                 "Confirm or dispute it before editing scores."
             ),
         )
+    # Terminal status (``completed``/``disputed``/``voided``) — or any future
+    # ``_is_scorable`` gate without a message of its own.
+    raise HTTPException(status_code=409, detail="This match is no longer scorable.")
 
 
 def _enforce_confirmable(match: Match, user_id: uuid.UUID) -> None:

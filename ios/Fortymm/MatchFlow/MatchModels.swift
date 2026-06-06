@@ -136,21 +136,22 @@ struct FinalMatch: Identifiable {
     var canScore: Bool = false
     /// The saved games already form a decided, valid match and the viewer can
     /// post the result. True for a match scored to a decision but never posted
-    /// (e.g. a web user entered the games then left) — which `canScore` is
-    /// *false* for, since there's no next game to enter. Drives the detail
-    /// screen's "Post result" recovery path.
+    /// (e.g. a web user entered the games then left, or a dispute that cleared
+    /// the signatures). `canScore` is *also* true here — the board stays
+    /// editable until signed — so the detail screen offers both "Post result"
+    /// (resubmit) and "Edit scores".
     var canFinalize: Bool = false
     /// The viewer's side number (1 or 2). Used to orient entered scores back to
     /// the canonical side-1/side-2 axis when resuming a match the viewer didn't
     /// create. Defaults to side 1 (the match creator).
     var yourSideNumber: Int = 1
 
-    /// The viewer can resume entering scores. Relies solely on the server's
-    /// `canScore`, which is already false once a result is awaiting confirmation
-    /// (the BFF only exposes a next game while one exists) — so this stays
-    /// correct on the *list* surface too, where `awaitingConfirmation` is only a
-    /// games-won guess (the list row carries no signatures). Single source of
-    /// truth for the "Score" affordances on the list, detail, and dashboard.
+    /// The viewer can resume entering / editing scores. Relies solely on the
+    /// server's `canScore`, which is false once a result is signed (awaiting
+    /// confirmation) — so this stays correct on the *list* surface too, where
+    /// `awaitingConfirmation` is only a games-won guess (the list row carries no
+    /// signatures). Single source of truth for the "Score" affordances on the
+    /// list, detail, and dashboard.
     var canResume: Bool { canScore && inProgress }
 
     /// Context for resuming live scoring, or `nil` when the viewer can't (or

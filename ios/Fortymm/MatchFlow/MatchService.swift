@@ -258,10 +258,11 @@ struct MatchService {
             sideBGames: side2?.gamesWon ?? 0,
             viewerIsParticipant: viewerIsParticipant,
             inProgress: status == .inProgress,
-            // `canScore` is the server's authoritative "there's a next game to
-            // enter" signal (already false once a result is awaiting
-            // confirmation); `canResume` is built on it, so it stays correct on
-            // the list surface where `awaitingConfirmation` is only a heuristic.
+            // `canScore` is the server's authoritative "scores are editable"
+            // signal — true whenever no result is signed (the scratchpad is
+            // open), regardless of whether a next game remains. `canResume` is
+            // built on it, so it stays correct on the list surface where
+            // `awaitingConfirmation` is only a heuristic.
             canScore: canScore && viewerIsParticipant,
             canFinalize: canFinalize && viewerIsParticipant,
             yourSideNumber: mine?.sideNumber ?? 1
