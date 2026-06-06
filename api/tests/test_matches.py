@@ -1,5 +1,6 @@
 import asyncio
 import uuid
+from collections.abc import Awaitable, Callable
 
 import pytest
 from fastapi import HTTPException
@@ -1849,18 +1850,20 @@ async def test_concurrent_confirm_and_dispute_serialize(
         match_id = uuid.UUID(match["id"])
         opp_id = opp.id
 
-        sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
+        make_session = async_sessionmaker(engine, expire_on_commit=False)
 
-        async def run(handler: object) -> object:
+        async def run(
+            handler: Callable[[uuid.UUID, User, AsyncSession], Awaitable[object]],
+        ) -> object:
             # Each racer gets its own session/connection, mirroring two
             # concurrent requests. Return the HTTP status on rejection so the
             # assertions can tell winner from loser.
-            async with sessionmaker() as session:
+            async with make_session() as session:
                 opp_user = (
                     await session.execute(select(User).where(User.id == opp_id))
                 ).scalar_one()
                 try:
-                    await handler(match_id, opp_user, session)  # type: ignore[operator]
+                    await handler(match_id, opp_user, session)
                     return "ok"
                 except HTTPException as exc:
                     return exc.status_code
@@ -1874,8 +1877,7 @@ async def test_concurrent_confirm_and_dispute_serialize(
         assert sorted(str(o) for o in outcomes) == ["409", "ok"], outcomes
 
         # The committed match holds its invariants no matter which won.
-        sm = async_sessionmaker(engine, expire_on_commit=False)
-        async with sm() as verify:
+        async with make_session() as verify:
             final = (
                 await verify.execute(
                     select(Match)
