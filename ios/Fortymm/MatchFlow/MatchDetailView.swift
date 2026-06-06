@@ -18,6 +18,8 @@ struct MatchDetailView: View {
     /// A confirm/dispute request is in flight (blocks the footer + dims the UI).
     @State private var actioning = false
     @State private var actionError: String?
+    /// Non-nil while the resume-scoring flow is presented over this screen.
+    @State private var resuming: ResumeScoring?
 
     /// What the screen renders: the freshest copy we have.
     private var match: FinalMatch { live ?? initial }
@@ -50,6 +52,9 @@ struct MatchDetailView: View {
             else { withAnimation(.spring(response: 0.42, dampingFraction: 0.5).delay(0.06)) { reveal = true } }
         }
         .task { await refresh() }
+        // Foregrounding may reveal a cross-device change (the opponent confirmed
+        // or disputed the posted result) — refetch so the status isn't stale.
+        .refetchOnForeground { Task { await refresh(force: true) } }
         .alert(
             "Something went wrong",
             isPresented: Binding(
@@ -61,6 +66,9 @@ struct MatchDetailView: View {
         } message: {
             Text(actionError ?? "")
         }
+        // The match changed underneath us (games posted, or simply more games
+        // entered) — refetch so the detail reflects the new state.
+        .resumeScoringCover($resuming) { Task { await refresh(force: true) } }
     }
 
     /// Sign off on (or dispute) the posted result, then refresh from the server
@@ -68,6 +76,24 @@ struct MatchDetailView: View {
     /// back to live). Surfaces an alert on failure and leaves the screen as-is.
     private func confirm() async { await act { try await service.confirmMatch($0) } }
     private func dispute() async { await act { try await service.disputeMatch($0) } }
+
+    /// Post the result of a match that's been scored to a decision but never
+    /// posted (the `can_finalize` recovery path) — sends the already-saved games
+    /// and refreshes. For a solo match this finalizes immediately; a two-player
+    /// match moves to awaiting the opponent's confirmation.
+    private func finalize() async {
+        guard !actioning, let id = UUID(uuidString: match.id) else { return }
+        actioning = true
+        defer { actioning = false }
+        do {
+            let updated = try await service.postResult(
+                matchId: id, games: match.games, yourSideNumber: match.yourSideNumber
+            )
+            withAnimation { live = updated }
+        } catch {
+            actionError = error.fmMessage
+        }
+    }
 
     private func act(_ run: (UUID) async throws -> FinalMatch) async {
         guard !actioning, let id = UUID(uuidString: match.id) else { return }
@@ -82,12 +108,16 @@ struct MatchDetailView: View {
     }
 
     /// Pull the full detail (games, rating, head-to-head, current status) for
-    /// the match. Skipped when we already hold the full payload (a freshly
-    /// posted result), or for non-server ids (e.g. SwiftUI previews); a list
-    /// row arrives without games, so that path fetches.
-    private func refresh() async {
-        guard initial.games.isEmpty, let id = UUID(uuidString: initial.id) else { return }
-        live = try? await service.matchDetails(id)
+    /// the match. On first load (`force: false`) it's skipped when we already
+    /// hold the full payload (a freshly posted result) or for non-server ids
+    /// (e.g. SwiftUI previews) — a list row arrives without games, so that path
+    /// fetches. `force: true` always refetches: used after an action (resume,
+    /// sign-off) or on foreground, where the held copy is known to be stale.
+    private func refresh(force: Bool = false) async {
+        guard force || initial.games.isEmpty, let id = UUID(uuidString: match.id) else { return }
+        if let updated = try? await service.matchDetails(id) {
+            withAnimation { live = updated }
+        }
     }
 
     // MARK: Breadcrumb
@@ -337,6 +367,10 @@ struct MatchDetailView: View {
         Group {
             if match.canConfirm {
                 confirmFooter
+            } else if match.canFinalize {
+                finalizeFooter
+            } else if let ctx = match.resumeContext {
+                resumeFooter(ctx)
             } else {
                 defaultFooter
             }
@@ -358,19 +392,46 @@ struct MatchDetailView: View {
         }
     }
 
-    /// Default footer: back to the matches list.
-    private var defaultFooter: some View {
-        Button(action: onBack) {
-            Text("Back to matches")
-                .font(FMFont.ui(16, weight: .bold))
-                .foregroundStyle(FMColor.fgInverse)
-                .frame(maxWidth: .infinity)
-                .frame(height: 50)
-                .background(BallGradient())
-                .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
-                .shadow(color: FMColor.ball500.opacity(0.32), radius: 11, y: 8)
+    /// The footer's full-width ball-gradient pill — shared by every primary
+    /// footer action (back, post, resume, confirm) so the shape/shadow live once.
+    private func footerButton(
+        _ title: String, showArrow: Bool = true, disabled: Bool = false,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Text(title).font(FMFont.ui(16, weight: .bold))
+                if showArrow { Image(systemName: "arrow.right").font(.system(size: 15, weight: .bold)) }
+            }
+            .foregroundStyle(FMColor.fgInverse)
+            .frame(maxWidth: .infinity)
+            .frame(height: 50)
+            .background(BallGradient())
+            .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+            .shadow(color: FMColor.ball500.opacity(0.32), radius: 11, y: 8)
         }
         .buttonStyle(.plain)
+        .disabled(disabled)
+    }
+
+    /// Default footer: back to the matches list.
+    private var defaultFooter: some View {
+        footerButton("Back to matches", showArrow: false, action: onBack)
+    }
+
+    /// Finalize footer: shown for a match scored to a decision but never posted.
+    /// This is the recovery path for a match stranded *past* the decider (issue
+    /// #445) — `can_score` is false (no next game), so "Post result" is the only
+    /// way forward. One tap posts the saved games.
+    private var finalizeFooter: some View {
+        footerButton("Post result", disabled: actioning) { Task { await finalize() } }
+    }
+
+    /// Resume footer: shown for a live match the viewer can still score. This is
+    /// the recovery path for a match stranded mid-scoring (issue #445) — a Live
+    /// match you own always offers a way to continue.
+    private func resumeFooter(_ ctx: ResumeScoring) -> some View {
+        footerButton(match.games.isEmpty ? "Enter scores" : "Resume scoring") { resuming = ctx }
     }
 
     /// Sign-off footer: shown when the current user owes a confirm/dispute on a
@@ -387,18 +448,9 @@ struct MatchDetailView: View {
             }
             .buttonStyle(.plain)
             .disabled(actioning)
-            Button { Task { await confirm() } } label: {
-                Text("Confirm result")
-                    .font(FMFont.ui(16, weight: .bold))
-                    .foregroundStyle(FMColor.fgInverse)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 50)
-                    .background(BallGradient())
-                    .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
-                    .shadow(color: FMColor.ball500.opacity(0.32), radius: 11, y: 8)
+            footerButton("Confirm result", showArrow: false, disabled: actioning) {
+                Task { await confirm() }
             }
-            .buttonStyle(.plain)
-            .disabled(actioning)
         }
     }
 }

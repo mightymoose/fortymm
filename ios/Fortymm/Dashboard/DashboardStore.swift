@@ -22,23 +22,30 @@ final class DashboardStore: ObservableObject {
         self.client = client
     }
 
-    /// Fetch (or refetch) the dashboard. Skips the network call once loaded
-    /// unless `force` is set, so re-entering the tab doesn't refetch; pull to
-    /// refresh passes `force: true`.
+    /// Fetch (or refetch) the dashboard. Without `force`, skips the call once
+    /// loaded; with `force` (re-entering the tab, pull-to-refresh, or after a
+    /// score is posted) it refetches *in place* — the existing content stays on
+    /// screen and is swapped only when the new data arrives, so re-appearing the
+    /// tab doesn't flash the loading card. A transient forced-refresh failure
+    /// keeps the good content rather than replacing it with an error.
     ///
     /// `GET /v1/dashboard` requires auth, but the session gate guarantees the
     /// session cookie is already minted and stored before this screen renders,
     /// so there's no need to fetch the session here first.
     func load(force: Bool = false) async {
-        if case .loaded = state, !force { return }
         if case .loading = state { return }
+        let alreadyLoaded: Bool
+        if case .loaded = state { alreadyLoaded = true } else { alreadyLoaded = false }
+        if alreadyLoaded && !force { return }
 
-        state = .loading
+        if !alreadyLoaded { state = .loading }
         do {
             let dashboard: DashboardResponse = try await client.get("/v1/dashboard")
             state = .loaded(dashboard)
         } catch {
-            state = .failed(error.fmMessage)
+            // Only surface the error when there's nothing already on screen;
+            // a failed background refresh shouldn't blank a working dashboard.
+            if !alreadyLoaded { state = .failed(error.fmMessage) }
         }
     }
 }

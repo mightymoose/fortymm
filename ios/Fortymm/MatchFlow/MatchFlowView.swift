@@ -9,16 +9,36 @@ import SwiftUI
 /// shows "Awaiting confirmation" honestly, rather than an optimistic result.
 struct MatchFlowView: View {
     var service: MatchService = .shared
+    /// When set, the flow skips setup and opens straight into scoring an
+    /// existing live match (the "resume" entry point from the detail/list/
+    /// dashboard surfaces). Nil ⇒ the normal new-match flow.
+    var resume: ResumeScoring?
     /// Close the flow. `toMatches` = land on the Matches tab (vs. just dismiss).
     var onClose: (_ toMatches: Bool) -> Void
 
-    private enum Step { case setup, score, detail }
-    @State private var step: Step = .setup
-    @State private var opponent: MatchPlayer?
-    @State private var bestOf = 5
-    @State private var rated = false
+    init(
+        service: MatchService = .shared,
+        resume: ResumeScoring? = nil,
+        onClose: @escaping (_ toMatches: Bool) -> Void
+    ) {
+        self.service = service
+        self.resume = resume
+        self.onClose = onClose
+        _step = State(initialValue: resume == nil ? .setup : .score)
+        _matchId = State(initialValue: resume?.matchId)
+        _opponent = State(initialValue: resume?.config.opponent)
+        _bestOf = State(initialValue: resume?.config.bestOf ?? 5)
+        _rated = State(initialValue: resume?.config.rated ?? false)
+    }
 
-    /// Server match id, captured when the match is created on "Start match".
+    private enum Step { case setup, score, detail }
+    @State private var step: Step
+    @State private var opponent: MatchPlayer?
+    @State private var bestOf: Int
+    @State private var rated: Bool
+
+    /// Server match id, captured when the match is created on "Start match",
+    /// or supplied up front when resuming an existing match.
     @State private var matchId: UUID?
     @State private var final: FinalMatch?
 
@@ -46,8 +66,14 @@ struct MatchFlowView: View {
             case .score:
                 ScoreEntryView(
                     config: config,
+                    initialGames: resume?.games ?? [],
                     onPost: post,
-                    onExit: { withAnimation { step = .setup } }
+                    // Resuming has no setup step to fall back to — exiting closes
+                    // the flow (back to wherever it was launched from).
+                    onExit: {
+                        if resume == nil { withAnimation { step = .setup } }
+                        else { onClose(false) }
+                    }
                 )
                 .transition(.move(edge: .trailing).combined(with: .opacity))
             case .detail:
@@ -99,7 +125,10 @@ struct MatchFlowView: View {
         busy = true
         Task {
             do {
-                final = try await service.postResult(matchId: matchId, games: games)
+                final = try await service.postResult(
+                    matchId: matchId, games: games,
+                    yourSideNumber: resume?.yourSideNumber ?? 1
+                )
                 withAnimation { step = .detail }
             } catch {
                 errorMessage = error.fmMessage

@@ -6,6 +6,10 @@ import SwiftUI
 /// and by tapping a score field directly.
 struct ScoreEntryView: View {
     let config: MatchConfig
+    /// Games already entered for this match, in order (game 1…N). Empty for a
+    /// new match; populated when resuming a live one so the user continues from
+    /// where they left off rather than re-entering scored games.
+    var initialGames: [Game] = []
     /// Hand the completed games (in order, game 1…N) up to the coordinator,
     /// which posts them to the API and renders the server's result.
     var onPost: ([Game]) -> Void
@@ -56,7 +60,17 @@ struct ScoreEntryView: View {
         }
         .background(FMColor.ink950.ignoresSafeArea())
         .onAppear {
-            if games.isEmpty { games = Array(repeating: Game(), count: config.bestOf) }
+            if games.isEmpty {
+                // Seed every slot from `initialGames` (already-entered games when
+                // resuming), padded/clipped to the match length, then land on the
+                // first slot still needing a score.
+                var seeded = Array(initialGames.prefix(config.bestOf))
+                if seeded.count < config.bestOf {
+                    seeded += Array(repeating: Game(), count: config.bestOf - seeded.count)
+                }
+                games = seeded
+                active = seeded.firstIndex { !MatchRules.gameComplete($0) } ?? 0
+            }
             focusYou()
         }
         // Switching game (or editing) → raise the keypad on your side.
