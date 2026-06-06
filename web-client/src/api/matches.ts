@@ -1,5 +1,6 @@
 import {
   keepPreviousData,
+  queryOptions,
   useMutation,
   useQuery,
   useQueryClient,
@@ -23,6 +24,7 @@ export type MatchGameScoreWrite = components['schemas']['MatchGameScoreWrite']
 export type MatchResultsWrite = components['schemas']['MatchResultsWrite']
 export type MatchResultsGameWrite = components['schemas']['MatchResultsGameWrite']
 export type MatchStatus = components['schemas']['MatchStatus']
+export type Scoreboard = components['schemas']['Scoreboard']
 
 export type MatchListParams = {
   status?: MatchStatus
@@ -158,9 +160,10 @@ export function matchesCsvUrl(
   return `${resolveBaseUrl()}/v1/matches.csv${query ? `?${query}` : ''}`
 }
 
-/** Throws on failure so the surrounding boundary can render a retry. */
-export function useMatch(matchId: string) {
-  return useQuery({
+/** Query options for a single match's detail. Shared by `useMatch` and any
+ * caller that needs to prefetch or read the same query (route loaders, etc.). */
+export function matchQueryOptions(matchId: string) {
+  return queryOptions({
     queryKey: matchQueryKey(matchId),
     queryFn: async (): Promise<MatchDetails> =>
       unwrap(
@@ -172,6 +175,11 @@ export function useMatch(matchId: string) {
     retry: false,
     throwOnError: true,
   })
+}
+
+/** Throws on failure so the surrounding boundary can render a retry. */
+export function useMatch(matchId: string) {
+  return useQuery(matchQueryOptions(matchId))
 }
 
 /** Cache work shared by both score mutations: prime the detail cache from the

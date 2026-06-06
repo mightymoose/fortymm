@@ -13,6 +13,7 @@ import {
   X,
 } from 'lucide-react'
 
+import { ScoreboardProvider } from '@/components/matches/match-details/scoreboard'
 import { AppShell } from '@/components/app-shell'
 import { Overline } from '@/components/overline'
 import { cn, initialsOf } from '@/lib/utils'
@@ -579,6 +580,8 @@ function HeroScoreboard({
   const isUpcoming = view.state === 'upcoming'
 
   return (
+    <ScoreboardProvider matchId={matchId}>
+      {(_scoreboard) => (
     <section className="md-hero">
       <div className="md-hero__grid-bg" aria-hidden="true" />
 
@@ -661,6 +664,8 @@ function HeroScoreboard({
         <GameGrid view={view} matchId={matchId} />
       )}
     </section>
+      )}
+    </ScoreboardProvider>
   )
 }
 
