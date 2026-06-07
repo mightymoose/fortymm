@@ -581,7 +581,7 @@ function HeroScoreboard({
 
   return (
     <ScoreboardProvider matchId={matchId}>
-      {(_scoreboard) => (
+      {() => (
     <section className="md-hero">
       <div className="md-hero__grid-bg" aria-hidden="true" />
 
