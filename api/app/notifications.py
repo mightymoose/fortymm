@@ -49,6 +49,7 @@ async def close_apns_clients() -> None:
     for client in _apns_clients.values():
         await client.aclose()
     _apns_clients.clear()
+    _apns_jwt_cache.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -108,6 +109,9 @@ def _get_apns_jwt(key_pem: str, key_id: str, team_id: str) -> str:
     APNs tokens are valid for 1 hour. Apple returns TooManyProviderTokenUpdates
     (403) if a new token is issued more than once every 20 minutes, so we cache
     and reuse the token across all concurrent sends for the same signing key.
+
+    Two coroutines can race past the expiry check and both regenerate; that is
+    safe — both minted tokens are valid for 1 hour and last-writer-wins is fine.
     """
     cache_key = (key_id, team_id)
     cached_token, issued_at = _apns_jwt_cache.get(cache_key, ("", 0.0))
