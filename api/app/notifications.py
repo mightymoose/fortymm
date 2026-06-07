@@ -30,6 +30,13 @@ _APNS_PROD_HOST = "https://api.push.apple.com"
 # the connection alive lets multiple sends share the same TCP+TLS session.
 _apns_clients: dict[str, httpx.AsyncClient] = {}
 
+# Cached provider auth token per (key_id, team_id). APNs tokens are valid for
+# 1 hour; Apple rejects new tokens generated more frequently than once per 20
+# minutes with TooManyProviderTokenUpdates (403). Reuse the token for 55 min
+# then regenerate to stay well inside the validity window.
+_apns_jwt_cache: dict[tuple[str, str], tuple[str, float]] = {}
+_APNS_JWT_TTL = 55 * 60  # seconds
+
 
 def _get_apns_client(host: str) -> httpx.AsyncClient:
     if host not in _apns_clients:
@@ -95,10 +102,26 @@ async def register_device_token(
 # ---------------------------------------------------------------------------
 
 
-def _make_apns_jwt(key_pem: str, key_id: str, team_id: str) -> str:
-    """Return a signed APNs provider auth token (ES256 JWT, valid ~1 hour)."""
-    payload = {"iss": team_id, "iat": int(time.time())}
-    return jwt.encode(payload, key_pem, algorithm="ES256", headers={"kid": key_id})
+def _get_apns_jwt(key_pem: str, key_id: str, team_id: str) -> str:
+    """Return a cached APNs provider auth token, regenerating after 55 minutes.
+
+    APNs tokens are valid for 1 hour. Apple returns TooManyProviderTokenUpdates
+    (403) if a new token is issued more than once every 20 minutes, so we cache
+    and reuse the token across all concurrent sends for the same signing key.
+    """
+    cache_key = (key_id, team_id)
+    cached_token, issued_at = _apns_jwt_cache.get(cache_key, ("", 0.0))
+    if cached_token and time.time() - issued_at < _APNS_JWT_TTL:
+        return cached_token
+    now = int(time.time())
+    token = jwt.encode(
+        {"iss": team_id, "iat": now},
+        key_pem,
+        algorithm="ES256",
+        headers={"kid": key_id},
+    )
+    _apns_jwt_cache[cache_key] = (token, float(now))
+    return token
 
 
 async def send_push_notification(
@@ -131,7 +154,7 @@ async def send_push_notification(
         return True
 
     bundle_id = os.environ.get("APNS_BUNDLE_ID", "com.fortymm.ios-client")
-    auth_token = _make_apns_jwt(key_pem, key_id, team_id)
+    auth_token = _get_apns_jwt(key_pem, key_id, team_id)
     host = _APNS_SANDBOX_HOST if environment == "development" else _APNS_PROD_HOST
     headers = {
         "authorization": f"bearer {auth_token}",
