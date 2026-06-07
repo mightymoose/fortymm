@@ -37,6 +37,13 @@ def _get_apns_client(host: str) -> httpx.AsyncClient:
     return _apns_clients[host]
 
 
+async def close_apns_clients() -> None:
+    """Close all persistent APNs HTTP/2 clients. Call from the app lifespan."""
+    for client in _apns_clients.values():
+        await client.aclose()
+    _apns_clients.clear()
+
+
 # ---------------------------------------------------------------------------
 # Device token registration
 # ---------------------------------------------------------------------------

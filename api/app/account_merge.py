@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, cast
 
-from sqlalchemy import CursorResult, delete, text, update
+from sqlalchemy import CursorResult, delete, func, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
@@ -126,7 +126,7 @@ async def merge_user(
     await db.execute(
         update(DeviceToken)
         .where(DeviceToken.user_id == from_user_id)
-        .values(user_id=to_user_id)
+        .values(user_id=to_user_id, updated_at=func.now())
     )
 
     # match_side_players is RESTRICT, so any rows that didn't re-point would

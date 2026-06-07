@@ -1,4 +1,4 @@
-"""create device_tokens table
+"""create user_device_tokens table
 
 Revision ID: 0008
 Revises: 0007
@@ -20,7 +20,7 @@ depends_on: str | Sequence[str] | None = None
 
 def upgrade() -> None:
     op.create_table(
-        "device_tokens",
+        "user_device_tokens",
         sa.Column(
             "id",
             postgresql.UUID(as_uuid=True),
@@ -48,11 +48,15 @@ def upgrade() -> None:
             server_default=sa.func.now(),
         ),
     )
-    op.create_index("ix_device_tokens_user_id", "device_tokens", ["user_id"])
-    op.create_unique_constraint("uq_device_tokens_token", "device_tokens", ["token"])
+    op.create_index("ix_user_device_tokens_user_id", "user_device_tokens", ["user_id"])
+    op.create_unique_constraint(
+        "uq_user_device_tokens_token", "user_device_tokens", ["token"]
+    )
 
 
 def downgrade() -> None:
-    op.drop_constraint("uq_device_tokens_token", "device_tokens", type_="unique")
-    op.drop_index("ix_device_tokens_user_id", table_name="device_tokens")
-    op.drop_table("device_tokens")
+    op.drop_constraint(
+        "uq_user_device_tokens_token", "user_device_tokens", type_="unique"
+    )
+    op.drop_index("ix_user_device_tokens_user_id", table_name="user_device_tokens")
+    op.drop_table("user_device_tokens")

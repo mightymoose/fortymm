@@ -9,8 +9,8 @@ from app.db import Base
 
 
 class DeviceToken(Base):
-    __tablename__ = "device_tokens"
-    __table_args__ = (UniqueConstraint("token", name="uq_device_tokens_token"),)
+    __tablename__ = "user_device_tokens"
+    __table_args__ = (UniqueConstraint("token", name="uq_user_device_tokens_token"),)
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4

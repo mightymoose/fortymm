@@ -5,12 +5,10 @@ import SwiftUI
 /// shell once a user is in hand. The session store is shared with the rest of the
 /// app via the environment so no screen has to refetch.
 struct RootView: View {
-    @StateObject private var session = SessionStore()
+    @EnvironmentObject private var session: SessionStore
 
     var body: some View {
         content
-            .environmentObject(session)
-            .task { await session.load() }
             // Universal Links land here (cold launch or while running). The
             // store parses + holds the link; the cover below presents it once
             // the session has loaded.

@@ -12,6 +12,7 @@ from sqlalchemy import text
 from app import db, queue
 from app.dashboard import router as dashboard_router
 from app.matches import router as matches_router
+from app.notifications import close_apns_clients
 from app.notifications import router as notifications_router
 from app.players import router as players_router
 from app.rate_limiting import init_rate_limit_redis, shutdown_rate_limit_redis
@@ -36,6 +37,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     finally:
         shutdown_rate_limit_redis()
         await connection.aclose()
+        await close_apns_clients()
 
 
 app = FastAPI(title="FortyMM API", lifespan=lifespan)
