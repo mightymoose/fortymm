@@ -666,6 +666,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/device-tokens": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Register Device Token
+         * @description Upsert an APNs device token for the current user.
+         *
+         *     The token is globally unique — if it was previously associated with a
+         *     different user (e.g. after a re-install), this re-points it to the caller.
+         */
+        post: operations["register_device_token_v1_device_tokens_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/health": {
         parameters: {
             query?: never;
@@ -1424,6 +1447,21 @@ export interface components {
         RbacUserRolesUpdate: {
             /** Role Ids */
             role_ids: string[];
+        };
+        /** RegisterDeviceTokenRequest */
+        RegisterDeviceTokenRequest: {
+            /** Token */
+            token: string;
+            /**
+             * Environment
+             * @enum {string}
+             */
+            environment: "development" | "production";
+        };
+        /** RegisterDeviceTokenResponse */
+        RegisterDeviceTokenResponse: {
+            /** Ok */
+            ok: boolean;
         };
         /** RequestLoginRequest */
         RequestLoginRequest: {
@@ -2992,6 +3030,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DashboardResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    register_device_token_v1_device_tokens_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RegisterDeviceTokenRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RegisterDeviceTokenResponse"];
                 };
             };
             /** @description Validation Error */

@@ -11,7 +11,7 @@ import httpx
 import jwt
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -100,8 +100,12 @@ async def send_push_notification(
     environment: str,
     title: str,
     body: str,
-) -> None:
+) -> bool:
     """Send a single APNs alert push notification.
+
+    Returns False if APNs reports the token is permanently invalid (410), so
+    the caller can remove the stale row. Returns True for success or transient
+    errors (the token itself is not at fault).
 
     Reads credentials from env vars:
       APNS_AUTH_KEY  — PEM contents of the .p8 key file
@@ -109,15 +113,15 @@ async def send_push_notification(
       APNS_TEAM_ID   — 10-char team ID
       APNS_BUNDLE_ID — app bundle ID (default: com.fortymm.ios-client)
 
-    If any required credential is absent, logs a warning and returns without
-    sending — the app stays functional in environments without APNs configured.
+    If any required credential is absent, logs a warning and returns True
+    without sending — the app stays functional without APNs configured.
     """
     key_pem = os.environ.get("APNS_AUTH_KEY")
     key_id = os.environ.get("APNS_KEY_ID")
     team_id = os.environ.get("APNS_TEAM_ID")
     if key_pem is None or key_id is None or team_id is None:
         log.warning("APNs credentials not configured; skipping push notification")
-        return
+        return True
 
     bundle_id = os.environ.get("APNS_BUNDLE_ID", "com.fortymm.ios-client")
     auth_token = _make_apns_jwt(key_pem, key_id, team_id)
@@ -134,8 +138,10 @@ async def send_push_notification(
     )
     if response.status_code == 410:
         log.warning("APNs token expired/unregistered: %s", device_token)
-    elif response.status_code != 200:
+        return False
+    if response.status_code != 200:
         log.warning("APNs request failed [%s]: %s", response.status_code, response.text)
+    return True
 
 
 async def send_push_to_user(
@@ -145,9 +151,17 @@ async def send_push_to_user(
     title: str,
     body: str,
 ) -> None:
-    """Send a push notification to every registered device for a user."""
-    rows = await db.scalars(select(DeviceToken).where(DeviceToken.user_id == user_id))
-    await asyncio.gather(
+    """Send a push notification to every registered device for a user.
+
+    Tokens that APNs marks as permanently invalid (410) are deleted so they
+    are not retried on future sends.
+    """
+    token_rows = list(
+        await db.scalars(select(DeviceToken).where(DeviceToken.user_id == user_id))
+    )
+    if not token_rows:
+        return
+    results = await asyncio.gather(
         *(
             send_push_notification(
                 device_token=row.token,
@@ -155,6 +169,10 @@ async def send_push_to_user(
                 title=title,
                 body=body,
             )
-            for row in rows
+            for row in token_rows
         )
     )
+    stale = [row.token for row, ok in zip(token_rows, results, strict=True) if not ok]
+    if stale:
+        await db.execute(delete(DeviceToken).where(DeviceToken.token.in_(stale)))
+        await db.commit()
