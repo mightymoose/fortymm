@@ -24,6 +24,7 @@ from sqlalchemy import CursorResult, delete, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
+    DeviceToken,
     LeagueMembership,
     Match,
     MatchSidePlayer,
@@ -118,6 +119,25 @@ async def merge_user(
         {"from_id": from_user_id, "to_id": to_user_id},
     )
 
+    # device_tokens.token is UNIQUE, so re-point only the guest's tokens the
+    # survivor doesn't already hold; the rare collision (same physical device
+    # registered under both users) is dropped with the rest below.
+    await db.execute(
+        text(
+            """
+            UPDATE device_tokens AS dt
+            SET user_id = :to_id
+            WHERE dt.user_id = :from_id
+              AND NOT EXISTS (
+                SELECT 1 FROM device_tokens other
+                WHERE other.user_id = :to_id
+                  AND other.token = dt.token
+              )
+            """
+        ),
+        {"from_id": from_user_id, "to_id": to_user_id},
+    )
+
     # match_side_players is RESTRICT, so any rows that didn't re-point would
     # block the final user delete. Re-point should always cover them; this is
     # a belt-and-braces drop in case the impossible collision ever fires.
@@ -134,6 +154,7 @@ async def merge_user(
     # none of these reference each other. Keep the guest's *session* tokens so
     # its cookie still resolves to this (now-tombstoned) row.
     await db.execute(delete(UserRole).where(UserRole.user_id == from_user_id))
+    await db.execute(delete(DeviceToken).where(DeviceToken.user_id == from_user_id))
     await db.execute(delete(RatingHistory).where(RatingHistory.user_id == from_user_id))
     await db.execute(
         delete(UserLeagueRating).where(UserLeagueRating.user_id == from_user_id)

@@ -19,5 +19,17 @@
 	<array>
 		<string>applinks:uat.fortymm.com</string>
 	</array>
+	<!--
+	  Push notifications (APNs). `development` routes device tokens through the
+	  APNs *sandbox*, which is what Xcode debug builds register against — the
+	  app reports "sandbox" to the backend (POST /v1/device-tokens) so the
+	  server pushes via api.sandbox.push.apple.com. TestFlight / App Store
+	  builds need this set to `production` (and the app then reports
+	  "production"); flip both together when cutting a release build. The App ID
+	  com.fortymm.ios-client must have the Push Notifications capability enabled
+	  in the Apple Developer portal for token registration to succeed.
+	-->
+	<key>aps-environment</key>
+	<string>development</string>
 </dict>
 </plist>

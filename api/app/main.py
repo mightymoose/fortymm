@@ -12,6 +12,7 @@ from sqlalchemy import text
 from app import db, queue
 from app.dashboard import router as dashboard_router
 from app.matches import router as matches_router
+from app.notifications.router import router as notifications_router
 from app.players import router as players_router
 from app.rate_limiting import init_rate_limit_redis, shutdown_rate_limit_redis
 from app.rbac import router as rbac_router
@@ -43,6 +44,7 @@ app.include_router(rbac_router)
 app.include_router(matches_router)
 app.include_router(players_router)
 app.include_router(dashboard_router)
+app.include_router(notifications_router)
 
 SOLVER_HEALTH_TIMEOUT = 10.0
 
