@@ -6,22 +6,27 @@ Create Date: 2026-06-07 00:00:00.000000
 
 """
 
-from typing import Sequence, Union
+from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision: str = "0008"
-down_revision: Union[str, None] = "0007"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "0007"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
     op.create_table(
         "device_tokens",
-        sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
+        sa.Column(
+            "id",
+            postgresql.UUID(as_uuid=True),
+            primary_key=True,
+            server_default=sa.text("gen_random_uuid()"),
+        ),
         sa.Column(
             "user_id",
             postgresql.UUID(as_uuid=True),
@@ -34,17 +39,17 @@ def upgrade() -> None:
             "created_at",
             sa.DateTime(timezone=True),
             nullable=False,
+            server_default=sa.func.now(),
         ),
         sa.Column(
             "updated_at",
             sa.DateTime(timezone=True),
             nullable=False,
+            server_default=sa.func.now(),
         ),
     )
     op.create_index("ix_device_tokens_user_id", "device_tokens", ["user_id"])
-    op.create_unique_constraint(
-        "uq_device_tokens_token", "device_tokens", ["token"]
-    )
+    op.create_unique_constraint("uq_device_tokens_token", "device_tokens", ["token"])
 
 
 def downgrade() -> None:
