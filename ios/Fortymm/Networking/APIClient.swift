@@ -87,6 +87,23 @@ struct APIClient {
         try await get("/v1/session")
     }
 
+    /// Register an APNs device token for push notifications. Fire-and-forget
+    /// on the call site — errors are non-fatal (the token is re-sent on the
+    /// next launch when the OS delivers it again).
+    func registerDeviceToken(_ token: String) async throws {
+        struct Request: Encodable { let token: String; let environment: String }
+        struct Ignored: Decodable {}
+        #if DEBUG
+        let env = "development"
+        #else
+        let env = "production"
+        #endif
+        let _: Ignored = try await post(
+            "/v1/device-tokens",
+            body: Request(token: token, environment: env)
+        )
+    }
+
     // MARK: - Verbs
 
     func get<T: Decodable>(

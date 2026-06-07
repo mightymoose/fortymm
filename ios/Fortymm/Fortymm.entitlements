@@ -19,5 +19,14 @@
 	<array>
 		<string>applinks:uat.fortymm.com</string>
 	</array>
+	<!--
+	  Push Notifications. "development" covers debug/device runs; production
+	  builds are handled by the provisioning profile (Xcode overwrites this
+	  value during Archive). Enable the capability on the App ID in the Apple
+	  Developer portal before building: Certificates, IDs & Profiles →
+	  Identifiers → com.fortymm.ios-client → Push Notifications.
+	-->
+	<key>aps-environment</key>
+	<string>development</string>
 </dict>
 </plist>

@@ -24,6 +24,7 @@ from sqlalchemy import CursorResult, delete, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
+    DeviceToken,
     LeagueMembership,
     Match,
     MatchSidePlayer,
@@ -116,6 +117,16 @@ async def merge_user(
             """
         ),
         {"from_id": from_user_id, "to_id": to_user_id},
+    )
+
+    # Device tokens are device-scoped, not account-scoped. Re-point them to the
+    # surviving user so the device keeps receiving push notifications after the
+    # merge. The unique constraint on ``token`` can't collide here — a token
+    # can only be registered to one user at a time.
+    await db.execute(
+        update(DeviceToken)
+        .where(DeviceToken.user_id == from_user_id)
+        .values(user_id=to_user_id)
     )
 
     # match_side_players is RESTRICT, so any rows that didn't re-point would
