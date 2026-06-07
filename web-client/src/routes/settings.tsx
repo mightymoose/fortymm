@@ -15,6 +15,7 @@ import { Check, Mail } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { ApiError } from '@/api/client'
+import { useSendTestNotification } from '@/api/notifications'
 import {
   deriveEmailStatus,
   useLogout,
@@ -969,6 +970,72 @@ function EmailSection({
 }
 
 /* ------------------------------------------------------------------ */
+/*  03 — Notifications (test push to iOS)                             */
+/* ------------------------------------------------------------------ */
+
+function NotificationsSection() {
+  const sendTest = useSendTestNotification()
+  // Inline note for the non-error "nothing to send / not set up" outcomes;
+  // genuine delivery is confirmed with a toast.
+  const [note, setNote] = useState<string | null>(null)
+
+  const onSend = async () => {
+    setNote(null)
+    try {
+      const result = await sendTest.mutateAsync()
+      if (result.sent === 0) {
+        setNote(
+          'No devices registered yet. Install the FortyMM iOS app, sign in with this account and allow notifications, then try again.',
+        )
+        return
+      }
+      const plural = result.sent === 1 ? 'device' : 'devices'
+      toast.success(`Test notification sent to ${result.sent} ${plural}.`)
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 503) {
+        setNote("Push notifications aren't configured on the server yet.")
+        return
+      }
+      toast.error(
+        err instanceof Error
+          ? `Couldn't send test notification: ${err.message}`
+          : "Couldn't send test notification.",
+      )
+    }
+  }
+
+  return (
+    <SectionCard
+      id="sec-notifications"
+      num="03"
+      eyebrow="Devices"
+      title="Push notifications"
+      subtitle="Send a test notification to your iOS devices to confirm push is working. It goes to every device where you're signed into this account with the app installed."
+    >
+      <button
+        type="button"
+        className="fmm-btn fmm-btn--primary"
+        onClick={onSend}
+        disabled={sendTest.isPending}
+      >
+        {sendTest.isPending ? (
+          <>
+            <Spinner /> Sending…
+          </>
+        ) : (
+          'Send test notification'
+        )}
+      </button>
+      {note && (
+        <div className="fmm-help" style={{ marginTop: 12 }}>
+          {note}
+        </div>
+      )}
+    </SectionCard>
+  )
+}
+
+/* ------------------------------------------------------------------ */
 /*  Page                                                              */
 /* ------------------------------------------------------------------ */
 
@@ -1039,6 +1106,7 @@ function SettingsPage() {
                 confirmedAt={sessionConfirmedAt}
                 pendingEmail={sessionPendingEmail}
               />
+              <NotificationsSection />
             </div>
 
             <ComingSoon>

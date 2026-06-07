@@ -27,6 +27,10 @@ struct RootView: View {
                 .fullScreenCover(item: $session.pendingDeepLink) { link in
                     deepLinkDestination(link)
                 }
+                // Now that a session exists to attach the device token to, ask
+                // for notification permission and register with APNs. Runs once
+                // the signed-in shell appears.
+                .task { PushNotificationManager.shared.requestAuthorizationAndRegister() }
         case let .signedOut(reason, email):
             SessionEndedView(
                 reason: reason,

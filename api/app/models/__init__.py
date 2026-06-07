@@ -1,3 +1,4 @@
+from app.models.device_token import DeviceToken
 from app.models.league import League, LeagueVisibility
 from app.models.league_membership import LeagueMembership
 from app.models.match import Match, MatchStatus
@@ -18,6 +19,7 @@ from app.models.user_role import UserRole
 from app.models.user_token import UserToken
 
 __all__ = [
+    "DeviceToken",
     "League",
     "LeagueMembership",
     "LeagueVisibility",

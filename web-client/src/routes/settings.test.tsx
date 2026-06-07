@@ -240,3 +240,62 @@ describe('SettingsPage footer sign out', () => {
     await waitFor(() => expect(deleteCalled).toBe(true))
   })
 })
+
+describe('SettingsPage notifications section', () => {
+  it('POSTs a test push and confirms delivery', async () => {
+    const user = userEvent.setup()
+    let called = false
+    server.use(
+      http.post('*/v1/notifications/test', () => {
+        called = true
+        return HttpResponse.json({ sent: 2, pruned: 0 })
+      }),
+    )
+
+    await renderSettings()
+    await user.click(
+      await screen.findByRole('button', { name: /send test notification/i }),
+    )
+
+    await waitFor(() => expect(called).toBe(true))
+    // No "no devices" / "not configured" note on a successful send.
+    expect(screen.queryByText(/no devices registered/i)).not.toBeInTheDocument()
+  })
+
+  it('shows a helper note when no devices are registered', async () => {
+    const user = userEvent.setup()
+    server.use(
+      http.post('*/v1/notifications/test', () =>
+        HttpResponse.json({ sent: 0, pruned: 0 }),
+      ),
+    )
+
+    await renderSettings()
+    await user.click(
+      await screen.findByRole('button', { name: /send test notification/i }),
+    )
+
+    expect(
+      await screen.findByText(/no devices registered yet/i),
+    ).toBeInTheDocument()
+  })
+
+  it('explains when push is not configured on the server (503)', async () => {
+    const user = userEvent.setup()
+    server.use(
+      http.post(
+        '*/v1/notifications/test',
+        () => new HttpResponse(null, { status: 503 }),
+      ),
+    )
+
+    await renderSettings()
+    await user.click(
+      await screen.findByRole('button', { name: /send test notification/i }),
+    )
+
+    expect(
+      await screen.findByText(/aren't configured on the server/i),
+    ).toBeInTheDocument()
+  })
+})
