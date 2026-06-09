@@ -66,6 +66,10 @@ export default defineConfig({
     },
     setupFiles: ['./src/test/setup.ts'],
     css: true,
+    // Unit tests live under src/; Playwright specs under e2e/ are a separate
+    // suite. Scope include explicitly so runners that don't honor `exclude`
+    // (e.g. Stryker's sandboxed vitest) never try to run the .spec.ts e2e files.
+    include: ['src/**/*.{test,spec}.{ts,tsx}'],
     exclude: ['**/node_modules/**', '**/dist/**', 'e2e/**'],
   },
 })
