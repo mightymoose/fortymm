@@ -3,7 +3,6 @@ import { Link, useRouter } from '@tanstack/react-router'
 import {
   Check,
   ChevronRight,
-  Clock,
   Copy,
   Download,
   Link2,
@@ -576,49 +575,12 @@ function HeroScoreboard({
   view: MatchView
   matchId: string
 }) {
-  const isLive = view.state === 'live'
   const isUpcoming = view.state === 'upcoming'
 
   return (
     <Scoreboard matchId={matchId}>
       {() => (
         <>
-      <div className="md-hero__grid-bg" aria-hidden="true" />
-
-      <div className="md-hero__strip">
-        <div className="md-hero__strip-l">
-          {isLive && view.currentGameNumber !== null && (
-            <span className="md-chip md-chip--live">
-              <span className="dot" />
-              Live · Game {view.currentGameNumber}
-            </span>
-          )}
-          {view.state === 'final' && (
-            <span className="md-chip md-chip--final">
-              <span className="dot" />
-              Final
-            </span>
-          )}
-          {isUpcoming && (
-            <span className="md-chip md-chip--upcoming">
-              <span className="dot" />
-              {view.statusLabel}
-            </span>
-          )}
-        </div>
-        <div className="md-hero__strip-r">
-          <span className="md-hero__strip-meta">
-            SINGLES · BO{view.bestOf}
-          </span>
-          {!isUpcoming && (
-            <span className="md-hero__strip-meta md-hero__strip-meta--with-icon">
-              <Clock size={13} strokeWidth={1.75} />
-              First to {view.gamesToWin}
-            </span>
-          )}
-        </div>
-      </div>
-
       <div className="md-hero__row">
         <PlayerSide side={view.leftSide} pos="l" />
         <div className="md-hero__score-block">
@@ -629,28 +591,25 @@ function HeroScoreboard({
               <div className="md-hero__vs-label">{view.statusLabel}</div>
             </>
           ) : (
-            <>
-              <div className="md-hero__score-row">
-                <div
-                  className={cn(
-                    'md-hero__score md-hero__score--l',
-                    view.leftSide.won && 'md-hero__score--win',
-                  )}
-                >
-                  {view.leftSide.gamesWon}
-                </div>
-                <div className="md-hero__score-dash">—</div>
-                <div
-                  className={cn(
-                    'md-hero__score md-hero__score--r',
-                    view.rightSide?.won && 'md-hero__score--win',
-                  )}
-                >
-                  {view.rightSide?.gamesWon ?? 0}
-                </div>
+            <div className="md-hero__score-row">
+              <div
+                className={cn(
+                  'md-hero__score md-hero__score--l',
+                  view.leftSide.won && 'md-hero__score--win',
+                )}
+              >
+                {view.leftSide.gamesWon}
               </div>
-              <div className="md-hero__score-caption">{view.statusLabel}</div>
-            </>
+              <div className="md-hero__score-dash">—</div>
+              <div
+                className={cn(
+                  'md-hero__score md-hero__score--r',
+                  view.rightSide?.won && 'md-hero__score--win',
+                )}
+              >
+                {view.rightSide?.gamesWon ?? 0}
+              </div>
+            </div>
           )}
         </div>
         {view.rightSide ? (

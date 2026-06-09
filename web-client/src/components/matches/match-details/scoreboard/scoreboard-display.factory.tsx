@@ -1,13 +1,15 @@
+import { buildScoreboardHeadingView } from "./heading.factory";
 import type { ScoreboardView } from "./scoreboard-query";
 import type { ScoreboardDisplayProps } from "./scoreboard-display";
 
-/** The projected `{ status, outcome }` view the display renders around. */
+/** The projected `{ status, outcome, heading }` view the display renders around. */
 export function buildScoreboardView(
   overrides: Partial<ScoreboardView> = {},
 ): ScoreboardView {
   return {
     status: "scheduled",
     outcome: null,
+    heading: buildScoreboardHeadingView(),
     ...overrides,
   };
 }

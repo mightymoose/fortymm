@@ -8,6 +8,7 @@ import {
 import { server } from "@/mocks/server";
 import { render, screen, type Container } from "@/test/utilities";
 
+import { headingPage } from "./heading.page";
 import { ScoreboardFetcher, type ScoreboardProps } from "./scoreboard-fetcher";
 
 const DEFAULT_MATCH_ID = "m-1";
@@ -29,6 +30,8 @@ const scoped = (container: Container) => ({
   getHeading() {
     return container.getByRole("heading", { level: 2 });
   },
+  /** The heading strip (status chip + format/race labels) the display renders. */
+  headingStrip: headingPage.within(container),
 });
 
 /**

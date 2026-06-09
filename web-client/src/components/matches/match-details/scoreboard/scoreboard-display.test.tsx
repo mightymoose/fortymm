@@ -1,5 +1,6 @@
 import { within } from "@/test/utilities";
 
+import { buildScoreboardHeadingView } from "./heading.factory";
 import { buildScoreboardView } from "./scoreboard-display.factory";
 import { scoreboardDisplayPage } from "./scoreboard-display.page";
 
@@ -30,6 +31,26 @@ describe("ScoreboardDisplay", () => {
     });
 
     expect(scoreboardDisplayPage.getHeading()).toHaveTextContent("Match");
+  });
+
+  it("renders the heading strip inside the region from the view's heading", () => {
+    scoreboardDisplayPage.render({
+      scoreboard: buildScoreboardView({
+        heading: buildScoreboardHeadingView({
+          chip: { status: "final", label: "Final" },
+          formatLabel: "SINGLES · BO5",
+          raceLabel: "First to 3",
+        }),
+      }),
+    });
+
+    const strip = scoreboardDisplayPage.headingStrip;
+    expect(strip.getChip()).toHaveTextContent("Final");
+    expect(strip.getFormatLabel()).toHaveTextContent("SINGLES · BO5");
+    expect(strip.getRaceLabel()).toHaveTextContent("First to 3");
+    expect(scoreboardDisplayPage.getContainer()).toContainElement(
+      strip.getChip(),
+    );
   });
 
   it("renders the children render-prop's output inside the region", () => {

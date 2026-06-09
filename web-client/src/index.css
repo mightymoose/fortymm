@@ -2829,12 +2829,6 @@ body.dark.fortymm-theme {
   color: var(--fg-3);
   letter-spacing: 0.1em;
 }
-.fortymm-theme .md-hero__score-caption {
-  font: 500 11px var(--font-mono);
-  color: var(--fg-3);
-  letter-spacing: 0.18em;
-  margin-top: 4px;
-}
 .fortymm-theme .md-hero__vs-label {
   font: 500 11px var(--font-mono);
   color: var(--fg-3);
@@ -2858,46 +2852,6 @@ body.dark.fortymm-theme {
   align-items: center;
   gap: 6px;
   letter-spacing: 0.1em;
-}
-
-/* ---------- Chips ---------- */
-.fortymm-theme .md-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 24px;
-  padding: 0 10px;
-  border-radius: var(--r-pill);
-  font: 600 11px var(--font-ui);
-  letter-spacing: 0.04em;
-  background: var(--bg-panel);
-  color: var(--fg-2);
-  border: 1px solid var(--border-subtle);
-}
-.fortymm-theme .md-chip--live {
-  background: rgba(0, 226, 154, 0.12);
-  color: var(--serve-500);
-  border-color: rgba(0, 226, 154, 0.3);
-}
-.fortymm-theme .md-chip--final {
-  background: rgba(255, 122, 26, 0.1);
-  color: var(--ball-500);
-  border-color: rgba(255, 122, 26, 0.3);
-}
-.fortymm-theme .md-chip--upcoming {
-  background: rgba(255, 196, 61, 0.1);
-  color: var(--warn);
-  border-color: rgba(255, 196, 61, 0.3);
-}
-.fortymm-theme .md-chip .dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: currentColor;
-}
-.fortymm-theme .md-chip--live .dot {
-  box-shadow: 0 0 8px currentColor;
-  animation: ball-pulse 1.4s ease-in-out infinite;
 }
 
 /* ---------- Per-game grid ---------- */

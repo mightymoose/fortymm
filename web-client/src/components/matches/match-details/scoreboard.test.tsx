@@ -67,6 +67,23 @@ describe("Scoreboard", () => {
     ).toBeInTheDocument();
   });
 
+  it("displays the heading strip projected from the match details", async () => {
+    scoreboardPage.mockEndpoint(() =>
+      HttpResponse.json({
+        ...decidedMatch(),
+        data: { scoreboard: { status: "final" } },
+      }),
+    );
+
+    scoreboardPage.render();
+
+    await waitForElementToBeRemoved(scoreboardPage.queryLoading());
+    // Wiring only: heading content is pinned by the query and display tests.
+    const chip = scoreboardPage.headingStrip.getChip();
+    expect(chip).toHaveTextContent("Final");
+    expect(scoreboardPage.getRegion()).toContainElement(chip);
+  });
+
   it("owns no error boundary — a failed query propagates to an ancestor boundary", async () => {
     scoreboardPage.mockEndpoint(() => new HttpResponse(null, { status: 500 }));
 
