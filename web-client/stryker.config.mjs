@@ -8,6 +8,10 @@
  *
  * Run with `npm run test:mutation`. Reports land in `reports/mutation/`.
  *
+ * `npm run test:mutation:changed` (scripts/mutation-changed.ts) scopes a run
+ * to the files changed vs a base ref; it imports this config and reuses the
+ * `!`-exclusions from `mutate`, so the exclusion list lives only here.
+ *
  * @type {import('@stryker-mutator/api/core').PartialStrykerOptions}
  */
 export default {

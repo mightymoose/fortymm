@@ -2,6 +2,7 @@ import { HttpResponse } from "msw";
 
 import {
   buildMatchDetails,
+  buildMatchDetailsGame,
   buildMatchDetailsPlayer,
   buildMatchDetailsSide,
 } from "@/mocks/factories/matches/match-details.factory";
@@ -93,6 +94,40 @@ describe("ScoreboardFetcher", () => {
     expect(scoreboardFetcherPage.headingStrip.getChip()).toHaveTextContent(
       "Final",
     );
+  });
+
+  it("renders the game grid from the selected view for a live match", async () => {
+    // Wiring only: grid content is pinned by the query and game-grid tests.
+    // The game stays unscored so no cell needs a router for an edit link.
+    scoreboardFetcherPage.mockEndpoint(() =>
+      HttpResponse.json(
+        buildMatchDetails({
+          games: [buildMatchDetailsGame()],
+          data: { scoreboard: { status: "live" } },
+        }),
+      ),
+    );
+
+    scoreboardFetcherPage.render();
+
+    await waitForElementToBeRemoved(scoreboardFetcherPage.queryLoading());
+    const grid = scoreboardFetcherPage.gameGrid.getGrid();
+    expect(scoreboardFetcherPage.getRegion()).toContainElement(grid);
+  });
+
+  it("omits the game grid for a scheduled match", async () => {
+    scoreboardFetcherPage.mockEndpoint(() =>
+      HttpResponse.json(
+        buildMatchDetails({ data: { scoreboard: { status: "scheduled" } } }),
+      ),
+    );
+
+    scoreboardFetcherPage.render();
+
+    await waitForElementToBeRemoved(scoreboardFetcherPage.queryLoading());
+    expect(
+      scoreboardFetcherPage.gameGrid.queryGrid(),
+    ).not.toBeInTheDocument();
   });
 
   it("renders the children output inside the region", async () => {

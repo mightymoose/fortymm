@@ -3,7 +3,9 @@ import { HttpResponse } from "msw";
 import { ApiError } from "@/api/client";
 import {
   buildMatchDetails,
+  buildMatchDetailsGame,
   buildMatchDetailsPlayer,
+  buildMatchDetailsScore,
   buildMatchDetailsSide,
 } from "@/mocks/factories/matches/match-details.factory";
 import { waitFor } from "@/test/utilities";
@@ -402,6 +404,267 @@ describe("scoreboardQuery", () => {
     await waitFor(() => expect(result.current.isError).toBe(true));
     expect(result.current.error).toBeInstanceOf(ApiError);
     expect((result.current.error as ApiError).status).toBe(500);
+  });
+
+  it("projects no game grid for a scheduled match", async () => {
+    scoreboardQueryPage.mockEndpoint(() =>
+      HttpResponse.json(
+        buildMatchDetails({ data: { scoreboard: { status: "scheduled" } } }),
+      ),
+    );
+
+    const { result } = scoreboardQueryPage.render();
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data?.gameGrid).toBeNull();
+  });
+
+  it("projects no game grid when the match has only one side", async () => {
+    scoreboardQueryPage.mockEndpoint(() =>
+      HttpResponse.json(
+        buildMatchDetails({
+          sides: [buildMatchDetailsSide()],
+          data: { scoreboard: { status: "live" } },
+        }),
+      ),
+    );
+
+    const { result } = scoreboardQueryPage.render();
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data?.gameGrid).toBeNull();
+  });
+
+  it("projects scored cells per side, padded to best_of, with the match id", async () => {
+    scoreboardQueryPage.mockEndpoint(() =>
+      HttpResponse.json(
+        buildMatchDetails({
+          id: "m-99",
+          best_of: 5,
+          games: [
+            buildMatchDetailsGame({
+              score: buildMatchDetailsScore({
+                side_1_points: 11,
+                side_2_points: 7,
+              }),
+            }),
+            buildMatchDetailsGame({ id: "g-2", game_number: 2 }),
+          ],
+          current_game: { game_number: 2 },
+          data: { scoreboard: { status: "live" } },
+        }),
+      ),
+    );
+
+    const { result } = scoreboardQueryPage.render();
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    const grid = result.current.data?.gameGrid;
+    expect(grid?.matchId).toBe("m-99");
+    expect(grid?.bestOf).toBe(5);
+    const [mine, theirs] = grid!.rows;
+    expect(mine.cells).toHaveLength(5);
+    expect(mine.cells[0]).toEqual({
+      kind: "scored",
+      points: 11,
+      won: true,
+      editGameNumber: 1,
+    });
+    // The opponent's row mirrors the score but never carries an edit link.
+    expect(theirs.cells[0]).toEqual({
+      kind: "scored",
+      points: 7,
+      won: false,
+      editGameNumber: null,
+    });
+    // The existing-but-unscored current game is live; the padded slots aren't.
+    expect(mine.cells[1]).toEqual({ kind: "unplayed", isLive: true });
+    expect(mine.cells[2]).toEqual({ kind: "unplayed", isLive: false });
+  });
+
+  it("marks only the current game's unscored record live, not other unscored records", async () => {
+    scoreboardQueryPage.mockEndpoint(() =>
+      HttpResponse.json(
+        buildMatchDetails({
+          best_of: 5,
+          games: [
+            buildMatchDetailsGame({ id: "g-2", game_number: 2 }),
+            buildMatchDetailsGame({ id: "g-3", game_number: 3 }),
+          ],
+          current_game: { game_number: 3 },
+          data: { scoreboard: { status: "live" } },
+        }),
+      ),
+    );
+
+    const { result } = scoreboardQueryPage.render();
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    const [mine] = result.current.data!.gameGrid!.rows;
+    expect(mine.cells[1]).toEqual({ kind: "unplayed", isLive: false });
+    expect(mine.cells[2]).toEqual({ kind: "unplayed", isLive: true });
+  });
+
+  it("projects row identity and totals from the sides", async () => {
+    scoreboardQueryPage.mockEndpoint(() =>
+      HttpResponse.json(
+        buildMatchDetails({
+          sides: [
+            buildMatchDetailsSide({
+              won: true,
+              games_won: 3,
+              players: [buildMatchDetailsPlayer({ username: "rita.kovac" })],
+            }),
+            buildMatchDetailsSide({
+              side_number: 2,
+              won: false,
+              games_won: 1,
+              players: [
+                buildMatchDetailsPlayer({
+                  user_id: "u-opp",
+                  username: "leo.mertens",
+                  is_current_user: false,
+                }),
+              ],
+              is_current_user_side: false,
+            }),
+          ],
+          data: { scoreboard: { status: "final" } },
+        }),
+      ),
+    );
+
+    const { result } = scoreboardQueryPage.render();
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    const [mine, theirs] = result.current.data!.gameGrid!.rows;
+    expect(mine).toMatchObject({
+      name: "rita.kovac",
+      initials: "RK",
+      isGhost: false,
+      won: true,
+      gamesWon: 3,
+    });
+    expect(theirs).toMatchObject({
+      name: "leo.mertens",
+      won: false,
+      gamesWon: 1,
+    });
+  });
+
+  it("puts the viewer's side first even when they are side 2", async () => {
+    scoreboardQueryPage.mockEndpoint(() =>
+      HttpResponse.json(
+        buildMatchDetails({
+          sides: [
+            buildMatchDetailsSide({
+              players: [
+                buildMatchDetailsPlayer({
+                  user_id: "u-opp",
+                  username: "leo.mertens",
+                  is_current_user: false,
+                }),
+              ],
+              is_current_user_side: false,
+            }),
+            buildMatchDetailsSide({
+              side_number: 2,
+              players: [buildMatchDetailsPlayer({ username: "rita.kovac" })],
+            }),
+          ],
+          games: [
+            buildMatchDetailsGame({
+              score: buildMatchDetailsScore({
+                side_1_points: 11,
+                side_2_points: 7,
+              }),
+            }),
+          ],
+          data: { scoreboard: { status: "live" } },
+        }),
+      ),
+    );
+
+    const { result } = scoreboardQueryPage.render();
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    const [mine, theirs] = result.current.data!.gameGrid!.rows;
+    // Side 2's points lead, and the viewer's row carries the edit link.
+    expect(mine).toMatchObject({ name: "rita.kovac" });
+    expect(mine.cells[0]).toMatchObject({ points: 7, editGameNumber: 1 });
+    expect(theirs.cells[0]).toMatchObject({
+      points: 11,
+      editGameNumber: null,
+    });
+  });
+
+  it("orders by side number with no edit links when the viewer is a spectator", async () => {
+    scoreboardQueryPage.mockEndpoint(() =>
+      HttpResponse.json(
+        buildMatchDetails({
+          sides: [
+            buildMatchDetailsSide({
+              players: [
+                buildMatchDetailsPlayer({
+                  user_id: "u-a",
+                  username: "ada.l",
+                  is_current_user: false,
+                }),
+              ],
+              is_current_user_side: false,
+            }),
+            buildMatchDetailsSide({
+              side_number: 2,
+              players: [
+                buildMatchDetailsPlayer({
+                  user_id: "u-b",
+                  username: "bo.k",
+                  is_current_user: false,
+                }),
+              ],
+              is_current_user_side: false,
+            }),
+          ],
+          games: [
+            buildMatchDetailsGame({ score: buildMatchDetailsScore() }),
+          ],
+          data: { scoreboard: { status: "live" } },
+        }),
+      ),
+    );
+
+    const { result } = scoreboardQueryPage.render();
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    const [first, second] = result.current.data!.gameGrid!.rows;
+    expect(first.name).toBe("ada.l");
+    expect(second.name).toBe("bo.k");
+    expect(first.cells[0]).toMatchObject({ editGameNumber: null });
+    expect(second.cells[0]).toMatchObject({ editGameNumber: null });
+  });
+
+  it("projects a playerless side as a ghost 'No opponent' row", async () => {
+    scoreboardQueryPage.mockEndpoint(() =>
+      HttpResponse.json(
+        buildMatchDetails({
+          sides: [
+            buildMatchDetailsSide(),
+            buildMatchDetailsSide({
+              side_number: 2,
+              players: [],
+              is_current_user_side: false,
+            }),
+          ],
+          data: { scoreboard: { status: "live" } },
+        }),
+      ),
+    );
+
+    const { result } = scoreboardQueryPage.render();
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    const [, ghost] = result.current.data!.gameGrid!.rows;
+    expect(ghost).toMatchObject({ name: "No opponent", isGhost: true });
   });
 
   it("shares the matchDetailsQuery cache key so the request is not duplicated", () => {

@@ -8,6 +8,7 @@ import { server } from "@/mocks/server";
 import { render, screen, type Container } from "@/test/utilities";
 
 import { Scoreboard, type ScoreboardProps } from "./scoreboard";
+import { gameGridPage } from "./scoreboard/game-grid.page";
 import { headingPage } from "./scoreboard/heading.page";
 
 const DEFAULT_MATCH_ID = "m-1";
@@ -35,6 +36,8 @@ const scoped = (container: Container) => ({
   },
   /** The heading strip (status chip + format/race labels) the display renders. */
   headingStrip: headingPage.within(container),
+  /** The per-game score grid the display renders at the bottom of the hero. */
+  gameGrid: gameGridPage.within(container),
 });
 
 /**

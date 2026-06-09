@@ -3,6 +3,7 @@ import {
   type MatchDetailsResult,
 } from "../match-details-query";
 import type { Scoreboard } from "@/api/matches";
+import { initialsOf } from "@/lib/utils";
 
 /** The status chip on the left of the strip; null when the match is live
  * but has no current game (nothing meaningful to announce). */
@@ -20,10 +21,47 @@ export type ScoreboardHeadingView = {
   raceLabel: string | null;
 };
 
+/** One slot in a game-grid row. Every row is padded to `bestOf` cells, so a
+ * slot may be a scored game, an unscored (possibly live) game, or a game that
+ * doesn't exist yet — the latter two render identically except for the live
+ * highlight. */
+export type GameGridCellView =
+  | { kind: "unplayed"; isLive: boolean }
+  | {
+      kind: "scored";
+      points: number;
+      won: boolean;
+      /** Game number to link the cell to its scores/edit route; null when the
+       * viewer can't edit this cell (spectator, or the opponent's row). */
+      editGameNumber: number | null;
+    };
+
+export type GameGridRowView = {
+  /** Lead player's username, or "No opponent" for a playerless ghost side. */
+  name: string;
+  initials: string;
+  isGhost: boolean;
+  won: boolean;
+  gamesWon: number;
+  cells: GameGridCellView[];
+};
+
+/** The per-game score grid at the bottom of the scoreboard. Rows are
+ * perspective-ordered: the viewer's side first when they're a participant,
+ * otherwise side 1 first. */
+export type GameGridView = {
+  matchId: string;
+  bestOf: number;
+  rows: [GameGridRowView, GameGridRowView];
+};
+
 export type ScoreboardView = {
   status: Scoreboard["status"];
   outcome: string | null;
   heading: ScoreboardHeadingView;
+  /** Null when there's nothing to tabulate: an upcoming match, or a match
+   * without two sides. */
+  gameGrid: GameGridView | null;
 };
 
 const games = (n: number) => `${n} ${n === 1 ? "game" : "games"}`;
@@ -85,10 +123,86 @@ const selectHeading = (match: MatchDetailsResult): ScoreboardHeadingView => {
   };
 };
 
+type MatchDetailsSide = MatchDetailsResult["unmigrated"]["sides"][number];
+type MatchDetailsGame = MatchDetailsResult["unmigrated"]["games"][number];
+
+const selectGameGridRow = (
+  side: MatchDetailsSide,
+  slots: Array<MatchDetailsGame | null>,
+  details: MatchDetailsResult["unmigrated"],
+  editable: boolean,
+): GameGridRowView => {
+  const name = side.players[0]?.username ?? "No opponent";
+  return {
+    name,
+    initials: initialsOf(name),
+    isGhost: side.players.length === 0,
+    won: side.won === true,
+    gamesWon: side.games_won,
+    cells: slots.map((game): GameGridCellView => {
+      if (!game?.score) {
+        return {
+          kind: "unplayed",
+          isLive:
+            game !== null &&
+            details.current_game?.game_number === game.game_number,
+        };
+      }
+      return {
+        kind: "scored",
+        points:
+          side.side_number === 1
+            ? game.score.side_1_points
+            : game.score.side_2_points,
+        won: game.score.winner_side_number === side.side_number,
+        editGameNumber:
+          editable && game.score.id ? game.game_number : null,
+      };
+    }),
+  };
+};
+
+const selectGameGrid = (match: MatchDetailsResult): GameGridView | null => {
+  // An upcoming match has no games to tabulate — the hero shows "VS" instead.
+  if (match.data.scoreboard.status === "scheduled") return null;
+
+  const details = match.unmigrated;
+  // Perspective ordering: the viewer's side reads first when they're a
+  // participant; otherwise side 1 / side 2.
+  const bySideNumber = [...details.sides].sort(
+    (a, b) => a.side_number - b.side_number,
+  );
+  const mine = bySideNumber.find((s) => s.is_current_user_side);
+  const first = mine ?? bySideNumber[0];
+  const second = bySideNumber.find((s) => s !== first);
+  if (!first || !second) return null;
+
+  // Pad to best_of so the grid always renders the same number of cells.
+  const gamesByNumber = new Map(details.games.map((g) => [g.game_number, g]));
+  const slots: Array<MatchDetailsGame | null> = [];
+  for (let n = 1; n <= details.best_of; n += 1) {
+    slots.push(gamesByNumber.get(n) ?? null);
+  }
+
+  // Per-cell edit links are gated on participation — spectators can't write
+  // scores — and only the viewer's own row carries them, so the user doesn't
+  // see two stacked links over the same game.
+  const canEdit = first.is_current_user_side;
+  return {
+    matchId: details.id,
+    bestOf: details.best_of,
+    rows: [
+      selectGameGridRow(first, slots, details, canEdit),
+      selectGameGridRow(second, slots, details, false),
+    ],
+  };
+};
+
 const selectScoreboard = (match: MatchDetailsResult): ScoreboardView => ({
   status: match.data.scoreboard.status,
   outcome: selectOutcome(match),
   heading: selectHeading(match),
+  gameGrid: selectGameGrid(match),
 });
 
 export const scoreboardQuery = (matchId: string) => ({
