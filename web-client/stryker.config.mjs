@@ -33,7 +33,7 @@ export default {
     "src/**/*.{ts,tsx}",
     "!src/**/*.test.{ts,tsx}",
     "!src/**/*.page.tsx", // page objects (test-only DOM access)
-    "!src/**/*.factory.ts", // test data builders
+    "!src/**/*.factory.{ts,tsx}", // test data builders
     "!src/**/*-skeleton.tsx", // pure <Suspense> fallbacks, no logic
     "!src/components/ui/**", // shadcn primitives (vendored)
     "!src/mocks/**", // MSW handlers + fixtures
