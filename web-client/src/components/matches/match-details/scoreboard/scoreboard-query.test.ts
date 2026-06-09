@@ -85,6 +85,108 @@ describe("scoreboardQuery", () => {
     },
   );
 
+  it("projects an upcoming chip from status_label for a scheduled match, with no race label", async () => {
+    scoreboardQueryPage.mockEndpoint(() =>
+      HttpResponse.json(
+        buildMatchDetails({
+          status_label: "Awaiting opponent",
+          data: { scoreboard: { status: "scheduled" } },
+        }),
+      ),
+    );
+
+    const { result } = scoreboardQueryPage.render();
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data?.heading).toEqual({
+      chip: { status: "scheduled", label: "Awaiting opponent" },
+      formatLabel: "SINGLES · BO5",
+      raceLabel: null,
+    });
+  });
+
+  it("projects a live chip naming the current game, and the race label", async () => {
+    scoreboardQueryPage.mockEndpoint(() =>
+      HttpResponse.json(
+        buildMatchDetails({
+          current_game: { game_number: 3 },
+          data: { scoreboard: { status: "live" } },
+        }),
+      ),
+    );
+
+    const { result } = scoreboardQueryPage.render();
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data?.heading.chip).toEqual({
+      status: "live",
+      label: "Live · Game 3",
+    });
+    expect(result.current.data?.heading.raceLabel).toBe("First to 3");
+  });
+
+  it("projects no chip for a live match with no current game", async () => {
+    scoreboardQueryPage.mockEndpoint(() =>
+      HttpResponse.json(
+        buildMatchDetails({
+          current_game: null,
+          data: { scoreboard: { status: "live" } },
+        }),
+      ),
+    );
+
+    const { result } = scoreboardQueryPage.render();
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data?.heading.chip).toBeNull();
+  });
+
+  it("projects a Final chip for a final match", async () => {
+    scoreboardQueryPage.mockEndpoint(() =>
+      HttpResponse.json(
+        buildMatchDetails({ data: { scoreboard: { status: "final" } } }),
+      ),
+    );
+
+    const { result } = scoreboardQueryPage.render();
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data?.heading.chip).toEqual({
+      status: "final",
+      label: "Final",
+    });
+  });
+
+  it("builds the format label from team_size and best_of", async () => {
+    scoreboardQueryPage.mockEndpoint(() =>
+      HttpResponse.json(
+        buildMatchDetails({ team_size: 2, best_of: 3, games_to_win: 2 }),
+      ),
+    );
+
+    const { result } = scoreboardQueryPage.render();
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data?.heading.formatLabel).toBe("DOUBLES · BO3");
+  });
+
+  it("builds the race label from games_to_win", async () => {
+    scoreboardQueryPage.mockEndpoint(() =>
+      HttpResponse.json(
+        buildMatchDetails({
+          best_of: 1,
+          games_to_win: 1,
+          data: { scoreboard: { status: "final" } },
+        }),
+      ),
+    );
+
+    const { result } = scoreboardQueryPage.render();
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data?.heading.raceLabel).toBe("First to 1");
+  });
+
   it("reports no games recorded for a match that has not started", async () => {
     // The default factory leaves both sides at `won: null`, `games_won: 0`.
     scoreboardQueryPage.mockEndpoint(() =>

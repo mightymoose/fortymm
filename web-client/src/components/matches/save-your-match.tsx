@@ -80,7 +80,7 @@ function DismissedReceipt() {
   // routes straight to the email flow — the label promises a commit, not an
   // undo, so we navigate rather than restore the prompt.
   return (
-    <div className="md-save-receipt" role="status">
+    <div className="md-save-receipt" role="status" aria-label="Match save receipt">
       <span aria-hidden="true">—</span>
       <span>
         This match lives on your device only.{' '}

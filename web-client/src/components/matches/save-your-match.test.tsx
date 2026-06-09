@@ -253,7 +253,7 @@ describe('SaveYourMatch', () => {
     expect(
       screen.queryByRole('region', { name: PROMPT_REGION }),
     ).not.toBeInTheDocument()
-    const receipt = screen.getByRole('status')
+    const receipt = screen.getByRole('status', { name: /match save receipt/i })
     expect(receipt).toHaveTextContent(/lives on your device only/i)
     // The receipt's "Save it" is a real CTA — it links straight to the email
     // section, not a re-surface of the prompt.

@@ -1,5 +1,6 @@
 import { render, screen, type Container } from "@/test/utilities";
 
+import { headingPage } from "./heading.page";
 import {
   ScoreboardDisplay,
   type ScoreboardDisplayProps,
@@ -13,6 +14,8 @@ const scoped = (container: Container) => ({
   getContainer() {
     return container.getByRole("region");
   },
+  /** The heading strip (status chip + format/race labels) the display renders. */
+  headingStrip: headingPage.within(container),
 });
 
 export const scoreboardDisplayPage = {

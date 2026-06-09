@@ -70,10 +70,29 @@ describe("ScoreboardFetcher", () => {
     scoreboardFetcherPage.render({ children });
 
     await waitForElementToBeRemoved(scoreboardFetcherPage.queryLoading());
-    expect(children).toHaveBeenCalledWith({
-      status: "scheduled",
-      outcome: "rita.kovac defeated leo.mertens, 3 games to 1",
-    });
+    // Wiring only: the projected heading's content is pinned by the
+    // scoreboard-query tests, the resulting DOM by the display tests.
+    expect(children).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: "scheduled",
+        outcome: "rita.kovac defeated leo.mertens, 3 games to 1",
+      }),
+    );
+  });
+
+  it("renders the heading strip from the selected view", async () => {
+    scoreboardFetcherPage.mockEndpoint(() =>
+      HttpResponse.json(
+        buildMatchDetails({ data: { scoreboard: { status: "final" } } }),
+      ),
+    );
+
+    scoreboardFetcherPage.render();
+
+    await waitForElementToBeRemoved(scoreboardFetcherPage.queryLoading());
+    expect(scoreboardFetcherPage.headingStrip.getChip()).toHaveTextContent(
+      "Final",
+    );
   });
 
   it("renders the children output inside the region", async () => {
