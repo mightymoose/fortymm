@@ -801,9 +801,10 @@ async def test_can_score_match_without_opponent(
 async def test_results_post_commits_canon_and_records_first_signature(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    """``POST /results`` commits the canonical games (obliterating the
-    scratchpad), sets ``side.won``, and inserts the caller's signature — but
-    leaves status at ``in_progress`` until the opponent confirms."""
+    """``POST /results`` on a rated match commits the canonical games
+    (obliterating the scratchpad) and inserts the caller's signature — but
+    leaves status at ``in_progress`` and ``side.won`` unset until the
+    opponent confirms."""
     await start_session(api_client, db_session)
     async with opponent_session(db_session, "rival") as (opp_client, opp):
         match = await _create_match(api_client, opp.id, best_of=3)
@@ -835,9 +836,9 @@ async def test_results_post_commits_canon_and_records_first_signature(
         assert body["can_confirm"] is False  # poster has already signed
         assert len(body["signatures"]) == 1
         sides = sorted(body["sides"], key=lambda s: s["side_number"])
-        # side.won is set on /results — the games show who won, irrespective
-        # of whether the result has been ratified yet.
-        assert [s["won"] for s in sides] == [True, False]
+        # side.won is NOT set on /results for a rated match — the opponent
+        # hasn't ratified the claim yet; /confirmation stamps it (#485).
+        assert [s["won"] for s in sides] == [None, None]
         # Games + scores reflect the payload, not the scratchpad.
         games = sorted(body["games"], key=lambda g: g["game_number"])
         assert [g["game_number"] for g in games] == [1, 2]
@@ -857,6 +858,9 @@ async def test_results_post_commits_canon_and_records_first_signature(
         assert confirmed["status"] == "completed"
         assert confirmed["status_label"] == "Final"
         assert len(confirmed["signatures"]) == 2
+        # Confirmation is the moment the outcome becomes official.
+        confirmed_sides = sorted(confirmed["sides"], key=lambda s: s["side_number"])
+        assert [s["won"] for s in confirmed_sides] == [True, False]
 
 
 async def test_results_409_when_already_posted(
@@ -1573,6 +1577,36 @@ async def test_results_on_solo_finalizes_with_no_signature_row(
     assert body["signatures"] == []
 
 
+async def test_results_on_unrated_match_finalizes_immediately(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """An unrated match with a real opponent skips the confirmation
+    round-trip (#485): confirmation exists to protect ratings from one-sided
+    claims, and an unrated match has no stakes worth a second sign-off. The
+    /results call flips straight to completed, stamps ``side.won``, and
+    inserts no signature row — same as the solo path."""
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "casual-opp") as (opp_client, opp):
+        create = await api_client.post(
+            "/v1/matches",
+            json={"opponent_user_id": str(opp.id), "best_of": 3, "rated": False},
+        )
+        assert create.status_code == 201
+        match = create.json()
+
+        body = await _post_results(api_client, match["id"])
+        assert body["status"] == "completed"
+        assert body["status_label"] == "Final"
+        assert body["signatures"] == []
+        sides = sorted(body["sides"], key=lambda s: s["side_number"])
+        assert [s["won"] for s in sides] == [True, False]
+        assert [s["rating_change"] for s in sides] == [None, None]
+
+        # Nothing left to confirm — the opponent's /confirmation is a 409.
+        confirm = await opp_client.post(f"/v1/matches/{match['id']}/confirmation")
+        assert confirm.status_code == 409
+
+
 async def test_confirmation_409_when_no_result_posted(
     api_client: AsyncClient, db_session: AsyncSession
 ):
@@ -1753,15 +1787,15 @@ async def test_dispute_zeros_side_score_to_match_won_reset(
         assert [sides_by_number[n].score for n in (1, 2)] == [0, 0]
 
 
-async def test_awaiting_confirmation_response_keeps_won_and_scores_public(
+async def test_awaiting_confirmation_response_keeps_scores_public_but_not_won(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    """Locks the "unratified result is public" contract for both the authed
+    """Locks the awaiting-confirmation read contract for both the authed
     detail endpoint AND the anonymous public read path. From the moment
-    ``POST /results`` lands, ``side.won`` and ``games[].score`` are visible;
-    confirmation only ratifies the result for ratings/finality. The
-    awaiting state is conveyed by ``status_label="Awaiting confirmation"``,
-    NOT by hiding the outcome."""
+    ``POST /results`` lands, ``games[].score`` and the games-won counts are
+    visible — the opponent (and any third party) needs to see what's being
+    attested to. But ``side.won`` stays null until /confirmation ratifies
+    the result (#485): no official W/L before the opponent signs."""
     await start_session(api_client, db_session)
     async with opponent_session(db_session, "shape-opp") as (_opp_client, opp):
         match = await _create_match(api_client, opp.id, best_of=3)
@@ -1772,7 +1806,7 @@ async def test_awaiting_confirmation_response_keeps_won_and_scores_public(
         assert authed["status"] == "in_progress"
         assert authed["status_label"] == "Awaiting confirmation"
         sides = sorted(authed["sides"], key=lambda s: s["side_number"])
-        assert [s["won"] for s in sides] == [True, False]
+        assert [s["won"] for s in sides] == [None, None]
         assert [s["games_won"] for s in sides] == [2, 0]
         # Per-game scores stay visible — the opponent (and any third party)
         # needs to see what's being attested to.
@@ -1787,7 +1821,7 @@ async def test_awaiting_confirmation_response_keeps_won_and_scores_public(
         assert anon_view["status"] == "in_progress"
         assert anon_view["status_label"] == "Awaiting confirmation"
         anon_sides = sorted(anon_view["sides"], key=lambda s: s["side_number"])
-        assert [s["won"] for s in anon_sides] == [True, False]
+        assert [s["won"] for s in anon_sides] == [None, None]
         for g in sorted(anon_view["games"], key=lambda g: g["game_number"]):
             assert g["score"] is not None
         # Anonymous viewers see signatures (just user_id + signed_at — no PII).
@@ -2013,6 +2047,37 @@ async def test_solo_result_sends_no_push(
         json={"games": [{"game_number": 1, "side_1_points": 11, "side_2_points": 5}]},
     )
     assert response.status_code == 201
+    assert sender.sent == []
+
+
+async def test_unrated_result_sends_no_push(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """An unrated match finalizes on post with nothing for the opponent to
+    confirm — so no confirmation push is fired, even with a device
+    registered."""
+    await start_session(api_client, db_session)
+
+    sender = FakeSender()
+    use_sender(sender)
+
+    async with opponent_session(db_session, "rival") as (opp_client, opp):
+        await _register_device(opp_client, "opp-device")
+        created = await api_client.post(
+            "/v1/matches",
+            json={"opponent_user_id": str(opp.id), "best_of": 1, "rated": False},
+        )
+        assert created.status_code == 201
+        match = created.json()
+
+        response = await api_client.post(
+            f"/v1/matches/{match['id']}/results",
+            json={
+                "games": [{"game_number": 1, "side_1_points": 11, "side_2_points": 5}]
+            },
+        )
+        assert response.status_code == 201
+
     assert sender.sent == []
 
 

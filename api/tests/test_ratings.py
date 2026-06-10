@@ -279,7 +279,7 @@ async def test_unrated_match_does_not_move_ratings(
     api_client: AsyncClient, db_session: AsyncSession
 ):
     await start_session(api_client, db_session)
-    async with opponent_session(db_session, "rival") as (opp_client, opp):
+    async with opponent_session(db_session, "rival") as (_opp_client, opp):
         create = await api_client.post(
             "/v1/matches",
             json={
@@ -298,9 +298,10 @@ async def test_unrated_match_does_not_move_ratings(
             },
         )
         assert post.status_code == 201
-        confirm = await opp_client.post(f"/v1/matches/{match['id']}/confirmation")
-        assert confirm.status_code == 201
-        body = confirm.json()
+        # Unrated matches skip the confirmation gate (#485) and finalize
+        # straight from /results.
+        body = post.json()
+        assert body["status"] == "completed"
         for side in body["sides"]:
             assert side["rating_change"] is None
 

@@ -7,6 +7,7 @@ import {
 } from '@tanstack/react-query'
 import { api, resolveBaseUrl, unwrap } from './client'
 import { DASHBOARD_QUERY_KEY } from './dashboard'
+import { matchDetailsQueryKey } from '@/components/matches/match-details/match-details-query'
 import type { components } from './schema'
 
 export type Player = components['schemas']['PlayerRead']
@@ -191,6 +192,12 @@ function applyScoreMutationCache(
   data: MatchDetails,
 ) {
   queryClient.setQueryData<MatchDetails>(matchQueryKey(matchId), data)
+  // The scoreboard reads a *different* cache key (`matchDetailsQuery`) off the
+  // same endpoint, so priming `matchQueryKey` above doesn't refresh the hero.
+  // Invalidate it so the scoreboard re-derives won/outcome — e.g. after a
+  // confirmation flips `side.won` null→true (issue #485), the hero must change
+  // from "leading" to "defeated" without a manual reload.
+  queryClient.invalidateQueries({ queryKey: matchDetailsQueryKey(matchId) })
   queryClient.invalidateQueries({ queryKey: ['matches', 'list'] })
   queryClient.invalidateQueries({ queryKey: DASHBOARD_QUERY_KEY })
 }

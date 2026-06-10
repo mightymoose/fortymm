@@ -188,11 +188,11 @@ function projectSides(seed: SeedMatch): {
   opponentSide: MatchDetailsSide
 } {
   const { side1, side2 } = sideWinCounts(seed)
-  // After ``POST /results`` (non-solo) the canonical games have decided the
-  // match even though status remains ``in_progress`` until the opponent
-  // confirms; mirror the API so the hero scoreboard renders the winner
-  // immediately rather than waiting on the confirmation round-trip.
-  const decided = seed.status === 'completed' || seed.signatures.length > 0
+  // ``won`` is only stamped when the match completes — immediately at
+  // /results for solo/unrated matches, at /confirmation for rated ones
+  // (issue #485). While a rated match awaits confirmation the outcome is
+  // conveyed by the games, not an official W/L. Mirrors the API.
+  const decided = seed.status === 'completed'
 
   const showRatingChange =
     seed.status === 'completed' && seed.affects_rating && seed.opponent !== null
@@ -774,10 +774,11 @@ export function newMatchSeed(input: {
   return seed
 }
 
-/** POST /v1/matches/{id}/results: obliterate the existing games + scores,
- * insert the payload's games, record the current user's signature, and
- * (for solo matches) flip status to completed. Non-solo matches stay at
- * ``in_progress`` until ``POST /confirmation`` lands the second signature.
+/** POST /v1/matches/{id}/results: obliterate the existing games + scores
+ * and insert the payload's games. Solo and unrated matches finalize
+ * immediately (no second sign-off needed — issue #485); rated matches
+ * record the current user's signature and stay at ``in_progress`` until
+ * ``POST /confirmation`` lands the second one.
  * Returns null on validation success, or a 422-suitable detail string. */
 export function finalizeSeed(
   seed: SeedMatch,
@@ -841,8 +842,9 @@ export function finalizeSeed(
     },
   }))
 
-  if (seed.opponent === null) {
-    // Solo match — nobody else to sign, finalize immediately (mirror the API).
+  if (seed.opponent === null || !seed.affects_rating) {
+    // Solo or unrated match — no second sign-off needed, finalize
+    // immediately (mirror the API, issue #485).
     seed.status = 'completed'
     seed.completed_at = new Date().toISOString()
   } else {
