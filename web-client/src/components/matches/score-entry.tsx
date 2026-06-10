@@ -142,7 +142,12 @@ function ScoreEntryInner({
   const me = meTyped ?? (persistedMe !== null ? String(persistedMe) : '')
   const opp = oppTyped ?? (persistedOpp !== null ? String(persistedOpp) : '')
 
-  const sanitize = (value: string) => value.replace(/[^0-9]/g, '').slice(0, 2)
+  // Strip non-digits and cap at 3 digits. Two digits silently turned "100"
+  // into "10", then the deuce/win-by-2 check fired against a value the user
+  // never typed (#442). Three digits covers any real table-tennis score
+  // (a long deuce game tops out well under 100) without that mutation, so
+  // illegalScoreReason always references exactly what was entered.
+  const sanitize = (value: string) => value.replace(/[^0-9]/g, '').slice(0, 3)
   const onMeChange = (value: string) => {
     setMeTyped(sanitize(value))
     if (finalizeMutation.error) finalizeMutation.reset()
