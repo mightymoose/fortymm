@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import {
   RouterProvider,
@@ -109,6 +109,39 @@ describe('/login flow', () => {
     expect(router.state.location.search).toMatchObject({
       email: 'rita@example.com',
     })
+  })
+
+  // Regression test for #436: the mutation's isPending only disables the
+  // button on a batched re-render, so a synchronous click burst used to
+  // dispatch one POST (and one sign-in email) per click.
+  it('fires exactly one POST /login/request for a rapid multi-click', async () => {
+    let requests = 0
+    server.use(
+      http.post('*/v1/login/request', async ({ request }) => {
+        requests += 1
+        const body = (await request.json()) as { email: string }
+        // Stay in flight long enough for the burst to land while pending.
+        await new Promise((resolve) => setTimeout(resolve, 25))
+        return HttpResponse.json({ email: body.email }, { status: 202 })
+      }),
+    )
+    const user = userEvent.setup()
+    const { router } = renderAt('/login')
+
+    const input = await screen.findByLabelText('Email address')
+    await user.type(input, 'rita@example.com')
+
+    // fireEvent (not userEvent) so all three clicks land in one synchronous
+    // burst, before React re-renders with the disabled submitting button.
+    const button = screen.getByRole('button', { name: /send the link/i })
+    fireEvent.click(button)
+    fireEvent.click(button)
+    fireEvent.click(button)
+
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe('/login/sent')
+    })
+    expect(requests).toBe(1)
   })
 
   it('keeps the user on /login and surfaces an inline error for bad emails', async () => {

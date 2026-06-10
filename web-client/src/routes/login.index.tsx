@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
 
 import { ApiError } from '@/api/client'
@@ -25,6 +25,10 @@ function LoginPage() {
   const navigate = useNavigate()
   const requestLogin = useRequestLogin()
   const [serverError, setServerError] = useState<string | null>(null)
+  // Synchronous in-flight guard: the mutation's isPending flips on a batched
+  // re-render, so a rapid click burst can dispatch duplicate requests (and
+  // duplicate sign-in emails) before the button disables.
+  const inFlight = useRef(false)
 
   if (error === 'send-failed') {
     return (
@@ -47,6 +51,8 @@ function LoginPage() {
       submitting={requestLogin.isPending}
       errorMessage={serverError}
       onSubmit={async ({ email, captchaToken, honeypot }) => {
+        if (inFlight.current) return
+        inFlight.current = true
         setServerError(null)
         try {
           await requestLogin.mutateAsync({ email, captchaToken, honeypot })
@@ -67,6 +73,8 @@ function LoginPage() {
             return
           }
           setServerError('Something went wrong. Try again.')
+        } finally {
+          inFlight.current = false
         }
       }}
     />
