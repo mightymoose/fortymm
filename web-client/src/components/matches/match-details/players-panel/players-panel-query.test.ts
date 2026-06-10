@@ -208,6 +208,45 @@ describe("playersPanelQuery", () => {
     });
   });
 
+  it("shows the sparkline at exactly two history points — the minimum line", async () => {
+    playersPanelQueryPage.mockEndpoint(() =>
+      HttpResponse.json(
+        buildMatchDetails({
+          recent_form: [
+            buildMatchDetailsPlayerForm({ rating_history: [1601, 1612] }),
+          ],
+        }),
+      ),
+    );
+
+    const result = await renderPanel();
+
+    expect(result.current.data?.left?.rating.sparkline).toEqual([1601, 1612]);
+  });
+
+  it("highlights an exactly-50% career win rate", async () => {
+    playersPanelQueryPage.mockEndpoint(() =>
+      HttpResponse.json(
+        buildMatchDetails({
+          recent_form: [
+            buildMatchDetailsPlayerForm({
+              career_matches_before: 10,
+              career_wins_before: 5,
+            }),
+          ],
+        }),
+      ),
+    );
+
+    const result = await renderPanel();
+
+    expect(result.current.data?.left?.career).toEqual({
+      matches: 10,
+      winRateLabel: "50%",
+      highWinRate: true,
+    });
+  });
+
   it("does not highlight a sub-50% career win rate", async () => {
     playersPanelQueryPage.mockEndpoint(() =>
       HttpResponse.json(
@@ -290,6 +329,44 @@ describe("playersPanelQuery", () => {
 
     expect(result.current.data?.left?.name).toBe("rita.kovac");
     expect(result.current.data?.right?.name).toBe("leo.mertens");
+  });
+
+  it("orders a spectator's view side 1 first even when the payload lists side 2 first", async () => {
+    playersPanelQueryPage.mockEndpoint(() =>
+      HttpResponse.json(
+        buildMatchDetails({
+          sides: [
+            buildMatchDetailsSide({
+              side_number: 2,
+              is_current_user_side: false,
+              players: [
+                buildMatchDetailsPlayer({
+                  user_id: "u-b",
+                  username: "bo.k",
+                  is_current_user: false,
+                }),
+              ],
+            }),
+            buildMatchDetailsSide({
+              side_number: 1,
+              is_current_user_side: false,
+              players: [
+                buildMatchDetailsPlayer({
+                  user_id: "u-a",
+                  username: "ada.l",
+                  is_current_user: false,
+                }),
+              ],
+            }),
+          ],
+        }),
+      ),
+    );
+
+    const result = await renderPanel();
+
+    expect(result.current.data?.left?.name).toBe("ada.l");
+    expect(result.current.data?.right?.name).toBe("bo.k");
   });
 
   it("projects a missing second side as a null right profile", async () => {
