@@ -17,6 +17,12 @@ const matchDetailsSchema = z.object({
 const queryKey = (matchId: string) =>
   [{ scope: "matches", version: "v1", entity: "details", matchId }] as const;
 
+/** The cache key the scoreboard (`scoreboardQuery` → `matchDetailsQuery`)
+ * reads from. Mutations that change a match must invalidate this — it is a
+ * different key from `matchQueryKey` in `@/api/matches`, which backs
+ * `useMatch`, so updating one does not refresh the other. */
+export const matchDetailsQueryKey = queryKey;
+
 type MatchDetailsQueryKey = ReturnType<typeof queryKey>;
 
 const fetchMatchDetails = async ({
