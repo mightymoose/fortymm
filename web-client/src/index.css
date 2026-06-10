@@ -2909,10 +2909,15 @@ body.dark.fortymm-theme {
   font-variant-numeric: tabular-nums;
   line-height: 1;
 }
-.fortymm-theme .md-games__cell--win {
+/* The a-qualified selectors match the specificity of the
+   `.match-details a { color: inherit }` reset so editable (linked) cells
+   still get their win/loss color. */
+.fortymm-theme .md-games__cell--win,
+.fortymm-theme a.md-games__cell--win {
   color: var(--serve-500);
 }
-.fortymm-theme .md-games__cell--loss {
+.fortymm-theme .md-games__cell--loss,
+.fortymm-theme a.md-games__cell--loss {
   color: var(--fg-3);
 }
 .fortymm-theme .md-games__cell--live {
