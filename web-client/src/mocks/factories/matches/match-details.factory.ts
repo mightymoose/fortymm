@@ -10,6 +10,7 @@ type MatchDetailsScore = components['schemas']['MatchDetailsScore']
 type MatchDetailsCurrentGame = components['schemas']['MatchDetailsCurrentGame']
 type MatchSignatureView = components['schemas']['MatchSignatureView']
 type MatchDetailsPlayerForm = components['schemas']['MatchDetailsPlayerForm']
+type MatchDetailsFormResult = components['schemas']['MatchDetailsFormResult']
 type MatchDetailsH2H = components['schemas']['MatchDetailsH2H']
 type MatchLeague = components['schemas']['MatchLeague']
 
@@ -68,6 +69,39 @@ export function buildMatchDetailsGame(
     id: 'game-1',
     game_number: 1,
     score: null,
+    ...overrides,
+  }
+}
+
+/** One past result in a player's recent-form list — a 3–1 win over silva.r. */
+export function buildMatchDetailsFormResult(
+  overrides: Partial<MatchDetailsFormResult> = {},
+): MatchDetailsFormResult {
+  return {
+    match_id: 'm-prev-1',
+    is_win: true,
+    player_games_won: 3,
+    opponent_games_won: 1,
+    opponent_username: 'silva.r',
+    completed_at: '2026-05-09T18:00:00Z',
+    ...overrides,
+  }
+}
+
+/**
+ * A player's pre-match form entry as it appears in `recent_form` — rita.kovac
+ * (`u-me`) rated 1612 with a rising history and a 9–3 career going in.
+ */
+export function buildMatchDetailsPlayerForm(
+  overrides: Partial<MatchDetailsPlayerForm> = {},
+): MatchDetailsPlayerForm {
+  return {
+    user_id: 'u-me',
+    recent_results: [buildMatchDetailsFormResult()],
+    rating_before: 1612,
+    rating_history: [1580, 1601, 1612],
+    career_matches_before: 12,
+    career_wins_before: 9,
     ...overrides,
   }
 }

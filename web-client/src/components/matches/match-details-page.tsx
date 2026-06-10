@@ -8,15 +8,16 @@ import {
   Link2,
   Send,
   Share2,
-  User,
   X,
 } from 'lucide-react'
 
+import { PlayersPanel } from './match-details/players-panel'
+import { Sparkline } from './match-details/players-panel/sparkline'
 import { Scoreboard } from './match-details/scoreboard'
 import { AppShell } from '@/components/app-shell'
 import { Overline } from '@/components/overline'
 import { cn, initialsOf } from '@/lib/utils'
-import { fmtDateShort, fmtDateTimeShort } from '@/lib/dates'
+import { fmtDateShort } from '@/lib/dates'
 import { formatRatingDelta } from '@/lib/rating'
 import {
   scoringNewRoute,
@@ -33,17 +34,10 @@ import { SaveYourMatch } from './save-your-match'
 type MatchDetails = components['schemas']['app__schemas__match__MatchDetails']
 type MatchResultsGameWrite = components['schemas']['MatchResultsGameWrite']
 type MatchDetailsSide = components['schemas']['MatchDetailsSide']
-type MatchDetailsFormResult = components['schemas']['MatchDetailsFormResult']
 type MatchDetailsPlayerForm = components['schemas']['MatchDetailsPlayerForm']
 type MatchDetailsH2H = components['schemas']['MatchDetailsH2H']
 type MatchDetailsH2HMeeting = components['schemas']['MatchDetailsH2HMeeting']
 type RatingChange = components['schemas']['RatingChange']
-
-// A match with only the creator's side has no opponent and may never gain one
-// (solo / "start without opponent" matches). The empty side reads as this
-// rather than implying someone is on the way — mirrors the recent-form rows,
-// which already label a missing opponent "No opponent".
-const NO_OPPONENT_LABEL = 'No opponent'
 
 const EMPTY_FORM: MatchDetailsPlayerForm = {
   user_id: '',
@@ -68,11 +62,7 @@ type SideView = {
   won: boolean | null
   isCurrentUser: boolean
   ratingChange: RatingChange | null
-  recentForm: MatchDetailsFormResult[]
-  ratingBefore: number | null
   ratingHistory: number[]
-  careerMatchesBefore: number
-  careerWinsBefore: number
 }
 
 type H2HMeetingView = {
@@ -141,11 +131,7 @@ function projectSide(
     won: side.won,
     isCurrentUser: side.is_current_user_side,
     ratingChange: side.rating_change ?? null,
-    recentForm: form.recent_results,
-    ratingBefore: form.rating_before ?? null,
     ratingHistory: form.rating_history ?? [],
-    careerMatchesBefore: form.career_matches_before,
-    careerWinsBefore: form.career_wins_before,
   }
 }
 
@@ -443,7 +429,7 @@ function MatchDetailsPage({
 
         <div className="md-col-2">
           <div className="md-col-2__main">
-            <PlayersCard view={view} />
+            <PlayersPanel matchId={matchId} />
             {showAuxCards && <CommentsCard />}
           </div>
           <aside className="md-col-2__aside">
@@ -520,230 +506,6 @@ function Breadcrumb({
       <span>›</span>
       <span className="md-breadcrumb__current">Match {matchId.slice(0, 6)}</span>
     </div>
-  )
-}
-
-function PlayersCard({ view }: { view: MatchView }) {
-  return (
-    <div className="md-card">
-      <div className="md-card__hd">
-        <Overline as="h3">Players · going into this match</Overline>
-        <span className="md-card__hd-meta">
-          SNAPSHOT · {fmtDateTimeShort(view.createdAt).toUpperCase()}
-        </span>
-      </div>
-      <div className="md-players">
-        <PlayerProfile side={view.leftSide} won={view.leftSide.won === true} />
-        <div className="md-players__divider" />
-        {view.rightSide ? (
-          <PlayerProfile
-            side={view.rightSide}
-            won={view.rightSide.won === true}
-          />
-        ) : (
-          <NoOpponentProfile />
-        )}
-      </div>
-    </div>
-  )
-}
-
-function PlayerProfile({ side, won }: { side: SideView; won: boolean }) {
-  if (side.isGhost) return <NoOpponentProfile />
-  const form = side.recentForm
-  const wins = form.filter((r) => r.is_win).length
-  const losses = form.length - wins
-  // A one-line "going in" summary so the with-history half leads with a
-  // sentence, mirroring the empty half's "first one" line (no lone row list).
-  const careerMatches = side.careerMatchesBefore
-  const careerWinRate =
-    careerMatches > 0
-      ? Math.round((side.careerWinsBefore / careerMatches) * 100)
-      : null
-  const formSummary =
-    `${careerMatches} prior ${careerMatches === 1 ? 'match' : 'matches'}` +
-    (careerWinRate !== null ? ` · ${careerWinRate}% win rate going in` : '')
-  return (
-    <div className="md-profile">
-      <div className="md-profile__identity">
-        <div className={cn('md-avatar', won ? 'md-avatar--win' : 'md-avatar--loss')}>
-          {side.initials}
-        </div>
-        <div className="md-profile__id-text">
-          <div className="md-profile__name">{side.username}</div>
-        </div>
-      </div>
-      <RatingBox side={side} />
-      <div className="md-profile__form" data-testid={`form-${side.sideNumber}`}>
-        <div className="md-kicker">
-          {form.length === 0 ? 'Form' : `Form · ${wins}–${losses}`}
-        </div>
-        {form.length === 0 ? (
-          <div className="md-profile__empty">
-            No prior matches yet — this is{' '}
-            {side.isCurrentUser ? 'your' : 'their'} first one.
-          </div>
-        ) : (
-          <>
-            <div className="md-profile__form-summary">{formSummary}</div>
-            <ul className="md-profile__form-list">
-              {form.map((r) => (
-                <FormRow key={r.match_id} result={r} />
-              ))}
-            </ul>
-          </>
-        )}
-      </div>
-      <CareerStats side={side} />
-    </div>
-  )
-}
-
-function NoOpponentProfile() {
-  return (
-    <div className="md-profile">
-      <div className="md-profile__identity">
-        <div className="md-avatar md-avatar--ghost" aria-hidden="true">
-          <User size={20} strokeWidth={1.75} />
-        </div>
-        <div className="md-profile__id-text">
-          <div className="md-profile__name md-profile__name--ghost">
-            {NO_OPPONENT_LABEL}
-          </div>
-        </div>
-      </div>
-      <div className="md-profile__empty">
-        Solo match — no second player.
-      </div>
-    </div>
-  )
-}
-
-function RatingBox({ side }: { side: SideView }) {
-  const value = side.ratingBefore
-  return (
-    <div
-      className="md-profile__rating-box"
-      data-testid={`rating-box-${side.sideNumber}`}
-    >
-      <div>
-        <div className="md-kicker">Rating</div>
-        <div className="md-profile__rating-value">
-          {value === null ? <span className="dim">Unrated</span> : Math.round(value)}
-        </div>
-      </div>
-      {side.ratingHistory.length >= 2 && (
-        <Sparkline data={side.ratingHistory} />
-      )}
-    </div>
-  )
-}
-
-function Sparkline({
-  data,
-  w = 110,
-  h = 36,
-  downColor = 'var(--fg-3)',
-}: {
-  data: number[]
-  w?: number
-  h?: number
-  downColor?: string
-}) {
-  const min = Math.min(...data)
-  const max = Math.max(...data)
-  const range = max - min || 1
-  const pad = 2
-  const points = data.map((v, i) => {
-    const x = pad + (i / (data.length - 1)) * (w - pad * 2)
-    const y = h - pad - ((v - min) / range) * (h - pad * 2)
-    return [x, y] as const
-  })
-  const path = points
-    .map((p, i) => `${i === 0 ? 'M' : 'L'}${p[0].toFixed(1)} ${p[1].toFixed(1)}`)
-    .join(' ')
-  // The last point's trend picks the colour so a falling rating reads as a
-  // loss tone even before the user squints at the y-axis.
-  const trendUp = data[data.length - 1] >= data[0]
-  const color = trendUp ? 'var(--serve-500)' : downColor
-  const last = points[points.length - 1]
-  return (
-    <svg
-      width={w}
-      height={h}
-      style={{ display: 'block', overflow: 'visible' }}
-      aria-hidden="true"
-    >
-      <path
-        d={path}
-        fill="none"
-        stroke={color}
-        strokeWidth="1.5"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-      <circle cx={last[0]} cy={last[1]} r="2.4" fill={color} />
-    </svg>
-  )
-}
-
-function CareerStats({ side }: { side: SideView }) {
-  const matches = side.careerMatchesBefore
-  const winRate =
-    matches > 0 ? Math.round((side.careerWinsBefore / matches) * 100) : null
-  return (
-    <div
-      className="md-profile__career"
-      data-testid={`career-${side.sideNumber}`}
-    >
-      <div>
-        <div className="md-kicker">Career matches</div>
-        <div className="md-profile__career-value">{matches}</div>
-      </div>
-      <div>
-        <div className="md-kicker">Win rate</div>
-        <div
-          className={cn(
-            'md-profile__career-value',
-            winRate !== null &&
-              winRate >= 50 &&
-              'md-profile__career-value--good',
-          )}
-        >
-          {winRate === null ? <span className="dim">—</span> : `${winRate}%`}
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function FormRow({ result }: { result: MatchDetailsFormResult }) {
-  const win = result.is_win
-  const score = `${result.player_games_won}–${result.opponent_games_won}`
-  const opponentLabel = result.opponent_username ?? 'No opponent'
-  return (
-    <li className="md-form-row">
-      <span
-        className={cn(
-          'md-form-row__badge',
-          win ? 'md-form-row__badge--w' : 'md-form-row__badge--l',
-        )}
-      >
-        {win ? 'W' : 'L'}
-      </span>
-      <span className="md-form-row__opp" title={opponentLabel}>
-        <span className="md-form-row__opp-name">{opponentLabel}</span>
-        <span className="md-form-row__when">{fmtDateShort(result.completed_at)}</span>
-      </span>
-      <span
-        className={cn(
-          'md-form-row__score',
-          !win && 'md-form-row__score--loss',
-        )}
-      >
-        {score}
-      </span>
-    </li>
   )
 }
 
