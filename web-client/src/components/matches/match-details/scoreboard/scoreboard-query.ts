@@ -55,10 +55,48 @@ export type GameGridView = {
   rows: [GameGridRowView, GameGridRowView];
 };
 
+/** One competitor in the hero row. A ghost side stands in for a missing
+ * opponent — a playerless side row, or no second side at all — and renders
+ * as the dashed "No opponent" placeholder instead of an avatar. */
+export type HeroSideView = {
+  /** Lead player's username, or "No opponent" for a ghost side. */
+  name: string;
+  initials: string;
+  isGhost: boolean;
+  won: boolean;
+};
+
+/** One side's half of the hero scoreline; `won` drives the win highlight. */
+export type HeroScorelineSideView = {
+  gamesWon: number;
+  won: boolean;
+};
+
+/** The center block between the two hero players: a "VS · <status>"
+ * placeholder until the match starts, then the games-won scoreline. */
+export type HeroScoreView =
+  | { kind: "upcoming"; statusLabel: string }
+  | {
+      kind: "scoreline";
+      left: HeroScorelineSideView;
+      right: HeroScorelineSideView;
+    };
+
+/** The hero row across the middle of the scoreboard: left player, center
+ * score block, right player. Sides are perspective-ordered like the game
+ * grid — the viewer's side reads left when they're a participant, otherwise
+ * side 1 is left. */
+export type HeroRowView = {
+  left: HeroSideView;
+  score: HeroScoreView;
+  right: HeroSideView;
+};
+
 export type ScoreboardView = {
   status: Scoreboard["status"];
   outcome: string | null;
   heading: ScoreboardHeadingView;
+  heroRow: HeroRowView;
   /** Null when there's nothing to tabulate: an upcoming match, or a match
    * without two sides. */
   gameGrid: GameGridView | null;
@@ -126,13 +164,57 @@ const selectHeading = (match: MatchDetailsResult): ScoreboardHeadingView => {
 type MatchDetailsSide = MatchDetailsResult["unmigrated"]["sides"][number];
 type MatchDetailsGame = MatchDetailsResult["unmigrated"]["games"][number];
 
+const NO_OPPONENT_LABEL = "No opponent";
+
+// Perspective ordering shared by the hero row and the game grid: the viewer's
+// side reads first when they're a participant, otherwise side 1 / side 2.
+const orderedSides = (
+  details: MatchDetailsResult["unmigrated"],
+): [MatchDetailsSide | null, MatchDetailsSide | null] => {
+  const bySideNumber = [...details.sides].sort(
+    (a, b) => a.side_number - b.side_number,
+  );
+  const mine = bySideNumber.find((s) => s.is_current_user_side);
+  const first = mine ?? bySideNumber[0] ?? null;
+  const second = bySideNumber.find((s) => s !== first) ?? null;
+  return [first, second];
+};
+
+const selectHeroSide = (side: MatchDetailsSide | null): HeroSideView => {
+  const player = side?.players[0] ?? null;
+  const name = player?.username ?? NO_OPPONENT_LABEL;
+  return {
+    name,
+    initials: initialsOf(name),
+    isGhost: player === null,
+    won: side?.won === true,
+  };
+};
+
+const selectHeroRow = (match: MatchDetailsResult): HeroRowView => {
+  const details = match.unmigrated;
+  const [first, second] = orderedSides(details);
+  const score: HeroScoreView =
+    match.data.scoreboard.status === "scheduled"
+      ? { kind: "upcoming", statusLabel: details.status_label }
+      : {
+          kind: "scoreline",
+          left: { gamesWon: first?.games_won ?? 0, won: first?.won === true },
+          right: {
+            gamesWon: second?.games_won ?? 0,
+            won: second?.won === true,
+          },
+        };
+  return { left: selectHeroSide(first), score, right: selectHeroSide(second) };
+};
+
 const selectGameGridRow = (
   side: MatchDetailsSide,
   slots: Array<MatchDetailsGame | null>,
   details: MatchDetailsResult["unmigrated"],
   editable: boolean,
 ): GameGridRowView => {
-  const name = side.players[0]?.username ?? "No opponent";
+  const name = side.players[0]?.username ?? NO_OPPONENT_LABEL;
   return {
     name,
     initials: initialsOf(name),
@@ -167,14 +249,7 @@ const selectGameGrid = (match: MatchDetailsResult): GameGridView | null => {
   if (match.data.scoreboard.status === "scheduled") return null;
 
   const details = match.unmigrated;
-  // Perspective ordering: the viewer's side reads first when they're a
-  // participant; otherwise side 1 / side 2.
-  const bySideNumber = [...details.sides].sort(
-    (a, b) => a.side_number - b.side_number,
-  );
-  const mine = bySideNumber.find((s) => s.is_current_user_side);
-  const first = mine ?? bySideNumber[0];
-  const second = bySideNumber.find((s) => s !== first);
+  const [first, second] = orderedSides(details);
   if (!first || !second) return null;
 
   // Pad to best_of so the grid always renders the same number of cells.
@@ -202,6 +277,7 @@ const selectScoreboard = (match: MatchDetailsResult): ScoreboardView => ({
   status: match.data.scoreboard.status,
   outcome: selectOutcome(match),
   heading: selectHeading(match),
+  heroRow: selectHeroRow(match),
   gameGrid: selectGameGrid(match),
 });
 

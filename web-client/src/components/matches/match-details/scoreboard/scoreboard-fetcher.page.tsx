@@ -10,6 +10,7 @@ import { render, screen, type Container } from "@/test/utilities";
 
 import { gameGridPage } from "./game-grid.page";
 import { headingPage } from "./heading.page";
+import { heroRowPage } from "./hero-row.page";
 import { ScoreboardFetcher, type ScoreboardProps } from "./scoreboard-fetcher";
 
 const DEFAULT_MATCH_ID = "m-1";
@@ -33,6 +34,8 @@ const scoped = (container: Container) => ({
   },
   /** The heading strip (status chip + format/race labels) the display renders. */
   headingStrip: headingPage.within(container),
+  /** The hero row (left player / score block / right player) the display renders. */
+  heroRow: heroRowPage.within(container),
   /** The per-game score grid the display renders at the bottom of the hero. */
   gameGrid: gameGridPage.within(container),
 });
@@ -56,9 +59,6 @@ export const scoreboardFetcherPage = {
   render(overrides: Partial<ScoreboardProps> = {}) {
     const props: ScoreboardProps = {
       matchId: DEFAULT_MATCH_ID,
-      children: (scoreboard) => (
-        <div data-testid="scoreboard-children">{scoreboard.status}</div>
-      ),
       ...overrides,
     };
 

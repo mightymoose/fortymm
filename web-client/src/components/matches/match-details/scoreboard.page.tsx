@@ -10,6 +10,7 @@ import { render, screen, type Container } from "@/test/utilities";
 import { Scoreboard, type ScoreboardProps } from "./scoreboard";
 import { gameGridPage } from "./scoreboard/game-grid.page";
 import { headingPage } from "./scoreboard/heading.page";
+import { heroRowPage } from "./scoreboard/hero-row.page";
 
 const DEFAULT_MATCH_ID = "m-1";
 
@@ -36,6 +37,8 @@ const scoped = (container: Container) => ({
   },
   /** The heading strip (status chip + format/race labels) the display renders. */
   headingStrip: headingPage.within(container),
+  /** The hero row (left player / score block / right player) the display renders. */
+  heroRow: heroRowPage.within(container),
   /** The per-game score grid the display renders at the bottom of the hero. */
   gameGrid: gameGridPage.within(container),
 });
@@ -43,10 +46,10 @@ const scoped = (container: Container) => ({
 /**
  * Test page-object for the public `Scoreboard` wrapper. `Scoreboard` adds only
  * a `<Suspense>` boundary (with its real `Loading...` fallback) around
- * `ScoreboardFetcher` and forwards `matchId`/`children` through — it
- * deliberately has *no* error boundary, delegating failures upward. This
- * renders it beneath an `ErrorBoundary` standing in for that ancestor so a
- * rejected query can be observed reaching the boundary, and stubs the same
+ * `ScoreboardFetcher` and forwards `matchId` through — it deliberately has
+ * *no* error boundary, delegating failures upward. This renders it beneath an
+ * `ErrorBoundary` standing in for that ancestor so a rejected query can be
+ * observed reaching the boundary, and stubs the same
  * `GET /v1/matches/:matchId` endpoint the query reads.
  */
 export const scoreboardPage = {
@@ -61,9 +64,6 @@ export const scoreboardPage = {
   render(overrides: Partial<ScoreboardProps> = {}) {
     const props: ScoreboardProps = {
       matchId: DEFAULT_MATCH_ID,
-      children: (scoreboard) => (
-        <div data-testid="scoreboard-children">{scoreboard.status}</div>
-      ),
       ...overrides,
     };
 

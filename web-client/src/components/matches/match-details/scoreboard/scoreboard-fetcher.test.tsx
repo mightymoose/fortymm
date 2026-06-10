@@ -6,7 +6,7 @@ import {
   buildMatchDetailsPlayer,
   buildMatchDetailsSide,
 } from "@/mocks/factories/matches/match-details.factory";
-import { waitForElementToBeRemoved, within } from "@/test/utilities";
+import { waitForElementToBeRemoved } from "@/test/utilities";
 
 import { scoreboardFetcherPage } from "./scoreboard-fetcher.page";
 
@@ -62,23 +62,20 @@ describe("ScoreboardFetcher", () => {
     );
   });
 
-  it("calls the children render-prop with the selected ScoreboardView", async () => {
-    const children = vi.fn(() => null);
+  it("renders the hero row from the selected view", async () => {
     scoreboardFetcherPage.mockEndpoint(() =>
       HttpResponse.json(decidedMatch()),
     );
 
-    scoreboardFetcherPage.render({ children });
+    scoreboardFetcherPage.render();
 
     await waitForElementToBeRemoved(scoreboardFetcherPage.queryLoading());
-    // Wiring only: the projected heading's content is pinned by the
-    // scoreboard-query tests, the resulting DOM by the display tests.
-    expect(children).toHaveBeenCalledWith(
-      expect.objectContaining({
-        status: "scheduled",
-        outcome: "rita.kovac defeated leo.mertens, 3 games to 1",
-      }),
+    // Wiring only: row content is pinned by the query and hero-row tests.
+    const name = scoreboardFetcherPage.heroRow.getPlayerName(
+      "l",
+      "rita.kovac",
     );
+    expect(scoreboardFetcherPage.getRegion()).toContainElement(name);
   });
 
   it("renders the heading strip from the selected view", async () => {
@@ -128,21 +125,6 @@ describe("ScoreboardFetcher", () => {
     expect(
       scoreboardFetcherPage.gameGrid.queryGrid(),
     ).not.toBeInTheDocument();
-  });
-
-  it("renders the children output inside the region", async () => {
-    scoreboardFetcherPage.mockEndpoint(() =>
-      HttpResponse.json(decidedMatch()),
-    );
-
-    scoreboardFetcherPage.render({
-      children: () => <p data-testid="scoreboard-body">live</p>,
-    });
-
-    await waitForElementToBeRemoved(scoreboardFetcherPage.queryLoading());
-    expect(
-      within(scoreboardFetcherPage.getRegion()).getByTestId("scoreboard-body"),
-    ).toBeInTheDocument();
   });
 
   it("propagates a query failure to the nearest error boundary", async () => {

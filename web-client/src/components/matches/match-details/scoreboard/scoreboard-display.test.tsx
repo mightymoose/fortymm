@@ -1,6 +1,6 @@
-import { within } from "@/test/utilities";
-
 import { buildGameGridView } from "./game-grid.factory";
+import { buildHeroRowView } from "./hero-row.factory";
+import { buildHeroSideView } from "./hero-player.factory";
 import { buildScoreboardHeadingView } from "./heading.factory";
 import { buildScoreboardView } from "./scoreboard-display.factory";
 import { scoreboardDisplayPage } from "./scoreboard-display.page";
@@ -54,24 +54,21 @@ describe("ScoreboardDisplay", () => {
     );
   });
 
-  it("renders the children render-prop's output inside the region", () => {
+  it("renders the hero row inside the region from the view's heroRow", () => {
+    // Wiring only: row content is pinned by the query and hero-row tests.
     scoreboardDisplayPage.render({
-      children: () => <p data-testid="scoreboard-body">live scores</p>,
+      scoreboard: buildScoreboardView({
+        heroRow: buildHeroRowView({
+          left: buildHeroSideView({ name: "rita.kovac" }),
+        }),
+      }),
     });
 
-    const body = within(scoreboardDisplayPage.getContainer()).getByTestId(
-      "scoreboard-body",
+    const name = scoreboardDisplayPage.heroRow.getPlayerName(
+      "l",
+      "rita.kovac",
     );
-    expect(body).toHaveTextContent("live scores");
-  });
-
-  it("invokes children with the exact scoreboard prop it was given", () => {
-    const scoreboard = buildScoreboardView({ status: "live", outcome: "tied" });
-    const children = vi.fn(() => null);
-
-    scoreboardDisplayPage.render({ scoreboard, children });
-
-    expect(children).toHaveBeenCalledWith(scoreboard);
+    expect(scoreboardDisplayPage.getContainer()).toContainElement(name);
   });
 
   it("renders the game grid inside the region from the view's gameGrid", () => {

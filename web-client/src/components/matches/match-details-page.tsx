@@ -439,7 +439,7 @@ function MatchDetailsPage({
 
         <SaveYourMatch key={matchId} view={view} matchId={matchId} />
 
-        <HeroScoreboard view={view} matchId={matchId} />
+        <Scoreboard matchId={matchId} />
 
         <div className="md-col-2">
           <div className="md-col-2__main">
@@ -519,106 +519,6 @@ function Breadcrumb({
       <Link to="/matches">Matches</Link>
       <span>›</span>
       <span className="md-breadcrumb__current">Match {matchId.slice(0, 6)}</span>
-    </div>
-  )
-}
-
-function HeroScoreboard({
-  view,
-  matchId,
-}: {
-  view: MatchView
-  matchId: string
-}) {
-  const isUpcoming = view.state === 'upcoming'
-
-  return (
-    <Scoreboard matchId={matchId}>
-      {() => (
-        <>
-      <div className="md-hero__row">
-        <PlayerSide side={view.leftSide} pos="l" />
-        <div className="md-hero__score-block">
-          {isUpcoming ? (
-            <>
-              <div className="md-hero__vs-label">VS</div>
-              <div className="md-hero__vs-dash">—</div>
-              <div className="md-hero__vs-label">{view.statusLabel}</div>
-            </>
-          ) : (
-            <div className="md-hero__score-row">
-              <div
-                className={cn(
-                  'md-hero__score md-hero__score--l',
-                  view.leftSide.won && 'md-hero__score--win',
-                )}
-              >
-                {view.leftSide.gamesWon}
-              </div>
-              <div className="md-hero__score-dash">—</div>
-              <div
-                className={cn(
-                  'md-hero__score md-hero__score--r',
-                  view.rightSide?.won && 'md-hero__score--win',
-                )}
-              >
-                {view.rightSide?.gamesWon ?? 0}
-              </div>
-            </div>
-          )}
-        </div>
-        {view.rightSide ? (
-          <PlayerSide side={view.rightSide} pos="r" />
-        ) : (
-          <NoOpponentSide pos="r" />
-        )}
-      </div>
-      </>
-      )}
-    </Scoreboard>
-  )
-}
-
-function PlayerSide({ side, pos }: { side: SideView; pos: 'l' | 'r' }) {
-  if (side.isGhost) return <NoOpponentSide pos={pos} />
-  const win = side.won === true
-  return (
-    <div className={`md-hero__player md-hero__player--${pos}`}>
-      <div className="md-hero__player-row">
-        <div
-          className={cn(
-            'md-avatar md-hero__avatar-singles',
-            win ? 'md-avatar--win' : 'md-avatar--loss',
-          )}
-        >
-          {side.initials}
-        </div>
-        <div className={`md-hero__player-text--${pos}`}>
-          <div className={cn('md-hero__name', win && 'md-hero__name--win')}>
-            {side.username}
-          </div>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function NoOpponentSide({ pos }: { pos: 'l' | 'r' }) {
-  return (
-    <div className={`md-hero__player md-hero__player--${pos}`}>
-      <div className="md-hero__player-row">
-        <div
-          className="md-avatar md-avatar--ghost md-hero__avatar-singles"
-          aria-hidden="true"
-        >
-          <User size={26} strokeWidth={1.75} />
-        </div>
-        <div className={`md-hero__player-text--${pos}`}>
-          <div className="md-hero__name md-hero__name--ghost">
-            {NO_OPPONENT_LABEL}
-          </div>
-        </div>
-      </div>
     </div>
   )
 }
