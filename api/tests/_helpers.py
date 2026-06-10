@@ -4,8 +4,9 @@ The leading underscore keeps pytest from auto-collecting this as a test module;
 fixtures still belong in ``conftest.py``.
 """
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
@@ -13,6 +14,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.main import app as fastapi_app
 from app.models import User
+from app.notifications.apns import Environment, SendOutcome, SendResult
+from app.notifications.dependencies import get_push_sender
 
 
 async def start_session(api_client: AsyncClient, db_session: AsyncSession) -> User:
@@ -74,3 +77,53 @@ async def opponent_session(
         yield client, user
     finally:
         await client.aclose()
+
+
+# ----- push notifications ---------------------------------------------------
+
+
+@dataclass
+class SentPush:
+    """One recorded ``PushSender.send`` call."""
+
+    token: str
+    environment: str
+    title: str
+    body: str
+    category: str | None
+    data: Mapping[str, str] | None
+
+
+class FakeSender:
+    """Records every send and returns a per-token outcome (default success).
+
+    Drop-in for the ``PushSender`` protocol; install it with ``use_sender``."""
+
+    def __init__(
+        self,
+        *,
+        configured: bool = True,
+        outcomes: dict[str, SendOutcome] | None = None,
+    ) -> None:
+        self.is_configured = configured
+        self.sent: list[SentPush] = []
+        self._outcomes = outcomes or {}
+
+    async def send(
+        self,
+        token: str,
+        *,
+        environment: Environment,
+        title: str,
+        body: str,
+        category: str | None = None,
+        data: Mapping[str, str] | None = None,
+    ) -> SendResult:
+        self.sent.append(SentPush(token, environment, title, body, category, data))
+        return SendResult(self._outcomes.get(token, SendOutcome.SUCCESS))
+
+
+def use_sender(sender: FakeSender) -> None:
+    """Override the process-wide push sender for the duration of a test.
+    ``api_client`` clears ``dependency_overrides`` afterwards."""
+    fastapi_app.dependency_overrides[get_push_sender] = lambda: sender

@@ -43,6 +43,9 @@ from app.models import (
     User,
     UserLeagueRating,
 )
+from app.notifications.apns import MATCH_RESULT_CONFIRMATION_CATEGORY
+from app.notifications.dependencies import get_notification_service
+from app.notifications.service import NotificationService
 from app.players import escape_like
 from app.rate_limiting import RedisRateLimiter
 from app.ratings import get_calculator, state_rating_value, validate_state
@@ -807,6 +810,93 @@ def _can_confirm(match: Match, user_id: uuid.UUID | None) -> bool:
     return True
 
 
+# ----- result-confirmation push -------------------------------------------
+
+# En-dash between scores reads better than a hyphen in notification copy.
+_SCORE_DASH = "–"
+
+
+def _game_scores_text(match: Match, poster_side_number: int) -> str:
+    """Compact per-game scores oriented poster-first (e.g. ``"11–7, 9–11"``),
+    so they line up with the games-won headline the recipient sees. Games with
+    no saved score are skipped."""
+    parts: list[str] = []
+    for game in sorted(match.games, key=lambda g: g.game_number):
+        if game.score is None:
+            continue
+        if poster_side_number == 1:
+            poster_pts, recipient_pts = (
+                game.score.side_1_points,
+                game.score.side_2_points,
+            )
+        else:
+            poster_pts, recipient_pts = (
+                game.score.side_2_points,
+                game.score.side_1_points,
+            )
+        parts.append(f"{poster_pts}{_SCORE_DASH}{recipient_pts}")
+    return ", ".join(parts)
+
+
+def _result_confirmation_copy(
+    match: Match, poster_id: uuid.UUID
+) -> tuple[str, str] | None:
+    """Title + body for the "confirm or dispute the result your opponent
+    posted" push, framed for the *recipient* (the side that didn't post).
+
+    The headline carries the games-won score and, where there's room, the
+    body lists the individual game scores — both oriented so the poster's
+    number comes first. Returns ``None`` when the match isn't a two-human
+    match (nothing to confirm)."""
+    poster_side = my_side(match, poster_id)
+    recipient_side = opponent_side(match, poster_id)
+    if poster_side is None or recipient_side is None or not poster_side.players:
+        return None
+
+    poster_name = poster_side.players[0].user.username
+    wins = side_win_counts(match)
+    poster_games = wins.get(poster_side.side_number, 0)
+    recipient_games = wins.get(recipient_side.side_number, 0)
+
+    # Score always reads winner-first; the verb tells the recipient which side
+    # the poster claims won.
+    if poster_games >= recipient_games:
+        verb, hi, lo = "beating", poster_games, recipient_games
+    else:
+        verb, hi, lo = "losing", recipient_games, poster_games
+    headline = f"{poster_name} reported {verb} you {hi}{_SCORE_DASH}{lo}"
+
+    games = _game_scores_text(match, poster_side.side_number)
+    body = (
+        f"{headline}. Games: {games}. Approve or dispute?"
+        if games
+        else f"{headline}. Approve or dispute?"
+    )
+    return "Confirm your match result", body
+
+
+async def _notify_result_posted(
+    notifications: NotificationService, match: Match, poster_id: uuid.UUID
+) -> None:
+    """Push a confirm/dispute prompt to every player on the side that now owes
+    a sign-off. Best-effort: ``send_to_user`` no-ops when push isn't
+    configured, and a delivery hiccup must not fail the result post (the
+    result is already committed by the time this runs)."""
+    copy = _result_confirmation_copy(match, poster_id)
+    recipient_side = opponent_side(match, poster_id)
+    if copy is None or recipient_side is None:
+        return
+    title, body = copy
+    for player in recipient_side.players:
+        await notifications.send_to_user(
+            player.user_id,
+            title=title,
+            body=body,
+            category=MATCH_RESULT_CONFIRMATION_CATEGORY,
+            data={"match_id": str(match.id)},
+        )
+
+
 async def _load_rating_changes(
     db: AsyncSession, match_id: uuid.UUID
 ) -> dict[uuid.UUID, RatingChange]:
@@ -1458,6 +1548,7 @@ async def post_match_result(
     payload: MatchResultsWrite,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_session),
+    notifications: NotificationService = Depends(get_notification_service),
 ) -> MatchDetails:
     """Post the result of a match. Any previously-saved per-game scores are
     discarded; the payload's games (validated as a complete, decided match)
@@ -1480,7 +1571,11 @@ async def post_match_result(
 
     await _commit_canonical_games(db, match, payload, decided_side)
 
-    if not _all_sides_have_players(match):
+    # Drives the post-commit push: only a two-human match leaves the other
+    # side owing a confirm/dispute. Computed before commit; the recipient gets
+    # pinged once the result is durably saved.
+    awaiting_confirmation = _all_sides_have_players(match)
+    if not awaiting_confirmation:
         # Solo path: nobody else to sign — finalize immediately, no signature
         # row inserted. Preserves today's solo-match behavior end-to-end.
         match.status = MatchStatus.completed
@@ -1496,6 +1591,9 @@ async def post_match_result(
 
     reloaded = await _load_match(db, match.id)
     assert reloaded is not None
+    # Notify the side that now owes a sign-off, with Approve/Dispute actions.
+    if awaiting_confirmation:
+        await _notify_result_posted(notifications, reloaded, current_user.id)
     extras = await _load_view_extras(db, reloaded)
     return _serialize_details(reloaded, current_user.id, extras)
 

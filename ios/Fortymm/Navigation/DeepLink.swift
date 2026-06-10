@@ -12,11 +12,15 @@ enum DeepLink: Identifiable, Equatable {
     case login(token: String)
     /// Email confirmation — `/confirm-email?token=…`. Lands on `ConfirmEmailView`.
     case confirmEmail(token: String)
+    /// A match to open — not a URL, but a push-notification body tap
+    /// (`PushNotificationManager`). Lands on `MatchDetailLoaderView`.
+    case match(id: UUID)
 
     var id: String {
         switch self {
         case let .login(token): return "login:\(token)"
         case let .confirmEmail(token): return "confirm:\(token)"
+        case let .match(id): return "match:\(id.uuidString)"
         }
     }
 
