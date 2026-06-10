@@ -1998,71 +1998,19 @@ body.dark.fortymm-theme {
 /* ---------- Failed-save flash ----------
    Non-blocking banner under the entry header: names the failed game, points
    at the scoreline, auto-dismisses after 6s (the hairline timer drains).
-   The persistent state lives in the failed cell, not here. */
-.fortymm-theme .save-flash {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  margin-bottom: 16px;
-  padding: 12px 14px;
-  background: rgba(255, 77, 109, 0.12);
-  border: 1px solid rgba(255, 77, 109, 0.45);
-  border-left: 3px solid var(--loss);
-  border-radius: 10px;
-  box-shadow: var(--shadow-md, 0 4px 16px rgba(0, 0, 0, 0.3));
-}
-.fortymm-theme .save-flash__icon {
-  flex: 0 0 auto;
-  width: 32px;
-  height: 32px;
-  border-radius: 8px;
-  background: rgba(255, 77, 109, 0.18);
-  color: var(--loss);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-.fortymm-theme .save-flash__text {
-  flex: 1;
-  min-width: 0;
-}
-.fortymm-theme .save-flash__title {
-  font-size: 14px;
-  font-weight: 700;
-  color: var(--loss);
-}
-.fortymm-theme .save-flash__hint {
-  font-size: 12px;
-  color: var(--fg-3);
-  margin-top: 1px;
-}
-.fortymm-theme .save-flash__close {
-  flex: 0 0 auto;
-  background: transparent;
-  border: none;
-  padding: 4px;
-  border-radius: 6px;
-  line-height: 0;
-  color: var(--fg-muted);
-  cursor: pointer;
-}
-.fortymm-theme .save-flash__close:hover {
-  color: var(--fg-1);
-}
-.fortymm-theme .save-flash__close:focus-visible {
-  outline: 2px solid var(--loss);
-  outline-offset: 2px;
-}
+   The persistent state lives in the failed cell, not here. Layout and
+   chrome come from the design-system Alert — these rules only add the
+   entrance motion and the auto-dismiss hairline. */
 .fortymm-theme .save-flash__timer {
   position: absolute;
-  left: 3px;
+  left: 0;
   right: 0;
   bottom: 0;
   height: 2px;
   background: rgba(255, 77, 109, 0.5);
-  border-bottom-left-radius: 10px;
-  border-bottom-right-radius: 10px;
+  /* Matches the Alert's rounded-lg corners. */
+  border-bottom-left-radius: 8px;
+  border-bottom-right-radius: 8px;
   transform-origin: left;
   animation: save-flash-drain 6s linear forwards;
 }
@@ -2085,6 +2033,8 @@ body.dark.fortymm-theme {
   }
 }
 .fortymm-theme .save-flash {
+  /* The timer hairline anchors to the Alert's box. */
+  position: relative;
   animation: save-flash-in var(--dur-slow, 360ms) var(--ease-out, cubic-bezier(0.2, 0.8, 0.2, 1));
 }
 @media (prefers-reduced-motion: reduce) {
