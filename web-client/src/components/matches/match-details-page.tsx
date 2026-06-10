@@ -19,7 +19,6 @@ import { cn, initialsOf } from '@/lib/utils'
 import { fmtDateShort, fmtDateTimeShort } from '@/lib/dates'
 import { formatRatingDelta } from '@/lib/rating'
 import {
-  scoringEditRoute,
   scoringNewRoute,
   useConfirmMatch,
   useDisputeMatch,
@@ -32,7 +31,6 @@ import { ApiError } from '@/api/client'
 import { SaveYourMatch } from './save-your-match'
 
 type MatchDetails = components['schemas']['app__schemas__match__MatchDetails']
-type MatchDetailsGame = components['schemas']['MatchDetailsGame']
 type MatchResultsGameWrite = components['schemas']['MatchResultsGameWrite']
 type MatchDetailsSide = components['schemas']['MatchDetailsSide']
 type MatchDetailsFormResult = components['schemas']['MatchDetailsFormResult']
@@ -77,16 +75,6 @@ type SideView = {
   careerWinsBefore: number
 }
 
-type GameView = {
-  id: string
-  gameNumber: number
-  // `null` for an un-scored trailing game.
-  score: { leftPoints: number; rightPoints: number; leftWon: boolean } | null
-  // The full score record for an edit-link affordance. Null when the game
-  // hasn't been scored yet.
-  scoreId: string | null
-}
-
 type H2HMeetingView = {
   matchId: string
   completedAt: string
@@ -116,9 +104,6 @@ export type MatchView = {
   // 1, right = side 2.
   leftSide: SideView
   rightSide: SideView | null
-  games: GameView[]
-  currentGameNumber: number | null
-  canScore: boolean
   scoreCta: { matchId: string; gameNumber: number } | null
   headToHead: H2HView | null
   // True when the caller can hit either ``POST /confirmation`` or
@@ -182,29 +167,6 @@ function orderSides(sides: MatchDetailsSide[]): {
   }
 }
 
-function projectGame(
-  game: MatchDetailsGame,
-  leftSideNumber: number,
-): GameView {
-  const score = game.score
-  if (!score)
-    return { id: game.id, gameNumber: game.game_number, score: null, scoreId: null }
-  const leftPoints =
-    leftSideNumber === 1 ? score.side_1_points : score.side_2_points
-  const rightPoints =
-    leftSideNumber === 1 ? score.side_2_points : score.side_1_points
-  return {
-    id: game.id,
-    gameNumber: game.game_number,
-    score: {
-      leftPoints,
-      rightPoints,
-      leftWon: score.winner_side_number === leftSideNumber,
-    },
-    scoreId: score.id,
-  }
-}
-
 function formForUser(
   data: MatchDetails,
   userId: string | null,
@@ -264,10 +226,6 @@ function projectMatchView(data: MatchDetails, matchId: string): MatchView {
         formForUser(data, rightSide.players[0]?.user_id ?? null),
       )
     : null
-  const games = data.games
-    .slice()
-    .sort((a, b) => a.game_number - b.game_number)
-    .map((g) => projectGame(g, leftView.sideNumber))
   const scoreCta =
     data.can_score && data.current_game
       ? { matchId, gameNumber: data.current_game.game_number }
@@ -327,9 +285,6 @@ function projectMatchView(data: MatchDetails, matchId: string): MatchView {
     createdAt: data.created_at,
     leftSide: leftView,
     rightSide: rightView,
-    games,
-    currentGameNumber: data.current_game?.game_number ?? null,
-    canScore: data.can_score,
     scoreCta,
     headToHead: projectHeadToHead(data.head_to_head, leftView.sideNumber),
     canConfirm: data.can_confirm,
@@ -618,10 +573,6 @@ function HeroScoreboard({
           <NoOpponentSide pos="r" />
         )}
       </div>
-
-      {!isUpcoming && view.rightSide && (
-        <GameGrid view={view} matchId={matchId} />
-      )}
       </>
       )}
     </Scoreboard>
@@ -669,140 +620,6 @@ function NoOpponentSide({ pos }: { pos: 'l' | 'r' }) {
         </div>
       </div>
     </div>
-  )
-}
-
-function GameGrid({ view, matchId }: { view: MatchView; matchId: string }) {
-  // Pad to best_of so the grid always renders the same number of cells.
-  const slots: Array<GameView | null> = []
-  for (let n = 1; n <= view.bestOf; n += 1) {
-    slots.push(view.games.find((g) => g.gameNumber === n) ?? null)
-  }
-  // Per-cell edit links are gated on participation — spectators can't write
-  // scores, so the row never wraps cells in `<Link>`s for them.
-  const canEdit = view.leftSide.isCurrentUser
-  return (
-    <div className="md-games">
-      <div
-        className="md-games__grid"
-        style={{ '--md-games-count': view.bestOf } as React.CSSProperties}
-      >
-        <div className="md-games__kicker">GAMES</div>
-        {slots.map((_, i) => (
-          <div key={`h-${i}`} className="md-games__col-label">
-            G{i + 1}
-          </div>
-        ))}
-        <div className="md-games__col-label">SETS</div>
-
-        <GameGridSide
-          side={view.leftSide}
-          slots={slots}
-          rowSide="left"
-          matchId={matchId}
-          currentGameNumber={view.currentGameNumber}
-          canEdit={canEdit}
-        />
-        {view.rightSide && (
-          <GameGridSide
-            side={view.rightSide}
-            slots={slots}
-            rowSide="right"
-            matchId={matchId}
-            currentGameNumber={view.currentGameNumber}
-            canEdit={false}
-          />
-        )}
-      </div>
-    </div>
-  )
-}
-
-function GameGridSide({
-  side,
-  slots,
-  rowSide,
-  matchId,
-  currentGameNumber,
-  canEdit,
-}: {
-  side: SideView
-  slots: Array<GameView | null>
-  rowSide: 'left' | 'right'
-  matchId: string
-  currentGameNumber: number | null
-  canEdit: boolean
-}) {
-  const won = side.won === true
-  return (
-    <>
-      <div className="md-games__player">
-        {side.isGhost ? (
-          <span className="md-avatar md-avatar--ghost" aria-hidden="true">
-            <User size={14} strokeWidth={1.75} />
-          </span>
-        ) : (
-          <span
-            className={cn('md-avatar', won ? 'md-avatar--win' : 'md-avatar--loss')}
-          >
-            {side.initials}
-          </span>
-        )}
-        <span className="md-games__player-name">
-          {side.isGhost ? NO_OPPONENT_LABEL : side.username}
-        </span>
-      </div>
-      {slots.map((g, i) => {
-        if (!g) {
-          return (
-            <div key={i} className="md-games__cell md-games__cell--empty">
-              —
-            </div>
-          )
-        }
-        if (!g.score) {
-          const isLiveCell = currentGameNumber === g.gameNumber
-          return (
-            <div
-              key={i}
-              className={cn(
-                'md-games__cell md-games__cell--empty',
-                isLiveCell && 'md-games__cell--live',
-              )}
-            >
-              —
-            </div>
-          )
-        }
-        const cellWin =
-          rowSide === 'left' ? g.score.leftWon : !g.score.leftWon
-        const value =
-          rowSide === 'left' ? g.score.leftPoints : g.score.rightPoints
-        const editTo =
-          canEdit && g.scoreId ? scoringEditRoute(matchId, g.gameNumber) : null
-        const className = cn(
-          'md-games__cell',
-          cellWin ? 'md-games__cell--win' : 'md-games__cell--loss',
-        )
-        // Only render the per-cell edit link on the participant's own row so
-        // the user doesn't see two stacked links over the same cell.
-        if (editTo) {
-          return (
-            <Link key={i} {...editTo} className={className}>
-              {value}
-            </Link>
-          )
-        }
-        return (
-          <div key={i} className={className}>
-            {value}
-          </div>
-        )
-      })}
-      <div className={cn('md-games__total', won && 'md-games__total--win')}>
-        {side.gamesWon}
-      </div>
-    </>
   )
 }
 

@@ -1,5 +1,6 @@
 import { within } from "@/test/utilities";
 
+import { buildGameGridView } from "./game-grid.factory";
 import { buildScoreboardHeadingView } from "./heading.factory";
 import { buildScoreboardView } from "./scoreboard-display.factory";
 import { scoreboardDisplayPage } from "./scoreboard-display.page";
@@ -71,6 +72,27 @@ describe("ScoreboardDisplay", () => {
     scoreboardDisplayPage.render({ scoreboard, children });
 
     expect(children).toHaveBeenCalledWith(scoreboard);
+  });
+
+  it("renders the game grid inside the region from the view's gameGrid", () => {
+    // Wiring only: grid content is pinned by the query and game-grid tests.
+    scoreboardDisplayPage.render({
+      scoreboard: buildScoreboardView({ gameGrid: buildGameGridView() }),
+    });
+
+    const grid = scoreboardDisplayPage.gameGrid.getGrid();
+    expect(scoreboardDisplayPage.getContainer()).toContainElement(grid);
+    expect(
+      scoreboardDisplayPage.gameGrid.getPlayerName("left"),
+    ).toHaveTextContent("rita.kovac");
+  });
+
+  it("omits the game grid when the view's gameGrid is null", () => {
+    scoreboardDisplayPage.render({
+      scoreboard: buildScoreboardView({ gameGrid: null }),
+    });
+
+    expect(scoreboardDisplayPage.gameGrid.queryGrid()).not.toBeInTheDocument();
   });
 
   it("labels the region via useId, pointing aria-labelledby at the heading id", () => {

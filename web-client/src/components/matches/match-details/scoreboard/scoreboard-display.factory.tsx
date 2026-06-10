@@ -2,7 +2,7 @@ import { buildScoreboardHeadingView } from "./heading.factory";
 import type { ScoreboardView } from "./scoreboard-query";
 import type { ScoreboardDisplayProps } from "./scoreboard-display";
 
-/** The projected `{ status, outcome, heading }` view the display renders around. */
+/** The projected `{ status, outcome, heading, gameGrid }` view the display renders around. */
 export function buildScoreboardView(
   overrides: Partial<ScoreboardView> = {},
 ): ScoreboardView {
@@ -10,6 +10,9 @@ export function buildScoreboardView(
     status: "scheduled",
     outcome: null,
     heading: buildScoreboardHeadingView(),
+    // Null by default so the view renders without a router — scored grid
+    // cells may carry typed <Link>s; see `gameGridPage.render`.
+    gameGrid: null,
     ...overrides,
   };
 }

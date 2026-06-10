@@ -1,4 +1,5 @@
 import { useId } from "react";
+import { GameGrid } from "./game-grid";
 import { Heading } from "./heading";
 import { type ScoreboardView } from "./scoreboard-query";
 
@@ -21,6 +22,7 @@ export const ScoreboardDisplay = ({
       <div className="md-hero__grid-bg" aria-hidden="true" />
       <Heading heading={scoreboard.heading} />
       {children(scoreboard)}
+      {scoreboard.gameGrid && <GameGrid gameGrid={scoreboard.gameGrid} />}
     </section>
   );
 };

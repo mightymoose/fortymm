@@ -84,6 +84,23 @@ describe("Scoreboard", () => {
     expect(scoreboardPage.getRegion()).toContainElement(chip);
   });
 
+  it("displays the game grid projected from the match details", async () => {
+    scoreboardPage.mockEndpoint(() =>
+      HttpResponse.json({
+        ...decidedMatch(),
+        data: { scoreboard: { status: "final" } },
+      }),
+    );
+
+    scoreboardPage.render();
+
+    await waitForElementToBeRemoved(scoreboardPage.queryLoading());
+    // Wiring only: grid content is pinned by the query and game-grid tests.
+    const grid = scoreboardPage.gameGrid.getGrid();
+    expect(scoreboardPage.getRegion()).toContainElement(grid);
+    expect(scoreboardPage.gameGrid.getTotal("left")).toHaveTextContent("3");
+  });
+
   it("owns no error boundary — a failed query propagates to an ancestor boundary", async () => {
     scoreboardPage.mockEndpoint(() => new HttpResponse(null, { status: 500 }));
 
