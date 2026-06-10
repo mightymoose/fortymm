@@ -279,7 +279,7 @@ async def test_unrated_match_does_not_move_ratings(
     api_client: AsyncClient, db_session: AsyncSession
 ):
     await start_session(api_client, db_session)
-    async with opponent_session(db_session, "rival") as (opp_client, opp):
+    async with opponent_session(db_session, "rival") as (_opp_client, opp):
         create = await api_client.post(
             "/v1/matches",
             json={
@@ -304,7 +304,6 @@ async def test_unrated_match_does_not_move_ratings(
         assert body["status"] == "completed"
         for side in body["sides"]:
             assert side["rating_change"] is None
-        assert opp_client is not None
 
         # The session user has an `initial` seed row from joining the league,
         # but an unrated match must not produce any `match`-sourced history.
