@@ -26,9 +26,14 @@ function renderWithClient(ui: React.ReactElement) {
     },
   })
   const rootRoute = createRootRoute({ component: () => <Outlet /> })
-  const indexRoute = createRoute({
+  const homeRoute = createRoute({
     getParentRoute: () => rootRoute,
     path: '/',
+    component: () => <div>Home page</div>,
+  })
+  const dashboardRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/dashboard',
     component: () => <>{ui}</>,
   })
   const settingsRoute = createRoute({
@@ -36,18 +41,13 @@ function renderWithClient(ui: React.ReactElement) {
     path: '/settings',
     component: () => <div>Settings page</div>,
   })
-  const dashboardRoute = createRoute({
-    getParentRoute: () => rootRoute,
-    path: '/dashboard',
-    component: () => <div>Dashboard page</div>,
-  })
   const router = createRouter({
     routeTree: rootRoute.addChildren([
-      indexRoute,
-      settingsRoute,
+      homeRoute,
       dashboardRoute,
+      settingsRoute,
     ]),
-    history: createMemoryHistory({ initialEntries: ['/'] }),
+    history: createMemoryHistory({ initialEntries: ['/dashboard'] }),
   })
   return render(
     <QueryClientProvider client={client}>
@@ -199,7 +199,7 @@ describe('UserMenu', () => {
     ).not.toBeInTheDocument()
   })
 
-  it('clicking Log out calls DELETE /v1/session and redirects to /dashboard', async () => {
+  it('clicking Log out calls DELETE /v1/session and redirects to /', async () => {
     let deleteCalls = 0
     server.use(
       http.delete('*/v1/session', () => {
@@ -218,6 +218,6 @@ describe('UserMenu', () => {
     await waitFor(() => {
       expect(deleteCalls).toBe(1)
     })
-    expect(await screen.findByText('Dashboard page')).toBeInTheDocument()
+    expect(await screen.findByText('Home page')).toBeInTheDocument()
   })
 })

@@ -5,6 +5,7 @@ import {
   useQueryClient,
 } from '@tanstack/react-query'
 import { ApiError, api, unwrap } from './client'
+import { clearAppEntered } from '@/lib/landing-redirect'
 import type { components } from './schema'
 
 export type Session = components['schemas']['SessionResponse']
@@ -199,6 +200,7 @@ export function useLogout() {
     // into the next ephemeral session.
     onSuccess: () => {
       qc.clear()
+      clearAppEntered()
     },
   })
 }

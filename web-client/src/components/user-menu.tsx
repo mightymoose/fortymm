@@ -114,7 +114,7 @@ export function UserMenu() {
           onSelect={() => {
             logout.mutate(undefined, {
               onSuccess: () => {
-                void navigate({ to: '/dashboard' })
+                void navigate({ to: '/', search: { landing: false } })
               },
             })
           }}
