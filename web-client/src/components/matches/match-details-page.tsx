@@ -11,6 +11,7 @@ import {
   X,
 } from 'lucide-react'
 
+import { MatchInfo } from './match-details/match-info'
 import { PlayersPanel } from './match-details/players-panel'
 import { Sparkline } from './match-details/players-panel/sparkline'
 import { Scoreboard } from './match-details/scoreboard'
@@ -433,7 +434,7 @@ function MatchDetailsPage({
             {showAuxCards && <CommentsCard />}
           </div>
           <aside className="md-col-2__aside">
-            <MatchInfoCard view={view} />
+            <MatchInfo matchId={matchId} />
             {showRatingCard && <RatingCard view={view} />}
             {view.headToHead && (
               <H2HCard view={view} h2h={view.headToHead} />
@@ -505,27 +506,6 @@ function Breadcrumb({
       <Link to="/matches">Matches</Link>
       <span>›</span>
       <span className="md-breadcrumb__current">Match {matchId.slice(0, 6)}</span>
-    </div>
-  )
-}
-
-function MatchInfoCard({ view }: { view: MatchView }) {
-  const rows: Array<[string, string]> = [
-    ['Format', `Singles · Best of ${view.bestOf}, first to ${view.gamesToWin}`],
-    ['Status', view.statusLabel],
-    ['Rated', view.rated ? 'Yes' : 'No'],
-  ]
-  return (
-    <div className="md-card">
-      <div className="md-card__hd"><Overline as="h3">Match info</Overline></div>
-      <div className="md-card__body">
-        {rows.map(([k, v]) => (
-          <div key={k} className="md-info-row">
-            <span className="md-info-row__k">{k}</span>
-            <span className="md-info-row__v">{v}</span>
-          </div>
-        ))}
-      </div>
     </div>
   )
 }
