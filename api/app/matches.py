@@ -858,16 +858,13 @@ def _result_confirmation_copy(
     poster_games = wins.get(poster_side.side_number, 0)
     recipient_games = wins.get(recipient_side.side_number, 0)
 
+    # Score always reads winner-first; the verb tells the recipient which side
+    # the poster claims won.
     if poster_games >= recipient_games:
-        headline = (
-            f"{poster_name} reported beating you "
-            f"{poster_games}{_SCORE_DASH}{recipient_games}"
-        )
+        verb, hi, lo = "beating", poster_games, recipient_games
     else:
-        headline = (
-            f"{poster_name} reported losing to you "
-            f"{recipient_games}{_SCORE_DASH}{poster_games}"
-        )
+        verb, hi, lo = "losing", recipient_games, poster_games
+    headline = f"{poster_name} reported {verb} you {hi}{_SCORE_DASH}{lo}"
 
     games = _game_scores_text(match, poster_side.side_number)
     body = (
