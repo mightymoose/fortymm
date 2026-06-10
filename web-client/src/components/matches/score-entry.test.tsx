@@ -316,6 +316,38 @@ describe('ScoreEntry — create', () => {
     expect(posted).toBe(0)
   })
 
+  it('keeps a 3-digit entry intact instead of silently truncating to 2 digits', async () => {
+    // Regression for #442: typing "100" used to be cut to "10", then the
+    // win-by-2 check fired against a value the user never entered. The input
+    // now keeps up to 3 digits, so the score the user sees is the score the
+    // validation reasons about.
+    const user = userEvent.setup()
+    server.use(
+      http.get('*/v1/matches/m-1', () => HttpResponse.json(inProgressMatch())),
+    )
+
+    renderScoreEntry({ kind: 'create', matchId: 'm-1', gameNumber: 3 })
+    const meInput = await screen.findByRole('textbox', {
+      name: 'rita.kovac score',
+    })
+    const oppInput = screen.getByRole('textbox', { name: 'nguyen.t score' })
+
+    await user.type(meInput, '100')
+    expect(meInput).toHaveValue('100')
+
+    // The illegal-score hint references the typed value, not a mutated one:
+    // 100–97 is a deuce game that doesn't lead by exactly 2.
+    await user.type(oppInput, '97')
+    expect(oppInput).toHaveValue('97')
+    expect(screen.getByRole('alert')).toHaveTextContent(/leads by exactly 2/i)
+
+    // The field still caps at 3 digits so it can't grow unbounded — a 4th
+    // digit typed in one pass is dropped rather than accepted.
+    await user.clear(meInput)
+    await user.type(meInput, '1005')
+    expect(meInput).toHaveValue('100')
+  })
+
   it('redirects to the existing score\'s edit page when landing on /scores/new for an already-scored game', async () => {
     // Browser-Back-after-save flow: the user advanced to game 3, pressed
     // Back to /games/1/scores/new, but game 1 already has a score. Without
