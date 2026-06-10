@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from 'react'
 import { Link, useRouter } from '@tanstack/react-router'
 import {
   Check,
-  ChevronRight,
   Copy,
   Download,
   Link2,
@@ -13,13 +12,12 @@ import {
 
 import { MatchInfo } from './match-details/match-info'
 import { PlayersPanel } from './match-details/players-panel'
-import { Sparkline } from './match-details/players-panel/sparkline'
+import { Ratings } from './match-details/ratings'
 import { Scoreboard } from './match-details/scoreboard'
 import { AppShell } from '@/components/app-shell'
 import { Overline } from '@/components/overline'
 import { cn, initialsOf } from '@/lib/utils'
 import { fmtDateShort } from '@/lib/dates'
-import { formatRatingDelta } from '@/lib/rating'
 import {
   scoringNewRoute,
   useConfirmMatch,
@@ -35,19 +33,8 @@ import { SaveYourMatch } from './save-your-match'
 type MatchDetails = components['schemas']['app__schemas__match__MatchDetails']
 type MatchResultsGameWrite = components['schemas']['MatchResultsGameWrite']
 type MatchDetailsSide = components['schemas']['MatchDetailsSide']
-type MatchDetailsPlayerForm = components['schemas']['MatchDetailsPlayerForm']
 type MatchDetailsH2H = components['schemas']['MatchDetailsH2H']
 type MatchDetailsH2HMeeting = components['schemas']['MatchDetailsH2HMeeting']
-type RatingChange = components['schemas']['RatingChange']
-
-const EMPTY_FORM: MatchDetailsPlayerForm = {
-  user_id: '',
-  recent_results: [],
-  rating_before: null,
-  rating_history: [],
-  career_matches_before: 0,
-  career_wins_before: 0,
-}
 
 type HeroState = 'live' | 'final' | 'upcoming'
 
@@ -62,8 +49,6 @@ type SideView = {
   gamesWon: number
   won: boolean | null
   isCurrentUser: boolean
-  ratingChange: RatingChange | null
-  ratingHistory: number[]
 }
 
 type H2HMeetingView = {
@@ -114,11 +99,7 @@ export type MatchView = {
   pendingSignerName: string | null
 }
 
-function projectSide(
-  side: MatchDetailsSide,
-  fallbackLabel: string,
-  form: MatchDetailsPlayerForm,
-): SideView {
+function projectSide(side: MatchDetailsSide, fallbackLabel: string): SideView {
   const player = side.players[0]
   const isGhost = side.players.length === 0
   const username = player?.username ?? fallbackLabel
@@ -131,8 +112,6 @@ function projectSide(
     gamesWon: side.games_won,
     won: side.won,
     isCurrentUser: side.is_current_user_side,
-    ratingChange: side.rating_change ?? null,
-    ratingHistory: form.rating_history ?? [],
   }
 }
 
@@ -152,14 +131,6 @@ function orderSides(sides: MatchDetailsSide[]): {
     leftSide: bySideNumber[0],
     rightSide: bySideNumber[1] ?? null,
   }
-}
-
-function formForUser(
-  data: MatchDetails,
-  userId: string | null,
-): MatchDetailsPlayerForm {
-  if (!userId) return EMPTY_FORM
-  return data.recent_form?.find((f) => f.user_id === userId) ?? EMPTY_FORM
 }
 
 function projectHeadToHead(
@@ -201,18 +172,8 @@ function projectMatchView(data: MatchDetails, matchId: string): MatchView {
   const viewerIsParticipant = leftSide.is_current_user_side
   const leftLabel = viewerIsParticipant ? 'You' : 'Side 1'
   const rightLabel = viewerIsParticipant ? 'Opponent' : 'Side 2'
-  const leftView = projectSide(
-    leftSide,
-    leftLabel,
-    formForUser(data, leftSide.players[0]?.user_id ?? null),
-  )
-  const rightView = rightSide
-    ? projectSide(
-        rightSide,
-        rightLabel,
-        formForUser(data, rightSide.players[0]?.user_id ?? null),
-      )
-    : null
+  const leftView = projectSide(leftSide, leftLabel)
+  const rightView = rightSide ? projectSide(rightSide, rightLabel) : null
   const scoreCta =
     data.can_score && data.current_game
       ? { matchId, gameNumber: data.current_game.game_number }
@@ -381,15 +342,6 @@ function MatchDetailsPage({
   // Comments + share modal are still part of the design handoff but have no
   // real data behind them yet; gate them off and flip when each lands.
   const showAuxCards = false
-  // Only an over-and-done match has a real rating change to show. A live match
-  // may carry seeded/projected ratings that look like a finished result — the
-  // snapshot panel already states the pre-match numbers, so a "result" card
-  // mid-match reads as a contradiction. Gate it to Final. (Flagged for design:
-  // a live "PROJECTED · IF … WINS" card could replace this later.)
-  const showRatingCard =
-    view.state === 'final' &&
-    (view.leftSide.ratingChange !== null ||
-      view.rightSide?.ratingChange != null)
 
   return (
     <div className="match-details">
@@ -435,7 +387,7 @@ function MatchDetailsPage({
           </div>
           <aside className="md-col-2__aside">
             <MatchInfo matchId={matchId} />
-            {showRatingCard && <RatingCard view={view} />}
+            <Ratings matchId={matchId} />
             {view.headToHead && (
               <H2HCard view={view} h2h={view.headToHead} />
             )}
@@ -508,94 +460,6 @@ function Breadcrumb({
       <span className="md-breadcrumb__current">Match {matchId.slice(0, 6)}</span>
     </div>
   )
-}
-
-function RatingCard({ view }: { view: MatchView }) {
-  const sides = [view.leftSide, view.rightSide].filter(
-    (s): s is SideView => s !== null,
-  )
-  return (
-    <div className="md-card">
-      <div className="md-card__hd">
-        <Overline as="h3">Result · rating change</Overline>
-      </div>
-      <div className="md-card__body md-rating-card__body">
-        {sides.map((side, i) => (
-          <RatingRow key={side.sideNumber} side={side} isFirst={i === 0} />
-        ))}
-      </div>
-    </div>
-  )
-}
-
-function RatingRow({ side, isFirst }: { side: SideView; isFirst: boolean }) {
-  const change = side.ratingChange
-  const won = side.won === true
-  return (
-    <>
-      {!isFirst && <hr className="md-rating-divider" />}
-      <div className="md-rating-row">
-        <div
-          className={cn(
-            'md-avatar',
-            won ? 'md-avatar--win' : 'md-avatar--loss',
-          )}
-        >
-          {side.initials}
-        </div>
-        <div className="md-rating-row__text">
-          <div className="md-rating-row__name">{side.username}</div>
-          {change ? (
-            <div className="md-rating-row__numbers">
-              {change.before !== null && (
-                <span className="from">{Math.round(change.before)}</span>
-              )}
-              <ChevronRight size={11} strokeWidth={1.75} />
-              <span className="to">{Math.round(change.after)}</span>
-            </div>
-          ) : (
-            <div className="md-rating-row__numbers">
-              <span className="from">Unrated player</span>
-            </div>
-          )}
-        </div>
-        {change && (
-          <div className="md-rating-row__delta">
-            <RatingRowSparkline
-              history={side.ratingHistory}
-              change={change}
-            />
-            <span
-              className={cn(
-                'md-rating-row__delta-num',
-                change.delta >= 0 ? 'md-delta-up' : 'md-delta-down',
-              )}
-            >
-              {formatRatingDelta(change.delta)}
-            </span>
-          </div>
-        )}
-      </div>
-    </>
-  )
-}
-
-function RatingRowSparkline({
-  history,
-  change,
-}: {
-  history: number[]
-  change: RatingChange
-}) {
-  // history is anchored "before this match"; append the post-match value so the
-  // line lands on the new rating.
-  const series = [...history]
-  if (series.length === 0 && change.before !== null) {
-    series.push(change.before)
-  }
-  series.push(change.after)
-  if (series.length < 2) return null
-  return <Sparkline data={series} w={80} h={28} downColor="var(--loss)" />
 }
 
 function H2HCard({ view, h2h }: { view: MatchView; h2h: H2HView }) {
