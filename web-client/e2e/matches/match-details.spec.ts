@@ -4,6 +4,21 @@ import type { components } from '../../src/api/schema';
 
 type MatchDetails = components['schemas']['MatchDetails'];
 
+const gameScore = (
+    gameNumber: number,
+    side1Points: number,
+    side2Points: number,
+): MatchDetails['games'][number] => ({
+    id: `g-${gameNumber}`,
+    game_number: gameNumber,
+    score: {
+        id: `s-${gameNumber}`,
+        side_1_points: side1Points,
+        side_2_points: side2Points,
+        winner_side_number: side1Points > side2Points ? 1 : 2,
+    },
+});
+
 /** A decided singles match: rita.kovac beat silva.r, 3 games to 1. */
 const decidedMatch = (id: string): MatchDetails =>
     matchDetails({
@@ -30,7 +45,12 @@ const decidedMatch = (id: string): MatchDetails =>
                 is_current_user_side: false,
             },
         ],
-        games: [],
+        games: [
+            gameScore(1, 11, 7),
+            gameScore(2, 9, 11),
+            gameScore(3, 11, 5),
+            gameScore(4, 11, 8),
+        ],
         current_game: null,
         can_score: false,
     });
@@ -76,6 +96,38 @@ test.describe('Match Details', () => {
             await matchDetailsPage.mock(decidedMatch('m-completed-win-1'));
             await matchDetailsPage.goTo('m-completed-win-1');
             await expect(page.getByRole('region', { name: 'rita.kovac defeated silva.r, 3 games to 1' })).toBeVisible();
+        });
+
+        // Regression test for #472: the current user's row renders its cells
+        // as edit links (<a>), and the `.match-details a { color: inherit }`
+        // reset used to out-rank the win/loss colors, leaving the row colorless.
+        test('colors the editable (current-user) row win/loss cells like the opponent row', async ({ page }) => {
+            await matchDetailsPage.mock(decidedMatch('m-completed-win-1'));
+            await matchDetailsPage.goTo('m-completed-win-1');
+
+            const color = (testId: string) =>
+                page
+                    .getByTestId(testId)
+                    .evaluate((el) => getComputedStyle(el).color);
+
+            const winColor = 'rgb(0, 226, 154)'; // --serve-500
+
+            // Current-user row, game 1 (won, rendered as an edit link).
+            const myWinCell = page.getByTestId('scoreboard-game-grid-cell-left-1');
+            await expect(myWinCell).toHaveText('11');
+            await expect(
+                myWinCell.locator('xpath=self::a'),
+                'editable cell renders as a link',
+            ).toBeVisible();
+            expect(await color('scoreboard-game-grid-cell-left-1')).toBe(winColor);
+
+            // Won and lost cells on the editable row must be distinguishable.
+            const myLossColor = await color('scoreboard-game-grid-cell-left-2');
+            expect(myLossColor).not.toBe(winColor);
+
+            // And the editable row must match the opponent (non-link) row.
+            expect(await color('scoreboard-game-grid-cell-right-2')).toBe(winColor);
+            expect(await color('scoreboard-game-grid-cell-right-1')).toBe(myLossColor);
         });
     });
 });
