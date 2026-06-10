@@ -1934,6 +1934,166 @@ body.dark.fortymm-theme {
   color: var(--fg-3);
 }
 
+/* ---------- Failed-save cell ----------
+   A per-game save 500'd (#369). The entered points stay visible — they're the
+   scratch-pad data the user retries with — and the cell becomes the recovery
+   affordance: red border + corner ⚠ badge + RETRY micro-label (never color
+   alone), tappable back to that game's entry screen pre-filled. Red (--loss,
+   cool/pink) reads as a different hue from the active cell's orange. */
+.fortymm-theme .sl-cell.failed {
+  border: 1.5px solid var(--loss);
+  background: rgba(255, 77, 109, 0.09);
+  padding-bottom: 22px;
+}
+.fortymm-theme .sl-cell.failed .sl-n {
+  color: var(--loss);
+}
+.fortymm-theme .sl-cell.failed .sl-scores .dash {
+  color: rgba(255, 77, 109, 0.7);
+}
+.fortymm-theme .sl-cell.failed:hover {
+  border-color: var(--loss);
+  background: rgba(255, 77, 109, 0.14);
+  transform: translateY(-2px);
+  box-shadow:
+    0 0 0 1px var(--loss),
+    0 8px 22px rgba(255, 77, 109, 0.22);
+}
+.fortymm-theme .sl-cell.failed:active {
+  transform: scale(0.97);
+}
+.fortymm-theme .sl-cell.failed:focus-visible {
+  outline: 2px solid var(--loss);
+  outline-offset: 2px;
+}
+.fortymm-theme .sl-badge {
+  position: absolute;
+  top: -9px;
+  right: -9px;
+  z-index: 1;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--loss);
+  color: var(--ink-950);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+}
+.fortymm-theme .sl-retry {
+  position: absolute;
+  bottom: 6px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font: 600 9px var(--font-mono);
+  letter-spacing: 0.1em;
+  color: var(--loss);
+  white-space: nowrap;
+}
+
+/* ---------- Failed-save flash ----------
+   Non-blocking banner under the entry header: names the failed game, points
+   at the scoreline, auto-dismisses after 6s (the hairline timer drains).
+   The persistent state lives in the failed cell, not here. */
+.fortymm-theme .save-flash {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  background: rgba(255, 77, 109, 0.12);
+  border: 1px solid rgba(255, 77, 109, 0.45);
+  border-left: 3px solid var(--loss);
+  border-radius: 10px;
+  box-shadow: var(--shadow-md, 0 4px 16px rgba(0, 0, 0, 0.3));
+}
+.fortymm-theme .save-flash__icon {
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: rgba(255, 77, 109, 0.18);
+  color: var(--loss);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.fortymm-theme .save-flash__text {
+  flex: 1;
+  min-width: 0;
+}
+.fortymm-theme .save-flash__title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--loss);
+}
+.fortymm-theme .save-flash__hint {
+  font-size: 12px;
+  color: var(--fg-3);
+  margin-top: 1px;
+}
+.fortymm-theme .save-flash__close {
+  flex: 0 0 auto;
+  background: transparent;
+  border: none;
+  padding: 4px;
+  border-radius: 6px;
+  line-height: 0;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.fortymm-theme .save-flash__close:hover {
+  color: var(--fg-1);
+}
+.fortymm-theme .save-flash__close:focus-visible {
+  outline: 2px solid var(--loss);
+  outline-offset: 2px;
+}
+.fortymm-theme .save-flash__timer {
+  position: absolute;
+  left: 3px;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  background: rgba(255, 77, 109, 0.5);
+  border-bottom-left-radius: 10px;
+  border-bottom-right-radius: 10px;
+  transform-origin: left;
+  animation: save-flash-drain 6s linear forwards;
+}
+@keyframes save-flash-drain {
+  from {
+    transform: scaleX(1);
+  }
+  to {
+    transform: scaleX(0);
+  }
+}
+@keyframes save-flash-in {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.fortymm-theme .save-flash {
+  animation: save-flash-in var(--dur-slow, 360ms) var(--ease-out, cubic-bezier(0.2, 0.8, 0.2, 1));
+}
+@media (prefers-reduced-motion: reduce) {
+  .fortymm-theme .save-flash,
+  .fortymm-theme .save-flash__timer {
+    animation: none;
+  }
+}
+
 /* ---------- Per-cell ✕ clear button ----------
    Desktop-only affordance on logged scoreline cells: small ✕ in the top-right,
    revealed on hover/focus, fires a per-game DELETE. Hidden on touch + below

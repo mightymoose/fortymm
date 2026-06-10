@@ -1,6 +1,11 @@
 import { useRef, useState } from 'react'
 import { Link, Navigate, useNavigate } from '@tanstack/react-router'
-import { User as UserIcon, X as XIcon } from 'lucide-react'
+import {
+  RotateCw,
+  TriangleAlert,
+  User as UserIcon,
+  X as XIcon,
+} from 'lucide-react'
 import { ApiError } from '@/api/client'
 import {
   matchDetailRoute,
@@ -19,6 +24,14 @@ import {
 import { AppShell } from '@/components/app-shell'
 import { cn, initialsOf } from '@/lib/utils'
 import { decidedSide, illegalScoreReason } from '@/lib/scoring'
+import {
+  clearFailedSave,
+  dismissSaveFlash,
+  failedSaveFor,
+  recordFailedSave,
+  useFailedSaves,
+} from './failed-saves'
+import { SaveFlash } from './save-flash'
 
 // Placeholder for the opponent label on solo matches — mirrors the match
 // details hero. Distinct from `initialsOf('Opponent')` so users can tell
@@ -64,6 +77,7 @@ function ScoreEntryInner({
   const deleteMutation = useDeleteScore(matchId, gameNumber)
   const cellDeleteMutation = useDeleteScoreForMatch(matchId)
   const finalizeMutation = useFinalizeMatch(matchId)
+  const { entries: failedEntries, flash } = useFailedSaves()
 
   // `null` means "user hasn't typed anything yet" — we fall through to the
   // persisted score in edit mode. Avoids a state-syncing effect when `data`
@@ -111,7 +125,10 @@ function ScoreEntryInner({
   // Mode/URL/state alignment: in create mode but a score exists → swap to
   // the edit URL so Save doesn't try to POST .../scores/new and 409. The
   // inverse — edit mode but no saved score — swaps to the create URL.
-  if (mode.kind === 'create' && persistedScore) {
+  // Skipped while this page's own create is settling: the success cache
+  // write makes the score "exist" a beat before onSettled navigates to the
+  // next game, and this redirect must not outrun that navigation.
+  if (mode.kind === 'create' && persistedScore && !createMutation.isSuccess) {
     return <Navigate {...scoringEditRoute(matchId, gameNumber)} replace />
   }
   if (mode.kind === 'edit' && !persistedScore) {
@@ -139,8 +156,34 @@ function ScoreEntryInner({
     (mySideNumber === 1
       ? persistedScore.side_2_points
       : persistedScore.side_1_points)
-  const me = meTyped ?? (persistedMe !== null ? String(persistedMe) : '')
-  const opp = oppTyped ?? (persistedOpp !== null ? String(persistedOpp) : '')
+  // A failed save's points pre-fill ahead of the persisted score — they're
+  // the newer scratch data, and pre-filling is what makes tapping a failed
+  // scoreline cell a real retry rather than a blank do-over.
+  const failedEntry = failedSaveFor(failedEntries, matchId, gameNumber)
+  const failedMe =
+    failedEntry &&
+    (mySideNumber === 1
+      ? failedEntry.side_1_points
+      : failedEntry.side_2_points)
+  const failedOpp =
+    failedEntry &&
+    (mySideNumber === 1
+      ? failedEntry.side_2_points
+      : failedEntry.side_1_points)
+  const me =
+    meTyped ??
+    (failedMe !== null
+      ? String(failedMe)
+      : persistedMe !== null
+        ? String(persistedMe)
+        : '')
+  const opp =
+    oppTyped ??
+    (failedOpp !== null
+      ? String(failedOpp)
+      : persistedOpp !== null
+        ? String(persistedOpp)
+        : '')
 
   // Strip non-digits and cap at 3 digits. Two digits silently turned "100"
   // into "10", then the deuce/win-by-2 check fired against a value the user
@@ -230,10 +273,16 @@ function ScoreEntryInner({
     }
     const next = predictNextScoringRoute()
     const args = toBody()
-    // Fire-and-forget — we don't surface per-game errors, and we navigate as
-    // soon as the request settles either way. Even on failure, the canonical
-    // POST /results will reconcile the score later.
-    const settle = { onSettled: () => navigate(next) }
+    // Fire-and-forget — we navigate as soon as the request settles either
+    // way, since the canonical POST /results reconciles the score later. A
+    // failure must still be visible and recoverable (#369): we keep the
+    // entered points so the scoreline cell flips to its failed state and the
+    // next screen flashes "Game N didn't save".
+    const settle = {
+      onSuccess: () => clearFailedSave(matchId, gameNumber),
+      onError: () => recordFailedSave(matchId, gameNumber, args),
+      onSettled: () => navigate(next),
+    }
     if (mode.kind === 'edit') {
       updateMutation.mutate(args, settle)
     } else {
@@ -255,6 +304,8 @@ function ScoreEntryInner({
 
   function onClear() {
     if (mode.kind !== 'edit') return
+    // Clearing is an explicit discard — drop any failed-save leftovers too.
+    clearFailedSave(matchId, gameNumber)
     deleteMutation.mutate(undefined, {
       // After clearing, land back on this game's create route so the user
       // can re-enter — same page, just with empty inputs and create-mode
@@ -268,6 +319,7 @@ function ScoreEntryInner({
   // strip. Fire-and-forget like the per-game writes; we just refocus the
   // first empty input on the current page so the user can keep typing.
   function onClearCell(n: number) {
+    clearFailedSave(matchId, n)
     cellDeleteMutation.mutate(n)
     focusFirstEmpty()
   }
@@ -330,6 +382,15 @@ function ScoreEntryInner({
             / save game
           </div>
         </div>
+
+        {flash !== null && flash.matchId === matchId && (
+          <SaveFlash
+            // Re-key per failure so a repeat failure restarts the timer.
+            key={flash.id}
+            gameNumber={flash.gameNumber}
+            onDismiss={dismissSaveFlash}
+          />
+        )}
 
         <div className="single-entry">
           <ScoreSide
@@ -407,6 +468,7 @@ function ScoreEntryInner({
           activeGameNumber={gameNumber}
           matchId={matchId}
           mySideNumber={mySideNumber}
+          failedEntries={failedEntries}
           onClearCell={onClearCell}
           clearDisabled={inputsLocked || cellDeleteMutation.isPending}
         />
@@ -488,6 +550,7 @@ function Scoreline({
   activeGameNumber,
   matchId,
   mySideNumber,
+  failedEntries,
   onClearCell,
   clearDisabled,
 }: {
@@ -495,6 +558,7 @@ function Scoreline({
   activeGameNumber: number
   matchId: string
   mySideNumber: 1 | 2
+  failedEntries: Readonly<Record<string, MatchGameScoreWrite>>
   onClearCell: (gameNumber: number) => void
   clearDisabled: boolean
 }) {
@@ -515,25 +579,43 @@ function Scoreline({
           const g = data.games.find((x) => x.game_number === n) ?? null
           const score = g?.score ?? null
           const isActive = n === activeGameNumber
+          // On the failed game's own page the active treatment wins — the
+          // inputs there are already pre-filled, so the cell needn't also
+          // shout "retry" at the user who is mid-retry.
+          const failed = isActive
+            ? null
+            : failedSaveFor(failedEntries, matchId, n)
           const cls = cn(
             'sl-cell',
-            score ? 'done' : 'pending',
+            failed ? 'failed' : score ? 'done' : 'pending',
             isActive && 'active',
           )
-          const myPoints = score
+          // A failed entry's points display over the persisted score — they
+          // are the newer scratch data the user would be retrying.
+          const myPoints = failed
             ? mySideNumber === 1
-              ? score.side_1_points
-              : score.side_2_points
-            : null
-          const oppPoints = score
+              ? failed.side_1_points
+              : failed.side_2_points
+            : score
+              ? mySideNumber === 1
+                ? score.side_1_points
+                : score.side_2_points
+              : null
+          const oppPoints = failed
             ? mySideNumber === 1
-              ? score.side_2_points
-              : score.side_1_points
-            : null
-          const isMyWin = score
-            ? score.winner_side_number === mySideNumber
-            : null
-          const clearBtn = score ? (
+              ? failed.side_2_points
+              : failed.side_1_points
+            : score
+              ? mySideNumber === 1
+                ? score.side_2_points
+                : score.side_1_points
+              : null
+          const isMyWin =
+            score && !failed ? score.winner_side_number === mySideNumber : null
+          // The ⚠ badge takes over the failed cell's corner, so the hover-✕
+          // hides until the retry resolves the failure.
+          const clearBtn =
+            score && !failed ? (
             <button
               type="button"
               className="sl-clear"
@@ -555,6 +637,11 @@ function Scoreline({
           ) : null
           const inner = (
             <>
+              {failed && (
+                <span className="sl-badge" aria-hidden>
+                  <TriangleAlert size={13} strokeWidth={2.25} />
+                </span>
+              )}
               <div className="sl-n">G{n}</div>
               <div className="sl-scores">
                 <span className={cn('s', isMyWin === true && 'w')}>
@@ -565,6 +652,11 @@ function Scoreline({
                   {oppPoints ?? '—'}
                 </span>
               </div>
+              {failed && (
+                <span className="sl-retry" aria-hidden>
+                  <RotateCw size={10} strokeWidth={2.5} /> RETRY
+                </span>
+              )}
               {clearBtn}
             </>
           )
@@ -579,7 +671,18 @@ function Scoreline({
             ? scoringEditRoute(matchId, n)
             : scoringNewRoute(matchId, n)
           return (
-            <Link key={n} {...target} className={cls}>
+            <Link
+              key={n}
+              {...target}
+              className={cls}
+              // Failure can't be color-alone: the label spells it out for
+              // screen readers; sighted users get the ⚠ badge + RETRY text.
+              aria-label={
+                failed
+                  ? `Game ${n}, failed to save, ${myPoints} to ${oppPoints}. Tap to retry.`
+                  : undefined
+              }
+            >
               {inner}
             </Link>
           )
