@@ -298,11 +298,13 @@ async def test_unrated_match_does_not_move_ratings(
             },
         )
         assert post.status_code == 201
-        confirm = await opp_client.post(f"/v1/matches/{match['id']}/confirmation")
-        assert confirm.status_code == 201
-        body = confirm.json()
+        # Unrated matches skip the confirmation gate (#485) and finalize
+        # straight from /results.
+        body = post.json()
+        assert body["status"] == "completed"
         for side in body["sides"]:
             assert side["rating_change"] is None
+        assert opp_client is not None
 
         # The session user has an `initial` seed row from joining the league,
         # but an unrated match must not produce any `match`-sourced history.

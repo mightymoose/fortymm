@@ -323,7 +323,9 @@ async def _record_match_with_winner(
 ) -> Match:
     """Persist a singles match with explicit winner/loser so W-L and form
     assertions are deterministic. Same shape as `_record_match` but flips
-    `MatchSide.won` on the right side."""
+    `MatchSide.won` on the right side. ``won`` is stamped only for completed
+    matches, mirroring the API: since #485 it's written at the moment a match
+    becomes final, never while one is still in progress."""
     settings = MatchSettings(team_size=1, best_of=5, affects_rating=False)
     league = await get_default_league(db_session)
     match = Match(
@@ -334,9 +336,10 @@ async def _record_match_with_winner(
         created_at=created_at,
         updated_at=created_at,
     )
-    side1 = MatchSide(match=match, side_number=1, won=True)
+    completed = status == MatchStatus.completed
+    side1 = MatchSide(match=match, side_number=1, won=True if completed else None)
     side1.players.append(MatchSidePlayer(match=match, user=winner))
-    side2 = MatchSide(match=match, side_number=2, won=False)
+    side2 = MatchSide(match=match, side_number=2, won=False if completed else None)
     side2.players.append(MatchSidePlayer(match=match, user=loser))
     db_session.add(match)
     await db_session.commit()
@@ -567,19 +570,18 @@ async def test_list_player_matches_returns_perspective_paginated(
     assert items[1]["opponent"]["username"] == "rival.a"
 
 
-async def test_list_player_matches_result_visible_while_awaiting_confirmation(
+async def test_list_player_matches_result_hidden_while_awaiting_confirmation(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    """The posted result is public from the moment ``POST /results`` lands;
-    confirmation only ratifies it for ratings/finality. The W/L row carries
-    the outcome immediately — the awaiting-confirmation state is conveyed
-    by ``status`` (still ``in_progress``), not by hiding the result."""
+    """A rated match awaiting confirmation has no official outcome yet —
+    ``side.won`` is only stamped when /confirmation completes the match
+    (#485). The W/L row stays null while ``status`` is ``in_progress`` so a
+    profile never shows a WIN/LOSS for an unratified claim."""
     await start_session(api_client, db_session)
     target = await make_user(db_session, "awaiting.target")
     rival = await make_user(db_session, "awaiting.rival")
-    # Post-/results, pre-/confirmation: won is set, status is still
-    # in_progress. ``_record_match_with_winner`` already writes won on each
-    # side — pass status=in_progress to land on the awaiting state.
+    # Post-/results, pre-/confirmation: status in_progress, won unset —
+    # ``_record_match_with_winner`` leaves won as None for non-completed.
     await _record_match_with_winner(
         db_session,
         target,
@@ -594,7 +596,7 @@ async def test_list_player_matches_result_visible_while_awaiting_confirmation(
     assert body["total"] == 1
     row = body["items"][0]
     assert row["status"] == "in_progress"
-    assert row["result"] == "W"
+    assert row["result"] is None
 
 
 async def test_list_player_matches_excludes_other_players_matches(

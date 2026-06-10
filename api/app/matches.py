@@ -1349,12 +1349,12 @@ async def _commit_canonical_games(
     db: AsyncSession,
     match: Match,
     payload: MatchResultsWrite,
-    decided_side: int,
 ) -> None:
     """Replace ``match.games`` (and the attached score rows) with the canonical
-    payload and set ``side.score`` + ``side.won`` from it. **Does not change
-    ``match.status``** — the caller picks whether the result is final (solo)
-    or awaiting confirmation (non-solo)."""
+    payload and set ``side.score`` from it. **Does not change ``match.status``
+    or ``side.won``** — the caller picks whether the result is final
+    (solo/unrated: immediately at /results) or awaiting confirmation (rated),
+    and stamps ``side.won`` via ``_set_side_won`` only at that final moment."""
     # ``Match.games`` cascades ``all, delete-orphan``; clearing the collection
     # marks each existing MatchGame (and via MatchGame.score's own cascade,
     # the MatchGameScore) for delete. We must flush the deletes before
@@ -1380,7 +1380,38 @@ async def _commit_canonical_games(
         new_wins[1 if g.side_1_points > g.side_2_points else 2] += 1
     for side in match.sides:
         side.score = new_wins.get(side.side_number, 0)
+
+
+def _set_side_won(match: Match, decided_side: int) -> None:
+    """Stamp the W/L outcome on each side. Called only at the moment a match
+    becomes ``completed`` — /results for matches that skip confirmation,
+    /confirmation for rated ones — so a profile never shows a WIN/LOSS for a
+    result the opponent hasn't ratified yet (issue #485)."""
+    for side in match.sides:
         side.won = side.side_number == decided_side
+
+
+def _requires_confirmation(match: Match) -> bool:
+    """Only rated matches go through the sign-off round-trip. Confirmation
+    exists to protect ratings from one-sided claims; an unrated match has no
+    stakes worth a second signature, and a solo match has no second human to
+    sign anyway (rated already implies a registered opponent at creation —
+    the player check is defensive)."""
+    return match.match_settings.affects_rating and _all_sides_have_players(match)
+
+
+def _posted_decided_side(match: Match) -> int:
+    """Winner side number per the committed canonical games. Only meaningful
+    once a result has been posted: /results validated the games as decided,
+    and ``_enforce_scorable`` freezes them while signatures exist, so exactly
+    one side has clinched by the time /confirmation reads this."""
+    target = _games_to_win(match.match_settings.best_of)
+    for side_number, count in sorted(side_win_counts(match).items()):
+        if count >= target:
+            return side_number
+    raise HTTPException(
+        status_code=409, detail="The posted games no longer decide this match."
+    )
 
 
 # ----- scoring endpoints ---------------------------------------------------
@@ -1552,13 +1583,14 @@ async def post_match_result(
 ) -> MatchDetails:
     """Post the result of a match. Any previously-saved per-game scores are
     discarded; the payload's games (validated as a complete, decided match)
-    become canon, and the caller's signature is recorded.
+    become canon.
 
-    For a non-solo match the status stays ``in_progress`` until every side
-    signs — the other side acts on the posted result via ``POST /confirmation``
-    or ``POST /dispute``, and the rating update fires inside /confirmation
-    when the final signature lands. Solo matches (one side player-less)
-    finalize immediately here, since there's no second party to attest."""
+    For a rated match the caller's signature is recorded and status stays
+    ``in_progress`` until every side signs — the other side acts on the posted
+    result via ``POST /confirmation`` or ``POST /dispute``, and ``side.won``
+    plus the rating update fire inside /confirmation when the final signature
+    lands. Unrated matches (nothing at stake worth a second sign-off) and solo
+    matches (no second party to attest) finalize immediately here."""
     match = await _load_match_for_scoring(db, match_id, current_user.id, lock=True)
     _enforce_scorable(match)
 
@@ -1569,20 +1601,22 @@ async def post_match_result(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    await _commit_canonical_games(db, match, payload, decided_side)
+    await _commit_canonical_games(db, match, payload)
 
-    # Drives the post-commit push: only a two-human match leaves the other
-    # side owing a confirm/dispute. Computed before commit; the recipient gets
+    # Drives the post-commit push: only a rated match leaves the other side
+    # owing a confirm/dispute. Computed before commit; the recipient gets
     # pinged once the result is durably saved.
-    awaiting_confirmation = _all_sides_have_players(match)
+    awaiting_confirmation = _requires_confirmation(match)
     if not awaiting_confirmation:
-        # Solo path: nobody else to sign — finalize immediately, no signature
-        # row inserted. Preserves today's solo-match behavior end-to-end.
+        # Solo / unrated path: no second sign-off needed — finalize
+        # immediately, no signature row inserted.
         match.status = MatchStatus.completed
+        _set_side_won(match, decided_side)
         await _apply_rating_update(db, match)
     else:
-        # Non-solo path: caller is the first signer. Status remains
-        # in_progress until /confirmation lands the last needed signature.
+        # Rated path: caller is the first signer. Status remains in_progress
+        # (and side.won unset) until /confirmation lands the last needed
+        # signature.
         await _add_signature_or_409(
             db, match, current_user.id, "Result already posted; use /confirmation."
         )
@@ -1610,7 +1644,8 @@ async def confirm_match_result(
 ) -> MatchDetails:
     """Sign off on a posted result. When this is the last signature needed
     (every side has at least one signing player) the match flips to
-    ``completed`` and the rating update runs — exactly once."""
+    ``completed``, ``side.won`` is stamped from the posted games, and the
+    rating update runs — exactly once."""
     match = await _load_match_for_scoring(db, match_id, current_user.id, lock=True)
     _enforce_confirmable(match, current_user.id)
 
@@ -1619,6 +1654,7 @@ async def confirm_match_result(
     )
     if _all_sides_signed(match):
         match.status = MatchStatus.completed
+        _set_side_won(match, _posted_decided_side(match))
         await _apply_rating_update(db, match)
 
     await db.commit()
@@ -1653,13 +1689,12 @@ async def dispute_match_result(
 
     match.signatures.clear()
     for side in match.sides:
-        # Drop the "this side won" claim — the games stay around (so the
-        # disputer can edit the contested score), but until a fresh /results
-        # call ratifies a new outcome nobody has officially won. ``side.score``
-        # is the denormalized games-won mirror — keep it consistent with
-        # ``side.won`` here so a direct DB reader doesn't see won=None with
-        # score>0 (the games still imply 2-1 etc., but the BFF derives that
-        # from MatchGame, not from side.score).
+        # ``side.won`` is only stamped at completion now, so it's still None
+        # on an awaiting-confirmation match — nulling it here is defensive.
+        # ``side.score`` is the denormalized games-won mirror — zero it so a
+        # direct DB reader doesn't see won=None with score>0 (the games still
+        # imply 2-1 etc., but the BFF derives that from MatchGame, not from
+        # side.score).
         side.won = None
         side.score = 0
 
