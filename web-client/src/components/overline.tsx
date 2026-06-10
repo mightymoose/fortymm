@@ -7,6 +7,7 @@ type OverlineProps = {
   children: ReactNode
   className?: string
   style?: CSSProperties
+  id?: string
 }
 
 export function Overline({
@@ -14,10 +15,11 @@ export function Overline({
   children,
   className,
   style,
+  id,
 }: OverlineProps) {
   const Tag = as ?? 'div'
   return (
-    <Tag className={cn('fortymm-overline', className)} style={style}>
+    <Tag className={cn('fortymm-overline', className)} style={style} id={id}>
       {children}
     </Tag>
   )

@@ -438,41 +438,14 @@ describe("MatchDetailsView", () => {
         "Players · going into this match",
       ),
     );
-    // My side: 1 W and 1 L with the right opponent / score labels.
-    const myForm = screen.getByTestId("form-1");
-    expect(within(myForm).getByText("Form · 1–1")).toBeInTheDocument();
-    // The with-history half leads with a one-line "going in" summary, mirroring
-    // the empty half's "first one" sentence.
+    // Wiring only: each half's content (form rows, rating box, career strip)
+    // is pinned by the players-panel query and component tests. Here we prove
+    // the panel projected *this* payload — my history half and the rookie's
+    // empty half, side by side.
     expect(
-      within(myForm).getByText("12 prior matches · 75% win rate going in"),
+      screen.getByText("12 prior matches · 75% win rate going in"),
     ).toBeInTheDocument();
-    expect(within(myForm).getByText("silva.r")).toBeInTheDocument();
-    expect(within(myForm).getByText("3–1")).toBeInTheDocument();
-    expect(within(myForm).getByText("tanaka.y")).toBeInTheDocument();
-    expect(within(myForm).getByText("1–3")).toBeInTheDocument();
-    // Each form row carries the date the past match completed on.
-    expect(within(myForm).getByText("May 9")).toBeInTheDocument();
-    expect(within(myForm).getByText("May 7")).toBeInTheDocument();
-    // Pre-match rating shows (rounded) with a sparkline; career stats below.
-    const myRating = screen.getByTestId("rating-box-1");
-    expect(within(myRating).getByText("1612")).toBeInTheDocument();
-    expect(myRating.querySelector("svg")).not.toBeNull();
-    const myCareer = screen.getByTestId("career-1");
-    expect(within(myCareer).getByText("12")).toBeInTheDocument();
-    expect(within(myCareer).getByText("75%")).toBeInTheDocument();
-    // Rookie shows the empty state, not a result list.
-    const oppForm = screen.getByTestId("form-2");
-    expect(
-      within(oppForm).getByText(/No prior matches yet/),
-    ).toBeInTheDocument();
-    expect(within(oppForm).queryByText(/Form · /)).not.toBeInTheDocument();
-    // Unrated rookie: no rating number, no sparkline, no win rate.
-    const oppRating = screen.getByTestId("rating-box-2");
-    expect(within(oppRating).getByText("Unrated")).toBeInTheDocument();
-    expect(oppRating.querySelector("svg")).toBeNull();
-    const oppCareer = screen.getByTestId("career-2");
-    expect(within(oppCareer).getByText("0")).toBeInTheDocument();
-    expect(within(oppCareer).getByText("—")).toBeInTheDocument();
+    expect(screen.getByText(/No prior matches yet/)).toBeInTheDocument();
   });
 
   it("shows the head-to-head card with prior meetings counted per side", async () => {

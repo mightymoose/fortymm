@@ -2,6 +2,7 @@ import {
   matchDetailsQuery,
   type MatchDetailsResult,
 } from "../match-details-query";
+import { orderedSides } from "../ordered-sides";
 import type { Scoreboard } from "@/api/matches";
 import { initialsOf } from "@/lib/utils";
 
@@ -165,20 +166,6 @@ type MatchDetailsSide = MatchDetailsResult["unmigrated"]["sides"][number];
 type MatchDetailsGame = MatchDetailsResult["unmigrated"]["games"][number];
 
 const NO_OPPONENT_LABEL = "No opponent";
-
-// Perspective ordering shared by the hero row and the game grid: the viewer's
-// side reads first when they're a participant, otherwise side 1 / side 2.
-const orderedSides = (
-  details: MatchDetailsResult["unmigrated"],
-): [MatchDetailsSide | null, MatchDetailsSide | null] => {
-  const bySideNumber = [...details.sides].sort(
-    (a, b) => a.side_number - b.side_number,
-  );
-  const mine = bySideNumber.find((s) => s.is_current_user_side);
-  const first = mine ?? bySideNumber[0] ?? null;
-  const second = bySideNumber.find((s) => s !== first) ?? null;
-  return [first, second];
-};
 
 const selectHeroSide = (side: MatchDetailsSide | null): HeroSideView => {
   const player = side?.players[0] ?? null;

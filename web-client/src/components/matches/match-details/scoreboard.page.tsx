@@ -27,9 +27,17 @@ const scoped = (container: Container) => ({
   queryError() {
     return container.queryByRole("alert");
   },
-  /** The `<section>` landmark `ScoreboardDisplay` renders once data arrives. */
+  /** The `<section>` landmark `ScoreboardDisplay` renders once data arrives.
+   * The page renders sibling region landmarks (e.g. the players panel), so
+   * this resolves the one carrying the hero class. */
   getRegion() {
-    return container.getByRole("region");
+    const region = container
+      .getAllByRole("region")
+      .find((el: HTMLElement) => el.classList.contains("md-hero"));
+    if (!region) {
+      throw new Error("Unable to find the scoreboard's md-hero region");
+    }
+    return region;
   },
   /** The `<h2>` `ScoreboardDisplay` labels the region with. */
   getHeading() {
