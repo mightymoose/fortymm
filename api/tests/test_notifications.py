@@ -2,43 +2,13 @@ from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.main import app
 from app.models import DeviceToken
-from app.notifications.apns import Environment, SendOutcome, SendResult
-from app.notifications.dependencies import get_push_sender
-from tests._helpers import make_client, start_session
+from app.notifications.apns import SendOutcome
+from tests._helpers import FakeSender, make_client, start_session, use_sender
 
 # ``api_client`` (an ASGI client sharing the per-test ``db_session``) comes from
-# tests/conftest.py — no need to redefine it here.
-
-
-class FakeSender:
-    """Records every send and returns a per-token outcome (default success)."""
-
-    def __init__(
-        self,
-        *,
-        configured: bool = True,
-        outcomes: dict[str, SendOutcome] | None = None,
-    ) -> None:
-        self.is_configured = configured
-        self.sent: list[tuple[str, str, str, str]] = []
-        self._outcomes = outcomes or {}
-
-    async def send(
-        self,
-        token: str,
-        *,
-        environment: Environment,
-        title: str,
-        body: str,
-    ) -> SendResult:
-        self.sent.append((token, environment, title, body))
-        return SendResult(self._outcomes.get(token, SendOutcome.SUCCESS))
-
-
-def use_sender(sender: FakeSender) -> None:
-    app.dependency_overrides[get_push_sender] = lambda: sender
+# tests/conftest.py — no need to redefine it here. ``FakeSender`` / ``use_sender``
+# live in tests/_helpers so the match-result notification tests share them.
 
 
 async def register(
@@ -126,7 +96,7 @@ async def test_test_send_fans_out_to_all_user_tokens(
 
     assert response.status_code == 200
     assert response.json() == {"sent": 2, "pruned": 0}
-    by_token = {token: environment for (token, environment, _, _) in sender.sent}
+    by_token = {push.token: push.environment for push in sender.sent}
     assert by_token == {"tok-1": "sandbox", "tok-2": "production"}
 
 

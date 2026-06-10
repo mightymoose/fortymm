@@ -8,6 +8,7 @@ than an ``HTTPException`` so the HTTP mapping stays in the router.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Mapping, Sequence
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.postgresql import insert
@@ -74,11 +75,51 @@ class NotificationService:
         if not self._sender.is_configured:
             raise PushNotConfiguredError
 
-        rows = await self._db.execute(
-            select(DeviceToken).where(DeviceToken.user_id == user.id)
-        )
-        tokens = rows.scalars().all()
+        tokens = await self._tokens_for_user(user.id)
+        sent, pruned = await self._fan_out(tokens, title=_TEST_TITLE, body=_TEST_BODY)
+        return TestNotificationResponse(sent=sent, pruned=pruned)
 
+    async def send_to_user(
+        self,
+        user_id: uuid.UUID,
+        *,
+        title: str,
+        body: str,
+        category: str | None = None,
+        data: Mapping[str, str] | None = None,
+    ) -> int:
+        """Best-effort push to every device a user has registered. Returns the
+        number APNs accepted and prunes any gone tokens as a side effect.
+
+        Unlike ``send_test_notification`` this **silently no-ops** (returns 0)
+        when APNs isn't configured: an event-driven push fired from another
+        flow (e.g. a posted match result) must never fail that flow just
+        because this environment has no push credentials."""
+        if not self._sender.is_configured:
+            return 0
+        tokens = await self._tokens_for_user(user_id)
+        sent, _ = await self._fan_out(
+            tokens, title=title, body=body, category=category, data=data
+        )
+        return sent
+
+    async def _tokens_for_user(self, user_id: uuid.UUID) -> Sequence[DeviceToken]:
+        rows = await self._db.execute(
+            select(DeviceToken).where(DeviceToken.user_id == user_id)
+        )
+        return rows.scalars().all()
+
+    async def _fan_out(
+        self,
+        tokens: Sequence[DeviceToken],
+        *,
+        title: str,
+        body: str,
+        category: str | None = None,
+        data: Mapping[str, str] | None = None,
+    ) -> tuple[int, int]:
+        """Send one push per token, returning ``(sent, pruned)``. Tokens APNs
+        reports as gone are deleted in a single statement."""
         sent = 0
         gone_ids: list[uuid.UUID] = []
         for device in tokens:
@@ -88,8 +129,10 @@ class NotificationService:
             result = await self._sender.send(
                 device.token,
                 environment=environment,
-                title=_TEST_TITLE,
-                body=_TEST_BODY,
+                title=title,
+                body=body,
+                category=category,
+                data=data,
             )
             if result.outcome is SendOutcome.SUCCESS:
                 sent += 1
@@ -102,4 +145,4 @@ class NotificationService:
             )
             await self._db.commit()
 
-        return TestNotificationResponse(sent=sent, pruned=len(gone_ids))
+        return sent, len(gone_ids)

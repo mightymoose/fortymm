@@ -28,9 +28,15 @@ struct RootView: View {
                     deepLinkDestination(link)
                 }
                 // Now that a session exists to attach the device token to, ask
-                // for notification permission and register with APNs. Runs once
-                // the signed-in shell appears.
-                .task { PushNotificationManager.shared.requestAuthorizationAndRegister() }
+                // for notification permission and register with APNs, and route
+                // a tapped match notification to its detail. Runs once the
+                // signed-in shell appears.
+                .task {
+                    PushNotificationManager.shared.onOpenMatch = { id in
+                        Task { @MainActor in session.openMatch(id) }
+                    }
+                    PushNotificationManager.shared.requestAuthorizationAndRegister()
+                }
         case let .signedOut(reason, email):
             SessionEndedView(
                 reason: reason,
@@ -59,6 +65,11 @@ struct RootView: View {
             ConfirmEmailView(
                 token: token,
                 onConfirmed: { session.resolveDeepLink($0) },
+                onClose: { session.pendingDeepLink = nil }
+            )
+        case let .match(id):
+            MatchDetailLoaderView(
+                matchId: id,
                 onClose: { session.pendingDeepLink = nil }
             )
         }

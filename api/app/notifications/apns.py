@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 import os
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 from typing import Literal, Protocol
@@ -26,6 +27,11 @@ import jwt
 log = logging.getLogger(__name__)
 
 Environment = Literal["sandbox", "production"]
+
+# Category identifier shared with the iOS client (see
+# ``PushNotificationManager`` in the iOS app). A push carrying this category
+# renders the Approve / Dispute action buttons the app registered for it.
+MATCH_RESULT_CONFIRMATION_CATEGORY = "MATCH_RESULT_CONFIRMATION"
 
 _APNS_HOSTS: dict[str, str] = {
     "sandbox": "https://api.sandbox.push.apple.com",
@@ -57,7 +63,11 @@ class SendResult:
 
 class PushSender(Protocol):
     """The seam the service depends on. Real implementation talks to APNs;
-    tests inject a recording fake."""
+    tests inject a recording fake.
+
+    ``category`` selects an APNs notification category (the iOS app registers
+    one per set of action buttons); ``data`` is merged into the push payload
+    alongside ``aps`` so the device can route the tap (e.g. a ``match_id``)."""
 
     @property
     def is_configured(self) -> bool: ...
@@ -69,6 +79,8 @@ class PushSender(Protocol):
         environment: Environment,
         title: str,
         body: str,
+        category: str | None = None,
+        data: Mapping[str, str] | None = None,
     ) -> SendResult: ...
 
 
@@ -85,6 +97,8 @@ class NoopSender:
         environment: Environment,
         title: str,
         body: str,
+        category: str | None = None,
+        data: Mapping[str, str] | None = None,
     ) -> SendResult:
         return SendResult(SendOutcome.FAILED, "push not configured")
 
@@ -169,6 +183,8 @@ class APNsClient:
         environment: Environment,
         title: str,
         body: str,
+        category: str | None = None,
+        data: Mapping[str, str] | None = None,
     ) -> SendResult:
         url = f"{_APNS_HOSTS[environment]}/3/device/{token}"
         headers = {
@@ -176,7 +192,17 @@ class APNsClient:
             "apns-topic": self._config.bundle_id,
             "apns-push-type": "alert",
         }
-        payload = {"aps": {"alert": {"title": title, "body": body}, "sound": "default"}}
+        # ``object`` (not ``Any``) so the heterogeneous JSON payload still
+        # type-checks under mypy --strict without loosening the interior.
+        aps: dict[str, object] = {
+            "alert": {"title": title, "body": body},
+            "sound": "default",
+        }
+        if category is not None:
+            aps["category"] = category
+        payload: dict[str, object] = {"aps": aps}
+        if data:
+            payload.update(data)
         try:
             response = await self._client.post(url, headers=headers, json=payload)
         except httpx.HTTPError as exc:

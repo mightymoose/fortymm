@@ -20,7 +20,15 @@ from app.models import (
     MatchStatus,
     User,
 )
-from tests._helpers import make_client, make_user, opponent_session, start_session
+from app.notifications.apns import MATCH_RESULT_CONFIRMATION_CATEGORY
+from tests._helpers import (
+    FakeSender,
+    make_client,
+    make_user,
+    opponent_session,
+    start_session,
+    use_sender,
+)
 
 # ----- create -------------------------------------------------------------
 
@@ -1903,3 +1911,129 @@ async def test_concurrent_confirm_and_dispute_serialize(
                 assert final.status == MatchStatus.in_progress
                 assert final.signatures == []
                 assert [s.won for s in sides] == [None, None]
+
+
+# ----- result-confirmation push -------------------------------------------
+
+
+async def _register_device(
+    client: AsyncClient, token: str, *, environment: str = "sandbox"
+) -> None:
+    response = await client.post(
+        "/v1/device-tokens",
+        json={"token": token, "platform": "ios", "environment": environment},
+    )
+    assert response.status_code == 200, response.text
+
+
+async def test_posting_result_pushes_confirmation_to_opponent(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """When a player posts a result on a two-human match, the opponent gets a
+    push carrying the Approve/Dispute category, the match id, and copy with the
+    games-won score plus the individual game scores."""
+    me = await start_session(api_client, db_session)
+    me.username = "poster"
+    await db_session.commit()
+
+    sender = FakeSender()
+    use_sender(sender)
+
+    async with opponent_session(db_session, "rival") as (opp_client, opp):
+        await _register_device(opp_client, "opp-device")
+        match = await _create_match(api_client, opp.id, best_of=3)
+
+        response = await api_client.post(
+            f"/v1/matches/{match['id']}/results",
+            json={
+                "games": [
+                    {"game_number": 1, "side_1_points": 11, "side_2_points": 7},
+                    {"game_number": 2, "side_1_points": 9, "side_2_points": 11},
+                    {"game_number": 3, "side_1_points": 11, "side_2_points": 8},
+                ]
+            },
+        )
+        assert response.status_code == 201
+
+    assert len(sender.sent) == 1
+    push = sender.sent[0]
+    assert push.token == "opp-device"
+    assert push.category == MATCH_RESULT_CONFIRMATION_CATEGORY
+    assert push.data == {"match_id": match["id"]}
+    # Recipient-framed games-won (poster won 2–1) and the per-game scores,
+    # oriented poster-first.
+    assert "poster reported beating you 2–1" in push.body
+    assert "11–7" in push.body
+    assert "9–11" in push.body
+    assert "11–8" in push.body
+
+
+async def test_posting_result_does_not_push_to_the_poster(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """Only the side that owes a sign-off is notified — never the poster, even
+    when both players have a device registered."""
+    await start_session(api_client, db_session)
+    await _register_device(api_client, "poster-device")
+
+    sender = FakeSender()
+    use_sender(sender)
+
+    async with opponent_session(db_session, "rival") as (opp_client, opp):
+        await _register_device(opp_client, "opp-device")
+        match = await _create_match(api_client, opp.id, best_of=1)
+
+        response = await api_client.post(
+            f"/v1/matches/{match['id']}/results",
+            json={
+                "games": [{"game_number": 1, "side_1_points": 11, "side_2_points": 5}]
+            },
+        )
+        assert response.status_code == 201
+
+    assert [push.token for push in sender.sent] == ["opp-device"]
+
+
+async def test_solo_result_sends_no_push(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """A solo (opponent-less) match finalizes on post with nobody to confirm —
+    so no confirmation push is fired."""
+    await start_session(api_client, db_session)
+
+    sender = FakeSender()
+    use_sender(sender)
+
+    created = await api_client.post("/v1/matches", json={"best_of": 1, "rated": False})
+    assert created.status_code == 201
+    match = created.json()
+
+    response = await api_client.post(
+        f"/v1/matches/{match['id']}/results",
+        json={"games": [{"game_number": 1, "side_1_points": 11, "side_2_points": 5}]},
+    )
+    assert response.status_code == 201
+    assert sender.sent == []
+
+
+async def test_posting_result_succeeds_when_opponent_has_no_device(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """The push is best-effort: an opponent with no registered device just
+    means nothing is sent — the result post still succeeds."""
+    await start_session(api_client, db_session)
+
+    sender = FakeSender()
+    use_sender(sender)
+
+    async with opponent_session(db_session, "rival") as (_opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=1)
+        response = await api_client.post(
+            f"/v1/matches/{match['id']}/results",
+            json={
+                "games": [{"game_number": 1, "side_1_points": 11, "side_2_points": 5}]
+            },
+        )
+        assert response.status_code == 201
+
+    assert sender.sent == []
