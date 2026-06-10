@@ -444,13 +444,14 @@ export interface paths {
          * Post Match Result
          * @description Post the result of a match. Any previously-saved per-game scores are
          *     discarded; the payload's games (validated as a complete, decided match)
-         *     become canon, and the caller's signature is recorded.
+         *     become canon.
          *
-         *     For a non-solo match the status stays ``in_progress`` until every side
-         *     signs — the other side acts on the posted result via ``POST /confirmation``
-         *     or ``POST /dispute``, and the rating update fires inside /confirmation
-         *     when the final signature lands. Solo matches (one side player-less)
-         *     finalize immediately here, since there's no second party to attest.
+         *     For a rated match the caller's signature is recorded and status stays
+         *     ``in_progress`` until every side signs — the other side acts on the posted
+         *     result via ``POST /confirmation`` or ``POST /dispute``, and ``side.won``
+         *     plus the rating update fire inside /confirmation when the final signature
+         *     lands. Unrated matches (nothing at stake worth a second sign-off) and solo
+         *     matches (no second party to attest) finalize immediately here.
          */
         post: operations["post_match_result_v1_matches__match_id__results_post"];
         delete?: never;
@@ -472,7 +473,8 @@ export interface paths {
          * Confirm Match Result
          * @description Sign off on a posted result. When this is the last signature needed
          *     (every side has at least one signing player) the match flips to
-         *     ``completed`` and the rating update runs — exactly once.
+         *     ``completed``, ``side.won`` is stamped from the posted games, and the
+         *     rating update runs — exactly once.
          */
         post: operations["confirm_match_result_v1_matches__match_id__confirmation_post"];
         delete?: never;
