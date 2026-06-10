@@ -68,6 +68,21 @@ describe('failed-saves store', () => {
     expect(result.current.flash).toBeNull()
   })
 
+  it('clearing the same game number in a different match leaves the flash up', () => {
+    const { result } = renderHook(() => useFailedSaves())
+
+    act(() =>
+      recordFailedSave('m-1', 2, { side_1_points: 9, side_2_points: 11 }),
+    )
+    act(() => clearFailedSave('m-2', 2))
+
+    expect(result.current.flash).toMatchObject({ matchId: 'm-1', gameNumber: 2 })
+    expect(failedSaveFor(result.current.entries, 'm-1', 2)).toEqual({
+      side_1_points: 9,
+      side_2_points: 11,
+    })
+  })
+
   it('clearing one game leaves an unrelated flash up', () => {
     const { result } = renderHook(() => useFailedSaves())
 

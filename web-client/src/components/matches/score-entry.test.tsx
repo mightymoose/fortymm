@@ -671,6 +671,8 @@ describe('ScoreEntry — failed saves', () => {
     expect(cell).toHaveClass('failed')
     expect(cell).toHaveTextContent('11')
     expect(cell).toHaveTextContent('4')
+    // The non-color cue: the RETRY micro-label is visible in the cell.
+    expect(cell).toHaveTextContent('RETRY')
     expect(cell).toHaveAttribute('href', '/matches/m-1/games/3/scores/new')
   })
 
