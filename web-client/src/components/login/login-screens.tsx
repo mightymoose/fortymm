@@ -1127,6 +1127,7 @@ export function ScreenEmail({
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
+    if (submitting) return
     setTouched(true)
     if (!valid) return
     if (!captchaToken) {
