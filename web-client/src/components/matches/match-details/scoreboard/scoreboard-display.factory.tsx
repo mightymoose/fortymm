@@ -1,8 +1,9 @@
+import { buildHeroRowView } from "./hero-row.factory";
 import { buildScoreboardHeadingView } from "./heading.factory";
 import type { ScoreboardView } from "./scoreboard-query";
 import type { ScoreboardDisplayProps } from "./scoreboard-display";
 
-/** The projected `{ status, outcome, heading, gameGrid }` view the display renders around. */
+/** The projected `{ status, outcome, heading, heroRow, gameGrid }` view the display renders. */
 export function buildScoreboardView(
   overrides: Partial<ScoreboardView> = {},
 ): ScoreboardView {
@@ -10,6 +11,7 @@ export function buildScoreboardView(
     status: "scheduled",
     outcome: null,
     heading: buildScoreboardHeadingView(),
+    heroRow: buildHeroRowView(),
     // Null by default so the view renders without a router — scored grid
     // cells may carry typed <Link>s; see `gameGridPage.render`.
     gameGrid: null,
@@ -17,11 +19,7 @@ export function buildScoreboardView(
   };
 }
 
-/**
- * Props for `ScoreboardDisplay`. The default `children` renders a recognizable
- * marker so tests can assert the render-prop's output lands inside the section;
- * override it with a `vi.fn()` to inspect the argument it receives.
- */
+/** Props for `ScoreboardDisplay`. */
 export function buildScoreboardDisplayProps(
   overrides: Partial<ScoreboardDisplayProps> = {},
 ): ScoreboardDisplayProps {
@@ -29,7 +27,6 @@ export function buildScoreboardDisplayProps(
     scoreboard: buildScoreboardView({
       outcome: "rita.kovac leading, 2 games to 1",
     }),
-    children: () => <div data-testid="scoreboard-children">scoreboard body</div>,
     ...overrides,
   };
 }

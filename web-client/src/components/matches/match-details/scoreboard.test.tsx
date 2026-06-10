@@ -5,7 +5,7 @@ import {
   buildMatchDetailsPlayer,
   buildMatchDetailsSide,
 } from "@/mocks/factories/matches/match-details.factory";
-import { waitForElementToBeRemoved, within } from "@/test/utilities";
+import { waitForElementToBeRemoved } from "@/test/utilities";
 
 import { scoreboardPage } from "./scoreboard.page";
 
@@ -54,17 +54,15 @@ describe("Scoreboard", () => {
     expect(requestedMatchId).toBe("m-42");
   });
 
-  it("forwards children through to the rendered output", async () => {
+  it("displays the hero row projected from the match details", async () => {
     scoreboardPage.mockEndpoint(() => HttpResponse.json(decidedMatch()));
 
-    scoreboardPage.render({
-      children: () => <p data-testid="scoreboard-body">live</p>,
-    });
+    scoreboardPage.render();
 
     await waitForElementToBeRemoved(scoreboardPage.queryLoading());
-    expect(
-      within(scoreboardPage.getRegion()).getByTestId("scoreboard-body"),
-    ).toBeInTheDocument();
+    // Wiring only: row content is pinned by the query and hero-row tests.
+    const name = scoreboardPage.heroRow.getPlayerName("l", "rita.kovac");
+    expect(scoreboardPage.getRegion()).toContainElement(name);
   });
 
   it("displays the heading strip projected from the match details", async () => {

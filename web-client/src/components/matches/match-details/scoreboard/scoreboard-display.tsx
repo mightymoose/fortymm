@@ -1,17 +1,14 @@
 import { useId } from "react";
 import { GameGrid } from "./game-grid";
 import { Heading } from "./heading";
+import { HeroRow } from "./hero-row";
 import { type ScoreboardView } from "./scoreboard-query";
 
 export interface ScoreboardDisplayProps {
   scoreboard: ScoreboardView;
-  children: (scoreboard: ScoreboardView) => React.ReactNode;
 }
 
-export const ScoreboardDisplay = ({
-  scoreboard,
-  children,
-}: ScoreboardDisplayProps) => {
+export const ScoreboardDisplay = ({ scoreboard }: ScoreboardDisplayProps) => {
   const id = useId();
 
   return (
@@ -21,7 +18,7 @@ export const ScoreboardDisplay = ({
       </h2>
       <div className="md-hero__grid-bg" aria-hidden="true" />
       <Heading heading={scoreboard.heading} />
-      {children(scoreboard)}
+      <HeroRow heroRow={scoreboard.heroRow} />
       {scoreboard.gameGrid && <GameGrid gameGrid={scoreboard.gameGrid} />}
     </section>
   );

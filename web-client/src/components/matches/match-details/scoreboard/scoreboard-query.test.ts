@@ -667,6 +667,128 @@ describe("scoreboardQuery", () => {
     expect(ghost).toMatchObject({ name: "No opponent", isGhost: true });
   });
 
+  it("projects the hero scoreline from the perspective-ordered sides", async () => {
+    scoreboardQueryPage.mockEndpoint(() =>
+      HttpResponse.json(
+        buildMatchDetails({
+          sides: [
+            buildMatchDetailsSide({
+              won: false,
+              games_won: 1,
+              players: [
+                buildMatchDetailsPlayer({
+                  user_id: "u-opponent",
+                  username: "leo.mertens",
+                  is_current_user: false,
+                }),
+              ],
+              is_current_user_side: false,
+            }),
+            buildMatchDetailsSide({
+              side_number: 2,
+              won: true,
+              games_won: 3,
+              players: [buildMatchDetailsPlayer({ username: "rita.kovac" })],
+            }),
+          ],
+          data: { scoreboard: { status: "final" } },
+        }),
+      ),
+    );
+
+    const { result } = scoreboardQueryPage.render();
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    // The viewer is side 2, so their side reads left.
+    expect(result.current.data?.heroRow).toEqual({
+      left: { name: "rita.kovac", initials: "RK", isGhost: false, won: true },
+      score: {
+        kind: "scoreline",
+        left: { gamesWon: 3, won: true },
+        right: { gamesWon: 1, won: false },
+      },
+      right: {
+        name: "leo.mertens",
+        initials: "LM",
+        isGhost: false,
+        won: false,
+      },
+    });
+  });
+
+  it("projects an upcoming VS block carrying the status label for a scheduled match", async () => {
+    scoreboardQueryPage.mockEndpoint(() =>
+      HttpResponse.json(
+        buildMatchDetails({
+          status_label: "Awaiting opponent",
+          data: { scoreboard: { status: "scheduled" } },
+        }),
+      ),
+    );
+
+    const { result } = scoreboardQueryPage.render();
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data?.heroRow.score).toEqual({
+      kind: "upcoming",
+      statusLabel: "Awaiting opponent",
+    });
+    expect(result.current.data?.heroRow.left.name).toBe("rita.kovac");
+    expect(result.current.data?.heroRow.right.name).toBe("leo.mertens");
+  });
+
+  it("projects a ghost hero side scoring zero when the match has only one side", async () => {
+    scoreboardQueryPage.mockEndpoint(() =>
+      HttpResponse.json(
+        buildMatchDetails({
+          sides: [buildMatchDetailsSide({ games_won: 2 })],
+          data: { scoreboard: { status: "live" } },
+        }),
+      ),
+    );
+
+    const { result } = scoreboardQueryPage.render();
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data?.heroRow.right).toEqual({
+      name: "No opponent",
+      initials: "NO",
+      isGhost: true,
+      won: false,
+    });
+    expect(result.current.data?.heroRow.score).toEqual({
+      kind: "scoreline",
+      left: { gamesWon: 2, won: false },
+      right: { gamesWon: 0, won: false },
+    });
+  });
+
+  it("projects a playerless side as a ghost hero side", async () => {
+    scoreboardQueryPage.mockEndpoint(() =>
+      HttpResponse.json(
+        buildMatchDetails({
+          sides: [
+            buildMatchDetailsSide(),
+            buildMatchDetailsSide({
+              side_number: 2,
+              players: [],
+              is_current_user_side: false,
+            }),
+          ],
+          data: { scoreboard: { status: "live" } },
+        }),
+      ),
+    );
+
+    const { result } = scoreboardQueryPage.render();
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data?.heroRow.right).toMatchObject({
+      name: "No opponent",
+      isGhost: true,
+    });
+  });
+
   it("shares the matchDetailsQuery cache key so the request is not duplicated", () => {
     expect(scoreboardQuery("m-1").queryKey).toEqual(
       matchDetailsQuery("m-1").queryKey,
