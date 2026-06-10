@@ -795,4 +795,35 @@ describe('ScoreEntry — failed saves', () => {
     expect(cell).toHaveTextContent('10')
     expect(cell).toHaveAttribute('href', '/matches/m-1/games/1/scores/edit')
   })
+
+  it('flash is suppressed on the failed game\'s own entry page', async () => {
+    const user = userEvent.setup()
+    server.use(
+      http.get('*/v1/matches/m-1', () => HttpResponse.json(inProgressMatch())),
+      http.post('*/v1/matches/m-1/games/3/scores/new', () =>
+        HttpResponse.json({ detail: 'boom' }, { status: 500 }),
+      ),
+    )
+
+    renderScoringApp('/matches/m-1/games/3/scores/new')
+    await screen.findByRole('heading', { name: /enter game 3 score/i })
+    await user.type(
+      screen.getByRole('textbox', { name: 'rita.kovac score' }),
+      '11',
+    )
+    await user.type(screen.getByRole('textbox', { name: 'nguyen.t score' }), '4')
+    await user.click(screen.getByRole('button', { name: /save game & next/i }))
+    // On game 4 the flash is present (different game).
+    await screen.findByRole('heading', { name: /enter game 4 score/i })
+    expect(screen.getByRole('alert')).toHaveTextContent("Game 3 didn't save.")
+
+    // Tap the failed cell → back on game 3: flash must be absent.
+    await user.click(
+      screen.getByRole('link', {
+        name: 'Game 3, failed to save, 11 to 4. Tap to retry.',
+      }),
+    )
+    await screen.findByRole('heading', { name: /enter game 3 score/i })
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
 })

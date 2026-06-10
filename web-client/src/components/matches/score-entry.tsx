@@ -383,7 +383,9 @@ function ScoreEntryInner({
           </div>
         </div>
 
-        {flash !== null && flash.matchId === matchId && (
+        {flash !== null &&
+          flash.matchId === matchId &&
+          flash.gameNumber !== gameNumber && (
           <SaveFlash
             // Re-key per failure so a repeat failure restarts the timer.
             key={flash.id}
