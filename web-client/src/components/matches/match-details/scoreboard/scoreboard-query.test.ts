@@ -737,6 +737,31 @@ describe("scoreboardQuery", () => {
     expect(result.current.data?.heroRow.right.name).toBe("leo.mertens");
   });
 
+  // Regression test for #394: a live match whose first game is still being
+  // played (no completed game yet) must show the 0 — 0 scoreline, not the
+  // upcoming "VS" placeholder — that state disagreed with the Live chip.
+  it("projects a 0-0 scoreline, not the VS block, for a live match with no scored game", async () => {
+    scoreboardQueryPage.mockEndpoint(() =>
+      HttpResponse.json(
+        buildMatchDetails({
+          status: "in_progress",
+          games: [buildMatchDetailsGame()],
+          current_game: { game_number: 1 },
+          data: { scoreboard: { status: "live" } },
+        }),
+      ),
+    );
+
+    const { result } = scoreboardQueryPage.render();
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data?.heroRow.score).toEqual({
+      kind: "scoreline",
+      left: { gamesWon: 0, won: false },
+      right: { gamesWon: 0, won: false },
+    });
+  });
+
   it("projects a ghost hero side scoring zero when the match has only one side", async () => {
     scoreboardQueryPage.mockEndpoint(() =>
       HttpResponse.json(
