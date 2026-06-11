@@ -12,6 +12,7 @@ type MatchSignatureView = components['schemas']['MatchSignatureView']
 type MatchDetailsPlayerForm = components['schemas']['MatchDetailsPlayerForm']
 type MatchDetailsFormResult = components['schemas']['MatchDetailsFormResult']
 type MatchDetailsH2H = components['schemas']['MatchDetailsH2H']
+type MatchDetailsH2HMeeting = components['schemas']['MatchDetailsH2HMeeting']
 type MatchLeague = components['schemas']['MatchLeague']
 
 const DEFAULT_LEAGUE: MatchLeague = {
@@ -106,6 +107,35 @@ export function buildMatchDetailsPlayerForm(
   }
 }
 
+/** One past meeting in the head-to-head record — a 3–2 win for side 1 on
+ * 2026-05-08, framed against this match's side numbers. */
+export function buildMatchDetailsH2HMeeting(
+  overrides: Partial<MatchDetailsH2HMeeting> = {},
+): MatchDetailsH2HMeeting {
+  return {
+    match_id: 'm-h2h-1',
+    completed_at: '2026-05-08T18:00:00Z',
+    side_1_games_won: 3,
+    side_2_games_won: 2,
+    winner_side_number: 1,
+    ...overrides,
+  }
+}
+
+/** The head-to-head record between this match's two sides — side 1 leads 2–1
+ * across three prior meetings, with one meeting in `recent_meetings`. */
+export function buildMatchDetailsH2H(
+  overrides: Partial<MatchDetailsH2H> = {},
+): MatchDetailsH2H {
+  return {
+    total_meetings: 3,
+    side_1_wins: 2,
+    side_2_wins: 1,
+    recent_meetings: [buildMatchDetailsH2HMeeting()],
+    ...overrides,
+  }
+}
+
 /**
  * A full `MatchDetails` payload as returned by `GET /v1/matches/{match_id}`.
  * Defaults to a pending best-of-5 singles match with the mock current user on
@@ -168,4 +198,5 @@ export type {
   MatchSignatureView,
   MatchDetailsPlayerForm,
   MatchDetailsH2H,
+  MatchDetailsH2HMeeting,
 }
