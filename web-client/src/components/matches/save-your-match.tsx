@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { Suspense, useState } from 'react'
+import { useSuspenseQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import { ChevronRight } from 'lucide-react'
 
@@ -6,7 +7,10 @@ import { deriveEmailStatus, useSession } from '@/api/session'
 import { fmtDate } from '@/lib/dates'
 import { cn } from '@/lib/utils'
 
-import type { MatchView } from './match-details-page'
+import {
+  saveYourMatchQuery,
+  type SaveYourMatchView,
+} from './match-details/save-your-match-query'
 
 // Per-match key. Dismissing on one finalized match doesn't quiet the prompt
 // on the next — a guest with multiple matches still gets the nudge once per
@@ -36,12 +40,8 @@ function writeDismissed(matchId: string, value: boolean) {
   }
 }
 
-function MatchAnchor({ view }: { view: MatchView }) {
-  // The outer gate guarantees a real opponent on the right side; we can
-  // dereference freely here.
-  const me = view.leftSide
-  const opp = view.rightSide!
-  const iWon = me.won === true
+function MatchAnchor({ view }: { view: SaveYourMatchView }) {
+  const iWon = view.leftWon === true
   return (
     <div className="md-save__anchor" aria-label="Match summary">
       <div
@@ -50,15 +50,15 @@ function MatchAnchor({ view }: { view: MatchView }) {
           iWon ? 'md-avatar--win' : 'md-avatar--loss',
         )}
       >
-        {me.initials}
+        {view.leftInitials}
       </div>
       <div className="md-save__blips">
         <span className={cn('md-save__blip', iWon && 'md-save__blip--win')}>
-          {me.gamesWon}
+          {view.leftGamesWon}
         </span>
         <span className="md-save__blip-dash">–</span>
         <span className={cn('md-save__blip', !iWon && 'md-save__blip--win')}>
-          {opp.gamesWon}
+          {view.rightGamesWon}
         </span>
       </div>
       <div
@@ -67,7 +67,7 @@ function MatchAnchor({ view }: { view: MatchView }) {
           iWon ? 'md-avatar--loss' : 'md-avatar--win',
         )}
       >
-        {opp.initials}
+        {view.rightInitials}
       </div>
       <span className="md-save__date">{fmtDate(view.createdAt).toUpperCase()}</span>
     </div>
@@ -97,24 +97,22 @@ function DismissedReceipt() {
   )
 }
 
-export function SaveYourMatch({
-  view,
-  matchId,
-}: {
-  view: MatchView
-  matchId: string
-}) {
-  // Cheap, props-only gates first so we never call useSession() (and thereby
-  // mint a guest user via GET /v1/session) on the standalone public-share
-  // route where the viewer is never the participant. The inner body owns the
-  // hook tree so the conditional return here doesn't change hook order.
-  // Show as soon as the match is being played — we don't wait for opponent
-  // sign-off. The "save it before cookies clear" risk applies the moment the
-  // guest has invested any real time, not just at the rated-finalized
-  // boundary (which can be hours later, after the guest has closed the tab).
-  if (view.state === 'upcoming') return null
-  if (!view.leftSide.isCurrentUser) return null
-  if (!view.rightSide || view.rightSide.isGhost) return null
+export function SaveYourMatch({ matchId }: { matchId: string }) {
+  return (
+    <Suspense fallback={<div>Loading...</div>}>
+      <SaveYourMatchFetcher matchId={matchId} />
+    </Suspense>
+  )
+}
+
+function SaveYourMatchFetcher({ matchId }: { matchId: string }) {
+  const { data: view } = useSuspenseQuery(saveYourMatchQuery(matchId))
+  // A null projection means the prompt doesn't apply (match not yet started,
+  // the viewer isn't a participant, or there's no real opponent). We bail here,
+  // before SaveYourMatchActive, so we never call useSession() — and thereby
+  // mint a guest user via GET /v1/session — on the standalone public-share
+  // route where the viewer is never the participant.
+  if (!view) return null
   return <SaveYourMatchActive view={view} matchId={matchId} />
 }
 
@@ -122,7 +120,7 @@ function SaveYourMatchActive({
   view,
   matchId,
 }: {
-  view: MatchView
+  view: SaveYourMatchView
   matchId: string
 }) {
   const { data: session } = useSession()
@@ -173,7 +171,7 @@ function SaveYourMatchActive({
           Let&rsquo;s make sure this one sticks around.
         </h3>
         <p className="md-save__body">
-          Add an email and your rating and rivalry with {view.rightSide!.username}{' '}
+          Add an email and your rating and rivalry with {view.rightUsername}{' '}
           are saved across devices. Right now, clearing cookies erases this
           match.
         </p>
