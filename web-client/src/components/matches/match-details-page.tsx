@@ -17,7 +17,6 @@ import { Ratings } from './match-details/ratings'
 import { Scoreboard } from './match-details/scoreboard'
 import { AppShell } from '@/components/app-shell'
 import { Overline } from '@/components/overline'
-import { initialsOf } from '@/lib/utils'
 import {
   scoringNewRoute,
   useConfirmMatch,
@@ -39,28 +38,15 @@ type HeroState = 'live' | 'final' | 'upcoming'
 type SideView = {
   sideNumber: number
   username: string
-  userId: string | null
-  // A "no opponent" side: a real side row carrying no player. Rendered as the
-  // dashed-circle placeholder instead of an avatar/profile.
-  isGhost: boolean
-  initials: string
-  gamesWon: number
-  won: boolean | null
-  isCurrentUser: boolean
 }
 
 export type MatchView = {
-  state: HeroState
   statusLabel: string
   bestOf: number
   gamesToWin: number
   rated: boolean
-  // When the match was created — used to stamp the pre-match "snapshot" of
-  // player form/ratings with the moment those numbers were captured.
-  createdAt: string
   // Left/right are perspective-relative: when the current user is on a side
-  // they're left (and `leftSide.isCurrentUser` is true); otherwise left = side
-  // 1, right = side 2.
+  // they're left; otherwise left = side 1, right = side 2.
   leftSide: SideView
   rightSide: SideView | null
   scoreCta: { matchId: string; gameNumber: number } | null
@@ -83,17 +69,9 @@ export type MatchView = {
 
 function projectSide(side: MatchDetailsSide, fallbackLabel: string): SideView {
   const player = side.players[0]
-  const isGhost = side.players.length === 0
-  const username = player?.username ?? fallbackLabel
   return {
     sideNumber: side.side_number,
-    username,
-    userId: player?.user_id ?? null,
-    isGhost,
-    initials: initialsOf(username),
-    gamesWon: side.games_won,
-    won: side.won,
-    isCurrentUser: side.is_current_user_side,
+    username: player?.username ?? fallbackLabel,
   }
 }
 
@@ -182,12 +160,10 @@ function projectMatchView(data: MatchDetails, matchId: string): MatchView {
     : null
 
   return {
-    state,
     statusLabel: data.status_label,
     bestOf: data.best_of,
     gamesToWin: data.games_to_win,
     rated: data.affects_rating,
-    createdAt: data.created_at,
     leftSide: leftView,
     rightSide: rightView,
     scoreCta,
@@ -332,7 +308,7 @@ function MatchDetailsPage({
 
         <FinalizeCallout view={view} matchId={matchId} />
 
-        <SaveYourMatch key={matchId} view={view} matchId={matchId} />
+        <SaveYourMatch key={matchId} matchId={matchId} />
 
         <Scoreboard matchId={matchId} />
 
