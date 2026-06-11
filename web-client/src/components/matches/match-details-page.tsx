@@ -10,14 +10,14 @@ import {
   X,
 } from 'lucide-react'
 
+import { HeadToHead } from './match-details/head-to-head'
 import { MatchInfo } from './match-details/match-info'
 import { PlayersPanel } from './match-details/players-panel'
 import { Ratings } from './match-details/ratings'
 import { Scoreboard } from './match-details/scoreboard'
 import { AppShell } from '@/components/app-shell'
 import { Overline } from '@/components/overline'
-import { cn, initialsOf } from '@/lib/utils'
-import { fmtDateShort } from '@/lib/dates'
+import { initialsOf } from '@/lib/utils'
 import {
   scoringNewRoute,
   useConfirmMatch,
@@ -33,8 +33,6 @@ import { SaveYourMatch } from './save-your-match'
 type MatchDetails = components['schemas']['app__schemas__match__MatchDetails']
 type MatchResultsGameWrite = components['schemas']['MatchResultsGameWrite']
 type MatchDetailsSide = components['schemas']['MatchDetailsSide']
-type MatchDetailsH2H = components['schemas']['MatchDetailsH2H']
-type MatchDetailsH2HMeeting = components['schemas']['MatchDetailsH2HMeeting']
 
 type HeroState = 'live' | 'final' | 'upcoming'
 
@@ -49,21 +47,6 @@ type SideView = {
   gamesWon: number
   won: boolean | null
   isCurrentUser: boolean
-}
-
-type H2HMeetingView = {
-  matchId: string
-  completedAt: string
-  leftGamesWon: number
-  rightGamesWon: number
-  winnerSideNumber: number | null
-}
-
-type H2HView = {
-  totalMeetings: number
-  leftWins: number
-  rightWins: number
-  recentMeetings: H2HMeetingView[]
 }
 
 export type MatchView = {
@@ -81,7 +64,6 @@ export type MatchView = {
   leftSide: SideView
   rightSide: SideView | null
   scoreCta: { matchId: string; gameNumber: number } | null
-  headToHead: H2HView | null
   // True when the caller can hit either ``POST /confirmation`` or
   // ``POST /dispute`` — surfaces the Confirm / Dispute CTAs.
   canConfirm: boolean
@@ -130,31 +112,6 @@ function orderSides(sides: MatchDetailsSide[]): {
   return {
     leftSide: bySideNumber[0],
     rightSide: bySideNumber[1] ?? null,
-  }
-}
-
-function projectHeadToHead(
-  raw: MatchDetailsH2H | null | undefined,
-  leftSideNumber: number,
-): H2HView | null {
-  if (!raw) return null
-  const swap = leftSideNumber !== 1
-  const recentMeetings: H2HMeetingView[] = raw.recent_meetings.map(
-    (m: MatchDetailsH2HMeeting) => ({
-      matchId: m.match_id,
-      completedAt: m.completed_at,
-      leftGamesWon: swap ? m.side_2_games_won : m.side_1_games_won,
-      rightGamesWon: swap ? m.side_1_games_won : m.side_2_games_won,
-      // API frames winner_side_number against *this* match's sides, which
-      // are also our left/right anchor — no remap needed.
-      winnerSideNumber: m.winner_side_number,
-    }),
-  )
-  return {
-    totalMeetings: raw.total_meetings,
-    leftWins: swap ? raw.side_2_wins : raw.side_1_wins,
-    rightWins: swap ? raw.side_1_wins : raw.side_2_wins,
-    recentMeetings,
   }
 }
 
@@ -234,7 +191,6 @@ function projectMatchView(data: MatchDetails, matchId: string): MatchView {
     leftSide: leftView,
     rightSide: rightView,
     scoreCta,
-    headToHead: projectHeadToHead(data.head_to_head, leftView.sideNumber),
     canConfirm: data.can_confirm,
     resubmitGames,
     viewerIsAwaitingOther,
@@ -388,9 +344,7 @@ function MatchDetailsPage({
           <aside className="md-col-2__aside">
             <MatchInfo matchId={matchId} />
             <Ratings matchId={matchId} />
-            {view.headToHead && (
-              <H2HCard view={view} h2h={view.headToHead} />
-            )}
+            <HeadToHead matchId={matchId} />
           </aside>
         </div>
 
@@ -458,112 +412,6 @@ function Breadcrumb({
       <Link to="/matches">Matches</Link>
       <span>›</span>
       <span className="md-breadcrumb__current">Match {matchId.slice(0, 6)}</span>
-    </div>
-  )
-}
-
-function H2HCard({ view, h2h }: { view: MatchView; h2h: H2HView }) {
-  const leftLabel = view.leftSide.username
-  const rightLabel = view.rightSide?.username ?? 'Opponent'
-  const hasMeetings = h2h.totalMeetings > 0
-  return (
-    <div className="md-card">
-      <div className="md-card__hd">
-        <Overline as="h3">Head to head</Overline>
-        <span className="md-card__hd-meta">
-          {h2h.totalMeetings} {h2h.totalMeetings === 1 ? 'MEETING' : 'MEETINGS'}
-        </span>
-      </div>
-      <div className="md-card__body md-h2h">
-        <div className="md-h2h__counts">
-          <div className="md-h2h__count-label md-h2h__count-label--l">
-            {leftLabel}
-          </div>
-          <div
-            className={cn(
-              'md-h2h__count',
-              'md-h2h__count--l',
-              h2h.leftWins > h2h.rightWins && 'md-h2h__count--win',
-            )}
-          >
-            {h2h.leftWins}
-          </div>
-          <span className="md-h2h__sep">—</span>
-          <div
-            className={cn(
-              'md-h2h__count',
-              'md-h2h__count--r',
-              h2h.rightWins > h2h.leftWins && 'md-h2h__count--win',
-            )}
-          >
-            {h2h.rightWins}
-          </div>
-          <div className="md-h2h__count-label md-h2h__count-label--r">
-            {rightLabel}
-          </div>
-        </div>
-        {hasMeetings ? (
-          <H2HMeetings h2h={h2h} leftSideNumber={view.leftSide.sideNumber} />
-        ) : (
-          <div className="md-h2h__empty">
-            No prior meetings — this match is the start of the rivalry.
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
-
-function H2HMeetings({
-  h2h,
-  leftSideNumber,
-}: {
-  h2h: H2HView
-  leftSideNumber: number
-}) {
-  const totalDecided = h2h.leftWins + h2h.rightWins
-  const leftPct = totalDecided > 0 ? (h2h.leftWins / totalDecided) * 100 : 0
-  const rightPct = totalDecided > 0 ? (h2h.rightWins / totalDecided) * 100 : 0
-  return (
-    <>
-      <div className="md-h2h__bar" aria-hidden="true">
-        <div style={{ width: `${leftPct}%`, background: 'var(--serve-500)' }} />
-        <div style={{ width: `${rightPct}%`, background: 'var(--ink-500)' }} />
-      </div>
-      <div>
-        {h2h.recentMeetings.map((m) => (
-          <H2HRow key={m.matchId} meeting={m} leftSideNumber={leftSideNumber} />
-        ))}
-      </div>
-    </>
-  )
-}
-
-function H2HRow({
-  meeting,
-  leftSideNumber,
-}: {
-  meeting: H2HMeetingView
-  leftSideNumber: number
-}) {
-  const leftWon = meeting.winnerSideNumber === leftSideNumber
-  return (
-    <div className="md-h2h__row">
-      <span className="md-h2h__date">{fmtDateShort(meeting.completedAt)}</span>
-      <span className="md-h2h__label">Match</span>
-      <span
-        className={cn('md-h2h__score', leftWon && 'md-h2h__score--win')}
-      >
-        {meeting.leftGamesWon}–{meeting.rightGamesWon}
-      </span>
-      <span
-        className={cn(
-          'md-h2h__result',
-          leftWon ? 'md-h2h__result--w' : 'md-h2h__result--l',
-        )}
-      >
-        {leftWon ? 'W' : 'L'}
-      </span>
     </div>
   )
 }
