@@ -18,8 +18,9 @@ export type HeadToHeadMeetingView = {
   leftGamesWon: number;
   /** Games won by the right side in that meeting. */
   rightGamesWon: number;
-  /** True when the left side won that meeting — drives the W/L marker tone. */
-  leftWon: boolean;
+  /** True when the left side won, false when the right side won, null when no
+   * winner was recorded (e.g. a voided match where `won` was never set). */
+  leftWon: boolean | null;
 };
 
 /** The "Head to head" sidebar card. Counts and meetings are perspective-ordered
@@ -60,7 +61,9 @@ const selectHeadToHead = (match: MatchDetailsResult): HeadToHeadView | null => {
   const leftLabel = sideLabel(first, viewerIsParticipant ? "You" : "Side 1");
   const rightLabel = second
     ? sideLabel(second, viewerIsParticipant ? "Opponent" : "Side 2")
-    : "Opponent";
+    : viewerIsParticipant
+      ? "Opponent"
+      : "Side 2";
 
   // The API frames game counts and `winner_side_number` against this match's
   // side numbers. When the left anchor is side 2 (viewer is side 2), swap so
@@ -79,7 +82,10 @@ const selectHeadToHead = (match: MatchDetailsResult): HeadToHeadView | null => {
       dateLabel: fmtDateShort(m.completed_at),
       leftGamesWon: swap ? m.side_2_games_won : m.side_1_games_won,
       rightGamesWon: swap ? m.side_1_games_won : m.side_2_games_won,
-      leftWon: m.winner_side_number === leftSideNumber,
+      leftWon:
+        m.winner_side_number === null
+          ? null
+          : m.winner_side_number === leftSideNumber,
     })),
   };
 };

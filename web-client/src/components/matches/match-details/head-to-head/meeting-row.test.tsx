@@ -38,4 +38,16 @@ describe("MeetingRow", () => {
     expect(result).toHaveClass("md-h2h__result--l");
     expect(result).not.toHaveClass("md-h2h__result--w");
   });
+
+  it("shows a neutral dash with no outcome class when winner is unknown", () => {
+    meetingRowPage.render({
+      meeting: buildHeadToHeadMeetingView({ leftWon: null }),
+    });
+
+    expect(meetingRowPage.getScore()).not.toHaveClass("md-h2h__score--win");
+    const result = meetingRowPage.getResult();
+    expect(result).toHaveTextContent(/^–$/);
+    expect(result).not.toHaveClass("md-h2h__result--w");
+    expect(result).not.toHaveClass("md-h2h__result--l");
+  });
 });

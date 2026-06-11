@@ -195,7 +195,7 @@ describe("headToHeadQuery", () => {
     });
   });
 
-  it("falls back to Opponent when the match has no right side", async () => {
+  it("falls back to Opponent when the match has no right side (participant viewer)", async () => {
     headToHeadQueryPage.mockEndpoint(() =>
       HttpResponse.json(matchWithH2H({ sides: [buildMatchDetailsSide()] })),
     );
@@ -206,6 +206,43 @@ describe("headToHeadQuery", () => {
       leftLabel: "rita.kovac",
       rightLabel: "Opponent",
     });
+  });
+
+  it("falls back to Side 2 when the match has no right side and viewer is not a participant", async () => {
+    headToHeadQueryPage.mockEndpoint(() =>
+      HttpResponse.json(
+        matchWithH2H({
+          sides: [
+            buildMatchDetailsSide({ is_current_user_side: false }),
+          ],
+        }),
+      ),
+    );
+
+    const result = await renderH2H();
+
+    expect(result.current.data).toMatchObject({
+      leftLabel: "rita.kovac",
+      rightLabel: "Side 2",
+    });
+  });
+
+  it("maps winner_side_number null to leftWon null (no decided winner)", async () => {
+    headToHeadQueryPage.mockEndpoint(() =>
+      HttpResponse.json(
+        matchWithH2H({
+          head_to_head: buildMatchDetailsH2H({
+            recent_meetings: [
+              buildMatchDetailsH2HMeeting({ winner_side_number: null }),
+            ],
+          }),
+        }),
+      ),
+    );
+
+    const result = await renderH2H();
+
+    expect(result.current.data?.recentMeetings[0].leftWon).toBeNull();
   });
 
   it("orders side 1 left for a non-participant viewer regardless of payload order", async () => {
