@@ -19,7 +19,7 @@ export const HeadToHeadDisplay = ({ headToHead }: HeadToHeadDisplayProps) => {
   // halves always sum to 100% when anything is decided.
   const totalDecided = leftWins + rightWins;
   const leftPct = totalDecided > 0 ? (leftWins / totalDecided) * 100 : 0;
-  const rightPct = totalDecided > 0 ? (rightWins / totalDecided) * 100 : 0;
+  const rightPct = 100 - leftPct;
 
   return (
     <section className="md-card" aria-labelledby={id}>
