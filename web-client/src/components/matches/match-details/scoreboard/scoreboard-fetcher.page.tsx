@@ -8,9 +8,9 @@ import {
 import { server } from "@/mocks/server";
 import { render, screen, type Container } from "@/test/utilities";
 
-import { gameGridPage } from "./game-grid.page";
-import { headingPage } from "./heading.page";
-import { heroRowPage } from "./hero-row.page";
+import { gameGridPage } from "./scoreboard-fetcher/scoreboard-display/game-grid.page";
+import { headingPage } from "./scoreboard-fetcher/scoreboard-display/heading.page";
+import { heroRowPage } from "./scoreboard-fetcher/scoreboard-display/hero-row.page";
 import { ScoreboardFetcher, type ScoreboardProps } from "./scoreboard-fetcher";
 
 const DEFAULT_MATCH_ID = "m-1";

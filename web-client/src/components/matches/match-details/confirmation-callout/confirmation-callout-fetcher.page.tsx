@@ -8,7 +8,7 @@ import {
 import { server } from "@/mocks/server";
 import { render, screen, type Container } from "@/test/utilities";
 
-import { confirmationCalloutDisplayPage } from "./confirmation-callout-display.page";
+import { confirmationCalloutDisplayPage } from "./confirmation-callout-fetcher/confirmation-callout-active/confirmation-callout-display.page";
 import {
   ConfirmationCalloutFetcher,
   type ConfirmationCalloutProps,

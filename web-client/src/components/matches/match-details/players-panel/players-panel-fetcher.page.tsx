@@ -8,7 +8,7 @@ import {
 import { server } from "@/mocks/server";
 import { render, screen, type Container } from "@/test/utilities";
 
-import { playersPanelDisplayPage } from "./players-panel-display.page";
+import { playersPanelDisplayPage } from "./players-panel-fetcher/players-panel-display.page";
 import {
   PlayersPanelFetcher,
   type PlayersPanelProps,

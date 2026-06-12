@@ -19,7 +19,7 @@ import {
   ConfirmationCallout,
   type ConfirmationCalloutProps,
 } from "./confirmation-callout";
-import { confirmationCalloutDisplayPage } from "./confirmation-callout/confirmation-callout-display.page";
+import { confirmationCalloutDisplayPage } from "./confirmation-callout/confirmation-callout-fetcher/confirmation-callout-active/confirmation-callout-display.page";
 
 const DEFAULT_MATCH_ID = "m-1";
 

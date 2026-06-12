@@ -1,7 +1,7 @@
 import { useSuspenseQuery } from "@tanstack/react-query";
 
-import { ConfirmationCalloutActive } from "./confirmation-callout-active";
-import { confirmationCalloutQuery } from "./confirmation-callout-query";
+import { ConfirmationCalloutActive } from "./confirmation-callout-fetcher/confirmation-callout-active";
+import { confirmationCalloutQuery } from "./confirmation-callout-fetcher/confirmation-callout-query";
 
 export interface ConfirmationCalloutProps {
   matchId: string;

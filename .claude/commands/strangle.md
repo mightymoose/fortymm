@@ -16,8 +16,12 @@ strangler quartets` commits (`git log --oneline --grep="strangler"`).
 2. Read the legacy host component and identify the seam: the markup + logic
    that becomes the new component, and the props it needs from the host.
 3. Invoke the `react-component` skill — it defines the quartet layout
-   (`.tsx`, `.page.tsx`, `.factory.tsx`, `.test.tsx`), page-object
-   composition, view models, and MSW mocking. Canonical exemplars live in
+   (`.tsx`, `.page.tsx`, `.factory.tsx`, `.test.tsx`), the recursive
+   supremum directory rule (a component's deps nest in its named subdirectory;
+   shared deps float up to their lowest common ancestor), page-object
+   composition, view models, and MSW mocking. The extracted quartet lands in
+   the host's named subdirectory; if it's shared, place it at the importers'
+   LCA. Canonical exemplar:
    `web-client/src/components/matches/match-details/scoreboard/`.
 4. Replace the extracted markup in the host with the new component; the host's
    page object should compose the new component's page object rather than

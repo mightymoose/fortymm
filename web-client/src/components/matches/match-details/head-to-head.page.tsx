@@ -8,7 +8,7 @@ import { server } from "@/mocks/server";
 import { render, screen, type Container } from "@/test/utilities";
 
 import { HeadToHead, type HeadToHeadProps } from "./head-to-head";
-import { headToHeadDisplayPage } from "./head-to-head/head-to-head-display.page";
+import { headToHeadDisplayPage } from "./head-to-head/head-to-head-fetcher/head-to-head-display.page";
 
 const DEFAULT_MATCH_ID = "m-1";
 

@@ -5,24 +5,72 @@ description: Build or extract React components in web-client/ the fortymm way �
 
 # Building web-client React components
 
-Every component in `web-client/src` ships as a colocated quartet in its feature
-directory. The canonical exemplars live in
-`web-client/src/components/matches/match-details/scoreboard/` — when in doubt,
-open `game-grid-cell.{tsx,page.tsx,factory.tsx,test.tsx}` (leaf component) and
-`game-grid.{tsx,page.tsx,factory.tsx,test.tsx}` (composes the row, which
-composes the cell) and copy their shapes.
+Every component in `web-client/src` ships as a colocated quartet:
 
 ```
-feature-dir/
-├── thing.tsx           # the component — props in, DOM out
-├── thing.page.tsx      # test page object — the only place tests touch the DOM
-├── thing.factory.tsx   # builders for the component's props/view types
-└── thing.test.tsx      # tests, written entirely against the page object
+thing.tsx           # the component — props in, DOM out
+thing.page.tsx      # test page object — the only place tests touch the DOM
+thing.factory.tsx   # builders for the component's props/view types
+thing.test.tsx      # tests, written entirely against the page object
 ```
 
 File names are kebab-case; components are PascalCase named exports (no default
 exports). One component per file — if a component grows a distinct sub-block
 (a row, a chip, a cell), extract it into its own quartet and compose.
+
+## Directory layout: the recursive supremum rule
+
+Quartets are not piled flat in one feature directory — they nest by their
+**dependency graph**. The rule has two halves:
+
+1. **Ownership.** A component `thing.{tsx,…}` lives in directory `D`. Its
+   *private* dependencies — modules used only within the subtree `thing` roots
+   — live in `D/thing/`. Applied recursively, all the way down. So `thing`'s
+   data layers (`thing-query`, `thing-fetcher`, `thing-display`) and child
+   components each sit in the directory of whichever module owns them.
+
+2. **Supremum (LCA).** A module imported by two or more components does **not**
+   sit inside any one of them. It moves to the directory of the **lowest common
+   ancestor** of its importers, taken in the **dependency tree**:
+   - When the topmost importer is itself an ancestor of all the others (a
+     `fetcher` imports its `query`, and so do the `display` and leaves *below*
+     the fetcher), that topmost importer *is* the LCA → the module lives
+     **inside its directory**. So a section's `*-query` lives next to its
+     `*-display`, inside the `*-fetcher/` directory.
+   - When importers sit in divergent subtrees (a `sparkline` used by both a
+     `rating-box` under `players-panel` and a `rating-row` under `ratings`),
+     the LCA is their branch point → the module becomes a sibling there (e.g.
+     the shared `match-details/` root).
+
+Nothing is special-cased: the fetcher is a dependency of the wrapper, the
+display is a dependency of the fetcher, the query is a dependency of the
+fetcher — they nest by import edge exactly like genuine child components.
+
+**Canonical exemplar:** `web-client/src/components/matches/match-details/scoreboard/`.
+The wrapper `scoreboard.tsx` sits at the feature root; below it:
+
+```
+scoreboard/
+  scoreboard-fetcher.{tsx,page.tsx,test.tsx}
+  scoreboard-fetcher/
+    scoreboard-query.{ts,page.tsx,test.ts}     # LCA of its importers = the fetcher
+    scoreboard-display.{tsx,page.tsx,factory.tsx,test.tsx}
+    scoreboard-display/
+      game-grid.{tsx,…}                         # composes the row, which composes the cell
+      game-grid/game-grid-row.{tsx,…}
+      game-grid/game-grid-row/game-grid-cell.{tsx,…}   # leaf component
+      heading.{tsx,…}   heading/status-chip.{tsx,…}
+      hero-row.{tsx,…}  hero-row/hero-player.{tsx,…}  hero-row/hero-score.{tsx,…}
+```
+
+When in doubt, open `game-grid-cell.{tsx,page.tsx,factory.tsx,test.tsx}` (leaf)
+and `game-grid.{…}` (composes the row, which composes the cell) and copy their
+shapes — they're now at
+`scoreboard/scoreboard-fetcher/scoreboard-display/game-grid/…`.
+
+When you extract a sub-block out of a component, the new quartet lands in the
+*parent's* named subdirectory (`parent/child.tsx`); if the extraction turns out
+to be shared by siblings, float it up to their LCA per the supremum rule.
 
 ## The component (`thing.tsx`)
 
@@ -58,7 +106,10 @@ objects reuse it. The shape is always:
 import { render, screen, type Container } from "@/test/utilities";
 import { Thing, type ThingProps } from "./thing";
 import { buildThingProps } from "./thing.factory";
-import { childPage } from "./child.page";
+// A child quartet lives in this component's named subdirectory, so its page
+// object is imported from `./thing/`; a shared module sits at the LCA, reached
+// with `../` (e.g. `../thing-query`). See the supremum rule above.
+import { childPage } from "./thing/child.page";
 
 const scoped = (container: Container) => ({
   /** JSDoc every accessor: what it is, and when it's absent. */
@@ -187,8 +238,18 @@ describe("Thing", () => {
 ## Data-fed components: the query → fetcher → display split
 
 When a component renders server data, split it into layers, each its own
-quartet (exemplar: `scoreboard-query.ts` → `scoreboard-fetcher.tsx` →
-`scoreboard-display.tsx`):
+quartet. The layers are *not* co-located siblings — they nest by the supremum
+rule like everything else: the fetcher is a dependency of the wrapper, the
+display a dependency of the fetcher, and the query lives inside the fetcher's
+directory (its LCA, since the fetcher and everything below it import it). The
+scoreboard exemplar:
+
+```
+scoreboard.tsx                                   # wrapper
+scoreboard/scoreboard-fetcher.tsx                # fetcher
+scoreboard/scoreboard-fetcher/scoreboard-query.ts
+scoreboard/scoreboard-fetcher/scoreboard-display.tsx
+```
 
 1. **Query selector (`thing-query.ts` + `thing-query.test.ts`)** — exports the
    `View` types and a query-options factory built on the page's BFF query

@@ -8,7 +8,7 @@ import {
 import { server } from "@/mocks/server";
 import { render, screen, type Container } from "@/test/utilities";
 
-import { finalizeCalloutDisplayPage } from "./finalize-callout-display.page";
+import { finalizeCalloutDisplayPage } from "./finalize-callout-fetcher/finalize-callout-active/finalize-callout-display.page";
 import {
   FinalizeCalloutFetcher,
   type FinalizeCalloutProps,
