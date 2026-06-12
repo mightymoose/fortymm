@@ -2,6 +2,7 @@ import { type HttpResponseResolver, http } from "msw";
 import type { components } from "@/api/schema";
 import type { server } from "../../server";
 import type { worker } from "../../browser";
+import type { ErrorBody } from "../error-body";
 
 type Backend = typeof server | typeof worker;
 type MatchDetails = components["schemas"]["app__schemas__match__MatchDetails"];
@@ -10,9 +11,7 @@ type MatchResultsWrite = components["schemas"]["MatchResultsWrite"];
 export type MatchResultsResolver = HttpResponseResolver<
   { matchId: string },
   MatchResultsWrite,
-  // The error body lets tests drive the inline failure path (e.g. a 409
-  // `detail`) through the same typed resolver.
-  MatchDetails | { detail: string }
+  MatchDetails | ErrorBody
 >;
 
 export const mockMatchResultsEndpoint = (
