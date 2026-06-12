@@ -1,0 +1,103 @@
+# QA stack — built artifacts, no dev server, isolated volumes.
+#
+# A prod-like stack (same shape as docker-compose.uat.yml) that runs
+# alongside the dev and UAT stacks. Project name `fortymm-qa` keeps
+# networks, containers, and volumes namespaced; `nginx` is the only
+# service with a host port (8085 — UAT holds 8084). Everything else is
+# reachable only on the internal docker network; use `docker exec` for
+# ad-hoc psql/redis-cli access.
+#
+# Bring up:    docker compose -f docker-compose.qa.yml up -d --build
+# Bring down:  docker compose -f docker-compose.qa.yml down
+# Wipe data:   docker compose -f docker-compose.qa.yml down -v
+#
+# Unlike UAT (fronted by host Caddy at uat.fortymm.com), QA is local-only:
+# hit it directly at http://127.0.0.1:8085.
+
+name: fortymm-qa
+
+# api and worker run the same image and load the same secrets; only their
+# environment/command/depends_on differ.
+x-api-service: &api-service
+  build:
+    context: ./api
+    dockerfile: Dockerfile.dev
+  env_file:
+    - .env
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: fortymm
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d fortymm"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  api:
+    <<: *api-service
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/fortymm
+      REDIS_URL: redis://redis:6379/0
+      SESSION_COOKIE_SECURE: "false"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # Same image as dev but no --reload and no source volume mount —
+    # the image's COPY'd /app is what runs. Both seed scripts are
+    # idempotent (seed_rbac.py: additive; seed_leagues.py: upserts the
+    # default league), so chaining them after migrations is safe on
+    # every boot.
+    command: >
+      sh -c "alembic upgrade head &&
+             python scripts/seed_rbac.py &&
+             python scripts/seed_leagues.py &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000"
+
+  worker:
+    <<: *api-service
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/fortymm
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: rq worker --url redis://redis:6379/0 solver email ratings
+
+  web-client:
+    build:
+      context: ./web-client
+      dockerfile: Dockerfile.uat
+    depends_on:
+      - api
+
+  nginx:
+    image: nginx:1.27-alpine
+    ports:
+      - "8085:80"
+    # uat.conf only references internal service names (api:8000,
+    # web-client:80), so it is host-port-agnostic and shared as-is.
+    volumes:
+      - ./nginx/uat.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - api
+      - web-client
+
+volumes:
+  postgres-data:
