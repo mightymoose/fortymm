@@ -44,6 +44,58 @@ const decidedMatch = () =>
     can_score: false,
   });
 
+describe("MatchDetails — confirmation-callout seam", () => {
+  it("renders the confirmation callout when the viewer can confirm", async () => {
+    // Wiring only: callout content and the confirm/dispute flows are pinned
+    // by the confirmation-callout quartet's own tests.
+    matchDetailsPage.mockMatch("m-1", {
+      ...decidedMatch(),
+      status: "in_progress",
+      status_label: "Awaiting confirmation",
+      can_confirm: true,
+    });
+
+    matchDetailsPage.render("m-1");
+
+    await waitFor(() =>
+      expect(
+        matchDetailsPage.confirmationCallout.getCallout(),
+      ).toBeInTheDocument(),
+    );
+  });
+});
+
+describe("MatchDetails — finalize-callout seam", () => {
+  it("renders the finalize callout for a finalizable board", async () => {
+    // Wiring only: callout content and the post flow are pinned by the
+    // finalize-callout quartet's own tests.
+    matchDetailsPage.mockMatch("m-1", {
+      ...decidedMatch(),
+      status: "in_progress",
+      status_label: "Live",
+      can_finalize: true,
+      games: [
+        {
+          id: "g1",
+          game_number: 1,
+          score: {
+            id: "s1",
+            side_1_points: 11,
+            side_2_points: 4,
+            winner_side_number: 1,
+          },
+        },
+      ],
+    });
+
+    matchDetailsPage.render("m-1");
+
+    await waitFor(() =>
+      expect(matchDetailsPage.finalizeCallout.getCallout()).toBeInTheDocument(),
+    );
+  });
+});
+
 describe("MatchDetails — scoreboard seam", () => {
   it("wraps the hero in a region named by the live scoreboard outcome", async () => {
     matchDetailsPage.mockMatch("m-1", decidedMatch());

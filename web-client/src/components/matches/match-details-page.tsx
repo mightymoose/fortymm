@@ -1,177 +1,33 @@
-import { useEffect, useRef, useState } from 'react'
 import { Link, useRouter } from '@tanstack/react-router'
-import {
-  Check,
-  Copy,
-  Download,
-  Link2,
-  Send,
-  Share2,
-  X,
-} from 'lucide-react'
 
+import { ConfirmationCallout } from './match-details/confirmation-callout'
+import { FinalizeCallout } from './match-details/finalize-callout'
 import { HeadToHead } from './match-details/head-to-head'
 import { MatchInfo } from './match-details/match-info'
 import { PlayersPanel } from './match-details/players-panel'
 import { Ratings } from './match-details/ratings'
 import { Scoreboard } from './match-details/scoreboard'
 import { AppShell } from '@/components/app-shell'
-import { Overline } from '@/components/overline'
-import {
-  scoringNewRoute,
-  useConfirmMatch,
-  useDisputeMatch,
-  useFinalizeMatch,
-  useMatch,
-} from '@/api/matches'
+import { scoringNewRoute, useMatch } from '@/api/matches'
 import type { components } from '@/api/schema'
 import { ApiError } from '@/api/client'
 
 import { SaveYourMatch } from './save-your-match'
 
 type MatchDetails = components['schemas']['app__schemas__match__MatchDetails']
-type MatchResultsGameWrite = components['schemas']['MatchResultsGameWrite']
-type MatchDetailsSide = components['schemas']['MatchDetailsSide']
 
-type HeroState = 'live' | 'final' | 'upcoming'
-
-type SideView = {
-  sideNumber: number
-  username: string
-}
-
+// What's left of the legacy page-level projection now that every section is a
+// self-fetching quartet: just the header's "Score" CTA target.
 export type MatchView = {
-  statusLabel: string
-  bestOf: number
-  gamesToWin: number
-  rated: boolean
-  // Left/right are perspective-relative: when the current user is on a side
-  // they're left; otherwise left = side 1, right = side 2.
-  leftSide: SideView
-  rightSide: SideView | null
   scoreCta: { matchId: string; gameNumber: number } | null
-  // True when the caller can hit either ``POST /confirmation`` or
-  // ``POST /dispute`` — surfaces the Confirm / Dispute CTAs.
-  canConfirm: boolean
-  // The canonical games to re-post when the saved scores form a decided, valid,
-  // unsigned match (i.e. `can_finalize`). Non-null drives the "Post result"
-  // callout, which doubles as the one-click resubmit after a mistaken dispute;
-  // null when there's nothing postable.
-  resubmitGames: MatchResultsGameWrite[] | null
-  // True when there's at least one signature AND the current user is among
-  // the signers — surfaces the passive "Awaiting <opponent>'s confirmation"
-  // indicator (we already signed; waiting on the other side).
-  viewerIsAwaitingOther: boolean
-  // The user whose signature we're waiting on, for the passive label. Null
-  // when there's no posted result, or when the viewer isn't a participant.
-  pendingSignerName: string | null
-}
-
-function projectSide(side: MatchDetailsSide, fallbackLabel: string): SideView {
-  const player = side.players[0]
-  return {
-    sideNumber: side.side_number,
-    username: player?.username ?? fallbackLabel,
-  }
-}
-
-function orderSides(sides: MatchDetailsSide[]): {
-  leftSide: MatchDetailsSide
-  rightSide: MatchDetailsSide | null
-} {
-  const bySideNumber = [...sides].sort(
-    (a, b) => a.side_number - b.side_number,
-  )
-  const mine = bySideNumber.find((s) => s.is_current_user_side)
-  if (mine) {
-    const opp = bySideNumber.find((s) => !s.is_current_user_side) ?? null
-    return { leftSide: mine, rightSide: opp }
-  }
-  return {
-    leftSide: bySideNumber[0],
-    rightSide: bySideNumber[1] ?? null,
-  }
 }
 
 function projectMatchView(data: MatchDetails, matchId: string): MatchView {
-  // Hero state comes from the new scoreboard view model (data.data.scoreboard),
-  // which collapses the lifecycle to the same scheduled/live/final buckets the
-  // matches list uses — so disputed/voided read as `final`, not `upcoming`.
-  const state: HeroState =
-    data.data.scoreboard.status === 'live'
-      ? 'live'
-      : data.data.scoreboard.status === 'final'
-        ? 'final'
-        : 'upcoming'
-  const { leftSide, rightSide } = orderSides(data.sides)
-  const viewerIsParticipant = leftSide.is_current_user_side
-  const leftLabel = viewerIsParticipant ? 'You' : 'Side 1'
-  const rightLabel = viewerIsParticipant ? 'Opponent' : 'Side 2'
-  const leftView = projectSide(leftSide, leftLabel)
-  const rightView = rightSide ? projectSide(rightSide, rightLabel) : null
   const scoreCta =
     data.can_score && data.current_game
       ? { matchId, gameNumber: data.current_game.game_number }
       : null
-
-  // Awaiting-confirmation indicator: which side hasn't signed yet, surfaced
-  // by username for the passive "Awaiting <opp>" copy when the viewer has
-  // already signed. Null when there's no posted result, or the viewer can't
-  // see this state (anonymous, non-participant, etc.).
-  //
-  // Gated on the live (``in_progress``) state: a posted result keeps the match
-  // in_progress until the other side signs, at which point /confirmation flips
-  // it to ``completed``. Once finalized (or disputed/voided) the signatures
-  // still exist, so without this status check the passive notice would linger
-  // above a Final match — even across a reload. See #358.
-  const signers = new Set(data.signatures.map((sig) => sig.user_id))
-  const viewerUserId = viewerIsParticipant
-    ? (leftSide.players[0]?.user_id ?? null)
-    : null
-  const viewerHasSigned =
-    viewerUserId !== null && signers.has(viewerUserId)
-  const viewerIsAwaitingOther =
-    state === 'live' &&
-    viewerIsParticipant &&
-    data.signatures.length > 0 &&
-    viewerHasSigned
-  // Find the participant who's missing from the signature set. With "at
-  // least one player per side" semantics, this picks the first un-signed
-  // player on the other side. Falls back to "your opponent" if we can't
-  // resolve a name.
-  let pendingSignerName: string | null = null
-  if (viewerIsAwaitingOther && rightSide) {
-    const missing = rightSide.players.find((p) => !signers.has(p.user_id))
-    pendingSignerName = missing?.username ?? 'your opponent'
-  }
-
-  // The canonical games to re-post when the board is decided but unsigned.
-  // Built from the saved (perspective-agnostic) side-1/side-2 scores so a
-  // one-click "Post result" sends exactly what's on the board.
-  const resubmitGames: MatchResultsGameWrite[] | null = data.can_finalize
-    ? data.games
-        .filter((g) => g.score)
-        .sort((a, b) => a.game_number - b.game_number)
-        .map((g) => ({
-          game_number: g.game_number,
-          side_1_points: g.score!.side_1_points,
-          side_2_points: g.score!.side_2_points,
-        }))
-    : null
-
-  return {
-    statusLabel: data.status_label,
-    bestOf: data.best_of,
-    gamesToWin: data.games_to_win,
-    rated: data.affects_rating,
-    leftSide: leftView,
-    rightSide: rightView,
-    scoreCta,
-    canConfirm: data.can_confirm,
-    resubmitGames,
-    viewerIsAwaitingOther,
-    pendingSignerName,
-  }
+  return { scoreCta }
 }
 
 export function MatchDetailsView({
@@ -270,11 +126,6 @@ function MatchDetailsPage({
   matchId: string
   standalone: boolean
 }) {
-  const [shareOpen, setShareOpen] = useState(false)
-  // Comments + share modal are still part of the design handoff but have no
-  // real data behind them yet; gate them off and flip when each lands.
-  const showAuxCards = false
-
   return (
     <div className="match-details">
       <main className="md-page md-page--y">
@@ -292,21 +143,12 @@ function MatchDetailsPage({
                 Score
               </Link>
             )}
-            {showAuxCards && (
-              <button
-                type="button"
-                className="md-btn md-btn--ghost md-btn--sm"
-                onClick={() => setShareOpen(true)}
-              >
-                <Share2 size={14} /> Share
-              </button>
-            )}
           </div>
         </div>
 
-        <ConfirmationCallout view={view} matchId={matchId} />
+        <ConfirmationCallout matchId={matchId} />
 
-        <FinalizeCallout view={view} matchId={matchId} />
+        <FinalizeCallout matchId={matchId} />
 
         <SaveYourMatch key={matchId} matchId={matchId} />
 
@@ -315,7 +157,6 @@ function MatchDetailsPage({
         <div className="md-col-2">
           <div className="md-col-2__main">
             <PlayersPanel matchId={matchId} />
-            {showAuxCards && <CommentsCard />}
           </div>
           <aside className="md-col-2__aside">
             <MatchInfo matchId={matchId} />
@@ -336,10 +177,6 @@ function MatchDetailsPage({
           </div>
         </footer>
       </main>
-
-      {showAuxCards && (
-        <ShareModal open={shareOpen} onClose={() => setShareOpen(false)} />
-      )}
     </div>
   )
 }
@@ -389,268 +226,5 @@ function Breadcrumb({
       <span>›</span>
       <span className="md-breadcrumb__current">Match {matchId.slice(0, 6)}</span>
     </div>
-  )
-}
-
-function CommentsCard() {
-  return null
-}
-
-function ConfirmationCallout({
-  view,
-  matchId,
-}: {
-  view: MatchView
-  matchId: string
-}) {
-  const confirmMutation = useConfirmMatch(matchId)
-  const disputeMutation = useDisputeMatch(matchId)
-  const pending = confirmMutation.isPending || disputeMutation.isPending
-  // Without throwOnError, a 409 (race: opponent confirmed/disputed first,
-  // user double-clicked, etc.) would otherwise vanish — surface it inline
-  // so the button doesn't appear inert.
-  const mutationError =
-    (confirmMutation.error instanceof ApiError
-      ? confirmMutation.error
-      : null) ??
-    (disputeMutation.error instanceof ApiError ? disputeMutation.error : null)
-
-  if (view.canConfirm) {
-    return (
-      <section
-        className="md-confirm-callout md-confirm-callout--featured"
-        data-testid="match-confirm-callout"
-      >
-        <div className="md-confirm-callout__copy">
-          <div className="md-confirm-callout__kicker">
-            <span className="ball-dot" aria-hidden="true" /> Posted result ·
-            awaiting your sign-off
-          </div>
-          <h3 className="md-confirm-callout__headline">
-            Confirm the result to finalize this match.
-          </h3>
-          <p className="md-confirm-callout__body">
-            Your opponent has posted the result below. Confirm if the scores
-            are right, or dispute to send the match back to in-progress so the
-            wrong game can be re-scored.
-          </p>
-          {mutationError && (
-            <p
-              role="alert"
-              className="mt-1.5 text-xs text-[color:var(--loss)]"
-            >
-              {mutationError.detail ?? mutationError.message}
-            </p>
-          )}
-        </div>
-        <div className="md-confirm-callout__actions">
-          <button
-            type="button"
-            className="md-btn md-btn--ghost"
-            disabled={pending}
-            onClick={() => {
-              confirmMutation.reset()
-              disputeMutation.mutate()
-            }}
-          >
-            {disputeMutation.isPending ? 'Disputing…' : 'Dispute'}
-          </button>
-          <button
-            type="button"
-            className="md-btn md-btn--primary"
-            disabled={pending}
-            onClick={() => {
-              disputeMutation.reset()
-              confirmMutation.mutate()
-            }}
-          >
-            {confirmMutation.isPending ? 'Confirming…' : 'Confirm result'}
-          </button>
-        </div>
-      </section>
-    )
-  }
-
-  if (view.viewerIsAwaitingOther && view.pendingSignerName) {
-    return (
-      <section
-        className="md-confirm-callout md-confirm-callout--passive"
-        data-testid="match-confirm-callout"
-      >
-        <div className="md-confirm-callout__copy">
-          <Overline as="h3">Posted · awaiting confirmation</Overline>
-          <p className="md-confirm-callout__body">
-            You've signed off on this result. Waiting on{' '}
-            <strong>{view.pendingSignerName}</strong> to confirm or dispute
-            before the match is finalized.
-          </p>
-        </div>
-      </section>
-    )
-  }
-
-  return null
-}
-
-function FinalizeCallout({
-  view,
-  matchId,
-}: {
-  view: MatchView
-  matchId: string
-}) {
-  const finalizeMutation = useFinalizeMatch(matchId)
-  // Only a participant on a decided-but-unsigned board gets here (the backend
-  // gates `can_finalize` on participation + validity + no signature). This is
-  // the recovery path for scores entered then left unposted, and the one-click
-  // resubmit after a mistaken dispute — the scratchpad scores survive a
-  // dispute, so re-posting them unchanged drops back into the sign-off flow.
-  if (!view.resubmitGames) return null
-  const games = view.resubmitGames
-  const error =
-    finalizeMutation.error instanceof ApiError ? finalizeMutation.error : null
-  return (
-    <section
-      className="md-confirm-callout md-confirm-callout--featured"
-      data-testid="match-finalize-callout"
-    >
-      <div className="md-confirm-callout__copy">
-        <div className="md-confirm-callout__kicker">
-          <span className="ball-dot" aria-hidden="true" /> Scores ready · not
-          yet posted
-        </div>
-        <h3 className="md-confirm-callout__headline">
-          Post this result for your opponent to confirm.
-        </h3>
-        <p className="md-confirm-callout__body">
-          These scores already decide the match but haven't been posted. Post
-          them as-is to send the result for sign-off, or edit any game in the
-          scoreboard below first.
-        </p>
-        {error && (
-          <p role="alert" className="mt-1.5 text-xs text-[color:var(--loss)]">
-            {error.detail ?? error.message}
-          </p>
-        )}
-      </div>
-      <div className="md-confirm-callout__actions">
-        <button
-          type="button"
-          className="md-btn md-btn--primary"
-          disabled={finalizeMutation.isPending}
-          onClick={() => {
-            finalizeMutation.reset()
-            finalizeMutation.mutate({ games })
-          }}
-        >
-          {finalizeMutation.isPending ? 'Posting…' : 'Post result'}
-        </button>
-      </div>
-    </section>
-  )
-}
-
-function ShareModal({
-  open,
-  onClose,
-}: {
-  open: boolean
-  onClose: () => void
-}) {
-  const [copied, setCopied] = useState(false)
-  const copyResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const url = typeof window !== 'undefined' ? window.location.href : ''
-
-  useEffect(() => {
-    if (!open) return
-    function onKey(e: KeyboardEvent) {
-      if (e.key === 'Escape') onClose()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [open, onClose])
-
-  useEffect(
-    () => () => {
-      if (copyResetTimer.current) clearTimeout(copyResetTimer.current)
-    },
-    [],
-  )
-
-  if (!open) return null
-
-  async function copy() {
-    try {
-      await navigator.clipboard.writeText(url)
-    } catch {
-      // Best-effort fallback; ignore the failure.
-    }
-    setCopied(true)
-    if (copyResetTimer.current) clearTimeout(copyResetTimer.current)
-    copyResetTimer.current = setTimeout(() => setCopied(false), 2200)
-  }
-
-  return (
-    <div className="md-modal-scrim" onClick={onClose}>
-      <div className="md-modal" onClick={(e) => e.stopPropagation()}>
-        <div className="md-modal__hd">
-          <div>
-            <div className="md-kicker">● Share match</div>
-            <div className="md-modal__title" style={{ marginTop: 4 }}>
-              One link. Anyone can view.
-            </div>
-          </div>
-          <button
-            type="button"
-            className="md-btn md-btn--ghost md-btn--icon md-btn--sm"
-            onClick={onClose}
-            aria-label="Close"
-          >
-            <X size={14} />
-          </button>
-        </div>
-        <div className="md-modal__body">
-          <div className="md-modal__url-row">
-            <div className="md-modal__url">{url}</div>
-            <button
-              type="button"
-              className="md-btn md-btn--primary"
-              onClick={copy}
-            >
-              {copied ? (
-                <><Check size={14} /> Copied</>
-              ) : (
-                <><Copy size={14} /> Copy</>
-              )}
-            </button>
-          </div>
-          <div className="md-modal__tiles">
-            <ShareTile icon={<Send size={16} />} label="Post on X" hint="" />
-            <ShareTile icon={<Link2 size={16} />} label="Embed" hint="iframe" />
-            <ShareTile icon={<Download size={16} />} label="Save PNG" hint="" />
-          </div>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function ShareTile({
-  icon,
-  label,
-  hint,
-}: {
-  icon: React.ReactNode
-  label: string
-  hint: string
-}) {
-  return (
-    <button type="button" className="md-share-tile">
-      {icon}
-      <div style={{ textAlign: 'left' }}>
-        <div className="md-share-tile__label">{label}</div>
-        <div className="md-share-tile__hint">{hint}</div>
-      </div>
-    </button>
   )
 }
