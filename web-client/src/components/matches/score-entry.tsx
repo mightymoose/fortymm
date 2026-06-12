@@ -356,7 +356,9 @@ function ScoreEntryInner({
     ? `Edit game ${gameNumber} score.`
     : `Enter game ${gameNumber} score.`
   const subtitle = wouldFinalize
-    ? 'This score finishes the match — submitting posts the result for your opponent to confirm.'
+    ? data.affects_rating
+      ? 'This score finishes the match — submitting posts the result for your opponent to confirm.'
+      : 'This score finishes the match — submitting will finalize the result immediately.'
     : isEdit
       ? 'Save updates the score for this game.'
       : gameNumber < bestOf
@@ -364,8 +366,8 @@ function ScoreEntryInner({
         : 'Final game. Save to post the result.'
   const submitLabel = wouldFinalize
     ? finalizeMutation.isPending
-      ? 'Posting result…'
-      : 'Post result'
+      ? data.affects_rating ? 'Posting result…' : 'Finalizing…'
+      : data.affects_rating ? 'Post result' : 'Finalize result'
     : isEdit
       ? 'Save changes →'
       : gameNumber < bestOf
