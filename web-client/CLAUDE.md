@@ -1,5 +1,28 @@
 # web-client
 
+## Architecture
+
+**Routing is file-based and generated.** `src/routes/*.tsx` files are compiled
+into `routeTree.gen.ts` by the `@tanstack/router-plugin/vite` plugin. Don't
+edit `routeTree.gen.ts` by hand.
+
+**MSW only intercepts in `import.meta.env.DEV`.** See `src/main.tsx` (and the
+`VITE_ENABLE_MSW=false` escape hatch for hitting a real API). The vitest setup
+(`src/test/setup.ts`) uses the Node MSW server with
+`onUnhandledRequest: 'error'` — every fetch in a test must have a matching
+handler in `src/mocks/handlers.ts` (or one added via `server.use(...)`).
+Production builds never load MSW.
+
+**`VITE_API_URL`** overrides the API base URL; otherwise the client uses
+`window.location.origin`. In dev that means MSW handles everything; in the
+compose stack the web origin is also where nginx proxies the API.
+
+## Conventions
+
+- Path alias: `@/*` → `src/*` (see `vite.config.ts`, `components.json`).
+- shadcn components go under `src/components/ui` (configured in
+  `components.json`).
+
 ## Design system
 
 Prefer the shared design-system components in `src/components/ui` (showcased on

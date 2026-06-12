@@ -19,6 +19,29 @@ change, run from `api/`:
 3. `mypy` — strict type check; settings live in `pyproject.toml`
 4. `pytest` — tests (needs Docker for testcontainers)
 
+## Architecture
+
+**Solver health is a real round-trip.** `GET /v1/health` enqueues a job on the
+`solver` RQ queue and waits up to 10s for a worker to solve a tiny CP-SAT
+problem (`app/solver.py:solve_hello_world`). With no worker running, health
+fails. Tests sidestep this by replacing the queue with `fakeredis` +
+synchronous RQ in `tests/conftest.py` (`fake_solver_queue` autouse fixture).
+
+**Ephemeral, cookie-based sessions.** `GET /v1/session` creates a `User` +
+`UserToken` (sha256-hashed) on first hit and sets an HTTP-only `session`
+cookie; subsequent hits resolve the user from that cookie. Tokens are
+namespaced by `context` so a single user table can back multiple credential
+types later. `SESSION_COOKIE_SECURE` defaults true; set to `false` for local
+non-HTTPS dev (compose already does this).
+
+**Alembic discovers models via `app.models` import.** `migrations/env.py` and
+`tests/conftest.py` both import `app.models` for the side effect of
+registering on `Base.metadata`. New model files must be re-exported from
+`app/models/__init__.py` or autogenerate will miss them.
+
+**Tests** use async pytest (`asyncio_mode = "auto"`, session-scoped loop) and
+the `db_session` fixture, which truncates all tables after each test.
+
 ## Datetimes are timezone-aware, always
 
 - **Migrations:** every `sa.Column(..., sa.DateTime(...), ...)` must use
