@@ -1,5 +1,5 @@
 ---
-description: Ship the current branch end-to-end — run /simplify, all test suites, push, then kick off /review.
+description: Ship the current branch end-to-end — run /simplify, all test suites, commit, push, open a PR, /code-review and /qa-review it, then merge if everything passes (raising any issues to the user first).
 ---
 
 End-to-end "ship it" workflow for the current branch. Run the steps below **in order**. If any step fails, stop and report the failure to the user — do not skip ahead.
@@ -33,24 +33,51 @@ Run each suite the project ships. Use the project root as cwd. Run independent s
 
 If any suite fails: stop, report the failure, do not push.
 
-## Step 3 — Push
+## Step 3 — Commit & push
 
 Only after every suite is green:
 
-1. `git push -u origin HEAD` (the `-u` is a no-op if already tracking).
-2. If the push is rejected because the remote moved, **do not** force-push. Pull/rebase, re-run tests, then push.
-3. Never use `--no-verify`, `--force-with-lease`, or `--force` here unless the user explicitly asks for it.
+1. Commit the branch's work. Run `git status`; if anything is uncommitted (the branch changes, plus any `simplify` / schema-regen edits from Steps 1–2), stage and commit it with a clear message describing the change. Pre-existing changes unrelated to this branch that you flagged in Preflight stay out of the commit unless the user said to include them.
+2. `git push -u origin HEAD` (the `-u` is a no-op if already tracking).
+3. If the push is rejected because the remote moved, **do not** force-push. Pull/rebase, re-run tests, then push.
+4. Never use `--no-verify`, `--force-with-lease`, or `--force` here unless the user explicitly asks for it.
 
-## Step 4 — Code review
+## Step 4 — Open a PR
 
-Invoke the `review` skill on the current branch:
+Create a pull request for the branch with `gh pr create`. Write a title and body that summarize the change and its testing (you already know the diff and which suites passed). Target `main` unless the user said otherwise. Capture the PR URL/number from the output — you need it for Step 5. If a PR for this branch already exists, reuse it (`gh pr view`) rather than creating a duplicate.
+
+## Step 5 — Code review
+
+Invoke the `code-review:code-review` skill on the PR you just opened:
 
 ```
-Skill(skill="review")
+Skill(skill="code-review:code-review")
 ```
 
-If `review` surfaces issues, report them to the user — do not auto-fix without acknowledgement, since simplify + tests already passed and any further edits would need their own re-test/push cycle.
+- **If it surfaces issues:** stop and raise them to the user. Ask what they want to do (e.g. fix now, fix later, or proceed anyway). Do **not** auto-fix without acknowledgement — simplify + tests already passed and any further edits need their own re-test/push cycle. Only continue to Step 6 once the user has decided; if they choose to fix first, that resets the workflow (re-run the relevant suites and re-push before resuming).
+- **If it's clean:** continue to Step 6.
+
+## Step 6 — QA review
+
+Run the `qa-review` workflow — the adversarial "Quinn" black-box pass against the prod-like QA stack:
+
+```
+Skill(skill="qa-review")
+```
+
+- **If Quinn finds bugs:** relay the bug report (with screenshots via SendUserFile) and raise them to the user. Ask what they want to do. Do **not** auto-fix without acknowledgement.
+- **If it's clean:** continue to Step 7.
+
+## Step 7 — Merge
+
+Only reach this step if **every** prior step passed clean — green tests, no code-review issues, no QA bugs (or the user explicitly chose to proceed despite something). Merge the PR:
+
+```bash
+gh pr merge --squash --delete-branch
+```
+
+Use `--squash` unless the user asked for a different merge strategy. If the merge is blocked (required checks still running, conflicts, branch protection), report exactly why and stop — do not override protections.
 
 ## Reporting
 
-End with a single-line summary listing: simplify outcome, each suite's result, push status, and review outcome. Keep it terse — the user can read the diff.
+End with a single-line summary listing: simplify outcome, each suite's result, commit + push status, the PR URL, code-review outcome, QA-review verdict, and merge status. Keep it terse — the user can read the diff.

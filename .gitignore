@@ -5,3 +5,4 @@ node_modules/
 .tanstack/
 
 secrets
+.qa-review/
