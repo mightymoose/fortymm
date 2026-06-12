@@ -1,7 +1,7 @@
 import { useSuspenseQuery } from "@tanstack/react-query";
 
-import { RatingsDisplay } from "./ratings-display";
-import { ratingsQuery } from "./ratings-query";
+import { RatingsDisplay } from "./ratings-fetcher/ratings-display";
+import { ratingsQuery } from "./ratings-fetcher/ratings-query";
 
 export interface RatingsProps {
   matchId: string;

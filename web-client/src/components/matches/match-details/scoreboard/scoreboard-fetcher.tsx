@@ -1,6 +1,6 @@
 import { useSuspenseQuery } from '@tanstack/react-query'
-import { scoreboardQuery } from './scoreboard-query'
-import { ScoreboardDisplay } from './scoreboard-display';
+import { scoreboardQuery } from './scoreboard-fetcher/scoreboard-query'
+import { ScoreboardDisplay } from './scoreboard-fetcher/scoreboard-display';
 
 export interface ScoreboardProps {
     matchId: string;

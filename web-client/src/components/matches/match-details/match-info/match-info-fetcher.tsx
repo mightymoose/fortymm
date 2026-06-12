@@ -1,7 +1,7 @@
 import { useSuspenseQuery } from "@tanstack/react-query";
 
-import { MatchInfoDisplay } from "./match-info-display";
-import { matchInfoQuery } from "./match-info-query";
+import { MatchInfoDisplay } from "./match-info-fetcher/match-info-display";
+import { matchInfoQuery } from "./match-info-fetcher/match-info-query";
 
 export interface MatchInfoProps {
   matchId: string;

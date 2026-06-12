@@ -8,7 +8,7 @@ import {
 import { server } from "@/mocks/server";
 import { render, screen, type Container } from "@/test/utilities";
 
-import { matchInfoDisplayPage } from "./match-info-display.page";
+import { matchInfoDisplayPage } from "./match-info-fetcher/match-info-display.page";
 import { MatchInfoFetcher, type MatchInfoProps } from "./match-info-fetcher";
 
 const DEFAULT_MATCH_ID = "m-1";

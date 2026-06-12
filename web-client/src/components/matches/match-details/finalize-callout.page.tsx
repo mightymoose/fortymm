@@ -12,7 +12,7 @@ import { server } from "@/mocks/server";
 import { render, screen, type Container } from "@/test/utilities";
 
 import { FinalizeCallout, type FinalizeCalloutProps } from "./finalize-callout";
-import { finalizeCalloutDisplayPage } from "./finalize-callout/finalize-callout-display.page";
+import { finalizeCalloutDisplayPage } from "./finalize-callout/finalize-callout-fetcher/finalize-callout-active/finalize-callout-display.page";
 
 const DEFAULT_MATCH_ID = "m-1";
 

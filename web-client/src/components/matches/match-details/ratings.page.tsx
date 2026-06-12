@@ -8,7 +8,7 @@ import { server } from "@/mocks/server";
 import { render, screen, type Container } from "@/test/utilities";
 
 import { Ratings, type RatingsProps } from "./ratings";
-import { ratingsDisplayPage } from "./ratings/ratings-display.page";
+import { ratingsDisplayPage } from "./ratings/ratings-fetcher/ratings-display.page";
 
 const DEFAULT_MATCH_ID = "m-1";
 

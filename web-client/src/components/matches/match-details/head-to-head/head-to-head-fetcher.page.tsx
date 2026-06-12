@@ -8,7 +8,7 @@ import {
 import { server } from "@/mocks/server";
 import { render, screen, type Container } from "@/test/utilities";
 
-import { headToHeadDisplayPage } from "./head-to-head-display.page";
+import { headToHeadDisplayPage } from "./head-to-head-fetcher/head-to-head-display.page";
 import {
   HeadToHeadFetcher,
   type HeadToHeadProps,

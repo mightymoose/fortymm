@@ -8,7 +8,7 @@ import { server } from "@/mocks/server";
 import { render, screen, type Container } from "@/test/utilities";
 
 import { PlayersPanel, type PlayersPanelProps } from "./players-panel";
-import { playersPanelDisplayPage } from "./players-panel/players-panel-display.page";
+import { playersPanelDisplayPage } from "./players-panel/players-panel-fetcher/players-panel-display.page";
 
 const DEFAULT_MATCH_ID = "m-1";
 

@@ -1,7 +1,7 @@
 import { useSuspenseQuery } from "@tanstack/react-query";
 
-import { HeadToHeadDisplay } from "./head-to-head-display";
-import { headToHeadQuery } from "./head-to-head-query";
+import { HeadToHeadDisplay } from "./head-to-head-fetcher/head-to-head-display";
+import { headToHeadQuery } from "./head-to-head-fetcher/head-to-head-query";
 
 export interface HeadToHeadProps {
   matchId: string;

@@ -1,7 +1,7 @@
 import { useSuspenseQuery } from "@tanstack/react-query";
 
-import { FinalizeCalloutActive } from "./finalize-callout-active";
-import { finalizeCalloutQuery } from "./finalize-callout-query";
+import { FinalizeCalloutActive } from "./finalize-callout-fetcher/finalize-callout-active";
+import { finalizeCalloutQuery } from "./finalize-callout-fetcher/finalize-callout-query";
 
 export interface FinalizeCalloutProps {
   matchId: string;
