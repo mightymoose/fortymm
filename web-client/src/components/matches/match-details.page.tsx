@@ -16,6 +16,7 @@ import {
   MatchDetailsView,
 } from "@/components/matches/match-details-page";
 
+import { finalizeCalloutPage } from "./match-details/finalize-callout.page";
 import { scoreboardPage } from "./match-details/scoreboard.page";
 
 type MatchDetailsResponse = Parameters<typeof HttpResponse.json>[0];
@@ -96,4 +97,10 @@ export const matchDetailsPage = {
    * the only named region on the page, so screen-level scoping resolves to it.
    */
   scoreboard: scoreboardPage.within(screen),
+
+  /**
+   * The "Post result" callout is rendered through the self-fetching
+   * `FinalizeCallout` wrapper — reuse its page object's callout queries.
+   */
+  finalizeCallout: finalizeCalloutPage.within(screen),
 };

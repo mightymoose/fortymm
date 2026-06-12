@@ -1,5 +1,6 @@
 import { Link, useRouter } from '@tanstack/react-router'
 
+import { FinalizeCallout } from './match-details/finalize-callout'
 import { HeadToHead } from './match-details/head-to-head'
 import { MatchInfo } from './match-details/match-info'
 import { PlayersPanel } from './match-details/players-panel'
@@ -11,7 +12,6 @@ import {
   scoringNewRoute,
   useConfirmMatch,
   useDisputeMatch,
-  useFinalizeMatch,
   useMatch,
 } from '@/api/matches'
 import type { components } from '@/api/schema'
@@ -20,7 +20,6 @@ import { ApiError } from '@/api/client'
 import { SaveYourMatch } from './save-your-match'
 
 type MatchDetails = components['schemas']['app__schemas__match__MatchDetails']
-type MatchResultsGameWrite = components['schemas']['MatchResultsGameWrite']
 type MatchDetailsSide = components['schemas']['MatchDetailsSide']
 
 type HeroState = 'live' | 'final' | 'upcoming'
@@ -43,11 +42,6 @@ export type MatchView = {
   // True when the caller can hit either ``POST /confirmation`` or
   // ``POST /dispute`` — surfaces the Confirm / Dispute CTAs.
   canConfirm: boolean
-  // The canonical games to re-post when the saved scores form a decided, valid,
-  // unsigned match (i.e. `can_finalize`). Non-null drives the "Post result"
-  // callout, which doubles as the one-click resubmit after a mistaken dispute;
-  // null when there's nothing postable.
-  resubmitGames: MatchResultsGameWrite[] | null
   // True when there's at least one signature AND the current user is among
   // the signers — surfaces the passive "Awaiting <opponent>'s confirmation"
   // indicator (we already signed; waiting on the other side).
@@ -135,20 +129,6 @@ function projectMatchView(data: MatchDetails, matchId: string): MatchView {
     pendingSignerName = missing?.username ?? 'your opponent'
   }
 
-  // The canonical games to re-post when the board is decided but unsigned.
-  // Built from the saved (perspective-agnostic) side-1/side-2 scores so a
-  // one-click "Post result" sends exactly what's on the board.
-  const resubmitGames: MatchResultsGameWrite[] | null = data.can_finalize
-    ? data.games
-        .filter((g) => g.score)
-        .sort((a, b) => a.game_number - b.game_number)
-        .map((g) => ({
-          game_number: g.game_number,
-          side_1_points: g.score!.side_1_points,
-          side_2_points: g.score!.side_2_points,
-        }))
-    : null
-
   return {
     statusLabel: data.status_label,
     bestOf: data.best_of,
@@ -158,7 +138,6 @@ function projectMatchView(data: MatchDetails, matchId: string): MatchView {
     rightSide: rightView,
     scoreCta,
     canConfirm: data.can_confirm,
-    resubmitGames,
     viewerIsAwaitingOther,
     pendingSignerName,
   }
@@ -282,7 +261,7 @@ function MatchDetailsPage({
 
         <ConfirmationCallout view={view} matchId={matchId} />
 
-        <FinalizeCallout view={view} matchId={matchId} />
+        <FinalizeCallout matchId={matchId} />
 
         <SaveYourMatch key={matchId} matchId={matchId} />
 
@@ -457,62 +436,4 @@ function ConfirmationCallout({
   }
 
   return null
-}
-
-function FinalizeCallout({
-  view,
-  matchId,
-}: {
-  view: MatchView
-  matchId: string
-}) {
-  const finalizeMutation = useFinalizeMatch(matchId)
-  // Only a participant on a decided-but-unsigned board gets here (the backend
-  // gates `can_finalize` on participation + validity + no signature). This is
-  // the recovery path for scores entered then left unposted, and the one-click
-  // resubmit after a mistaken dispute — the scratchpad scores survive a
-  // dispute, so re-posting them unchanged drops back into the sign-off flow.
-  if (!view.resubmitGames) return null
-  const games = view.resubmitGames
-  const error =
-    finalizeMutation.error instanceof ApiError ? finalizeMutation.error : null
-  return (
-    <section
-      className="md-confirm-callout md-confirm-callout--featured"
-      data-testid="match-finalize-callout"
-    >
-      <div className="md-confirm-callout__copy">
-        <div className="md-confirm-callout__kicker">
-          <span className="ball-dot" aria-hidden="true" /> Scores ready · not
-          yet posted
-        </div>
-        <h3 className="md-confirm-callout__headline">
-          Post this result for your opponent to confirm.
-        </h3>
-        <p className="md-confirm-callout__body">
-          These scores already decide the match but haven't been posted. Post
-          them as-is to send the result for sign-off, or edit any game in the
-          scoreboard below first.
-        </p>
-        {error && (
-          <p role="alert" className="mt-1.5 text-xs text-[color:var(--loss)]">
-            {error.detail ?? error.message}
-          </p>
-        )}
-      </div>
-      <div className="md-confirm-callout__actions">
-        <button
-          type="button"
-          className="md-btn md-btn--primary"
-          disabled={finalizeMutation.isPending}
-          onClick={() => {
-            finalizeMutation.reset()
-            finalizeMutation.mutate({ games })
-          }}
-        >
-          {finalizeMutation.isPending ? 'Posting…' : 'Post result'}
-        </button>
-      </div>
-    </section>
-  )
 }
