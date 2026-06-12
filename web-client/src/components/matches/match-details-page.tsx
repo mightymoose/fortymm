@@ -1,14 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
 import { Link, useRouter } from '@tanstack/react-router'
-import {
-  Check,
-  Copy,
-  Download,
-  Link2,
-  Send,
-  Share2,
-  X,
-} from 'lucide-react'
 
 import { HeadToHead } from './match-details/head-to-head'
 import { MatchInfo } from './match-details/match-info'
@@ -270,11 +260,6 @@ function MatchDetailsPage({
   matchId: string
   standalone: boolean
 }) {
-  const [shareOpen, setShareOpen] = useState(false)
-  // Comments + share modal are still part of the design handoff but have no
-  // real data behind them yet; gate them off and flip when each lands.
-  const showAuxCards = false
-
   return (
     <div className="match-details">
       <main className="md-page md-page--y">
@@ -292,15 +277,6 @@ function MatchDetailsPage({
                 Score
               </Link>
             )}
-            {showAuxCards && (
-              <button
-                type="button"
-                className="md-btn md-btn--ghost md-btn--sm"
-                onClick={() => setShareOpen(true)}
-              >
-                <Share2 size={14} /> Share
-              </button>
-            )}
           </div>
         </div>
 
@@ -315,7 +291,6 @@ function MatchDetailsPage({
         <div className="md-col-2">
           <div className="md-col-2__main">
             <PlayersPanel matchId={matchId} />
-            {showAuxCards && <CommentsCard />}
           </div>
           <aside className="md-col-2__aside">
             <MatchInfo matchId={matchId} />
@@ -336,10 +311,6 @@ function MatchDetailsPage({
           </div>
         </footer>
       </main>
-
-      {showAuxCards && (
-        <ShareModal open={shareOpen} onClose={() => setShareOpen(false)} />
-      )}
     </div>
   )
 }
@@ -390,10 +361,6 @@ function Breadcrumb({
       <span className="md-breadcrumb__current">Match {matchId.slice(0, 6)}</span>
     </div>
   )
-}
-
-function CommentsCard() {
-  return null
 }
 
 function ConfirmationCallout({
@@ -547,110 +514,5 @@ function FinalizeCallout({
         </button>
       </div>
     </section>
-  )
-}
-
-function ShareModal({
-  open,
-  onClose,
-}: {
-  open: boolean
-  onClose: () => void
-}) {
-  const [copied, setCopied] = useState(false)
-  const copyResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const url = typeof window !== 'undefined' ? window.location.href : ''
-
-  useEffect(() => {
-    if (!open) return
-    function onKey(e: KeyboardEvent) {
-      if (e.key === 'Escape') onClose()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [open, onClose])
-
-  useEffect(
-    () => () => {
-      if (copyResetTimer.current) clearTimeout(copyResetTimer.current)
-    },
-    [],
-  )
-
-  if (!open) return null
-
-  async function copy() {
-    try {
-      await navigator.clipboard.writeText(url)
-    } catch {
-      // Best-effort fallback; ignore the failure.
-    }
-    setCopied(true)
-    if (copyResetTimer.current) clearTimeout(copyResetTimer.current)
-    copyResetTimer.current = setTimeout(() => setCopied(false), 2200)
-  }
-
-  return (
-    <div className="md-modal-scrim" onClick={onClose}>
-      <div className="md-modal" onClick={(e) => e.stopPropagation()}>
-        <div className="md-modal__hd">
-          <div>
-            <div className="md-kicker">● Share match</div>
-            <div className="md-modal__title" style={{ marginTop: 4 }}>
-              One link. Anyone can view.
-            </div>
-          </div>
-          <button
-            type="button"
-            className="md-btn md-btn--ghost md-btn--icon md-btn--sm"
-            onClick={onClose}
-            aria-label="Close"
-          >
-            <X size={14} />
-          </button>
-        </div>
-        <div className="md-modal__body">
-          <div className="md-modal__url-row">
-            <div className="md-modal__url">{url}</div>
-            <button
-              type="button"
-              className="md-btn md-btn--primary"
-              onClick={copy}
-            >
-              {copied ? (
-                <><Check size={14} /> Copied</>
-              ) : (
-                <><Copy size={14} /> Copy</>
-              )}
-            </button>
-          </div>
-          <div className="md-modal__tiles">
-            <ShareTile icon={<Send size={16} />} label="Post on X" hint="" />
-            <ShareTile icon={<Link2 size={16} />} label="Embed" hint="iframe" />
-            <ShareTile icon={<Download size={16} />} label="Save PNG" hint="" />
-          </div>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function ShareTile({
-  icon,
-  label,
-  hint,
-}: {
-  icon: React.ReactNode
-  label: string
-  hint: string
-}) {
-  return (
-    <button type="button" className="md-share-tile">
-      {icon}
-      <div style={{ textAlign: 'left' }}>
-        <div className="md-share-tile__label">{label}</div>
-        <div className="md-share-tile__hint">{hint}</div>
-      </div>
-    </button>
   )
 }
