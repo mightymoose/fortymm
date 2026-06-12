@@ -5,17 +5,16 @@ import type { worker } from "../../browser";
 
 type Backend = typeof server | typeof worker;
 type MatchDetails = components["schemas"]["app__schemas__match__MatchDetails"];
-type MatchResultsWrite = components["schemas"]["MatchResultsWrite"];
 
-export type MatchResultsResolver = HttpResponseResolver<
+export type MatchDisputeResolver = HttpResponseResolver<
   { matchId: string },
-  MatchResultsWrite,
+  never,
   // The error body lets tests drive the inline failure path (e.g. a 409
   // `detail`) through the same typed resolver.
   MatchDetails | { detail: string }
 >;
 
-export const mockMatchResultsEndpoint = (
+export const mockMatchDisputeEndpoint = (
   backend: Backend,
-  resolver: MatchResultsResolver,
-) => backend.use(http.post("*/v1/matches/:matchId/results", resolver));
+  resolver: MatchDisputeResolver,
+) => backend.use(http.post("*/v1/matches/:matchId/dispute", resolver));

@@ -16,6 +16,7 @@ import {
   MatchDetailsView,
 } from "@/components/matches/match-details-page";
 
+import { confirmationCalloutPage } from "./match-details/confirmation-callout.page";
 import { finalizeCalloutPage } from "./match-details/finalize-callout.page";
 import { scoreboardPage } from "./match-details/scoreboard.page";
 
@@ -103,4 +104,10 @@ export const matchDetailsPage = {
    * `FinalizeCallout` wrapper — reuse its page object's callout queries.
    */
   finalizeCallout: finalizeCalloutPage.within(screen),
+
+  /**
+   * The Confirm/Dispute sign-off callout is rendered through the self-fetching
+   * `ConfirmationCallout` wrapper — reuse its page object's callout queries.
+   */
+  confirmationCallout: confirmationCalloutPage.within(screen),
 };

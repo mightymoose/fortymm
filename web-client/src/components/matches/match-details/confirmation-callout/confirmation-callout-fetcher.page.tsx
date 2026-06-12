@@ -8,19 +8,19 @@ import {
 import { server } from "@/mocks/server";
 import { render, screen, type Container } from "@/test/utilities";
 
-import { finalizeCalloutDisplayPage } from "./finalize-callout-display.page";
+import { confirmationCalloutDisplayPage } from "./confirmation-callout-display.page";
 import {
-  FinalizeCalloutFetcher,
-  type FinalizeCalloutProps,
-} from "./finalize-callout-fetcher";
+  ConfirmationCalloutFetcher,
+  type ConfirmationCalloutProps,
+} from "./confirmation-callout-fetcher";
 
 const DEFAULT_MATCH_ID = "m-1";
 
 const scoped = (container: Container) => ({
-  ...finalizeCalloutDisplayPage.within(container),
+  ...confirmationCalloutDisplayPage.within(container),
   /** The Suspense fallback shown while the match-details query is pending. */
   queryLoading() {
-    return container.queryByTestId("finalize-callout-loading");
+    return container.queryByTestId("confirmation-callout-loading");
   },
   /** The error-boundary fallback shown when the query rejects. (Same
    * `role="alert"` query as the display's inline error — overridden here for
@@ -31,16 +31,16 @@ const scoped = (container: Container) => ({
 });
 
 /**
- * Test page-object for `FinalizeCalloutFetcher`. The fetcher reads via
- * `useSuspenseQuery`, so this mirrors the real `FinalizeCallout` wrapper — a
- * `<Suspense>` plus an `ErrorBoundary` — so tests can assert the fetch →
+ * Test page-object for `ConfirmationCalloutFetcher`. The fetcher reads via
+ * `useSuspenseQuery`, so this mirrors the real `ConfirmationCallout` wrapper —
+ * a `<Suspense>` plus an `ErrorBoundary` — so tests can assert the fetch →
  * display handoff, the null-projection bail, and that a failed query reaches
  * the boundary. Stubs the same `GET /v1/matches/:matchId` endpoint the query
  * reads. NOTE: the boundary fallback and the display's inline mutation error
  * both use `role="alert"`; in this harness no mutation runs, so `queryError`
  * is unambiguous.
  */
-export const finalizeCalloutFetcherPage = {
+export const confirmationCalloutFetcherPage = {
   /**
    * Stub `GET /v1/matches/:matchId` — `HttpResponse.json(buildMatchDetails())`
    * for the happy path, a non-2xx to drive the error boundary.
@@ -49,8 +49,8 @@ export const finalizeCalloutFetcherPage = {
     mockMatchDetailsEndpoint(server, resolver);
   },
 
-  render(overrides: Partial<FinalizeCalloutProps> = {}) {
-    const props: FinalizeCalloutProps = {
+  render(overrides: Partial<ConfirmationCalloutProps> = {}) {
+    const props: ConfirmationCalloutProps = {
       matchId: DEFAULT_MATCH_ID,
       ...overrides,
     };
@@ -58,13 +58,15 @@ export const finalizeCalloutFetcherPage = {
     render(
       <ErrorBoundary
         fallbackRender={() => (
-          <div role="alert">Couldn’t load the finalize callout</div>
+          <div role="alert">Couldn’t load the confirmation callout</div>
         )}
       >
         <Suspense
-          fallback={<div data-testid="finalize-callout-loading">Loading…</div>}
+          fallback={
+            <div data-testid="confirmation-callout-loading">Loading…</div>
+          }
         >
-          <FinalizeCalloutFetcher {...props} />
+          <ConfirmationCalloutFetcher {...props} />
         </Suspense>
       </ErrorBoundary>,
     );

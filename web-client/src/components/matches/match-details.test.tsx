@@ -44,6 +44,27 @@ const decidedMatch = () =>
     can_score: false,
   });
 
+describe("MatchDetails — confirmation-callout seam", () => {
+  it("renders the confirmation callout when the viewer can confirm", async () => {
+    // Wiring only: callout content and the confirm/dispute flows are pinned
+    // by the confirmation-callout quartet's own tests.
+    matchDetailsPage.mockMatch("m-1", {
+      ...decidedMatch(),
+      status: "in_progress",
+      status_label: "Awaiting confirmation",
+      can_confirm: true,
+    });
+
+    matchDetailsPage.render("m-1");
+
+    await waitFor(() =>
+      expect(
+        matchDetailsPage.confirmationCallout.getCallout(),
+      ).toBeInTheDocument(),
+    );
+  });
+});
+
 describe("MatchDetails — finalize-callout seam", () => {
   it("renders the finalize callout for a finalizable board", async () => {
     // Wiring only: callout content and the post flow are pinned by the
