@@ -1,9 +1,12 @@
 require "shellwords"
+require "tempfile"
 
 default_platform(:ios)
 
-PROJECT = "Fortymm.xcodeproj"
-SCHEME  = "Fortymm"
+PROJECT         = "Fortymm.xcodeproj"
+SCHEME          = "Fortymm"
+APP_IDENTIFIER  = "com.fortymm.ios-client"
+TEAM_ID         = "3A8872P8KP"
 
 platform :ios do
   desc "Build the app for the simulator (no signing) — fast CI/local sanity check"
@@ -43,15 +46,39 @@ platform :ios do
     # instead of a developer Apple ID logged into Xcode. Without these flags,
     # `-allowProvisioningUpdates` falls back to Xcode's Accounts list, and a
     # machine with no signed-in account fails the export with "No Accounts".
-    # Passed to both archive (xcargs) and export (export_xcargs) — the export
-    # phase is the one that regenerates the App Store provisioning profile.
-    key_path = File.absolute_path(ENV.fetch("ASC_KEY_PATH"))
+    # gym forwards xcargs to BOTH the archive and export xcodebuild
+    # invocations, so set only xcargs — adding export_xcargs too would pass
+    # the flags twice and xcodebuild rejects a repeated -authenticationKeyPath.
+    # The export phase is the one that regenerates the App Store profile.
+    #
+    # xcodebuild's -authenticationKeyPath demands an absolute path to an
+    # existing file. ASC_KEY_PATH is relative to ios/ but the Fastfile runs
+    # with CWD=ios/fastlane, so resolving it here doubles the path. Instead
+    # write the .p8 contents app_store_connect_api_key already loaded into a
+    # temp file with a guaranteed-absolute path.
+    asc_key_file = Tempfile.new(["asc_api_key", ".p8"])
+    asc_key_file.write(api_key[:key])
+    asc_key_file.flush
     signing_args = [
       "-allowProvisioningUpdates",
-      "-authenticationKeyPath", key_path.shellescape,
-      "-authenticationKeyID", ENV.fetch("ASC_KEY_ID"),
-      "-authenticationKeyIssuerID", ENV.fetch("ASC_ISSUER_ID")
+      "-authenticationKeyPath", asc_key_file.path.shellescape,
+      "-authenticationKeyID", api_key[:key_id],
+      "-authenticationKeyIssuerID", api_key[:issuer_id]
     ].join(" ")
+
+    # Sign the export MANUALLY with the local "Apple Distribution" cert. The
+    # archive signs automatically (cert in the keychain), but export defaults
+    # to cloud-managed signing, which can't use a cert whose private key lives
+    # only in the local keychain ("Cloud signing permission error"). Fetch the
+    # matching App Store profile up front — get_provisioning_profile reuses an
+    # existing valid profile and only creates one when none matches — then hand
+    # its name to gym's manual export.
+    get_provisioning_profile(
+      api_key: api_key,
+      app_identifier: APP_IDENTIFIER,
+      readonly: false
+    )
+    profile_name = lane_context[SharedValues::SIGH_NAME]
 
     build_app(
       project: PROJECT,
@@ -59,7 +86,14 @@ platform :ios do
       configuration: "Release",
       export_method: "app-store",
       xcargs: signing_args,
-      export_xcargs: signing_args
+      export_options: {
+        signingStyle: "manual",
+        teamID: TEAM_ID,
+        signingCertificate: "Apple Distribution",
+        provisioningProfiles: {
+          APP_IDENTIFIER => profile_name
+        }
+      }
     )
 
     upload_to_testflight(
