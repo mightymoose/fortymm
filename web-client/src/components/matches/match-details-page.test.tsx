@@ -213,6 +213,30 @@ describe("MatchDetailsView", () => {
     ).toHaveAttribute("href", "/matches");
   });
 
+  it("shows retry guidance (not not-found) when the match endpoint is rate-limited (#514)", async () => {
+    server.use(
+      http.get("*/v1/matches/m-busy", () =>
+        HttpResponse.json({ detail: "Too Many Requests" }, { status: 429 }),
+      ),
+    );
+    renderDetails("m-busy");
+
+    const alert = await screen.findByRole("alert");
+    // 429 is transient — show retry copy, not the "couldn't find that match"
+    // dead end.
+    expect(within(alert).getByText(/too many requests/i)).toBeInTheDocument();
+    expect(
+      within(alert).queryByText(/couldn.t find that match/i),
+    ).not.toBeInTheDocument();
+    // Retrying the same URL is the right move, so keep the retry affordance.
+    expect(
+      within(alert).getByRole("button", { name: /try again/i }),
+    ).toBeInTheDocument();
+    expect(
+      within(alert).queryByRole("link", { name: /back to matches/i }),
+    ).not.toBeInTheDocument();
+  });
+
   it('renders no-opponent matches with a "No opponent" placeholder, still scorable', async () => {
     const game1 = { id: "g-solo-1", game_number: 1, score: null };
     const match = matchDetails({
