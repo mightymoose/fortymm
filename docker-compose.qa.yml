@@ -2,10 +2,10 @@
 #
 # A prod-like stack (same shape as docker-compose.uat.yml) that runs
 # alongside the dev and UAT stacks. Project name `fortymm-qa` keeps
-# networks, containers, and volumes namespaced; `nginx` is the only
-# service with a host port (8085 — UAT holds 8084). Everything else is
-# reachable only on the internal docker network; use `docker exec` for
-# ad-hoc psql/redis-cli access.
+# networks, containers, and volumes namespaced. Only `nginx` (8085 — UAT
+# holds 8084) and `mailpit` (8087, the captured-email web UI) publish host
+# ports. Everything else is reachable only on the internal docker network;
+# use `docker exec` for ad-hoc psql/redis-cli access.
 #
 # Bring up:    docker compose -f docker-compose.qa.yml up -d --build
 # Bring down:  docker compose -f docker-compose.qa.yml down
@@ -104,7 +104,7 @@ services:
   # relaying it to Postmark. SMTP on :1025 (internal); web UI on :8025,
   # published to the host below (QA is local-only anyway).
   mailpit:
-    image: axllent/mailpit:latest
+    image: axllent/mailpit:v1.30
     restart: unless-stopped
     ports:
       - "8087:8025"  # Mailpit web UI — http://127.0.0.1:8087

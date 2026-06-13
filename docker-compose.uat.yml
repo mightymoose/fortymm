@@ -1,9 +1,10 @@
 # UAT stack — built artifacts, no dev server, isolated volumes.
 #
 # Runs alongside the dev stack: project name `fortymm-uat` keeps networks,
-# containers, and volumes namespaced. `nginx` is the only service with a
-# host port; everything else is reachable only on the internal docker
-# network. Use `docker exec` for ad-hoc psql/redis-cli access.
+# containers, and volumes namespaced. Only `nginx` (8084) and `mailpit`
+# (8086, the captured-email web UI) publish host ports; everything else is
+# reachable only on the internal docker network. Use `docker exec` for
+# ad-hoc psql/redis-cli access.
 #
 # Bring up:    docker compose -f docker-compose.uat.yml up -d --build
 # Bring down:  docker compose -f docker-compose.uat.yml down
@@ -100,7 +101,7 @@ services:
   # captured mail (which contains live sign-in/confirmation links) is not
   # exposed on uat.fortymm.com.
   mailpit:
-    image: axllent/mailpit:latest
+    image: axllent/mailpit:v1.30
     restart: unless-stopped
     ports:
       - "8086:8025"  # Mailpit web UI — http://127.0.0.1:8086
