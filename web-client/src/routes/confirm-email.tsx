@@ -4,6 +4,11 @@ import { toast } from 'sonner'
 
 import { ApiError } from '@/api/client'
 import { useConfirmEmail, useMergePreview } from '@/api/session'
+import { btnPrimary } from '@/components/login/styles'
+import {
+  LinkCheckPage,
+  type LinkCheckState,
+} from '@/components/login/link-check-page/link-check-page'
 import { MergeGate } from '@/components/login/merge-gate'
 import { pageTitle } from '@/lib/page-title'
 
@@ -16,6 +21,21 @@ export const Route = createFileRoute('/confirm-email')({
   }),
   component: ConfirmEmailPage,
 })
+
+const CONFIRM_COPY: Partial<
+  Record<LinkCheckState, { eyebrow: string; title: string; subtitle: string }>
+> = {
+  success: {
+    eyebrow: '● Email confirmed',
+    title: 'You’re in.',
+    subtitle: 'Your email is verified — your FortyMM account is yours to keep.',
+  },
+  checking: {
+    eyebrow: '● Confirming your email',
+    title: 'Confirming your email',
+    subtitle: 'Hang tight — this only takes a second.',
+  },
+}
 
 function ConfirmEmailPage() {
   const { token } = Route.useSearch()
@@ -92,56 +112,35 @@ function ConfirmEmailPage() {
   // one orphan user + session-token row per click. The confirm endpoint
   // itself rotates the cookie to the token's owner, so the user lands on
   // the dashboard signed in as themselves.
+  const linkState: LinkCheckState =
+    status === 'ok' ? 'success' : status === 'confirming' ? 'checking' : 'expired'
+
+  // Email-confirm copy per state; `expired` falls through to LinkCheckPage's
+  // own defaults.
+  const copy = CONFIRM_COPY[linkState]
+
   return (
-    <div
-      style={{
-        maxWidth: 520,
-        margin: '64px auto',
-        padding: 24,
-        textAlign: 'center',
-      }}
-    >
-      <h1
-        style={{
-          fontFamily: 'var(--font-display)',
-          fontSize: 40,
-          margin: '0 0 12px',
-        }}
-      >
-        {status === 'ok' ? 'You’re in.' : 'Confirming your email…'}
-      </h1>
-      {status === 'confirming' && (
-        <p style={{ color: 'var(--fg-3)' }}>Hang tight, this only takes a second.</p>
-      )}
-      {status === 'ok' && (
-        <>
-          <p style={{ color: 'var(--fg-2)' }}>
-            Your email is verified. Your FortyMM account is now yours to keep.
-          </p>
-          <Link
-            to="/dashboard"
-            className="fmm-btn fmm-btn--primary"
-            style={{ marginTop: 24 }}
-          >
+    <LinkCheckPage
+      state={linkState}
+      eyebrow={copy?.eyebrow}
+      title={copy?.title}
+      subtitle={copy?.subtitle}
+      detail={linkState === 'expired' ? errorMsg : undefined}
+      footer={
+        linkState === 'success' ? (
+          <Link to="/dashboard" style={{ ...btnPrimary, width: '100%' }}>
             Go to dashboard
           </Link>
-        </>
-      )}
-      {(status === 'error' || status === 'missing-token') && (
-        <>
-          <p className="fmm-help fmm-help--err" role="alert">
-            {errorMsg}
-          </p>
+        ) : linkState === 'expired' ? (
           <Link
             to="/settings"
             hash="sec-email"
-            className="fmm-btn fmm-btn--quiet"
-            style={{ marginTop: 24 }}
+            style={{ ...btnPrimary, width: '100%' }}
           >
             Back to settings
           </Link>
-        </>
-      )}
-    </div>
+        ) : undefined
+      }
+    />
   )
 }

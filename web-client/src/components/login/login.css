@@ -168,3 +168,128 @@
     left: -25%;
   }
 }
+
+/* ── Token-check page — focused single-column link landing ────────────── */
+/* The page a sign-in / email-confirm link opens to: not the marketing split
+   shell, a centered column that reads well on phone and desktop alike. */
+
+.fmm-linkcheck {
+  position: relative;
+  align-items: center;
+  overflow: hidden;
+}
+
+.fmm-linkcheck__grid {
+  position: absolute;
+  inset: 0;
+  opacity: 0.5;
+  -webkit-mask-image: radial-gradient(ellipse 70% 45% at 50% 32%, black, transparent 75%);
+          mask-image: radial-gradient(ellipse 70% 45% at 50% 32%, black, transparent 75%);
+  pointer-events: none;
+}
+
+.fmm-linkcheck__halo {
+  position: absolute;
+  top: -22%;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 460px;
+  height: 460px;
+  pointer-events: none;
+}
+
+.fmm-linkcheck__header,
+.fmm-linkcheck__main,
+.fmm-linkcheck__footer {
+  position: relative;
+  width: 100%;
+  max-width: 460px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.fmm-linkcheck__header {
+  flex-shrink: 0;
+  padding: 22px 24px 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.fmm-linkcheck__pill {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  border: 1px solid var(--ink-600);
+  border-radius: var(--r-pill);
+  padding: 4px 10px;
+}
+
+.fmm-linkcheck__main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 18px;
+  padding: 0 24px;
+}
+
+.fmm-linkcheck__title {
+  font-family: 'Bebas Neue', sans-serif;
+  font-size: clamp(40px, 12vw, 64px);
+  line-height: 0.95;
+  letter-spacing: 0.01em;
+  text-transform: uppercase;
+  margin: 12px 0 0;
+  color: var(--fg-1);
+}
+
+.fmm-linkcheck__sub {
+  font: 400 14.5px/1.55 var(--font-ui);
+  color: var(--fg-3);
+  margin: 12px 0 0;
+  max-width: 340px;
+}
+
+.fmm-linkcheck__detail {
+  font: 600 13px/1.5 var(--font-mono);
+  margin: 12px 0 0;
+}
+
+.fmm-linkcheck__footer {
+  flex-shrink: 0;
+  padding: 0 24px 26px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.fmm-linkcheck__disc {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.fmm-linkcheck__disc--spin {
+  border: 5px solid rgba(255, 122, 26, 0.18);
+  border-top-color: var(--ball-500);
+  border-right-color: var(--ball-500);
+  animation: fmm-login-spin 1s linear infinite;
+}
+
+.fmm-linkcheck__disc--ok {
+  background: rgba(0, 226, 154, 0.16);
+  border: 2px solid var(--serve-500);
+  box-shadow: var(--shadow-live-glow);
+}
+
+.fmm-linkcheck__disc--err {
+  background: rgba(255, 77, 109, 0.16);
+  border: 2px solid var(--loss);
+  box-shadow: 0 0 24px rgba(255, 77, 109, 0.25);
+}
