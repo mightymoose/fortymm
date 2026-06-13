@@ -7,10 +7,9 @@ import { MatchInfo } from './match-details/match-info'
 import { PlayersPanel } from './match-details/players-panel'
 import { Ratings } from './match-details/ratings'
 import { Scoreboard } from './match-details/scoreboard'
+import { SaveYourMatch } from './match-details/save-your-match'
 import { ScoreCta } from './match-details/score-cta'
 import { AppShell } from '@/components/app-shell'
-
-import { SaveYourMatch } from './save-your-match'
 
 // `MatchDetailsError` is the error-boundary fallback for this page; it now
 // lives in its own colocated quartet. Re-exported here so the routes can keep

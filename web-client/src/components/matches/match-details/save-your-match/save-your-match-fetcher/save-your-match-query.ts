@@ -3,8 +3,8 @@ import { initialsOf } from "@/lib/utils";
 import {
   matchDetailsQuery,
   type MatchDetailsResult,
-} from "./match-details-query";
-import { orderedSides } from "./ordered-sides";
+} from "../../match-details-query";
+import { orderedSides } from "../../ordered-sides";
 
 /** The match anchor + body copy for the guest "save this match" nudge, shaped
  * for the viewer's perspective (left side = the viewer). Null from the query
