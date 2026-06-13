@@ -112,47 +112,12 @@ describe("MatchDetailsView", () => {
     expect(rightScore).not.toHaveClass("md-hero__score--win");
   });
 
-  it("shows a Score CTA only when can_score is true and links to current_game", async () => {
-    const game1 = { id: "g-1", game_number: 1, score: null };
-    const match = matchDetails({
-      id: "m-2",
-      status: "pending",
-      status_label: "Scheduled",
-      games: [game1],
-      current_game: { game_number: 1 },
-      can_score: true,
-    });
-    server.use(http.get("*/v1/matches/m-2", () => HttpResponse.json(match)));
-
-    renderDetails("m-2");
-
-    const scoreLink = await screen.findByRole("link", { name: "Score" });
-    expect(scoreLink).toHaveAttribute(
-      "href",
-      "/matches/m-2/games/1/scores/new",
-    );
-  });
-
-  it("hides the Score CTA when can_score is false", async () => {
-    const match = matchDetails({
-      id: "m-3",
-      status: "completed",
-      can_score: false,
-      current_game: null,
-      games: [],
-    });
-    server.use(http.get("*/v1/matches/m-3", () => HttpResponse.json(match)));
-
-    const { container } = renderDetails("m-3");
-
-    // Wait for the players card to render (one of its name nodes).
-    await waitFor(() =>
-      expect(container.querySelector(".md-profile__name")).toBeInTheDocument(),
-    );
-    expect(
-      screen.queryByRole("link", { name: "Score" }),
-    ).not.toBeInTheDocument();
-  });
+  // The header "Score" CTA moved to the self-fetching `ScoreCta` quartet — see
+  // score-cta-query.test.ts (the can_score / current_game projection),
+  // score-cta-display.test.tsx (the link target), and score-cta-fetcher.test.tsx
+  // (the fetch → display handoff and null-projection bail). The no-opponent and
+  // spectator cases below still assert the CTA's presence/absence as incidental
+  // page-level wiring.
 
   it("links each scored game cell on my row to its scores/edit route", async () => {
     const match = matchDetails({
