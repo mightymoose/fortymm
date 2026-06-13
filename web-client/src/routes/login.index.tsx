@@ -58,7 +58,10 @@ function LoginPage() {
           await requestLogin.mutateAsync({ email, captchaToken, honeypot })
           navigate({
             to: '/login/sent',
-            search: { email, error: undefined },
+            // Stamp the send time so /login/sent can run a real expiry
+            // countdown anchored to when the link actually went out (survives
+            // refresh; a fresh send via resend re-stamps it).
+            search: { email, sentAt: Date.now(), error: undefined },
           })
         } catch (err) {
           if (err instanceof ApiError) {

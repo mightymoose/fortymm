@@ -1,73 +1,18 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { CSSProperties, FormEvent, ReactNode } from 'react'
 
 import { Turnstile, type TurnstileHandle } from '@/components/turnstile'
 import { HONEYPOT_STYLE, isValidEmail } from '@/lib/form-helpers'
 
+import { BallLogo, Eyebrow, RedirectStrip } from './atoms'
+import { btnGhost, btnPrimary, fineprint, linkInline } from './styles'
 import './login.css'
 
+// Sign-in / confirmation links live 15 minutes — mirrors the API's
+// LOGIN_TOKEN_LIFETIME. The countdown owns this so routes only pass send time.
+const LOGIN_LINK_TTL_MS = 15 * 60 * 1000
+
 /* ─── Brand atoms ───────────────────────────────────────────────────── */
-
-function BallLogo({ size = 26 }: { size?: number }) {
-  const gradId = `fmm-login-lg-${size}`
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-      <svg
-        width={size}
-        height={size}
-        viewBox="0 0 80 80"
-        aria-hidden="true"
-      >
-        <defs>
-          <radialGradient id={gradId} cx="35%" cy="35%" r="65%">
-            <stop offset="0%" stopColor="#FFB57A" />
-            <stop offset="55%" stopColor="#FF7A1A" />
-            <stop offset="100%" stopColor="#B94700" />
-          </radialGradient>
-        </defs>
-        <circle cx="40" cy="40" r="36" fill={`url(#${gradId})`} />
-        <ellipse cx="30" cy="28" rx="10" ry="6" fill="#FFF" fillOpacity="0.22" />
-      </svg>
-      <span
-        style={{
-          fontFamily: "'Bebas Neue', sans-serif",
-          fontSize: size * 0.95,
-          letterSpacing: '0.04em',
-          color: 'var(--fg-1)',
-          lineHeight: 1,
-        }}
-      >
-        FORTYMM<span style={{ color: 'var(--ball-500)' }}>.</span>
-      </span>
-    </div>
-  )
-}
-
-function Eyebrow({
-  children,
-  color = 'var(--ball-500)',
-}: {
-  children: ReactNode
-  color?: string
-}) {
-  return (
-    <div
-      style={{
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: 0,
-        fontFamily: 'var(--font-ui)',
-        fontSize: 11,
-        fontWeight: 600,
-        letterSpacing: '0.18em',
-        textTransform: 'uppercase',
-        color,
-      }}
-    >
-      {children}
-    </div>
-  )
-}
 
 function Display({
   children,
@@ -394,66 +339,7 @@ function EmailReceipt({ email }: { email: string }) {
   )
 }
 
-function VerifyCard() {
-  return (
-    <div
-      style={{
-        ...receiptCard,
-        borderColor: 'rgba(255,122,26,0.35)',
-        boxShadow:
-          '0 0 0 1px rgba(255,122,26,0.18), 0 8px 24px rgba(255,122,26,0.10)',
-      }}
-    >
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 14,
-          padding: '4px 0 14px',
-        }}
-      >
-        <Spinner />
-        <div>
-          <div
-            style={{
-              fontFamily: 'var(--font-mono)',
-              fontSize: 10.5,
-              fontWeight: 700,
-              color: 'var(--ball-500)',
-              letterSpacing: '0.18em',
-            }}
-          >
-            ● VERIFYING TOKEN
-          </div>
-          <div
-            style={{
-              fontFamily: 'var(--font-ui)',
-              fontSize: 14,
-              fontWeight: 500,
-              color: 'var(--fg-1)',
-              marginTop: 4,
-            }}
-          >
-            Confirming signature &amp; expiry…
-          </div>
-        </div>
-      </div>
-      <div style={receiptDiv} />
-      <div style={receiptRow}>
-        <span style={receiptK}>Issued</span>
-        <span style={receiptV}>2 min ago · device match</span>
-      </div>
-    </div>
-  )
-}
-
 type SolverLine = [string, string, string, string]
-
-const VERIFY_LOG: SolverLine[] = [
-  ['200', 'POST', '/auth/verify', 'token signature ok'],
-  ['200', 'GET', '/auth/session', 'device fingerprint match'],
-  ['…', '···', '/auth/grant', 'minting session…'],
-]
 
 const FAILED_VERIFY_LOG: SolverLine[] = [
   ['200', 'POST', '/auth/verify', 'token signature ok'],
@@ -691,64 +577,32 @@ function BounceReceipt({ email }: { email: string }) {
   )
 }
 
-function ErrorReceipt({ code, detail }: { code: string; detail?: string }) {
-  return (
-    <div
-      style={{
-        ...receiptCard,
-        borderColor: 'rgba(255,77,109,0.35)',
-        boxShadow:
-          '0 0 0 1px rgba(255,77,109,0.18), 0 8px 24px rgba(255,77,109,0.10)',
-      }}
-    >
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 14,
-          padding: '4px 0 12px',
-        }}
-      >
-        <XBadge />
-        <div>
-          <div
-            style={{
-              fontFamily: 'var(--font-mono)',
-              fontSize: 10.5,
-              fontWeight: 700,
-              color: 'var(--loss)',
-              letterSpacing: '0.18em',
-            }}
-          >
-            ● {code}
-          </div>
-          {detail && (
-            <div
-              style={{
-                fontFamily: 'var(--font-ui)',
-                fontSize: 14,
-                fontWeight: 500,
-                color: 'var(--fg-1)',
-                marginTop: 4,
-              }}
-            >
-              {detail}
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  )
-}
+/** Live countdown to a sign-in link's expiry. `sentAt` is the epoch-ms send
+ *  time; this owns the link lifetime (matches the API's LOGIN_TOKEN_LIFETIME),
+ *  ticks once a second, and at zero flips to a spent "Link expired" treatment
+ *  (the Resend control on the screen is the recovery path). */
+function ExpiresCountdown({ sentAt }: { sentAt: number }) {
+  const expiresAt = sentAt + LOGIN_LINK_TTL_MS
+  // Track "now" and derive the remaining time during render — that way a new
+  // send time reflects immediately, and there's no setState in the effect body.
+  const [now, setNow] = useState(() => Date.now())
 
-function ExpiresCountdown({
-  minutes,
-  seconds,
-}: {
-  minutes: number
-  seconds: number
-}) {
-  const t = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
+  useEffect(() => {
+    const id = setInterval(() => {
+      const t = Date.now()
+      setNow(t)
+      if (t >= expiresAt) clearInterval(id)
+    }, 1000)
+    return () => clearInterval(id)
+  }, [expiresAt])
+
+  const remaining = Math.max(0, expiresAt - now)
+  const expired = remaining <= 0
+  const totalSeconds = Math.ceil(remaining / 1000)
+  const mm = String(Math.floor(totalSeconds / 60)).padStart(2, '0')
+  const ss = String(totalSeconds % 60).padStart(2, '0')
+  const pct = Math.max(0, Math.min(100, (remaining / LOGIN_LINK_TTL_MS) * 100))
+
   return (
     <div
       style={{
@@ -759,7 +613,7 @@ function ExpiresCountdown({
         padding: '12px 16px',
         borderRadius: 'var(--r-md)',
         background: 'var(--ink-900)',
-        border: '1px solid var(--ink-600)',
+        border: `1px solid ${expired ? 'var(--loss)' : 'var(--ink-600)'}`,
       }}
     >
       <span
@@ -771,84 +625,29 @@ function ExpiresCountdown({
           textTransform: 'uppercase',
         }}
       >
-        Link expires in
+        {expired ? 'Link expired' : 'Link expires in'}
       </span>
       <span
+        role="timer"
+        aria-label={expired ? 'Link expired' : `Link expires in ${mm}:${ss}`}
         style={{
           fontFamily: 'var(--font-mono)',
           fontSize: 18,
           fontWeight: 700,
-          color: 'var(--ball-500)',
+          color: expired ? 'var(--loss)' : 'var(--ball-500)',
           letterSpacing: '0.06em',
           fontVariantNumeric: 'tabular-nums',
         }}
       >
-        {t}
+        {`${mm}:${ss}`}
       </span>
       <span style={{ flex: 1 }} />
-      <ProgressBar pct={97} />
+      <ProgressBar pct={pct} expired={expired} />
     </div>
   )
 }
 
-function RedirectStrip({ dest }: { dest: string }) {
-  return (
-    <div
-      style={{
-        marginTop: 'auto',
-        display: 'flex',
-        alignItems: 'center',
-        gap: 12,
-        padding: '12px 16px',
-        borderRadius: 'var(--r-md)',
-        background: 'rgba(0,226,154,0.08)',
-        border: '1px solid rgba(0,226,154,0.3)',
-      }}
-    >
-      <span
-        style={{
-          fontFamily: 'var(--font-mono)',
-          fontSize: 10.5,
-          fontWeight: 700,
-          color: 'var(--serve-500)',
-          letterSpacing: '0.16em',
-        }}
-      >
-        ● REDIRECTING
-      </span>
-      <span
-        style={{
-          fontFamily: 'var(--font-mono)',
-          fontSize: 13,
-          color: 'var(--fg-2)',
-        }}
-      >
-        {dest}
-      </span>
-      <span style={{ flex: 1 }} />
-      <span
-        style={{
-          fontFamily: 'var(--font-mono)',
-          fontSize: 13,
-          color: 'var(--fg-3)',
-        }}
-      >
-        2s
-      </span>
-      <span
-        style={{
-          fontFamily: 'var(--font-mono)',
-          fontSize: 18,
-          color: 'var(--serve-500)',
-        }}
-      >
-        →
-      </span>
-    </div>
-  )
-}
-
-function ProgressBar({ pct }: { pct: number }) {
+function ProgressBar({ pct, expired = false }: { pct: number; expired?: boolean }) {
   return (
     <span
       style={{
@@ -865,27 +664,13 @@ function ProgressBar({ pct }: { pct: number }) {
           display: 'block',
           width: `${pct}%`,
           height: '100%',
-          background: 'linear-gradient(90deg, var(--ball-500), var(--ball-400))',
+          background: expired
+            ? 'var(--loss)'
+            : 'linear-gradient(90deg, var(--ball-500), var(--ball-400))',
+          transition: 'width 1s linear',
         }}
       />
     </span>
-  )
-}
-
-function Spinner() {
-  return (
-    <div
-      aria-hidden="true"
-      style={{
-        width: 36,
-        height: 36,
-        borderRadius: '50%',
-        border: '3px solid rgba(255,122,26,0.20)',
-        borderTopColor: 'var(--ball-500)',
-        borderRightColor: 'var(--ball-500)',
-        animation: 'fmm-login-spin 1s linear infinite',
-      }}
-    />
   )
 }
 
@@ -971,50 +756,6 @@ function Divider({ label }: { label: string }) {
 }
 
 /* ─── Shared style objects ──────────────────────────────────────────── */
-
-const btnPrimary: CSSProperties = {
-  appearance: 'none',
-  border: '1px solid var(--ball-500)',
-  background: 'var(--ball-500)',
-  color: 'var(--ink-950)',
-  fontFamily: 'var(--font-ui)',
-  fontSize: 15,
-  fontWeight: 700,
-  letterSpacing: '0.01em',
-  padding: '14px 18px',
-  borderRadius: 'var(--r-md)',
-  cursor: 'pointer',
-  boxShadow: 'var(--shadow-glow)',
-}
-
-const btnGhost: CSSProperties = {
-  appearance: 'none',
-  border: '1px solid var(--ink-500)',
-  background: 'transparent',
-  color: 'var(--fg-2)',
-  fontFamily: 'var(--font-ui)',
-  fontSize: 14,
-  fontWeight: 600,
-  padding: '14px 18px',
-  borderRadius: 'var(--r-md)',
-  cursor: 'pointer',
-}
-
-const fineprint: CSSProperties = {
-  fontFamily: 'var(--font-ui)',
-  fontSize: 12.5,
-  lineHeight: 1.55,
-  color: 'var(--fg-3)',
-  marginTop: 2,
-}
-
-const linkInline: CSSProperties = {
-  color: 'var(--ball-500)',
-  textDecoration: 'underline',
-  textDecorationColor: 'rgba(255,122,26,0.4)',
-  textUnderlineOffset: '2px',
-  cursor: 'pointer',
-}
 
 // Reset for <button> elements that should render as inline text-link. Lets
 // app actions live in <button> (correct semantics, no scroll-jump, no `#`
@@ -1232,6 +973,9 @@ export function ScreenEmail({
 
 export interface ScreenSentProps {
   email: string
+  /** Epoch-ms time the sign-in link was sent; drives the live expiry
+   *  countdown. Defaults to first render when the caller doesn't know it. */
+  sentAt?: number
   onResend?: () => void
   onStartOver?: () => void
   resending?: boolean
@@ -1240,11 +984,15 @@ export interface ScreenSentProps {
 
 export function ScreenSent({
   email,
+  sentAt,
   onResend,
   onStartOver,
   resending = false,
   resendMessage = null,
 }: ScreenSentProps) {
+  // Stable fallback so the countdown doesn't reset every render when no
+  // send time was threaded in.
+  const [fallbackSentAt] = useState(() => Date.now())
   return (
     <Shell
       left={
@@ -1312,32 +1060,7 @@ export function ScreenSent({
             </span>
           </div>
 
-          <ExpiresCountdown minutes={14} seconds={32} />
-        </FormCol>
-      }
-    />
-  )
-}
-
-export function ScreenVerify() {
-  return (
-    <Shell
-      left={
-        <HeroCol
-          eyebrow="● Checking the score"
-          h1a="Hold up."
-          h1b="Reading your link."
-        />
-      }
-      right={
-        <FormCol
-          stepNo="03"
-          stepLabel="Verifying link"
-          title="Confirming your sign-in"
-          subtitle="Just a sec — confirming you’re you."
-        >
-          <VerifyCard />
-          <SolverLog lines={VERIFY_LOG} />
+          <ExpiresCountdown sentAt={sentAt ?? fallbackSentAt} />
         </FormCol>
       }
     />
@@ -1374,51 +1097,6 @@ export function ScreenSuccess({
         >
           <SuccessReceipt username={username} email={email} />
           <RedirectStrip dest={redirectTo} />
-        </FormCol>
-      }
-    />
-  )
-}
-
-export interface ScreenErrorProps {
-  detail?: string
-  onRequestNew?: () => void
-}
-
-export function ScreenError({ detail, onRequestNew }: ScreenErrorProps) {
-  return (
-    <Shell
-      left={
-        <HeroCol
-          eyebrow="● Net out"
-          h1a="That one missed."
-          h1b="Try again."
-        />
-      }
-      right={
-        <FormCol
-          stepNo="!!"
-          stepLabel="Link invalid"
-          title="This link can’t be used"
-          subtitle="Your link expired or was already used. Links are good for 15 minutes and one tap — strict for a reason. We’ll send a fresh one."
-          accent="var(--loss)"
-        >
-          <ErrorReceipt code="ERR_TOKEN_EXPIRED" detail={detail} />
-          <button
-            type="button"
-            style={btnPrimary}
-            onClick={onRequestNew}
-            disabled={!onRequestNew}
-          >
-            Hit me with a new link
-          </button>
-          <div style={{ ...fineprint, marginTop: 6 }}>
-            Still stuck?{' '}
-            <a href="mailto:support@fortymm.com" style={linkInline}>
-              Email support
-            </a>{' '}
-            — we read every one.
-          </div>
         </FormCol>
       }
     />

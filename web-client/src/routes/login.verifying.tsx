@@ -8,11 +8,9 @@ import {
   useConsumeLoginToken,
   useMergePreview,
 } from '@/api/session'
-import {
-  ScreenError,
-  ScreenVerify,
-  ScreenVerifyNetError,
-} from '@/components/login/login-screens'
+import { btnPrimary } from '@/components/login/styles'
+import { LinkCheckPage } from '@/components/login/link-check-page/link-check-page'
+import { ScreenVerifyNetError } from '@/components/login/login-screens'
 import { MergeGate } from '@/components/login/merge-gate'
 import { pageTitle } from '@/lib/page-title'
 
@@ -91,25 +89,31 @@ function LoginVerifyingPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, error])
 
+  const sendNewLink = () =>
+    navigate({ to: '/login', search: { error: undefined, email: undefined } })
+
+  const sendNewLinkButton = (
+    <button
+      type="button"
+      style={{ ...btnPrimary, width: '100%' }}
+      onClick={sendNewLink}
+    >
+      Send a new link
+    </button>
+  )
+
   if (!token && !error) {
     return (
-      <ScreenError
+      <LinkCheckPage
+        state="expired"
         detail="This link is missing its token."
-        onRequestNew={() =>
-          navigate({ to: '/login', search: { error: undefined, email: undefined } })
-        }
+        footer={sendNewLinkButton}
       />
     )
   }
 
   if (error === 'expired') {
-    return (
-      <ScreenError
-        onRequestNew={() =>
-          navigate({ to: '/login', search: { error: undefined, email: undefined } })
-        }
-      />
-    )
+    return <LinkCheckPage state="expired" footer={sendNewLinkButton} />
   }
 
   if (error === 'net') {
@@ -141,5 +145,5 @@ function LoginVerifyingPage() {
     )
   }
 
-  return <ScreenVerify />
+  return <LinkCheckPage state="checking" />
 }

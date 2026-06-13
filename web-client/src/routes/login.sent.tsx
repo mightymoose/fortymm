@@ -10,12 +10,13 @@ export const Route = createFileRoute('/login/sent')({
   validateSearch: (search: Record<string, unknown>) => ({
     error: search.error === 'bounce' ? ('bounce' as const) : undefined,
     email: typeof search.email === 'string' ? search.email : '',
+    sentAt: typeof search.sentAt === 'number' ? search.sentAt : undefined,
   }),
   component: LoginSentPage,
 })
 
 function LoginSentPage() {
-  const { error, email } = Route.useSearch()
+  const { error, email, sentAt } = Route.useSearch()
   const navigate = useNavigate()
 
   // Both "resend" and "start over" route back to /login with the email
@@ -35,6 +36,7 @@ function LoginSentPage() {
   return (
     <ScreenSent
       email={email || 'your inbox'}
+      sentAt={sentAt}
       onStartOver={back}
       onResend={back}
     />
