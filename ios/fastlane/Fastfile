@@ -1,3 +1,5 @@
+require "shellwords"
+
 default_platform(:ios)
 
 PROJECT = "Fortymm.xcodeproj"
@@ -37,13 +39,27 @@ platform :ios do
       build_number: latest + 1
     )
 
+    # Authenticate automatic signing with the App Store Connect API key
+    # instead of a developer Apple ID logged into Xcode. Without these flags,
+    # `-allowProvisioningUpdates` falls back to Xcode's Accounts list, and a
+    # machine with no signed-in account fails the export with "No Accounts".
+    # Passed to both archive (xcargs) and export (export_xcargs) — the export
+    # phase is the one that regenerates the App Store provisioning profile.
+    key_path = File.absolute_path(ENV.fetch("ASC_KEY_PATH"))
+    signing_args = [
+      "-allowProvisioningUpdates",
+      "-authenticationKeyPath", key_path.shellescape,
+      "-authenticationKeyID", ENV.fetch("ASC_KEY_ID"),
+      "-authenticationKeyIssuerID", ENV.fetch("ASC_ISSUER_ID")
+    ].join(" ")
+
     build_app(
       project: PROJECT,
       scheme: SCHEME,
       configuration: "Release",
       export_method: "app-store",
-      # Let Xcode's automatic signing pick the distribution cert/profile.
-      xcargs: "-allowProvisioningUpdates"
+      xcargs: signing_args,
+      export_xcargs: signing_args
     )
 
     upload_to_testflight(
