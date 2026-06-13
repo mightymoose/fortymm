@@ -1,9 +1,10 @@
 # UAT stack — built artifacts, no dev server, isolated volumes.
 #
 # Runs alongside the dev stack: project name `fortymm-uat` keeps networks,
-# containers, and volumes namespaced. `nginx` is the only service with a
-# host port; everything else is reachable only on the internal docker
-# network. Use `docker exec` for ad-hoc psql/redis-cli access.
+# containers, and volumes namespaced. Only `nginx` (8084) and `mailpit`
+# (8086, the captured-email web UI) publish host ports; everything else is
+# reachable only on the internal docker network. Use `docker exec` for
+# ad-hoc psql/redis-cli access.
 #
 # Bring up:    docker compose -f docker-compose.uat.yml up -d --build
 # Bring down:  docker compose -f docker-compose.uat.yml down
@@ -20,6 +21,19 @@ x-api-service: &api-service
     dockerfile: Dockerfile.dev
   env_file:
     - .env
+
+# Preview stacks must never send real email. .env points SMTP_* at the live
+# Postmark account; these keys override it (compose `environment:` wins over
+# `env_file:`) so the worker delivers to the in-network Mailpit on :1025 with
+# no TLS and no auth. Read everything it captures at the Mailpit web UI on the
+# host port published by the `mailpit` service below. See root CLAUDE.md
+# "Preview-stack email (Mailpit)".
+x-mailpit-smtp: &mailpit-smtp
+  SMTP_HOST: mailpit
+  SMTP_PORT: "1025"
+  SMTP_USE_TLS: "false"
+  SMTP_USERNAME: ""
+  SMTP_PASSWORD: ""
 
 services:
   postgres:
@@ -47,6 +61,7 @@ services:
   api:
     <<: *api-service
     environment:
+      <<: *mailpit-smtp
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/fortymm
       REDIS_URL: redis://redis:6379/0
       SESSION_COOKIE_SECURE: "false"
@@ -70,12 +85,26 @@ services:
   worker:
     <<: *api-service
     environment:
+      <<: *mailpit-smtp
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/fortymm
       REDIS_URL: redis://redis:6379/0
     depends_on:
       redis:
         condition: service_healthy
+      mailpit:
+        condition: service_started
     command: rq worker --url redis://redis:6379/0 solver email ratings
+
+  # Catches every email the worker sends in this preview stack instead of
+  # relaying it to Postmark. SMTP on :1025 (internal); web UI on :8025,
+  # published to the host below. Local-only — not proxied by Caddy, so
+  # captured mail (which contains live sign-in/confirmation links) is not
+  # exposed on uat.fortymm.com.
+  mailpit:
+    image: axllent/mailpit:v1.30
+    restart: unless-stopped
+    ports:
+      - "8086:8025"  # Mailpit web UI — http://127.0.0.1:8086
 
   web-client:
     build:
