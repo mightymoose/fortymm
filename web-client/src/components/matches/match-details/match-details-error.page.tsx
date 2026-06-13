@@ -16,9 +16,6 @@ import { buildMatchDetailsErrorProps } from './match-details-error.factory'
 
 const scoped = (container: Container) => ({
   /** The error region. Always present once the boundary renders. */
-  getAlert() {
-    return container.getByRole('alert')
-  },
   findAlert() {
     return container.findByRole('alert')
   },
@@ -31,9 +28,6 @@ const scoped = (container: Container) => ({
    * absent for the not-found dead end. */
   queryRetryButton() {
     return container.queryByRole('button', { name: /try again/i })
-  },
-  getRetryButton() {
-    return container.getByRole('button', { name: /try again/i })
   },
   /** The "Back to matches" link — present only for the in-app not-found case
    * (4xx, non-standalone); absent on the public standalone route. */
