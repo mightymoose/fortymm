@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import {
   RouterProvider,
   createMemoryHistory,
@@ -173,45 +173,9 @@ describe("MatchDetailsView", () => {
     );
   });
 
-  it("renders an error fallback when the match fails to load", async () => {
-    server.use(
-      http.get("*/v1/matches/m-missing", () =>
-        HttpResponse.json({ detail: "Match not found." }, { status: 404 }),
-      ),
-    );
-    renderDetails("m-missing");
-
-    const alert = await screen.findByRole("alert");
-    expect(
-      within(alert).getByText(/couldn.t find that match/i),
-    ).toBeInTheDocument();
-  });
-
-  it("shows friendly not-found copy (not the raw API detail) for a malformed match id (#152)", async () => {
-    server.use(
-      http.get("*/v1/matches/garbage", () =>
-        HttpResponse.json(
-          {
-            detail:
-              "Input should be a valid UUID, invalid character: found `g` at 1",
-          },
-          { status: 422 },
-        ),
-      ),
-    );
-    renderDetails("garbage");
-
-    const alert = await screen.findByRole("alert");
-    expect(
-      within(alert).getByText(/couldn.t find that match/i),
-    ).toBeInTheDocument();
-    // The raw pydantic validation message must not leak to the user.
-    expect(within(alert).queryByText(/valid UUID/i)).not.toBeInTheDocument();
-    // Retrying the same broken URL is pointless — offer a way back to the list.
-    expect(
-      within(alert).getByRole("link", { name: /back to matches/i }),
-    ).toHaveAttribute("href", "/matches");
-  });
+  // The error-boundary fallback (404 not-found, #152 malformed-id no-leak, and
+  // the #514 429 retry path) is now owned by the `MatchDetailsError` quartet —
+  // see match-details/match-details-error.test.tsx.
 
   it('renders no-opponent matches with a "No opponent" placeholder, still scorable', async () => {
     const game1 = { id: "g-solo-1", game_number: 1, score: null };

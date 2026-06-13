@@ -1,4 +1,4 @@
-import { Link, useRouter } from '@tanstack/react-router'
+import { Link } from '@tanstack/react-router'
 
 import { ConfirmationCallout } from './match-details/confirmation-callout'
 import { FinalizeCallout } from './match-details/finalize-callout'
@@ -9,9 +9,16 @@ import { Ratings } from './match-details/ratings'
 import { Scoreboard } from './match-details/scoreboard'
 import { ScoreCta } from './match-details/score-cta'
 import { AppShell } from '@/components/app-shell'
-import { ApiError } from '@/api/client'
 
 import { SaveYourMatch } from './save-your-match'
+
+// `MatchDetailsError` is the error-boundary fallback for this page; it now
+// lives in its own colocated quartet. Re-exported here so the routes can keep
+// importing both halves of the page from one module.
+export {
+  MatchDetailsError,
+  type MatchDetailsErrorProps,
+} from './match-details/match-details-error'
 
 export function MatchDetailsView({
   matchId,
@@ -27,56 +34,6 @@ export function MatchDetailsView({
   // Every section below is a self-fetching quartet, so the page renders
   // immediately and each piece suspends independently — no page-level fetch.
   const body = <MatchDetailsPage matchId={matchId} standalone={standalone} />
-  return standalone ? body : <AppShell>{body}</AppShell>
-}
-
-export function MatchDetailsError({
-  error,
-  reset,
-  standalone = false,
-}: {
-  error: Error
-  reset: () => void
-  /** Mirror of `MatchDetailsView`'s standalone — skip AppShell on the public
-   * route, and drop the "Back to matches" affordance (anonymous viewers
-   * can't reach /matches). */
-  standalone?: boolean
-}) {
-  const router = useRouter()
-  const status = error instanceof ApiError ? error.status : 0
-  // Any client error (404 no-such-match, 422 malformed id, …) means there's no
-  // viewable match at this URL — show the friendly copy and never leak the raw
-  // API detail (e.g. the pydantic "Input should be a valid UUID" string, #152).
-  // Retrying the same URL won't help, so offer a way back to the list instead.
-  const notFound = status >= 400 && status < 500
-  const message = notFound
-    ? "We couldn't find that match."
-    : 'Something went wrong loading this match.'
-  const body = (
-    <div role="alert" className="md-error-state">
-      <div className="md-error-state__title">{message}</div>
-      {notFound ? (
-        // The public route has no /matches index to send anonymous viewers
-        // to; for them the 404 page stops at the message.
-        standalone ? null : (
-          <Link to="/matches" className="md-btn md-btn--secondary">
-            Back to matches
-          </Link>
-        )
-      ) : (
-        <button
-          type="button"
-          className="md-btn md-btn--secondary"
-          onClick={() => {
-            reset()
-            router.invalidate()
-          }}
-        >
-          Try again
-        </button>
-      )}
-    </div>
-  )
   return standalone ? body : <AppShell>{body}</AppShell>
 }
 
