@@ -25,6 +25,22 @@ x-api-service: &api-service
   env_file:
     - .env
 
+# Preview stacks must never send real email. .env points SMTP_* at the live
+# Postmark account; these keys override it (compose `environment:` wins over
+# `env_file:`) so the worker delivers to the in-network Mailpit on :1025 with
+# no TLS and no auth. APP_BASE_URL is also overridden here: .env hardcodes
+# uat.fortymm.com, but QA is reached at http://127.0.0.1:8085, so captured
+# sign-in/confirmation links must point there to be clickable. Read captured
+# mail at the Mailpit web UI on the host port published by `mailpit` below.
+# See root CLAUDE.md "Preview-stack email (Mailpit)".
+x-mailpit-smtp: &mailpit-smtp
+  SMTP_HOST: mailpit
+  SMTP_PORT: "1025"
+  SMTP_USE_TLS: "false"
+  SMTP_USERNAME: ""
+  SMTP_PASSWORD: ""
+  APP_BASE_URL: http://127.0.0.1:8085
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -51,6 +67,7 @@ services:
   api:
     <<: *api-service
     environment:
+      <<: *mailpit-smtp
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/fortymm
       REDIS_URL: redis://redis:6379/0
       SESSION_COOKIE_SECURE: "false"
@@ -73,12 +90,24 @@ services:
   worker:
     <<: *api-service
     environment:
+      <<: *mailpit-smtp
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/fortymm
       REDIS_URL: redis://redis:6379/0
     depends_on:
       redis:
         condition: service_healthy
+      mailpit:
+        condition: service_started
     command: rq worker --url redis://redis:6379/0 solver email ratings
+
+  # Catches every email the worker sends in this preview stack instead of
+  # relaying it to Postmark. SMTP on :1025 (internal); web UI on :8025,
+  # published to the host below (QA is local-only anyway).
+  mailpit:
+    image: axllent/mailpit:latest
+    restart: unless-stopped
+    ports:
+      - "8087:8025"  # Mailpit web UI — http://127.0.0.1:8087
 
   web-client:
     build:
