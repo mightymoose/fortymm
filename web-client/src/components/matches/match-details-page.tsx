@@ -7,28 +7,11 @@ import { MatchInfo } from './match-details/match-info'
 import { PlayersPanel } from './match-details/players-panel'
 import { Ratings } from './match-details/ratings'
 import { Scoreboard } from './match-details/scoreboard'
+import { ScoreCta } from './match-details/score-cta'
 import { AppShell } from '@/components/app-shell'
-import { scoringNewRoute, useMatch } from '@/api/matches'
-import type { components } from '@/api/schema'
 import { ApiError } from '@/api/client'
 
 import { SaveYourMatch } from './save-your-match'
-
-type MatchDetails = components['schemas']['app__schemas__match__MatchDetails']
-
-// What's left of the legacy page-level projection now that every section is a
-// self-fetching quartet: just the header's "Score" CTA target.
-export type MatchView = {
-  scoreCta: { matchId: string; gameNumber: number } | null
-}
-
-function projectMatchView(data: MatchDetails, matchId: string): MatchView {
-  const scoreCta =
-    data.can_score && data.current_game
-      ? { matchId, gameNumber: data.current_game.game_number }
-      : null
-  return { scoreCta }
-}
 
 export function MatchDetailsView({
   matchId,
@@ -41,18 +24,9 @@ export function MatchDetailsView({
    * viewer. */
   standalone?: boolean
 }) {
-  const { data, isLoading } = useMatch(matchId)
-
-  const body =
-    isLoading || !data ? (
-      <MatchDetailsSkeleton />
-    ) : (
-      <MatchDetailsPage
-        view={projectMatchView(data, matchId)}
-        matchId={matchId}
-        standalone={standalone}
-      />
-    )
+  // Every section below is a self-fetching quartet, so the page renders
+  // immediately and each piece suspends independently — no page-level fetch.
+  const body = <MatchDetailsPage matchId={matchId} standalone={standalone} />
   return standalone ? body : <AppShell>{body}</AppShell>
 }
 
@@ -106,23 +80,10 @@ export function MatchDetailsError({
   return standalone ? body : <AppShell>{body}</AppShell>
 }
 
-function MatchDetailsSkeleton() {
-  return (
-    <div className="match-details" aria-busy="true">
-      <main className="md-page md-page--y">
-        <section className="md-hero md-hero--skeleton" />
-        <div className="md-card md-card--skeleton" />
-      </main>
-    </div>
-  )
-}
-
 function MatchDetailsPage({
-  view,
   matchId,
   standalone,
 }: {
-  view: MatchView
   matchId: string
   standalone: boolean
 }) {
@@ -132,17 +93,7 @@ function MatchDetailsPage({
         <div className="md-header">
           <Breadcrumb matchId={matchId} standalone={standalone} />
           <div className="md-header__right">
-            {view.scoreCta && (
-              <Link
-                {...scoringNewRoute(
-                  view.scoreCta.matchId,
-                  view.scoreCta.gameNumber,
-                )}
-                className="md-btn md-btn--primary md-btn--sm"
-              >
-                Score
-              </Link>
-            )}
+            <ScoreCta matchId={matchId} />
           </div>
         </div>
 
