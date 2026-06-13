@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 
 import { BallLogo, Eyebrow } from '../atoms'
-import { fineprint } from '../styles'
+import { fineprint, linkInline } from '../styles'
 
 export type LinkCheckState = 'checking' | 'success' | 'expired'
 
@@ -111,12 +111,21 @@ export function LinkCheckPage({
       </main>
 
       <footer className="fmm-linkcheck__footer">
-        {footer ??
-          (state === 'checking' ? (
-            <p style={{ ...fineprint, textAlign: 'center', marginTop: 0 }}>
-              Keep this tab open while we verify.
-            </p>
-          ) : null)}
+        {footer}
+        {!footer && state === 'checking' && (
+          <p style={{ ...fineprint, textAlign: 'center', marginTop: 0 }}>
+            Keep this tab open while we verify.
+          </p>
+        )}
+        {state === 'expired' && (
+          <p style={{ ...fineprint, textAlign: 'center', marginTop: 0 }}>
+            Still stuck?{' '}
+            <a href="mailto:support@fortymm.com" style={linkInline}>
+              Email support
+            </a>
+            .
+          </p>
+        )}
       </footer>
     </div>
   )

@@ -44,6 +44,13 @@ describe('LinkCheckPage', () => {
     expect(
       linkCheckPage.within().root()?.querySelector('a[href="/login"]'),
     ).toBeTruthy()
+    // Support escape hatch is always present on the expired state.
+    expect(
+      linkCheckPage
+        .within()
+        .root()
+        ?.querySelector('a[href="mailto:support@fortymm.com"]'),
+    ).toBeTruthy()
     expect(linkCheckPage.text()).not.toMatch(TOKEN_PATTERN)
   })
 
