@@ -10,8 +10,12 @@ export const Route = createFileRoute('/p/matches/$matchId')({
   head: () => ({
     meta: [{ title: pageTitle('Match') }],
   }),
-  loader: ({ context, params }) =>
-    context.queryClient.ensureQueryData(matchDetailsQuery(params.matchId)),
+  // Warm the React Query cache without blocking the route transition, so the
+  // page's self-fetching sections keep streaming in independently on a direct
+  // load while a preceding hover/touch preload makes the click render instantly.
+  loader: ({ context, params }) => {
+    void context.queryClient.prefetchQuery(matchDetailsQuery(params.matchId))
+  },
   component: PublicMatchDetailsRoute,
   errorComponent: PublicMatchDetailsError,
 })
