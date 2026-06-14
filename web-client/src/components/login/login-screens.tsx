@@ -238,11 +238,14 @@ function EmailField({
 }: {
   value: string
   onChange?: (next: string) => void
-  state?: 'valid' | 'error'
+  state?: 'valid' | 'error' | 'neutral'
   autoFocus?: boolean
   readOnly?: boolean
 }) {
   const error = state === 'error'
+  // A pristine/incomplete field is neutral — show no badge rather than a
+  // misleading green "VALID" on an empty input (#520).
+  const neutral = state === 'neutral'
   return (
     <div
       style={{
@@ -299,19 +302,21 @@ function EmailField({
           letterSpacing: '0.01em',
         }}
       />
-      <span
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          padding: '0 14px',
-          fontFamily: 'var(--font-mono)',
-          fontSize: 11,
-          color: error ? 'var(--loss)' : 'var(--serve-500)',
-          letterSpacing: '0.14em',
-        }}
-      >
-        ● {error ? 'FAILED' : 'VALID'}
-      </span>
+      {!neutral && (
+        <span
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            padding: '0 14px',
+            fontFamily: 'var(--font-mono)',
+            fontSize: 11,
+            color: error ? 'var(--loss)' : 'var(--serve-500)',
+            letterSpacing: '0.14em',
+          }}
+        >
+          ● {error ? 'FAILED' : 'VALID'}
+        </span>
+      )}
     </div>
   )
 }
@@ -906,7 +911,7 @@ export function ScreenEmail({
                 setEmail(next)
                 if (localError) setLocalError(null)
               }}
-              state={showError ? 'error' : 'valid'}
+              state={showError ? 'error' : valid ? 'valid' : 'neutral'}
               autoFocus
             />
             {showError && (

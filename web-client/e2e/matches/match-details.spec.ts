@@ -19,6 +19,12 @@ const gameScore = (
     },
 });
 
+// The match-details route guards its `$matchId` param to the UUID shape (real
+// match ids are UUIDs; a non-UUID is a malformed URL the route short-circuits
+// to the not-found state without fetching). So fixtures driven through the
+// route must use a UUID-shaped id, not a readable `m-...` slug.
+const COMPLETED_WIN_ID = '00000000-0000-4000-8000-000000000001';
+
 /** A decided singles match: rita.kovac beat silva.r, 3 games to 1. */
 const decidedMatch = (id: string): MatchDetails =>
     matchDetails({
@@ -93,8 +99,8 @@ test.describe('Match Details', () => {
 
     test.describe('the scoreboard', () => {
         test('names the hero region with the decided-match outcome', async ({ page }) => {
-            await matchDetailsPage.mock(decidedMatch('m-completed-win-1'));
-            await matchDetailsPage.goTo('m-completed-win-1');
+            await matchDetailsPage.mock(decidedMatch(COMPLETED_WIN_ID));
+            await matchDetailsPage.goTo(COMPLETED_WIN_ID);
             await expect(page.getByRole('region', { name: 'rita.kovac defeated silva.r, 3 games to 1' })).toBeVisible();
         });
 
@@ -102,8 +108,8 @@ test.describe('Match Details', () => {
         // as edit links (<a>), and the `.match-details a { color: inherit }`
         // reset used to out-rank the win/loss colors, leaving the row colorless.
         test('colors the editable (current-user) row win/loss cells like the opponent row', async ({ page }) => {
-            await matchDetailsPage.mock(decidedMatch('m-completed-win-1'));
-            await matchDetailsPage.goTo('m-completed-win-1');
+            await matchDetailsPage.mock(decidedMatch(COMPLETED_WIN_ID));
+            await matchDetailsPage.goTo(COMPLETED_WIN_ID);
 
             const color = (testId: string) =>
                 page

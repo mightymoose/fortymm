@@ -203,7 +203,7 @@ describe('/login/verifying flow', () => {
       expect(router.state.location.search).toMatchObject({ error: 'expired' })
     })
     expect(
-      await screen.findByRole('heading', { name: /this link expired/i }),
+      await screen.findByRole('heading', { name: /this link can't be used/i }),
     ).toBeInTheDocument()
   })
 
@@ -226,7 +226,7 @@ describe('/login/verifying flow', () => {
   it('shows the missing-token screen when no token is supplied', async () => {
     renderAt('/login/verifying')
     expect(
-      await screen.findByRole('heading', { name: /this link expired/i }),
+      await screen.findByRole('heading', { name: /this link can't be used/i }),
     ).toBeInTheDocument()
     expect(
       screen.getByText(/this link is missing its token/i),

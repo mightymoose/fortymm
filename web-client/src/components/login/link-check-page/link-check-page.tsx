@@ -35,7 +35,8 @@ const DEFAULT_COPY: Record<
   },
   expired: {
     eyebrow: '● Link expired',
-    title: 'This link expired',
+    // Covers both a genuinely expired link and one that was never valid (#522).
+    title: "This link can't be used",
     subtitle:
       'Sign-in links last 15 minutes and work once. Send a fresh one and you’ll be straight in.',
   },
