@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from 'react'
+import { useCallback, useEffect, useMemo } from 'react'
 import {
   Link,
   createFileRoute,
@@ -169,6 +169,7 @@ function MatchesPage() {
   const matchList = useMatchList(queryParams, { enabled: session.isSuccess })
   const data = matchList.data
   const isLoading = matchList.isPending
+  const isFetching = matchList.isFetching
 
   // Rewrite the URL — `replace: true` keeps each keystroke from filling
   // browser history. Defaults are stripped so the URL stays clean.
@@ -230,6 +231,24 @@ function MatchesPage() {
   const items = data?.items ?? []
   const total = data?.total ?? 0
   const liveCount = data?.status_counts?.in_progress ?? 0
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
+
+  // Snap an out-of-range `?page=` back to the last valid page once the real
+  // total is known — a stale bookmark or paging past the end would otherwise
+  // render an empty table under a nonsensical "Showing 26–16 of 16" footer
+  // (#541). Only act on a settled, current total: `isLoading` covers the
+  // pending/session-gated window (where `total` is still 0), and `isFetching`
+  // covers a `keepPreviousData` refetch still serving the prior filter's total.
+  useEffect(() => {
+    if (!isLoading && !isFetching && page > totalPages) {
+      setPage(totalPages)
+    }
+  }, [isLoading, isFetching, page, totalPages, setPage])
+
+  // The redirect runs in an effect, so an out-of-range page paints for one
+  // frame first. Clamp the page the footer renders with so its range math never
+  // shows start > end during that frame.
+  const displayPage = Math.min(page, totalPages)
 
   return (
     <AppShell>
@@ -251,10 +270,11 @@ function MatchesPage() {
           />
         </div>
         <PaginationFooter
-          page={page}
+          page={displayPage}
           setPage={setPage}
           total={total}
           pageSize={PAGE_SIZE}
+          totalPages={totalPages}
         />
       </div>
     </AppShell>
@@ -609,13 +629,14 @@ function PaginationFooter({
   setPage,
   total,
   pageSize,
+  totalPages,
 }: {
   page: number
   setPage: (n: number) => void
   total: number
   pageSize: number
+  totalPages: number
 }) {
-  const totalPages = Math.max(1, Math.ceil(total / pageSize))
   const first = total === 0 ? 0 : (page - 1) * pageSize + 1
   const last = Math.min(total, page * pageSize)
   const tokens = paginationRange(page, totalPages)
