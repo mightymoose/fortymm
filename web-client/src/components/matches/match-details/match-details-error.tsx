@@ -6,19 +6,11 @@ import { ApiError } from '@/api/client'
 export interface MatchDetailsErrorProps {
   error: Error
   reset: () => void
-  /** Skip the AppShell chrome and drop the "Back to matches" affordance —
-   * used by the public `/p/matches` route, whose anonymous viewers have no
-   * nav sidebar and can't reach /matches. */
-  standalone?: boolean
 }
 
 /** Error boundary fallback for the match-details page. Translates the failing
  * `GET /v1/matches/{id}` status into the right message + recovery affordance. */
-export function MatchDetailsError({
-  error,
-  reset,
-  standalone = false,
-}: MatchDetailsErrorProps) {
+export function MatchDetailsError({ error, reset }: MatchDetailsErrorProps) {
   const router = useRouter()
   const status = error instanceof ApiError ? error.status : 0
   // `GET /v1/matches/{id}` is public and per-IP rate-limited, so a valid shared
@@ -40,13 +32,9 @@ export function MatchDetailsError({
     <div role="alert" className="md-error-state">
       <div className="md-error-state__title">{message}</div>
       {notFound ? (
-        // The public route has no /matches index to send anonymous viewers
-        // to; for them the 404 page stops at the message.
-        standalone ? null : (
-          <Link to="/matches" className="md-btn md-btn--secondary">
-            Back to matches
-          </Link>
-        )
+        <Link to="/matches" className="md-btn md-btn--secondary">
+          Back to matches
+        </Link>
       ) : (
         <button
           type="button"
@@ -61,5 +49,5 @@ export function MatchDetailsError({
       )}
     </div>
   )
-  return standalone ? body : <AppShell>{body}</AppShell>
+  return <AppShell>{body}</AppShell>
 }

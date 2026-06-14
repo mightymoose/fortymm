@@ -29,8 +29,8 @@ const scoped = (container: Container) => ({
   queryRetryButton() {
     return container.queryByRole('button', { name: /try again/i })
   },
-  /** The "Back to matches" link — present only for the in-app not-found case
-   * (4xx, non-standalone); absent on the public standalone route. */
+  /** The "Back to matches" link — present for the not-found case (4xx),
+   * absent for retryable errors. */
   queryBackLink() {
     return container.queryByRole('link', { name: /back to matches/i })
   },

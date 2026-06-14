@@ -12,16 +12,15 @@ export function buildApiError(
   return new ApiError(status, detail, 'load match')
 }
 
-/** Props for `MatchDetailsError`. Default scenario: a 404 no-such-match on the
- * in-app (non-standalone) route — the friendly not-found dead end with a
- * "Back to matches" link and the AppShell chrome. */
+/** Props for `MatchDetailsError`. Default scenario: a 404 no-such-match — the
+ * friendly not-found dead end with a "Back to matches" link and AppShell
+ * chrome. */
 export function buildMatchDetailsErrorProps(
   overrides: Partial<MatchDetailsErrorProps> = {},
 ): MatchDetailsErrorProps {
   return {
     error: buildApiError(404, 'Match not found.'),
     reset: () => {},
-    standalone: false,
     ...overrides,
   }
 }

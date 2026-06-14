@@ -659,11 +659,10 @@ async def get_match(
     db: AsyncSession = Depends(get_session),
     match_service: MatchService = Depends(get_match_service),
 ) -> MatchDetails:
-    """Open to anyone, signed in or not. The same endpoint backs both the
-    authed `/matches/$matchId` route and the public `/p/matches/$matchId`
-    share route — a signed-in caller gets is_current_user / can_score flags;
-    an anonymous caller gets the same view with those flags off. Per-IP
-    rate-limited (60/min) so an open URL can't be scraped from one source.
+    """Open to anyone, signed in or not. A signed-in caller gets
+    is_current_user / can_score flags; an anonymous caller gets the same view
+    with those flags off. Per-IP rate-limited (60/min) so an open URL can't be
+    scraped from one source.
 
     The serializer flags whether the current user is on a side; write paths
     below still gate on participation via `get_current_user`."""

@@ -12,8 +12,7 @@ export function SaveYourMatchFetcher({ matchId }: SaveYourMatchProps) {
   // A null projection means the prompt doesn't apply (match not yet started,
   // the viewer isn't a participant, or there's no real opponent). We bail here,
   // before the display, so we never call useSession() — and thereby mint a
-  // guest user via GET /v1/session — on the standalone public-share route
-  // where the viewer is never the participant.
+  // guest user via GET /v1/session — when the prompt isn't going to render.
   if (!view) return null;
   return <SaveYourMatchDisplay view={view} matchId={matchId} />;
 }

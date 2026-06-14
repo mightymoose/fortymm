@@ -74,19 +74,4 @@ describe('MatchDetailsError', () => {
     ).toBeInTheDocument()
     expect(matchDetailsErrorPage.queryRetryButton()).toBeInTheDocument()
   })
-
-  it('drops the Back to matches link on the public standalone route', async () => {
-    matchDetailsErrorPage.render({
-      error: buildApiError(404, 'Match not found.'),
-      standalone: true,
-    })
-
-    await matchDetailsErrorPage.findAlert()
-    // Anonymous viewers can't reach /matches, so the 404 stops at the message.
-    expect(
-      matchDetailsErrorPage.queryMessage(/couldn.t find that match/i),
-    ).toBeInTheDocument()
-    expect(matchDetailsErrorPage.queryBackLink()).not.toBeInTheDocument()
-    expect(matchDetailsErrorPage.queryRetryButton()).not.toBeInTheDocument()
-  })
 })
