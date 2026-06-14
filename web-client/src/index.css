@@ -1984,8 +1984,12 @@ body.dark.fortymm-theme {
    with the corner badge ("Not saved" on a failed cell, "Saving" while a save
    is in flight). Spelled out so failure/pending never reads by color alone. */
 .fortymm-theme .sl-status {
-  font: 600 9px var(--font-mono);
-  letter-spacing: 0.1em;
+  /* Tight tracking + a small size keep the "NOT SAVED" / "SAVING" label
+     narrower than the score above it, so it never drives the cell wider than
+     a plainly-saved cell (the uppercase label otherwise sprawled the failed
+     cell past its neighbours). */
+  font: 600 8px var(--font-mono);
+  letter-spacing: 0.04em;
   text-transform: uppercase;
   white-space: nowrap;
 }
