@@ -30,7 +30,7 @@ import { useDebouncedValue } from '@/lib/use-debounced-value'
 // Reuse the matches list's scaffold (action bar, filter row, table chrome,
 // footer) so both pages stay visually identical — only the per-row cells
 // differ. Player-specific cell styles live in players-cells.css.
-import '@/routes/matches/index.css'
+import '@/components/matches/match-list/match-list.css'
 import '@/components/players/players-cells.css'
 
 // URL is the source of truth for filters + pagination so refresh / share / back
