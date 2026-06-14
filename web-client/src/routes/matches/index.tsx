@@ -1,5 +1,10 @@
 import { useCallback, useMemo } from 'react'
-import { Link, createFileRoute, useNavigate } from '@tanstack/react-router'
+import {
+  Link,
+  createFileRoute,
+  useNavigate,
+  useRouter,
+} from '@tanstack/react-router'
 import { zodValidator } from '@tanstack/zod-adapter'
 import {
   ChevronLeft,
@@ -14,6 +19,7 @@ import {
 import { z } from 'zod'
 
 import {
+  matchDetailRoute,
   matchesCsvUrl,
   scoringNewRoute,
   useMatchList,
@@ -407,9 +413,18 @@ function MatchRow({
   const side2 = row.sides.find((s) => s.side_number === 2) ?? null
   const showScore =
     row.status === 'in_progress' || row.status === 'completed'
+  const router = useRouter()
+
+  const matchDetail = matchDetailRoute(row.id)
 
   function open() {
-    void navigate({ to: '/matches/$matchId', params: { matchId: row.id } })
+    void navigate(matchDetail)
+  }
+
+  // The row is a clickable <tr>, not a <Link>, so router intent-preloading
+  // doesn't apply automatically. Warm the match-details loader on hover/focus.
+  function preload() {
+    void router.preloadRoute(matchDetail)
   }
 
   return (
@@ -419,6 +434,8 @@ function MatchRow({
       tabIndex={0}
       aria-label={`Open match: ${sideLabel(side1)} vs ${sideLabel(side2)}`}
       onClick={open}
+      onMouseEnter={preload}
+      onFocus={preload}
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault()
