@@ -22,9 +22,11 @@ import { useFailedGameSaves } from './score-saves'
 
 export interface SaveBannerProps {
   matchId: string
-  /** The game whose entry screen is mounted. Its own failure is omitted — the
-   * pre-filled inputs are the retry surface there, so the banner needn't also
-   * shout about it. */
+  /** The game whose entry screen is mounted. Its own failure is normally
+   * omitted — the pre-filled inputs are the retry surface there, so the banner
+   * needn't also shout about it. The exception is when that game's score
+   * finishes the match: we stay on it, the banner surfaces (informational
+   * only), and the main "Post result" button owns finalizing. */
   activeGameNumber: number
 }
 
@@ -100,6 +102,17 @@ export function SaveBanner({ matchId, activeGameNumber }: SaveBannerProps) {
   const signature = failed.map((entry) => entry.gameNumber).join(',')
 
   if (failed.length === 0 || signature === dismissedSignature) return null
+
+  // When the *active* game's own failed scratch is what finishes the match, we
+  // stayed on its entry screen — so the live inputs above are the authoritative
+  // score and the main "Post result" button owns finalizing (it posts those
+  // inputs; this banner would post the older cached scratch and silently clobber
+  // an edit made after the failed save, #542). Here the banner is informational
+  // only; for failures on *other* games (no live inputs on screen) it keeps its
+  // own post/retry button.
+  const decidedHere =
+    wouldFinalize &&
+    allFailed.some((entry) => entry.gameNumber === activeGameNumber)
   // The finalize POST is in flight — lock the button and swap its label.
   const posting = wouldFinalize && finalizeMutation.isPending
   // A finalize that reached the server and failed (409 a result was already
@@ -117,17 +130,21 @@ export function SaveBanner({ matchId, activeGameNumber }: SaveBannerProps) {
     : single
       ? `Game ${failed[0].gameNumber} didn't save.`
       : `${failed.length} games didn't save.`
-  const description = finalizeFailed
-    ? (finalizeError?.detail ??
-      finalizeError?.message ??
-      "Couldn't post the result — try again.")
-    : wouldFinalize
-      ? data?.affects_rating
-        ? "Post the result now — they didn't save individually, but the match is decided."
-        : "Finalize the result now — they didn't save individually, but the match is decided."
-      : single
-        ? 'Retry now, or tap it in the scoreline to fix the score.'
-        : 'Retry all now, or tap a game in the scoreline to fix it.'
+  const description = decidedHere
+    ? data?.affects_rating
+      ? 'Post the result below to finish the match.'
+      : 'Finalize the result below to finish the match.'
+    : finalizeFailed
+      ? (finalizeError?.detail ??
+        finalizeError?.message ??
+        "Couldn't post the result — try again.")
+      : wouldFinalize
+        ? data?.affects_rating
+          ? "Post the result now — they didn't save individually, but the match is decided."
+          : "Finalize the result now — they didn't save individually, but the match is decided."
+        : single
+          ? 'Retry now, or tap it in the scoreline to fix the score.'
+          : 'Retry all now, or tap a game in the scoreline to fix it.'
   const retryLabel = wouldFinalize
     ? data?.affects_rating
       ? 'Post result'
@@ -170,17 +187,19 @@ export function SaveBanner({ matchId, activeGameNumber }: SaveBannerProps) {
         {description}
       </AlertDescription>
       <AlertAction className="top-1/2 flex -translate-y-1/2 items-center gap-1">
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="border-[color:var(--loss)]/50 text-[color:var(--loss)] hover:bg-[color:var(--loss)]/10 hover:text-[color:var(--loss)]"
-          onClick={retry}
-          disabled={posting}
-        >
-          <RotateCw aria-hidden />
-          {posting ? 'Posting…' : retryLabel}
-        </Button>
+        {!decidedHere && (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="border-[color:var(--loss)]/50 text-[color:var(--loss)] hover:bg-[color:var(--loss)]/10 hover:text-[color:var(--loss)]"
+            onClick={retry}
+            disabled={posting}
+          >
+            <RotateCw aria-hidden />
+            {posting ? 'Posting…' : retryLabel}
+          </Button>
+        )}
         <Button
           type="button"
           variant="ghost"

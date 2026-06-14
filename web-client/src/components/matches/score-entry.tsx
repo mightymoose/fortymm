@@ -237,12 +237,13 @@ function ScoreEntryInner({
 
   // Per the fire-and-forget posture: only finalize errors are surfaced. The
   // per-game mutations (save / delete) self-heal at finalize, so their errors
-  // are intentionally hidden here (surfaced in the scoreline instead).
+  // are intentionally hidden here (surfaced in the scoreline instead). All
+  // finalize errors surface, not just 422 validation drift — for a deciding
+  // game this button is the sole finalize path (the banner is informational),
+  // so a 409 "already posted" / 500 must be visible here rather than swallowed.
   const finalizeApiError =
     finalizeMutation.error instanceof ApiError ? finalizeMutation.error : null
-  const showScoreError =
-    localScoreError !== null ||
-    (finalizeApiError !== null && finalizeApiError.status === 422)
+  const showScoreError = localScoreError !== null || finalizeApiError !== null
 
   function predictNextScoringRoute() {
     if (!data) return matchDetailRoute(matchId)

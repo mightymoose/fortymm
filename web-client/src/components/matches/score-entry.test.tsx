@@ -1005,11 +1005,15 @@ describe('ScoreEntry — failed saves', () => {
     await waitFor(() => expect(scoreCalls).toBe(1))
 
     // The recorded games now decide the match (3-0), so the banner surfaces here
-    // as the post-result affordance rather than re-saving each game.
+    // — informational only. The main "Post result" button (live inputs) owns
+    // finalizing, so the banner carries no duplicate post button of its own.
     const banner = await screen.findByRole('alert')
     expect(banner).toHaveTextContent('These scores finish the match.')
     expect(
-      within(banner).getByRole('button', { name: /post result/i }),
+      within(banner).queryByRole('button', { name: /post result/i }),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: /post result/i }),
     ).toBeInTheDocument()
   })
 
@@ -1076,16 +1080,14 @@ describe('ScoreEntry — failed saves', () => {
     const banner = await screen.findByRole('alert')
     expect(banner).toHaveTextContent('These scores finish the match.')
 
-    // Back online — the banner's "Post result" finalizes in one shot.
+    // Back online — the main "Post result" button finalizes in one shot.
     onlineManager.setOnline(true)
-    await user.click(
-      within(banner).getByRole('button', { name: /post result/i }),
-    )
+    await user.click(screen.getByRole('button', { name: /post result/i }))
 
     await waitFor(() =>
       expect(screen.getByText('match-page')).toBeInTheDocument(),
     )
-    // Canonical result carries every recorded game — and the banner did NOT
+    // Canonical result carries every recorded game — and finalizing did NOT
     // re-fire the per-game scratch save.
     expect(scoreSaveCalls).toBe(1)
     expect(resultsBody).toEqual({
@@ -1138,12 +1140,14 @@ describe('ScoreEntry — failed saves', () => {
     await user.click(screen.getByRole('button', { name: /post result/i }))
     await waitFor(() => expect(scoreSaveCalls).toBe(1))
 
-    // Still offline — we stayed on the deciding game; tapping the banner's "Post
-    // result" re-fires the scratch save (which fails again), never /results.
+    // Still offline — we stayed on the deciding game. The banner is informational
+    // (no button of its own); tapping the main "Post result" re-fires the scratch
+    // save (which fails again), and never touches /results.
     const banner = await screen.findByRole('alert')
-    await user.click(
-      within(banner).getByRole('button', { name: /post result/i }),
-    )
+    expect(
+      within(banner).queryByRole('button', { name: /post result/i }),
+    ).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /post result/i }))
     await waitFor(() => expect(scoreSaveCalls).toBe(2))
     expect(resultsCalls).toBe(0)
   })
@@ -1188,28 +1192,19 @@ describe('ScoreEntry — failed saves', () => {
     )
     await user.type(screen.getByRole('textbox', { name: 'nguyen.t score' }), '3')
     await user.click(screen.getByRole('button', { name: /post result/i }))
-    // The match is decided — we stay on the deciding game, where the banner is
-    // the post-result surface.
+    // The match is decided — we stay on the deciding game; the banner is
+    // informational and the main "Post result" button finalizes.
     await screen.findByRole('alert')
 
-    // Back online, post the result — the server rejects with a 409.
+    // Back online, post the result via the main button — the server rejects 409.
     onlineManager.setOnline(true)
-    const banner = await screen.findByRole('alert')
-    await user.click(
-      within(banner).getByRole('button', { name: /post result/i }),
-    )
+    await user.click(screen.getByRole('button', { name: /post result/i }))
 
-    // The banner surfaces the reason rather than reverting silently, and the
-    // button is usable again for another attempt.
-    await waitFor(() =>
-      expect(screen.getByRole('alert')).toHaveTextContent(
-        'A result has already been posted.',
-      ),
-    )
+    // The reason surfaces inline rather than reverting silently, and the button
+    // stays usable for another attempt.
+    await screen.findByText('A result has already been posted.')
     expect(
-      within(screen.getByRole('alert')).getByRole('button', {
-        name: /post result/i,
-      }),
+      screen.getByRole('button', { name: /post result/i }),
     ).toBeEnabled()
   })
 
