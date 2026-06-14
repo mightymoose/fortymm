@@ -169,6 +169,7 @@ function MatchesPage() {
   const matchList = useMatchList(queryParams, { enabled: session.isSuccess })
   const data = matchList.data
   const isLoading = matchList.isPending
+  const isFetching = matchList.isFetching
 
   // Rewrite the URL — `replace: true` keeps each keystroke from filling
   // browser history. Defaults are stripped so the URL stays clean.
@@ -235,13 +236,14 @@ function MatchesPage() {
   // Snap an out-of-range `?page=` back to the last valid page once the real
   // total is known — a stale bookmark or paging past the end would otherwise
   // render an empty table under a nonsensical "Showing 26–16 of 16" footer
-  // (#541). Wait for the first load to settle; `total` isn't trustworthy while
-  // the query is still pending.
+  // (#541). Only act on a settled, current total: `isLoading` covers the
+  // pending/session-gated window (where `total` is still 0), and `isFetching`
+  // covers a `keepPreviousData` refetch still serving the prior filter's total.
   useEffect(() => {
-    if (!isLoading && page > totalPages) {
+    if (!isLoading && !isFetching && page > totalPages) {
       setPage(totalPages)
     }
-  }, [isLoading, page, totalPages, setPage])
+  }, [isLoading, isFetching, page, totalPages, setPage])
 
   // The redirect runs in an effect, so an out-of-range page paints for one
   // frame first. Clamp the page the footer renders with so its range math never
