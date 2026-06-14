@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, Navigate, useNavigate } from '@tanstack/react-router'
-import { useQueryClient } from '@tanstack/react-query'
+import { onlineManager, useQueryClient } from '@tanstack/react-query'
 import {
   Check,
   Loader2,
@@ -263,7 +263,12 @@ function ScoreEntryInner({
 
   function onSubmit() {
     if (!inputsValid) return
-    if (wouldFinalize) {
+    // Finalizing posts the canonical result — but that's the one write that
+    // can't be faked offline. When offline we instead fall through to the
+    // scratchpad save below, which stores the deciding game's score in the
+    // mutation cache (visible as a failed cell) so it survives until the user
+    // can post the result back online. Online, finalize as usual.
+    if (wouldFinalize && onlineManager.isOnline()) {
       finalizeMutation.mutate(
         { games: hypotheticalGames },
         { onSuccess: () => navigate(matchDetailRoute(matchId)) },

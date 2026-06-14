@@ -1,7 +1,14 @@
 import { useState } from 'react'
+import { useNavigate } from '@tanstack/react-router'
 import { useQueryClient } from '@tanstack/react-query'
 import { RotateCw, TriangleAlert, X as XIcon } from 'lucide-react'
-import { fireScoreSave } from '@/api/matches'
+import {
+  fireScoreSave,
+  matchDetailRoute,
+  useFinalizeMatch,
+  useMatch,
+} from '@/api/matches'
+import { decidedSide, type GamePoints } from '@/lib/scoring'
 import {
   Alert,
   AlertAction,
@@ -35,6 +42,9 @@ export interface SaveBannerProps {
  */
 export function SaveBanner({ matchId, activeGameNumber }: SaveBannerProps) {
   const queryClient = useQueryClient()
+  const navigate = useNavigate()
+  const { data } = useMatch(matchId)
+  const finalizeMutation = useFinalizeMatch(matchId)
   const failed = useFailedGameSaves(matchId).filter(
     (entry) => entry.gameNumber !== activeGameNumber,
   )
@@ -47,16 +57,70 @@ export function SaveBanner({ matchId, activeGameNumber }: SaveBannerProps) {
 
   if (failed.length === 0 || signature === dismissedSignature) return null
 
+  // The recorded scores behind these failures (failed scratch points, plus any
+  // games already persisted) might now decide the whole match. When they do, a
+  // retry shouldn't re-POST each game's scratch save — it should post the
+  // canonical result in one shot (the same write the entry screen's "Post
+  // result" button fires). Build the merged set the same way the entry screen
+  // builds `hypotheticalGames`, excluding the active game (its live input is
+  // the main button's job, not the banner's). Failed scratch overrides the
+  // persisted score for the same game — it's the newer data the cell shows.
+  const mergedByNumber = new Map<number, GamePoints>()
+  for (const game of data?.games ?? []) {
+    if (!game.score || game.game_number === activeGameNumber) continue
+    mergedByNumber.set(game.game_number, {
+      game_number: game.game_number,
+      side_1_points: game.score.side_1_points,
+      side_2_points: game.score.side_2_points,
+    })
+  }
+  for (const entry of failed) {
+    mergedByNumber.set(entry.gameNumber, {
+      game_number: entry.gameNumber,
+      side_1_points: entry.variables.side_1_points,
+      side_2_points: entry.variables.side_2_points,
+    })
+  }
+  const mergedGames = [...mergedByNumber.values()].sort(
+    (a, b) => a.game_number - b.game_number,
+  )
+  const wouldFinalize =
+    data != null && decidedSide(mergedGames, data.best_of) !== null
+  // The finalize POST is in flight — lock the button and swap its label.
+  const posting = wouldFinalize && finalizeMutation.isPending
+
   const single = failed.length === 1
-  const title = single
-    ? `Game ${failed[0].gameNumber} didn't save.`
-    : `${failed.length} games didn't save.`
-  const description = single
-    ? 'Retry now, or tap it in the scoreline to fix the score.'
-    : 'Retry all now, or tap a game in the scoreline to fix it.'
-  const retryLabel = single ? 'Retry' : 'Retry all'
+  const title = wouldFinalize
+    ? 'These scores finish the match.'
+    : single
+      ? `Game ${failed[0].gameNumber} didn't save.`
+      : `${failed.length} games didn't save.`
+  const description = wouldFinalize
+    ? data?.affects_rating
+      ? "Post the result now — they didn't save individually, but the match is decided."
+      : "Finalize the result now — they didn't save individually, but the match is decided."
+    : single
+      ? 'Retry now, or tap it in the scoreline to fix the score.'
+      : 'Retry all now, or tap a game in the scoreline to fix it.'
+  const retryLabel = wouldFinalize
+    ? data?.affects_rating
+      ? 'Post result'
+      : 'Finalize result'
+    : single
+      ? 'Retry'
+      : 'Retry all'
 
   function retry() {
+    // Enough recorded scores to decide the match → post the canonical result
+    // (it obliterates + replaces the scratch saves server-side) instead of
+    // re-firing each failed per-game save.
+    if (wouldFinalize) {
+      finalizeMutation.mutate(
+        { games: mergedGames },
+        { onSuccess: () => navigate(matchDetailRoute(matchId)) },
+      )
+      return
+    }
     for (const entry of failed) {
       fireScoreSave(queryClient, matchId, entry.gameNumber, entry.variables)
     }
@@ -79,9 +143,10 @@ export function SaveBanner({ matchId, activeGameNumber }: SaveBannerProps) {
           size="sm"
           className="border-[color:var(--loss)]/50 text-[color:var(--loss)] hover:bg-[color:var(--loss)]/10 hover:text-[color:var(--loss)]"
           onClick={retry}
+          disabled={posting}
         >
           <RotateCw aria-hidden />
-          {retryLabel}
+          {posting ? 'Posting…' : retryLabel}
         </Button>
         <Button
           type="button"
