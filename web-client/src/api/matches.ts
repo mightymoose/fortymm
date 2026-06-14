@@ -52,6 +52,31 @@ export function matchQueryKey(matchId: string) {
   return ['matches', 'detail', matchId] as const
 }
 
+/** Mutation-cache key for one game's scratch-pad score save. Keyed per game so
+ * every scoreline cell can observe *its own* save straight from the shared
+ * mutation cache (pending / error / success) and a retry just re-fires this
+ * exact key — no separate failed-save store. Shares the match's query-key
+ * prefix so all of a match's saves sweep together via
+ * `matchScoreMutationPrefix`. */
+export function scoreMutationKey(matchId: string, gameNumber: number) {
+  return [...matchQueryKey(matchId), 'score', gameNumber] as const
+}
+
+/** Recover the game number from a `scoreMutationKey` tuple — it's the last
+ * element. Reading the tail (rather than a fixed index) survives any change to
+ * the match query-key prefix. Returns `null` for a non-score key. */
+export function gameNumberFromScoreMutationKey(
+  mutationKey: readonly unknown[] | undefined,
+): number | null {
+  const last = mutationKey?.[mutationKey.length - 1]
+  return typeof last === 'number' ? last : null
+}
+
+/** Prefix matching every game's score-save mutation for a match. */
+export function matchScoreMutationPrefix(matchId: string) {
+  return [...matchQueryKey(matchId), 'score'] as const
+}
+
 /**
  * Opponents to feature in the new-match picker, most-recently-played first
  * (backfilled with other registered players by the API). Errors are thrown so
@@ -202,54 +227,103 @@ function applyScoreMutationCache(
   queryClient.invalidateQueries({ queryKey: DASHBOARD_QUERY_KEY })
 }
 
+type QueryClientArg = ReturnType<typeof useQueryClient>
+
 /**
- * Writes the first score for a game (lazily inserting the MatchGame row).
+ * Options for one game's scratch-pad score save, shared by the entry screen's
+ * submit (`useSaveGameScore`) and the imperative retries fired from the
+ * scoreline / banner (`fireScoreSave`). Whether to POST (create the game's
+ * first score, lazily inserting the row) or PUT (replace an existing one) is
+ * decided from the match cache at call time — so a retry after a failed create
+ * still POSTs and a retry after a failed edit still PUTs.
+ *
  * Fire-and-forget: per-game writes are scratchpad-only — the canonical commit
  * lives in `POST .../results`, which obliterates and replaces the saved
- * scores. So we don't surface errors on these mutations.
+ * scores. We never throw, so a failure simply lives on the mutation in the
+ * cache (status `error`, with the entered points in `variables`) as the
+ * failed-save state each scoreline cell reads back. A generous `gcTime` keeps
+ * that failed state around for the length of a scoring session rather than the
+ * default 5 minutes.
  */
-export function useCreateScore(matchId: string, gameNumber: number) {
+export function scoreSaveMutationOptions(
+  queryClient: QueryClientArg,
+  matchId: string,
+  gameNumber: number,
+) {
+  return {
+    mutationKey: scoreMutationKey(matchId, gameNumber),
+    gcTime: 1000 * 60 * 30,
+    mutationFn: async (input: MatchGameScoreWrite): Promise<MatchDetails> => {
+      const cached = queryClient.getQueryData<MatchDetails>(
+        matchQueryKey(matchId),
+      )
+      const hasScore = Boolean(
+        cached?.games.find((g) => g.game_number === gameNumber)?.score,
+      )
+      const path = { match_id: matchId, game_number: gameNumber }
+      return hasScore
+        ? unwrap(
+            'update score',
+            await api.PUT('/v1/matches/{match_id}/games/{game_number}/scores', {
+              params: { path },
+              body: input,
+            }),
+          )
+        : unwrap(
+            'submit score',
+            await api.POST(
+              '/v1/matches/{match_id}/games/{game_number}/scores/new',
+              { params: { path }, body: input },
+            ),
+          )
+    },
+    onSuccess: (data: MatchDetails) =>
+      applyScoreMutationCache(queryClient, matchId, data),
+  }
+}
+
+/** Entry-screen submit hook for one game's score. The observer exposes
+ * `isSuccess` / `isPending` for the screen's redirect-race guard; the write
+ * itself lands in the shared mutation cache under `scoreMutationKey`, where the
+ * scoreline cells and banner observe it. */
+export function useSaveGameScore(matchId: string, gameNumber: number) {
   const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: async (input: MatchGameScoreWrite): Promise<MatchDetails> =>
-      unwrap(
-        'submit score',
-        await api.POST(
-          '/v1/matches/{match_id}/games/{game_number}/scores/new',
-          {
-            params: {
-              path: { match_id: matchId, game_number: gameNumber },
-            },
-            body: input,
-          },
-        ),
-      ),
-    onSuccess: (data) => applyScoreMutationCache(queryClient, matchId, data),
-  })
+  return useMutation(scoreSaveMutationOptions(queryClient, matchId, gameNumber))
 }
 
 /**
- * Edits the saved score for a game. Same scratchpad-write posture as
- * `useCreateScore`.
+ * Imperatively (re)fire a game's score save into the shared mutation cache.
+ * Used by scoreline-cell and banner retries, which save games other than the
+ * one whose entry screen is mounted, so they can't hold a `useSaveGameScore`
+ * observer of their own. Resolves when the write settles; a rejection stays on
+ * the mutation in the cache as the failed-save state (swallowed here so it
+ * isn't an unhandled rejection).
  */
-export function useUpdateScore(matchId: string, gameNumber: number) {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: async (input: MatchGameScoreWrite): Promise<MatchDetails> =>
-      unwrap(
-        'update score',
-        await api.PUT(
-          '/v1/matches/{match_id}/games/{game_number}/scores',
-          {
-            params: {
-              path: { match_id: matchId, game_number: gameNumber },
-            },
-            body: input,
-          },
-        ),
-      ),
-    onSuccess: (data) => applyScoreMutationCache(queryClient, matchId, data),
-  })
+export function fireScoreSave(
+  queryClient: QueryClientArg,
+  matchId: string,
+  gameNumber: number,
+  input: MatchGameScoreWrite,
+) {
+  return queryClient
+    .getMutationCache()
+    .build(queryClient, scoreSaveMutationOptions(queryClient, matchId, gameNumber))
+    .execute(input)
+    .catch(() => undefined)
+}
+
+/** Drop a game's score-save mutations from the cache — call when the game is
+ * cleared/deleted so a stale failed-save state doesn't outlive the score it
+ * referred to. */
+export function forgetScoreSaves(
+  queryClient: QueryClientArg,
+  matchId: string,
+  gameNumber: number,
+) {
+  const cache = queryClient.getMutationCache()
+  cache
+    .findAll({ mutationKey: scoreMutationKey(matchId, gameNumber), exact: true })
+    .forEach((mutation) => cache.remove(mutation))
 }
 
 /**

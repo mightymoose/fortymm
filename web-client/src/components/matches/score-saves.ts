@@ -1,0 +1,102 @@
+import { useMutationState, type Mutation } from '@tanstack/react-query'
+import {
+  gameNumberFromScoreMutationKey,
+  matchScoreMutationPrefix,
+  scoreMutationKey,
+  type MatchGameScoreWrite,
+} from '@/api/matches'
+
+/**
+ * View-model hooks over the per-game score-save mutations (`scoreMutationKey`).
+ *
+ * The shared React Query mutation cache *is* the failed-save store: each game's
+ * scratch save is its own keyed mutation, so a cell can read its own latest
+ * save state (saving / failed / saved) and the entered points without any
+ * prop-drilled side store. A retry is just another mutation under the same key,
+ * so "latest wins" — a successful re-save supersedes an older failure even
+ * though the failed mutation lingers in the cache until it's garbage-collected.
+ */
+
+export type GameSaveStatus = 'idle' | 'pending' | 'success' | 'error'
+
+export interface GameSaveState {
+  status: GameSaveStatus
+  /** The points last submitted for this game — shown in the cell while it's
+   * saving or failed (they're the scratch data a retry re-sends). */
+  variables: MatchGameScoreWrite | null
+  submittedAt: number
+}
+
+// Stable, module-level selectors so the per-cell / per-render subscriptions
+// don't allocate a fresh closure each time.
+const selectGameSaveState = (mutation: Mutation): GameSaveState => ({
+  status: mutation.state.status as GameSaveStatus,
+  variables:
+    (mutation.state.variables as MatchGameScoreWrite | undefined) ?? null,
+  submittedAt: mutation.state.submittedAt,
+})
+
+interface ScoreSaveProbe {
+  gameNumber: number | null
+  status: GameSaveStatus
+  variables: MatchGameScoreWrite | undefined
+  submittedAt: number
+}
+const selectScoreSaveProbe = (mutation: Mutation): ScoreSaveProbe => ({
+  gameNumber: gameNumberFromScoreMutationKey(mutation.options.mutationKey),
+  status: mutation.state.status as GameSaveStatus,
+  variables: mutation.state.variables as MatchGameScoreWrite | undefined,
+  submittedAt: mutation.state.submittedAt,
+})
+
+/** Latest score-save state for a single game, or `null` if it's never been
+ * saved this session. Reads the shared mutation cache, so it reflects a save
+ * fired from any screen — including the one that already navigated away. */
+export function useGameSaveState(
+  matchId: string,
+  gameNumber: number,
+): GameSaveState | null {
+  const states = useMutationState({
+    filters: {
+      mutationKey: scoreMutationKey(matchId, gameNumber),
+      exact: true,
+    },
+    select: selectGameSaveState,
+  })
+  return states.length ? states[states.length - 1] : null
+}
+
+export interface FailedGameSave {
+  gameNumber: number
+  variables: MatchGameScoreWrite
+}
+
+/**
+ * Games whose *latest* score-save failed, oldest-submitted first. Latest-per-
+ * game so a successful retry (or a fresh save) supersedes an earlier failure
+ * without having to evict it from the cache. Drives the failure banner's copy
+ * ("Game 3 didn't save." vs "2 games didn't save.") and its retry-all.
+ */
+export function useFailedGameSaves(matchId: string): FailedGameSave[] {
+  const states = useMutationState({
+    filters: { mutationKey: matchScoreMutationPrefix(matchId) },
+    select: selectScoreSaveProbe,
+  })
+
+  const latestPerGame = new Map<number, ScoreSaveProbe>()
+  for (const state of states) {
+    if (state.gameNumber == null) continue
+    const prev = latestPerGame.get(state.gameNumber)
+    if (!prev || state.submittedAt >= prev.submittedAt) {
+      latestPerGame.set(state.gameNumber, state)
+    }
+  }
+
+  return [...latestPerGame.values()]
+    .filter((state) => state.status === 'error' && state.variables != null)
+    .sort((a, b) => a.submittedAt - b.submittedAt)
+    .map((state) => ({
+      gameNumber: state.gameNumber as number,
+      variables: state.variables as MatchGameScoreWrite,
+    }))
+}

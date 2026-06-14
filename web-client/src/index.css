@@ -1943,7 +1943,6 @@ body.dark.fortymm-theme {
 .fortymm-theme .sl-cell.failed {
   border: 1.5px solid var(--loss);
   background: rgba(255, 77, 109, 0.09);
-  padding-bottom: 22px;
 }
 .fortymm-theme .sl-cell.failed .sl-n {
   color: var(--loss);
@@ -1981,48 +1980,95 @@ body.dark.fortymm-theme {
   justify-content: center;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
 }
-.fortymm-theme .sl-retry {
-  position: absolute;
-  bottom: 6px;
-  left: 50%;
-  transform: translateX(-50%);
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
+/* In-flow status micro-label under the score — the non-color cue that pairs
+   with the corner badge ("Not saved" on a failed cell, "Saving" while a save
+   is in flight). Spelled out so failure/pending never reads by color alone. */
+.fortymm-theme .sl-status {
   font: 600 9px var(--font-mono);
   letter-spacing: 0.1em;
-  color: var(--loss);
+  text-transform: uppercase;
   white-space: nowrap;
 }
-
-/* ---------- Failed-save flash ----------
-   Non-blocking banner under the entry header: names the failed game, points
-   at the scoreline, auto-dismisses after 6s (the hairline timer drains).
-   The persistent state lives in the failed cell, not here. Layout and
-   chrome come from the design-system Alert — these rules only add the
-   entrance motion and the auto-dismiss hairline. */
-.fortymm-theme .save-flash__timer {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  height: 2px;
-  background: rgba(255, 77, 109, 0.5);
-  /* Matches the Alert's rounded-lg corners. */
-  border-bottom-left-radius: 8px;
-  border-bottom-right-radius: 8px;
-  transform-origin: left;
-  animation: save-flash-drain 6s linear forwards;
+.fortymm-theme .sl-status.failed {
+  color: var(--loss);
 }
-@keyframes save-flash-drain {
+.fortymm-theme .sl-status.saving {
+  color: var(--warn);
+}
+
+/* ---------- Save-in-progress cell ----------
+   A per-game scratch save is in flight (first submit, or a retry). Amber —
+   distinct from active-orange and failed-red — with a spinning badge and the
+   entered points dimmed until the write settles. Non-interactive meanwhile. */
+.fortymm-theme .sl-cell.saving {
+  border: 1.5px solid rgba(255, 196, 61, 0.55);
+  background: rgba(255, 196, 61, 0.08);
+  cursor: default;
+}
+.fortymm-theme .sl-cell.saving .sl-n {
+  color: var(--warn);
+}
+.fortymm-theme .sl-cell.saving .sl-scores {
+  color: rgba(255, 255, 255, 0.5);
+}
+.fortymm-theme .sl-cell.saving .sl-scores .dash {
+  color: rgba(255, 196, 61, 0.7);
+}
+.fortymm-theme .sl-badge.saving {
+  background: var(--warn);
+}
+.fortymm-theme .sl-spin {
+  animation: sys-health-spin 0.7s linear infinite;
+}
+
+/* ---------- Resolved cell (transient) ----------
+   A failed/saving cell whose retry just succeeded: a brief green tint + check
+   before it settles to the plain saved look. */
+.fortymm-theme .sl-cell.resolved {
+  border-color: var(--serve-500);
+  background: rgba(0, 226, 154, 0.09);
+  animation: sl-resolve-in var(--dur-base, 200ms) var(--ease-out, cubic-bezier(0.2, 0.8, 0.2, 1));
+}
+.fortymm-theme .sl-badge.resolved {
+  background: var(--serve-500);
+  animation: sl-badge-in var(--dur-base, 200ms) var(--ease-out, cubic-bezier(0.2, 0.8, 0.2, 1)) both;
+}
+@keyframes sl-resolve-in {
   from {
-    transform: scaleX(1);
+    border-color: var(--ink-600);
+    background: rgba(0, 226, 154, 0);
   }
   to {
-    transform: scaleX(0);
+    border-color: var(--serve-500);
+    background: rgba(0, 226, 154, 0.09);
   }
 }
-@keyframes save-flash-in {
+@keyframes sl-badge-in {
+  from {
+    transform: scale(0.6);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .fortymm-theme .sl-cell.resolved,
+  .fortymm-theme .sl-badge.resolved,
+  .fortymm-theme .sl-spin {
+    animation: none;
+  }
+}
+
+/* ---------- Failed-save banner ----------
+   Non-blocking notice under the entry header: names the failed game(s) and
+   offers a retry, but never gates "Save game & next". It persists while any of
+   the match's saves are failed (the source of truth is the mutation cache, not
+   a timer); the per-cell failed treatment is the always-on recovery affordance.
+   Layout and chrome come from the design-system Alert — these rules only add
+   the entrance motion. */
+@keyframes save-banner-in {
   from {
     opacity: 0;
     transform: translateY(-10px);
@@ -2032,14 +2078,11 @@ body.dark.fortymm-theme {
     transform: none;
   }
 }
-.fortymm-theme .save-flash {
-  /* The timer hairline anchors to the Alert's box. */
-  position: relative;
-  animation: save-flash-in var(--dur-slow, 360ms) var(--ease-out, cubic-bezier(0.2, 0.8, 0.2, 1));
+.fortymm-theme .save-banner {
+  animation: save-banner-in var(--dur-slow, 360ms) var(--ease-out, cubic-bezier(0.2, 0.8, 0.2, 1));
 }
 @media (prefers-reduced-motion: reduce) {
-  .fortymm-theme .save-flash,
-  .fortymm-theme .save-flash__timer {
+  .fortymm-theme .save-banner {
     animation: none;
   }
 }

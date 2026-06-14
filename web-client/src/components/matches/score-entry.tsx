@@ -1,22 +1,24 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, Navigate, useNavigate } from '@tanstack/react-router'
+import { useQueryClient } from '@tanstack/react-query'
 import {
-  RotateCw,
+  Check,
+  Loader2,
   TriangleAlert,
   User as UserIcon,
   X as XIcon,
 } from 'lucide-react'
 import { ApiError } from '@/api/client'
 import {
+  forgetScoreSaves,
   matchDetailRoute,
   scoringEditRoute,
   scoringNewRoute,
-  useCreateScore,
   useDeleteScore,
   useDeleteScoreForMatch,
   useFinalizeMatch,
   useMatch,
-  useUpdateScore,
+  useSaveGameScore,
   type MatchDetails,
   type MatchGameScoreWrite,
   type MatchResultsGameWrite,
@@ -24,14 +26,11 @@ import {
 import { AppShell } from '@/components/app-shell'
 import { cn, initialsOf } from '@/lib/utils'
 import { decidedSide, illegalScoreReason } from '@/lib/scoring'
-import {
-  clearFailedSave,
-  dismissSaveFlash,
-  failedSaveFor,
-  recordFailedSave,
-  useFailedSaves,
-} from './failed-saves'
-import { SaveFlash } from './save-flash'
+import { useGameSaveState } from './score-saves'
+import { SaveBanner } from './save-banner'
+
+/** The non-null persisted score on a game. */
+type PersistedScore = NonNullable<MatchDetails['games'][number]['score']>
 
 // Placeholder for the opponent label on solo matches — mirrors the match
 // details hero. Distinct from `initialsOf('Opponent')` so users can tell
@@ -71,13 +70,16 @@ function ScoreEntryInner({
   mode: ScoreEntryMode
 }) {
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const { data, isLoading } = useMatch(matchId)
-  const createMutation = useCreateScore(matchId, gameNumber)
-  const updateMutation = useUpdateScore(matchId, gameNumber)
+  const saveMutation = useSaveGameScore(matchId, gameNumber)
   const deleteMutation = useDeleteScore(matchId, gameNumber)
   const cellDeleteMutation = useDeleteScoreForMatch(matchId)
   const finalizeMutation = useFinalizeMatch(matchId)
-  const { entries: failedEntries, flash } = useFailedSaves()
+  // This game's own latest save state, read from the shared mutation cache —
+  // used only to pre-fill the inputs after a failed save (the scoreline cells
+  // and banner each read their own state).
+  const ownSave = useGameSaveState(matchId, gameNumber)
 
   // `null` means "user hasn't typed anything yet" — we fall through to the
   // persisted score in edit mode. Avoids a state-syncing effect when `data`
@@ -125,10 +127,10 @@ function ScoreEntryInner({
   // Mode/URL/state alignment: in create mode but a score exists → swap to
   // the edit URL so Save doesn't try to POST .../scores/new and 409. The
   // inverse — edit mode but no saved score — swaps to the create URL.
-  // Skipped while this page's own create is settling: the success cache
+  // Skipped while this page's own save is settling: the success cache
   // write makes the score "exist" a beat before onSettled navigates to the
   // next game, and this redirect must not outrun that navigation.
-  if (mode.kind === 'create' && persistedScore && !createMutation.isSuccess) {
+  if (mode.kind === 'create' && persistedScore && !saveMutation.isSuccess) {
     return <Navigate {...scoringEditRoute(matchId, gameNumber)} replace />
   }
   if (mode.kind === 'edit' && !persistedScore) {
@@ -157,31 +159,28 @@ function ScoreEntryInner({
       ? persistedScore.side_2_points
       : persistedScore.side_1_points)
   // A failed save's points pre-fill ahead of the persisted score — they're
-  // the newer scratch data, and pre-filling is what makes tapping a failed
-  // scoreline cell a real retry rather than a blank do-over.
-  const failedEntry = failedSaveFor(failedEntries, matchId, gameNumber)
+  // the newer scratch data, and pre-filling is what makes opening a failed
+  // game from the scoreline a real retry rather than a blank do-over. They
+  // live on this game's failed mutation in the shared cache.
+  const failedEntry = ownSave?.status === 'error' ? ownSave.variables : null
   const failedMe =
     failedEntry &&
-    (mySideNumber === 1
-      ? failedEntry.side_1_points
-      : failedEntry.side_2_points)
+    (mySideNumber === 1 ? failedEntry.side_1_points : failedEntry.side_2_points)
   const failedOpp =
     failedEntry &&
-    (mySideNumber === 1
-      ? failedEntry.side_2_points
-      : failedEntry.side_1_points)
+    (mySideNumber === 1 ? failedEntry.side_2_points : failedEntry.side_1_points)
   const me =
     meTyped ??
-    (failedMe !== null
+    (failedMe != null
       ? String(failedMe)
-      : persistedMe !== null
+      : persistedMe != null
         ? String(persistedMe)
         : '')
   const opp =
     oppTyped ??
-    (failedOpp !== null
+    (failedOpp != null
       ? String(failedOpp)
-      : persistedOpp !== null
+      : persistedOpp != null
         ? String(persistedOpp)
         : '')
 
@@ -236,8 +235,8 @@ function ScoreEntryInner({
     inputsValid && decidedSide(hypotheticalGames, bestOf) !== null
 
   // Per the fire-and-forget posture: only finalize errors are surfaced. The
-  // per-game mutations (create / update / delete) self-heal at finalize, so
-  // their errors are intentionally hidden.
+  // per-game mutations (save / delete) self-heal at finalize, so their errors
+  // are intentionally hidden here (surfaced in the scoreline instead).
   const finalizeApiError =
     finalizeMutation.error instanceof ApiError ? finalizeMutation.error : null
   const showScoreError =
@@ -273,21 +272,13 @@ function ScoreEntryInner({
     }
     const next = predictNextScoringRoute()
     const args = toBody()
-    // Fire-and-forget — we navigate as soon as the request settles either
-    // way, since the canonical POST /results reconciles the score later. A
-    // failure must still be visible and recoverable (#369): we keep the
-    // entered points so the scoreline cell flips to its failed state and the
-    // next screen flashes "Game N didn't save".
-    const settle = {
-      onSuccess: () => clearFailedSave(matchId, gameNumber),
-      onError: () => recordFailedSave(matchId, gameNumber, args),
-      onSettled: () => navigate(next),
-    }
-    if (mode.kind === 'edit') {
-      updateMutation.mutate(args, settle)
-    } else {
-      createMutation.mutate(args, settle)
-    }
+    // Fire-and-forget — we navigate as soon as the request settles either way,
+    // since the canonical POST /results reconciles the score later. The save
+    // lands in the shared mutation cache under this game's key: on success the
+    // game's scoreline cell reads "saved"; on failure it stays there as the
+    // failed-save state (#369), so the cell flips to failed (keeping the
+    // entered points) and the next screen's banner names the game.
+    saveMutation.mutate(args, { onSettled: () => navigate(next) })
   }
 
   // After any clear, drop focus into the first input that's still empty so
@@ -304,8 +295,9 @@ function ScoreEntryInner({
 
   function onClear() {
     if (mode.kind !== 'edit') return
-    // Clearing is an explicit discard — drop any failed-save leftovers too.
-    clearFailedSave(matchId, gameNumber)
+    // Clearing is an explicit discard — drop any failed-save leftovers too, so
+    // a stale failure doesn't outlive the score it referred to.
+    forgetScoreSaves(queryClient, matchId, gameNumber)
     deleteMutation.mutate(undefined, {
       // After clearing, land back on this game's create route so the user
       // can re-enter — same page, just with empty inputs and create-mode
@@ -319,7 +311,7 @@ function ScoreEntryInner({
   // strip. Fire-and-forget like the per-game writes; we just refocus the
   // first empty input on the current page so the user can keep typing.
   function onClearCell(n: number) {
-    clearFailedSave(matchId, n)
+    forgetScoreSaves(queryClient, matchId, n)
     cellDeleteMutation.mutate(n)
     focusFirstEmpty()
   }
@@ -366,8 +358,12 @@ function ScoreEntryInner({
         : 'Final game. Save to post the result.'
   const submitLabel = wouldFinalize
     ? finalizeMutation.isPending
-      ? data.affects_rating ? 'Posting result…' : 'Finalizing…'
-      : data.affects_rating ? 'Post result' : 'Finalize result'
+      ? data.affects_rating
+        ? 'Posting result…'
+        : 'Finalizing…'
+      : data.affects_rating
+        ? 'Post result'
+        : 'Finalize result'
     : isEdit
       ? 'Save changes →'
       : gameNumber < bestOf
@@ -385,16 +381,7 @@ function ScoreEntryInner({
           </div>
         </div>
 
-        {flash !== null &&
-          flash.matchId === matchId &&
-          flash.gameNumber !== gameNumber && (
-          <SaveFlash
-            // Re-key per failure so a repeat failure restarts the timer.
-            key={flash.id}
-            gameNumber={flash.gameNumber}
-            onDismiss={dismissSaveFlash}
-          />
-        )}
+        <SaveBanner matchId={matchId} activeGameNumber={gameNumber} />
 
         <div className="single-entry">
           <ScoreSide
@@ -433,10 +420,7 @@ function ScoreEntryInner({
         </div>
 
         {showScoreError && (
-          <p
-            role="alert"
-            className="mt-1.5 text-xs text-[color:var(--loss)]"
-          >
+          <p role="alert" className="mt-1.5 text-xs text-[color:var(--loss)]">
             {localScoreError ??
               finalizeApiError?.detail ??
               finalizeApiError?.message}
@@ -472,7 +456,6 @@ function ScoreEntryInner({
           activeGameNumber={gameNumber}
           matchId={matchId}
           mySideNumber={mySideNumber}
-          failedEntries={failedEntries}
           onClearCell={onClearCell}
           clearDisabled={inputsLocked || cellDeleteMutation.isPending}
         />
@@ -554,7 +537,6 @@ function Scoreline({
   activeGameNumber,
   matchId,
   mySideNumber,
-  failedEntries,
   onClearCell,
   clearDisabled,
 }: {
@@ -562,16 +544,14 @@ function Scoreline({
   activeGameNumber: number
   matchId: string
   mySideNumber: 1 | 2
-  failedEntries: Readonly<Record<string, MatchGameScoreWrite>>
   onClearCell: (gameNumber: number) => void
   clearDisabled: boolean
 }) {
-  // Every cell links to its own scoring route — scored games go to edit,
-  // un-scored games go to /scores/new. Lets the user pick games in any
-  // order from the scoreline directly. Logged cells also carry a ✕ button
-  // (desktop hover; hidden on touch) that clears that game in place.
-  // `--sl-cell-count` drives the mobile grid template so the cells fit
-  // exactly the best-of width (the desktop layout flex-wraps regardless).
+  // Each cell observes its *own* save in the shared mutation cache (saving /
+  // failed / saved), so the strip reflects per-game outcomes independently —
+  // two failed saves light two cells, each retried and resolved on its own.
+  // `--sl-cell-count` drives the mobile grid template so the cells fit exactly
+  // the best-of width (the desktop layout flex-wraps regardless).
   return (
     <div className="scoreline">
       <div className="sl-label">SCORELINE</div>
@@ -580,118 +560,194 @@ function Scoreline({
         style={{ '--sl-cell-count': data.best_of } as React.CSSProperties}
       >
         {Array.from({ length: data.best_of }, (_, i) => i + 1).map((n) => {
-          const g = data.games.find((x) => x.game_number === n) ?? null
-          const score = g?.score ?? null
-          const isActive = n === activeGameNumber
-          // On the failed game's own page the active treatment wins — the
-          // inputs there are already pre-filled, so the cell needn't also
-          // shout "retry" at the user who is mid-retry.
-          const failed = isActive
-            ? null
-            : failedSaveFor(failedEntries, matchId, n)
-          const cls = cn(
-            'sl-cell',
-            failed ? 'failed' : score ? 'done' : 'pending',
-            isActive && 'active',
-          )
-          // A failed entry's points display over the persisted score — they
-          // are the newer scratch data the user would be retrying.
-          const myPoints = failed
-            ? mySideNumber === 1
-              ? failed.side_1_points
-              : failed.side_2_points
-            : score
-              ? mySideNumber === 1
-                ? score.side_1_points
-                : score.side_2_points
-              : null
-          const oppPoints = failed
-            ? mySideNumber === 1
-              ? failed.side_2_points
-              : failed.side_1_points
-            : score
-              ? mySideNumber === 1
-                ? score.side_2_points
-                : score.side_1_points
-              : null
-          const isMyWin =
-            score && !failed ? score.winner_side_number === mySideNumber : null
-          // The ⚠ badge takes over the failed cell's corner, so the hover-✕
-          // hides until the retry resolves the failure.
-          const clearBtn =
-            score && !failed ? (
-            <button
-              type="button"
-              className="sl-clear"
-              aria-label={`Clear game ${n}`}
-              title={`Clear game ${n}`}
-              disabled={clearDisabled}
-              onClick={(e) => {
-                // Stop the surrounding Link from navigating to /edit on the
-                // cell we just cleared. preventDefault is what blocks
-                // TanStack Router's nav (it checks defaultPrevented before
-                // dispatching) — stopPropagation is belt-and-suspenders.
-                e.preventDefault()
-                e.stopPropagation()
-                onClearCell(n)
-              }}
-            >
-              <XIcon size={14} strokeWidth={2.5} aria-hidden />
-            </button>
-          ) : null
-          const inner = (
-            <>
-              {failed && (
-                <span className="sl-badge" aria-hidden>
-                  <TriangleAlert size={13} strokeWidth={2.25} />
-                </span>
-              )}
-              <div className="sl-n">G{n}</div>
-              <div className="sl-scores">
-                <span className={cn('s', isMyWin === true && 'w')}>
-                  {myPoints ?? '—'}
-                </span>
-                <span className="dash">–</span>
-                <span className={cn('s', isMyWin === false && 'w')}>
-                  {oppPoints ?? '—'}
-                </span>
-              </div>
-              {failed && (
-                <span className="sl-retry" aria-hidden>
-                  <RotateCw size={10} strokeWidth={2.5} /> RETRY
-                </span>
-              )}
-              {clearBtn}
-            </>
-          )
-          if (isActive) {
-            return (
-              <div key={n} className={cls} aria-current="step">
-                {inner}
-              </div>
-            )
-          }
-          const target = score
-            ? scoringEditRoute(matchId, n)
-            : scoringNewRoute(matchId, n)
+          const game = data.games.find((x) => x.game_number === n) ?? null
           return (
-            <Link
+            <ScorelineCell
               key={n}
-              {...target}
-              className={cls}
-              // Failure can't be color-alone: the label spells it out for
-              // screen readers; sighted users get the ⚠ badge + RETRY text.
-              aria-label={
-                failed
-                  ? `Game ${n}, failed to save, ${myPoints} to ${oppPoints}. Tap to retry.`
-                  : undefined
-              }
-            >
-              {inner}
-            </Link>
+              n={n}
+              matchId={matchId}
+              score={game?.score ?? null}
+              isActive={n === activeGameNumber}
+              mySideNumber={mySideNumber}
+              clearDisabled={clearDisabled}
+              onClear={onClearCell}
+            />
           )
         })}
       </div>
     </div>
+  )
+}
+
+function ScorelineCell({
+  n,
+  matchId,
+  score,
+  isActive,
+  mySideNumber,
+  clearDisabled,
+  onClear,
+}: {
+  n: number
+  matchId: string
+  score: PersistedScore | null
+  isActive: boolean
+  mySideNumber: 1 | 2
+  clearDisabled: boolean
+  onClear: (gameNumber: number) => void
+}) {
+  const save = useGameSaveState(matchId, n)
+
+  // A brief green confirmation when this game's save flips pending → success,
+  // before the cell settles into its plain saved look — only on an actual
+  // transition, so navigating onto a page whose game already saved doesn't
+  // re-flash. Mirrors the design's saving → green-check → settle motion.
+  const [resolved, setResolved] = useState(false)
+  const prevStatus = useRef(save?.status)
+  useEffect(() => {
+    const previous = prevStatus.current
+    prevStatus.current = save?.status
+    if (previous === 'pending' && save?.status === 'success') {
+      setResolved(true)
+      const timer = setTimeout(() => setResolved(false), 900)
+      return () => clearTimeout(timer)
+    }
+  }, [save?.status])
+
+  // The active cell is the game being entered above — its inputs are the retry
+  // surface, so it never wears a saving/failed/resolved treatment.
+  const status = isActive ? null : (save?.status ?? null)
+  const saving = status === 'pending'
+  const failed = status === 'error'
+  const showResolved = resolved && status === 'success' && score != null
+
+  // While saving or failed, show the just-entered scratch points (from the
+  // mutation); otherwise the persisted score.
+  const points =
+    (saving || failed) && save?.variables
+      ? save.variables
+      : score
+        ? { side_1_points: score.side_1_points, side_2_points: score.side_2_points }
+        : null
+  const myPoints =
+    points && (mySideNumber === 1 ? points.side_1_points : points.side_2_points)
+  const oppPoints =
+    points && (mySideNumber === 1 ? points.side_2_points : points.side_1_points)
+  const isMyWin =
+    score && !saving && !failed ? score.winner_side_number === mySideNumber : null
+
+  const cls = cn(
+    'sl-cell',
+    isActive
+      ? 'active'
+      : saving
+        ? 'saving'
+        : failed
+          ? 'failed'
+          : showResolved
+            ? 'resolved'
+            : score
+              ? 'done'
+              : 'pending',
+  )
+
+  const badge = saving ? (
+    <span className="sl-badge saving" aria-hidden>
+      <Loader2 className="sl-spin" size={13} strokeWidth={2.25} />
+    </span>
+  ) : failed ? (
+    <span className="sl-badge" aria-hidden>
+      <TriangleAlert size={13} strokeWidth={2.25} />
+    </span>
+  ) : showResolved ? (
+    <span className="sl-badge resolved" aria-hidden>
+      <Check size={14} strokeWidth={3} />
+    </span>
+  ) : null
+
+  const statusLabel = saving ? (
+    <span className="sl-status saving" aria-hidden>
+      Saving
+    </span>
+  ) : failed ? (
+    <span className="sl-status failed" aria-hidden>
+      Not saved
+    </span>
+  ) : null
+
+  // The ⚠ / spinner badge owns the cell's corner while saving or failed, so
+  // the hover-✕ only shows on a plainly-saved cell.
+  const clearBtn =
+    score && !saving && !failed && !showResolved ? (
+      <button
+        type="button"
+        className="sl-clear"
+        aria-label={`Clear game ${n}`}
+        title={`Clear game ${n}`}
+        disabled={clearDisabled}
+        onClick={(e) => {
+          // Stop the surrounding Link from navigating to /edit on the cell we
+          // just cleared. preventDefault is what blocks TanStack Router's nav
+          // (it checks defaultPrevented before dispatching) — stopPropagation
+          // is belt-and-suspenders.
+          e.preventDefault()
+          e.stopPropagation()
+          onClear(n)
+        }}
+      >
+        <XIcon size={14} strokeWidth={2.5} aria-hidden />
+      </button>
+    ) : null
+
+  const inner = (
+    <>
+      {badge}
+      <div className="sl-n">G{n}</div>
+      <div className="sl-scores">
+        <span className={cn('s', isMyWin === true && 'w')}>
+          {myPoints ?? '—'}
+        </span>
+        <span className="dash">–</span>
+        <span className={cn('s', isMyWin === false && 'w')}>
+          {oppPoints ?? '—'}
+        </span>
+      </div>
+      {statusLabel}
+      {clearBtn}
+    </>
+  )
+
+  if (isActive) {
+    return (
+      <div className={cls} aria-current="step">
+        {inner}
+      </div>
+    )
+  }
+
+  // A save in flight isn't a navigation target — wait for it to settle.
+  if (saving) {
+    return (
+      <div
+        className={cls}
+        aria-label={`Game ${n}, saving, ${myPoints} to ${oppPoints}`}
+      >
+        {inner}
+      </div>
+    )
+  }
+
+  const target = score ? scoringEditRoute(matchId, n) : scoringNewRoute(matchId, n)
+  // Failure can't be color-alone: the label spells it out for screen readers;
+  // sighted users get the ⚠ badge + "Not saved" micro-label.
+  const ariaLabel = failed
+    ? `Game ${n} didn't save, ${myPoints} to ${oppPoints}. Tap to fix.`
+    : score
+      ? `Game ${n}, saved, ${myPoints} to ${oppPoints}`
+      : `Game ${n}, not yet played`
+  return (
+    <Link {...target} className={cls} aria-label={ariaLabel}>
+      {inner}
+    </Link>
   )
 }
