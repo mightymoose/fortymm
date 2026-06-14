@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import {
   RouterProvider,
@@ -7,9 +7,13 @@ import {
   createRoute,
   createRouter,
 } from '@tanstack/react-router'
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import {
+  QueryClient,
+  QueryClientProvider,
+  onlineManager,
+} from '@tanstack/react-query'
 import { http, HttpResponse } from 'msw'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { server } from '@/mocks/server'
 import { matchDetails } from '@/test/factories'
 import type { components } from '@/api/schema'
@@ -899,4 +903,411 @@ describe('ScoreEntry — failed saves', () => {
       '4',
     )
   })
+
+  // Regression: React Query's default `networkMode: 'online'` *pauses*
+  // mutations while offline, so the offline Save tap used to do nothing —
+  // no navigation, no failed cell. The score-save mutation forces
+  // `networkMode: 'always'` so an offline tap fires, fails on the network
+  // error, and lands in the same failed-save state as a 500.
+  it('offline: Save still fires, navigates forward, and flags the cell as failed', async () => {
+    const user = userEvent.setup()
+    server.use(
+      http.get('*/v1/matches/m-1', () => HttpResponse.json(inProgressMatch())),
+      // Offline → the request rejects with a network error.
+      http.post('*/v1/matches/m-1/games/3/scores/new', () =>
+        HttpResponse.error(),
+      ),
+    )
+
+    renderScoringApp('/matches/m-1/games/3/scores/new')
+
+    // Load the page online (the match details land in cache), then drop the
+    // connection — mirroring a user who opened the match then lost signal.
+    await screen.findByRole('heading', { name: /enter game 3 score/i })
+    onlineManager.setOnline(false)
+    await user.type(
+      screen.getByRole('textbox', { name: 'rita.kovac score' }),
+      '11',
+    )
+    await user.type(screen.getByRole('textbox', { name: 'nguyen.t score' }), '4')
+    await user.click(screen.getByRole('button', { name: /save game & next/i }))
+
+    // Forward navigation still happens — the offline save isn't stuck paused.
+    await screen.findByRole('heading', { name: /enter game 4 score/i })
+
+    // It lands in the failed-save state: banner names the game, cell flips to
+    // "Not saved" keeping the entered points for a retry.
+    const banner = await screen.findByRole('alert')
+    expect(banner).toHaveTextContent("Game 3 didn't save.")
+    const cell = screen.getByRole('link', {
+      name: "Game 3 didn't save, 11 to 4. Tap to fix.",
+    })
+    expect(cell).toHaveClass('failed')
+    expect(cell).toHaveTextContent('Not saved')
+  })
+
+  // Goal: scores must be enterable offline. The deciding game normally posts
+  // the canonical result (/results), the one write we can't fake offline.
+  // Offline we instead store it as a scratchpad save so the score survives —
+  // we must NOT attempt /results, and the game must land in the failed-save
+  // state with its points retained for a later online post.
+  it('offline: the deciding game stores as a scratchpad save instead of posting the result', async () => {
+    const user = userEvent.setup()
+    let resultsCalls = 0
+    let scoreCalls = 0
+    server.use(
+      http.get('*/v1/matches/m-1', () =>
+        HttpResponse.json(
+          inProgressMatch({
+            // Bo5, 2-0 on the board — an 11-3 win in game 3 clinches at 3-0.
+            sides: participantSides({ meWins: 2, oppWins: 0 }),
+            games: [
+              { id: 'g-1', game_number: 1, score: score('s-1', 11, 4) },
+              { id: 'g-2', game_number: 2, score: score('s-2', 11, 6) },
+            ],
+            current_game: { game_number: 3 },
+          }),
+        ),
+      ),
+      http.post('*/v1/matches/m-1/results', () => {
+        resultsCalls += 1
+        return HttpResponse.json({ detail: 'should not be called' }, { status: 500 })
+      }),
+      // Offline → the scratchpad save rejects with a network error.
+      http.post('*/v1/matches/m-1/games/3/scores/new', () => {
+        scoreCalls += 1
+        return HttpResponse.error()
+      }),
+    )
+
+    renderScoringApp('/matches/m-1/games/3/scores/new')
+
+    // Load online, then go offline — the deciding-game submit follows.
+    await screen.findByRole('heading', { name: /enter game 3 score/i })
+    onlineManager.setOnline(false)
+    await user.type(
+      screen.getByRole('textbox', { name: 'rita.kovac score' }),
+      '11',
+    )
+    await user.type(screen.getByRole('textbox', { name: 'nguyen.t score' }), '3')
+
+    // The button still reads "Post result" (it would decide the match), but
+    // offline it stores the score rather than posting.
+    await user.click(screen.getByRole('button', { name: /post result/i }))
+
+    // Forward navigation lands on the next slot — not frozen, not posted.
+    await screen.findByRole('heading', { name: /enter game 4 score/i })
+    expect(resultsCalls).toBe(0)
+    expect(scoreCalls).toBe(1)
+
+    // The deciding game is stored: failed cell, points retained for retry.
+    const cell = screen.getByRole('link', {
+      name: "Game 3 didn't save, 11 to 3. Tap to fix.",
+    })
+    expect(cell).toHaveClass('failed')
+
+    // The recorded games now decide the match (3-0), so the banner offers to
+    // post the result rather than re-saving each game individually.
+    const banner = await screen.findByRole('alert')
+    expect(banner).toHaveTextContent('These scores finish the match.')
+    expect(
+      screen.getByRole('button', { name: /post result/i }),
+    ).toBeInTheDocument()
+  })
+
+  // Goal: once enough recorded scores decide the match, the banner's retry
+  // posts the canonical result instead of re-saving each game. Continues the
+  // offline scenario above — the deciding game is sitting in the strip as a
+  // failed scratch save — then comes back online and posts the result from the
+  // banner in one shot, with all three games' points (never re-firing the
+  // scratch save).
+  it('banner retry finalizes (posts the result) once back online', async () => {
+    const user = userEvent.setup()
+    let resultsBody: unknown = null
+    let scoreSaveCalls = 0
+    server.use(
+      http.get('*/v1/matches/m-1', () =>
+        HttpResponse.json(
+          inProgressMatch({
+            sides: participantSides({ meWins: 2, oppWins: 0 }),
+            games: [
+              { id: 'g-1', game_number: 1, score: score('s-1', 11, 4) },
+              { id: 'g-2', game_number: 2, score: score('s-2', 11, 6) },
+            ],
+            current_game: { game_number: 3 },
+          }),
+        ),
+      ),
+      http.post('*/v1/matches/m-1/games/3/scores/new', () => {
+        scoreSaveCalls += 1
+        return HttpResponse.error()
+      }),
+      http.post('*/v1/matches/m-1/results', async ({ request }) => {
+        resultsBody = await request.json()
+        return HttpResponse.json(
+          matchDetails({
+            id: 'm-1',
+            status: 'completed',
+            status_label: 'Final',
+            best_of: 5,
+            games_to_win: 3,
+            sides: participantSides({ meWins: 3, oppWins: 0, meWon: true }),
+            current_game: null,
+            can_score: false,
+            can_finalize: false,
+          }),
+          { status: 201 },
+        )
+      }),
+    )
+
+    renderScoringApp('/matches/m-1/games/3/scores/new')
+
+    // Offline: the deciding game stores as a failed scratch save and we land
+    // on game 4 with the finalize banner.
+    await screen.findByRole('heading', { name: /enter game 3 score/i })
+    onlineManager.setOnline(false)
+    await user.type(
+      screen.getByRole('textbox', { name: 'rita.kovac score' }),
+      '11',
+    )
+    await user.type(screen.getByRole('textbox', { name: 'nguyen.t score' }), '3')
+    await user.click(screen.getByRole('button', { name: /post result/i }))
+    await screen.findByRole('heading', { name: /enter game 4 score/i })
+    expect(scoreSaveCalls).toBe(1)
+
+    const banner = await screen.findByRole('alert')
+    expect(banner).toHaveTextContent('These scores finish the match.')
+
+    // Back online — the banner's "Post result" finalizes in one shot.
+    onlineManager.setOnline(true)
+    await user.click(
+      within(banner).getByRole('button', { name: /post result/i }),
+    )
+
+    await waitFor(() =>
+      expect(screen.getByText('match-page')).toBeInTheDocument(),
+    )
+    // Canonical result carries every recorded game — and the banner did NOT
+    // re-fire the per-game scratch save.
+    expect(scoreSaveCalls).toBe(1)
+    expect(resultsBody).toEqual({
+      games: [
+        { game_number: 1, side_1_points: 11, side_2_points: 4 },
+        { game_number: 2, side_1_points: 11, side_2_points: 6 },
+        { game_number: 3, side_1_points: 11, side_2_points: 3 },
+      ],
+    })
+  })
+
+  // The banner's finalize is guarded on connectivity like the entry screen:
+  // offline it must NOT fire /results (which can only fail unseen) — it falls
+  // back to re-firing the per-game scratch saves so the scores stay in the strip.
+  it('offline: banner retry re-fires the per-game saves instead of posting the result', async () => {
+    const user = userEvent.setup()
+    let resultsCalls = 0
+    let scoreSaveCalls = 0
+    server.use(
+      http.get('*/v1/matches/m-1', () =>
+        HttpResponse.json(
+          inProgressMatch({
+            sides: participantSides({ meWins: 2, oppWins: 0 }),
+            games: [
+              { id: 'g-1', game_number: 1, score: score('s-1', 11, 4) },
+              { id: 'g-2', game_number: 2, score: score('s-2', 11, 6) },
+            ],
+            current_game: { game_number: 3 },
+          }),
+        ),
+      ),
+      http.post('*/v1/matches/m-1/games/3/scores/new', () => {
+        scoreSaveCalls += 1
+        return HttpResponse.error()
+      }),
+      http.post('*/v1/matches/m-1/results', () => {
+        resultsCalls += 1
+        return HttpResponse.json({ detail: 'should not be called' }, { status: 500 })
+      }),
+    )
+
+    renderScoringApp('/matches/m-1/games/3/scores/new')
+    await screen.findByRole('heading', { name: /enter game 3 score/i })
+    onlineManager.setOnline(false)
+    await user.type(
+      screen.getByRole('textbox', { name: 'rita.kovac score' }),
+      '11',
+    )
+    await user.type(screen.getByRole('textbox', { name: 'nguyen.t score' }), '3')
+    await user.click(screen.getByRole('button', { name: /post result/i }))
+    await screen.findByRole('heading', { name: /enter game 4 score/i })
+    expect(scoreSaveCalls).toBe(1)
+
+    // Still offline — tapping the banner's "Post result" re-fires the scratch
+    // save (which fails again), and never touches /results.
+    const banner = await screen.findByRole('alert')
+    await user.click(
+      within(banner).getByRole('button', { name: /post result/i }),
+    )
+    await waitFor(() => expect(scoreSaveCalls).toBe(2))
+    expect(resultsCalls).toBe(0)
+  })
+
+  // The finalize hook's contract is that its errors matter (unlike the swallowed
+  // per-game saves). When the banner's online finalize fails, it surfaces the
+  // server's reason instead of silently reverting.
+  it('banner surfaces a finalize error (e.g. result already posted) instead of failing silently', async () => {
+    const user = userEvent.setup()
+    server.use(
+      http.get('*/v1/matches/m-1', () =>
+        HttpResponse.json(
+          inProgressMatch({
+            sides: participantSides({ meWins: 2, oppWins: 0 }),
+            games: [
+              { id: 'g-1', game_number: 1, score: score('s-1', 11, 4) },
+              { id: 'g-2', game_number: 2, score: score('s-2', 11, 6) },
+            ],
+            current_game: { game_number: 3 },
+          }),
+        ),
+      ),
+      http.post('*/v1/matches/m-1/games/3/scores/new', () =>
+        HttpResponse.error(),
+      ),
+      http.post('*/v1/matches/m-1/results', () =>
+        HttpResponse.json(
+          { detail: 'A result has already been posted.' },
+          { status: 409 },
+        ),
+      ),
+    )
+
+    renderScoringApp('/matches/m-1/games/3/scores/new')
+
+    // Store the deciding game offline so the finalize banner appears.
+    await screen.findByRole('heading', { name: /enter game 3 score/i })
+    onlineManager.setOnline(false)
+    await user.type(
+      screen.getByRole('textbox', { name: 'rita.kovac score' }),
+      '11',
+    )
+    await user.type(screen.getByRole('textbox', { name: 'nguyen.t score' }), '3')
+    await user.click(screen.getByRole('button', { name: /post result/i }))
+    await screen.findByRole('heading', { name: /enter game 4 score/i })
+
+    // Back online, post the result — the server rejects with a 409.
+    onlineManager.setOnline(true)
+    const banner = await screen.findByRole('alert')
+    await user.click(
+      within(banner).getByRole('button', { name: /post result/i }),
+    )
+
+    // The banner surfaces the reason rather than reverting silently, and the
+    // button is usable again for another attempt.
+    await waitFor(() =>
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        'A result has already been posted.',
+      ),
+    )
+    expect(
+      within(screen.getByRole('alert')).getByRole('button', {
+        name: /post result/i,
+      }),
+    ).toBeEnabled()
+  })
+
+  // Regression for the fully-offline path (QA BUG 1): with NO games persisted
+  // server-side, entering game after game offline must keep advancing — the
+  // next-game prediction has to count the failed scratch saves, not just
+  // `data.games`, or it bounces back to game 1 and the decided-match banner
+  // never appears. Bo3: two offline wins decide the match; we must land on
+  // game 3 with the finalize banner, then post the result online.
+  it('offline end-to-end: enter every game offline, advance correctly, then post the decided result', async () => {
+    const user = userEvent.setup()
+    let resultsBody: unknown = null
+    server.use(
+      // Nothing persisted — every score lands only as a failed scratch save.
+      http.get('*/v1/matches/m-1', () =>
+        HttpResponse.json(
+          inProgressMatch({
+            best_of: 3,
+            games_to_win: 2,
+            sides: participantSides({ meWins: 0, oppWins: 0 }),
+            games: [],
+            current_game: { game_number: 1 },
+          }),
+        ),
+      ),
+      http.post('*/v1/matches/m-1/games/:n/scores/new', () =>
+        HttpResponse.error(),
+      ),
+      http.post('*/v1/matches/m-1/results', async ({ request }) => {
+        resultsBody = await request.json()
+        return HttpResponse.json(
+          matchDetails({
+            id: 'm-1',
+            status: 'completed',
+            status_label: 'Final',
+            best_of: 3,
+            games_to_win: 2,
+            sides: participantSides({ meWins: 2, oppWins: 0, meWon: true }),
+            current_game: null,
+            can_score: false,
+            can_finalize: false,
+          }),
+          { status: 201 },
+        )
+      }),
+    )
+
+    renderScoringApp('/matches/m-1/games/1/scores/new')
+    await screen.findByRole('heading', { name: /enter game 1 score/i })
+    onlineManager.setOnline(false)
+
+    // Game 1 offline → fails, advances to game 2.
+    await user.type(
+      screen.getByRole('textbox', { name: 'rita.kovac score' }),
+      '11',
+    )
+    await user.type(screen.getByRole('textbox', { name: 'nguyen.t score' }), '9')
+    await user.click(screen.getByRole('button', { name: /save game & next/i }))
+    await screen.findByRole('heading', { name: /enter game 2 score/i })
+
+    // Game 2 offline → fails, and must advance to game 3 (NOT bounce back to
+    // game 1, which is the bug this guards).
+    await user.type(
+      screen.getByRole('textbox', { name: 'rita.kovac score' }),
+      '11',
+    )
+    await user.type(screen.getByRole('textbox', { name: 'nguyen.t score' }), '7')
+    await user.click(screen.getByRole('button', { name: /save game & next/i }))
+    await screen.findByRole('heading', { name: /enter game 3 score/i })
+
+    // Both offline games sit in the strip, and since they decide the Bo3 the
+    // banner offers to post the result.
+    expect(
+      screen.getByRole('link', { name: /game 1 didn't save, 11 to 9/i }),
+    ).toBeInTheDocument()
+    const banner = await screen.findByRole('alert')
+    expect(banner).toHaveTextContent('These scores finish the match.')
+
+    // Back online, post the result — both games are carried.
+    onlineManager.setOnline(true)
+    await user.click(
+      within(banner).getByRole('button', { name: /post result/i }),
+    )
+    await waitFor(() =>
+      expect(screen.getByText('match-page')).toBeInTheDocument(),
+    )
+    expect(resultsBody).toEqual({
+      games: [
+        { game_number: 1, side_1_points: 11, side_2_points: 9 },
+        { game_number: 2, side_1_points: 11, side_2_points: 7 },
+      ],
+    })
+  })
+})
+
+afterEach(() => {
+  // Restore connectivity so the offline test doesn't leak into others.
+  onlineManager.setOnline(true)
 })

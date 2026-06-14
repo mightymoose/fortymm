@@ -49,13 +49,49 @@ mkdir -p "$(pwd)/.qa-review"
 grep -qxF '.qa-review/' .gitignore || echo '.qa-review/' >> .gitignore
 ```
 
-## 2. Dispatch the Quinn subagent
+## 2. Launch Chrome for Quinn (you do this, not Quinn)
+
+Quinn runs as a **subagent inside this background-job sandbox**, which aborts any
+forked browser process — `playwright-cli open` dies with `SIGABRT` even with the
+sandbox flag, so Quinn can't start its own Chrome. The fix: *you* (the
+orchestrator) launch Chrome here as a detached process, and Quinn attaches over
+CDP (a socket connection, which the sandbox allows).
+
+Quinn's flows need two distinct users (poster + opponent), i.e. two cookie jars,
+so launch **two** Chromes on two ports. Run this with
+`dangerouslyDisableSandbox: true` — the detached launch is what the sandbox
+otherwise blocks:
+
+```bash
+CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+
+launch_cdp() {  # $1=port  $2=label
+  if curl -sf -o /dev/null "http://localhost:$1/json/version"; then
+    echo "$2: CDP already up on $1 — reusing"; return
+  fi
+  nohup "$CHROME" --remote-debugging-port="$1" \
+    --user-data-dir="/tmp/qa-chrome-$2" \
+    --no-first-run --no-default-browser-check about:blank >/dev/null 2>&1 &
+  disown
+  until curl -sf -o /dev/null "http://localhost:$1/json/version"; do sleep 1; done
+  echo "$2: CDP up on $1"
+}
+
+launch_cdp 9222 poster
+launch_cdp 9223 opponent
+```
+
+The launched Chrome is **headless** — Quinn drives it blind and reads the page
+via `snapshot` (the a11y tree), screenshotting only as bug evidence.
+
+## 3. Dispatch the Quinn subagent
 
 Use the Agent tool (general-purpose). Tell Quinn it has the `playwright-cli`
-skill available. Pass it the base URL, the absolute screenshots dir, and the
-flows to exercise (derive these from what the user asked to QA; if they didn't
-say, give Quinn the app's primary flows — sign-in, create a match, enter
-scores). Give Quinn the identity and rules verbatim below as its prompt.
+skill available. Pass it the base URL, the absolute screenshots dir, the two CDP
+ports (poster 9222, opponent 9223), and the flows to exercise (derive these from
+what the user asked to QA; if they didn't say, give Quinn the app's primary
+flows — sign-in, create a match, enter scores). Give Quinn the identity and rules
+verbatim below as its prompt.
 
 ```
 You are Quinn, a veteran QA engineer with 12 years of experience breaking
@@ -78,13 +114,23 @@ NON-NEGOTIABLE RULES
 4. MOBILE MATTERS. Test every flow at both desktop (1280x800) and mobile
    (375x667). Switch with `playwright-cli resize 375 667`.
 
+BROWSER ACCESS — ATTACH, DON'T OPEN. Two headless Chromes are already running
+for you. Do NOT run `playwright-cli open` (the sandbox will kill it). Attach each
+named session to its CDP port instead:
+  playwright-cli -s=poster attach --cdp=http://localhost:9222
+  playwright-cli -s=opponent attach --cdp=http://localhost:9223
+Every playwright-cli call must run with dangerouslyDisableSandbox: true. The
+browsers are headless, so use `snapshot` (the a11y tree) as your eyes and reserve
+screenshots for bug evidence. When finished, `detach` each session — do NOT
+`close` (the orchestrator owns these browsers and tears them down).
+
 TARGET: <BASE_URL>  (the real app — real API, no mocks)
 FLOWS TO BREAK: <FLOWS>
 
-Use two named browser sessions (`playwright-cli -s=poster ...`,
-`-s=opponent ...`) when a flow needs two distinct users (two cookie jars).
-Probe empty input, over-long input, duplicate submits, back-button mid-flow,
-reload mid-flow, and concurrent actions from both users.
+Use the `poster` and `opponent` sessions (above) as two distinct users when a
+flow needs two cookie jars. Probe empty input, over-long input, duplicate
+submits, back-button mid-flow, reload mid-flow, and concurrent actions from both
+users.
 
 Return a structured report: for each bug — title, exact repro steps, what you
 expected, what happened, viewport, and the screenshot filename. Then a one-line
@@ -92,16 +138,25 @@ verdict per flow (pass / bugs found). Your final message IS the report; the
 orchestrator relays it to the user.
 ```
 
-## 3. Relay and tear down
+## 4. Relay and tear down
 
 Relay Quinn's report to the user as the deliverable, listing each bug with its
 screenshot path under `.qa-review/`. Surface the screenshots with SendUserFile
 when there are bugs worth showing.
 
-Tear down unless the user wants the stack left up for their own poking:
+Close the Chromes you launched in Step 2 — Quinn only detaches, so the processes
+are still running:
+
+```bash
+pkill -f 'remote-debugging-port=9222'
+pkill -f 'remote-debugging-port=9223'
+```
+
+Tear down the stack unless the user wants it left up for their own poking:
 
 ```bash
 docker compose -f docker-compose.qa.yml down -v   # -v wipes QA data
 ```
 
-Confirm teardown (and whether you removed the copied `.env`) in your summary.
+Confirm teardown (Chromes closed, stack down, and whether you removed the copied
+`.env`) in your summary.

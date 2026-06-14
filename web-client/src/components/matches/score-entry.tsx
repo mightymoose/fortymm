@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, Navigate, useNavigate } from '@tanstack/react-router'
-import { useQueryClient } from '@tanstack/react-query'
+import { onlineManager, useQueryClient } from '@tanstack/react-query'
 import {
   Check,
   Loader2,
@@ -12,6 +12,7 @@ import { ApiError } from '@/api/client'
 import {
   forgetScoreSaves,
   matchDetailRoute,
+  recordedGameNumbers,
   scoringEditRoute,
   scoringNewRoute,
   useDeleteScore,
@@ -245,8 +246,15 @@ function ScoreEntryInner({
 
   function predictNextScoringRoute() {
     if (!data) return matchDetailRoute(matchId)
+    // Persisted scores live in `data.games`; offline-entered ones never land
+    // there (the saves fail), so also count games sitting in the mutation cache
+    // as failed/in-flight scratch saves — otherwise after the second offline
+    // game this loop bounces back to game 1 instead of advancing. Read the
+    // cache live here (right before firing this game's save) so a prior game
+    // that just settled is already counted.
     const nowScored = new Set<number>([
       ...data.games.filter((g) => g.score).map((g) => g.game_number),
+      ...recordedGameNumbers(queryClient, matchId),
       gameNumber,
     ])
     for (let n = 1; n <= data.best_of; n += 1) {
@@ -263,7 +271,12 @@ function ScoreEntryInner({
 
   function onSubmit() {
     if (!inputsValid) return
-    if (wouldFinalize) {
+    // Finalizing posts the canonical result — but that's the one write that
+    // can't be faked offline. When offline we instead fall through to the
+    // scratchpad save below, which stores the deciding game's score in the
+    // mutation cache (visible as a failed cell) so it survives until the user
+    // can post the result back online. Online, finalize as usual.
+    if (wouldFinalize && onlineManager.isOnline()) {
       finalizeMutation.mutate(
         { games: hypotheticalGames },
         { onSuccess: () => navigate(matchDetailRoute(matchId)) },
