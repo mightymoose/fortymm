@@ -9,12 +9,11 @@ import {
 } from '@tanstack/react-router'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { http, HttpResponse } from 'msw'
-import { afterEach, describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { server } from '@/mocks/server'
 import { matchDetails } from '@/test/factories'
 import type { components } from '@/api/schema'
 import { ScoreEntry } from './score-entry'
-import { resetFailedSaves } from './failed-saves'
 
 type MatchDetailsSide = components['schemas']['MatchDetailsSide']
 type MatchDetailsScore = components['schemas']['MatchDetailsScore']
@@ -577,10 +576,11 @@ describe('ScoreEntry — edit', () => {
 
 // ---------------------------------------------------------------------------
 // Failed saves (#369): forward navigation stays unblocked, but a non-2xx save
-// becomes visible (flash + failed scoreline cell) and recoverable (the cell
-// is tappable and re-opens the game pre-filled). These tests use a harness
-// whose scoring routes render the real ScoreEntry, so the post-navigation
-// screen is the actual next-game page rather than a stub.
+// becomes visible (a banner + failed scoreline cell) and recoverable. The
+// per-game save state lives in the shared mutation cache, keyed per game — so
+// each cell reads its own outcome and a retry re-fires just that game. These
+// tests use a harness whose scoring routes render the real ScoreEntry, so the
+// post-navigation screen is the actual next-game page rather than a stub.
 // ---------------------------------------------------------------------------
 
 function renderScoringApp(initialPath: string) {
@@ -635,9 +635,7 @@ function renderScoringApp(initialPath: string) {
 }
 
 describe('ScoreEntry — failed saves', () => {
-  afterEach(() => resetFailedSaves())
-
-  it('still navigates forward on a 500, but flashes the failure and flags the cell with the entered points', async () => {
+  it('still navigates forward on a 500, but shows the banner and flags the cell with the entered points', async () => {
     const user = userEvent.setup()
     server.use(
       http.get('*/v1/matches/m-1', () => HttpResponse.json(inProgressMatch())),
@@ -659,24 +657,27 @@ describe('ScoreEntry — failed saves', () => {
     // Forward navigation is not blocked — we land on game 4 regardless.
     await screen.findByRole('heading', { name: /enter game 4 score/i })
 
-    // The flash names the failed game and points at the scoreline.
-    const flash = screen.getByRole('alert')
-    expect(flash).toHaveTextContent("Game 3 didn't save.")
-    expect(flash).toHaveTextContent('Tap it in the scoreline to retry.')
+    // The banner names the single failed game and offers a retry.
+    const banner = await screen.findByRole('alert')
+    expect(banner).toHaveTextContent("Game 3 didn't save.")
+    expect(banner).toHaveTextContent('tap it in the scoreline to fix the score')
+    expect(
+      screen.getByRole('button', { name: /^retry$/i }),
+    ).toBeInTheDocument()
 
     // The cell keeps the entered numbers, reads as failed, and is tappable.
     const cell = screen.getByRole('link', {
-      name: 'Game 3, failed to save, 11 to 4. Tap to retry.',
+      name: "Game 3 didn't save, 11 to 4. Tap to fix.",
     })
     expect(cell).toHaveClass('failed')
     expect(cell).toHaveTextContent('11')
     expect(cell).toHaveTextContent('4')
-    // The non-color cue: the RETRY micro-label is visible in the cell.
-    expect(cell).toHaveTextContent('RETRY')
+    // The non-color cue: the "Not saved" micro-label is visible in the cell.
+    expect(cell).toHaveTextContent('Not saved')
     expect(cell).toHaveAttribute('href', '/matches/m-1/games/3/scores/new')
   })
 
-  it('dismissing the flash keeps the failed cell as the persistent recovery affordance', async () => {
+  it('dismissing the banner keeps the failed cell as the persistent recovery affordance', async () => {
     const user = userEvent.setup()
     server.use(
       http.get('*/v1/matches/m-1', () => HttpResponse.json(inProgressMatch())),
@@ -700,34 +701,32 @@ describe('ScoreEntry — failed saves', () => {
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
     expect(
       screen.getByRole('link', {
-        name: 'Game 3, failed to save, 11 to 4. Tap to retry.',
+        name: "Game 3 didn't save, 11 to 4. Tap to fix.",
       }),
     ).toBeInTheDocument()
   })
 
-  it('tapping the failed cell re-opens the game pre-filled; a successful retry clears the failure', async () => {
+  it('the banner Retry re-fires just that game; a successful retry clears the failure', async () => {
     const user = userEvent.setup()
     let attempts = 0
-    // The GET fixture is stateful, as the real API is: once the retry POST
-    // succeeds, refetches must see game 3 saved or they'd revert the cache.
-    let current = inProgressMatch()
     server.use(
-      http.get('*/v1/matches/m-1', () => HttpResponse.json(current)),
+      http.get('*/v1/matches/m-1', () => HttpResponse.json(inProgressMatch())),
       http.post('*/v1/matches/m-1/games/3/scores/new', () => {
         attempts += 1
         if (attempts === 1) {
           return HttpResponse.json({ detail: 'boom' }, { status: 500 })
         }
-        current = inProgressMatch({
-          sides: participantSides({ meWins: 2, oppWins: 1 }),
-          games: [
-            { id: 'g-1', game_number: 1, score: score('s-1', 11, 8) },
-            { id: 'g-2', game_number: 2, score: score('s-2', 9, 11) },
-            { id: 'g-3', game_number: 3, score: score('s-3', 11, 4) },
-          ],
-          current_game: { game_number: 4 },
-        })
-        return HttpResponse.json(current)
+        return HttpResponse.json(
+          inProgressMatch({
+            sides: participantSides({ meWins: 2, oppWins: 1 }),
+            games: [
+              { id: 'g-1', game_number: 1, score: score('s-1', 11, 8) },
+              { id: 'g-2', game_number: 2, score: score('s-2', 9, 11) },
+              { id: 'g-3', game_number: 3, score: score('s-3', 11, 4) },
+            ],
+            current_game: { game_number: 4 },
+          }),
+        )
       }),
     )
 
@@ -741,27 +740,95 @@ describe('ScoreEntry — failed saves', () => {
     await user.click(screen.getByRole('button', { name: /save game & next/i }))
     await screen.findByRole('heading', { name: /enter game 4 score/i })
 
-    // Tap the failed cell — back on game 3 with the entered values intact.
-    await user.click(
-      screen.getByRole('link', {
-        name: 'Game 3, failed to save, 11 to 4. Tap to retry.',
+    // Retry in place from the banner — no navigation. The single failed game
+    // is re-sent and resolves; the failure state clears everywhere.
+    await user.click(screen.getByRole('button', { name: /^retry$/i }))
+
+    await waitFor(() =>
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument(),
+    )
+    expect(attempts).toBe(2)
+    expect(
+      screen.queryByRole('link', { name: /didn't save/i }),
+    ).not.toBeInTheDocument()
+    // Still on game 4 — retry doesn't navigate.
+    expect(
+      screen.getByRole('heading', { name: /enter game 4 score/i }),
+    ).toBeInTheDocument()
+  })
+
+  it("two failed saves read '2 games didn't save' and Retry all fires one request per game", async () => {
+    // Two independent failures land in the strip at once via failed *edits*:
+    // edits keep the persisted score, so navigation proceeds forward (rather
+    // than looping back to the lowest un-scored game the way a failed create
+    // would). Games 1 and 2 are already scored; we fail an edit of each, then
+    // land on game 3 with both 1 and 2 flagged failed.
+    const user = userEvent.setup()
+    const attempts: Record<number, number> = { 1: 0, 2: 0 }
+    server.use(
+      http.get('*/v1/matches/m-1', () => HttpResponse.json(inProgressMatch())),
+      http.put('*/v1/matches/m-1/games/:gameNumber/scores', ({ params }) => {
+        const gameNumber = Number(params.gameNumber)
+        attempts[gameNumber] += 1
+        if (attempts[gameNumber] === 1) {
+          return HttpResponse.json({ detail: 'boom' }, { status: 500 })
+        }
+        return HttpResponse.json(inProgressMatch())
       }),
     )
-    await screen.findByRole('heading', { name: /enter game 3 score/i })
-    expect(
-      screen.getByRole('textbox', { name: 'rita.kovac score' }),
-    ).toHaveValue('11')
-    expect(screen.getByRole('textbox', { name: 'nguyen.t score' })).toHaveValue(
-      '4',
-    )
 
-    // Retry succeeds: failure state is gone everywhere.
-    await user.click(screen.getByRole('button', { name: /save game & next/i }))
-    await screen.findByRole('heading', { name: /enter game 4 score/i })
-    expect(attempts).toBe(2)
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    renderScoringApp('/matches/m-1/games/1/scores/edit')
+
+    // Fail an edit of game 1 → forward to the next un-scored game (3).
+    await screen.findByRole('heading', { name: /edit game 1 score/i })
+    let meInput = screen.getByRole('textbox', { name: 'rita.kovac score' })
+    await user.clear(meInput)
+    await user.type(meInput, '12')
+    let oppInput = screen.getByRole('textbox', { name: 'nguyen.t score' })
+    await user.clear(oppInput)
+    await user.type(oppInput, '10')
+    await user.click(screen.getByRole('button', { name: /save changes/i }))
+    await screen.findByRole('heading', { name: /enter game 3 score/i })
+
+    // From game 3, open game 2 (still a plainly-saved cell) and fail its edit.
+    await user.click(
+      screen.getByRole('link', { name: /game 2, saved/i }),
+    )
+    await screen.findByRole('heading', { name: /edit game 2 score/i })
+    meInput = screen.getByRole('textbox', { name: 'rita.kovac score' })
+    await user.clear(meInput)
+    await user.type(meInput, '7')
+    oppInput = screen.getByRole('textbox', { name: 'nguyen.t score' })
+    await user.clear(oppInput)
+    await user.type(oppInput, '11')
+    await user.click(screen.getByRole('button', { name: /save changes/i }))
+    await screen.findByRole('heading', { name: /enter game 3 score/i })
+
+    // Both failures are independent cells, and the banner counts them.
+    const banner = await screen.findByRole('alert')
+    expect(banner).toHaveTextContent("2 games didn't save.")
     expect(
-      screen.queryByRole('link', { name: /failed to save/i }),
+      screen.getByRole('button', { name: /retry all/i }),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('link', {
+        name: "Game 1 didn't save, 12 to 10. Tap to fix.",
+      }),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('link', {
+        name: "Game 2 didn't save, 7 to 11. Tap to fix.",
+      }),
+    ).toBeInTheDocument()
+
+    // Retry all → exactly one fresh request per failed game.
+    await user.click(screen.getByRole('button', { name: /retry all/i }))
+    await waitFor(() =>
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument(),
+    )
+    expect(attempts).toEqual({ 1: 2, 2: 2 })
+    expect(
+      screen.queryByRole('link', { name: /didn't save/i }),
     ).not.toBeInTheDocument()
   })
 
@@ -789,14 +856,14 @@ describe('ScoreEntry — failed saves', () => {
     // …and G1 shows the *entered* 12–10 (not the persisted 11–8), failed,
     // linking back to the edit screen since a saved score still exists.
     const cell = screen.getByRole('link', {
-      name: 'Game 1, failed to save, 12 to 10. Tap to retry.',
+      name: "Game 1 didn't save, 12 to 10. Tap to fix.",
     })
     expect(cell).toHaveTextContent('12')
     expect(cell).toHaveTextContent('10')
     expect(cell).toHaveAttribute('href', '/matches/m-1/games/1/scores/edit')
   })
 
-  it('flash is suppressed on the failed game\'s own entry page', async () => {
+  it("the banner is suppressed on the failed game's own entry page", async () => {
     const user = userEvent.setup()
     server.use(
       http.get('*/v1/matches/m-1', () => HttpResponse.json(inProgressMatch())),
@@ -813,17 +880,23 @@ describe('ScoreEntry — failed saves', () => {
     )
     await user.type(screen.getByRole('textbox', { name: 'nguyen.t score' }), '4')
     await user.click(screen.getByRole('button', { name: /save game & next/i }))
-    // On game 4 the flash is present (different game).
+    // On game 4 the banner is present (different game).
     await screen.findByRole('heading', { name: /enter game 4 score/i })
     expect(screen.getByRole('alert')).toHaveTextContent("Game 3 didn't save.")
 
-    // Tap the failed cell → back on game 3: flash must be absent.
+    // Tap the failed cell → back on game 3, pre-filled: banner must be absent.
     await user.click(
       screen.getByRole('link', {
-        name: 'Game 3, failed to save, 11 to 4. Tap to retry.',
+        name: "Game 3 didn't save, 11 to 4. Tap to fix.",
       }),
     )
     await screen.findByRole('heading', { name: /enter game 3 score/i })
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(
+      screen.getByRole('textbox', { name: 'rita.kovac score' }),
+    ).toHaveValue('11')
+    expect(screen.getByRole('textbox', { name: 'nguyen.t score' })).toHaveValue(
+      '4',
+    )
   })
 })
