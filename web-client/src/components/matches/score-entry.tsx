@@ -243,7 +243,13 @@ function ScoreEntryInner({
   // so a 409 "already posted" / 500 must be visible here rather than swallowed.
   const finalizeApiError =
     finalizeMutation.error instanceof ApiError ? finalizeMutation.error : null
-  const showScoreError = localScoreError !== null || finalizeApiError !== null
+  // The score *inputs* are only invalid for genuine validation problems (local
+  // illegal score, or a 422 drift the server rejected) — a 409/500 means the
+  // entered score is fine, so don't paint the fields red for those.
+  const inputsInvalid =
+    localScoreError !== null || finalizeApiError?.status === 422
+  // The message line, though, surfaces every finalize error (409/500 included).
+  const showScoreError = inputsInvalid || finalizeApiError !== null
 
   function predictNextScoringRoute() {
     if (!data) return matchDetailRoute(matchId)
@@ -416,7 +422,7 @@ function ScoreEntryInner({
             inputRef={meRef}
             autoFocus
             disabled={inputsLocked}
-            invalid={showScoreError}
+            invalid={inputsInvalid}
             onChange={onMeChange}
             onKeyDown={(e) => handleKey(e, 'me')}
           />
@@ -436,7 +442,7 @@ function ScoreEntryInner({
             value={opp}
             inputRef={oppRef}
             disabled={inputsLocked}
-            invalid={showScoreError}
+            invalid={inputsInvalid}
             onChange={onOppChange}
             onKeyDown={(e) => handleKey(e, 'opp')}
           />

@@ -95,23 +95,26 @@ export function SaveBanner({ matchId, activeGameNumber }: SaveBannerProps) {
     data != null && decidedSide(mergedGames, data.best_of) !== null
 
   // Normally the active game is omitted — its pre-filled inputs are the retry
-  // surface, so the banner needn't also shout about it. The one exception is
-  // when the active game's score finishes the match: we stay on it instead of
-  // advancing, so the banner here is its only "Post result" affordance.
+  // surface, so the banner needn't also shout about it. The exception is when
+  // the active game's score finishes the match: we stay on it instead of
+  // advancing, so it must appear here (informational; see `decidedHere`).
   const failed = wouldFinalize ? allFailed : otherFailed
   const signature = failed.map((entry) => entry.gameNumber).join(',')
 
   if (failed.length === 0 || signature === dismissedSignature) return null
 
-  // When the *active* game's own failed scratch is what finishes the match, we
-  // stayed on its entry screen — so the live inputs above are the authoritative
-  // score and the main "Post result" button owns finalizing (it posts those
-  // inputs; this banner would post the older cached scratch and silently clobber
-  // an edit made after the failed save, #542). Here the banner is informational
-  // only; for failures on *other* games (no live inputs on screen) it keeps its
-  // own post/retry button.
+  // When the active game's own failed scratch is the SOLE failure and it
+  // finishes the match, we stayed on its entry screen — so the live inputs above
+  // are the authoritative score and the main "Post result" button owns
+  // finalizing (it posts those inputs; this banner would post the older cached
+  // scratch and silently clobber an edit made after the failed save, #542). Here
+  // the banner is informational only. If *other* games also failed, the main
+  // button's payload (persisted + live inputs) wouldn't include their unsaved
+  // scratch scores, so the banner keeps its own post/retry button — its merged
+  // payload does cover them.
   const decidedHere =
     wouldFinalize &&
+    otherFailed.length === 0 &&
     allFailed.some((entry) => entry.gameNumber === activeGameNumber)
   // The finalize POST is in flight — lock the button and swap its label.
   const posting = wouldFinalize && finalizeMutation.isPending
