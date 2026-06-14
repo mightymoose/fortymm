@@ -1,5 +1,6 @@
 import { Plus, TriangleAlert } from 'lucide-react'
 
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 
 import { findPoolConflicts, genId } from '../../data/helpers'
@@ -22,6 +23,9 @@ export const PoolsSection = ({ event, tables, onChange }: PoolsSectionProps) => 
   const pools = event.pools
   const setPools = (next: Pool[]) => onChange({ ...event, pools: next })
   const conflicts = findPoolConflicts(pools)
+  // Count distinct tables, not conflict pairs: one table double-booked across
+  // several overlapping pools yields multiple conflict entries.
+  const conflictTableCount = new Set(conflicts.map((c) => c.table)).size
 
   const addPool = () =>
     setPools([
@@ -48,27 +52,19 @@ export const PoolsSection = ({ event, tables, onChange }: PoolsSectionProps) => 
       />
 
       {conflicts.length > 0 && (
-        <div
-          role="alert"
-          className="flex items-start gap-2.5 rounded-[6px] border border-[color:rgba(255,196,61,0.3)] bg-[color:rgba(255,196,61,0.1)] px-3.5 py-2.5"
-        >
-          <TriangleAlert
-            size={16}
-            className="mt-0.5 text-[color:var(--warn)]"
-          />
-          <div className="text-[13px] text-[color:var(--fg-2)]">
-            <div className="font-semibold text-[color:var(--warn)]">
-              {conflicts.length}{' '}
-              {conflicts.length === 1 ? 'table is' : 'tables are'} double-booked
-              within this event
-            </div>
-            <div className="mt-0.5 text-[11px] text-[color:var(--fg-3)]">
-              {conflicts
-                .map((c) => `${c.table} (${c.poolA}↔${c.poolB})`)
-                .join(' · ')}
-            </div>
-          </div>
-        </div>
+        <Alert className="border-[color:var(--warn)]/40 bg-[color:var(--warn)]/10">
+          <TriangleAlert className="text-[color:var(--warn)]" />
+          <AlertTitle className="text-[color:var(--warn)]">
+            {conflictTableCount}{' '}
+            {conflictTableCount === 1 ? 'table is' : 'tables are'} double-booked
+            within this event
+          </AlertTitle>
+          <AlertDescription className="text-[11px] text-[color:var(--fg-3)]">
+            {conflicts
+              .map((c) => `${c.table} (${c.poolA}↔${c.poolB})`)
+              .join(' · ')}
+          </AlertDescription>
+        </Alert>
       )}
 
       {pools.length === 0 ? (

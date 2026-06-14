@@ -95,9 +95,10 @@ export const DetailsTab = ({ tournament, onUpdate }: DetailsTabProps) => {
               )}
             </Field>
             <Field label="Status">
-              {() => (
+              {(id) => (
                 <ToggleGroup
                   type="single"
+                  aria-labelledby={`${id}-label`}
                   value={draft.status}
                   onValueChange={(v) => v && update({ status: v as TournamentStatus })}
                   className="w-fit"

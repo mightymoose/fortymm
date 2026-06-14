@@ -15,8 +15,10 @@ export interface FieldProps {
 }
 
 /** Uppercase-overline label + control + hint, the standard form row used
- * across the tournament forms. `children` receives the generated control id so
- * the rendered input can wire `id`/`aria-describedby`. */
+ * across the tournament forms. `children` receives the generated control id:
+ * a real input wires it as `id` (the label's `htmlFor` targets it); a
+ * non-input control (e.g. a radio `ToggleGroup`) instead points
+ * `aria-labelledby` at the label's `${id}-label` id. */
 export const Field = ({
   label,
   required,
@@ -29,6 +31,7 @@ export const Field = ({
   return (
     <div className={cn('flex flex-col gap-1.5', className)}>
       <Label
+        id={`${id}-label`}
         htmlFor={id}
         className="text-[11px] font-semibold tracking-[0.12em] text-[color:var(--fg-3)] uppercase"
       >
