@@ -15,9 +15,13 @@ import { heroRowPage } from "./scoreboard/scoreboard-fetcher/scoreboard-display/
 const DEFAULT_MATCH_ID = "m-1";
 
 const scoped = (container: Container) => ({
-  /** `Scoreboard`'s own `<Suspense>` fallback while the query is pending. */
+  /** `Scoreboard`'s own `<Suspense>` fallback (the `ScoreboardSkeleton`) while
+   * the query is pending. Scoped by accessible name so it doesn't collide with
+   * the `StatusChip`'s own `role="status"` once the loaded chip arrives. */
   queryLoading() {
-    return container.queryByText("Loading...");
+    return container.queryByRole("status", {
+      name: /loading match scoreboard/i,
+    });
   },
   /**
    * The fallback rendered by the *ancestor* error boundary. `Scoreboard` owns
@@ -53,7 +57,7 @@ const scoped = (container: Container) => ({
 
 /**
  * Test page-object for the public `Scoreboard` wrapper. `Scoreboard` adds only
- * a `<Suspense>` boundary (with its real `Loading...` fallback) around
+ * a `<Suspense>` boundary (with its real `ScoreboardSkeleton` fallback) around
  * `ScoreboardFetcher` and forwards `matchId` through — it deliberately has
  * *no* error boundary, delegating failures upward. This renders it beneath an
  * `ErrorBoundary` standing in for that ancestor so a rejected query can be
