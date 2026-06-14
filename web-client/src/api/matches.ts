@@ -336,6 +336,46 @@ export function forgetScoreSaves(
 }
 
 /**
+ * Game numbers the user has entered this session but the server hasn't
+ * persisted — the latest scratch save for the game is still in flight
+ * (`pending`) or failed (`error`). Offline, saves never reach `data.games`
+ * (the writes fail), so this is the only record that a game was entered; the
+ * scoring screen unions it into "which games are done" so forward navigation
+ * doesn't bounce back to a game that only exists as a failed scratch save.
+ *
+ * Read imperatively off the live mutation cache (not a render snapshot) so a
+ * save that settled a moment before the call is already reflected — the caller
+ * computes the next route synchronously, right before firing the next save.
+ */
+export function recordedGameNumbers(
+  queryClient: QueryClientArg,
+  matchId: string,
+): Set<number> {
+  const mutations = queryClient
+    .getMutationCache()
+    .findAll({ mutationKey: matchScoreMutationPrefix(matchId) })
+  // Latest save per game wins, so a successful re-save supersedes an older
+  // failure (mirrors `useFailedGameSaves`).
+  const latest = new Map<number, (typeof mutations)[number]>()
+  for (const mutation of mutations) {
+    const n = gameNumberFromScoreMutationKey(mutation.options.mutationKey)
+    if (n == null) continue
+    const prev = latest.get(n)
+    if (!prev || mutation.state.submittedAt >= prev.state.submittedAt) {
+      latest.set(n, mutation)
+    }
+  }
+  const entered = new Set<number>()
+  for (const [n, mutation] of latest) {
+    const { status, variables } = mutation.state
+    if ((status === 'pending' || status === 'error') && variables != null) {
+      entered.add(n)
+    }
+  }
+  return entered
+}
+
+/**
  * Clears the saved score for a game. Same scratchpad-write posture — failures
  * heal at finalize (the canonical /results POST is the source of truth).
  */

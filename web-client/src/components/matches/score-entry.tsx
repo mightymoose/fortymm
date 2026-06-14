@@ -12,6 +12,7 @@ import { ApiError } from '@/api/client'
 import {
   forgetScoreSaves,
   matchDetailRoute,
+  recordedGameNumbers,
   scoringEditRoute,
   scoringNewRoute,
   useDeleteScore,
@@ -245,8 +246,15 @@ function ScoreEntryInner({
 
   function predictNextScoringRoute() {
     if (!data) return matchDetailRoute(matchId)
+    // Persisted scores live in `data.games`; offline-entered ones never land
+    // there (the saves fail), so also count games sitting in the mutation cache
+    // as failed/in-flight scratch saves — otherwise after the second offline
+    // game this loop bounces back to game 1 instead of advancing. Read the
+    // cache live here (right before firing this game's save) so a prior game
+    // that just settled is already counted.
     const nowScored = new Set<number>([
       ...data.games.filter((g) => g.score).map((g) => g.game_number),
+      ...recordedGameNumbers(queryClient, matchId),
       gameNumber,
     ])
     for (let n = 1; n <= data.best_of; n += 1) {
