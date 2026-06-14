@@ -283,8 +283,17 @@ function ScoreEntryInner({
       )
       return
     }
-    const next = predictNextScoringRoute()
     const args = toBody()
+    // Offline deciding game: store the score as a scratch save but DON'T advance
+    // — the match is over, there's no next game to play. Staying here, the save's
+    // failure makes the SaveBanner surface on this same screen ("These scores
+    // finish the match." / "Post result"), which posts the canonical result once
+    // back online.
+    if (wouldFinalize) {
+      saveMutation.mutate(args)
+      return
+    }
+    const next = predictNextScoringRoute()
     // Fire-and-forget — we navigate as soon as the request settles either way,
     // since the canonical POST /results reconciles the score later. The save
     // lands in the shared mutation cache under this game's key: on success the

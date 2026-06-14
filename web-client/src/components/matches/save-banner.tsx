@@ -47,26 +47,29 @@ export function SaveBanner({ matchId, activeGameNumber }: SaveBannerProps) {
   const navigate = useNavigate()
   const { data } = useMatch(matchId)
   const finalizeMutation = useFinalizeMatch(matchId)
-  const failed = useFailedGameSaves(matchId).filter(
+  const allFailed = useFailedGameSaves(matchId)
+  const otherFailed = allFailed.filter(
     (entry) => entry.gameNumber !== activeGameNumber,
   )
-  // A signature of the current failed set so a dismiss sticks only until the
-  // set changes (a new failure, or a retry that clears one) — then it returns.
-  const signature = failed.map((entry) => entry.gameNumber).join(',')
+  // A dismiss sticks only until the failed set changes (a new failure, or a
+  // retry that clears one) — keyed by the signature computed below.
   const [dismissedSignature, setDismissedSignature] = useState<string | null>(
     null,
   )
 
-  if (failed.length === 0 || signature === dismissedSignature) return null
+  // Nothing failed → nothing to show; skip the merge/finalize work below.
+  if (allFailed.length === 0) return null
 
   // The recorded scores behind these failures (failed scratch points, plus any
   // games already persisted) might now decide the whole match. When they do, a
   // retry shouldn't re-POST each game's scratch save — it should post the
   // canonical result in one shot (the same write the entry screen's "Post
   // result" button fires). Build the merged set the same way the entry screen
-  // builds `hypotheticalGames`, excluding the active game (its live input is
-  // the main button's job, not the banner's). Failed scratch overrides the
-  // persisted score for the same game — it's the newer data the cell shows.
+  // builds `hypotheticalGames`. Include the active game's failed scratch here:
+  // the deciding game stays on its own entry screen (we don't advance once the
+  // match is over), so its scratch is what finishes the match. Failed scratch
+  // overrides the persisted score for the same game — it's the newer data the
+  // cell shows.
   const mergedByNumber = new Map<number, GamePoints>()
   for (const game of data?.games ?? []) {
     if (!game.score || game.game_number === activeGameNumber) continue
@@ -76,7 +79,7 @@ export function SaveBanner({ matchId, activeGameNumber }: SaveBannerProps) {
       side_2_points: game.score.side_2_points,
     })
   }
-  for (const entry of failed) {
+  for (const entry of allFailed) {
     mergedByNumber.set(entry.gameNumber, {
       game_number: entry.gameNumber,
       side_1_points: entry.variables.side_1_points,
@@ -88,6 +91,15 @@ export function SaveBanner({ matchId, activeGameNumber }: SaveBannerProps) {
   )
   const wouldFinalize =
     data != null && decidedSide(mergedGames, data.best_of) !== null
+
+  // Normally the active game is omitted — its pre-filled inputs are the retry
+  // surface, so the banner needn't also shout about it. The one exception is
+  // when the active game's score finishes the match: we stay on it instead of
+  // advancing, so the banner here is its only "Post result" affordance.
+  const failed = wouldFinalize ? allFailed : otherFailed
+  const signature = failed.map((entry) => entry.gameNumber).join(',')
+
+  if (failed.length === 0 || signature === dismissedSignature) return null
   // The finalize POST is in flight — lock the button and swap its label.
   const posting = wouldFinalize && finalizeMutation.isPending
   // A finalize that reached the server and failed (409 a result was already
