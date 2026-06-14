@@ -253,6 +253,15 @@ export function scoreSaveMutationOptions(
   return {
     mutationKey: scoreMutationKey(matchId, gameNumber),
     gcTime: 1000 * 60 * 30,
+    // Fire even with no network connection. React Query's default
+    // `networkMode: 'online'` *pauses* mutations while offline — the
+    // mutationFn never runs and `onSettled` never fires, so an offline Save
+    // tap would silently do nothing. We instead want it to run, fail fast on
+    // the network error, and land in this game's failed-save state (the cell
+    // flips to "Not saved", keeping the entered points to retry) — matching
+    // the fire-and-forget posture where failures live on the mutation, not in
+    // a paused limbo.
+    networkMode: 'always' as const,
     mutationFn: async (input: MatchGameScoreWrite): Promise<MatchDetails> => {
       const cached = queryClient.getQueryData<MatchDetails>(
         matchQueryKey(matchId),
@@ -327,12 +336,56 @@ export function forgetScoreSaves(
 }
 
 /**
+ * Game numbers the user has entered this session but the server hasn't
+ * persisted — the latest scratch save for the game is still in flight
+ * (`pending`) or failed (`error`). Offline, saves never reach `data.games`
+ * (the writes fail), so this is the only record that a game was entered; the
+ * scoring screen unions it into "which games are done" so forward navigation
+ * doesn't bounce back to a game that only exists as a failed scratch save.
+ *
+ * Read imperatively off the live mutation cache (not a render snapshot) so a
+ * save that settled a moment before the call is already reflected — the caller
+ * computes the next route synchronously, right before firing the next save.
+ */
+export function recordedGameNumbers(
+  queryClient: QueryClientArg,
+  matchId: string,
+): Set<number> {
+  const mutations = queryClient
+    .getMutationCache()
+    .findAll({ mutationKey: matchScoreMutationPrefix(matchId) })
+  // Latest save per game wins, so a successful re-save supersedes an older
+  // failure (mirrors `useFailedGameSaves`).
+  const latest = new Map<number, (typeof mutations)[number]>()
+  for (const mutation of mutations) {
+    const n = gameNumberFromScoreMutationKey(mutation.options.mutationKey)
+    if (n == null) continue
+    const prev = latest.get(n)
+    if (!prev || mutation.state.submittedAt >= prev.state.submittedAt) {
+      latest.set(n, mutation)
+    }
+  }
+  const entered = new Set<number>()
+  for (const [n, mutation] of latest) {
+    const { status, variables } = mutation.state
+    if ((status === 'pending' || status === 'error') && variables != null) {
+      entered.add(n)
+    }
+  }
+  return entered
+}
+
+/**
  * Clears the saved score for a game. Same scratchpad-write posture — failures
  * heal at finalize (the canonical /results POST is the source of truth).
  */
 export function useDeleteScore(matchId: string, gameNumber: number) {
   const queryClient = useQueryClient()
   return useMutation({
+    // Run offline too (see `scoreSaveMutationOptions`): the default
+    // `networkMode: 'online'` would pause an offline clear, freezing the ✕
+    // with nothing happening. Firing lets it fail like any other write.
+    networkMode: 'always',
     mutationFn: async (): Promise<MatchDetails> =>
       unwrap(
         'clear score',
@@ -357,6 +410,8 @@ export function useDeleteScore(matchId: string, gameNumber: number) {
 export function useDeleteScoreForMatch(matchId: string) {
   const queryClient = useQueryClient()
   return useMutation({
+    // Fire offline too, same rationale as `useDeleteScore`.
+    networkMode: 'always',
     mutationFn: async (gameNumber: number): Promise<MatchDetails> =>
       unwrap(
         'clear score',
@@ -389,6 +444,12 @@ export function useDeleteScoreForMatch(matchId: string) {
 export function useFinalizeMatch(matchId: string) {
   const queryClient = useQueryClient()
   return useMutation({
+    // Run offline so a paused mutation never freezes the submit button in its
+    // "Posting result…" pending state. The entry screen avoids *calling* this
+    // while offline (it stores the final game as a scratchpad save instead, so
+    // the score survives until the user can post the result back online); this
+    // also keeps the match-details finalize affordances from hanging offline.
+    networkMode: 'always',
     mutationFn: async (input: MatchResultsWrite): Promise<MatchDetails> =>
       unwrap(
         'post match result',
