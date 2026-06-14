@@ -16,6 +16,9 @@ const ProfileSkeleton = () => (
     </div>
     <span className={`${SK} md-sk--rating`} />
     <div className="md-profile__form">
+      <div className="md-kicker">
+        <span className={`${SK} md-sk--g-kicker`} />
+      </div>
       <div className="md-profile__form-summary">
         <span className={`${SK} md-sk--card-title`} />
       </div>
@@ -27,8 +30,10 @@ const ProfileSkeleton = () => (
         ))}
       </ul>
     </div>
+    {/* `CareerStats` always renders exactly two tiles (matches, win rate) in a
+       1fr/1fr grid — a single row. */}
     <div className="md-profile__career">
-      {Array.from({ length: 4 }, (_, i) => (
+      {Array.from({ length: 2 }, (_, i) => (
         <span key={i} className={`${SK} md-sk--career`} />
       ))}
     </div>

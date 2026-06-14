@@ -3184,9 +3184,10 @@ body.dark.fortymm-theme {
   width: 96px;
   height: 15px;
 }
-/* Footprint of `.md-profile__rating-box` (10+10 padding + 22px value ≈ 43px). */
+/* Footprint of `.md-profile__rating-box`: 10+10 padding + 1+1 border over a
+   stacked kicker (~13px) + 2px gap + 22px value line-box ≈ 62px. */
 .fortymm-theme .md-sk--rating {
-  height: 43px;
+  height: 62px;
   border-radius: var(--r-sm);
 }
 /* Spans the `.md-form-row` 18px/1fr/auto grid so the shimmer reads as a full

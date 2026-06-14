@@ -17,9 +17,12 @@ export function ConfirmationCallout({ matchId }: ConfirmationCalloutProps) {
     // (and tests a sync handle) while reserving no space.
     <Suspense
       fallback={
-        <span className="sr-only" role="status">
-          Loading result actions
-        </span>
+        <span
+          className="sr-only"
+          role="status"
+          aria-busy="true"
+          aria-label="Loading the result sign-off prompt"
+        />
       }
     >
       <ConfirmationCalloutFetcher matchId={matchId} />

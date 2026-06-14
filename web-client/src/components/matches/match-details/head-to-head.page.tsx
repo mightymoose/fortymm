@@ -15,9 +15,12 @@ const DEFAULT_MATCH_ID = "m-1";
 const scoped = (container: Container) => ({
   /** `HeadToHead`'s own `<Suspense>` fallback while the query is pending — a
    * visually-hidden `role="status"` (the card reserves no skeleton, since it
-   * usually resolves to nothing). */
+   * usually resolves to nothing). Scoped by accessible name so it stays
+   * unambiguous when composed alongside the other sections' status regions. */
   queryLoading() {
-    return container.queryByRole("status");
+    return container.queryByRole("status", {
+      name: /loading head-to-head record/i,
+    });
   },
   /**
    * The fallback rendered by the *ancestor* error boundary. `HeadToHead`
@@ -35,8 +38,9 @@ const scoped = (container: Container) => ({
 
 /**
  * Test page-object for the public `HeadToHead` wrapper. `HeadToHead` adds only
- * a `<Suspense>` boundary (with its real `Loading...` fallback) around
- * `HeadToHeadFetcher` and forwards `matchId` through — it deliberately has *no*
+ * a `<Suspense>` boundary (with its real visually-hidden `role="status"`
+ * fallback) around `HeadToHeadFetcher` and forwards `matchId` through — it
+ * deliberately has *no*
  * error boundary, delegating failures upward. This renders it beneath an
  * `ErrorBoundary` standing in for that ancestor so a rejected query can be
  * observed reaching the boundary, and stubs the same
