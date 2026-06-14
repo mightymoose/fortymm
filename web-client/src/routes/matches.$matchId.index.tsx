@@ -1,8 +1,8 @@
 import { createFileRoute } from '@tanstack/react-router'
 import {
+  MatchDetails,
   MatchDetailsError,
-  MatchDetailsView,
-} from '@/components/matches/match-details-page'
+} from '@/components/matches/match-details'
 import { matchDetailsQuery } from '@/components/matches/match-details/match-details-query'
 import { pageTitle } from '@/lib/page-title'
 
@@ -22,5 +22,5 @@ export const Route = createFileRoute('/matches/$matchId/')({
 
 function MatchDetailsRoute() {
   const { matchId } = Route.useParams()
-  return <MatchDetailsView matchId={matchId} />
+  return <MatchDetails matchId={matchId} />
 }

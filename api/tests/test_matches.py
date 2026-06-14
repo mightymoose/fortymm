@@ -326,9 +326,8 @@ async def test_get_unknown_match_is_404(
 async def test_get_match_is_open_to_anonymous_callers(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    """Same endpoint as the authed view backs the public `/p/matches/$id`
-    share route: anonymous callers get the same payload with no participant
-    flags and can_score=False."""
+    """The match-details endpoint is open to anonymous callers: they get the
+    same payload with no participant flags and can_score=False."""
     creator = await start_session(api_client, db_session)
     opponent = await make_user(db_session, "anon.viewer.opp")
     created = await _create_match(api_client, opponent.id)

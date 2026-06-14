@@ -12,9 +12,9 @@ import { render, screen } from "@testing-library/react";
 
 import { server } from "@/mocks/server";
 import {
+  MatchDetails,
   MatchDetailsError,
-  MatchDetailsView,
-} from "@/components/matches/match-details-page";
+} from "@/components/matches/match-details";
 
 import { confirmationCalloutPage } from "./match-details/confirmation-callout.page";
 import { finalizeCalloutPage } from "./match-details/finalize-callout.page";
@@ -23,13 +23,10 @@ import { scoreboardPage } from "./match-details/scoreboard.page";
 type MatchDetailsResponse = Parameters<typeof HttpResponse.json>[0];
 
 /**
- * Test page-object for the match-details page. This is the landing pad for the
- * scoreboard strangler migration: it starts focused on the `Scoreboard` seam
- * (the hero region) and will grow as more of `match-details-page.tsx` moves
- * here. Builds the same router + query harness the legacy
- * `match-details-page.test.tsx` uses so typed `<Link>`s resolve, and stubs the
- * single `GET /v1/matches/:matchId` BFF endpoint the page (and the hero's
- * `Scoreboard`) read.
+ * Test page-object for the match-details page. Builds the router + query
+ * harness the page needs so typed `<Link>`s resolve, and stubs the single
+ * `GET /v1/matches/:matchId` BFF endpoint the page (and its self-fetching
+ * section quartets) read.
  */
 export const matchDetailsPage = {
   /** Stub `GET /v1/matches/:matchId` with a `matchDetails(...)` payload. */
@@ -39,7 +36,7 @@ export const matchDetailsPage = {
     );
   },
 
-  render(matchId: string, { standalone = false }: { standalone?: boolean } = {}) {
+  render(matchId: string) {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });
@@ -47,9 +44,7 @@ export const matchDetailsPage = {
     const detailsRoute = createRoute({
       getParentRoute: () => rootRoute,
       path: "/details",
-      component: () => (
-        <MatchDetailsView matchId={matchId} standalone={standalone} />
-      ),
+      component: () => <MatchDetails matchId={matchId} />,
       errorComponent: MatchDetailsError,
     });
     // Route stubs the real route would navigate to — registered so typed

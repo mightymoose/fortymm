@@ -2337,21 +2337,6 @@ body.dark.fortymm-theme {
   padding: 32px 32px 80px;
 }
 
-.fortymm-theme .md-logo {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-.fortymm-theme .md-logo__word {
-  font-family: 'Bebas Neue', sans-serif;
-  letter-spacing: 0.04em;
-  color: var(--fg-1);
-  line-height: 1;
-}
-.fortymm-theme .md-logo__word .accent {
-  color: var(--ball-500);
-}
-
 /* ---------- Buttons ---------- */
 .fortymm-theme .md-btn {
   font: 600 13px var(--font-ui);
@@ -3866,34 +3851,6 @@ body.dark.fortymm-theme {
 @keyframes md-pop-in {
   from { opacity: 0; transform: scale(0.96) translateY(8px); }
   to { opacity: 1; transform: scale(1) translateY(0); }
-}
-
-/* ---------- Footer ---------- */
-.fortymm-theme .md-footer {
-  margin-top: 60px;
-  padding-top: 28px;
-  border-top: 1px solid var(--border-subtle);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 16px;
-}
-.fortymm-theme .md-footer__tagline {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  font: 400 12px var(--font-ui);
-  color: var(--fg-3);
-}
-.fortymm-theme .md-footer__links {
-  display: flex;
-  gap: 18px;
-  font: 500 12px var(--font-ui);
-  color: var(--fg-3);
-}
-.fortymm-theme .md-footer__links a {
-  cursor: pointer;
 }
 
 @media (max-width: 880px) {
