@@ -3189,7 +3189,10 @@ body.dark.fortymm-theme {
   height: 43px;
   border-radius: var(--r-sm);
 }
+/* Spans the `.md-form-row` 18px/1fr/auto grid so the shimmer reads as a full
+   row bar rather than collapsing into the leading 18px badge track. */
 .fortymm-theme .md-sk--form-row {
+  grid-column: 1 / -1;
   height: 18px;
 }
 .fortymm-theme .md-sk--career {

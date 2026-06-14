@@ -6,7 +6,7 @@ const SK = "md-sk animate-pulse";
  * therefore reserves the loaded panel's height even when one real side is the
  * shorter "No opponent" placeholder. Form list uses a representative three
  * rows (the loaded count varies). */
-const profileSkeleton = (
+const ProfileSkeleton = () => (
   <div className="md-profile">
     <div className="md-profile__identity">
       <span className={`${SK} md-sk--avatar-48`} />
@@ -56,9 +56,9 @@ export const PlayersPanelSkeleton = () => {
         <span className={`${SK} md-sk--meta`} />
       </div>
       <div className="md-players" aria-hidden="true">
-        {profileSkeleton}
+        <ProfileSkeleton />
         <div className="md-players__divider" />
-        {profileSkeleton}
+        <ProfileSkeleton />
       </div>
     </section>
   );
