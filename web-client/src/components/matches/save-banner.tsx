@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { useNavigate } from '@tanstack/react-router'
-import { useQueryClient } from '@tanstack/react-query'
+import { onlineManager, useQueryClient } from '@tanstack/react-query'
 import { RotateCw, TriangleAlert, X as XIcon } from 'lucide-react'
+import { ApiError } from '@/api/client'
 import {
   fireScoreSave,
   matchDetailRoute,
@@ -9,6 +10,7 @@ import {
   useMatch,
 } from '@/api/matches'
 import { decidedSide, type GamePoints } from '@/lib/scoring'
+import { cn } from '@/lib/utils'
 import {
   Alert,
   AlertAction,
@@ -88,6 +90,14 @@ export function SaveBanner({ matchId, activeGameNumber }: SaveBannerProps) {
     data != null && decidedSide(mergedGames, data.best_of) !== null
   // The finalize POST is in flight — lock the button and swap its label.
   const posting = wouldFinalize && finalizeMutation.isPending
+  // A finalize that reached the server and failed (409 a result was already
+  // posted, 422 validation drift, 500). `useFinalizeMatch`'s contract says its
+  // errors matter — unlike the swallowed per-game saves — so the banner
+  // surfaces it (the entry screen does the same). Offline we never call
+  // finalize (see `retry`), so an error here is always a real server response.
+  const finalizeError =
+    finalizeMutation.error instanceof ApiError ? finalizeMutation.error : null
+  const finalizeFailed = finalizeMutation.isError
 
   const single = failed.length === 1
   const title = wouldFinalize
@@ -95,13 +105,17 @@ export function SaveBanner({ matchId, activeGameNumber }: SaveBannerProps) {
     : single
       ? `Game ${failed[0].gameNumber} didn't save.`
       : `${failed.length} games didn't save.`
-  const description = wouldFinalize
-    ? data?.affects_rating
-      ? "Post the result now — they didn't save individually, but the match is decided."
-      : "Finalize the result now — they didn't save individually, but the match is decided."
-    : single
-      ? 'Retry now, or tap it in the scoreline to fix the score.'
-      : 'Retry all now, or tap a game in the scoreline to fix it.'
+  const description = finalizeFailed
+    ? (finalizeError?.detail ??
+      finalizeError?.message ??
+      "Couldn't post the result — try again.")
+    : wouldFinalize
+      ? data?.affects_rating
+        ? "Post the result now — they didn't save individually, but the match is decided."
+        : "Finalize the result now — they didn't save individually, but the match is decided."
+      : single
+        ? 'Retry now, or tap it in the scoreline to fix the score.'
+        : 'Retry all now, or tap a game in the scoreline to fix it.'
   const retryLabel = wouldFinalize
     ? data?.affects_rating
       ? 'Post result'
@@ -113,8 +127,11 @@ export function SaveBanner({ matchId, activeGameNumber }: SaveBannerProps) {
   function retry() {
     // Enough recorded scores to decide the match → post the canonical result
     // (it obliterates + replaces the scratch saves server-side) instead of
-    // re-firing each failed per-game save.
-    if (wouldFinalize) {
+    // re-firing each failed per-game save. Offline we can't post /results, so
+    // we fall through to re-firing the scratch saves (they stay in the strip as
+    // failed cells) — mirroring the entry screen's `onSubmit` online guard
+    // rather than firing a finalize that can only fail unseen.
+    if (wouldFinalize && onlineManager.isOnline()) {
       finalizeMutation.mutate(
         { games: mergedGames },
         { onSuccess: () => navigate(matchDetailRoute(matchId)) },
@@ -133,7 +150,11 @@ export function SaveBanner({ matchId, activeGameNumber }: SaveBannerProps) {
     >
       <TriangleAlert aria-hidden />
       <AlertTitle>{title}</AlertTitle>
-      <AlertDescription className="text-[color:var(--fg-3)]">
+      <AlertDescription
+        className={cn(
+          finalizeFailed ? 'text-[color:var(--loss)]' : 'text-[color:var(--fg-3)]',
+        )}
+      >
         {description}
       </AlertDescription>
       <AlertAction className="top-1/2 flex -translate-y-1/2 items-center gap-1">

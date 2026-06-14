@@ -1099,6 +1099,121 @@ describe('ScoreEntry — failed saves', () => {
       ],
     })
   })
+
+  // The banner's finalize is guarded on connectivity like the entry screen:
+  // offline it must NOT fire /results (which can only fail unseen) — it falls
+  // back to re-firing the per-game scratch saves so the scores stay in the strip.
+  it('offline: banner retry re-fires the per-game saves instead of posting the result', async () => {
+    const user = userEvent.setup()
+    let resultsCalls = 0
+    let scoreSaveCalls = 0
+    server.use(
+      http.get('*/v1/matches/m-1', () =>
+        HttpResponse.json(
+          inProgressMatch({
+            sides: participantSides({ meWins: 2, oppWins: 0 }),
+            games: [
+              { id: 'g-1', game_number: 1, score: score('s-1', 11, 4) },
+              { id: 'g-2', game_number: 2, score: score('s-2', 11, 6) },
+            ],
+            current_game: { game_number: 3 },
+          }),
+        ),
+      ),
+      http.post('*/v1/matches/m-1/games/3/scores/new', () => {
+        scoreSaveCalls += 1
+        return HttpResponse.error()
+      }),
+      http.post('*/v1/matches/m-1/results', () => {
+        resultsCalls += 1
+        return HttpResponse.json({ detail: 'should not be called' }, { status: 500 })
+      }),
+    )
+
+    renderScoringApp('/matches/m-1/games/3/scores/new')
+    await screen.findByRole('heading', { name: /enter game 3 score/i })
+    onlineManager.setOnline(false)
+    await user.type(
+      screen.getByRole('textbox', { name: 'rita.kovac score' }),
+      '11',
+    )
+    await user.type(screen.getByRole('textbox', { name: 'nguyen.t score' }), '3')
+    await user.click(screen.getByRole('button', { name: /post result/i }))
+    await screen.findByRole('heading', { name: /enter game 4 score/i })
+    expect(scoreSaveCalls).toBe(1)
+
+    // Still offline — tapping the banner's "Post result" re-fires the scratch
+    // save (which fails again), and never touches /results.
+    const banner = await screen.findByRole('alert')
+    await user.click(
+      within(banner).getByRole('button', { name: /post result/i }),
+    )
+    await waitFor(() => expect(scoreSaveCalls).toBe(2))
+    expect(resultsCalls).toBe(0)
+  })
+
+  // The finalize hook's contract is that its errors matter (unlike the swallowed
+  // per-game saves). When the banner's online finalize fails, it surfaces the
+  // server's reason instead of silently reverting.
+  it('banner surfaces a finalize error (e.g. result already posted) instead of failing silently', async () => {
+    const user = userEvent.setup()
+    server.use(
+      http.get('*/v1/matches/m-1', () =>
+        HttpResponse.json(
+          inProgressMatch({
+            sides: participantSides({ meWins: 2, oppWins: 0 }),
+            games: [
+              { id: 'g-1', game_number: 1, score: score('s-1', 11, 4) },
+              { id: 'g-2', game_number: 2, score: score('s-2', 11, 6) },
+            ],
+            current_game: { game_number: 3 },
+          }),
+        ),
+      ),
+      http.post('*/v1/matches/m-1/games/3/scores/new', () =>
+        HttpResponse.error(),
+      ),
+      http.post('*/v1/matches/m-1/results', () =>
+        HttpResponse.json(
+          { detail: 'A result has already been posted.' },
+          { status: 409 },
+        ),
+      ),
+    )
+
+    renderScoringApp('/matches/m-1/games/3/scores/new')
+
+    // Store the deciding game offline so the finalize banner appears.
+    await screen.findByRole('heading', { name: /enter game 3 score/i })
+    onlineManager.setOnline(false)
+    await user.type(
+      screen.getByRole('textbox', { name: 'rita.kovac score' }),
+      '11',
+    )
+    await user.type(screen.getByRole('textbox', { name: 'nguyen.t score' }), '3')
+    await user.click(screen.getByRole('button', { name: /post result/i }))
+    await screen.findByRole('heading', { name: /enter game 4 score/i })
+
+    // Back online, post the result — the server rejects with a 409.
+    onlineManager.setOnline(true)
+    const banner = await screen.findByRole('alert')
+    await user.click(
+      within(banner).getByRole('button', { name: /post result/i }),
+    )
+
+    // The banner surfaces the reason rather than reverting silently, and the
+    // button is usable again for another attempt.
+    await waitFor(() =>
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        'A result has already been posted.',
+      ),
+    )
+    expect(
+      within(screen.getByRole('alert')).getByRole('button', {
+        name: /post result/i,
+      }),
+    ).toBeEnabled()
+  })
 })
 
 afterEach(() => {
