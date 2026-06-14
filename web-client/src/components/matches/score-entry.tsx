@@ -405,8 +405,8 @@ function ScoreEntryInner({
         <div className="entry-head">
           <h2>{heading}</h2>
           <div className="hint">
-            <kbd>0</kbd>–<kbd>9</kbd> score &nbsp;·&nbsp; <kbd>Enter</kbd> next
-            / save game
+            Type <kbd>0</kbd>–<kbd>9</kbd> &nbsp;·&nbsp; <kbd>Enter</kbd> for
+            next / save game
           </div>
         </div>
 

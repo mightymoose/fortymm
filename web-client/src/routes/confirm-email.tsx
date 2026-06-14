@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { Link, createFileRoute } from '@tanstack/react-router'
+import { Link, createFileRoute, useNavigate } from '@tanstack/react-router'
 import { toast } from 'sonner'
 
 import { ApiError } from '@/api/client'
@@ -39,6 +39,7 @@ const CONFIRM_COPY: Partial<
 
 function ConfirmEmailPage() {
   const { token } = Route.useSearch()
+  const navigate = useNavigate()
   const preview = useMergePreview()
   const confirm = useConfirmEmail()
   const fired = useRef(false)
@@ -71,19 +72,35 @@ function ConfirmEmailPage() {
     }
   }, [confirm.isSuccess, confirm.data])
 
+  // The token is a single-use bearer credential. Once the confirm settles,
+  // drop it from the URL so it doesn't linger in the address bar / history /
+  // Referer — mirroring how `/login/verifying` scrubs its token (#521). The
+  // displayed state is driven by the mutation result, not the search param, so
+  // clearing `token` here doesn't revert the page to "missing token".
+  useEffect(() => {
+    if ((confirm.isSuccess || confirm.isError) && token) {
+      navigate({ to: '/confirm-email', search: { token: '' }, replace: true })
+    }
+  }, [confirm.isSuccess, confirm.isError, token, navigate])
+
   const p = preview.data
   const showGate =
     confirm.status === 'idle' && !!p && p.is_merge && p.guest_matches_count > 0
 
-  const status: 'missing-token' | 'gate' | 'confirming' | 'ok' | 'error' = !token
-    ? 'missing-token'
-    : confirm.isSuccess
+  // Order matters: the confirm result wins over `!token`, because we scrub the
+  // token from the URL after the mutation settles (#521) — a cleared token on
+  // a settled mutation is "ok"/"error", not "missing-token". A genuine
+  // no-token visit falls through to "missing-token".
+  const status: 'missing-token' | 'gate' | 'confirming' | 'ok' | 'error' =
+    confirm.isSuccess
       ? 'ok'
       : confirm.isError
         ? 'error'
         : showGate
           ? 'gate'
-          : 'confirming'
+          : !token
+            ? 'missing-token'
+            : 'confirming'
 
   const errorMsg =
     status === 'missing-token'
