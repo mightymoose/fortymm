@@ -24,6 +24,11 @@ const router = createRouter({
   routeTree,
   context: { queryClient },
   defaultNotFoundComponent: NotFoundPage,
+  // Preload routes on link hover/touch (intent). Routes warm the React Query
+  // cache in their loaders, so let React Query own staleness rather than the
+  // router's own loader cache.
+  defaultPreload: 'intent',
+  defaultPreloadStaleTime: 0,
 })
 
 declare module '@tanstack/react-router' {
