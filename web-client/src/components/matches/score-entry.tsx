@@ -278,6 +278,11 @@ function ScoreEntryInner({
 
   function onSubmit() {
     if (!inputsValid) return
+    // Ignore a second Save while the per-game save is still in flight (#538):
+    // a double-tap would otherwise fire a duplicate POST that 409s. The save is
+    // idempotent server-side, so this is just to avoid the wasted round-trip —
+    // the mutationFn also treats a 409 as a successful re-save as a backstop.
+    if (saveMutation.isPending) return
     // Finalizing posts the canonical result — but that's the one write that
     // can't be faked offline. When offline we instead fall through to the
     // scratchpad save below, which stores the deciding game's score in the

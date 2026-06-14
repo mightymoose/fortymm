@@ -205,6 +205,55 @@ describe('ScoreEntry — create', () => {
     expect(captured).toEqual({ side_1_points: 11, side_2_points: 4 })
   })
 
+  it('treats a 409 on the create POST as a successful re-save (#538)', async () => {
+    // A double-tapped Save fires the create POST twice; the second hits an
+    // already-saved game and 409s. The mutation must fall back to an update
+    // (PUT) so the game lands as saved and we advance — rather than the 409
+    // surfacing a false "didn't save" cell.
+    const user = userEvent.setup()
+    let posts = 0
+    let putBody: unknown = null
+    const advanced = inProgressMatch({
+      sides: participantSides({ meWins: 2, oppWins: 1 }),
+      games: [
+        { id: 'g-1', game_number: 1, score: score('s-1', 11, 8) },
+        { id: 'g-2', game_number: 2, score: score('s-2', 9, 11) },
+        { id: 'g-3', game_number: 3, score: score('s-3', 11, 4) },
+      ],
+      current_game: { game_number: 4 },
+    })
+    server.use(
+      http.get('*/v1/matches/m-1', () => HttpResponse.json(inProgressMatch())),
+      http.post('*/v1/matches/m-1/games/3/scores/new', () => {
+        posts += 1
+        return HttpResponse.json(
+          { detail: 'Game already has a score.' },
+          { status: 409 },
+        )
+      }),
+      http.put('*/v1/matches/m-1/games/3/scores', async ({ request }) => {
+        putBody = await request.json()
+        return HttpResponse.json(advanced)
+      }),
+    )
+
+    renderScoreEntry({ kind: 'create', matchId: 'm-1', gameNumber: 3 })
+
+    await screen.findByRole('heading', { name: /enter game 3 score/i })
+    await user.type(
+      screen.getByRole('textbox', { name: 'rita.kovac score' }),
+      '11',
+    )
+    await user.type(screen.getByRole('textbox', { name: 'nguyen.t score' }), '4')
+    await user.click(screen.getByRole('button', { name: /save game & next/i }))
+
+    await waitFor(() =>
+      expect(screen.getByText('scoring-new m-1 4')).toBeInTheDocument(),
+    )
+    expect(posts).toBe(1)
+    expect(putBody).toEqual({ side_1_points: 11, side_2_points: 4 })
+  })
+
   it('flips the submit button to "Post result" when this score would decide the match', async () => {
     // Bo5, 2-0 on the board, entering G3. An 11-3 win clinches at 3-0, so
     // the single submit button should POST /results (atomically saving +
