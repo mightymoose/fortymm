@@ -276,7 +276,9 @@ describe('MatchesPage', () => {
         return HttpResponse.json(
           matchListResponse({
             items: [matchListRow({ opponent: 'nguyen.t' })],
-            total: 1,
+            // Enough total for page 2 to be in range, so the deep-linked page
+            // isn't snapped back by the out-of-range clamp (#541).
+            total: 50,
             page: 2,
             status_counts: { in_progress: 1 },
           }),
@@ -345,6 +347,34 @@ describe('MatchesPage', () => {
         expect.objectContaining({ q: 'ngu' }),
       )
     })
+  })
+
+  it('snaps an out-of-range ?page= back to the last valid page (#541)', async () => {
+    server.use(
+      http.get('*/v1/matches', ({ request }) => {
+        const page = Number(new URL(request.url).searchParams.get('page') ?? '1')
+        // 16 matches → a single page. Any page > 1 is out of range and the
+        // API returns no items (but still the real total).
+        const items =
+          page === 1 ? [matchListRow({ opponent: 'nguyen.t' })] : []
+        return HttpResponse.json(
+          matchListResponse({ items, total: 16, page, status_counts: { pending: 16 } }),
+        )
+      }),
+    )
+    const { router } = renderMatchesPage('/matches?page=2')
+
+    // The page redirects to the last valid page, so the real rows render
+    // rather than an empty table under a broken "Showing 26–16" footer.
+    expect(await screen.findByText('nguyen.t')).toBeInTheDocument()
+    await waitFor(() => {
+      expect(router.state.location.search).not.toEqual(
+        expect.objectContaining({ page: 2 }),
+      )
+    })
+    // The footer range is sane — start never exceeds end.
+    expect(screen.getByText(/showing/i).textContent).toContain('1–16')
+    expect(screen.queryByText(/26–16/)).not.toBeInTheDocument()
   })
 
   it('Export CSV links straight to /v1/matches.csv with the active filter (#149)', async () => {
