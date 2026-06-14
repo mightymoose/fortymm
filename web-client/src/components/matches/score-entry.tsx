@@ -237,12 +237,19 @@ function ScoreEntryInner({
 
   // Per the fire-and-forget posture: only finalize errors are surfaced. The
   // per-game mutations (save / delete) self-heal at finalize, so their errors
-  // are intentionally hidden here (surfaced in the scoreline instead).
+  // are intentionally hidden here (surfaced in the scoreline instead). All
+  // finalize errors surface, not just 422 validation drift — for a deciding
+  // game this button is the sole finalize path (the banner is informational),
+  // so a 409 "already posted" / 500 must be visible here rather than swallowed.
   const finalizeApiError =
     finalizeMutation.error instanceof ApiError ? finalizeMutation.error : null
-  const showScoreError =
-    localScoreError !== null ||
-    (finalizeApiError !== null && finalizeApiError.status === 422)
+  // The score *inputs* are only invalid for genuine validation problems (local
+  // illegal score, or a 422 drift the server rejected) — a 409/500 means the
+  // entered score is fine, so don't paint the fields red for those.
+  const inputsInvalid =
+    localScoreError !== null || finalizeApiError?.status === 422
+  // The message line, though, surfaces every finalize error (409/500 included).
+  const showScoreError = inputsInvalid || finalizeApiError !== null
 
   function predictNextScoringRoute() {
     if (!data) return matchDetailRoute(matchId)
@@ -283,8 +290,17 @@ function ScoreEntryInner({
       )
       return
     }
-    const next = predictNextScoringRoute()
     const args = toBody()
+    // Offline deciding game: store the score as a scratch save but DON'T advance
+    // — the match is over, there's no next game to play. Staying here, the save's
+    // failure makes the SaveBanner surface on this same screen ("These scores
+    // finish the match." / "Post result"), which posts the canonical result once
+    // back online.
+    if (wouldFinalize) {
+      saveMutation.mutate(args)
+      return
+    }
+    const next = predictNextScoringRoute()
     // Fire-and-forget — we navigate as soon as the request settles either way,
     // since the canonical POST /results reconciles the score later. The save
     // lands in the shared mutation cache under this game's key: on success the
@@ -406,7 +422,7 @@ function ScoreEntryInner({
             inputRef={meRef}
             autoFocus
             disabled={inputsLocked}
-            invalid={showScoreError}
+            invalid={inputsInvalid}
             onChange={onMeChange}
             onKeyDown={(e) => handleKey(e, 'me')}
           />
@@ -426,7 +442,7 @@ function ScoreEntryInner({
             value={opp}
             inputRef={oppRef}
             disabled={inputsLocked}
-            invalid={showScoreError}
+            invalid={inputsInvalid}
             onChange={onOppChange}
             onKeyDown={(e) => handleKey(e, 'opp')}
           />
