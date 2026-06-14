@@ -13,9 +13,11 @@ import { headToHeadDisplayPage } from "./head-to-head/head-to-head-fetcher/head-
 const DEFAULT_MATCH_ID = "m-1";
 
 const scoped = (container: Container) => ({
-  /** `HeadToHead`'s own `<Suspense>` fallback while the query is pending. */
+  /** `HeadToHead`'s own `<Suspense>` fallback while the query is pending — a
+   * visually-hidden `role="status"` (the card reserves no skeleton, since it
+   * usually resolves to nothing). */
   queryLoading() {
-    return container.queryByText("Loading...");
+    return container.queryByRole("status");
   },
   /**
    * The fallback rendered by the *ancestor* error boundary. `HeadToHead`

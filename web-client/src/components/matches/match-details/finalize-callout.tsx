@@ -11,7 +11,16 @@ export interface FinalizeCalloutProps {
  * been posted. Self-fetching; renders nothing when there's nothing postable. */
 export function FinalizeCallout({ matchId }: FinalizeCalloutProps) {
   return (
-    <Suspense fallback={<div>Loading...</div>}>
+    // Renders nothing when there's nothing postable, so a visible skeleton
+    // would flash then collapse. A visually-hidden status keeps the load
+    // announced (and tests a sync handle) while reserving no space.
+    <Suspense
+      fallback={
+        <span className="sr-only" role="status">
+          Loading result actions
+        </span>
+      }
+    >
       <FinalizeCalloutFetcher matchId={matchId} />
     </Suspense>
   );

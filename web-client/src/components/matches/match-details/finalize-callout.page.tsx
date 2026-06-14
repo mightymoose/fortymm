@@ -17,9 +17,11 @@ import { finalizeCalloutDisplayPage } from "./finalize-callout/finalize-callout-
 const DEFAULT_MATCH_ID = "m-1";
 
 const scoped = (container: Container) => ({
-  /** `FinalizeCallout`'s own `<Suspense>` fallback while the query is pending. */
+  /** `FinalizeCallout`'s own `<Suspense>` fallback while the query is pending —
+   * a visually-hidden `role="status"` (the callout reserves no skeleton, since
+   * it usually resolves to nothing). */
   queryLoading() {
-    return container.queryByText("Loading...");
+    return container.queryByRole("status");
   },
   /**
    * The fallback rendered by the *ancestor* error boundary. `FinalizeCallout`

@@ -3168,6 +3168,42 @@ body.dark.fortymm-theme {
   height: 22px;
   margin: 0 auto;
 }
+/* Card-section skeletons (players panel, match info) — leaf sizes only; the
+   `.md-card`/`.md-profile`/`.md-info-row` containers supply every dimension
+   that drives height, so the swap to real content doesn't shift. */
+.fortymm-theme .md-sk--card-title {
+  width: 130px;
+  height: 12px;
+}
+.fortymm-theme .md-sk--avatar-48 {
+  width: 48px;
+  height: 48px;
+  border-radius: var(--r-pill);
+}
+.fortymm-theme .md-sk--profile-name {
+  width: 96px;
+  height: 15px;
+}
+/* Footprint of `.md-profile__rating-box` (10+10 padding + 22px value ≈ 43px). */
+.fortymm-theme .md-sk--rating {
+  height: 43px;
+  border-radius: var(--r-sm);
+}
+.fortymm-theme .md-sk--form-row {
+  height: 18px;
+}
+.fortymm-theme .md-sk--career {
+  height: 38px;
+  border-radius: var(--r-sm);
+}
+.fortymm-theme .md-sk--info-k {
+  width: 60px;
+  height: 12px;
+}
+.fortymm-theme .md-sk--info-v {
+  width: 84px;
+  height: 12px;
+}
 
 /* ---------- Two-column layout ---------- */
 .fortymm-theme .md-col-2 {
