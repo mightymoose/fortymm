@@ -12,7 +12,19 @@ export interface ConfirmationCalloutProps {
  * state applies. */
 export function ConfirmationCallout({ matchId }: ConfirmationCalloutProps) {
   return (
-    <Suspense fallback={<div>Loading...</div>}>
+    // Renders nothing when no sign-off is in play, so a visible skeleton would
+    // flash then collapse. A visually-hidden status keeps the load announced
+    // (and tests a sync handle) while reserving no space.
+    <Suspense
+      fallback={
+        <span
+          className="sr-only"
+          role="status"
+          aria-busy="true"
+          aria-label="Loading the result sign-off prompt"
+        />
+      }
+    >
       <ConfirmationCalloutFetcher matchId={matchId} />
     </Suspense>
   );

@@ -13,9 +13,12 @@ import { playersPanelDisplayPage } from "./players-panel/players-panel-fetcher/p
 const DEFAULT_MATCH_ID = "m-1";
 
 const scoped = (container: Container) => ({
-  /** `PlayersPanel`'s own `<Suspense>` fallback while the query is pending. */
+  /** `PlayersPanel`'s own `<Suspense>` fallback (the `PlayersPanelSkeleton`)
+   * while the query is pending. */
   queryLoading() {
-    return container.queryByText("Loading...");
+    return container.queryByRole("status", {
+      name: /loading the players panel/i,
+    });
   },
   /**
    * The fallback rendered by the *ancestor* error boundary. `PlayersPanel`

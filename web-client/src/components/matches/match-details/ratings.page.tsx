@@ -13,9 +13,12 @@ import { ratingsDisplayPage } from "./ratings/ratings-fetcher/ratings-display.pa
 const DEFAULT_MATCH_ID = "m-1";
 
 const scoped = (container: Container) => ({
-  /** `Ratings`'s own `<Suspense>` fallback while the query is pending. */
+  /** `Ratings`'s own `<Suspense>` fallback while the query is pending — a
+   * visually-hidden `role="status"` (the card reserves no skeleton, since it
+   * usually resolves to nothing). Scoped by accessible name so it stays
+   * unambiguous when composed alongside the other sections' status regions. */
   queryLoading() {
-    return container.queryByText("Loading...");
+    return container.queryByRole("status", { name: /loading rating change/i });
   },
   /**
    * The fallback rendered by the *ancestor* error boundary. `Ratings`
@@ -33,8 +36,9 @@ const scoped = (container: Container) => ({
 
 /**
  * Test page-object for the public `Ratings` wrapper. `Ratings` adds only a
- * `<Suspense>` boundary (with its real `Loading...` fallback) around
- * `RatingsFetcher` and forwards `matchId` through — it deliberately has *no*
+ * `<Suspense>` boundary (with its real visually-hidden `role="status"`
+ * fallback) around `RatingsFetcher` and forwards `matchId` through — it
+ * deliberately has *no*
  * error boundary, delegating failures upward. This renders it beneath an
  * `ErrorBoundary` standing in for that ancestor so a rejected query can be
  * observed reaching the boundary, and stubs the same

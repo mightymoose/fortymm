@@ -13,9 +13,10 @@ import { matchInfoDisplayPage } from "./match-info/match-info-fetcher/match-info
 const DEFAULT_MATCH_ID = "m-1";
 
 const scoped = (container: Container) => ({
-  /** `MatchInfo`'s own `<Suspense>` fallback while the query is pending. */
+  /** `MatchInfo`'s own `<Suspense>` fallback (the `MatchInfoSkeleton`) while
+   * the query is pending. */
   queryLoading() {
-    return container.queryByText("Loading...");
+    return container.queryByRole("status", { name: /loading match info/i });
   },
   /**
    * The fallback rendered by the *ancestor* error boundary. `MatchInfo`

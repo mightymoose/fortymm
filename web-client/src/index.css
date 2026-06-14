@@ -3093,6 +3093,122 @@ body.dark.fortymm-theme {
   color: var(--serve-500);
 }
 
+/* ---------- Hero scoreboard loading skeleton ----------
+   Shimmer blocks for the `Scoreboard` Suspense fallback. They live inside the
+   real `.md-hero*`/`.md-games*` boxes, so only the leaf sizes are stated here;
+   every container dimension is inherited from the loaded layout above, which
+   is what keeps the swap from shifting anything. */
+.fortymm-theme .md-sk {
+  display: block;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.06);
+}
+.fortymm-theme .md-sk--chip {
+  width: 92px;
+  height: 20px;
+  border-radius: var(--r-pill);
+}
+.fortymm-theme .md-sk--meta {
+  width: 104px;
+  height: 12px;
+}
+.fortymm-theme .md-sk--meta-sm {
+  width: 72px;
+}
+.fortymm-theme .md-sk--avatar {
+  width: 64px;
+  height: 64px;
+  border-radius: var(--r-pill);
+}
+.fortymm-theme .md-sk--name {
+  width: 150px;
+  height: 24px;
+}
+/* Matches the 112px Bebas score line-box (112 × 0.85 ≈ 95px) so the hero row
+   height — and thus everything below it — is identical to the loaded state. */
+.fortymm-theme .md-sk--score {
+  width: 64px;
+  height: 95px;
+  border-radius: 8px;
+}
+.fortymm-theme .md-sk--score-l {
+  justify-self: end;
+}
+.fortymm-theme .md-sk--score-r {
+  justify-self: start;
+}
+.fortymm-theme .md-sk--score-dash {
+  width: 18px;
+  height: 8px;
+}
+.fortymm-theme .md-sk--g-kicker {
+  width: 54px;
+  height: 10px;
+}
+.fortymm-theme .md-sk--g-label {
+  width: 22px;
+  height: 9px;
+  margin: 0 auto;
+}
+.fortymm-theme .md-sk--g-avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--r-pill);
+}
+.fortymm-theme .md-sk--g-name {
+  width: 92px;
+  height: 13px;
+}
+.fortymm-theme .md-sk--g-cell {
+  width: 22px;
+  height: 22px;
+}
+.fortymm-theme .md-sk--g-total {
+  width: 24px;
+  height: 22px;
+  margin: 0 auto;
+}
+/* Card-section skeletons (players panel, match info) — leaf sizes only; the
+   `.md-card`/`.md-profile`/`.md-info-row` containers supply every dimension
+   that drives height, so the swap to real content doesn't shift. */
+.fortymm-theme .md-sk--card-title {
+  width: 130px;
+  height: 12px;
+}
+.fortymm-theme .md-sk--avatar-48 {
+  width: 48px;
+  height: 48px;
+  border-radius: var(--r-pill);
+}
+.fortymm-theme .md-sk--profile-name {
+  width: 96px;
+  height: 15px;
+}
+/* Footprint of `.md-profile__rating-box`: 10+10 padding + 1+1 border over a
+   stacked kicker (~13px) + 2px gap + 22px value line-box ≈ 62px. */
+.fortymm-theme .md-sk--rating {
+  height: 62px;
+  border-radius: var(--r-sm);
+}
+/* Spans the `.md-form-row` 18px/1fr/auto grid so the shimmer reads as a full
+   row bar rather than collapsing into the leading 18px badge track. */
+.fortymm-theme .md-sk--form-row {
+  grid-column: 1 / -1;
+  height: 18px;
+}
+.fortymm-theme .md-sk--career {
+  height: 38px;
+  border-radius: var(--r-sm);
+}
+.fortymm-theme .md-sk--info-k {
+  width: 60px;
+  height: 12px;
+}
+.fortymm-theme .md-sk--info-v {
+  width: 84px;
+  height: 12px;
+}
+
 /* ---------- Two-column layout ---------- */
 .fortymm-theme .md-col-2 {
   display: grid;

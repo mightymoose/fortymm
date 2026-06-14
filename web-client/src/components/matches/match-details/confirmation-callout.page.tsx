@@ -25,9 +25,13 @@ const DEFAULT_MATCH_ID = "m-1";
 
 const scoped = (container: Container) => ({
   /** `ConfirmationCallout`'s own `<Suspense>` fallback while the query is
-   * pending. */
+   * pending — a visually-hidden `role="status"` (the callout reserves no
+   * skeleton, since it usually resolves to nothing). Scoped by accessible name
+   * so it stays unambiguous when composed alongside the other sections. */
   queryLoading() {
-    return container.queryByText("Loading...");
+    return container.queryByRole("status", {
+      name: /loading the result sign-off prompt/i,
+    });
   },
   /**
    * The fallback rendered by the *ancestor* error boundary.
@@ -43,8 +47,9 @@ const scoped = (container: Container) => ({
 
 /**
  * Test page-object for the public `ConfirmationCallout` wrapper. The wrapper
- * adds only a `<Suspense>` boundary (with its real `Loading...` fallback)
- * around `ConfirmationCalloutFetcher` and forwards `matchId` through — it
+ * adds only a `<Suspense>` boundary (with its real visually-hidden
+ * `role="status"` fallback) around `ConfirmationCalloutFetcher` and forwards
+ * `matchId` through — it
  * deliberately has *no* error boundary, delegating failures upward. This
  * renders it beneath an `ErrorBoundary` standing in for that ancestor, and
  * stubs the `GET /v1/matches/:matchId` endpoint the query reads (plus, on
