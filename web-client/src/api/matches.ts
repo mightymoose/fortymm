@@ -136,16 +136,11 @@ export function useCreateMatch() {
   })
 }
 
-/**
- * Paginated /matches list. `placeholderData: keepPreviousData` keeps the
- * current page rendered while the next page or filter resolves, so the table
- * doesn't flash empty between requests. Throws to the surrounding boundary.
- */
-export function useMatchList(
-  params: MatchListParams,
-  options: { enabled?: boolean } = {},
-) {
-  return useQuery({
+/** Query options for the paginated /matches list. Shared by `useMatchList` and
+ * any caller that needs to prefetch the same query — the list route's loader
+ * warms this on hover/touch preload so a click renders instantly. */
+export function matchListQueryOptions(params: MatchListParams) {
+  return queryOptions({
     queryKey: matchListQueryKey(params),
     queryFn: async (): Promise<MatchListResponse> =>
       unwrap(
@@ -161,12 +156,26 @@ export function useMatchList(
           },
         }),
       ),
+    retry: false,
+    throwOnError: true,
+  })
+}
+
+/**
+ * Paginated /matches list. `placeholderData: keepPreviousData` keeps the
+ * current page rendered while the next page or filter resolves, so the table
+ * doesn't flash empty between requests. Throws to the surrounding boundary.
+ */
+export function useMatchList(
+  params: MatchListParams,
+  options: { enabled?: boolean } = {},
+) {
+  return useQuery({
+    ...matchListQueryOptions(params),
     // Gate on the session so a first-visit direct-load doesn't fire before the
     // session cookie lands and 401 into the error boundary (#144).
     enabled: options.enabled ?? true,
     placeholderData: keepPreviousData,
-    retry: false,
-    throwOnError: true,
   })
 }
 
