@@ -5,7 +5,7 @@ import {
   useQuery,
   useQueryClient,
 } from '@tanstack/react-query'
-import { api, resolveBaseUrl, unwrap } from './client'
+import { ApiError, api, resolveBaseUrl, unwrap } from './client'
 import { DASHBOARD_QUERY_KEY } from './dashboard'
 import { matchDetailsQueryKey } from '@/components/matches/match-details/match-details-query'
 import type { components } from './schema'
@@ -279,21 +279,32 @@ export function scoreSaveMutationOptions(
         cached?.games.find((g) => g.game_number === gameNumber)?.score,
       )
       const path = { match_id: matchId, game_number: gameNumber }
-      return hasScore
-        ? unwrap(
-            'update score',
-            await api.PUT('/v1/matches/{match_id}/games/{game_number}/scores', {
-              params: { path },
-              body: input,
-            }),
-          )
-        : unwrap(
-            'submit score',
-            await api.POST(
-              '/v1/matches/{match_id}/games/{game_number}/scores/new',
-              { params: { path }, body: input },
-            ),
-          )
+      const putScore = async () =>
+        unwrap(
+          'update score',
+          await api.PUT('/v1/matches/{match_id}/games/{game_number}/scores', {
+            params: { path },
+            body: input,
+          }),
+        )
+      if (hasScore) return putScore()
+      try {
+        return unwrap(
+          'submit score',
+          await api.POST(
+            '/v1/matches/{match_id}/games/{game_number}/scores/new',
+            { params: { path }, body: input },
+          ),
+        )
+      } catch (err) {
+        // A concurrent save (e.g. a double-tapped Save button, #538) already
+        // created this game's score, so the create 409s before our cache
+        // reflected it. The per-game write is idempotent scratchpad state, so
+        // re-issue it as an update — the game lands as saved instead of the
+        // 409 surfacing a false "Game N didn't save" cell.
+        if (err instanceof ApiError && err.status === 409) return putScore()
+        throw err
+      }
     },
     onSuccess: (data: MatchDetails) =>
       applyScoreMutationCache(queryClient, matchId, data),
