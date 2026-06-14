@@ -20,14 +20,16 @@ import { z } from 'zod'
 
 import {
   matchDetailRoute,
+  matchListQueryOptions,
   matchesCsvUrl,
   scoringNewRoute,
   useMatchList,
+  type MatchListParams,
   type MatchListRow,
   type MatchStatus,
 } from '@/api/matches'
 import type { components } from '@/api/schema'
-import { useSession } from '@/api/session'
+import { SESSION_QUERY_KEY, useSession } from '@/api/session'
 import { AppShell } from '@/components/app-shell'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -70,8 +72,38 @@ export const Route = createFileRoute('/matches/')({
     meta: [{ title: pageTitle('Matches') }],
   }),
   validateSearch: zodValidator(matchesSearchSchema),
+  // The filters live in the URL, so the prefetched list must be keyed by them —
+  // expose the search to the loader.
+  loaderDeps: ({ search }) => search,
+  // Warm the React Query cache without blocking the route transition, so an
+  // intent preload (the router's `defaultPreload: 'intent'`, fired when any
+  // Link to /matches is hovered/touched) makes the click render instantly.
+  // Skip the prefetch on a cold direct load where the session isn't resolved
+  // yet — firing here would 401 into the error boundary ahead of the
+  // component's session-gated query (#144). Intra-app navigation and preloads
+  // always have the session cached, which is exactly when warming pays off.
+  loader: ({ context, deps }) => {
+    if (!context.queryClient.getQueryData(SESSION_QUERY_KEY)) return
+    void context.queryClient.prefetchQuery(
+      matchListQueryOptions(listParamsFromSearch(deps)),
+    )
+  },
   component: MatchesPage,
 })
+
+/** Map the validated URL search to the list query's params. Shared by the
+ * loader's prefetch and the component's live query so both hit the same cache
+ * key — a hover preload then renders straight from cache on click. */
+function listParamsFromSearch(
+  search: z.infer<typeof matchesSearchSchema>,
+): MatchListParams {
+  return {
+    status: search.status ? TAB_TO_API[search.status] : undefined,
+    q: search.q || undefined,
+    page: search.page ?? 1,
+    page_size: PAGE_SIZE,
+  }
+}
 
 const TAB_TO_API: Record<RowTab, MatchStatus> = {
   scheduled: 'pending',
@@ -118,14 +150,16 @@ function MatchesPage() {
   // click by 300ms. The URL still updates synchronously on every change.
   const debouncedQ = useDebouncedValue(q.trim(), 300)
   const apiStatus = status === 'all' ? undefined : TAB_TO_API[status]
+  // Built via the same helper the route loader uses, so a hover preload and the
+  // live query share one cache key and the click renders from cache.
   const queryParams = useMemo(
-    () => ({
-      status: apiStatus,
-      q: debouncedQ || undefined,
-      page,
-      page_size: PAGE_SIZE,
-    }),
-    [apiStatus, debouncedQ, page],
+    () =>
+      listParamsFromSearch({
+        status: urlSearch.status,
+        q: debouncedQ,
+        page: urlSearch.page,
+      }),
+    [urlSearch.status, debouncedQ, urlSearch.page],
   )
   // Wait for the session before firing the matches query — otherwise a
   // first-visit direct-load races the session cookie and 401s into the error
