@@ -1,3 +1,4 @@
+import { waitFor } from '@testing-library/react'
 import { matchDetailRoute, scoringNewRoute } from '@/api/matches'
 import {
   buildAttentionPanelView,
@@ -44,12 +45,27 @@ describe('AttentionPanel', () => {
     )
   })
 
-  it('shows a calm empty state and no rows when nothing is actionable', async () => {
-    page.render({ view: buildAttentionPanelView({ rows: [] }) })
+  it('hides entirely when there is nothing to surface', async () => {
+    page.render({
+      view: buildAttentionPanelView({
+        rows: [],
+        overflowCount: 0,
+        waitingCount: 0,
+      }),
+    })
+
+    await waitFor(() => expect(page.queryPanel()).not.toBeInTheDocument())
+  })
+
+  it('shows a calm empty state when rows are empty but matches are waiting', async () => {
+    page.render({
+      view: buildAttentionPanelView({ rows: [], waitingCount: 2 }),
+    })
 
     await page.findPanel()
     expect(page.queryRows()).toHaveLength(0)
     expect(page.queryEmptyState()).toBeInTheDocument()
+    expect(page.queryFooterText(/2 waiting on others/)).toBeInTheDocument()
   })
 
   it('summarizes overflow and waiting counts in the footer', async () => {

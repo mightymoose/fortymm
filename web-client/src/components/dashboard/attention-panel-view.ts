@@ -67,6 +67,20 @@ function routeOf(item: DashboardAttentionItem): RowRoute {
 }
 
 /**
+ * Whether the panel has nothing to show — no actionable rows, no overflow, and
+ * nobody waiting on others. The panel hides entirely in this case rather than
+ * rendering a standalone "all caught up" card (a calm empty state still shows
+ * when rows are empty but the footer has a waiting/overflow count to surface).
+ */
+export function isAttentionPanelEmpty(view: AttentionPanelView): boolean {
+  return (
+    view.rows.length === 0 &&
+    view.overflowCount === 0 &&
+    view.waitingCount === 0
+  )
+}
+
+/**
  * Project the BFF's pre-ranked attention items into the panel's view model:
  * cap visible rows at 3, compute the footer counts, and mark the
  * highest-priority *visible* bucket as primary (so a `Review result` beneath a

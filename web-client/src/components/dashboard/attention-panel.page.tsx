@@ -12,10 +12,14 @@ import { AttentionPanel, type AttentionPanelProps } from './attention-panel'
 import { buildAttentionPanelProps } from './attention-panel.factory'
 
 const scoped = (container: Container) => ({
-  /** The panel `<section>` (always present — it renders a calm empty state
-   * rather than disappearing). */
+  /** The panel `<section>` (absent when there's nothing to surface — the panel
+   * hides entirely rather than rendering a standalone empty card). */
   getPanel() {
     return container.getByRole('region', { name: /needs your attention/i })
+  },
+  /** The panel `<section>`, or null when it has hidden itself. */
+  queryPanel() {
+    return container.queryByRole('region', { name: /needs your attention/i })
   },
   /** Every action row (one `<li>` per visible item). */
   getRows() {
