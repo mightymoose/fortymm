@@ -9,7 +9,7 @@ import { RatingCard } from './your-game-row/rating-card'
 import { RecentResultsCard } from './your-game-row/recent-results-card'
 import type { YourGameRowView } from './your-game-row/your-game-row-view'
 
-const UI = "'Space Grotesk', ui-sans-serif, system-ui, sans-serif"
+const UI = 'var(--font-ui)'
 
 export interface YourGameRowProps {
   view: YourGameRowView
