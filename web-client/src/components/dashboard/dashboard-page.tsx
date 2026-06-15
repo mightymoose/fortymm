@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
 import type { ComponentProps, CSSProperties, ReactNode } from 'react'
 import { Link } from '@tanstack/react-router'
-import { ChevronRight, Plus } from 'lucide-react'
+import { ChevronRight } from 'lucide-react'
 import { useDashboard } from '@/api/dashboard'
 import { UserAvatar } from '@/components/ui/user-avatar'
 import { Card as UICard } from '@/components/ui/card'
@@ -10,8 +10,10 @@ import { deriveEmailStatus, useSession } from '@/api/session'
 import { Overline } from '@/components/overline'
 import { AttentionPanel } from '@/components/dashboard/attention-panel'
 import { projectAttentionPanelView } from '@/components/dashboard/attention-panel-view'
+import { DashboardHeader } from '@/components/dashboard/dashboard-page/dashboard-header'
+import { projectDashboardHeaderView } from '@/components/dashboard/dashboard-page/dashboard-header/dashboard-header-view'
 import { GuestPersistBanner } from '@/components/dashboard/guest-persist-banner'
-import { fmtDateShort, fmtLongDate } from '@/lib/dates'
+import { fmtDateShort } from '@/lib/dates'
 import { formatRatingDelta } from '@/lib/rating'
 import { useMediaQuery } from '@/lib/use-media-query'
 
@@ -234,98 +236,6 @@ function Sparkline({
   )
 }
 
-type ButtonKind = 'primary' | 'secondary' | 'ghost'
-type ButtonSize = 'sm' | 'md' | 'lg'
-
-const buttonSizes = {
-  sm: { h: 32, px: 12, font: 13 },
-  md: { h: 40, px: 16, font: 14 },
-  lg: { h: 52, px: 24, font: 16 },
-}
-
-const buttonKinds: Record<ButtonKind, CSSProperties> = {
-  primary: {
-    background: C.ball500,
-    color: C.ink950,
-    border: '1px solid transparent',
-    boxShadow:
-      '0 4px 14px rgba(255,122,26,0.35), inset 0 1px 0 rgba(255,255,255,0.18)',
-  },
-  secondary: {
-    background: 'transparent',
-    color: C.chalk100,
-    border: `1px solid ${C.ink500}`,
-  },
-  ghost: {
-    background: 'transparent',
-    color: C.chalk300,
-    border: '1px solid transparent',
-  },
-}
-
-type ButtonProps = {
-  children: ReactNode
-  kind?: ButtonKind
-  size?: ButtonSize
-  iconLeft?: ReactNode
-  iconRight?: ReactNode
-  fullWidth?: boolean
-  style?: CSSProperties
-  /** When set, renders a TanStack Router Link with the same styling instead of a <button>. */
-  to?: string
-  params?: Record<string, string>
-}
-
-function Button({
-  children,
-  kind = 'primary',
-  size = 'md',
-  iconLeft,
-  iconRight,
-  fullWidth = false,
-  style,
-  to,
-  params,
-}: ButtonProps) {
-  const s = buttonSizes[size]
-  const composed: CSSProperties = {
-    height: s.h,
-    padding: `0 ${s.px}px`,
-    borderRadius: 8,
-    font: `600 ${s.font}px ${UI}`,
-    letterSpacing: '0.005em',
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    cursor: 'pointer',
-    whiteSpace: 'nowrap',
-    width: fullWidth ? '100%' : 'auto',
-    textDecoration: 'none',
-    ...buttonKinds[kind],
-    ...style,
-  }
-  const body = (
-    <>
-      {iconLeft}
-      <span>{children}</span>
-      {iconRight}
-    </>
-  )
-  if (to) {
-    return (
-      <Link to={to} params={params} style={composed}>
-        {body}
-      </Link>
-    )
-  }
-  return (
-    <button type="button" style={composed}>
-      {body}
-    </button>
-  )
-}
-
 // The shared design-system Card (`@/components/ui/card`). `display: 'block'`
 // neutralizes the shadcn Card's default flex/gap so callers keep full control of
 // their inner layout (e.g. RatingCard re-enables flex via its own style;
@@ -451,61 +361,6 @@ function EmptyCard({ overline, body }: { overline: string; body: string }) {
         {body}
       </div>
     </Card>
-  )
-}
-
-function PageTitle({
-  greeting,
-  subtitle,
-  compact,
-}: {
-  greeting: string
-  subtitle?: string
-  compact: boolean
-}) {
-  return (
-    <div
-      style={{
-        display: 'flex',
-        flexDirection: compact ? 'column' : 'row',
-        alignItems: compact ? 'stretch' : 'flex-end',
-        marginBottom: 24,
-        gap: 16,
-      }}
-    >
-      <div>
-        <Overline style={{ marginBottom: 8 }}>
-          Dashboard · {fmtLongDate()}
-        </Overline>
-        <h1
-          style={{
-            margin: 0,
-            font: `700 ${compact ? 26 : 32}px ${UI}`,
-            letterSpacing: '-0.015em',
-            color: C.chalk50,
-            lineHeight: 1.05,
-          }}
-        >
-          {greeting}
-          <span style={{ color: C.ball500 }}>.</span>
-        </h1>
-        {subtitle && (
-          <div style={{ marginTop: 6, font: `400 14px ${UI}`, color: C.chalk300 }}>
-            {subtitle}
-          </div>
-        )}
-      </div>
-      {!compact && <div style={{ flex: 1 }} />}
-      <Button
-        kind="secondary"
-        size="md"
-        iconLeft={<Plus size={16} strokeWidth={1.75} />}
-        fullWidth={compact}
-        to="/matches/new"
-      >
-        Log a match
-      </Button>
-    </div>
   )
 }
 
@@ -840,7 +695,6 @@ export function DashboardPage() {
   const data = dashboard.data
   const user = session.data?.data.user
   const username = user?.username
-  const greeting = username ? `Hi, @${username}` : 'Hi'
   // Guest with at least one completed match — "you have things to lose now".
   // Zero-match guests and verified/pending-verification users never see this.
   const isGuest =
@@ -876,7 +730,10 @@ export function DashboardPage() {
           rating={data.rating ? Math.round(data.rating.current) : null}
         />
       )}
-      <PageTitle greeting={greeting} compact={compact} />
+      <DashboardHeader
+        view={projectDashboardHeaderView(username)}
+        compact={compact}
+      />
       {isLoading ? (
         <div style={{ marginBottom: 32 }}>
           <SkeletonCard label="Loading attention panel" height={160} />
