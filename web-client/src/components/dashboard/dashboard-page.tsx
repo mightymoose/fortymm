@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import { useDashboard } from '@/api/dashboard'
-import { deriveEmailStatus, useSession } from '@/api/session'
+import { useSession } from '@/api/session'
 import { AttentionPanel } from '@/components/dashboard/attention-panel'
 import { projectAttentionPanelView } from '@/components/dashboard/attention-panel-view'
 import { DashboardHeader } from '@/components/dashboard/dashboard-page/dashboard-header'
@@ -9,6 +9,7 @@ import { SkeletonCard } from '@/components/dashboard/dashboard-page/skeleton-car
 import { YourGameRow } from '@/components/dashboard/dashboard-page/your-game-row'
 import { projectYourGameRowView } from '@/components/dashboard/dashboard-page/your-game-row/your-game-row-view'
 import { GuestPersistBanner } from '@/components/dashboard/guest-persist-banner'
+import { projectGuestPersistBannerView } from '@/components/dashboard/guest-persist-banner/guest-persist-banner-view'
 import { useMediaQuery } from '@/lib/use-media-query'
 
 // Below this viewport width the page title drops its inline action button to its
@@ -31,16 +32,7 @@ export function DashboardPage() {
   const data = dashboard.data
   const user = session.data?.data.user
   const username = user?.username
-  // Guest with at least one completed match — "you have things to lose now".
-  // Zero-match guests and verified/pending-verification users never see this.
-  const isGuest =
-    user !== undefined &&
-    deriveEmailStatus({
-      email: user.email ?? null,
-      confirmedAt: user.confirmed_at ?? null,
-      pendingEmail: user.pending_email ?? null,
-    }) === 'guest'
-  const showGuestPersistBanner = isGuest && (data?.completed_match_count ?? 0) >= 1
+  const guestBannerView = projectGuestPersistBannerView(user, data)
   const attentionView = useMemo(
     () =>
       projectAttentionPanelView(
@@ -69,12 +61,7 @@ export function DashboardPage() {
         boxSizing: 'border-box',
       }}
     >
-      {showGuestPersistBanner && data && (
-        <GuestPersistBanner
-          matchCount={data.completed_match_count}
-          rating={data.rating ? Math.round(data.rating.current) : null}
-        />
-      )}
+      {guestBannerView && <GuestPersistBanner view={guestBannerView} />}
       <DashboardHeader
         view={projectDashboardHeaderView(username)}
         compact={compact}

@@ -24,7 +24,7 @@ const scoped = (container: Container) => ({
   getRows() {
     return container
       .queryAllByRole('row')
-      .filter((row) => within(row).queryAllByRole('cell').length > 0)
+      .filter((row: HTMLElement) => within(row).queryAllByRole('cell').length > 0)
   },
   /** The data row for the given opponent label (e.g. "silva.r"). */
   getRow(opponentLabel: string) {

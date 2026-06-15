@@ -3,6 +3,7 @@ import { Link } from '@tanstack/react-router'
 import { Smartphone, X } from 'lucide-react'
 import { Alert, AlertAction, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
+import type { GuestPersistBannerView } from './guest-persist-banner/guest-persist-banner-view'
 
 const MONO = "'JetBrains Mono', ui-monospace, monospace"
 
@@ -45,9 +46,8 @@ function Mono({ children }: { children: ReactNode }) {
   )
 }
 
-type GuestPersistBannerProps = {
-  matchCount: number
-  rating: number | null
+export interface GuestPersistBannerProps {
+  view: GuestPersistBannerView
   style?: CSSProperties
 }
 
@@ -55,12 +55,13 @@ type GuestPersistBannerProps = {
 // design-system Alert (it's a status message, not a content panel): bare
 // leading icon, AlertDescription for the copy, and the AlertAction slot for
 // the dismiss control. Tinted with the ball accent to match the rest of the
-// guest-conversion surface.
+// guest-conversion surface. Whether it shows at all is decided upstream by
+// `projectGuestPersistBannerView`.
 export function GuestPersistBanner({
-  matchCount,
-  rating,
+  view,
   style,
 }: GuestPersistBannerProps) {
+  const { matchCount, rating } = view
   const [dismissed, setDismissed] = useState(() => isDismissedThisSession())
 
   if (dismissed) return null
