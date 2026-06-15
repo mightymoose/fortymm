@@ -180,6 +180,26 @@ describe('/login flow', () => {
       await screen.findByRole('heading', { name: /couldn.t send/i }),
     ).toBeInTheDocument()
   })
+
+  it('shows friendly guidance instead of the bare "Too Many Requests" on a 429', async () => {
+    server.use(
+      http.post('*/v1/login/request', () =>
+        HttpResponse.json({ detail: 'Too Many Requests' }, { status: 429 }),
+      ),
+    )
+    const user = userEvent.setup()
+    const { router } = renderAt('/login')
+
+    const input = await screen.findByLabelText('Email address')
+    await user.type(input, 'rita@example.com')
+    await user.click(screen.getByRole('button', { name: /send the link/i }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      /too many sign-in attempts.*wait a minute/i,
+    )
+    expect(screen.queryByText(/too many requests/i)).not.toBeInTheDocument()
+    expect(router.state.location.pathname).toBe('/login')
+  })
 })
 
 describe('/login/verifying flow', () => {
