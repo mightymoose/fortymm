@@ -1332,6 +1332,40 @@ async def test_details_head_to_head_counts_prior_meetings_per_side(
     assert h2h["recent_meetings"][0]["winner_side_number"] == 2
 
 
+async def test_details_head_to_head_excludes_meetings_after_this_match(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """Viewing a match shows the rivalry as it stood going into it: meetings
+    completed *after* the viewed match must not appear, and a match that starts
+    the rivalry shows no prior meetings (regression for #497)."""
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "h2h-temporal-rival") as (
+        rival_client,
+        rival,
+    ):
+        # The match we'll view — first meeting, so it starts the rivalry.
+        first = await _play_match_to_completion(
+            api_client, rival_client, rival.id, best_of=3, side_1_wins=True
+        )
+        # Two more meetings completed *after* the viewed match.
+        await _play_match_to_completion(
+            api_client, rival_client, rival.id, best_of=3, side_1_wins=False
+        )
+        await _play_match_to_completion(
+            api_client, rival_client, rival.id, best_of=3, side_1_wins=True
+        )
+
+    detail = (await api_client.get(f"/v1/matches/{first['id']}")).json()
+    h2h = detail["head_to_head"]
+    # Nothing precedes the first meeting — both rows and aggregates are empty.
+    assert h2h == {
+        "total_meetings": 0,
+        "side_1_wins": 0,
+        "side_2_wins": 0,
+        "recent_meetings": [],
+    }
+
+
 async def test_details_head_to_head_is_null_for_solo_match(
     api_client: AsyncClient, db_session: AsyncSession
 ):

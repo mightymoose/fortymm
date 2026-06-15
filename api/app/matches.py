@@ -1066,13 +1066,16 @@ def _build_form_result(past_match: Match, user_id: uuid.UUID) -> MatchDetailsFor
 async def _load_head_to_head(
     db: AsyncSession,
     user_ids: list[uuid.UUID],
-    current_match_id: uuid.UUID,
+    match: Match,
 ) -> MatchDetailsH2H | None:
     if len(user_ids) != 2:
         return None
+    current_match_id = match.id
     user_a, user_b = user_ids
     rows_query = participant_filter(
-        participant_filter(_history_base_query(current_match_id), user_a),
+        participant_filter(
+            _history_base_query(current_match_id, before=match.created_at), user_a
+        ),
         user_b,
     )
     rows = (await db.execute(rows_query.limit(H2H_MEETINGS_LIMIT))).scalars().all()
@@ -1098,9 +1101,10 @@ async def _load_head_to_head(
             )
         )
 
-    # Full-history aggregates so the displayed window doesn't undercount a
-    # long rivalry. Driven from MatchSide.won so a future void/dispute that
-    # leaves `won` null naturally drops out of both totals.
+    # Prior-meetings aggregates (completed before this match) so the displayed
+    # window doesn't undercount the rivalry going into this match. Driven from
+    # MatchSide.won so a future void/dispute that leaves `won` null naturally
+    # drops out of both totals.
     a_side = aliased(MatchSide)
     b_side = aliased(MatchSide)
     a_player = aliased(MatchSidePlayer)
@@ -1118,6 +1122,7 @@ async def _load_head_to_head(
         .where(
             Match.status == MatchStatus.completed,
             Match.id != current_match_id,
+            Match.updated_at < match.created_at,
             a_player.user_id == user_a,
             b_player.user_id == user_b,
             a_side.id != b_side.id,
@@ -1149,7 +1154,7 @@ async def _load_view_extras(db: AsyncSession, match: Match) -> ViewExtras:
         rating_changes=await _load_rating_changes(db, match.id),
         recent_form=await _load_recent_form(db, user_ids, match),
         head_to_head=await _load_head_to_head(
-            db, user_ids if len(user_ids) == 2 else [], match.id
+            db, user_ids if len(user_ids) == 2 else [], match
         ),
     )
 
