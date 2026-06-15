@@ -72,6 +72,14 @@ function LoginPage() {
               })
               return
             }
+            if (err.status === 429) {
+              // The API's bare "Too Many Requests" detail is no guidance, so
+              // give the user a concrete what-now instead of echoing it.
+              setServerError(
+                'Too many sign-in attempts. Wait a minute, then try again.',
+              )
+              return
+            }
             setServerError(err.detail ?? 'Something went wrong. Try again.')
             return
           }
