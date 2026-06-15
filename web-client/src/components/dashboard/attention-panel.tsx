@@ -3,7 +3,10 @@ import { ArrowRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { UserAvatar } from '@/components/ui/user-avatar'
-import type { AttentionPanelView } from './attention-panel-view'
+import {
+  isAttentionPanelEmpty,
+  type AttentionPanelView,
+} from './attention-panel-view'
 
 export interface AttentionPanelProps {
   view: AttentionPanelView
@@ -15,11 +18,13 @@ export interface AttentionPanelProps {
  * plus a footer summarizing overflow + waiting counts and a `View all` link.
  * Pure view-in — all ranking/labels/routing are decided by
  * `projectAttentionPanelView`. Buttons only route; they never finalize a
- * result. Renders a calm empty state rather than disappearing when nothing is
- * actionable.
+ * result. Hides entirely when there's nothing to surface; falls back to a calm
+ * empty state when there are no rows but the footer still has a waiting/overflow
+ * count to show.
  */
 export const AttentionPanel = ({ view }: AttentionPanelProps) => {
   const { rows, overflowCount, waitingCount, viewAllSearch } = view
+  if (isAttentionPanelEmpty(view)) return null
   return (
     <section
       aria-labelledby="needs-attention-heading"

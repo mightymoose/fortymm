@@ -1,5 +1,8 @@
 import { dashboardAttentionItem } from '@/test/factories'
-import { projectAttentionPanelView } from './attention-panel-view'
+import {
+  isAttentionPanelEmpty,
+  projectAttentionPanelView,
+} from './attention-panel-view'
 
 describe('projectAttentionPanelView', () => {
   it('caps visible rows at 3 and reports the overflow', () => {
@@ -109,5 +112,37 @@ describe('projectAttentionPanelView', () => {
     expect(view.overflowCount).toBe(0)
     expect(view.waitingCount).toBe(4)
     expect(view.viewAllSearch).toEqual({ q: 'rita.kovac' })
+  })
+})
+
+describe('isAttentionPanelEmpty', () => {
+  it('is empty when there are no rows, no overflow, and nobody waiting', () => {
+    expect(isAttentionPanelEmpty(projectAttentionPanelView([], 0, 'rita'))).toBe(
+      true,
+    )
+  })
+
+  it('is not empty when matches are waiting on others', () => {
+    expect(isAttentionPanelEmpty(projectAttentionPanelView([], 3, 'rita'))).toBe(
+      false,
+    )
+  })
+
+  it('is not empty when there are actionable rows', () => {
+    const view = projectAttentionPanelView(
+      [dashboardAttentionItem({ kind: 'score' })],
+      0,
+      'rita',
+    )
+    expect(isAttentionPanelEmpty(view)).toBe(false)
+  })
+
+  it('is not empty when overflow rolls extra items into the footer', () => {
+    const items = Array.from({ length: 5 }, (_, i) =>
+      dashboardAttentionItem({ match_id: `m-${i}`, kind: 'score' }),
+    )
+    expect(isAttentionPanelEmpty(projectAttentionPanelView(items, 0, 'r'))).toBe(
+      false,
+    )
   })
 })

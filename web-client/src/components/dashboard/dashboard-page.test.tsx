@@ -140,7 +140,7 @@ describe('DashboardPage', () => {
     ).toBeInTheDocument()
   })
 
-  it('shows the attention panel empty state and the empty recent-results card when nothing is pending', async () => {
+  it('hides the attention panel and shows the empty recent-results card when nothing is pending', async () => {
     server.use(
       http.get('*/v1/dashboard', () =>
         HttpResponse.json(
@@ -155,10 +155,10 @@ describe('DashboardPage', () => {
     renderDashboard()
 
     await screen.findByText('No completed matches yet.')
-    // The panel stays put (a calm empty state) rather than disappearing.
+    // Nothing actionable and nobody waiting: the panel disappears entirely.
     expect(
-      screen.getByRole('region', { name: /needs your attention/i }),
-    ).toHaveTextContent(/all caught up/i)
+      screen.queryByRole('region', { name: /needs your attention/i }),
+    ).not.toBeInTheDocument()
   })
 
   it('Log a match navigates to /matches/new', async () => {
