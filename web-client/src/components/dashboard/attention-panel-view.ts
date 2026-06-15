@@ -1,0 +1,100 @@
+import { matchDetailRoute, scoringNewRoute } from '@/api/matches'
+import type { DashboardAttentionItem } from '@/api/dashboard'
+
+// Used wherever an opponent slot has no registered player — matches the label
+// the rest of the dashboard uses for solo matches.
+const NO_OPPONENT_LABEL = 'No opponent'
+
+// The panel never grows unbounded — show the top 3 rows, roll the rest into
+// the footer (PRD §6.4).
+export const ATTENTION_VISIBLE_LIMIT = 3
+
+type RowRoute =
+  | ReturnType<typeof matchDetailRoute>
+  | ReturnType<typeof scoringNewRoute>
+
+export interface AttentionRowView {
+  matchId: string
+  /** Avatar seed — null renders the "no opponent" placeholder avatar. */
+  opponentName: string | null
+  /** Row headline, e.g. `vs nguyen.t` or `No opponent`. */
+  headline: string
+  /** Button copy: `Resolve dispute` | `Review result` | `Enter score`. */
+  actionLabel: string
+  /** Whether this row takes the primary (filled) button — true for every row
+   * in the highest-priority bucket currently visible (PRD §6.3). */
+  primary: boolean
+  /** Where the button routes: match detail for dispute/review, the scoring
+   * page for a score row (or match detail when the board is already decided). */
+  route: RowRoute
+}
+
+export interface AttentionPanelView {
+  /** The (≤3) rows to render, in server-supplied priority order. */
+  rows: AttentionRowView[]
+  /** Actionable items beyond the visible 3 — footer "N more need attention". */
+  overflowCount: number
+  /** Matches waiting on someone else — footer "N waiting on others". */
+  waitingCount: number
+  /** Search params for the "View all" link to /matches. */
+  viewAllSearch: { q: string | undefined }
+}
+
+// A row's attention "bucket" — the unit the primary-button rule operates on
+// (score rows split rated vs unrated; review/dispute are each their own
+// bucket). We deliberately do NOT re-encode the priority *ordering* here: the
+// server already sorts by it (PRD §5), so the first visible row is the
+// highest-priority bucket present, and every row sharing its bucket takes the
+// primary button (PRD §6.3).
+function bucketKey(item: DashboardAttentionItem): string {
+  return item.kind === 'score' ? `score-${item.affects_rating}` : item.kind
+}
+
+function actionLabelOf(kind: DashboardAttentionItem['kind']): string {
+  if (kind === 'dispute') return 'Resolve dispute'
+  if (kind === 'review') return 'Review result'
+  return 'Enter score'
+}
+
+function routeOf(item: DashboardAttentionItem): RowRoute {
+  // A score row deep-links to the next un-played game; review/dispute rows (and
+  // a decided-but-unposted board, current_game_number === null) route to match
+  // detail, which holds the confirm/dispute/post-result actions.
+  if (item.kind === 'score' && item.current_game_number !== null) {
+    return scoringNewRoute(item.match_id, item.current_game_number)
+  }
+  return matchDetailRoute(item.match_id)
+}
+
+/**
+ * Project the BFF's pre-ranked attention items into the panel's view model:
+ * cap visible rows at 3, compute the footer counts, and mark the
+ * highest-priority *visible* bucket as primary (so a `Review result` beneath a
+ * `Resolve dispute` renders secondary). Items arrive already sorted by the
+ * server (PRD §5), so their order is preserved as-is.
+ */
+export function projectAttentionPanelView(
+  items: DashboardAttentionItem[],
+  waitingCount: number,
+  username: string | undefined,
+): AttentionPanelView {
+  const visible = items.slice(0, ATTENTION_VISIBLE_LIMIT)
+  // Items arrive pre-sorted by priority, so the first visible row defines the
+  // top bucket; rows sharing it render primary.
+  const topBucket = visible.length ? bucketKey(visible[0]) : ''
+  return {
+    rows: visible.map((item) => ({
+      matchId: item.match_id,
+      opponentName: item.opponent_username,
+      headline: item.opponent_username
+        ? `vs ${item.opponent_username}`
+        : NO_OPPONENT_LABEL,
+      actionLabel: actionLabelOf(item.kind),
+      primary: bucketKey(item) === topBucket,
+      route: routeOf(item),
+    })),
+    overflowCount: Math.max(0, items.length - ATTENTION_VISIBLE_LIMIT),
+    waitingCount,
+    viewAllSearch: { q: username },
+  }
+}

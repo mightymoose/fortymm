@@ -13,10 +13,10 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { mockSession } from '@/mocks/handlers'
 import { server } from '@/mocks/server'
 import {
+  dashboardAttentionItem,
   dashboardRating,
   dashboardRecentResult,
   dashboardResponse,
-  dashboardScoreBanner,
 } from '@/test/factories'
 import { GUEST_PERSIST_DISMISS_KEY } from './guest-persist-banner'
 import { DashboardPage } from './dashboard-page'
@@ -81,9 +81,13 @@ describe('DashboardPage', () => {
       http.get('*/v1/dashboard', () =>
         HttpResponse.json(
           dashboardResponse({
-            score_banners: [
-              dashboardScoreBanner({
-                match_id: 'm-banner',
+            // Wiring only: the panel's rows/footer/routing are pinned by the
+            // attention-panel and attention-panel-view tests. Here we just
+            // confirm the dashboard feeds the response into the panel.
+            attention: [
+              dashboardAttentionItem({
+                match_id: 'm-attn',
+                kind: 'score',
                 current_game_number: 1,
                 opponent_username: 'nguyen.t',
               }),
@@ -110,9 +114,10 @@ describe('DashboardPage', () => {
     )
     renderDashboard()
 
-    expect(await screen.findByTestId('dashboard-score-banner')).toHaveTextContent(
-      'vs nguyen.t',
-    )
+    const panel = await screen.findByRole('region', {
+      name: /needs your attention/i,
+    })
+    expect(panel).toHaveTextContent('vs nguyen.t')
     const recent = await screen.findByTestId('dashboard-recent-results')
     const table = recent.parentElement?.querySelector('table')
     expect(table).not.toBeNull()
@@ -135,12 +140,13 @@ describe('DashboardPage', () => {
     ).toBeInTheDocument()
   })
 
-  it('omits the score banner when none is active and shows the empty recent-results card', async () => {
+  it('shows the attention panel empty state and the empty recent-results card when nothing is pending', async () => {
     server.use(
       http.get('*/v1/dashboard', () =>
         HttpResponse.json(
           dashboardResponse({
-            score_banners: [],
+            attention: [],
+            waiting_count: 0,
             recent_results: [],
           }),
         ),
@@ -149,7 +155,10 @@ describe('DashboardPage', () => {
     renderDashboard()
 
     await screen.findByText('No completed matches yet.')
-    expect(screen.queryByTestId('dashboard-score-banner')).not.toBeInTheDocument()
+    // The panel stays put (a calm empty state) rather than disappearing.
+    expect(
+      screen.getByRole('region', { name: /needs your attention/i }),
+    ).toHaveTextContent(/all caught up/i)
   })
 
   it('Log a match navigates to /matches/new', async () => {
@@ -227,103 +236,6 @@ describe('DashboardPage', () => {
     expect(screen.queryByText('RD')).not.toBeInTheDocument()
   })
 
-  it('Enter final score links to the current-game scoring route', async () => {
-    server.use(
-      http.get('*/v1/dashboard', () =>
-        HttpResponse.json(
-          dashboardResponse({
-            score_banners: [
-              dashboardScoreBanner({
-                match_id: 'm-banner',
-                current_game_number: 1,
-                opponent_username: 'nguyen.t',
-              }),
-            ],
-          }),
-        ),
-      ),
-    )
-    renderDashboard()
-
-    const link = await screen.findByRole('link', { name: /enter final score/i })
-    expect(link).toHaveAttribute(
-      'href',
-      '/matches/m-banner/games/1/scores/new',
-    )
-  })
-
-  it('stacks a compact banner when a second match is pending scoring', async () => {
-    server.use(
-      http.get('*/v1/dashboard', () =>
-        HttpResponse.json(
-          dashboardResponse({
-            score_banners: [
-              dashboardScoreBanner({
-                match_id: 'm-primary',
-                current_game_number: 1,
-                opponent_username: 'nguyen.t',
-              }),
-              dashboardScoreBanner({
-                match_id: 'm-secondary',
-                current_game_number: 1,
-                opponent_username: 'holm.s',
-              }),
-            ],
-          }),
-        ),
-      ),
-    )
-    renderDashboard()
-
-    expect(await screen.findByTestId('dashboard-score-banner')).toHaveTextContent(
-      'vs nguyen.t',
-    )
-    const compact = await screen.findByTestId('dashboard-score-banner-compact')
-    expect(compact).toHaveTextContent('vs holm.s')
-    expect(compact).toHaveTextContent(/also pending/i)
-    expect(within(compact).getByRole('link', { name: /enter score/i })).toHaveAttribute(
-      'href',
-      '/matches/m-secondary/games/1/scores/new',
-    )
-    expect(
-      screen.queryByTestId('dashboard-score-banner-more'),
-    ).not.toBeInTheDocument()
-  })
-
-  it('collapses 3+ pending matches into a "+N more pending" link to the current user\'s live matches', async () => {
-    server.use(
-      http.get('*/v1/dashboard', () =>
-        HttpResponse.json(
-          dashboardResponse({
-            score_banners: [
-              dashboardScoreBanner({
-                match_id: 'm-1',
-                opponent_username: 'nguyen.t',
-              }),
-              dashboardScoreBanner({
-                match_id: 'm-2',
-                opponent_username: 'holm.s',
-              }),
-              dashboardScoreBanner({
-                match_id: 'm-3',
-                opponent_username: 'okafor.m',
-              }),
-              dashboardScoreBanner({
-                match_id: 'm-4',
-                opponent_username: 'silva.r',
-              }),
-            ],
-          }),
-        ),
-      ),
-    )
-    renderDashboard()
-
-    const more = await screen.findByTestId('dashboard-score-banner-more')
-    expect(more).toHaveTextContent('+2')
-    expect(more).toHaveTextContent(/more pending/i)
-    expect(more).toHaveAttribute('href', '/matches?q=rita.kovac&status=live')
-  })
 })
 
 describe('DashboardPage · guest persistence banner', () => {

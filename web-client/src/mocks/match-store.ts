@@ -11,8 +11,7 @@ type MatchDetailsH2HMeeting = components['schemas']['MatchDetailsH2HMeeting']
 type MatchListRow = components['schemas']['MatchListRow']
 type MatchLeague = components['schemas']['MatchLeague']
 type MatchSignatureView = components['schemas']['MatchSignatureView']
-type DashboardScoreBanner = components['schemas']['DashboardScoreBanner']
-type DashboardNextMatch = components['schemas']['DashboardNextMatch']
+type DashboardAttentionItem = components['schemas']['DashboardAttentionItem']
 type DashboardRecentResult = components['schemas']['DashboardRecentResult']
 type DashboardRating = components['schemas']['DashboardRating']
 type DashboardStreak = components['schemas']['DashboardStreak']
@@ -110,7 +109,7 @@ function sideWinCounts(seed: SeedMatch): { side1: number; side2: number } {
  * game in [1, best_of] is scored / the match isn't in progress. Mirrors the
  * server's ``current_game_number`` derivation in api/app/matches.py. */
 function currentGameNumber(seed: SeedMatch): number | null {
-  if (seed.status !== 'in_progress') return null
+  if (seed.status !== 'in_progress' && seed.status !== 'disputed') return null
   // A posted-but-unconfirmed result locks the scratchpad — no game is
   // "current" in a writable sense until the result is disputed.
   if (seed.signatures.length > 0) return null
@@ -134,9 +133,11 @@ function currentGameNumber(seed: SeedMatch): number | null {
  * result, regardless of whether the board already decides the match. (The mock
  * seeds always carry two sides and view the match as a participant.) */
 function scorableSeed(seed: SeedMatch): boolean {
+  // ``disputed`` is deliberately scorable — a dispute reopens the board for
+  // correction (mirrors the server's ``_TERMINAL_STATUSES``, which no longer
+  // includes disputed).
   return (
     seed.status !== 'completed' &&
-    seed.status !== 'disputed' &&
     seed.status !== 'voided' &&
     seed.signatures.length === 0
   )
@@ -146,7 +147,7 @@ function scorableSeed(seed: SeedMatch): boolean {
  * decided match — i.e. POST /results would succeed against the current
  * scratchpad state. Mirrors the server's ``_can_finalize`` predicate. */
 function canFinalizeSeed(seed: SeedMatch): boolean {
-  if (seed.status !== 'in_progress') return false
+  if (seed.status !== 'in_progress' && seed.status !== 'disputed') return false
   // Once a result is posted, /confirmation or /dispute is the next action,
   // not another /results.
   if (seed.signatures.length > 0) return false
@@ -460,23 +461,79 @@ export function projectListRow(seed: SeedMatch): MatchListRow {
   }
 }
 
-export function projectScoreBanner(seed: SeedMatch): DashboardScoreBanner | null {
-  const nextNumber = currentGameNumber(seed)
-  if (seed.status !== 'in_progress' || nextNumber === null) return null
+// Attention classification — mirrors api/app/dashboard.py (PRD §5). Returns the
+// bucket plus its priority (lower = more urgent) in one pass, or null when the
+// seed isn't an actionable row for the current user (waiting / pending /
+// finished).
+function classifyAttention(
+  seed: SeedMatch,
+): { kind: DashboardAttentionItem['kind']; priority: number } | null {
+  if (seed.status === 'disputed') return { kind: 'dispute', priority: 0 }
+  if (seed.status === 'in_progress' && seed.signatures.length > 0) {
+    const iSigned = seed.signatures.some(
+      (sig) => sig.user_id === MOCK_CURRENT_USER.id,
+    )
+    // Posted by me → waiting on opponent (footer); posted by them → my review.
+    return iSigned ? null : { kind: 'review', priority: 1 }
+  }
+  if (seed.status === 'in_progress') {
+    return { kind: 'score', priority: seed.affects_rating ? 2 : 3 }
+  }
+  return null
+}
+
+/** Classify a single seed into a dashboard attention row, or null when it's
+ * not actionable for the current user (waiting / pending / finished). */
+export function projectAttention(seed: SeedMatch): DashboardAttentionItem | null {
+  const classified = classifyAttention(seed)
+  if (classified === null) return null
   return {
     match_id: seed.id,
     opponent_username: seed.opponent?.username ?? null,
-    current_game_number: nextNumber,
+    kind: classified.kind,
+    affects_rating: seed.affects_rating,
+    current_game_number:
+      classified.kind === 'score' ? currentGameNumber(seed) : null,
   }
 }
 
-export function projectNextMatch(seed: SeedMatch): DashboardNextMatch | null {
-  if (seed.status !== 'pending') return null
+/** Whether a seed is "waiting on others" — a result I posted awaiting the
+ * opponent, or a pending/scheduled match. Footer count only, never a row. */
+export function isWaitingSeed(seed: SeedMatch): boolean {
+  if (seed.status === 'pending') return true
+  return (
+    seed.status === 'in_progress' &&
+    seed.signatures.some((sig) => sig.user_id === MOCK_CURRENT_USER.id)
+  )
+}
+
+/** Build the dashboard attention payload from all seeds, pre-ranked oldest-
+ * first within each priority bucket — mirrors the BFF's `_build_attention`. */
+export function projectDashboardAttention(seeds: SeedMatch[]): {
+  attention: DashboardAttentionItem[]
+  waiting_count: number
+} {
+  const ranked = seeds
+    .map((seed) => ({ seed, classified: classifyAttention(seed) }))
+    .filter(
+      (
+        row,
+      ): row is {
+        seed: SeedMatch
+        classified: { kind: DashboardAttentionItem['kind']; priority: number }
+      } => row.classified !== null,
+    )
+    .sort(
+      (a, b) =>
+        a.classified.priority - b.classified.priority ||
+        a.seed.created_at.localeCompare(b.seed.created_at),
+    )
   return {
-    match_id: seed.id,
-    opponent_username: seed.opponent?.username ?? null,
-    best_of: seed.best_of,
-    created_at: seed.created_at,
+    attention: ranked.flatMap((row) => {
+      const item = projectAttention(row.seed)
+      return item ? [item] : []
+    }),
+    waiting_count: seeds.filter(isWaitingSeed).length,
   }
 }
 
@@ -848,6 +905,9 @@ export function finalizeSeed(
     seed.status = 'completed'
     seed.completed_at = new Date().toISOString()
   } else {
+    // Rated path: (re)open into the sign-off flow. Setting status is
+    // load-bearing when re-posting a disputed match — a no-op otherwise.
+    seed.status = 'in_progress'
     seed.signatures.push({
       user_id: MOCK_CURRENT_USER.id,
       signed_at: new Date().toISOString(),
@@ -874,14 +934,15 @@ export function confirmSeed(seed: SeedMatch, userId: string): string | null {
   return null
 }
 
-/** POST /v1/matches/{id}/dispute: clear every signature; reset side win
- * flags (derived in ``projectSides`` from ``signatures.length``, so just
- * clearing signatures is enough). Returns null on success, or a 409-suitable
- * detail string. */
+/** POST /v1/matches/{id}/dispute: move the seed to ``disputed`` and clear
+ * every signature; reset side win flags (derived in ``projectSides`` from
+ * ``signatures.length``, so just clearing signatures is enough). Returns null
+ * on success, or a 409-suitable detail string. */
 export function disputeSeed(seed: SeedMatch, userId: string): string | null {
   const guard = confirmableGuard(seed, userId)
   if (guard) return guard
   seed.signatures = []
+  seed.status = 'disputed'
   return null
 }
 

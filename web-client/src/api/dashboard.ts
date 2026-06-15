@@ -3,9 +3,8 @@ import { api, unwrap } from './client'
 import type { components } from './schema'
 
 export type DashboardResponse = components['schemas']['DashboardResponse']
-export type DashboardScoreBanner =
-  components['schemas']['DashboardScoreBanner']
-export type DashboardNextMatch = components['schemas']['DashboardNextMatch']
+export type DashboardAttentionItem =
+  components['schemas']['DashboardAttentionItem']
 export type DashboardRecentResult =
   components['schemas']['DashboardRecentResult']
 export type DashboardRating = components['schemas']['DashboardRating']

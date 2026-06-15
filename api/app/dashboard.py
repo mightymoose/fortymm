@@ -30,12 +30,12 @@ from app.models import (
     UserLeagueRating,
 )
 from app.schemas.dashboard import (
-    DashboardNextMatch,
+    AttentionKind,
+    DashboardAttentionItem,
     DashboardRating,
     DashboardRatingStat,
     DashboardRecentResult,
     DashboardResponse,
-    DashboardScoreBanner,
     DashboardStreak,
 )
 from app.schemas.rating import RatingChange
@@ -54,24 +54,22 @@ async def get_dashboard(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_session),
 ) -> DashboardResponse:
-    # One query pulls every match the user participates in across the three
-    # statuses we surface; per-status bucketing happens in Python below. The
-    # dashboard always shows at most 1 + 1 + 5 = 7 matches, so the bound is
-    # safe even for an active user with thousands of completed matches.
-    pending_q = (
-        participant_filter(select(Match), current_user.id)
-        .where(Match.status == MatchStatus.pending)
-        .options(*match_eager_options())
-        .order_by(Match.created_at.desc())
-        .limit(1)
-    )
-    # Oldest first — the most-urgent banner heads the stack, and the
-    # frontend collapses anything past the second into a "+N more" pill.
+    # Open matches the user participates in are pulled in full (signatures + sides
+    # are needed to classify each into an attention bucket); completed matches
+    # feed the recent-results table. The attention panel is bounded by the user's
+    # *open* matches — a handful even for an active player — so loading them all
+    # and ranking in Python is safe.
     in_progress_q = (
         participant_filter(select(Match), current_user.id)
         .where(Match.status == MatchStatus.in_progress)
         .options(*match_eager_options())
-        .order_by(Match.created_at.asc())
+        .order_by(Match.updated_at.asc())
+    )
+    disputed_q = (
+        participant_filter(select(Match), current_user.id)
+        .where(Match.status == MatchStatus.disputed)
+        .options(*match_eager_options())
+        .order_by(Match.updated_at.asc())
     )
     completed_q = (
         participant_filter(select(Match), current_user.id)
@@ -80,10 +78,16 @@ async def get_dashboard(
         .order_by(Match.updated_at.desc())
         .limit(RECENT_RESULTS_LIMIT)
     )
+    # Pending/scheduled matches are always "waiting on others" (O3 default), so
+    # we only need their count, not their rows.
+    pending_count_q = participant_filter(
+        select(func.count(Match.id)), current_user.id
+    ).where(Match.status == MatchStatus.pending)
 
-    pending = (await db.execute(pending_q)).scalars().all()
     in_progress = (await db.execute(in_progress_q)).scalars().all()
+    disputed = (await db.execute(disputed_q)).scalars().all()
     completed = (await db.execute(completed_q)).scalars().all()
+    pending_count = int((await db.execute(pending_count_q)).scalar_one())
 
     # When completed_q didn't hit its LIMIT, we already have the exact count
     # and can skip the extra round-trip; only the user-with-history case pays
@@ -100,8 +104,9 @@ async def get_dashboard(
         db, current_user.id, [m.id for m in completed]
     )
 
-    score_banners = _build_score_banners(in_progress, current_user.id)
-    next_match = _build_next_match(pending, current_user.id)
+    attention, waiting_count = _build_attention(
+        in_progress, disputed, pending_count, current_user.id
+    )
     recent_results = [
         _build_recent_result(match, current_user.id, rating_changes.get(match.id))
         for match in completed
@@ -109,8 +114,8 @@ async def get_dashboard(
     rating = await _build_rating(db, current_user.id, completed_match_count)
 
     return DashboardResponse(
-        score_banners=score_banners,
-        next_match=next_match,
+        attention=attention,
+        waiting_count=waiting_count,
         recent_results=recent_results,
         rating=rating,
         completed_match_count=completed_match_count,
@@ -143,35 +148,87 @@ async def _load_my_rating_changes(
     return changes
 
 
-def _build_score_banners(
-    in_progress: Sequence[Match], current_user_id: uuid.UUID
-) -> list[DashboardScoreBanner]:
-    banners: list[DashboardScoreBanner] = []
-    for match in in_progress:
-        next_number = current_game_number(match)
-        if next_number is None:
-            continue
-        banners.append(
-            DashboardScoreBanner(
-                match_id=match.id,
-                opponent_username=opponent_username(match, current_user_id),
-                current_game_number=next_number,
+# Attention-priority ranking (PRD §5): lower number = more urgent. ``score``
+# splits into rated (2) vs unrated (3) by ``affects_rating``.
+_DISPUTE_PRIORITY = 0
+_REVIEW_PRIORITY = 1
+_RATED_SCORE_PRIORITY = 2
+_UNRATED_SCORE_PRIORITY = 3
+
+
+def _build_attention(
+    in_progress: Sequence[Match],
+    disputed: Sequence[Match],
+    pending_count: int,
+    current_user_id: uuid.UUID,
+) -> tuple[list[DashboardAttentionItem], int]:
+    """Classify the user's open matches into priority-ranked attention rows plus
+    a count of matches waiting on someone else.
+
+    Current-user-aware: the poster and the reviewer of the same posted result
+    classify differently — the poster has signed, so the match is "waiting on
+    opponent" (footer) for them, while the reviewer hasn't signed and gets a
+    ``review`` row. Pending/scheduled matches (``pending_count``) and our own
+    posted-and-awaiting results are folded into ``waiting_count``; they never
+    render as rows.
+    """
+    # (priority, sort_ts, item) — sorted by priority then oldest-first so a
+    # long-stalled match floats to the top of its bucket.
+    ranked: list[tuple[int, datetime, DashboardAttentionItem]] = []
+    waiting = pending_count
+
+    for match in disputed:
+        ranked.append(
+            (
+                _DISPUTE_PRIORITY,
+                match.updated_at,
+                _attention_item(match, current_user_id, "dispute"),
             )
         )
-    return banners
+
+    for match in in_progress:
+        if match.signatures:
+            i_signed = any(sig.user_id == current_user_id for sig in match.signatures)
+            if i_signed:
+                # We posted the result; it's awaiting the opponent's sign-off.
+                waiting += 1
+            else:
+                ranked.append(
+                    (
+                        _REVIEW_PRIORITY,
+                        match.updated_at,
+                        _attention_item(match, current_user_id, "review"),
+                    )
+                )
+        else:
+            priority = (
+                _RATED_SCORE_PRIORITY
+                if match.match_settings.affects_rating
+                else _UNRATED_SCORE_PRIORITY
+            )
+            ranked.append(
+                (
+                    priority,
+                    match.updated_at,
+                    _attention_item(match, current_user_id, "score"),
+                )
+            )
+
+    ranked.sort(key=lambda row: (row[0], row[1]))
+    return [item for _, _, item in ranked], waiting
 
 
-def _build_next_match(
-    pending: Sequence[Match], current_user_id: uuid.UUID
-) -> DashboardNextMatch | None:
-    if not pending:
-        return None
-    match = pending[0]
-    return DashboardNextMatch(
+def _attention_item(
+    match: Match, current_user_id: uuid.UUID, kind: AttentionKind
+) -> DashboardAttentionItem:
+    return DashboardAttentionItem(
         match_id=match.id,
         opponent_username=opponent_username(match, current_user_id),
-        best_of=match.match_settings.best_of,
-        created_at=match.created_at,
+        kind=kind,
+        affects_rating=match.match_settings.affects_rating,
+        # Only ``score`` rows deep-link to the scoring page; review/dispute rows
+        # route to match detail and carry no game number.
+        current_game_number=current_game_number(match) if kind == "score" else None,
     )
 
 

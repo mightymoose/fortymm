@@ -16,8 +16,7 @@ type MatchListRow = components['schemas']['MatchListRow']
 type MatchListResponse = components['schemas']['MatchListResponse']
 type MatchStatus = components['schemas']['MatchStatus']
 type DashboardResponse = components['schemas']['DashboardResponse']
-type DashboardScoreBanner = components['schemas']['DashboardScoreBanner']
-type DashboardNextMatch = components['schemas']['DashboardNextMatch']
+type DashboardAttentionItem = components['schemas']['DashboardAttentionItem']
 type DashboardRecentResult = components['schemas']['DashboardRecentResult']
 type DashboardRating = components['schemas']['DashboardRating']
 
@@ -291,8 +290,8 @@ export function dashboardResponse(
 ): DashboardResponse {
   const recent_results = overrides.recent_results ?? []
   return {
-    score_banners: [],
-    next_match: null,
+    attention: [],
+    waiting_count: 0,
     recent_results,
     rating: dashboardRating(),
     // Default mirrors the visible list. Override directly to model the
@@ -323,25 +322,15 @@ export function dashboardRating(
   }
 }
 
-export function dashboardScoreBanner(
-  overrides: Partial<DashboardScoreBanner> = {},
-): DashboardScoreBanner {
+export function dashboardAttentionItem(
+  overrides: Partial<DashboardAttentionItem> = {},
+): DashboardAttentionItem {
   return {
     match_id: nextId('m'),
     opponent_username: faker.internet.username().toLowerCase(),
+    kind: 'score',
+    affects_rating: true,
     current_game_number: 1,
-    ...overrides,
-  }
-}
-
-export function dashboardNextMatch(
-  overrides: Partial<DashboardNextMatch> = {},
-): DashboardNextMatch {
-  return {
-    match_id: nextId('m'),
-    opponent_username: faker.internet.username().toLowerCase(),
-    best_of: 5,
-    created_at: ISO,
     ...overrides,
   }
 }

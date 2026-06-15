@@ -9,12 +9,11 @@ import {
   MOCK_CURRENT_USER,
   mockMatches,
   newMatchSeed,
+  projectDashboardAttention,
   projectListRow,
   projectMatchDetails,
-  projectNextMatch,
   projectRating,
   projectRecentResult,
-  projectScoreBanner,
   statusCountsOf,
   validateScore,
   type SeedMatch,
@@ -764,9 +763,7 @@ export const handlers = [
   // ----- dashboard -------------------------------------------------------
   http.get('*/v1/dashboard', async () => {
     await delay(300)
-    const scoreBanners = mockMatches.map(projectScoreBanner).filter(notNull)
-    const nextMatch =
-      mockMatches.map(projectNextMatch).find(notNull) ?? null
+    const { attention, waiting_count } = projectDashboardAttention(mockMatches)
     // Match the real BFF's participant-filtered COUNT, which doesn't care
     // whether the opponent slot is registered — projectRecentResult drops
     // null-opponent matches from the *display* list, but they still count
@@ -780,8 +777,8 @@ export const handlers = [
       .sort((a, b) => b.completed_at.localeCompare(a.completed_at))
       .slice(0, 5)
     return HttpResponse.json({
-      score_banners: scoreBanners,
-      next_match: nextMatch,
+      attention,
+      waiting_count,
       recent_results: recentResults,
       rating: projectRating(mockMatches),
       completed_match_count: completedMatchCount,
