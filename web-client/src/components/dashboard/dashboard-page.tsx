@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import type { ComponentProps, CSSProperties, ReactNode } from 'react'
+import type { ComponentProps, ReactNode } from 'react'
 import { Link } from '@tanstack/react-router'
 import { ChevronRight } from 'lucide-react'
 import { useDashboard } from '@/api/dashboard'
@@ -11,10 +11,14 @@ import { AttentionPanel } from '@/components/dashboard/attention-panel'
 import { projectAttentionPanelView } from '@/components/dashboard/attention-panel-view'
 import { DashboardHeader } from '@/components/dashboard/dashboard-page/dashboard-header'
 import { projectDashboardHeaderView } from '@/components/dashboard/dashboard-page/dashboard-header/dashboard-header-view'
+import { RatingCard } from '@/components/dashboard/dashboard-page/rating-card'
+import {
+  projectRatingCardView,
+  ratingStrategyLabel,
+} from '@/components/dashboard/dashboard-page/rating-card/rating-card-view'
 import { RecentResultsCard } from '@/components/dashboard/dashboard-page/recent-results-card'
 import { projectRecentResultsCardView } from '@/components/dashboard/dashboard-page/recent-results-card/recent-results-card-view'
 import { GuestPersistBanner } from '@/components/dashboard/guest-persist-banner'
-import { formatRatingDelta } from '@/lib/rating'
 import { useMediaQuery } from '@/lib/use-media-query'
 
 // Below this viewport width the page title drops its inline action button to its
@@ -42,193 +46,6 @@ const C = {
 }
 
 const UI = "'Space Grotesk', ui-sans-serif, system-ui, sans-serif"
-const MONO = "'JetBrains Mono', ui-monospace, monospace"
-
-function Mono({
-  children,
-  size = 14,
-  weight = 500,
-  color = C.chalk50,
-  style,
-}: {
-  children: ReactNode
-  size?: number
-  weight?: number
-  color?: string
-  style?: CSSProperties
-}) {
-  return (
-    <span
-      style={{
-        font: `${weight} ${size}px ${MONO}`,
-        fontVariantNumeric: 'tabular-nums',
-        color,
-        letterSpacing: '-0.01em',
-        ...style,
-      }}
-    >
-      {children}
-    </span>
-  )
-}
-
-type PillTone = 'default' | 'soft' | 'accent' | 'live' | 'warn' | 'win' | 'loss'
-const pillTones: Record<PillTone, { bg: string; fg: string; border: string }> = {
-  default: { bg: 'transparent', fg: C.chalk300, border: C.ink500 },
-  soft: { bg: 'rgba(255,255,255,0.04)', fg: C.chalk100, border: C.ink500 },
-  accent: { bg: 'rgba(255,122,26,0.12)', fg: C.ball400, border: 'rgba(255,122,26,0.35)' },
-  live: { bg: 'rgba(0,226,154,0.12)', fg: C.serve500, border: 'rgba(0,226,154,0.3)' },
-  warn: { bg: 'rgba(255,196,61,0.12)', fg: C.warn, border: 'rgba(255,196,61,0.3)' },
-  win: { bg: 'rgba(0,226,154,0.12)', fg: C.serve500, border: 'transparent' },
-  loss: { bg: 'rgba(255,77,109,0.12)', fg: C.loss, border: 'transparent' },
-}
-
-function Pill({
-  children,
-  tone = 'default',
-  mono = false,
-  style,
-}: {
-  children: ReactNode
-  tone?: PillTone
-  mono?: boolean
-  style?: CSSProperties
-}) {
-  const t = pillTones[tone]
-  return (
-    <span
-      style={{
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: 6,
-        padding: '3px 9px',
-        borderRadius: 999,
-        background: t.bg,
-        color: t.fg,
-        border: `1px solid ${t.border}`,
-        font: `${mono ? 500 : 600} 11px ${mono ? MONO : UI}`,
-        letterSpacing: mono ? '0.04em' : '0.08em',
-        textTransform: mono ? 'none' : 'uppercase',
-        fontVariantNumeric: 'tabular-nums',
-        whiteSpace: 'nowrap',
-        ...style,
-      }}
-    >
-      {children}
-    </span>
-  )
-}
-
-function Sparkline({
-  data,
-  w = 280,
-  h = 48,
-  color = C.ball500,
-  fluid = false,
-}: {
-  data: number[]
-  w?: number
-  h?: number
-  color?: string
-  /**
-   * Fill the container width instead of rendering at the fixed `w`. Stretches
-   * the SVG with `preserveAspectRatio="none"`, so the trend line's geometry
-   * scales horizontally — fine for a sparkline (there's no canonical aspect),
-   * and the line *weight* stays uniform via `vector-effect="non-scaling-stroke"`.
-   * The end-point dot is drawn as an HTML overlay (below) rather than an SVG
-   * `<circle>` precisely so it stays round instead of stretching into an ellipse.
-   */
-  fluid?: boolean
-}) {
-  const min = Math.min(...data)
-  const max = Math.max(...data)
-  const range = max - min || 1
-  const pad = 2
-  const points = data.map((v, i) => {
-    const x = pad + (i / (data.length - 1)) * (w - pad * 2)
-    const y = h - pad - ((v - min) / range) * (h - pad * 2)
-    return [x, y] as const
-  })
-  const path = points
-    .map((p, i) => `${i === 0 ? 'M' : 'L'}${p[0].toFixed(1)} ${p[1].toFixed(1)}`)
-    .join(' ')
-  const last = points[points.length - 1]
-  const areaPath = `${path} L${last[0]} ${h} L${pad} ${h} Z`
-  const gradId = `dash-spark-${color.replace(/[^a-z0-9]/gi, '')}`
-  // Position the end-point dot as a fraction of the box; since the overlay is a
-  // sibling of the (possibly stretched) SVG, percentages keep it pinned to the
-  // last data point regardless of the horizontal scale, while a fixed pixel
-  // size keeps it circular.
-  const dotLeft = `${(last[0] / w) * 100}%`
-  const dotTop = `${(last[1] / h) * 100}%`
-  return (
-    <div
-      style={{
-        position: 'relative',
-        width: fluid ? '100%' : w,
-        height: h,
-        lineHeight: 0,
-      }}
-    >
-      <svg
-        width="100%"
-        height={h}
-        viewBox={`0 0 ${w} ${h}`}
-        // Stretch to fill when fluid; at fixed width the 1:1 mapping is undistorted.
-        preserveAspectRatio={fluid ? 'none' : 'xMidYMid meet'}
-        style={{ display: 'block', overflow: 'visible' }}
-      >
-        <defs>
-          <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={color} stopOpacity="0.35" />
-            <stop offset="100%" stopColor={color} stopOpacity="0" />
-          </linearGradient>
-        </defs>
-        <path d={areaPath} fill={`url(#${gradId})`} />
-        <path
-          d={path}
-          fill="none"
-          stroke={color}
-          strokeWidth="1.75"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          vectorEffect="non-scaling-stroke"
-        />
-      </svg>
-      <span
-        aria-hidden
-        style={{
-          position: 'absolute',
-          left: dotLeft,
-          top: dotTop,
-          width: 10,
-          height: 10,
-          marginLeft: -5,
-          marginTop: -5,
-          borderRadius: '50%',
-          background: color,
-          opacity: 0.25,
-          pointerEvents: 'none',
-        }}
-      />
-      <span
-        aria-hidden
-        style={{
-          position: 'absolute',
-          left: dotLeft,
-          top: dotTop,
-          width: 5.2,
-          height: 5.2,
-          marginLeft: -2.6,
-          marginTop: -2.6,
-          borderRadius: '50%',
-          background: color,
-          pointerEvents: 'none',
-        }}
-      />
-    </div>
-  )
-}
 
 // The shared design-system Card (`@/components/ui/card`). `display: 'block'`
 // neutralizes the shadcn Card's default flex/gap so callers keep full control of
@@ -358,134 +175,6 @@ function EmptyCard({ overline, body }: { overline: string; body: string }) {
   )
 }
 
-function Stat({
-  label,
-  value,
-}: {
-  label: string
-  value: number | string
-}) {
-  return (
-    <div
-      style={{
-        padding: '10px 12px',
-        background: C.ink900,
-        borderRadius: 8,
-        border: `1px solid ${C.ink700}`,
-      }}
-    >
-      <Overline style={{ fontSize: 9 }}>
-        {label}
-      </Overline>
-      <Mono size={16} weight={700} style={{ marginTop: 3, display: 'block' }}>
-        {value}
-      </Mono>
-    </div>
-  )
-}
-
-function RatingCard({
-  rating,
-}: {
-  rating: DashboardRating
-}) {
-  const { current, delta, peak, percentile, spark_data, streak, stats } = rating
-  // Sparkline needs ≥2 points to draw a line; pad a single point so the
-  // freshly-rated case still shows a level baseline.
-  const sparkPoints =
-    spark_data.length >= 2
-      ? spark_data
-      : [spark_data[0] ?? current, spark_data[0] ?? current]
-  // Peak tile + whatever strategy-specific stats the API returned; capped at
-  // three because the grid is 3 columns.
-  const tiles = [
-    { label: 'Peak', value: String(Math.round(peak)) },
-    ...stats,
-  ].slice(0, 3)
-  return (
-    <Card
-      padding={20}
-      // minWidth:0 lets the card shrink to its grid track instead of forcing the
-      // track wider than its `fr` share (grid items default to min-width:auto).
-      style={{ display: 'flex', flexDirection: 'column', gap: 14, minWidth: 0 }}
-    >
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <Overline>Current rating</Overline>
-        <div style={{ flex: 1 }} />
-        {streak ? (
-          <Pill tone={streak.kind === 'W' ? 'win' : 'loss'} mono>
-            {streak.kind}
-            {streak.n}
-          </Pill>
-        ) : null}
-      </div>
-      {/* flexWrap so the delta/percentile column drops below the big number
-          rather than overflowing (and being clipped) in a narrow card. */}
-      <div
-        style={{ display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap', rowGap: 8 }}
-      >
-        <Mono size={56} weight={700} color={C.chalk50} style={{ lineHeight: 0.9 }}>
-          {Math.round(current)}
-        </Mono>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
-          <Pill tone={delta >= 0 ? 'win' : 'loss'} mono>
-            {formatRatingDelta(delta)} last match
-          </Pill>
-          {percentile !== null ? (
-            <span style={{ font: `400 11px ${UI}`, color: C.chalk500 }}>
-              Top{' '}
-              <Mono size={11} color={C.chalk300}>
-                {percentile}%
-              </Mono>{' '}
-              in {rating.league_name}
-            </span>
-          ) : (
-            <span style={{ font: `400 11px ${UI}`, color: C.chalk500 }}>
-              {rating.league_name}
-            </span>
-          )}
-        </div>
-      </div>
-      <div
-        style={{
-          padding: '10px 12px',
-          background: C.ink900,
-          borderRadius: 8,
-          border: `1px solid ${C.ink700}`,
-        }}
-      >
-        <Sparkline data={sparkPoints} w={280} h={48} fluid />
-        <div
-          style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            marginTop: 6,
-            font: `400 10px ${MONO}`,
-            color: C.chalk500,
-            letterSpacing: '0.08em',
-          }}
-        >
-          <span>30 days ago</span>
-          <span>Today · peak {Math.round(peak)}</span>
-        </div>
-      </div>
-      {/* auto-fit so the tiles reflow to 2 (or 1) columns when the card is too
-          narrow for three, instead of overflowing the fixed 3-up grid. */}
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(84px, 1fr))',
-          gap: 8,
-        }}
-      >
-        {tiles.map((tile) => (
-          <Stat key={tile.label} label={tile.label} value={tile.value} />
-        ))}
-      </div>
-    </Card>
-  )
-}
-
 function YourGameRow({
   rating,
   recent,
@@ -520,7 +209,7 @@ function YourGameRow({
         {isLoading ? (
           <SkeletonCard label="Loading rating" height={260} />
         ) : rating ? (
-          <RatingCard rating={rating} />
+          <RatingCard view={projectRatingCardView(rating)} />
         ) : (
           <EmptyCard
             overline="Current rating"
@@ -535,12 +224,6 @@ function YourGameRow({
       </div>
     </section>
   )
-}
-
-function ratingStrategyLabel(key: string): string {
-  if (key === 'glicko2') return 'Glicko-2'
-  if (key === 'manual') return 'Manual'
-  return key
 }
 
 export function DashboardPage() {
