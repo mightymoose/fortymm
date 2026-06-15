@@ -31,6 +31,10 @@ export interface UserAvatarProps {
   /** Neutral muted background instead of the per-user color — for non-claimed
    *  or preview states where the username isn't a real identity yet. */
   dim?: boolean
+  /** Hide from assistive tech (`aria-hidden`, no `role`/`aria-label`). Use when
+   *  the avatar sits inside a control that already names the user, so the
+   *  decorative initials aren't announced as part of the accessible name (#99). */
+  decorative?: boolean
   className?: string
   style?: CSSProperties
 }
@@ -41,9 +45,15 @@ export function UserAvatar({
   ring = false,
   ringColor = 'var(--ball-500)',
   dim = false,
+  decorative = false,
   className,
   style,
 }: UserAvatarProps) {
+  // When decorative, drop the image semantics so the initials aren't read as
+  // part of an enclosing control's accessible name.
+  const labelProps = decorative
+    ? ({ 'aria-hidden': true } as const)
+    : ({ role: 'img', 'aria-label': name ?? undefined } as const)
   const base: CSSProperties = {
     width: size,
     height: size,
@@ -82,8 +92,7 @@ export function UserAvatar({
   if (dim) {
     return (
       <span
-        role="img"
-        aria-label={name}
+        {...labelProps}
         className={cn('user-avatar user-avatar--dim', className)}
         style={{
           ...base,
@@ -100,8 +109,7 @@ export function UserAvatar({
   const hue = hueFor(name)
   return (
     <span
-      role="img"
-      aria-label={name}
+      {...labelProps}
       className={cn('user-avatar', className)}
       style={{
         ...base,
