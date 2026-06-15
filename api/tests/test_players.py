@@ -80,6 +80,25 @@ async def test_recent_opponents_orders_by_most_recent_match(
     assert _usernames(response) == ["bo", "cy", "ana"]
 
 
+async def test_recent_opponents_breaks_recency_ties_alphabetically(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    me = await start_session(api_client, db_session)
+    # Inserted out of alphabetical order, all sharing one timestamp, so a
+    # missing tiebreaker would let Postgres return them in any order.
+    cy = await make_user(db_session, "cy")
+    ana = await make_user(db_session, "ana")
+    bo = await make_user(db_session, "bo")
+
+    await _record_match(db_session, me, cy, created_at=BASE_TIME)
+    await _record_match(db_session, me, ana, created_at=BASE_TIME)
+    await _record_match(db_session, me, bo, created_at=BASE_TIME)
+
+    response = await api_client.get("/v1/players/recent")
+    assert response.status_code == 200
+    assert _usernames(response) == ["ana", "bo", "cy"]
+
+
 async def test_recent_opponents_dedupes_repeated_opponents(
     api_client: AsyncClient, db_session: AsyncSession
 ):
