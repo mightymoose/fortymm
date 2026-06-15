@@ -54,6 +54,25 @@ describe('LinkCheckPage', () => {
     expect(linkCheckPage.text()).not.toMatch(TOKEN_PATTERN)
   })
 
+  it('missing: distinct incomplete-link copy, not the expired wording, with support escape hatch', () => {
+    linkCheckPage.render({
+      state: 'missing',
+      footer: <a href="/login">Send a new link</a>,
+    })
+
+    expect(linkCheckPage.state()).toBe('missing')
+    expect(linkCheckPage.heading()).toHaveTextContent(/this link is incomplete/i)
+    expect(linkCheckPage.text()).toMatch(/missing its token/i)
+    expect(linkCheckPage.text()).not.toMatch(/can’t be used|can't be used/i)
+    expect(
+      linkCheckPage
+        .within()
+        .root()
+        ?.querySelector('a[href="mailto:support@fortymm.com"]'),
+    ).toBeTruthy()
+    expect(linkCheckPage.text()).not.toMatch(TOKEN_PATTERN)
+  })
+
   it('lets the route override the default copy', () => {
     linkCheckPage.render({
       state: 'checking',

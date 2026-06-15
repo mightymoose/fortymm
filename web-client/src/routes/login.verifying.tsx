@@ -103,13 +103,7 @@ function LoginVerifyingPage() {
   )
 
   if (!token && !error) {
-    return (
-      <LinkCheckPage
-        state="expired"
-        detail="This link is missing its token."
-        footer={sendNewLinkButton}
-      />
-    )
+    return <LinkCheckPage state="missing" footer={sendNewLinkButton} />
   }
 
   if (error === 'expired') {
