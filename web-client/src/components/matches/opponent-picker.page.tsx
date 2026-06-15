@@ -27,17 +27,10 @@ const scoped = (container: Container) => ({
   getCombobox() {
     return container.getByRole('combobox')
   },
-  /** The listbox of search results, present only with results. */
-  queryListbox() {
-    return container.queryByRole('listbox')
-  },
   findOption(name: string | RegExp) {
     return container.findByRole('option', { name })
   },
   /** The boundary's error fallback. */
-  queryAlert() {
-    return container.queryByRole('alert')
-  },
   findAlert() {
     return container.findByRole('alert')
   },

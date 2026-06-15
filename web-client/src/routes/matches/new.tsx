@@ -11,7 +11,7 @@ import {
   useCreateMatch,
   type Player,
 } from '@/api/matches'
-import { OpponentPicker } from '@/components/matches/opponent-picker/opponent-picker'
+import { OpponentPicker } from '@/components/matches/opponent-picker'
 import { UserAvatar } from '@/components/ui/user-avatar'
 import { pageTitle } from '@/lib/page-title'
 import { cn } from '@/lib/utils'

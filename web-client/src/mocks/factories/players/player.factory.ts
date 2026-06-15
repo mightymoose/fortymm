@@ -14,5 +14,3 @@ export function buildPlayer(overrides: Partial<PlayerRead> = {}): PlayerRead {
     ...overrides,
   }
 }
-
-export type { PlayerRead }

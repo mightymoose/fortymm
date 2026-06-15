@@ -43,6 +43,8 @@ export const OpponentTypeahead = ({
   onPick,
   focusOnMountRef,
 }: OpponentTypeaheadProps) => {
+  // Open on mount: the typeahead is only mounted once the user has chosen to
+  // search, so the dropdown (hint, then results) should show straight away.
   const [open, setOpen] = useState(true)
   const [activeIdx, setActiveIdx] = useState(0)
   const wrapRef = useRef<HTMLDivElement>(null)

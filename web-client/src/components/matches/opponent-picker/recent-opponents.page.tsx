@@ -1,4 +1,3 @@
-import type { Player } from '@/api/matches'
 import {
   mockRecentOpponentsEndpoint,
   type RecentOpponentsResolver,
@@ -59,5 +58,3 @@ export const recentOpponentsPage = {
 
   ...scoped(screen),
 }
-
-export type { Player }

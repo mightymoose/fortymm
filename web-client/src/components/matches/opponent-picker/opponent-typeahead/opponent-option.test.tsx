@@ -2,13 +2,14 @@ import userEvent from '@testing-library/user-event'
 
 import { fireEvent } from '@/test/utilities'
 
-import { buildOptionPlayer } from './opponent-option.factory'
+import { buildPlayer } from '@/mocks/factories/players/player.factory'
+
 import { opponentOptionPage } from './opponent-option.page'
 
 describe('OpponentOption', () => {
   it('exposes a combobox option whose accessible name is the player + role (#94/#99)', () => {
     opponentOptionPage.render({
-      player: buildOptionPlayer({ username: 'grace.hopper', rating: 1500 }),
+      player: buildPlayer({ username: 'grace.hopper', rating: 1500 }),
     })
 
     const option = opponentOptionPage.getOption('grace.hopper, RATING 1500')
@@ -19,7 +20,7 @@ describe('OpponentOption', () => {
 
   it('reflects the active state via aria-selected and the active class (#94)', () => {
     opponentOptionPage.render({
-      player: buildOptionPlayer({ username: 'grace.hopper' }),
+      player: buildPlayer({ username: 'grace.hopper' }),
       active: true,
     })
 
@@ -38,7 +39,7 @@ describe('OpponentOption', () => {
 
   it('renders a readable fallback name for a blank username (#101)', () => {
     opponentOptionPage.render({
-      player: buildOptionPlayer({ username: '', rating: null }),
+      player: buildPlayer({ username: '', rating: null }),
     })
 
     expect(
