@@ -3,8 +3,8 @@ import { createFileRoute, useNavigate, useRouter } from '@tanstack/react-router'
 import { zodValidator } from '@tanstack/zod-adapter'
 import { z } from 'zod'
 
-import { usePlayerById } from '@/api/players'
-import { useSession } from '@/api/session'
+import { playerByIdQueryOptions, usePlayerById } from '@/api/players'
+import { SESSION_QUERY_KEY, useSession } from '@/api/session'
 import { AppShell } from '@/components/app-shell'
 import { PlayerProfile } from '@/components/players/player-profile'
 import { Button } from '@/components/ui/button'
@@ -20,6 +20,16 @@ export const Route = createFileRoute('/players/$userId')({
     meta: [{ title: pageTitle('Player') }],
   }),
   validateSearch: zodValidator(profileSearchSchema),
+  // Warm the profile cache on hover/touch preload without blocking navigation.
+  // Skip on a cold direct load where the session isn't resolved yet, so the
+  // prefetch can't 401 into the error boundary ahead of the component's
+  // session-gated query (same pattern as `/matches`).
+  loader: ({ context, params }) => {
+    if (!context.queryClient.getQueryData(SESSION_QUERY_KEY)) return
+    void context.queryClient.prefetchQuery(
+      playerByIdQueryOptions(params.userId),
+    )
+  },
   component: PlayerRoute,
   errorComponent: PlayerRouteError,
 })
