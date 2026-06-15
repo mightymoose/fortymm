@@ -23,6 +23,11 @@ x-api-service: &api-service
     dockerfile: Dockerfile.dev
   env_file:
     - .env
+  # Mount the APNs auth key to the container path APNS_AUTH_KEY_PATH points at
+  # in .env (/run/secrets/apns_auth_key.p8). Without this the key isn't visible
+  # inside the container and every push silently no-ops.
+  volumes:
+    - ./secrets/AuthKey_68VYRLMWWR.p8:/run/secrets/apns_auth_key.p8:ro
 
 services:
   postgres:
