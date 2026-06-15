@@ -82,7 +82,11 @@ function AttentionFooter({
   viewAllSearch: { q: string | undefined }
 }) {
   const parts: string[] = []
-  if (overflowCount > 0) parts.push(`${overflowCount} more need attention`)
+  if (overflowCount > 0) {
+    parts.push(
+      `${overflowCount} more ${overflowCount === 1 ? 'needs' : 'need'} attention`,
+    )
+  }
   if (waitingCount > 0) parts.push(`${waitingCount} waiting on others`)
   return (
     <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-[color:var(--ink-700)] px-5 py-3 text-[13px] text-[color:var(--chalk-500)]">

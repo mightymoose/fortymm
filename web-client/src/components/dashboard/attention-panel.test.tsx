@@ -66,6 +66,19 @@ describe('AttentionPanel', () => {
     expect(page.queryFooterText(/2 waiting on others/)).toBeInTheDocument()
   })
 
+  it('uses the singular verb for a single overflow item', async () => {
+    page.render({
+      view: buildAttentionPanelView({
+        rows: [buildAttentionRowView()],
+        overflowCount: 1,
+      }),
+    })
+
+    await page.findPanel()
+    expect(page.queryFooterText(/1 more needs attention/)).toBeInTheDocument()
+    expect(page.queryFooterText(/need attention/)).not.toBeInTheDocument()
+  })
+
   it('links "View all" to /matches scoped to the current user', async () => {
     page.render({
       view: buildAttentionPanelView({ viewAllSearch: { q: 'rita.kovac' } }),
