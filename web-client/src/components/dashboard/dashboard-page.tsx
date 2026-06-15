@@ -1,18 +1,15 @@
+import { useMemo } from 'react'
 import type { ComponentProps, CSSProperties, ReactNode } from 'react'
 import { Link } from '@tanstack/react-router'
-import { ArrowRight, ChevronRight, Plus, X } from 'lucide-react'
+import { ChevronRight, Plus } from 'lucide-react'
 import { useDashboard } from '@/api/dashboard'
 import { UserAvatar } from '@/components/ui/user-avatar'
 import { Card as UICard } from '@/components/ui/card'
-import { cn } from '@/lib/utils'
-import type {
-  DashboardRating,
-  DashboardRecentResult,
-  DashboardScoreBanner,
-} from '@/api/dashboard'
-import { scoringNewRoute } from '@/api/matches'
+import type { DashboardRating, DashboardRecentResult } from '@/api/dashboard'
 import { deriveEmailStatus, useSession } from '@/api/session'
 import { Overline } from '@/components/overline'
+import { AttentionPanel } from '@/components/dashboard/attention-panel'
+import { projectAttentionPanelView } from '@/components/dashboard/attention-panel-view'
 import { GuestPersistBanner } from '@/components/dashboard/guest-persist-banner'
 import { fmtDateShort, fmtLongDate } from '@/lib/dates'
 import { formatRatingDelta } from '@/lib/rating'
@@ -125,34 +122,6 @@ function Pill({
     </span>
   )
 }
-
-function BallDot({
-  live = false,
-  color = C.ball500,
-  size = 8,
-}: {
-  live?: boolean
-  color?: string
-  size?: number
-}) {
-  const isGreen = color === C.serve500
-  const glow = isGreen ? 'rgba(0,226,154,0.65)' : 'rgba(255,122,26,0.55)'
-  return (
-    <span
-      style={{
-        display: 'inline-block',
-        width: size,
-        height: size,
-        borderRadius: '50%',
-        background: color,
-        boxShadow: `0 0 ${size + 2}px ${glow}`,
-        animation: live ? 'ball-pulse 1.4s ease-in-out infinite' : 'none',
-        flexShrink: 0,
-      }}
-    />
-  )
-}
-
 
 function Sparkline({
   data,
@@ -360,29 +329,24 @@ function Button({
 // The shared design-system Card (`@/components/ui/card`). `display: 'block'`
 // neutralizes the shadcn Card's default flex/gap so callers keep full control of
 // their inner layout (e.g. RatingCard re-enables flex via its own style;
-// RecentResultsCard stays block). Pass `highlight` for the design-system
-// "Featured" treatment — an orange ring plus the accent glow shadow, and
-// nothing else.
+// RecentResultsCard stays block).
 function Card({
   children,
   padding = 20,
   style,
-  highlight = false,
   className,
   ...rest
 }: {
   children: ReactNode
   padding?: number | string
-  highlight?: boolean
 } & Omit<ComponentProps<'div'>, 'children'>) {
   return (
     <UICard
-      className={cn(highlight && 'ring-2 ring-[color:var(--ball-500)]', className)}
+      className={className}
       style={{
         display: 'block',
         padding,
         position: 'relative',
-        ...(highlight ? { boxShadow: 'var(--shadow-glow)' } : null),
         ...style,
       }}
       {...rest}
@@ -541,249 +505,6 @@ function PageTitle({
       >
         Log a match
       </Button>
-    </div>
-  )
-}
-
-// Shared derivation for both the primary and compact score banners: the orange
-// accent, the "vs <opponent>" headline, and the route into scoring.
-function scoreBannerView(banner: DashboardScoreBanner) {
-  const opponent = banner.opponent_username
-  return {
-    accent: C.ball500,
-    opponent,
-    headline: opponent ? `vs ${opponent}` : NO_OPPONENT_LABEL,
-    scoringRoute: scoringNewRoute(banner.match_id, banner.current_game_number),
-  }
-}
-
-function ScoreBanner({
-  banner,
-  compact,
-}: {
-  banner: DashboardScoreBanner
-  compact: boolean
-}) {
-  const { accent, opponent, headline, scoringRoute } = scoreBannerView(banner)
-  return (
-    <Card highlight padding={0} data-testid="dashboard-score-banner">
-      <div style={{ position: 'relative', padding: compact ? '20px 18px' : '22px 26px' }}>
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 10,
-            marginBottom: 14,
-            flexWrap: 'wrap',
-          }}
-        >
-          <BallDot live size={9} />
-          <span
-            style={{
-              font: `700 11px ${MONO}`,
-              letterSpacing: '0.18em',
-              color: accent,
-              fontVariantNumeric: 'tabular-nums',
-            }}
-          >
-            SCORE NEEDED
-          </span>
-        </div>
-
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 24,
-            flexWrap: 'wrap',
-          }}
-        >
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 18,
-              flex: '1 1 360px',
-              minWidth: 0,
-            }}
-          >
-            <UserAvatar name={opponent} size={64} ring ringColor={accent} />
-            <div style={{ minWidth: 0, flex: 1 }}>
-              <h1
-                style={{
-                  margin: 0,
-                  font: `700 28px ${UI}`,
-                  letterSpacing: '-0.01em',
-                  color: C.chalk50,
-                  lineHeight: 1.1,
-                }}
-              >
-                {headline}
-              </h1>
-            </div>
-          </div>
-
-          <div
-            style={{
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'flex-end',
-              gap: 8,
-              flex: compact ? '1 1 100%' : '0 0 auto',
-            }}
-          >
-            <Button
-              kind="primary"
-              size="lg"
-              iconRight={<ArrowRight size={18} strokeWidth={1.75} />}
-              fullWidth={compact}
-              style={compact ? undefined : { minWidth: 220 }}
-              {...scoringRoute}
-            >
-              Enter final score
-            </Button>
-          </div>
-        </div>
-      </div>
-
-      <button
-        type="button"
-        aria-label="Dismiss"
-        style={{
-          position: 'absolute',
-          top: 12,
-          right: 12,
-          width: 28,
-          height: 28,
-          background: 'transparent',
-          border: 'none',
-          color: C.chalk500,
-          cursor: 'pointer',
-          borderRadius: 6,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-        }}
-      >
-        <X size={14} strokeWidth={1.75} />
-      </button>
-    </Card>
-  )
-}
-
-// Used when a player has more than one match waiting for their score. Wraps the
-// shared design-system Card with the same "Featured" highlight (orange ring +
-// glow) as the primary ScoreBanner above, just in a compact single-row layout.
-function CompactScoreBanner({ banner }: { banner: DashboardScoreBanner }) {
-  const { accent, opponent, headline, scoringRoute } = scoreBannerView(banner)
-  return (
-    <Card
-      highlight
-      padding="14px 18px"
-      data-testid="dashboard-score-banner-compact"
-      style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 16 }}
-    >
-      <BallDot live color={accent} size={8} />
-      <UserAvatar name={opponent} size={36} ring ringColor={accent} />
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div
-          style={{
-            font: `700 10px ${MONO}`,
-            color: accent,
-            letterSpacing: '0.16em',
-            marginBottom: 2,
-          }}
-        >
-          ALSO PENDING
-        </div>
-        <div
-          style={{
-            font: `600 15px ${UI}`,
-            color: C.chalk50,
-            lineHeight: 1.2,
-            whiteSpace: 'nowrap',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-          }}
-        >
-          {headline}
-        </div>
-      </div>
-      <Button
-        kind="secondary"
-        size="md"
-        iconRight={<ArrowRight size={14} strokeWidth={1.75} />}
-        {...scoringRoute}
-      >
-        Enter score
-      </Button>
-    </Card>
-  )
-}
-
-// 3+ pending: a single quiet link that funnels the rest into /matches,
-// pre-filtered to the current user's live (in-progress) matches so the
-// destination opens straight on the same pile the pill is summarizing.
-function MorePendingLink({
-  count,
-  username,
-}: {
-  count: number
-  username?: string
-}) {
-  return (
-    <Link
-      to="/matches"
-      search={{ q: username, status: 'live' }}
-      data-testid="dashboard-score-banner-more"
-      style={{
-        display: 'inline-flex',
-        alignSelf: 'flex-start',
-        alignItems: 'center',
-        gap: 8,
-        padding: '6px 12px',
-        borderRadius: 999,
-        border: `1px solid ${C.ink500}`,
-        background: 'transparent',
-        font: `500 12px ${UI}`,
-        color: C.chalk300,
-        textDecoration: 'none',
-      }}
-    >
-      <Mono size={12} weight={600} color={C.chalk100}>
-        +{count}
-      </Mono>
-      more pending
-      <ChevronRight size={14} strokeWidth={1.75} />
-    </Link>
-  )
-}
-
-function ScoreBannerStack({
-  banners,
-  username,
-  compact,
-}: {
-  banners: DashboardScoreBanner[]
-  username?: string
-  compact: boolean
-}) {
-  if (banners.length === 0) return null
-  const [primary, secondary, ...rest] = banners
-  return (
-    <div
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 12,
-        marginBottom: 32,
-      }}
-    >
-      <ScoreBanner banner={primary} compact={compact} />
-      {secondary && <CompactScoreBanner banner={secondary} />}
-      {rest.length > 0 && (
-        <MorePendingLink count={rest.length} username={username} />
-      )}
     </div>
   )
 }
@@ -1130,6 +851,15 @@ export function DashboardPage() {
       pendingEmail: user.pending_email ?? null,
     }) === 'guest'
   const showGuestPersistBanner = isGuest && (data?.completed_match_count ?? 0) >= 1
+  const attentionView = useMemo(
+    () =>
+      projectAttentionPanelView(
+        data?.attention ?? [],
+        data?.waiting_count ?? 0,
+        username,
+      ),
+    [data?.attention, data?.waiting_count, username],
+  )
   return (
     <div
       style={{
@@ -1148,14 +878,14 @@ export function DashboardPage() {
       )}
       <PageTitle greeting={greeting} compact={compact} />
       {isLoading ? (
-        <SkeletonCard label="Loading score banner" height={140} />
-      ) : data?.score_banners?.length ? (
-        <ScoreBannerStack
-          banners={data.score_banners}
-          username={username}
-          compact={compact}
+        <div style={{ marginBottom: 32 }}>
+          <SkeletonCard label="Loading attention panel" height={160} />
+        </div>
+      ) : (
+        <AttentionPanel
+          view={attentionView}
         />
-      ) : null}
+      )}
       <YourGameRow
         rating={data?.rating ?? null}
         recent={data?.recent_results ?? []}

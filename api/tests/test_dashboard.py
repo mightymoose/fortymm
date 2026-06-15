@@ -43,8 +43,8 @@ async def test_dashboard_empty_when_user_has_no_matches(
     response = await api_client.get("/v1/dashboard")
     assert response.status_code == 200
     body = response.json()
-    assert body["score_banners"] == []
-    assert body["next_match"] is None
+    assert body["attention"] == []
+    assert body["waiting_count"] == 0
     assert body["recent_results"] == []
     assert body["completed_match_count"] == 0
     # A fresh signup is auto-joined to the default Glicko-2 league with
@@ -66,7 +66,7 @@ async def test_dashboard_empty_when_user_has_no_matches(
     ]
 
 
-async def test_dashboard_returns_score_banner_for_in_progress_match(
+async def test_dashboard_returns_score_attention_for_in_progress_match(
     api_client: AsyncClient, db_session: AsyncSession
 ):
     await start_session(api_client, db_session)
@@ -78,24 +78,26 @@ async def test_dashboard_returns_score_banner_for_in_progress_match(
     )
 
     body = (await api_client.get("/v1/dashboard")).json()
-    assert len(body["score_banners"]) == 1
-    banner = body["score_banners"][0]
-    assert banner["match_id"] == match["id"]
-    assert banner["opponent_username"] == "rival"
+    assert len(body["attention"]) == 1
+    item = body["attention"][0]
+    assert item["match_id"] == match["id"]
+    assert item["opponent_username"] == "rival"
+    assert item["kind"] == "score"
+    assert item["affects_rating"] is True
     # Game rows are created lazily; the dashboard deeplinks by game number.
-    assert banner["current_game_number"] == 2
-    # An in-progress match is not "pending" so the next_match slot is empty.
-    assert body["next_match"] is None
+    assert item["current_game_number"] == 2
+    # Nothing is waiting on the opponent yet.
+    assert body["waiting_count"] == 0
     assert body["recent_results"] == []
 
 
-async def test_dashboard_returns_multiple_banners_oldest_first(
+async def test_dashboard_orders_score_items_oldest_first(
     api_client: AsyncClient, db_session: AsyncSession
 ):
     # Variant D: back-to-back tournament play means a player can have two (or
-    # more) matches sitting in_progress at once. The frontend stacks them, but
-    # only if the API returns them in priority order — oldest first, since the
-    # one that's been waiting longest is the most urgent to score.
+    # more) matches sitting in_progress at once. The panel stacks them, but
+    # only if the API returns them in priority order — within the score bucket,
+    # oldest first, since the one waiting longest is the most urgent to score.
     await start_session(api_client, db_session)
     opp_a = await make_user(db_session, "rival_a")
     opp_b = await make_user(db_session, "rival_b")
@@ -105,19 +107,20 @@ async def test_dashboard_returns_multiple_banners_oldest_first(
     match_c = await _create_match(api_client, opp_c.id, best_of=5)
 
     body = (await api_client.get("/v1/dashboard")).json()
-    assert [b["match_id"] for b in body["score_banners"]] == [
+    assert [i["match_id"] for i in body["attention"]] == [
         match_a["id"],
         match_b["id"],
         match_c["id"],
     ]
-    assert [b["opponent_username"] for b in body["score_banners"]] == [
+    assert [i["opponent_username"] for i in body["attention"]] == [
         "rival_a",
         "rival_b",
         "rival_c",
     ]
+    assert all(i["kind"] == "score" for i in body["attention"])
 
 
-async def test_dashboard_returns_next_match_for_pending_match(
+async def test_dashboard_pending_match_counts_as_waiting(
     api_client: AsyncClient, db_session: AsyncSession
 ):
     await start_session(api_client, db_session)
@@ -129,11 +132,11 @@ async def test_dashboard_returns_next_match_for_pending_match(
     db_match.status = MatchStatus.pending
     await db_session.commit()
 
+    # Pending/scheduled matches need the *other* side's move first (O3 default),
+    # so they're footer-only, never a row.
     body = (await api_client.get("/v1/dashboard")).json()
-    assert body["score_banners"] == []
-    assert body["next_match"]["match_id"] == created["id"]
-    assert body["next_match"]["opponent_username"] == "rival"
-    assert body["next_match"]["best_of"] == 5
+    assert body["attention"] == []
+    assert body["waiting_count"] == 1
 
 
 async def test_dashboard_returns_recent_results_for_completed_matches(
@@ -181,8 +184,8 @@ async def test_dashboard_scoped_to_current_user(
         await _create_match(other_client, bystander.id)
 
     body = (await api_client.get("/v1/dashboard")).json()
-    assert body["score_banners"] == []
-    assert body["next_match"] is None
+    assert body["attention"] == []
+    assert body["waiting_count"] == 0
     assert body["recent_results"] == []
     # Pin that completed_match_count also follows the participant filter —
     # Bob's completed match must not bleed into Alice's history total.
@@ -192,6 +195,110 @@ async def test_dashboard_scoped_to_current_user(
     # match.
     assert body["rating"]["current"] == 1500.0
     assert body["rating"]["streak"] is None
+
+
+async def _post_result(client: AsyncClient, match_id: str, *, best_of: int = 1) -> None:
+    """Post a decided result for ``match_id`` (no confirmation). For a rated
+    match this leaves it ``in_progress`` with the poster's lone signature —
+    awaiting the other side's review."""
+    games_to_win = best_of // 2 + 1
+    post = await client.post(
+        f"/v1/matches/{match_id}/results",
+        json={
+            "games": [
+                {"game_number": n, "side_1_points": 11, "side_2_points": 4}
+                for n in range(1, games_to_win + 1)
+            ]
+        },
+    )
+    assert post.status_code == 201
+
+
+async def test_dashboard_review_item_when_opponent_posted_result(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """The opponent posts a rated result; the current user (who hasn't signed)
+    sees a ``review`` row — the in-app surface for confirmation that doesn't
+    depend on the push notification."""
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "poster") as (opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=1)
+        # The OPPONENT posts, so it's the current user's turn to review.
+        await _post_result(opp_client, match["id"], best_of=1)
+
+    body = (await api_client.get("/v1/dashboard")).json()
+    assert len(body["attention"]) == 1
+    item = body["attention"][0]
+    assert item["match_id"] == match["id"]
+    assert item["kind"] == "review"
+    assert item["opponent_username"] == "poster"
+    # Review/dispute rows route to match detail, never deep-link to scoring.
+    assert item["current_game_number"] is None
+    assert body["waiting_count"] == 0
+
+
+async def test_dashboard_my_posted_result_counts_as_waiting(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """The flip side of review: when *I* posted and the opponent owes the
+    sign-off, the match is waiting on them — footer count, never a row."""
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "reviewer") as (_opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=1)
+        await _post_result(api_client, match["id"], best_of=1)
+
+    body = (await api_client.get("/v1/dashboard")).json()
+    assert body["attention"] == []
+    assert body["waiting_count"] == 1
+
+
+async def test_dashboard_attention_priority_ranking(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """P0-4: a dispute ranks above a review, which ranks above a rated score,
+    which ranks above an unrated score."""
+    await start_session(api_client, db_session)
+    # Unrated + rated score matches: nobody has posted, so they sit in the
+    # score bucket; the current user is the one who'd score them.
+    rated_opp = await make_user(db_session, "rated_opp")
+    unrated_opp = await make_user(db_session, "unrated_opp")
+    rated_score = await _create_match(api_client, rated_opp.id, best_of=5)
+    unrated_create = await api_client.post(
+        "/v1/matches",
+        json={"opponent_user_id": str(unrated_opp.id), "best_of": 5, "rated": False},
+    )
+    assert unrated_create.status_code == 201
+    unrated_score = unrated_create.json()
+
+    async with opponent_session(db_session, "reviewer_opp") as (rev_client, rev_opp):
+        # Review row: the opponent posts, current user must review.
+        review_match = await _create_match(api_client, rev_opp.id, best_of=1)
+        await _post_result(rev_client, review_match["id"], best_of=1)
+
+        async with opponent_session(db_session, "dispute_opp") as (dis_client, dis_opp):
+            # Dispute row: current user posts, opponent disputes → disputed.
+            dispute_match = await _create_match(api_client, dis_opp.id, best_of=1)
+            await _post_result(api_client, dispute_match["id"], best_of=1)
+            dispute = await dis_client.post(
+                f"/v1/matches/{dispute_match['id']}/dispute"
+            )
+            assert dispute.status_code == 200
+
+            body = (await api_client.get("/v1/dashboard")).json()
+
+    assert [(i["kind"], i["affects_rating"]) for i in body["attention"]] == [
+        ("dispute", True),
+        ("review", True),
+        ("score", True),
+        ("score", False),
+    ]
+    assert [i["match_id"] for i in body["attention"]] == [
+        dispute_match["id"],
+        review_match["id"],
+        rated_score["id"],
+        unrated_score["id"],
+    ]
+    assert body["waiting_count"] == 0
 
 
 async def _play_match(

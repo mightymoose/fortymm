@@ -1511,12 +1511,13 @@ async def test_confirmation_finalizes_and_lands_second_signature(
         assert body["can_confirm"] is False
 
 
-async def test_dispute_clears_signatures_and_rewinds_to_in_progress(
+async def test_dispute_clears_signatures_and_moves_to_disputed(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    """``POST /dispute`` deletes every signature on the match, drops the
-    side.won flags back to None, and leaves the canonical games in place so
-    the disputer can navigate to the contested game and PUT a correction."""
+    """``POST /dispute`` deletes every signature on the match, moves it to the
+    ``disputed`` status, drops the side.won flags back to None, and leaves the
+    canonical games in place so the disputer can navigate to the contested game
+    and PUT a correction."""
     await start_session(api_client, db_session)
     async with opponent_session(db_session, "dispute-opp") as (opp_client, opp):
         match = await _create_match(api_client, opp.id, best_of=3)
@@ -1525,8 +1526,8 @@ async def test_dispute_clears_signatures_and_rewinds_to_in_progress(
         dispute = await opp_client.post(f"/v1/matches/{match['id']}/dispute")
         assert dispute.status_code == 200
         body = dispute.json()
-        assert body["status"] == "in_progress"
-        assert body["status_label"] == "Live"
+        assert body["status"] == "disputed"
+        assert body["status_label"] == "Disputed"
         assert body["signatures"] == []
         sides = sorted(body["sides"], key=lambda s: s["side_number"])
         assert [s["won"] for s in sides] == [None, None]
@@ -1939,9 +1940,9 @@ async def test_concurrent_confirm_and_dispute_serialize(
                 assert {s.won for s in sides} == {True, False}, [s.won for s in sides]
                 assert len(final.signatures) == 2
             else:
-                # Dispute won: rewound to in_progress with no live signatures
-                # and no recorded winner.
-                assert final.status == MatchStatus.in_progress
+                # Dispute won: moved to disputed with no live signatures and no
+                # recorded winner.
+                assert final.status == MatchStatus.disputed
                 assert final.signatures == []
                 assert [s.won for s in sides] == [None, None]
 

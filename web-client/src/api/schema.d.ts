@@ -751,8 +751,13 @@ export interface components {
              */
             skip_merge: boolean;
         };
-        /** DashboardNextMatch */
-        DashboardNextMatch: {
+        /**
+         * DashboardAttentionItem
+         * @description One actionable row in the dashboard's "Needs your attention" panel,
+         *     classified server-side and current-user-aware (see ``dashboard.py``). Rows
+         *     carry only routing data — opponent handle and the action — never scores.
+         */
+        DashboardAttentionItem: {
             /**
              * Match Id
              * Format: uuid
@@ -760,13 +765,15 @@ export interface components {
             match_id: string;
             /** Opponent Username */
             opponent_username: string | null;
-            /** Best Of */
-            best_of: number;
             /**
-             * Created At
-             * Format: date-time
+             * Kind
+             * @enum {string}
              */
-            created_at: string;
+            kind: "dispute" | "review" | "score";
+            /** Affects Rating */
+            affects_rating: boolean;
+            /** Current Game Number */
+            current_game_number: number | null;
         };
         /**
          * DashboardRating
@@ -837,26 +844,15 @@ export interface components {
         };
         /** DashboardResponse */
         DashboardResponse: {
-            /** Score Banners */
-            score_banners: components["schemas"]["DashboardScoreBanner"][];
-            next_match: components["schemas"]["DashboardNextMatch"] | null;
+            /** Attention */
+            attention: components["schemas"]["DashboardAttentionItem"][];
+            /** Waiting Count */
+            waiting_count: number;
             /** Recent Results */
             recent_results: components["schemas"]["DashboardRecentResult"][];
             rating?: components["schemas"]["DashboardRating"] | null;
             /** Completed Match Count */
             completed_match_count: number;
-        };
-        /** DashboardScoreBanner */
-        DashboardScoreBanner: {
-            /**
-             * Match Id
-             * Format: uuid
-             */
-            match_id: string;
-            /** Opponent Username */
-            opponent_username: string | null;
-            /** Current Game Number */
-            current_game_number: number;
         };
         /** DashboardStreak */
         DashboardStreak: {

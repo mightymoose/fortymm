@@ -228,9 +228,9 @@ def side_win_counts(match: Match) -> dict[int, int]:
 
 
 def current_game_number(match: Match) -> int | None:
-    """The next un-scored game number for an in-progress match. ``None`` when:
+    """The next un-scored game number for an open match. ``None`` when:
 
-    - the match isn't in progress (finalized / disputed / voided);
+    - the match is finalized / voided / pending (not in progress or disputed);
     - a result is posted and awaiting confirmation (``match.signatures``
       non-empty — score writes are locked);
     - the currently-saved games already decide the match — even if some game
@@ -242,7 +242,7 @@ def current_game_number(match: Match) -> int | None:
     Game rows are created lazily by the score-write endpoints, so the next
     game to score may not have a ``MatchGame`` row yet — this helper exposes
     the number rather than an object so deeplinks work either way."""
-    if match.status != MatchStatus.in_progress:
+    if match.status not in (MatchStatus.in_progress, MatchStatus.disputed):
         return None
     if match.signatures:
         return None
@@ -685,9 +685,11 @@ async def get_match(
 
 
 # A match that has reached one of these states is read-only — never scorable.
+# ``disputed`` is deliberately absent: a dispute reopens the match for score
+# correction (either side may edit — see ``dispute_match_result``), so a
+# disputed match is scorable again with its games intact.
 _TERMINAL_STATUSES = {
     MatchStatus.completed,
-    MatchStatus.disputed,
     MatchStatus.voided,
 }
 
@@ -1330,8 +1332,10 @@ def _can_finalize(match: Match) -> bool:
     ``can_finalize`` flag and the submit button's adaptive label.
 
     Returns False once anyone has posted a result — the next action on a
-    signed match is /confirmation or /dispute, not another /results."""
-    if match.status != MatchStatus.in_progress:
+    signed match is /confirmation or /dispute, not another /results. A
+    ``disputed`` match has no signatures and stays finalizable so the disputer
+    can re-post a corrected (or unchanged) board back into the sign-off flow."""
+    if match.status not in (MatchStatus.in_progress, MatchStatus.disputed):
         return False
     if match.signatures:
         return False
@@ -1613,9 +1617,11 @@ async def post_match_result(
         _set_side_won(match, decided_side)
         await _apply_rating_update(db, match)
     else:
-        # Rated path: caller is the first signer. Status remains in_progress
-        # (and side.won unset) until /confirmation lands the last needed
-        # signature.
+        # Rated path: caller is the first signer. Status is (re)set to
+        # in_progress — load-bearing when re-posting a ``disputed`` match, a
+        # no-op otherwise — and side.won stays unset until /confirmation lands
+        # the last needed signature.
+        match.status = MatchStatus.in_progress
         await _add_signature_or_409(
             db, match, current_user.id, "Result already posted; use /confirmation."
         )
@@ -1687,6 +1693,12 @@ async def dispute_match_result(
     _enforce_confirmable(match, current_user.id)
 
     match.signatures.clear()
+    # Move out of ``in_progress`` into the dedicated ``disputed`` state so a
+    # reopened match is unambiguous to the dashboard classifier and the matches
+    # list, instead of being indistinguishable from a never-posted live match.
+    # Scoring is reopened anyway (no signatures + ``disputed`` is non-terminal),
+    # and re-posting via /results flips it back to ``in_progress``.
+    match.status = MatchStatus.disputed
     for side in match.sides:
         # ``side.won`` is only stamped at completion now, so it's still None
         # on an awaiting-confirmation match — nulling it here is defensive.
