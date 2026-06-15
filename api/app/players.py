@@ -119,7 +119,11 @@ async def list_recent_opponents(
                 )
                 .where(User.id != current_user.id)
                 .group_by(User.id)
-                .order_by(func.max(Match.created_at).desc())
+                # Stable tiebreaker so ties on created_at (seed data, tests,
+                # concurrent creates) don't reorder across requests. Matches
+                # the alphabetical backfill below, so the list reads as one
+                # coherent order.
+                .order_by(func.max(Match.created_at).desc(), User.username)
                 .limit(limit)
             )
         )
