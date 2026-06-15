@@ -15,13 +15,13 @@ describe("ScoreboardDisplay", () => {
   it("names the heading with the outcome when one is provided", () => {
     scoreboardDisplayPage.render({
       scoreboard: buildScoreboardView({
-        outcome: "rita.kovac defeated leo.mertens, 3 games to 1",
+        outcome: "rita.kovac defeated leo.mertens by 3 games to 1",
       }),
     });
 
     const heading = scoreboardDisplayPage.getHeading();
     expect(heading).toHaveTextContent(
-      "rita.kovac defeated leo.mertens, 3 games to 1",
+      "rita.kovac defeated leo.mertens by 3 games to 1",
     );
     expect(heading).toHaveClass("sr-only");
   });

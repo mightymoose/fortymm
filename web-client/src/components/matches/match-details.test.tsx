@@ -105,12 +105,12 @@ describe("MatchDetails — scoreboard seam", () => {
     // an accessible name the old bare <section className="md-hero"> never had.
     await waitFor(() =>
       expect(matchDetailsPage.scoreboard.getHeading()).toHaveTextContent(
-        "me defeated nguyen.t, 3 games to 1",
+        "me defeated nguyen.t by 3 games to 1",
       ),
     );
     expect(
       matchDetailsPage.scoreboard.getRegion(),
-    ).toHaveAccessibleName("me defeated nguyen.t, 3 games to 1");
+    ).toHaveAccessibleName("me defeated nguyen.t by 3 games to 1");
   });
 
   it("renders the hero content inside that region", async () => {

@@ -25,7 +25,7 @@ export function buildScoreboardDisplayProps(
 ): ScoreboardDisplayProps {
   return {
     scoreboard: buildScoreboardView({
-      outcome: "rita.kovac leading, 2 games to 1",
+      outcome: "rita.kovac leads by 2 games to 1",
     }),
     ...overrides,
   };

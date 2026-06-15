@@ -101,7 +101,7 @@ test.describe('Match Details', () => {
         test('names the hero region with the decided-match outcome', async ({ page }) => {
             await matchDetailsPage.mock(decidedMatch(COMPLETED_WIN_ID));
             await matchDetailsPage.goTo(COMPLETED_WIN_ID);
-            await expect(page.getByRole('region', { name: 'rita.kovac defeated silva.r, 3 games to 1' })).toBeVisible();
+            await expect(page.getByRole('region', { name: 'rita.kovac defeated silva.r by 3 games to 1' })).toBeVisible();
         });
 
         // Regression test for #472: the current user's row renders its cells
