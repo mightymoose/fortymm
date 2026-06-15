@@ -40,7 +40,7 @@ describe("scoreboardQuery", () => {
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(result.current.data?.outcome).toBe(
-      "rita.kovac defeated leo.mertens, 3 games to 1",
+      "rita.kovac defeated leo.mertens by 3 games to 1",
     );
   });
 
@@ -69,7 +69,7 @@ describe("scoreboardQuery", () => {
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(result.current.data?.outcome).toBe(
-      "rita.kovac defeated leo.mertens, 1 game to 0",
+      "rita.kovac defeated leo.mertens by 1 game to 0",
     );
   });
 
@@ -226,7 +226,7 @@ describe("scoreboardQuery", () => {
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(result.current.data?.outcome).toBe(
-      "rita.kovac and leo.mertens are tied, 2 games all",
+      "rita.kovac and leo.mertens are tied at 2 games apiece",
     );
   });
 
@@ -252,7 +252,7 @@ describe("scoreboardQuery", () => {
     const { result } = scoreboardQueryPage.render();
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(result.current.data?.outcome).toBe("leo.mertens leading, 2 games to 1");
+    expect(result.current.data?.outcome).toBe("leo.mertens leads by 2 games to 1");
   });
 
   it("treats a side still on zero as leading, not unstarted, when the other has won games", async () => {
@@ -277,7 +277,7 @@ describe("scoreboardQuery", () => {
     const { result } = scoreboardQueryPage.render();
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(result.current.data?.outcome).toBe("leo.mertens leading, 2 games to 0");
+    expect(result.current.data?.outcome).toBe("leo.mertens leads by 2 games to 0");
   });
 
   it("falls back to in-progress copy when one side is won but the other is not yet lost", async () => {
@@ -304,7 +304,7 @@ describe("scoreboardQuery", () => {
     const { result } = scoreboardQueryPage.render();
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(result.current.data?.outcome).toBe("rita.kovac leading, 3 games to 1");
+    expect(result.current.data?.outcome).toBe("rita.kovac leads by 3 games to 1");
   });
 
   it("returns a null outcome when a side is missing entirely", async () => {
@@ -377,7 +377,7 @@ describe("scoreboardQuery", () => {
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     // No side `won: true`, so it is not "defeated" — just the current lead.
-    expect(result.current.data?.outcome).toBe("rita.kovac leading, 1 game to 0");
+    expect(result.current.data?.outcome).toBe("rita.kovac leads by 1 game to 0");
   });
 
   it("surfaces an error when data.scoreboard.status fails validation", async () => {

@@ -53,7 +53,7 @@ describe("ScoreboardFetcher", () => {
 
     await waitForElementToBeRemoved(scoreboardFetcherPage.queryLoading());
     expect(scoreboardFetcherPage.getHeading()).toHaveTextContent(
-      "rita.kovac defeated leo.mertens, 3 games to 1",
+      "rita.kovac defeated leo.mertens by 3 games to 1",
     );
     // The region is labelled by that heading — the full display handoff.
     expect(scoreboardFetcherPage.getRegion()).toHaveAttribute(
