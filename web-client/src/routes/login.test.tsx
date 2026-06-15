@@ -243,14 +243,16 @@ describe('/login/verifying flow', () => {
     ).toBeInTheDocument()
   })
 
-  it('shows the missing-token screen when no token is supplied', async () => {
+  it('shows a distinct missing-link screen (not "expired") when no token is supplied', async () => {
     renderAt('/login/verifying')
     expect(
-      await screen.findByRole('heading', { name: /this link can't be used/i }),
+      await screen.findByRole('heading', { name: /this link is incomplete/i }),
     ).toBeInTheDocument()
+    expect(screen.getByText(/missing its token/i)).toBeInTheDocument()
+    // It must not reuse the expired/already-used wording.
     expect(
-      screen.getByText(/this link is missing its token/i),
-    ).toBeInTheDocument()
+      screen.queryByRole('heading', { name: /this link can't be used/i }),
+    ).not.toBeInTheDocument()
   })
 
   it('toasts the merged-matches count when consume reports a merge', async () => {

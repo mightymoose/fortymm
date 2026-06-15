@@ -3,18 +3,29 @@ import type { ReactNode } from 'react'
 import { BallLogo, Eyebrow } from '../atoms'
 import { fineprint, linkInline } from '../styles'
 
-export type LinkCheckState = 'checking' | 'success' | 'expired'
+export type LinkCheckState = 'checking' | 'success' | 'expired' | 'missing'
 
 const ACCENT: Record<LinkCheckState, string> = {
   checking: 'var(--ball-500)',
   success: 'var(--serve-500)',
   expired: 'var(--loss)',
+  missing: 'var(--loss)',
 }
 
 const HALO: Record<LinkCheckState, string> = {
   checking: 'rgba(255,122,26,0.20)',
   success: 'rgba(0,226,154,0.16)',
   expired: 'rgba(255,77,109,0.14)',
+  missing: 'rgba(255,77,109,0.14)',
+}
+
+// The short code shown in the header pill. Distinct per failure so a missing
+// link doesn't read identically to an expired one.
+const PILL_CODE: Record<LinkCheckState, string> = {
+  checking: '03',
+  success: '03',
+  expired: '!!',
+  missing: '??',
 }
 
 const DEFAULT_COPY: Record<
@@ -39,6 +50,14 @@ const DEFAULT_COPY: Record<
     title: "This link can't be used",
     subtitle:
       'Sign-in links last 15 minutes and work once. Send a fresh one and you’ll be straight in.',
+  },
+  missing: {
+    eyebrow: '● Link incomplete',
+    // Distinct from `expired`: the link arrived without its token at all
+    // (often truncated when copied), so "expired or already used" is wrong.
+    title: 'This link is incomplete',
+    subtitle:
+      'This sign-in link is missing its token — it may have been cut off when it was copied. Open the most recent link in full, or send yourself a fresh one.',
   },
 }
 
@@ -90,7 +109,7 @@ export function LinkCheckPage({
       <header className="fmm-linkcheck__header">
         <BallLogo size={22} />
         <span className="fmm-linkcheck__pill" style={{ color: accent }}>
-          {state === 'expired' ? '!!' : '03'} · LINK
+          {PILL_CODE[state]} · LINK
         </span>
       </header>
 
@@ -118,7 +137,7 @@ export function LinkCheckPage({
             Keep this tab open while we verify.
           </p>
         )}
-        {state === 'expired' && (
+        {(state === 'expired' || state === 'missing') && (
           <p style={{ ...fineprint, textAlign: 'center', marginTop: 0 }}>
             Still stuck?{' '}
             <a href="mailto:support@fortymm.com" style={linkInline}>
