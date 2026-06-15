@@ -1,6 +1,9 @@
+import { useRef, useState } from 'react'
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
 
+import { useRequestLogin } from '@/api/session'
 import { ScreenSent, ScreenSentBounced } from '@/components/login/login-screens'
+import { Turnstile, type TurnstileHandle } from '@/components/turnstile'
 import { pageTitle } from '@/lib/page-title'
 
 export const Route = createFileRoute('/login/sent')({
@@ -18,27 +21,85 @@ export const Route = createFileRoute('/login/sent')({
 function LoginSentPage() {
   const { error, email, sentAt } = Route.useSearch()
   const navigate = useNavigate()
+  const requestLogin = useRequestLogin()
+  // A fresh captcha token is kept on this page (the Turnstile widget below
+  // hands one over and replaces it after each use) so "Resend" can re-issue
+  // the link without bouncing through /login to re-run the challenge.
+  const [captchaToken, setCaptchaToken] = useState<string | null>(null)
+  const [resendMessage, setResendMessage] = useState<string | null>(null)
+  const captchaRef = useRef<TurnstileHandle | null>(null)
+  const inFlight = useRef(false)
 
-  // Both "resend" and "start over" route back to /login with the email
-  // prefilled. The captcha can't replay across page loads, so we have to
-  // get the user through the challenge again to send a new link.
-  const back = () => {
+  // "Start over" (and bounce recovery) goes back to /login with the email
+  // prefilled to re-run the whole flow from scratch.
+  const startOver = () => {
     navigate({
       to: '/login',
       search: { email: email || undefined, error: undefined },
     })
   }
 
+  // "Resend" re-issues the link in place: POST a new request with the held
+  // captcha token, reset the expiry countdown (a new sentAt), and reset the
+  // widget so the next resend gets a fresh token. A captcha/network failure
+  // falls back to the full /login flow rather than stranding the user here.
+  const resend = () => {
+    if (inFlight.current || !email || !captchaToken) return
+    inFlight.current = true
+    setResendMessage(null)
+    requestLogin.mutate(
+      { email, captchaToken },
+      {
+        onSuccess: () => {
+          setResendMessage('New link sent — check your inbox.')
+          navigate({
+            to: '/login/sent',
+            replace: true,
+            search: { email, sentAt: Date.now(), error: undefined },
+          })
+        },
+        onError: () => startOver(),
+        onSettled: () => {
+          inFlight.current = false
+          // Turnstile tokens are single-use; drop the spent one and ask the
+          // widget for a fresh one for any subsequent resend.
+          setCaptchaToken(null)
+          captchaRef.current?.reset()
+        },
+      },
+    )
+  }
+
   if (error === 'bounce') {
-    return <ScreenSentBounced email={email} onChangeEmail={back} onRetry={back} />
+    return (
+      <ScreenSentBounced
+        email={email}
+        onChangeEmail={startOver}
+        onRetry={startOver}
+      />
+    )
   }
 
   return (
-    <ScreenSent
-      email={email || 'your inbox'}
-      sentAt={sentAt}
-      onStartOver={back}
-      onResend={back}
-    />
+    <>
+      <ScreenSent
+        email={email || 'your inbox'}
+        sentAt={sentAt}
+        onStartOver={startOver}
+        // Disabled until a captcha token is in hand (and there's an address to
+        // send to); the button shows the disabled state in the meantime.
+        onResend={email && captchaToken ? resend : undefined}
+        resending={requestLogin.isPending}
+        resendMessage={resendMessage}
+      />
+      <Turnstile
+        handleRef={(h) => {
+          captchaRef.current = h
+        }}
+        onToken={setCaptchaToken}
+        onExpire={() => setCaptchaToken(null)}
+        onError={() => setCaptchaToken(null)}
+      />
+    </>
   )
 }

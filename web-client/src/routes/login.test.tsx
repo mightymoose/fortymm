@@ -202,6 +202,48 @@ describe('/login flow', () => {
   })
 })
 
+describe('/login/sent flow', () => {
+  it('"Resend" re-issues the link in place and resets the countdown (#519)', async () => {
+    let requests = 0
+    server.use(
+      http.post('*/v1/login/request', async ({ request }) => {
+        requests += 1
+        const body = (await request.json()) as { email: string }
+        return HttpResponse.json({ email: body.email }, { status: 202 })
+      }),
+    )
+    const user = userEvent.setup()
+    const { router } = renderAt('/login/sent?email=rita@example.com&sentAt=1000')
+
+    // The hidden Turnstile hands over a token on mount, enabling Resend.
+    const resendBtn = await screen.findByRole('button', { name: /^resend$/i })
+    await waitFor(() => expect(resendBtn).toBeEnabled())
+    await user.click(resendBtn)
+
+    await waitFor(() => expect(requests).toBe(1))
+    // Stays on the sent page (does NOT route back to /login like Start over).
+    expect(router.state.location.pathname).toBe('/login/sent')
+    // Fresh send time → the expiry countdown restarts.
+    expect(router.state.location.search.sentAt).not.toBe(1000)
+    expect(await screen.findByText(/new link sent/i)).toBeInTheDocument()
+  })
+
+  it('"Start over" routes back to /login with the email prefilled', async () => {
+    const user = userEvent.setup()
+    const { router } = renderAt('/login/sent?email=rita@example.com&sentAt=1000')
+
+    const [startOver] = await screen.findAllByRole('button', {
+      name: /start over/i,
+    })
+    await user.click(startOver)
+
+    await waitFor(() => expect(router.state.location.pathname).toBe('/login'))
+    expect(router.state.location.search).toMatchObject({
+      email: 'rita@example.com',
+    })
+  })
+})
+
 describe('/login/verifying flow', () => {
   it('consumes the token and routes to /login/welcome on success', async () => {
     const { router } = renderAt('/login/verifying?token=good-token')
