@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from 'react'
+import { useState } from 'react'
 import { Link, createFileRoute, useNavigate } from '@tanstack/react-router'
-import { ArrowRight, Search } from 'lucide-react'
+import { ArrowRight } from 'lucide-react'
 import { z } from 'zod'
 
 import { AppShell } from '@/components/app-shell'
@@ -9,14 +9,11 @@ import { deriveEmailStatus, useSession } from '@/api/session'
 import {
   nextScoringDestination,
   useCreateMatch,
-  usePlayerSearch,
-  useRecentOpponents,
   type Player,
 } from '@/api/matches'
-import { OpponentPickerBoundary } from '@/components/matches/opponent-picker-boundary'
+import { OpponentPicker } from '@/components/matches/opponent-picker'
 import { UserAvatar } from '@/components/ui/user-avatar'
 import { pageTitle } from '@/lib/page-title'
-import { useDebouncedValue } from '@/lib/use-debounced-value'
 import { cn } from '@/lib/utils'
 import './new.css'
 
@@ -171,11 +168,9 @@ function MatchCard() {
             }}
           />
         ) : (
-          <OpponentPickerBoundary>
-            <RecentPicker
-              onPick={(player) => setOpponent(opponentFromPlayer(player))}
-            />
-          </OpponentPickerBoundary>
+          <OpponentPicker
+            onPick={(player) => setOpponent(opponentFromPlayer(player))}
+          />
         )}
       </div>
 
@@ -223,208 +218,6 @@ function SelectedOpponent({
       <button type="button" className="change" onClick={onChange}>
         Change
       </button>
-    </div>
-  )
-}
-
-/* ------------------------------------------------------------------ */
-/*  Opponent — player grid (default)                                  */
-/* ------------------------------------------------------------------ */
-
-function RecentSkeleton() {
-  return (
-    <div className="nm-recent-grid" role="status" aria-label="Loading players">
-      {Array.from({ length: 6 }, (_, i) => (
-        <div key={i} className="nm-chip-skel" aria-hidden="true">
-          <div className="av" />
-          <div className="lines">
-            <div className="line" />
-            <div className="line short" />
-          </div>
-        </div>
-      ))}
-    </div>
-  )
-}
-
-function RecentPicker({ onPick }: { onPick: (player: Player) => void }) {
-  const [showSearch, setShowSearch] = useState(false)
-  // Wait for the session before fetching players — otherwise a first-visit
-  // direct-load races the session cookie and 401s into the error boundary
-  // (#98). A disabled query stays `isPending`, so the skeleton holds until the
-  // session resolves rather than flashing the empty state.
-  const session = useSession()
-  const recent = useRecentOpponents({ enabled: session.isSuccess })
-  const players = recent.data ?? []
-  const isLoading = recent.isPending
-
-  if (showSearch) return <TypeaheadPicker onPick={onPick} />
-
-  return (
-    <div>
-      <div className="nm-recent-label">
-        <span>Recent opponents</span>
-        {!isLoading && players.length > 0 && (
-          <button
-            type="button"
-            className="search-btn"
-            onClick={() => setShowSearch(true)}
-          >
-            Search all players
-          </button>
-        )}
-      </div>
-      {isLoading ? (
-        <RecentSkeleton />
-      ) : players.length === 0 ? (
-        <div className="nm-no-match">
-          No other players yet. Start the match without picking one for a
-          casual solo session.
-        </div>
-      ) : (
-        <div className="nm-recent-grid">
-          {players.map((p) => (
-            <button
-              type="button"
-              key={p.id}
-              className="nm-chip"
-              onClick={() => onPick(p)}
-            >
-              <UserAvatar name={p.username} size={32} />
-              <div className="body">
-                <div className="n">{p.username}</div>
-                <div className="m">REGISTERED PLAYER</div>
-              </div>
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
-
-/* ------------------------------------------------------------------ */
-/*  Opponent — typeahead search                                       */
-/* ------------------------------------------------------------------ */
-
-function TypeaheadPicker({ onPick }: { onPick: (player: Player) => void }) {
-  const [query, setQuery] = useState('')
-  const [open, setOpen] = useState(true)
-  const [activeIdx, setActiveIdx] = useState(0)
-  const wrapRef = useRef<HTMLDivElement>(null)
-
-  // Trimmed and debounced; the (already-trimmed) term is the React Query key,
-  // so each search lands in its own cache slot.
-  const term = useDebouncedValue(query, 250).trim()
-  const { data: results = [], isFetching } = usePlayerSearch(term)
-
-  useEffect(() => {
-    function onClickOutside(e: MouseEvent) {
-      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) {
-        setOpen(false)
-      }
-    }
-    document.addEventListener('mousedown', onClickOutside)
-    return () => document.removeEventListener('mousedown', onClickOutside)
-  }, [])
-
-  function changeQuery(value: string) {
-    setQuery(value)
-    setActiveIdx(0)
-  }
-
-  function onKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
-    if (!open) return
-    if (e.key === 'ArrowDown') {
-      e.preventDefault()
-      setActiveIdx((i) => Math.min(results.length - 1, i + 1))
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault()
-      setActiveIdx((i) => Math.max(0, i - 1))
-    } else if (e.key === 'Enter') {
-      e.preventDefault()
-      const picked = results[activeIdx]
-      if (picked) onPick(picked)
-    } else if (e.key === 'Escape') {
-      setOpen(false)
-    }
-  }
-
-  // `placeholderData` on the search query keeps the prior term's rows visible
-  // while the next term loads, so this only fires on the very first search.
-  const loadingFirstResults = isFetching && results.length === 0
-
-  function renderBody() {
-    if (!term) {
-      return (
-        <div className="nm-no-match">
-          Start typing to search players by username.
-        </div>
-      )
-    }
-    if (loadingFirstResults) {
-      return (
-        <div className="nm-no-match" role="status">
-          Searching…
-        </div>
-      )
-    }
-    if (results.length === 0) {
-      return (
-        <div className="nm-no-match">
-          No one matches “{term}”. Try a different name.
-        </div>
-      )
-    }
-    return results.map((p, i) => (
-      <button
-        type="button"
-        key={p.id}
-        className={cn('nm-item', i === activeIdx && 'active')}
-        onMouseEnter={() => setActiveIdx(i)}
-        onClick={() => onPick(p)}
-      >
-        <UserAvatar name={p.username} size={36} />
-        <div className="body">
-          <div className="n">{p.username}</div>
-          <div className="m">
-            {p.rating != null
-              ? `RATING ${Math.round(p.rating)}`
-              : 'REGISTERED PLAYER'}
-          </div>
-        </div>
-      </button>
-    ))
-  }
-
-  return (
-    <div className="nm-search" ref={wrapRef}>
-      <div className="nm-input-wrap">
-        <Search className="search-icon" size={20} strokeWidth={1.75} />
-        <input
-          className="nm-input"
-          placeholder="Search by username"
-          value={query}
-          autoFocus
-          onChange={(e) => {
-            changeQuery(e.target.value)
-            setOpen(true)
-          }}
-          onFocus={() => setOpen(true)}
-          onKeyDown={onKeyDown}
-        />
-        {query && (
-          <button
-            type="button"
-            className="nm-clear"
-            aria-label="Clear search"
-            onClick={() => changeQuery('')}
-          >
-            ×
-          </button>
-        )}
-      </div>
-      {open && <div className="nm-dropdown">{renderBody()}</div>}
     </div>
   )
 }

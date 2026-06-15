@@ -1,0 +1,118 @@
+- generic [ref=e2]:
+  - generic [ref=e3]:
+    - complementary "Main navigation" [ref=e4]:
+      - generic [ref=e6]: FORTYMM
+      - navigation [ref=e7]:
+        - generic [ref=e8]:
+          - generic [ref=e9]: Play
+          - list [ref=e10]:
+            - listitem [ref=e11]:
+              - link "Dashboard" [ref=e12] [cursor=pointer]:
+                - /url: /dashboard
+                - img [ref=e14]
+                - text: Dashboard
+            - listitem [ref=e19]:
+              - link "Matches" [ref=e20] [cursor=pointer]:
+                - /url: /matches
+                - img [ref=e22]
+                - text: Matches
+            - listitem [ref=e25]:
+              - link "Players" [ref=e26] [cursor=pointer]:
+                - /url: /players
+                - img [ref=e28]
+                - text: Players
+    - generic [ref=e33]:
+      - banner [ref=e34]:
+        - generic [ref=e35]:
+          - button "About the alpha release" [ref=e36] [cursor=pointer]:
+            - img
+            - text: Alpha
+            - img
+          - button "Guest account daffodil-cuttlefish — open menu to claim" [ref=e122] [cursor=pointer]:
+            - img "daffodil-cuttlefish" [ref=e124]: DC
+            - generic "daffodil-cuttlefish" [ref=e125]
+            - img [ref=e127]
+      - main [ref=e40]:
+        - generic [ref=e41]:
+          - heading "New match." [level=1] [ref=e43]
+          - generic [ref=e44]:
+            - generic [ref=e45]:
+              - img "daffodil-cuttlefish" [ref=e129]: DC
+              - generic [ref=e47]:
+                - generic [ref=e48]: You
+                - generic [ref=e49]: daffodil-cuttlefish
+            - generic [ref=e50]:
+              - generic [ref=e51]:
+                - generic [ref=e52]: Opponent
+                - generic [ref=e53]: Optional · leave blank for a solo match
+              - generic [ref=e54]:
+                - generic [ref=e55]:
+                  - generic [ref=e56]: Recent opponents
+                  - button "Search all players" [ref=e130] [cursor=pointer]
+                - generic [ref=e131]:
+                  - button "almond-cuttlefish, REGISTERED PLAYER" [ref=e132] [cursor=pointer]:
+                    - generic [ref=e133]: AC
+                    - generic [ref=e134]:
+                      - generic [ref=e135]: almond-cuttlefish
+                      - generic [ref=e136]: REGISTERED PLAYER
+                  - button "amazing-badger, REGISTERED PLAYER" [ref=e137] [cursor=pointer]:
+                    - generic [ref=e138]: AB
+                    - generic [ref=e139]:
+                      - generic [ref=e140]: amazing-badger
+                      - generic [ref=e141]: REGISTERED PLAYER
+                  - button "amethyst-velociraptor, REGISTERED PLAYER" [ref=e142] [cursor=pointer]:
+                    - generic [ref=e143]: AV
+                    - generic [ref=e144]:
+                      - generic [ref=e145]: amethyst-velociraptor
+                      - generic [ref=e146]: REGISTERED PLAYER
+                  - button "augmented-bullfrog, REGISTERED PLAYER" [ref=e147] [cursor=pointer]:
+                    - generic [ref=e148]: AB
+                    - generic [ref=e149]:
+                      - generic [ref=e150]: augmented-bullfrog
+                      - generic [ref=e151]: REGISTERED PLAYER
+                  - button "boisterous-skua, REGISTERED PLAYER" [ref=e152] [cursor=pointer]:
+                    - generic [ref=e153]: BS
+                    - generic [ref=e154]:
+                      - generic [ref=e155]: boisterous-skua
+                      - generic [ref=e156]: REGISTERED PLAYER
+                  - button "defiant-wolf, REGISTERED PLAYER" [ref=e157] [cursor=pointer]:
+                    - generic [ref=e158]: DW
+                    - generic [ref=e159]:
+                      - generic [ref=e160]: defiant-wolf
+                      - generic [ref=e161]: REGISTERED PLAYER
+            - generic [ref=e88]:
+              - generic [ref=e89]:
+                - generic [ref=e90]: Match length
+                - radiogroup "Match length" [ref=e91]:
+                  - radio "1 Single" [ref=e92] [cursor=pointer]:
+                    - generic [ref=e93]: "1"
+                    - generic [ref=e94]: Single
+                  - radio "3 Short" [ref=e95] [cursor=pointer]:
+                    - generic [ref=e96]: "3"
+                    - generic [ref=e97]: Short
+                  - radio "5 Std" [checked] [ref=e98] [cursor=pointer]:
+                    - generic [ref=e99]: "5"
+                    - generic [ref=e100]: Std
+                  - radio "7 Long" [ref=e101] [cursor=pointer]:
+                    - generic [ref=e102]: "7"
+                    - generic [ref=e103]: Long
+                - generic [ref=e104]: First to 3 games.
+              - generic [ref=e105]:
+                - generic [ref=e106]:
+                  - text: Rated match
+                  - generic [ref=e107]: No opponent · unavailable
+                - generic [ref=e108]:
+                  - switch "Rated match" [disabled] [ref=e109]
+                  - generic [ref=e110]:
+                    - generic [ref=e111]: Just for fun
+                    - generic [ref=e112]: Pick an opponent to make this rated.
+            - generic [ref=e113]:
+              - generic [ref=e114]:
+                - generic [ref=e115]: "Ready: You · solo match"
+                - generic [ref=e116]: Best of 5 · first to 3·Unrated·games to 11, win by 2
+              - generic [ref=e117]:
+                - button "Cancel" [ref=e118] [cursor=pointer]
+                - button "Start match" [ref=e119] [cursor=pointer]:
+                  - text: Start match
+                  - img [ref=e120]
+  - region "Notifications alt+T"

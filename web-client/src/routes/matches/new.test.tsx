@@ -431,7 +431,7 @@ describe('NewMatchPage — opponent search', () => {
 
     // The server-side result is selectable straight from the dropdown.
     await user.click(
-      await screen.findByRole('button', { name: /barbara\.liskov/i }),
+      await screen.findByRole('option', { name: /barbara\.liskov/i }),
     )
     expect(screen.getByText(/registered player/i)).toBeInTheDocument()
     // The query reached the endpoint — nothing was filtered client-side.

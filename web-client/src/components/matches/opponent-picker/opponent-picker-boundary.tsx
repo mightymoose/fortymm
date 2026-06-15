@@ -36,6 +36,10 @@ function OpponentPickerError({ resetErrorBoundary }: FallbackProps) {
  * error with a retry button instead of crashing the New Match page. The
  * `QueryErrorResetBoundary` lets "Try again" clear React Query's cached error
  * so the picker's queries refetch on reset.
+ *
+ * The picker's `query` / `showSearch` state lives *above* this boundary (in
+ * `OpponentPicker`), so a reset remounts the children without dropping the
+ * typed search (#96).
  */
 export function OpponentPickerBoundary({ children }: { children: ReactNode }) {
   return (

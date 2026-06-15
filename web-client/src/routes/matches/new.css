@@ -283,6 +283,9 @@
   padding: 14px 12px;
   font: 400 13px var(--font-ui);
   color: var(--fg-3);
+  /* The "No one matches '<query>'" copy echoes the raw search term; break long
+     unbroken input so a degenerate query can't overflow the dropdown/page. */
+  overflow-wrap: anywhere;
 }
 
 /* --- Selected opponent --- */
