@@ -106,7 +106,7 @@ async def get_dashboard(
         _build_recent_result(match, current_user.id, rating_changes.get(match.id))
         for match in completed
     ]
-    rating = await _build_rating(db, current_user.id)
+    rating = await _build_rating(db, current_user.id, completed_match_count)
 
     return DashboardResponse(
         score_banners=score_banners,
@@ -198,7 +198,9 @@ def _build_recent_result(
     )
 
 
-async def _build_rating(db: AsyncSession, user_id: uuid.UUID) -> DashboardRating | None:
+async def _build_rating(
+    db: AsyncSession, user_id: uuid.UUID, completed_match_count: int
+) -> DashboardRating | None:
     """Resolve the user's headline rating row.
 
     Picks the default league's rating if there is one, otherwise the oldest
@@ -217,7 +219,15 @@ async def _build_rating(db: AsyncSession, user_id: uuid.UUID) -> DashboardRating
     league_id = rating_row.league_id
     spark, delta = await _spark_and_delta(db, user_id, league_id)
     peak = await _league_peak_rating(db, user_id, league_id, current)
-    percentile = await _league_percentile(db, league_id, current)
+    # A user who has never completed a match sits at the seed rating (1500, RD
+    # 350) — fully unrated. Ranking them against league peers reads as a
+    # concrete claim ("Top 92%") about a player the system can't place yet, so
+    # suppress the percentile until they've actually played. (#382)
+    percentile = (
+        None
+        if completed_match_count == 0
+        else await _league_percentile(db, league_id, current)
+    )
     streak = await _current_streak(db, user_id)
 
     return DashboardRating(
