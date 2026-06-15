@@ -43,19 +43,11 @@ export function playerMatchesQueryKey(
   return ['players', 'matches', playerId, params] as const
 }
 
-/**
- * Paginated /v1/players list backing the `/players` page. Gated on session
- * success so a first-visit direct-load doesn't race the session cookie and
- * 401 into the error boundary (same pattern as `useMatchList`).
- *
- * `placeholderData: keepPreviousData` keeps the current rows on screen while
- * the next page or filter resolves — no flash to empty.
- */
-export function usePlayerList(
-  params: PlayerListParams,
-  options: { enabled?: boolean } = {},
-) {
-  return useQuery({
+/** Query options for the paginated /v1/players list. Shared by `usePlayerList`
+ * and any caller that needs to prefetch the same query — the list route's
+ * loader warms this on hover/touch preload so a click renders instantly. */
+export function playerListQueryOptions(params: PlayerListParams) {
+  return queryOptions({
     queryKey: playerListQueryKey(params),
     queryFn: async (): Promise<PlayerListResponse> =>
       unwrap(
@@ -70,12 +62,29 @@ export function usePlayerList(
           },
         }),
       ),
-    enabled: options.enabled ?? true,
-    placeholderData: keepPreviousData,
     // Fail-fast to the surrounding error boundary's "Try again" affordance
     // rather than silently retrying behind the skeleton.
     retry: false,
     throwOnError: true,
+  })
+}
+
+/**
+ * Paginated /v1/players list backing the `/players` page. Gated on session
+ * success so a first-visit direct-load doesn't race the session cookie and
+ * 401 into the error boundary (same pattern as `useMatchList`).
+ *
+ * `placeholderData: keepPreviousData` keeps the current rows on screen while
+ * the next page or filter resolves — no flash to empty.
+ */
+export function usePlayerList(
+  params: PlayerListParams,
+  options: { enabled?: boolean } = {},
+) {
+  return useQuery({
+    ...playerListQueryOptions(params),
+    enabled: options.enabled ?? true,
+    placeholderData: keepPreviousData,
   })
 }
 

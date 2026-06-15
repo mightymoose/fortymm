@@ -3,7 +3,10 @@ import { createFileRoute, useNavigate, useRouter } from '@tanstack/react-router'
 import { zodValidator } from '@tanstack/zod-adapter'
 import { z } from 'zod'
 
-import { usePublicPlayerByUsername } from '@/api/players'
+import {
+  publicPlayerByUsernameQueryOptions,
+  usePublicPlayerByUsername,
+} from '@/api/players'
 import { PlayerProfile } from '@/components/players/player-profile'
 import { Button } from '@/components/ui/button'
 import { pageTitle } from '@/lib/page-title'
@@ -17,6 +20,13 @@ export const Route = createFileRoute('/p/players/$username')({
     meta: [{ title: pageTitle('Player') }],
   }),
   validateSearch: zodValidator(profileSearchSchema),
+  // Public route — no session required, so warm the profile cache on hover/
+  // touch preload unconditionally; a click then renders instantly.
+  loader: ({ context, params }) => {
+    void context.queryClient.prefetchQuery(
+      publicPlayerByUsernameQueryOptions(params.username),
+    )
+  },
   component: PublicPlayerRoute,
   errorComponent: PublicPlayerError,
 })

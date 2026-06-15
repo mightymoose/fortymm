@@ -11,8 +11,12 @@ import {
 } from 'lucide-react'
 import { z } from 'zod'
 
-import { usePlayerList, type PlayerSummary } from '@/api/players'
-import { useSession } from '@/api/session'
+import {
+  playerListQueryOptions,
+  usePlayerList,
+  type PlayerSummary,
+} from '@/api/players'
+import { SESSION_QUERY_KEY, useSession } from '@/api/session'
 import { AppShell } from '@/components/app-shell'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -41,16 +45,36 @@ const playersSearchSchema = z.object({
   page: z.coerce.number().int().min(2).optional().catch(undefined),
 })
 
+const PAGE_SIZE = 25
+
 export const Route = createFileRoute('/players/')({
   head: () => ({
     meta: [{ title: pageTitle('Players') }],
   }),
   validateSearch: zodValidator(playersSearchSchema),
+  // The filter + page live in the URL, so the prefetched list must be keyed by
+  // them — expose the search to the loader.
+  loaderDeps: ({ search }) => search,
+  // Warm the React Query cache without blocking the route transition, so an
+  // intent preload makes the click render instantly. Skip the prefetch on a
+  // cold direct load where the session isn't resolved yet — firing here would
+  // 401 into the error boundary ahead of the component's session-gated query
+  // (same pattern as `/matches`). The query key matches the component's first
+  // render: `useDebouncedValue` seeds its initial value synchronously, so the
+  // debounced `q` equals the URL `q` on mount.
+  loader: ({ context, deps }) => {
+    if (!context.queryClient.getQueryData(SESSION_QUERY_KEY)) return
+    void context.queryClient.prefetchQuery(
+      playerListQueryOptions({
+        q: deps.q?.trim() || undefined,
+        page: deps.page ?? 1,
+        page_size: PAGE_SIZE,
+      }),
+    )
+  },
   component: PlayersPage,
   errorComponent: PlayersListError,
 })
-
-const PAGE_SIZE = 25
 
 function PlayersPage() {
   const search = Route.useSearch()
