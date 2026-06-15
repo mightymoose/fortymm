@@ -5,6 +5,7 @@ from httpx import AsyncClient
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.dashboard import _league_percentile
 from app.models import (
     League,
     LeagueMembership,
@@ -275,16 +276,12 @@ async def test_dashboard_rating_peak_holds_after_loss(
     assert rating_after_loss["delta"] < 0
 
 
-async def test_dashboard_rating_percentile_against_league_peers(
-    api_client: AsyncClient, db_session: AsyncSession
-):
-    """A user mid-pack against 4 other rated members should land at the
-    bottom of the leaderboard until they actually beat someone."""
-    me = await start_session(api_client, db_session)
+async def _seed_rated_peers(db_session: AsyncSession) -> League:
+    """Add 4 rated members to the default league at varying ratings, none of
+    whom have played the current user. Returns the default league."""
     default_league = (
         await db_session.execute(select(League).where(League.is_default.is_(True)))
     ).scalar_one()
-    # Seed 4 peers at varying ratings without playing any matches against me.
     for name, value in [
         ("low", 1200.0),
         ("mid_low", 1400.0),
@@ -302,11 +299,62 @@ async def test_dashboard_rating_percentile_against_league_peers(
             )
         )
     await db_session.commit()
-    _ = me
+    return default_league
 
-    rating = (await api_client.get("/v1/dashboard")).json()["rating"]
-    # I'm at 1500 among 1200/1400/1500/1600/1800: 3rd of 5 — 60th percentile.
-    assert rating["percentile"] == 60
+
+async def test_dashboard_no_percentile_for_unplayed_user_with_peers(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """A never-played user sits at the seed rating (1500, RD 350) — fully
+    unrated. Even surrounded by rated peers they must not be handed a concrete
+    percentile; ranking the unrankable reads as placeholder data. (#382)"""
+    await start_session(api_client, db_session)
+    await _seed_rated_peers(db_session)
+
+    body = (await api_client.get("/v1/dashboard")).json()
+    assert body["completed_match_count"] == 0
+    assert body["rating"]["percentile"] is None
+
+
+async def test_dashboard_percentile_shown_once_user_has_played(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """Once the user has completed a match they're genuinely rated, so the
+    percentile against league peers comes back. (#382)"""
+    await start_session(api_client, db_session)
+    await _seed_rated_peers(db_session)
+    async with opponent_session(db_session, "rival") as (opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=1)
+        post = await api_client.post(
+            f"/v1/matches/{match['id']}/results",
+            json={
+                "games": [
+                    {"game_number": 1, "side_1_points": 11, "side_2_points": 4},
+                ]
+            },
+        )
+        assert post.status_code == 201
+        confirm = await opp_client.post(f"/v1/matches/{match['id']}/confirmation")
+        assert confirm.status_code == 201
+
+    body = (await api_client.get("/v1/dashboard")).json()
+    assert body["completed_match_count"] == 1
+    percentile = body["rating"]["percentile"]
+    assert percentile is not None
+    assert 0 <= percentile <= 100
+
+
+async def test_league_percentile_ranks_against_rated_members(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """The percentile helper itself: a 1500 rating among 1200/1400/1600/1800
+    plus self is 3rd of 5 — 60th percentile."""
+    me = await start_session(api_client, db_session)
+    default_league = await _seed_rated_peers(db_session)
+
+    pct = await _league_percentile(db_session, default_league.id, 1500.0)
+    assert pct == 60
+    _ = me
 
 
 async def test_dashboard_sparkline_returns_most_recent_points(
