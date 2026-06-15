@@ -8,23 +8,23 @@ import SwiftUI
 /// environment, so the greeting reads the username from there rather than
 /// refetching it.
 struct DashboardView: View {
-    /// Most "Score needed" banners to show inline before collapsing the rest
-    /// into a "+N more" link (mirrors the web's primary + secondary + more).
-    private static let maxBanners = 2
-
     @EnvironmentObject private var session: SessionStore
     @StateObject private var store = DashboardStore()
     var service: MatchService = .shared
-    /// Called by the "+N more" banner overflow link to send the user to the
-    /// Matches tab, filtered to their live (score-needed) matches. The argument
-    /// is the current username, used as the list's search filter. Nil in previews.
-    var onShowAllScores: ((String?) -> Void)? = nil
+    /// Called by the attention panel's "View all" footer link to send the user
+    /// to the Matches tab, filtered to their matches. The argument is the
+    /// current username, used as the list's search filter. Nil in previews.
+    var onViewAll: ((String?) -> Void)? = nil
 
     /// Non-nil while the resume-scoring flow is presented over the dashboard;
-    /// `resumeLoading` covers the brief fetch of the full match (the banner
-    /// carries only the id, opponent, and current game number).
+    /// `resumeLoading` covers the brief fetch of the full match (the attention
+    /// row carries only the id, opponent, and current game number).
     @State private var resuming: ResumeScoring?
     @State private var resumeLoading = false
+    /// Non-nil while a match-detail screen is presented over the dashboard —
+    /// the destination for `review`/`dispute` rows (and a decided-but-unposted
+    /// `score` row), fetched from the row's match id.
+    @State private var selected: FinalMatch?
 
     private static let longDate: DateFormatter = {
         let f = DateFormatter()
@@ -58,19 +58,36 @@ struct DashboardView: View {
             if resumeLoading { FMBlockingSpinner() }
         }
         // The match just changed (result posted / games entered) — refetch so the
-        // score banner clears and the recent results update.
+        // attention panel clears the row and the recent results update.
         .resumeScoringCover($resuming) { Task { await store.load(force: true) } }
+        // Detail covers review/dispute (and decided-but-unposted) rows; refetch
+        // on dismissal so a resolved row drops off the panel.
+        .fullScreenCover(item: $selected) { match in
+            MatchDetailView(initial: match, onBack: {
+                selected = nil
+                Task { await store.load(force: true) }
+            })
+        }
     }
 
-    /// Fetch the full match behind a score banner and open the resume flow.
-    /// Falls back silently if the match can no longer be scored.
-    private func openResume(_ matchId: UUID) {
+    /// Run an attention row's action: fetch the full match, then deep-link into
+    /// scoring (a `score` row whose board is still live) or open match detail
+    /// (review/dispute, or a board that has since been decided). Mirrors the web
+    /// view-model's `routeOf` and the matches-list `openResume` fallback.
+    private func act(on row: AttentionRowView) {
         guard !resumeLoading else { return }
         resumeLoading = true
         Task {
-            let detail = try? await service.matchDetails(matchId)
+            let detail = try? await service.matchDetails(row.matchId)
             resumeLoading = false
-            if let ctx = detail?.resumeContext { resuming = ctx }
+            guard let detail else { return }
+            switch row.target {
+            case .scoring:
+                if let ctx = detail.resumeContext { resuming = ctx }
+                else { selected = detail }
+            case .detail:
+                selected = detail
+            }
         }
     }
 
@@ -95,7 +112,7 @@ struct DashboardView: View {
     }
 
     /// The signed-in username, used to filter the matches list when the user
-    /// taps "+N more to score". Nil if the session isn't resolved.
+    /// taps the attention panel's "View all". Nil if the session isn't resolved.
     private var currentUsername: String? {
         if case let .loaded(user) = session.state { return user.username }
         return nil
@@ -113,19 +130,19 @@ struct DashboardView: View {
     @ViewBuilder
     private func yourGame(_ data: DashboardResponse) -> some View {
         VStack(alignment: .leading, spacing: FMSpace.s4) {
-            // Top-priority: matches stranded mid-scoring that need the user to
-            // finish entering a result (issue #445). Mirrors the web dashboard's
-            // "Score needed" banners — capped so a backlog of stranded matches
-            // doesn't bury the rest of the dashboard; the overflow link sends the
-            // user to the Matches tab to work through the rest.
-            ForEach(data.scoreBanners.prefix(Self.maxBanners), id: \.matchId) { banner in
-                ScoreNeededBanner(banner: banner) { openResume(banner.matchId) }
-            }
-            if data.scoreBanners.count > Self.maxBanners {
-                MorePendingLink(count: data.scoreBanners.count - Self.maxBanners) {
-                    onShowAllScores?(currentUsername)
-                }
-            }
+            // Server-ranked triage of every match needing the user's move —
+            // disputes, results to review, matches to score (issue #445).
+            // Mirrors the web dashboard's "Needs your attention" panel: top 3
+            // rows + a footer rolling up the overflow / waiting counts, with a
+            // "View all" link into the Matches tab.
+            DashboardAttentionPanel(
+                view: projectAttentionPanel(
+                    items: data.attention,
+                    waitingCount: data.waitingCount
+                ),
+                onAct: { act(on: $0) },
+                onViewAll: { onViewAll?(currentUsername) }
+            )
 
             HStack(alignment: .firstTextBaseline, spacing: FMSpace.s3) {
                 Text("Your game")
@@ -187,68 +204,6 @@ struct DashboardView: View {
                 }
             }
         }
-    }
-}
-
-/// Dashboard banner for a match stranded mid-scoring — a one-tap path back into
-/// score entry so a Live match the user owns is never permanently stranded
-/// (issue #445). Mirrors the web dashboard's "Score needed" banner.
-private struct ScoreNeededBanner: View {
-    let banner: DashboardScoreBanner
-    let onResume: () -> Void
-
-    var body: some View {
-        FMCard(featured: true) {
-            HStack(alignment: .center, spacing: FMSpace.s4) {
-                VStack(alignment: .leading, spacing: FMSpace.s1) {
-                    HStack(spacing: 7) {
-                        Circle().fill(FMColor.ball500).frame(width: 7, height: 7)
-                            .shadow(color: FMColor.ball500.opacity(0.55), radius: 5)
-                        DashOverline(text: "Score needed")
-                    }
-                    Text(opponentLine)
-                        .font(FMFont.ui(FMFont.md, weight: .semibold))
-                        .foregroundStyle(FMColor.fg1)
-                        .lineLimit(1)
-                    Text("Game \(banner.currentGameNumber) is waiting on a score.")
-                        .font(FMFont.ui(FMFont.sm))
-                        .foregroundStyle(FMColor.fg3)
-                        .lineLimit(1)
-                }
-                Spacer(minLength: FMSpace.s3)
-                FMButton(title: "Enter score", variant: .primary, size: .sm, action: onResume)
-            }
-        }
-    }
-
-    private var opponentLine: String {
-        if let opponent = banner.opponentUsername { return "vs @\(opponent)" }
-        return "Solo match"
-    }
-}
-
-/// Overflow link shown under the capped score banners — "+N more to score" —
-/// routing the user to the Matches tab to clear the rest.
-private struct MorePendingLink: View {
-    let count: Int
-    let onTap: () -> Void
-
-    var body: some View {
-        Button(action: onTap) {
-            HStack(spacing: FMSpace.s2) {
-                Text("+\(count) more to score")
-                    .font(FMFont.ui(FMFont.sm, weight: .semibold))
-                    .foregroundStyle(FMColor.fgAccent)
-                Image(systemName: "arrow.right")
-                    .font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(FMColor.fgAccent)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, FMSpace.s1)
-            .padding(.vertical, FMSpace.s1)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
     }
 }
 

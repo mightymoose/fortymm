@@ -5,24 +5,52 @@ import Foundation
 /// `.convertFromSnakeCase`, so `recent_results` / `spark_data` / `my_rating_change`
 /// arrive as `recentResults` / `sparkData` / `myRatingChange`.
 struct DashboardResponse: Decodable {
-    let scoreBanners: [DashboardScoreBanner]
-    let nextMatch: DashboardNextMatch?
+    /// Every actionable match for the current user, pre-ranked server-side by
+    /// attention priority (see `api/app/dashboard.py`). The UI renders the top
+    /// few as rows and rolls the remainder into the footer's overflow count.
+    let attention: [DashboardAttentionItem]
+    /// Matches that need *someone else's* move — a result we posted awaiting the
+    /// opponent's sign-off, plus pending/scheduled matches. Footer text only;
+    /// never a row.
+    let waitingCount: Int
     let recentResults: [DashboardRecentResult]
     let rating: DashboardRating?
     let completedMatchCount: Int
 }
 
-struct DashboardScoreBanner: Decodable {
-    let matchId: UUID
-    let opponentUsername: String?
-    let currentGameNumber: Int
+/// The actionable bucket a match falls in for the current user, in priority
+/// order (`dispute` > `review` > `score`). Mirrors the API's `AttentionKind`
+/// (`api/app/schemas/dashboard.py`). An unknown future kind decodes to
+/// `.unknown` so an older client doesn't fail the whole payload.
+enum AttentionKind: String, Decodable {
+    case dispute
+    case review
+    case score
+    case unknown
+
+    init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = AttentionKind(rawValue: raw) ?? .unknown
+    }
 }
 
-struct DashboardNextMatch: Decodable {
+/// One actionable row in the dashboard's "Needs your attention" panel,
+/// classified server-side and current-user-aware. Mirror of the API's
+/// `DashboardAttentionItem`. Carries only routing data — opponent handle and
+/// the action — never scores.
+struct DashboardAttentionItem: Decodable, Identifiable {
     let matchId: UUID
     let opponentUsername: String?
-    let bestOf: Int
-    let createdAt: Date
+    let kind: AttentionKind
+    /// `score` rows split rated-above-unrated by this flag; always true for
+    /// `review`/`dispute` (both only arise on rated matches).
+    let affectsRating: Bool
+    /// The next un-scored game for a `score` row, used to deep-link straight
+    /// into scoring. `nil` when the board is decided but unposted (route to
+    /// match detail to post instead), and always `nil` for `review`/`dispute`.
+    let currentGameNumber: Int?
+
+    var id: UUID { matchId }
 }
 
 /// One row of the "Recent matches" table.
