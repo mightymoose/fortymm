@@ -379,9 +379,16 @@ export interface paths {
         /**
          * Get Match
          * @description Open to anyone, signed in or not. A signed-in caller gets
-         *     is_current_user / can_score flags; an anonymous caller gets the same view
-         *     with those flags off. Per-IP rate-limited (60/min) so an open URL can't be
-         *     scraped from one source.
+         *     is_current_user / can_score flags; an anonymous caller gets the same
+         *     scorecard with those flags off. Per-IP rate-limited (60/min) so an open URL
+         *     can't be scraped from one source.
+         *
+         *     The richer history payload — recent form, head-to-head, and per-side rating
+         *     changes — is *only* loaded for a caller who is a participant on this match
+         *     (see #515). Non-participants (anonymous holders of the share URL or
+         *     signed-in spectators) get the scorecard with those extras empty/null, so a
+         *     public link reveals the result but not the players' rivalry / rating
+         *     metadata.
          *
          *     The serializer flags whether the current user is on a side; write paths
          *     below still gate on participation via `get_current_user`.

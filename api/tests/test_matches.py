@@ -348,6 +348,55 @@ async def test_get_match_is_open_to_anonymous_callers(
     assert user_ids == {str(creator.id), str(opponent.id)}
 
 
+async def test_history_extras_are_gated_to_participants(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """Regression for #515: recent form / head-to-head / rating history is
+    rivalry metadata, not part of the public scorecard. A participant viewing
+    the match sees it; an anonymous holder of the share URL and a signed-in
+    spectator both get the scorecard with those extras empty/null."""
+    me = await start_session(api_client, db_session)
+    async with opponent_session(db_session, "gated-rival") as (rival_client, rival):
+        # A prior completed meeting gives both players recent form and seeds a
+        # head-to-head between them.
+        await _play_match_to_completion(
+            api_client, rival_client, rival.id, best_of=3, side_1_wins=True
+        )
+        # The current match between the same two players is what we view.
+        current = await _create_match(api_client, rival.id, best_of=3)
+
+        # A participant (me) sees the rich history payload.
+        mine = (await api_client.get(f"/v1/matches/{current['id']}")).json()
+        assert mine["recent_form"], "participant should see recent form"
+        assert mine["head_to_head"] is not None
+        assert mine["head_to_head"]["total_meetings"] == 1
+
+        # The other participant (the rival) sees it too.
+        theirs = (await rival_client.get(f"/v1/matches/{current['id']}")).json()
+        assert theirs["recent_form"]
+        assert theirs["head_to_head"] is not None
+
+        # A signed-in spectator who is not on either side gets the scorecard
+        # only — no form, no head-to-head.
+        async with make_client() as spectator_client:
+            await start_session(spectator_client, db_session)
+            spec = (await spectator_client.get(f"/v1/matches/{current['id']}")).json()
+        assert spec["recent_form"] == []
+        assert spec["head_to_head"] is None
+        assert all(s["rating_change"] is None for s in spec["sides"])
+
+        # An anonymous holder of the share URL likewise sees no history.
+        async with make_client() as anon_client:
+            anon = (await anon_client.get(f"/v1/matches/{current['id']}")).json()
+        assert anon["recent_form"] == []
+        assert anon["head_to_head"] is None
+        assert all(s["rating_change"] is None for s in anon["sides"])
+
+        # The scorecard itself is unaffected — both players still appear.
+        anon_ids = {p["user_id"] for s in anon["sides"] for p in s["players"]}
+        assert anon_ids == {str(me.id), str(rival.id)}
+
+
 async def test_get_match_is_rate_limited_per_ip(
     api_client: AsyncClient, db_session: AsyncSession
 ):
