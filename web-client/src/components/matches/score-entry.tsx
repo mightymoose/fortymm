@@ -306,13 +306,19 @@ function ScoreEntryInner({
       return
     }
     const next = predictNextScoringRoute()
-    // Fire-and-forget — we navigate as soon as the request settles either way,
-    // since the canonical POST /results reconciles the score later. The save
-    // lands in the shared mutation cache under this game's key: on success the
-    // game's scoreline cell reads "saved"; on failure it stays there as the
-    // failed-save state (#369), so the cell flips to failed (keeping the
-    // entered points) and the next screen's banner names the game.
-    saveMutation.mutate(args, { onSettled: () => navigate(next) })
+    // Fire-and-forget — navigate to the next game *synchronously*, in the same
+    // user gesture, without waiting for the request to settle. The save lands
+    // in the shared mutation cache under this game's key (pending immediately),
+    // so the next screen's scoreline cell reads "saving" and the route
+    // prediction already counts it; on success the cell flips to "saved", on
+    // failure to the failed-save state (#369) with the entered points retained.
+    // Navigating inside the gesture — rather than from a later onSettled, after
+    // the network round-trip — is what keeps the mobile soft keyboard open: a
+    // browser only honours the next input's autofocus while still inside the
+    // tap that triggered it, so deferring to onSettled dropped focus and closed
+    // the keyboard between games (#567).
+    saveMutation.mutate(args)
+    navigate(next)
   }
 
   // After any clear, drop focus into the first input that's still empty so
@@ -478,6 +484,12 @@ function ScoreEntryInner({
               type="button"
               className="btn primary"
               disabled={!inputsValid || inputsLocked}
+              // Don't let tapping Save blur the active input: on mobile that
+              // dismisses the soft keyboard before the synchronous navigation
+              // can hand focus to the next game's input, closing the keyboard
+              // between games (#567). Preventing the pointerdown default keeps
+              // focus on the input through the tap; the click still fires.
+              onMouseDown={(e) => e.preventDefault()}
               onClick={onSubmit}
             >
               {submitLabel}

@@ -205,6 +205,38 @@ describe('ScoreEntry — create', () => {
     expect(captured).toEqual({ side_1_points: 11, side_2_points: 4 })
   })
 
+  it('advances to the next game immediately, without waiting for the save to settle (#567)', async () => {
+    // Mobile keyboard regression: navigation must happen synchronously in the
+    // Save tap, not from the save's `onSettled`. If it waited for the network
+    // round-trip, the soft keyboard would close and the next game's input would
+    // lose focus between games. Here the save POST never resolves, yet we must
+    // still land on the next un-scored game.
+    const user = userEvent.setup()
+    server.use(
+      http.get('*/v1/matches/m-1', () => HttpResponse.json(inProgressMatch())),
+      // Never resolves — stands in for a slow/in-flight save.
+      http.post(
+        '*/v1/matches/m-1/games/3/scores/new',
+        () => new Promise<Response>(() => {}),
+      ),
+    )
+
+    renderScoreEntry({ kind: 'create', matchId: 'm-1', gameNumber: 3 })
+
+    await screen.findByRole('heading', { name: /enter game 3 score/i })
+    await user.type(
+      screen.getByRole('textbox', { name: 'rita.kovac score' }),
+      '11',
+    )
+    await user.type(screen.getByRole('textbox', { name: 'nguyen.t score' }), '4')
+    await user.click(screen.getByRole('button', { name: /save game & next/i }))
+
+    // Already on game 4 even though the game-3 save is still pending.
+    await waitFor(() =>
+      expect(screen.getByText('scoring-new m-1 4')).toBeInTheDocument(),
+    )
+  })
+
   it('treats a 409 on the create POST as a successful re-save (#538)', async () => {
     // A double-tapped Save fires the create POST twice; the second hits an
     // already-saved game and 409s. The mutation must fall back to an update
