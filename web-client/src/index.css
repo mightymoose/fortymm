@@ -2200,8 +2200,14 @@ body.dark.fortymm-theme {
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  /* Keep the "Games won · N" tally on mobile (#387): hiding it left the cramped
+     mobile header with no running score, and the big inputs already read as
+     blank panels — this is the only games-won readout near them. */
   .fortymm-theme .se-head .rt {
-    display: none;
+    display: block;
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    margin-top: 2px;
   }
   .fortymm-theme .se-mid {
     padding: 14px 6px;
@@ -2213,9 +2219,22 @@ body.dark.fortymm-theme {
   .fortymm-theme .se-games {
     font-size: 14px;
   }
+  /* On mobile the inputs sit edge-to-edge with no chrome, so an empty field
+     reads as a dark panel with only a faint "0" placeholder (#387). Give it a
+     visible field affordance — a subtle filled box with a border — so it's
+     legible as a tap target. */
   .fortymm-theme .big-input {
     font-size: 72px;
     padding: 6px 0 0;
+    background: var(--ink-900);
+    border: 1px solid var(--ink-600);
+    border-radius: 12px;
+  }
+  .fortymm-theme .big-input:focus {
+    border-color: var(--ball-500);
+  }
+  .fortymm-theme .big-input[aria-invalid='true'] {
+    border-color: var(--loss);
   }
 
   /* Single row of buttons, equal-width, full-bleed across the card. */
