@@ -178,6 +178,42 @@
 }
 .fortymm-landing .nav-link:hover { color: var(--fg-1); }
 
+/* Mobile nav toggle (hamburger) — hidden until the narrow breakpoint. */
+.fortymm-landing .nav-toggle {
+  display: none;
+  flex-direction: column;
+  justify-content: center;
+  gap: 5px;
+  width: 40px;
+  height: 40px;
+  padding: 0 9px;
+  background: transparent;
+  border: 1px solid var(--ink-600);
+  border-radius: 8px;
+  cursor: pointer;
+}
+.fortymm-landing .nav-toggle-bar {
+  display: block;
+  height: 2px;
+  width: 100%;
+  background: var(--fg-1);
+  border-radius: 2px;
+  transition: transform var(--dur-fast) var(--ease-out),
+    opacity var(--dur-fast) var(--ease-out);
+}
+.fortymm-landing .nav.is-open .nav-toggle-bar:nth-child(1) {
+  transform: translateY(7px) rotate(45deg);
+}
+.fortymm-landing .nav.is-open .nav-toggle-bar:nth-child(2) {
+  opacity: 0;
+}
+.fortymm-landing .nav.is-open .nav-toggle-bar:nth-child(3) {
+  transform: translateY(-7px) rotate(-45deg);
+}
+.fortymm-landing .nav-mobile-menu {
+  display: none;
+}
+
 /* ---------- Hero ---------- */
 .fortymm-landing .hero {
   position: relative;
@@ -1351,7 +1387,16 @@
   .fortymm-landing .hero-inner,
   .fortymm-landing .tb-inner,
   .fortymm-landing .feat-panel {
-    grid-template-columns: 1fr;
+    /* minmax(0, 1fr) — not bare 1fr — so the single column can shrink below
+       the min-content width of its children (e.g. the scheduler mockup),
+       otherwise the column blows past the viewport (#375). */
+    grid-template-columns: minmax(0, 1fr);
+  }
+  /* Grid items default to min-width:auto, which floors them at min-content
+     and reintroduces the overflow; let them shrink instead. */
+  .fortymm-landing .tb-inner > *,
+  .fortymm-landing .feat-panel > * {
+    min-width: 0;
   }
   .fortymm-landing .footer-inner {
     grid-template-columns: 1fr 1fr;
@@ -1379,7 +1424,42 @@
   }
 }
 @media (max-width: 680px) {
-  .fortymm-landing .nav-links { display: none; }
+  /* Collapse the desktop links + inline CTAs into the hamburger menu. */
+  .fortymm-landing .nav-links,
+  .fortymm-landing .nav-signin,
+  .fortymm-landing .nav-cta {
+    display: none;
+  }
+  .fortymm-landing .nav {
+    gap: 12px;
+    padding: 12px 22px;
+  }
+  .fortymm-landing .nav-toggle {
+    display: flex;
+  }
+  /* Off-canvas menu drops below the sticky bar, full-width, vertical. */
+  .fortymm-landing .nav-mobile-menu {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 12px 22px 20px;
+    background: rgba(11, 13, 18, 0.97);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border-bottom: 1px solid var(--ink-600);
+  }
+  .fortymm-landing .nav-mobile-menu .nav-link {
+    padding: 10px 0;
+    font-size: 16px;
+  }
+  .fortymm-landing .nav-mobile-cta {
+    margin-top: 8px;
+    justify-content: center;
+  }
   .fortymm-landing .hero-h1 { font-size: 64px; }
   .fortymm-landing .section-h2 { font-size: 42px; }
   .fortymm-landing .cta-h2 { font-size: 48px; }
@@ -1401,5 +1481,35 @@
   .fortymm-landing .feat-panel,
   .fortymm-landing .founder {
     padding: 28px;
+  }
+  /* Kill the horizontal overflow from the scheduler mockup + copy. The
+     solver's fixed-width inner grids (sv-line 18/80/1fr, sv-grid-row
+     40px+repeat(8,1fr)) can't fit ~331px of usable width, so shrink the
+     fixed columns and cap the copy block to the viewport. */
+  .fortymm-landing .tb-copy {
+    max-width: 100%;
+  }
+  /* The two CTAs sit side by side and overflow ~331px; let them wrap. */
+  .fortymm-landing .tb-ctas {
+    flex-wrap: wrap;
+  }
+  .fortymm-landing .sv-body {
+    padding: 16px 12px;
+  }
+  .fortymm-landing .sv-line {
+    grid-template-columns: 14px 56px minmax(0, 1fr);
+    gap: 8px;
+  }
+  /* The constraint text is the long token; let it wrap rather than push the
+     card wider than the viewport. */
+  .fortymm-landing .sv-txt {
+    overflow-wrap: anywhere;
+  }
+  .fortymm-landing .sv-grid-row {
+    grid-template-columns: 28px repeat(8, minmax(0, 1fr));
+    gap: 3px;
+  }
+  .fortymm-landing .sv-cell {
+    height: 16px;
   }
 }

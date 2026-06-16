@@ -56,27 +56,68 @@ function Logo({ size = 28 }: { size?: number }) {
 /*  Nav                                                               */
 /* ------------------------------------------------------------------ */
 function Nav() {
+  const [menuOpen, setMenuOpen] = useState(false)
+  const closeMenu = () => setMenuOpen(false)
+
+  const sectionLinks = (
+    <>
+      <a className="nav-link" href="#product" onClick={closeMenu}>Product</a>
+      <a className="nav-link" href="#tournaments" onClick={closeMenu}>Tournaments</a>
+      <a className="nav-link" href="#manifesto" onClick={closeMenu}>Manifesto</a>
+      <a className="nav-link" href="#faq" onClick={closeMenu}>FAQ</a>
+    </>
+  )
+
   return (
-    <nav className="nav">
+    <nav className={`nav ${menuOpen ? 'is-open' : ''}`}>
       <Logo size={26} />
-      <div className="nav-links">
-        <a className="nav-link" href="#product">Product</a>
-        <a className="nav-link" href="#tournaments">Tournaments</a>
-        <a className="nav-link" href="#manifesto">Manifesto</a>
-        <a className="nav-link" href="#faq">FAQ</a>
-      </div>
+      <div className="nav-links">{sectionLinks}</div>
       <div style={{ flex: 1 }} />
       <Link
-        className="nav-link"
+        className="nav-link nav-signin"
         to="/login"
         search={{ error: undefined, email: undefined }}
       >
         Sign in
       </Link>
-      <Link className="btn btn-primary" to="/matches/new">
+      <Link className="btn btn-primary nav-cta" to="/matches/new">
         <span className="btn-dot" />
         Start playing
       </Link>
+      <button
+        type="button"
+        className="nav-toggle"
+        aria-label={menuOpen ? 'Close menu' : 'Open menu'}
+        aria-expanded={menuOpen}
+        aria-controls="nav-mobile-menu"
+        onClick={() => setMenuOpen((open) => !open)}
+      >
+        <span className="nav-toggle-bar" />
+        <span className="nav-toggle-bar" />
+        <span className="nav-toggle-bar" />
+      </button>
+
+      {menuOpen && (
+        <div id="nav-mobile-menu" className="nav-mobile-menu">
+          {sectionLinks}
+          <Link
+            className="nav-link"
+            to="/login"
+            search={{ error: undefined, email: undefined }}
+            onClick={closeMenu}
+          >
+            Sign in
+          </Link>
+          <Link
+            className="btn btn-primary nav-mobile-cta"
+            to="/matches/new"
+            onClick={closeMenu}
+          >
+            <span className="btn-dot" />
+            Start playing
+          </Link>
+        </div>
+      )}
     </nav>
   )
 }
