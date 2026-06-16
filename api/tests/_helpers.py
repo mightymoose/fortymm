@@ -16,9 +16,7 @@ from app.main import app as fastapi_app
 from app.models import User
 from app.notifications.apns import Environment, SendOutcome, SendResult
 from app.notifications.dependencies import get_push_sender
-from app.sessions import CSRF_COOKIE_NAME, CSRF_HEADER_NAME
-
-_CSRF_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+from app.sessions import CSRF_COOKIE_NAME, CSRF_HEADER_NAME, CSRF_SAFE_METHODS
 
 
 async def _attach_csrf_header(request: Request) -> None:
@@ -31,7 +29,7 @@ async def _attach_csrf_header(request: Request) -> None:
     inject a synthetic matching cookie/header pair — they still need to clear
     the middleware. Tests exercising the *rejection* path build a client
     without this hook."""
-    if request.method.upper() in _CSRF_SAFE_METHODS:
+    if request.method.upper() in CSRF_SAFE_METHODS:
         return
     cookie_header = request.headers.get("cookie")
     prefix = f"{CSRF_COOKIE_NAME}="

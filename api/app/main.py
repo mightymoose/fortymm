@@ -18,14 +18,10 @@ from app.notifications.router import router as notifications_router
 from app.players import router as players_router
 from app.rate_limiting import init_rate_limit_redis, shutdown_rate_limit_redis
 from app.rbac import router as rbac_router
-from app.sessions import CSRF_COOKIE_NAME, CSRF_HEADER_NAME
+from app.sessions import CSRF_COOKIE_NAME, CSRF_HEADER_NAME, CSRF_SAFE_METHODS
 from app.sessions import router as sessions_router
 
 log = logging.getLogger(__name__)
-
-# Methods that can't mutate state are exempt from the CSRF check. Note OPTIONS
-# preflights carry no custom header and must pass through.
-CSRF_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
 
 @asynccontextmanager

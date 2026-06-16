@@ -496,3 +496,20 @@ async def test_safe_methods_never_require_a_csrf_token(raw_client: AsyncClient):
     """GET (and other safe methods) must pass even with no token at all."""
     response = await raw_client.get("/v1/session")
     assert response.status_code == 200
+
+
+async def test_session_reissues_csrf_cookie_when_dropped(raw_client: AsyncClient):
+    """A returning session that lost its non-HttpOnly CSRF cookie gets a fresh
+    one on bootstrap, so mutations don't permanently 403."""
+    await raw_client.get("/v1/session")  # mints session + csrf cookies
+    # Simulate the CSRF cookie being dropped while the session persists.
+    raw_client.cookies.delete(CSRF_COOKIE_NAME)
+    assert raw_client.cookies.get(CSRF_COOKIE_NAME) is None
+
+    response = await raw_client.get("/v1/session")
+    assert response.status_code == 200
+    # The session cookie is untouched (still no re-set); only CSRF is reissued.
+    set_cookies = [h.lower() for h in response.headers.get_list("set-cookie")]
+    assert any(h.startswith(f"{CSRF_COOKIE_NAME}=") for h in set_cookies)
+    assert not any(h.startswith(f"{SESSION_COOKIE_NAME}=") for h in set_cookies)
+    assert raw_client.cookies.get(CSRF_COOKIE_NAME)

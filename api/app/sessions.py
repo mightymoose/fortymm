@@ -60,6 +60,11 @@ SESSION_COOKIE_NAME = "session"
 # along the cookies but can neither read this value nor set the custom header.
 CSRF_COOKIE_NAME = "csrf_token"
 CSRF_HEADER_NAME = "x-csrf-token"
+# Methods that can't mutate state are exempt from the CSRF check; OPTIONS
+# preflights in particular carry no custom header and must pass through. The
+# middleware (app/main.py) and the test request hook both read this set so they
+# can't drift.
+CSRF_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 SESSION_TOKEN_CONTEXT = "session"
 # Stable `code` on the 401 we raise when a cookie resolves to a tombstoned
 # (merged-away) guest, so clients can tell "your session was merged, sign in"
@@ -482,6 +487,7 @@ def _clear_session_cookie(response: Response) -> None:
 async def get_session_endpoint(
     response: Response,
     session_cookie: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None,
+    csrf_cookie: Annotated[str | None, Cookie(alias=CSRF_COOKIE_NAME)] = None,
     db: AsyncSession = Depends(get_session),
 ) -> SessionResponse:
     user: User | None = None
@@ -496,6 +502,12 @@ async def get_session_endpoint(
     if user is None:
         user, raw_token = await _create_session(db)
         _set_session_cookie(response, raw_token)
+    elif csrf_cookie is None:
+        # Returning session whose (non-HttpOnly) CSRF cookie was dropped —
+        # reissue it so mutations don't permanently 403. Self-heals on the
+        # bootstrap the client makes on every load, without rotating the cookie
+        # (or re-setting the session cookie) when one is already present.
+        _set_csrf_cookie(response)
     return await _build_session_response(db, user)
 
 
