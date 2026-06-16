@@ -44,6 +44,22 @@ describe('projectAttentionPanelView', () => {
     expect(view.rows.map((r) => r.primary)).toEqual([true, true])
   })
 
+  it('keeps rated and unrated score rows in the same primary bucket', () => {
+    // Both are `Enter score` actions; the rated/unrated split only governs
+    // ordering, never button emphasis (issue #565).
+    const view = projectAttentionPanelView(
+      [
+        dashboardAttentionItem({ kind: 'score', affects_rating: true }),
+        dashboardAttentionItem({ kind: 'score', affects_rating: true }),
+        dashboardAttentionItem({ kind: 'score', affects_rating: false }),
+      ],
+      0,
+      'rita.kovac',
+    )
+
+    expect(view.rows.map((r) => r.primary)).toEqual([true, true, true])
+  })
+
   it('routes a score row to the scoring page and review/dispute to match detail', () => {
     const view = projectAttentionPanelView(
       [
