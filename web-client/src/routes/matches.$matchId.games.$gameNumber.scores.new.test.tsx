@@ -16,6 +16,57 @@ import { Route } from './matches.$matchId.games.$gameNumber.scores.new'
 // guard, so the route fetches and the API answers 404.
 const UNKNOWN_MATCH_ID = '00000000-0000-4000-8000-000000000000'
 
+// A well-formed UUID with a live match behind it — passes the guard and
+// renders the score-entry page (the positive case the e2e regression hit when
+// the param guard rejected the non-UUID mock id).
+const LIVE_MATCH_ID = '22070000-0000-4000-8000-000000000000'
+
+function liveMatchDetails() {
+  return {
+    id: LIVE_MATCH_ID,
+    status: 'in_progress',
+    status_label: 'Live',
+    best_of: 5,
+    games_to_win: 3,
+    team_size: 1,
+    affects_rating: true,
+    created_at: '2026-05-12T19:00:00Z',
+    sides: [
+      {
+        side_number: 1,
+        players: [{ user_id: 'u-me', username: 'rita.kovac', is_current_user: true }],
+        games_won: 1,
+        won: null,
+        is_current_user_side: true,
+      },
+      {
+        side_number: 2,
+        players: [{ user_id: 'u-opp', username: 'nguyen.t', is_current_user: false }],
+        games_won: 1,
+        won: null,
+        is_current_user_side: false,
+      },
+    ],
+    games: [
+      {
+        id: 'g-1',
+        game_number: 1,
+        score: { id: 's-1', side_1_points: 11, side_2_points: 8, winner_side_number: 1 },
+      },
+      {
+        id: 'g-2',
+        game_number: 2,
+        score: { id: 's-2', side_1_points: 9, side_2_points: 11, winner_side_number: 2 },
+      },
+    ],
+    current_game: { game_number: 3 },
+    can_score: true,
+    can_finalize: false,
+    can_confirm: false,
+    signatures: [],
+  }
+}
+
 const ScoreCreateRoute = Route.options.component!
 const ScoreCreateError = Route.options.errorComponent!
 
@@ -23,7 +74,7 @@ const ScoreCreateError = Route.options.errorComponent!
 // route's own param guard + error boundary (not just the inner component). The
 // detail/list stubs cover the `<Link to="/matches">`/redirect targets the
 // not-found fallback can resolve to.
-function renderScoreCreate(matchId: string) {
+function renderScoreCreate(matchId: string, gameNumber = 1) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
@@ -47,7 +98,7 @@ function renderScoreCreate(matchId: string) {
   const router = createRouter({
     routeTree: rootRoute.addChildren([route, matchesList, matchPage]),
     history: createMemoryHistory({
-      initialEntries: [`/matches/${matchId}/games/1/scores/new`],
+      initialEntries: [`/matches/${matchId}/games/${gameNumber}/scores/new`],
     }),
   })
   return render(
@@ -79,6 +130,25 @@ describe('scoring-create route — bad/nonexistent match id (#385)', () => {
     ).toHaveAttribute('href', '/matches')
     // The guard short-circuits before any fetch — no 422/404 round-trip.
     expect(requested).toBe(false)
+  })
+
+  it('renders the score-entry page for a well-formed id with a live match', async () => {
+    server.use(
+      http.get('*/v1/matches/:matchId', () =>
+        HttpResponse.json(liveMatchDetails()),
+      ),
+    )
+
+    renderScoreCreate(LIVE_MATCH_ID, 3)
+
+    // The param guard lets a UUID-shaped id through, the fetch resolves, and
+    // the entry screen renders its heading — never the not-found dead end.
+    expect(
+      await screen.findByRole('heading', { name: /enter game 3 score/i }),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByText(/couldn.t find that match/i),
+    ).not.toBeInTheDocument()
   })
 
   it('catches a 404 from a valid-but-nonexistent id instead of crashing', async () => {

@@ -10,10 +10,15 @@ type NavigateOptions = {
   opponentUsername?: string
 }
 
-// Stable identifiers from `buildInitialSeeds()` in src/mocks/match-store.ts.
-// Hard-coded here so the e2e doesn't have to reach into the mock module.
+// Stable identifiers mirroring `m-2207` from src/mocks/match-store.ts (1-1
+// mid-match). Hard-coded here so the e2e doesn't have to reach into the mock
+// module. The match id is a real UUID, not the `m-2207` placeholder, because
+// the scoring routes guard the param shape and short-circuit to the friendly
+// not-found page for anything that isn't UUID-shaped (#385) — production match
+// ids are UUIDs (`gen_random_uuid()`), so the e2e seed must be too or the page
+// never renders.
 export const SEED = {
-  matchId: 'm-2207',
+  matchId: '22070000-0000-4000-8000-000000000000',
   // After the decouple-scoring refactor games 1 + 2 are scratchpad scores;
   // game 3 is the next un-scored slot. All addressing is by game number.
   nextGameNumber: 3,
