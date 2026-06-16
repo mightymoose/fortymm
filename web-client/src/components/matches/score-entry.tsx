@@ -487,7 +487,7 @@ function ScoreEntryInner({
               // Don't let tapping Save blur the active input: on mobile that
               // dismisses the soft keyboard before the synchronous navigation
               // can hand focus to the next game's input, closing the keyboard
-              // between games (#567). Preventing the pointerdown default keeps
+              // between games (#567). Preventing the mousedown default keeps
               // focus on the input through the tap; the click still fires.
               onMouseDown={(e) => e.preventDefault()}
               onClick={onSubmit}
