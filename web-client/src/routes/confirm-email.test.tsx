@@ -73,6 +73,26 @@ describe('/confirm-email token scrubbing (#521)', () => {
     })
   })
 
+  it('treats a duplicated ?token=a&token=b as a single (invalid) token, not a missing one', async () => {
+    // A repeated query param parses into an array. We take the first value, so
+    // the page confirms with it and surfaces the generic invalid-link error
+    // rather than the misleading "This link is missing its token." copy (#439).
+    server.use(
+      http.post('*/v1/me/email/confirm', () =>
+        HttpResponse.json(
+          { detail: 'That confirmation link is invalid or expired.' },
+          { status: 400 },
+        ),
+      ),
+    )
+    renderAt('/confirm-email?token=first&token=second')
+
+    await screen.findByText(/invalid or expired/i)
+    expect(
+      screen.queryByText(/this link is missing its token/i),
+    ).not.toBeInTheDocument()
+  })
+
   it('scrubs the token from the URL after a failed confirm', async () => {
     server.use(
       http.post('*/v1/me/email/confirm', () =>
