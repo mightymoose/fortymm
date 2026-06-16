@@ -3,8 +3,8 @@ import { headingPage } from "./heading.page";
 
 describe("Heading", () => {
   it("renders the status chip from the heading view's chip", () => {
-    // Chip variants and the null case are covered by the StatusChip tests;
-    // this pins the composition only.
+    // Chip variants are covered by the StatusChip tests; this pins the
+    // composition only.
     headingPage.render({
       heading: buildScoreboardHeadingView({
         chip: { status: "final", label: "Final" },
@@ -12,14 +12,6 @@ describe("Heading", () => {
     });
 
     expect(headingPage.getChip()).toHaveTextContent("Final");
-  });
-
-  it("omits the chip when the heading view's chip is null", () => {
-    headingPage.render({
-      heading: buildScoreboardHeadingView({ chip: null }),
-    });
-
-    expect(headingPage.queryChip()).not.toBeInTheDocument();
   });
 
   it("renders the format label", () => {

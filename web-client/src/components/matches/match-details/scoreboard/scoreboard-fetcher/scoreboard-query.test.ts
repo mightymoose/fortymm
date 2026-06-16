@@ -127,10 +127,13 @@ describe("scoreboardQuery", () => {
     expect(result.current.data?.heading.raceLabel).toBe("First to 3");
   });
 
-  it("projects no chip for a live match with no current game", async () => {
+  it("falls back to the status label as the chip for a live match with no current game (#492)", async () => {
+    // A posted-but-unconfirmed board is `live` with no current game; the chip
+    // must still show the server's label rather than vanishing.
     scoreboardQueryPage.mockEndpoint(() =>
       HttpResponse.json(
         buildMatchDetails({
+          status_label: "Awaiting confirmation",
           current_game: null,
           data: { scoreboard: { status: "live" } },
         }),
@@ -140,13 +143,19 @@ describe("scoreboardQuery", () => {
     const { result } = scoreboardQueryPage.render();
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(result.current.data?.heading.chip).toBeNull();
+    expect(result.current.data?.heading.chip).toEqual({
+      status: "live",
+      label: "Awaiting confirmation",
+    });
   });
 
   it("projects a Final chip for a final match", async () => {
     scoreboardQueryPage.mockEndpoint(() =>
       HttpResponse.json(
-        buildMatchDetails({ data: { scoreboard: { status: "final" } } }),
+        buildMatchDetails({
+          status_label: "Final",
+          data: { scoreboard: { status: "final" } },
+        }),
       ),
     );
 
@@ -156,6 +165,28 @@ describe("scoreboardQuery", () => {
     expect(result.current.data?.heading.chip).toEqual({
       status: "final",
       label: "Final",
+    });
+  });
+
+  it("projects the Disputed label, not 'Final', for a disputed match (#561)", async () => {
+    // A disputed board maps to the coarse `final` scoreboard status, but its
+    // chip must read the server's "Disputed" label so it agrees with the
+    // Match-info Status field.
+    scoreboardQueryPage.mockEndpoint(() =>
+      HttpResponse.json(
+        buildMatchDetails({
+          status_label: "Disputed",
+          data: { scoreboard: { status: "final" } },
+        }),
+      ),
+    );
+
+    const { result } = scoreboardQueryPage.render();
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data?.heading.chip).toEqual({
+      status: "final",
+      label: "Disputed",
     });
   });
 
@@ -253,6 +284,39 @@ describe("scoreboardQuery", () => {
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(result.current.data?.outcome).toBe("leo.mertens leads by 2 games to 1");
+  });
+
+  it("describes a posted result awaiting confirmation as won, not leading (#491)", async () => {
+    // The board is decided (a result was posted) but `side.won` is still null
+    // until the other side confirms. The outcome must read "won … awaiting
+    // confirmation", not "leading", which implies play continues.
+    scoreboardQueryPage.mockEndpoint(() =>
+      HttpResponse.json(
+        buildMatchDetails({
+          status_label: "Awaiting confirmation",
+          current_game: null,
+          data: { scoreboard: { status: "live" } },
+          sides: [
+            buildMatchDetailsSide({
+              games_won: 3,
+              players: [buildMatchDetailsPlayer({ username: "rita.kovac" })],
+            }),
+            buildMatchDetailsSide({
+              side_number: 2,
+              games_won: 0,
+              players: [buildMatchDetailsPlayer({ username: "leo.mertens" })],
+            }),
+          ],
+        }),
+      ),
+    );
+
+    const { result } = scoreboardQueryPage.render();
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data?.outcome).toBe(
+      "rita.kovac won 3 games to 0 — awaiting confirmation",
+    );
   });
 
   it("treats a side still on zero as leading, not unstarted, when the other has won games", async () => {

@@ -3,8 +3,8 @@ import type { StatusChipProps } from "./status-chip";
 
 /** The projected chip view the status chip renders. */
 export function buildStatusChipView(
-  overrides: Partial<NonNullable<StatusChipView>> = {},
-): NonNullable<StatusChipView> {
+  overrides: Partial<StatusChipView> = {},
+): StatusChipView {
   return {
     status: "final",
     label: "Final",

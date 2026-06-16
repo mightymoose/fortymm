@@ -6,12 +6,15 @@ import { orderedSides } from "../../ordered-sides";
 import type { Scoreboard } from "@/api/matches";
 import { initialsOf } from "@/lib/utils";
 
-/** The status chip on the left of the strip; null when the match is live
- * but has no current game (nothing meaningful to announce). */
+/** The status chip on the left of the strip. Its label comes from the
+ * server's lifecycle `status_label` (Live / Awaiting confirmation / Final /
+ * Disputed / Voided / Scheduled), so it never contradicts the Match-info
+ * Status field — the one exception being a live match with a game in progress,
+ * which reads "Live · Game N". Always present. */
 export type StatusChipView = {
   status: Scoreboard["status"];
   label: string;
-} | null;
+};
 
 export type ScoreboardHeadingView = {
   chip: StatusChipView;
@@ -105,21 +108,37 @@ export type ScoreboardView = {
 
 const games = (n: number) => `${n} ${n === 1 ? "game" : "games"}`;
 
-const selectOutcome = (match: MatchDetailsResult): string | null => {
-  const sides = match.unmigrated.sides;
+/** Mirrors the server's `_status_label` for the posted-but-unconfirmed state
+ * (api/app/matches.py). The BFF owns lifecycle labels, so we key off the
+ * string rather than re-deriving the state from `signatures` on the client. */
+const AWAITING_CONFIRMATION = "Awaiting confirmation";
 
-  // Decided match: one side won, the other lost.
+const selectOutcome = (match: MatchDetailsResult): string | null => {
+  const details = match.unmigrated;
+  const sides = details.sides;
+
+  // Decided & confirmed: one side won, the other lost.
   const winner = sides.find((s) => s.won === true);
   const loser = sides.find((s) => s.won === false);
   if (winner?.players[0] && loser?.players[0]) {
     return `${winner.players[0].username} defeated ${loser.players[0].username} by ${games(winner.games_won)} to ${loser.games_won}`;
   }
 
-  // Still in progress: describe the current state from games won. Needs both
-  // sides' lead player to name them.
+  // Still in progress (or posted, awaiting confirmation): describe the current
+  // state from games won. Needs both sides' lead player to name them.
   const [side1, side2] = sides;
   if (!side1?.players[0] || !side2?.players[0]) {
     return null;
+  }
+
+  // Result posted, waiting on the other side to confirm: the board is
+  // mathematically decided, so call it "won" — not "leading", which implies
+  // play continues — and flag the pending sign-off (#491). The prospective
+  // winner is whichever side reached the games target.
+  if (details.status_label === AWAITING_CONFIRMATION) {
+    const [winner, loser] =
+      side1.games_won >= side2.games_won ? [side1, side2] : [side2, side1];
+    return `${winner.players[0].username} won ${games(winner.games_won)} to ${loser.games_won} — awaiting confirmation`;
   }
 
   if (side1.games_won === 0 && side2.games_won === 0) {
@@ -139,13 +158,14 @@ const selectChip = (
   status: Scoreboard["status"],
   details: MatchDetailsResult["unmigrated"],
 ): StatusChipView => {
-  if (status === "live") {
-    return details.current_game
-      ? { status, label: `Live · Game ${details.current_game.game_number}` }
-      : null;
-  }
-  if (status === "final") {
-    return { status, label: "Final" };
+  // A game is actively being played — name it. Otherwise defer to the server's
+  // lifecycle label, which already distinguishes the states the coarse
+  // scoreboard status flattens: "Awaiting confirmation" and "Live" both map to
+  // `live` (so a posted-but-unconfirmed or between-games board still gets a
+  // chip, #491/#492), and "Disputed"/"Voided"/"Final" all map to `final` (so a
+  // disputed board's chip reads "Disputed", not "Final", #561).
+  if (status === "live" && details.current_game) {
+    return { status, label: `Live · Game ${details.current_game.game_number}` };
   }
   return { status, label: details.status_label };
 };

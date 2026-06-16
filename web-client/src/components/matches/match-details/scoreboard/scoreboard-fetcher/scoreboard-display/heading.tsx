@@ -11,7 +11,7 @@ export const Heading = ({ heading }: HeadingProps) => {
   return (
     <div className="md-hero__strip">
       <div className="md-hero__strip-l">
-        {heading.chip && <StatusChip chip={heading.chip} />}
+        <StatusChip chip={heading.chip} />
       </div>
       <div className="md-hero__strip-r">
         <span data-testid="scoreboard-heading-format" className="md-hero__strip-meta">

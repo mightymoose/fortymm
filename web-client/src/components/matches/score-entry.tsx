@@ -283,6 +283,11 @@ function ScoreEntryInner({
     // idempotent server-side, so this is just to avoid the wasted round-trip —
     // the mutationFn also treats a 409 as a successful re-save as a backstop.
     if (saveMutation.isPending) return
+    // Same for a second submit while the finalize POST is in flight (#550). The
+    // submit button's `disabled` is only a render-time guard, so a fast
+    // double-click can land a second tap before React commits it — fire one
+    // POST /results, not two (the second 409s on the already-posted result).
+    if (finalizeMutation.isPending) return
     // Finalizing posts the canonical result — but that's the one write that
     // can't be faked offline. When offline we instead fall through to the
     // scratchpad save below, which stores the deciding game's score in the
