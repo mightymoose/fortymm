@@ -124,6 +124,17 @@ const selectOutcome = (match: MatchDetailsResult): string | null => {
     return `${winner.players[0].username} defeated ${loser.players[0].username} by ${games(winner.games_won)} to ${loser.games_won}`;
   }
 
+  // Solo (no-opponent) match that has finished: the lone played side is stamped
+  // `won === true` but the ghost opponent side has no player, so the "defeated"
+  // branch above can't pair a loser. Without this branch the null guard below
+  // swallows the result and the hero heading reads just "Match" (#495). Trigger
+  // only when exactly one side carries a player — a real opponent whose side
+  // simply isn't stamped lost yet falls through to the in-progress copy.
+  const playeredSides = sides.filter((s) => s.players[0]);
+  if (winner?.players[0] && playeredSides.length === 1) {
+    return `${winner.players[0].username} finished, winning ${games(winner.games_won)} to 0`;
+  }
+
   // Still in progress (or posted, awaiting confirmation): describe the current
   // state from games won. Needs both sides' lead player to name them.
   const [side1, side2] = sides;
