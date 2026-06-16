@@ -760,9 +760,16 @@ async def get_match(
     match_service: MatchService = Depends(get_match_service),
 ) -> MatchDetails:
     """Open to anyone, signed in or not. A signed-in caller gets
-    is_current_user / can_score flags; an anonymous caller gets the same view
-    with those flags off. Per-IP rate-limited (60/min) so an open URL can't be
-    scraped from one source.
+    is_current_user / can_score flags; an anonymous caller gets the same
+    scorecard with those flags off. Per-IP rate-limited (60/min) so an open URL
+    can't be scraped from one source.
+
+    The richer history payload — recent form, head-to-head, and per-side rating
+    changes — is *only* loaded for a caller who is a participant on this match
+    (see #515). Non-participants (anonymous holders of the share URL or
+    signed-in spectators) get the scorecard with those extras empty/null, so a
+    public link reveals the result but not the players' rivalry / rating
+    metadata.
 
     The serializer flags whether the current user is on a side; write paths
     below still gate on participation via `get_current_user`."""
@@ -772,7 +779,13 @@ async def get_match(
     domain_match = await match_service.get_match(match_id)
     if domain_match is None:
         raise HTTPException(status_code=404, detail="Match not found.")
-    extras = await _load_view_extras(db, match)
+    # Gate the history/rivalry/rating payload on participation. Anonymous and
+    # spectator callers never see another player's form or rating trajectory —
+    # they get the scorecard with empty extras (see #515).
+    is_participant = current_user is not None and _is_participant(
+        match, current_user.id
+    )
+    extras = await _load_view_extras(db, match) if is_participant else _EMPTY_EXTRAS
     return _serialize_details(
         match,
         current_user.id if current_user else None,
