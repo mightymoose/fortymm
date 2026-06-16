@@ -71,17 +71,15 @@ function routeOf(item: DashboardAttentionItem): RowRoute {
 }
 
 /**
- * Whether the panel has nothing to show — no actionable rows, no overflow, and
- * nobody waiting on others. The panel hides entirely in this case rather than
- * rendering a standalone "all caught up" card (a calm empty state still shows
- * when rows are empty but the footer has a waiting/overflow count to surface).
+ * Whether the panel has nothing actionable to show. The panel is purely a
+ * to-do list: it hides entirely whenever there are no actionable rows, even if
+ * matches are still waiting on others — there's nothing for the user to do, so
+ * the dashboard stays calm rather than showing a standing "all caught up" card.
+ * (`rows.length === 0` already implies `overflowCount === 0`, since overflow
+ * only exists once the visible rows fill.)
  */
 export function isAttentionPanelEmpty(view: AttentionPanelView): boolean {
-  return (
-    view.rows.length === 0 &&
-    view.overflowCount === 0 &&
-    view.waitingCount === 0
-  )
+  return view.rows.length === 0
 }
 
 /**

@@ -126,12 +126,14 @@ describe('projectAttentionPanelView', () => {
 })
 
 describe('isAttentionPanelEmpty', () => {
-  it('is empty when there are no rows, no overflow, and nobody waiting', () => {
+  it('is empty when there are no actionable rows', () => {
     expect(isAttentionPanelEmpty(projectAttentionPanelView([], 0))).toBe(true)
   })
 
-  it('is not empty when matches are waiting on others', () => {
-    expect(isAttentionPanelEmpty(projectAttentionPanelView([], 3))).toBe(false)
+  it('is still empty when matches are waiting on others but there is nothing to act on', () => {
+    // The panel is purely a to-do list — matches waiting on others don't keep
+    // it on screen when the user has nothing to do.
+    expect(isAttentionPanelEmpty(projectAttentionPanelView([], 3))).toBe(true)
   })
 
   it('is not empty when there are actionable rows', () => {

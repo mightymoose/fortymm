@@ -18,9 +18,8 @@ export interface AttentionPanelProps {
  * plus a footer summarizing overflow + waiting counts and a `View all` link.
  * Pure view-in — all ranking/labels/routing are decided by
  * `projectAttentionPanelView`. Buttons only route; they never finalize a
- * result. Hides entirely when there's nothing to surface; falls back to a calm
- * empty state when there are no rows but the footer still has a waiting/overflow
- * count to show.
+ * result. Hides entirely when there are no actionable rows — it's purely a
+ * to-do list, so a user with nothing to do sees no panel at all.
  */
 export const AttentionPanel = ({ view }: AttentionPanelProps) => {
   const { rows, overflowCount, waitingCount, viewAllSearch } = view
@@ -38,35 +37,29 @@ export const AttentionPanel = ({ view }: AttentionPanelProps) => {
         >
           Needs your attention
         </h2>
-        {rows.length > 0 ? (
-          <ul className="flex flex-col">
-            {rows.map((row) => (
-              <li
-                key={row.matchId}
-                className="flex items-center gap-3 border-t border-[color:var(--ink-700)] px-5 py-3"
+        <ul className="flex flex-col">
+          {rows.map((row) => (
+            <li
+              key={row.matchId}
+              className="flex items-center gap-3 border-t border-[color:var(--ink-700)] px-5 py-3"
+            >
+              <UserAvatar name={row.opponentName} size={40} />
+              <span className="min-w-0 flex-1 truncate text-[15px] font-semibold text-[color:var(--chalk-50)]">
+                {row.headline}
+              </span>
+              <Button
+                asChild
+                variant={row.primary ? 'default' : 'outline'}
+                size="sm"
               >
-                <UserAvatar name={row.opponentName} size={40} />
-                <span className="min-w-0 flex-1 truncate text-[15px] font-semibold text-[color:var(--chalk-50)]">
-                  {row.headline}
-                </span>
-                <Button
-                  asChild
-                  variant={row.primary ? 'default' : 'outline'}
-                  size="sm"
-                >
-                  <Link {...row.route}>
-                    {row.actionLabel}
-                    <ArrowRight size={14} strokeWidth={1.75} />
-                  </Link>
-                </Button>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p className="border-t border-[color:var(--ink-700)] px-5 py-6 text-[13px] text-[color:var(--chalk-300)]">
-            You&rsquo;re all caught up.
-          </p>
-        )}
+                <Link {...row.route}>
+                  {row.actionLabel}
+                  <ArrowRight size={14} strokeWidth={1.75} />
+                </Link>
+              </Button>
+            </li>
+          ))}
+        </ul>
         <AttentionFooter
           overflowCount={overflowCount}
           waitingCount={waitingCount}

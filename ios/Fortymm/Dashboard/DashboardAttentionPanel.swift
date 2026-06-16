@@ -38,13 +38,15 @@ struct AttentionPanelView {
     let waitingCount: Int
 }
 
-/// Whether the panel has nothing to show — no actionable rows, no overflow, and
-/// nobody waiting on others. The panel hides entirely in this case rather than
-/// rendering a standalone "all caught up" card (a calm empty state still shows
-/// when rows are empty but the footer has a waiting/overflow count to surface).
-/// Mirrors the web view-model's `isAttentionPanelEmpty`.
+/// Whether the panel has nothing actionable to show. The panel is purely a
+/// to-do list: it hides entirely whenever there are no actionable rows, even if
+/// matches are still waiting on others — there's nothing for the user to do, so
+/// the dashboard stays calm rather than showing a standing "all caught up" card.
+/// (`rows.isEmpty` already implies `overflowCount == 0`, since overflow only
+/// exists once the visible rows fill.) Mirrors the web view-model's
+/// `isAttentionPanelEmpty`.
 func isAttentionPanelEmpty(_ view: AttentionPanelView) -> Bool {
-    view.rows.isEmpty && view.overflowCount == 0 && view.waitingCount == 0
+    view.rows.isEmpty
 }
 
 /// The panel never grows unbounded — show the top 3 rows, roll the rest into
@@ -113,9 +115,9 @@ func projectAttentionPanel(
 /// plus a footer summarizing overflow + waiting counts and a "View all" link.
 /// Pure view-in — all ranking/labels/targets are decided by
 /// `projectAttentionPanel`. Buttons only route; they never finalize a result.
-/// Hides entirely when there's nothing to surface; falls back to a calm empty
-/// state when there are no rows but the footer still has a waiting/overflow
-/// count to show. Mirrors the web dashboard's `AttentionPanel`.
+/// Hides entirely when there are no actionable rows — it's purely a to-do list,
+/// so a user with nothing to do sees no panel at all. Mirrors the web
+/// dashboard's `AttentionPanel`.
 struct DashboardAttentionPanel: View {
     let view: AttentionPanelView
     /// Run the row's action — fetch the match and open scoring or detail.
@@ -142,17 +144,9 @@ struct DashboardAttentionPanel: View {
 
             Rectangle().fill(FMColor.ink700).frame(height: 1)
 
-            if view.rows.isEmpty {
-                Text("You're all caught up.")
-                    .font(FMFont.ui(FMFont.sm))
-                    .foregroundStyle(FMColor.fg3)
-                    .padding(FMSpace.s4)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            } else {
-                ForEach(Array(view.rows.enumerated()), id: \.element.id) { i, row in
-                    if i > 0 { Rectangle().fill(FMColor.ink700).frame(height: 1) }
-                    AttentionRow(row: row) { onAct(row) }
-                }
+            ForEach(Array(view.rows.enumerated()), id: \.element.id) { i, row in
+                if i > 0 { Rectangle().fill(FMColor.ink700).frame(height: 1) }
+                AttentionRow(row: row) { onAct(row) }
             }
 
             Rectangle().fill(FMColor.ink700).frame(height: 1)
