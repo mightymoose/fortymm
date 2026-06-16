@@ -39,30 +39,37 @@ function writeDismissed(matchId: string, value: boolean) {
 /** Match score anchor: viewer avatar, game-score blips, opponent avatar, and
  * the match date — the win/loss tones key off the viewer's side. */
 function MatchAnchor({ view }: { view: SaveYourMatchView }) {
-  const iWon = view.leftWon === true;
+  // Tri-state, not a forced binary: `leftWon` is null mid-match (incl. a Live
+  // 0–0), so we must only paint a winner once a result is actually decided.
+  // The old `!iWon` fallthrough unconditionally greened the opponent's side
+  // (and avatar) on any undecided match (#386).
+  const leftWon = view.leftWon === true;
+  const rightWon = view.leftWon === false;
   return (
     <div className="md-save__anchor" aria-label="Match summary">
       <div
         className={cn(
           "md-avatar md-save__avatar",
-          iWon ? "md-avatar--win" : "md-avatar--loss",
+          leftWon && "md-avatar--win",
+          rightWon && "md-avatar--loss",
         )}
       >
         {view.leftInitials}
       </div>
       <div className="md-save__blips">
-        <span className={cn("md-save__blip", iWon && "md-save__blip--win")}>
+        <span className={cn("md-save__blip", leftWon && "md-save__blip--win")}>
           {view.leftGamesWon}
         </span>
         <span className="md-save__blip-dash">–</span>
-        <span className={cn("md-save__blip", !iWon && "md-save__blip--win")}>
+        <span className={cn("md-save__blip", rightWon && "md-save__blip--win")}>
           {view.rightGamesWon}
         </span>
       </div>
       <div
         className={cn(
           "md-avatar md-save__avatar",
-          iWon ? "md-avatar--loss" : "md-avatar--win",
+          rightWon && "md-avatar--win",
+          leftWon && "md-avatar--loss",
         )}
       >
         {view.rightInitials}

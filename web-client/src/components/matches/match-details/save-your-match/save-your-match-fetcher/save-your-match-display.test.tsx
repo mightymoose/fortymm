@@ -42,6 +42,59 @@ describe("SaveYourMatchDisplay", () => {
     expect(saveYourMatchDisplayPage.getHint()).toHaveTextContent(/TAKES 20s/);
   });
 
+  it("highlights neither side mid-match when no winner is decided (Live 0–0)", async () => {
+    saveYourMatchDisplayPage.mockSession({
+      user: { email: null, confirmed_at: null },
+    });
+
+    saveYourMatchDisplayPage.render({
+      view: buildSaveYourMatchView({
+        leftWon: null,
+        leftGamesWon: 0,
+        rightGamesWon: 0,
+      }),
+    });
+
+    await saveYourMatchDisplayPage.findPrompt();
+
+    // Neither 0 may carry the winner tint — the old binary `!iWon` painted the
+    // opponent's score green at a 0–0 tie (#386).
+    const blips = saveYourMatchDisplayPage.getScoreBlips();
+    expect(blips.map((n) => n.textContent)).toEqual(["0", "0"]);
+    for (const blip of blips) {
+      expect(blip).not.toHaveClass("md-save__blip--win");
+    }
+    // …and neither avatar may be styled as the winner or the loser.
+    for (const avatar of saveYourMatchDisplayPage.getAvatars()) {
+      expect(avatar).not.toHaveClass("md-avatar--win");
+      expect(avatar).not.toHaveClass("md-avatar--loss");
+    }
+  });
+
+  it("highlights only the decided winner's score and avatar", async () => {
+    saveYourMatchDisplayPage.mockSession({
+      user: { email: null, confirmed_at: null },
+    });
+
+    saveYourMatchDisplayPage.render({
+      view: buildSaveYourMatchView({
+        leftWon: true,
+        leftGamesWon: 3,
+        rightGamesWon: 1,
+      }),
+    });
+
+    await saveYourMatchDisplayPage.findPrompt();
+
+    const [leftBlip, rightBlip] = saveYourMatchDisplayPage.getScoreBlips();
+    expect(leftBlip).toHaveClass("md-save__blip--win");
+    expect(rightBlip).not.toHaveClass("md-save__blip--win");
+
+    const [leftAvatar, rightAvatar] = saveYourMatchDisplayPage.getAvatars();
+    expect(leftAvatar).toHaveClass("md-avatar--win");
+    expect(rightAvatar).toHaveClass("md-avatar--loss");
+  });
+
   it("hides when the viewer already has a confirmed email", async () => {
     saveYourMatchDisplayPage.mockSession({
       user: { email: "rita@example.com", confirmed_at: "2026-05-01T00:00:00Z" },
