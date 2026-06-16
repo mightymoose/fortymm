@@ -22,8 +22,12 @@ export const Route = createFileRoute('/login/verifying')({
   }),
   validateSearch: (search: Record<string, unknown>) => {
     const e = search.error
+    // A duplicated `?token=a&token=b` is parsed into an array. Take the first
+    // value so the dedup case behaves like a single (likely-invalid) token and
+    // surfaces the generic invalid-link error, not a misleading "missing token".
+    const raw = Array.isArray(search.token) ? search.token[0] : search.token
     return {
-      token: typeof search.token === 'string' ? search.token : '',
+      token: typeof raw === 'string' ? raw : '',
       error: e === 'expired' || e === 'net' ? (e as VerifyError) : undefined,
     }
   },
