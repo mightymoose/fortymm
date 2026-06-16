@@ -49,6 +49,15 @@ struct APIClient {
     /// and capture sides can't drift.
     private static let sessionCookieName = "session"
 
+    /// Double-submit CSRF defense (see `csrf_protect` in api/app/main.py): the
+    /// API sets a non-HttpOnly `csrf_token` cookie alongside the session, and
+    /// rejects any unsafe-method request that doesn't echo that value back in
+    /// the `X-CSRF-Token` header. We capture the cookie and replay both on
+    /// mutations. Safe (non-mutating) methods are exempt server-side.
+    private static let csrfCookieName = "csrf_token"
+    private static let csrfHeaderName = "X-CSRF-Token"
+    private static let csrfSafeMethods: Set<String> = ["GET", "HEAD", "OPTIONS"]
+
     private let session: URLSession
     private let decoder: JSONDecoder
     private let encoder: JSONEncoder
@@ -162,11 +171,19 @@ struct APIClient {
                 throw APIError.decoding(error)
             }
         }
-        if let token = await tokens.token() {
-            request.setValue(
-                "\(Self.sessionCookieName)=\(token)",
-                forHTTPHeaderField: "Cookie"
-            )
+        // Send the session and its CSRF companion as cookies. The server's
+        // double-submit check compares the CSRF cookie against the header, so
+        // both must be present and equal on mutations.
+        let csrf = await tokens.csrfToken()
+        let cookieHeader = [
+            (await tokens.token()).map { "\(Self.sessionCookieName)=\($0)" },
+            csrf.map { "\(Self.csrfCookieName)=\($0)" },
+        ].compactMap { $0 }.joined(separator: "; ")
+        if !cookieHeader.isEmpty {
+            request.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
+        }
+        if let csrf, !Self.csrfSafeMethods.contains(method) {
+            request.setValue(csrf, forHTTPHeaderField: Self.csrfHeaderName)
         }
 
         let (data, response) = try await session.data(for: request)
@@ -248,9 +265,10 @@ struct APIClient {
         )
     }
 
-    /// Pull a minted/rotated `session` cookie out of the response and persist
-    /// it. The API only ever sets the single `session` cookie, so folding
-    /// multiple Set-Cookie headers isn't a concern here.
+    /// Pull a minted/rotated `session` cookie (and its companion `csrf_token`)
+    /// out of the response and persist them. The API sets both together and
+    /// folds them into the comma-joined `Set-Cookie` header; both use `Max-Age`
+    /// (no comma-bearing `Expires`), so `HTTPCookie` splits them cleanly.
     private func captureSessionCookie(from http: HTTPURLResponse, url: URL) async {
         guard let header = http.value(forHTTPHeaderField: "Set-Cookie") else {
             return
@@ -259,15 +277,22 @@ struct APIClient {
             withResponseHeaderFields: ["Set-Cookie": header],
             for: url
         )
-        guard let cookie = cookies.first(where: { $0.name == Self.sessionCookieName })
-        else { return }
-        if cookie.value.isEmpty {
-            // A clearing Set-Cookie (e.g. the session-merged 401 clears the dead
-            // cookie). Drop the stored token so the next call starts cookieless
-            // and mints a fresh guest.
-            await tokens.clear()
-        } else {
-            await tokens.update(cookie.value)
+        if let session = cookies.first(where: { $0.name == Self.sessionCookieName }) {
+            if session.value.isEmpty {
+                // A clearing Set-Cookie (e.g. the session-merged 401 clears the
+                // dead cookie). Drop the stored token (and CSRF companion) so the
+                // next call starts cookieless and mints a fresh guest.
+                await tokens.clear()
+            } else {
+                await tokens.update(session.value)
+            }
+        }
+        // Capture the CSRF token whenever the server (re)issues it — including
+        // the self-heal reissue on a returning session, which carries no
+        // `session` cookie of its own.
+        if let csrf = cookies.first(where: { $0.name == Self.csrfCookieName }),
+           !csrf.value.isEmpty {
+            await tokens.updateCSRF(csrf.value)
         }
     }
 }
