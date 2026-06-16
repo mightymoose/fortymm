@@ -129,8 +129,12 @@
 }
 .nm-section-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
   justify-content: space-between;
+  /* Keep a minimum gap so the bold .title and the uppercase muted .hint never
+     abut ("OpponentOPTIONAL…") when the row is narrow before it wraps/stacks. */
+  gap: 4px 12px;
   margin-bottom: 14px;
 }
 .nm-section-head .title {
@@ -531,6 +535,7 @@
 }
 .nm-field-label {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   margin-bottom: 12px;
@@ -540,7 +545,10 @@
   color: var(--fg-3);
 }
 .nm-field-label .na {
+  /* Push to the row's right edge, but keep a min-gap from the "Rated match"
+     label so the two don't collide on a narrow row. */
   margin-left: auto;
+  padding-left: 12px;
   font: 500 11px var(--font-mono);
   letter-spacing: 0.14em;
   color: var(--fg-muted);
@@ -797,6 +805,13 @@
   }
   .nm-page-head h1 {
     font-size: 30px;
+  }
+  /* Stack the section head so the title and its hint each get a full line
+     instead of crowding into one narrow row. */
+  .nm-section-head {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
   }
   .nm-you-strip .stats {
     display: none;
