@@ -25,6 +25,16 @@ import {
   type MatchResultsGameWrite,
 } from '@/api/matches'
 import { AppShell } from '@/components/app-shell'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { cn, initialsOf } from '@/lib/utils'
 import { decidedSide, illegalScoreReason } from '@/lib/scoring'
 import { useGameSaveState } from './score-saves'
@@ -89,6 +99,17 @@ function ScoreEntryInner({
   const [oppTyped, setOppTyped] = useState<string | null>(null)
   const meRef = useRef<HTMLInputElement>(null)
   const oppRef = useRef<HTMLInputElement>(null)
+  // Set when a per-cell clear is confirmed: the dialog otherwise restores focus
+  // to its trigger (the now-removed ✕), so we re-grab focus for the first empty
+  // input in the dialog's close-focus hook instead.
+  const refocusAfterCloseRef = useRef(false)
+  // The game whose saved score is pending a clear-confirmation, or `'active'`
+  // for the in-page Clear button (which clears the game being edited above).
+  // `null` means no confirmation is open. Clearing discards a recorded game, so
+  // it asks first rather than firing instantly (#387).
+  const [pendingClear, setPendingClear] = useState<number | 'active' | null>(
+    null,
+  )
 
   if (isLoading || !data) {
     return (
@@ -201,6 +222,11 @@ function ScoreEntryInner({
   }
 
   const bothFilled = me !== '' && opp !== ''
+  // Exactly one side filled: the Save button is disabled, so without a word
+  // it's a dead end with no explanation (#387). Tell the user both scores are
+  // required and flag the still-empty field. Only after the user has started
+  // typing — a wholly-empty pair is the untouched initial state, not an error.
+  const oneSideFilled = (me !== '') !== (opp !== '')
   const localScoreError = bothFilled
     ? illegalScoreReason(Number(me), Number(opp))
     : null
@@ -250,6 +276,13 @@ function ScoreEntryInner({
     localScoreError !== null || finalizeApiError?.status === 422
   // The message line, though, surfaces every finalize error (409/500 included).
   const showScoreError = inputsInvalid || finalizeApiError !== null
+  // The "both scores required" hint is its own, lower-severity line — shown only
+  // when exactly one field is filled and there's no harder error to surface.
+  const showBothRequired = oneSideFilled && !showScoreError
+  // Per-side red flags: a genuine validation error paints both inputs; the
+  // both-required hint only flags the empty one.
+  const meInvalid = inputsInvalid || (showBothRequired && me === '')
+  const oppInvalid = inputsInvalid || (showBothRequired && opp === '')
 
   function predictNextScoringRoute() {
     if (!data) return matchDetailRoute(matchId)
@@ -338,27 +371,43 @@ function ScoreEntryInner({
     }
   }
 
-  function onClear() {
-    if (mode.kind !== 'edit') return
-    // Clearing is an explicit discard — drop any failed-save leftovers too, so
-    // a stale failure doesn't outlive the score it referred to.
-    forgetScoreSaves(queryClient, matchId, gameNumber)
-    deleteMutation.mutate(undefined, {
-      // After clearing, land back on this game's create route so the user
-      // can re-enter — same page, just with empty inputs and create-mode
-      // semantics. The remount's autoFocus puts focus on the me-input,
-      // which is the first empty input.
-      onSettled: () => navigate(scoringNewRoute(matchId, gameNumber)),
-    })
+  // Clearing discards a recorded game's score — an irreversible write. Both
+  // clear affordances (the in-page Clear button and the per-cell ✕) route
+  // through a confirmation dialog (#387); only on confirm do we actually fire
+  // the delete. `pendingClear` carries which game is being discarded.
+  function performClear() {
+    const target = pendingClear
+    setPendingClear(null)
+    if (target === null) return
+    if (target === 'active') {
+      if (mode.kind !== 'edit') return
+      // Clearing is an explicit discard — drop any failed-save leftovers too,
+      // so a stale failure doesn't outlive the score it referred to.
+      forgetScoreSaves(queryClient, matchId, gameNumber)
+      deleteMutation.mutate(undefined, {
+        // After clearing, land back on this game's create route so the user
+        // can re-enter — same page, just with empty inputs and create-mode
+        // semantics. The remount's autoFocus puts focus on the me-input,
+        // which is the first empty input.
+        onSettled: () => navigate(scoringNewRoute(matchId, gameNumber)),
+      })
+      return
+    }
+    // Per-cell ✕ — clears the score for any logged game from the scoreline
+    // strip. We refocus the first empty input on the current page so the user
+    // can keep typing (deferred to the dialog's close-focus hook).
+    forgetScoreSaves(queryClient, matchId, target)
+    cellDeleteMutation.mutate(target)
+    refocusAfterCloseRef.current = true
   }
 
-  // Per-cell ✕ — clears the score for any logged game from the scoreline
-  // strip. Fire-and-forget like the per-game writes; we just refocus the
-  // first empty input on the current page so the user can keep typing.
+  function onClear() {
+    if (mode.kind !== 'edit') return
+    setPendingClear('active')
+  }
+
   function onClearCell(n: number) {
-    forgetScoreSaves(queryClient, matchId, n)
-    cellDeleteMutation.mutate(n)
-    focusFirstEmpty()
+    setPendingClear(n)
   }
 
   function handleKey(
@@ -438,7 +487,7 @@ function ScoreEntryInner({
             inputRef={meRef}
             autoFocus
             disabled={inputsLocked}
-            invalid={inputsInvalid}
+            invalid={meInvalid}
             onChange={onMeChange}
             onKeyDown={(e) => handleKey(e, 'me')}
           />
@@ -458,7 +507,7 @@ function ScoreEntryInner({
             value={opp}
             inputRef={oppRef}
             disabled={inputsLocked}
-            invalid={inputsInvalid}
+            invalid={oppInvalid}
             onChange={onOppChange}
             onKeyDown={(e) => handleKey(e, 'opp')}
           />
@@ -469,6 +518,11 @@ function ScoreEntryInner({
             {localScoreError ??
               finalizeApiError?.detail ??
               finalizeApiError?.message}
+          </p>
+        )}
+        {showBothRequired && (
+          <p role="alert" className="mt-1.5 text-xs text-[color:var(--loss)]">
+            Enter both scores to save this game.
           </p>
         )}
 
@@ -511,6 +565,44 @@ function ScoreEntryInner({
           clearDisabled={inputsLocked || cellDeleteMutation.isPending}
         />
       </div>
+
+      <AlertDialog
+        open={pendingClear !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingClear(null)
+        }}
+      >
+        <AlertDialogContent
+          onCloseAutoFocus={(e) => {
+            // A confirmed per-cell clear removed its own ✕ trigger; rather than
+            // letting Radix restore focus to a detached node, put focus on the
+            // first empty input so the user can keep typing.
+            if (refocusAfterCloseRef.current) {
+              refocusAfterCloseRef.current = false
+              e.preventDefault()
+              focusFirstEmpty()
+            }
+          }}
+        >
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {pendingClear === 'active' || pendingClear === null
+                ? `Clear game ${gameNumber}?`
+                : `Clear game ${pendingClear}?`}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              This deletes the saved score for this game. You can re-enter it
+              afterwards.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Keep score</AlertDialogCancel>
+            <AlertDialogAction variant="destructive" onClick={performClear}>
+              Clear game
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </AppShell>
   )
 }

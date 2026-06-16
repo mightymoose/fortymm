@@ -401,6 +401,38 @@ describe('ScoreEntry — create', () => {
     expect(posted).toBe(0)
   })
 
+  it('explains that both scores are required when only one field is filled (#387)', async () => {
+    // With exactly one score entered, Save is disabled with no reason given.
+    // Surface an inline hint and flag the still-empty field so the disabled
+    // button isn't a silent dead end.
+    const user = userEvent.setup()
+    server.use(
+      http.get('*/v1/matches/m-1', () => HttpResponse.json(inProgressMatch())),
+    )
+
+    renderScoreEntry({ kind: 'create', matchId: 'm-1', gameNumber: 3 })
+    const meInput = await screen.findByRole('textbox', {
+      name: 'rita.kovac score',
+    })
+    const oppInput = screen.getByRole('textbox', { name: 'nguyen.t score' })
+
+    // Untouched: no hint, no red.
+    expect(screen.queryByText(/enter both scores/i)).not.toBeInTheDocument()
+
+    await user.type(meInput, '11')
+    // One side filled → hint appears, Save disabled, the empty field flagged.
+    expect(screen.getByText(/enter both scores to save this game/i)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /save/i })).toBeDisabled()
+    expect(oppInput).toHaveAttribute('aria-invalid', 'true')
+    expect(meInput).not.toHaveAttribute('aria-invalid', 'true')
+
+    // Filling the second score clears the hint and enables Save.
+    await user.type(oppInput, '9')
+    expect(screen.queryByText(/enter both scores/i)).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /save/i })).toBeEnabled()
+    expect(oppInput).not.toHaveAttribute('aria-invalid', 'true')
+  })
+
   it('keeps a 3-digit entry intact instead of silently truncating to 2 digits', async () => {
     // Regression for #442: typing "100" used to be cut to "10", then the
     // win-by-2 check fired against a value the user never entered. The input
@@ -528,9 +560,14 @@ describe('ScoreEntry — create', () => {
     expect(meInput).toHaveAttribute('aria-invalid', 'true')
     expect(oppInput).toHaveAttribute('aria-invalid', 'true')
 
-    // Editing either input clears the error.
+    // Editing either input clears the server error. (Clearing one field leaves
+    // exactly one score filled, so the lower-severity "both scores required"
+    // hint takes over — the 422 message itself is gone and the fields are no
+    // longer flagged for that error.)
     await user.clear(meInput)
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(
+      screen.queryByText(/rejected by the server/i),
+    ).not.toBeInTheDocument()
   })
 })
 
@@ -590,10 +627,42 @@ describe('ScoreEntry — edit', () => {
     // "Clear game N" labels and would otherwise collide with /clear/i.
     await user.click(screen.getByRole('button', { name: /^clear$/i }))
 
+    // Clearing now asks first (#387) — nothing is deleted until confirmed.
+    await screen.findByRole('alertdialog')
+    expect(deleted).toBe(false)
+    await user.click(screen.getByRole('button', { name: /clear game/i }))
+
     await waitFor(() =>
       expect(screen.getByText('scoring-new m-1 1')).toBeInTheDocument(),
     )
     expect(deleted).toBe(true)
+  })
+
+  it('cancelling the clear confirmation keeps the saved score (#387)', async () => {
+    const user = userEvent.setup()
+    let deleted = false
+    server.use(
+      http.get('*/v1/matches/m-1', () => HttpResponse.json(inProgressMatch())),
+      http.delete('*/v1/matches/m-1/games/1/scores', () => {
+        deleted = true
+        return HttpResponse.json(inProgressMatch())
+      }),
+    )
+
+    renderScoreEntry({ kind: 'edit', matchId: 'm-1', gameNumber: 1 })
+
+    await screen.findByRole('textbox', { name: 'rita.kovac score' })
+    await user.click(screen.getByRole('button', { name: /^clear$/i }))
+
+    const dialog = await screen.findByRole('alertdialog')
+    await user.click(within(dialog).getByRole('button', { name: /keep score/i }))
+
+    await waitFor(() =>
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument(),
+    )
+    expect(deleted).toBe(false)
+    // Still on the edit screen, score intact — no navigation away.
+    expect(screen.queryByText('scoring-new m-1 1')).not.toBeInTheDocument()
   })
 
   it("✕ on another game's cell clears that game in place without leaving the page", async () => {
@@ -624,6 +693,14 @@ describe('ScoreEntry — edit', () => {
     await user.type(oppInput, '7')
 
     await user.click(screen.getByRole('button', { name: /clear game 1/i }))
+
+    // Confirm first (#387): the ✕ opens a dialog scoped to game 1.
+    const dialog = await screen.findByRole('alertdialog')
+    expect(within(dialog).getByRole('heading')).toHaveTextContent(
+      /clear game 1\?/i,
+    )
+    expect(deletedGameNumber).toBeNull()
+    await user.click(within(dialog).getByRole('button', { name: /clear game/i }))
 
     await waitFor(() => expect(deletedGameNumber).toBe(1))
     // No redirect — still on the active game's entry route.
