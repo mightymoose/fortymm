@@ -57,15 +57,14 @@ describe('AttentionPanel', () => {
     await waitFor(() => expect(page.queryPanel()).not.toBeInTheDocument())
   })
 
-  it('shows a calm empty state when rows are empty but matches are waiting', async () => {
+  it('hides even when matches are waiting but there is nothing to act on', async () => {
+    // Purely a to-do list — "N waiting on others" never keeps it on screen
+    // when the user has no actionable rows.
     page.render({
       view: buildAttentionPanelView({ rows: [], waitingCount: 2 }),
     })
 
-    await page.findPanel()
-    expect(page.queryRows()).toHaveLength(0)
-    expect(page.queryEmptyState()).toBeInTheDocument()
-    expect(page.queryFooterText(/2 waiting on others/)).toBeInTheDocument()
+    await waitFor(() => expect(page.queryPanel()).not.toBeInTheDocument())
   })
 
   it('summarizes overflow and waiting counts in the footer', async () => {

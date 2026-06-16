@@ -36,10 +36,6 @@ const scoped = (container: Container) => ({
     if (!row) throw new Error(`No attention row for "${headline}"`)
     return within(row).getByRole('link')
   },
-  /** The calm "all caught up" empty-state copy (absent when rows exist). */
-  queryEmptyState() {
-    return container.queryByText(/all caught up/i)
-  },
   /** The "View all" footer link to /matches. */
   getViewAllLink() {
     return container.getByRole('link', { name: /view all/i })
