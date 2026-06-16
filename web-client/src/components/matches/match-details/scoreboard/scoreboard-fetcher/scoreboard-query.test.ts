@@ -371,6 +371,41 @@ describe("scoreboardQuery", () => {
     expect(result.current.data?.outcome).toBe("rita.kovac leads by 3 games to 1");
   });
 
+  it("names the finishing player for a finished solo (no-opponent) match (#495)", async () => {
+    // A solo match has one played side stamped `won: true` and a playerless
+    // ghost opponent side; there is no losing player to pair, so the heading
+    // used to fall through to the null guard and read just "Match".
+    scoreboardQueryPage.mockEndpoint(() =>
+      HttpResponse.json(
+        buildMatchDetails({
+          status_label: "Final",
+          sides: [
+            buildMatchDetailsSide({
+              won: true,
+              games_won: 3,
+              players: [buildMatchDetailsPlayer({ username: "rita.kovac" })],
+            }),
+            buildMatchDetailsSide({
+              side_number: 2,
+              won: false,
+              games_won: 0,
+              players: [],
+              is_current_user_side: false,
+            }),
+          ],
+          data: { scoreboard: { status: "final" } },
+        }),
+      ),
+    );
+
+    const { result } = scoreboardQueryPage.render();
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data?.outcome).toBe(
+      "rita.kovac finished, winning 3 games to 0",
+    );
+  });
+
   it("returns a null outcome when a side is missing entirely", async () => {
     scoreboardQueryPage.mockEndpoint(() =>
       HttpResponse.json(buildMatchDetails({ sides: [buildMatchDetailsSide()] })),
