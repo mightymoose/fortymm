@@ -23,30 +23,58 @@ export function MatchDetailsError({ error, reset }: MatchDetailsErrorProps) {
   // leak the raw API detail (e.g. the pydantic "Input should be a valid UUID"
   // string, #152). Retrying won't help, so offer a way back to the list.
   const notFound = !rateLimited && status >= 400 && status < 500
-  const message = notFound
-    ? "We couldn't find that match."
+  // Mono eyebrow + Bebas headline + supporting copy, mirroring the design
+  // system's page-level error/empty states ("Error and Empty States").
+  const { code, message, detail } = notFound
+    ? {
+        code: '404 · Not found',
+        message: "We couldn't find that match.",
+        detail:
+          "That match doesn't exist, or the link is wrong. It may have been deleted, or never finished being created.",
+      }
     : rateLimited
-      ? 'Too many requests. Try again shortly.'
-      : 'Something went wrong loading this match.'
+      ? {
+          code: 'Rate limited · 429',
+          message: 'Too many requests. Try again shortly.',
+          detail:
+            "You're refreshing faster than we can keep up. Give it a moment, then try the same link again.",
+        }
+      : {
+          code: 'Error',
+          message: 'Something went wrong loading this match.',
+          detail:
+            "Our server didn't answer in time — could be us, could be the network. Try again in a moment.",
+        }
   const body = (
-    <div role="alert" className="md-error-state">
-      <div className="md-error-state__title">{message}</div>
-      {notFound ? (
-        <Link to="/matches" className="md-btn md-btn--secondary">
-          Back to matches
-        </Link>
-      ) : (
-        <button
-          type="button"
-          className="md-btn md-btn--secondary"
-          onClick={() => {
-            reset()
-            router.invalidate()
-          }}
-        >
-          Try again
-        </button>
-      )}
+    <div
+      role="alert"
+      className="md-error-state"
+      data-tone={notFound ? 'neutral' : 'alert'}
+    >
+      <div className="md-error-state__code">
+        <span className="md-error-state__dot" aria-hidden="true" />
+        {code}
+      </div>
+      <h1 className="md-error-state__title">{message}</h1>
+      <p className="md-error-state__sub">{detail}</p>
+      <div className="md-error-state__actions">
+        {notFound ? (
+          <Link to="/matches" className="md-btn md-btn--primary">
+            Back to matches
+          </Link>
+        ) : (
+          <button
+            type="button"
+            className="md-btn md-btn--primary"
+            onClick={() => {
+              reset()
+              router.invalidate()
+            }}
+          >
+            Try again
+          </button>
+        )}
+      </div>
     </div>
   )
   return <AppShell>{body}</AppShell>

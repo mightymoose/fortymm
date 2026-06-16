@@ -2395,6 +2395,59 @@ body.dark.fortymm-theme {
   padding: 0;
 }
 
+/* ---------- Page-level error / empty state ---------- */
+.fortymm-theme .md-error-state {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  min-height: 60vh;
+  max-width: 760px;
+  padding: 48px clamp(24px, 6vw, 80px);
+}
+.fortymm-theme .md-error-state__code {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font: 600 11px var(--font-mono);
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--ball-500);
+  margin-bottom: 20px;
+}
+.fortymm-theme .md-error-state__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.fortymm-theme .md-error-state__title {
+  font-family: var(--font-display);
+  font-size: clamp(52px, 9vw, 104px);
+  line-height: 0.9;
+  letter-spacing: 0.01em;
+  text-transform: uppercase;
+  text-wrap: balance;
+  color: var(--fg-1);
+  margin: 0 0 20px;
+}
+.fortymm-theme .md-error-state[data-tone='alert'] .md-error-state__title {
+  color: var(--ball-500);
+}
+.fortymm-theme .md-error-state__sub {
+  font: 400 18px var(--font-ui);
+  line-height: 1.45;
+  color: var(--fg-2);
+  max-width: 520px;
+  margin: 0 0 32px;
+}
+.fortymm-theme .md-error-state__actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
 /* ---------- Page header row ---------- */
 .fortymm-theme .md-header {
   display: flex;
