@@ -3001,15 +3001,25 @@ body.dark.fortymm-theme {
   margin-top: 32px;
   padding-top: 24px;
   border-top: 1px solid var(--border-subtle);
+  /* Scroll boundary for the grid: lives inside the .md-hero section (which is
+     overflow: hidden for its decorative grid-bg), so when the per-game columns
+     can't shrink to fit on narrow viewports (BO5/BO7) the trailing SETS column
+     stays reachable by horizontal scroll instead of being clipped off-screen.
+     See #509. */
+  overflow-x: auto;
+  scrollbar-width: thin;
 }
 .fortymm-theme .md-games__grid {
   display: grid;
   grid-template-columns:
     var(--md-games-kicker, 130px)
-    repeat(var(--md-games-count, 5), 1fr)
+    repeat(var(--md-games-count, 5), minmax(40px, 1fr))
     var(--md-games-total, 90px);
   gap: 8px;
   align-items: center;
+  /* Keep columns at their intrinsic width and let .md-games scroll, rather than
+     letting the grid overflow (and get clipped by) its ancestor. */
+  min-width: max-content;
 }
 .fortymm-theme .md-games__kicker {
   font: 600 11px var(--font-mono);
