@@ -149,6 +149,9 @@ export const MatchList = () => {
   )
 
   const total = data?.total ?? 0
+  // True-live only: the server splits posted-but-unconfirmed results out of the
+  // `in_progress` count into `awaiting_confirmation_count`, so this no longer
+  // folds awaiting-confirmation matches into the Live headline (issue #381).
   const liveCount = data?.status_counts?.in_progress ?? 0
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
 
@@ -181,13 +184,15 @@ export const MatchList = () => {
   }, [data?.items])
   const tabs = useMemo(
     () =>
-      buildFilterTabs(
-        STATUS_TABS,
-        data?.status_counts,
-        TAB_TO_API,
-        data?.attention_count,
-      ),
-    [data?.status_counts, data?.attention_count],
+      buildFilterTabs(STATUS_TABS, data?.status_counts, TAB_TO_API, {
+        attentionCount: data?.attention_count,
+        awaitingCount: data?.awaiting_confirmation_count,
+      }),
+    [
+      data?.status_counts,
+      data?.attention_count,
+      data?.awaiting_confirmation_count,
+    ],
   )
 
   return (

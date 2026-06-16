@@ -1,7 +1,7 @@
-import type { MatchListRow, MatchStatus } from '@/api/matches'
+import type { MatchListFilter, MatchListRow } from '@/api/matches'
 import type { components } from '@/api/schema'
 import { matchDetailRoute, scoringNewRoute } from '@/api/matches'
-import { API_TO_TAB, STATUS_TONE } from './match-list-status'
+import { API_TO_TONE, STATUS_TONE, type StatusKey } from './match-list-status'
 import type {
   MatchListRowView,
   RowActionView,
@@ -9,6 +9,13 @@ import type {
 import type { FilterTabView } from './filter-row'
 
 type MatchListRowSide = components['schemas']['MatchDetailsSide']
+
+// The server-derived label for a posted-but-unconfirmed result (an in_progress
+// match with ≥1 signature; see `_status_label` in the API). When the row has no
+// current-user-aware attention bucket, the list re-tones these rows to the
+// dedicated "awaiting" treatment — they share the `in_progress` DB status with
+// true-live rows but aren't live anymore (issue #381).
+export const AWAITING_CONFIRMATION_LABEL = 'Awaiting confirmation'
 
 // The current-user-aware attention bucket the server stamps on a row (or null).
 export type AttentionKind = NonNullable<MatchListRow['attention']>
@@ -144,12 +151,21 @@ export function projectMatchListRow(
   row: MatchListRow,
   primaryKind: ActionableKind | null = null,
 ): MatchListRowView {
-  const tab = API_TO_TAB[row.status]
+  const attention = row.attention
+  // An in_progress row with a posted result reads as "Awaiting confirmation",
+  // not Live — re-tone it and drop the live-dot so it stops masquerading as a
+  // live match (issue #381). The DB status is still in_progress, so the
+  // games-score still shows. A current-user-aware attention bucket takes
+  // precedence over this perspective-neutral re-toning (see the status chip
+  // below).
+  const isAwaiting =
+    row.status === 'in_progress' &&
+    row.status_label === AWAITING_CONFIRMATION_LABEL
+  const tone: StatusKey = isAwaiting ? 'awaiting' : API_TO_TONE[row.status]
   const side1 = row.sides.find((s) => s.side_number === 1) ?? row.sides[0]
   const side2 = row.sides.find((s) => s.side_number === 2) ?? null
   const showScore = row.status === 'in_progress' || row.status === 'completed'
-  const isLive = row.status === 'in_progress'
-  const attention = row.attention
+  const isLive = row.status === 'in_progress' && !isAwaiting
 
   return {
     id: row.id,
@@ -168,11 +184,12 @@ export function projectMatchListRow(
     status: {
       // A current-user-aware bucket overrides the perspective-neutral
       // status_label so a row says who must act; otherwise fall back to the
-      // server label + tab tone.
+      // server label + (awaiting-aware) status tone.
       label: attention ? ATTENTION_LABEL[attention] : row.status_label,
-      toneClass: attention ? ATTENTION_TONE[attention] : STATUS_TONE[tab],
+      toneClass: attention ? ATTENTION_TONE[attention] : STATUS_TONE[tone],
       // Only the plain "Live" chip pulses; an attention-labeled in-progress row
-      // (e.g. "Needs your review") shouldn't carry a live dot next to its copy.
+      // (e.g. "Needs your review") or an awaiting-confirmation row shouldn't
+      // carry a live dot next to its copy.
       isLive: attention === null && isLive,
     },
     time: { when: formatCreatedAt(row.created_at) },
@@ -180,9 +197,14 @@ export function projectMatchListRow(
   }
 }
 
-/** Build the FilterRow tab descriptors from the static tab list + counts. The
- * Attention tab reads its badge from `attentionCount`; `all` sums the status
- * counts; every other tab reads its own status bucket. */
+/** Build the FilterRow tab descriptors from the static tab list + counts.
+ *
+ * The Attention tab reads its badge from `attentionCount` (its own server
+ * dimension). The status-backed tabs bucket exactly the way the server splits
+ * the list: `live` reads the (already awaiting-subtracted) `in_progress` count,
+ * the `awaiting` tab reads the dedicated `awaitingCount`, and `all` sums every
+ * status bucket plus the awaiting bucket — so a posted-but-unconfirmed result is
+ * counted once, under Awaiting, never under Live (issue #381). */
 export function buildFilterTabs(
   tabs: {
     value: FilterTabView['value']
@@ -191,27 +213,39 @@ export function buildFilterTabs(
     attention?: boolean
   }[],
   statusCounts: Record<string, number> | undefined,
-  tabToApi: Record<string, MatchStatus>,
-  attentionCount: number | undefined,
+  tabToApi: Record<string, MatchListFilter>,
+  counts: { attentionCount?: number; awaitingCount?: number } = {},
 ): FilterTabView[] {
   return tabs.map((tab) => ({
     value: tab.value,
     label: tab.label,
     isLive: tab.live ?? false,
-    count: tabCount(tab, statusCounts, tabToApi, attentionCount),
+    count: tabCount(tab, statusCounts, tabToApi, counts),
   }))
 }
 
 function tabCount(
   tab: { value: FilterTabView['value']; attention?: boolean },
   statusCounts: Record<string, number> | undefined,
-  tabToApi: Record<string, MatchStatus>,
-  attentionCount: number | undefined,
+  tabToApi: Record<string, MatchListFilter>,
+  { attentionCount, awaitingCount }: { attentionCount?: number; awaitingCount?: number },
 ): number | null {
+  // The Attention tab is its own server dimension — its badge reads from
+  // `attentionCount`, independent of `status_counts`.
   if (tab.attention) return attentionCount ?? null
   if (!statusCounts) return null
+  // `all` sums every status bucket plus the awaiting bucket (the awaiting count
+  // is peeled out of the in_progress status count server-side, issue #381).
   if (tab.value === 'all') {
-    return Object.values(statusCounts).reduce((a, b) => a + b, 0)
+    return (
+      Object.values(statusCounts).reduce((a, b) => a + b, 0) +
+      (awaitingCount ?? 0)
+    )
+  }
+  // `awaiting` reads its dedicated bucket; `live` reads the
+  // (already awaiting-subtracted) in_progress count — disjoint (issue #381).
+  if (tabToApi[tab.value] === 'awaiting_confirmation') {
+    return awaitingCount ?? 0
   }
   return statusCounts[tabToApi[tab.value]] ?? 0
 }

@@ -67,6 +67,7 @@ from app.schemas.match import (
     MatchDetailsSide,
     MatchGameScoreWrite,
     MatchLeague,
+    MatchListFilter,
     MatchListResponse,
     MatchListRow,
     MatchResultsGameWrite,
@@ -385,6 +386,15 @@ def participant_filter[SelectT: Select[Any]](
     return query.where(me_in_match)
 
 
+def _has_signature_exists() -> Any:
+    """``EXISTS`` correlated subquery: this match has at least one signature.
+    The "posted result" marker — an ``in_progress`` match with this true is the
+    derived "Awaiting confirmation" bucket (see ``_status_label``). Pulled into
+    a helper so the list filter and the status-count aggregate split the Live
+    vs awaiting buckets identically (issue #381)."""
+    return select(MatchSignature.id).where(MatchSignature.match_id == Match.id).exists()
+
+
 def _player_username_filter[SelectT: Select[Any]](query: SelectT, q: str) -> SelectT:
     """Restrict to matches that have *any* player whose username matches ``q``.
 
@@ -471,14 +481,33 @@ async def create_match(
     return _serialize_details(created, current_user.id)
 
 
+def _apply_list_filter[SelectT: Select[Any]](
+    query: SelectT, filter_: MatchListFilter
+) -> SelectT:
+    """Narrow ``query`` to one filter bucket. ``live`` and
+    ``awaiting_confirmation`` both sit on the ``in_progress`` status but split
+    on whether a result has been posted (any signature), so neither bucket
+    leaks into the other (issue #381). Every other bucket is a plain status
+    match."""
+    if filter_ is MatchListFilter.live:
+        return query.where(
+            Match.status == MatchStatus.in_progress, ~_has_signature_exists()
+        )
+    if filter_ is MatchListFilter.awaiting_confirmation:
+        return query.where(
+            Match.status == MatchStatus.in_progress, _has_signature_exists()
+        )
+    return query.where(Match.status == MatchStatus(filter_.value))
+
+
 def _filtered_matches_query(
-    q: str | None, status_: MatchStatus | None
+    q: str | None, filter_: MatchListFilter | None
 ) -> Select[tuple[Match]]:
-    """Shared base query for the matches list + CSV export (status + search)."""
+    """Shared base query for the matches list + CSV export (filter + search)."""
     base = select(Match)
     if q:
         base = _player_username_filter(base, q)
-    return base if status_ is None else base.where(Match.status == status_)
+    return base if filter_ is None else _apply_list_filter(base, filter_)
 
 
 # Open statuses the Attention filter ranges over — the only ones where the
@@ -523,7 +552,7 @@ def _attention_sort_key(
 
 @router.get("/matches.csv", response_class=Response)
 async def export_matches_csv(
-    status_: MatchStatus | None = Query(default=None, alias="status"),
+    status_: MatchListFilter | None = Query(default=None, alias="status"),
     q: str | None = Query(default=None),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_session),
@@ -552,7 +581,7 @@ async def export_matches_csv(
 
 @router.get("/matches", response_model=MatchListResponse)
 async def list_matches(
-    status_: MatchStatus | None = Query(default=None, alias="status"),
+    status_: MatchListFilter | None = Query(default=None, alias="status"),
     attention: bool = Query(
         default=False,
         description=(
@@ -568,16 +597,27 @@ async def list_matches(
     db: AsyncSession = Depends(get_session),
 ) -> MatchListResponse:
     # status_counts honors `q` but ignores the status/attention filter, so it's
-    # built from its own aggregate and powers the All/Live/Up-next/Final badges
-    # (and the browsing `total`) for either filter mode.
+    # built from its own aggregate and powers the All/Live/Awaiting/Up-next/Final
+    # badges (and the browsing `total`) for either filter mode. The
+    # awaiting-confirmation bucket is an `in_progress` row with a signature, so
+    # it's counted separately and peeled out of the `in_progress` total — the
+    # `in_progress` count then reads as true-live (no posted result), keeping the
+    # two buckets disjoint (issue #381).
     counts_query = select(Match.status, func.count(Match.id))
+    awaiting_query = select(func.count(Match.id)).where(
+        Match.status == MatchStatus.in_progress, _has_signature_exists()
+    )
     if q:
         counts_query = _player_username_filter(counts_query, q)
+        awaiting_query = _player_username_filter(awaiting_query, q)
     status_counts: dict[MatchStatus, int] = {s: 0 for s in MatchStatus}
     for status_value, count in (
         await db.execute(counts_query.group_by(Match.status))
     ).all():
         status_counts[status_value] = count
+    awaiting_count = (await db.execute(awaiting_query)).scalar_one()
+    # Split the raw in_progress total into true-live + awaiting-confirmation.
+    status_counts[MatchStatus.in_progress] -= awaiting_count
 
     # The list is open to every signed-in user. Writes still gate on
     # `_is_participant` downstream.
@@ -622,11 +662,12 @@ async def list_matches(
             .all()
         )
         items = [_list_row(match, current_user.id) for match in matches]
-        total = (
-            status_counts[status_]
-            if status_ is not None
-            else sum(status_counts.values())
-        )
+        if status_ is None:
+            total = sum(status_counts.values()) + awaiting_count
+        elif status_ is MatchListFilter.awaiting_confirmation:
+            total = awaiting_count
+        else:
+            total = status_counts[MatchStatus(status_.value)]
         # The Attention badge must read its own count even while another tab is
         # active, so it's a dedicated participant-scoped aggregate (honoring `q`).
         attention_count = await _attention_count(db, q, current_user.id)
@@ -636,6 +677,7 @@ async def list_matches(
         page=page,
         page_size=page_size,
         total=total,
+        awaiting_confirmation_count=awaiting_count,
         status_counts=status_counts,
         attention_count=attention_count,
     )
