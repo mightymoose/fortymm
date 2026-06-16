@@ -757,6 +757,13 @@ function EmailSection({
     } catch (err) {
       resetCaptcha()
       if (err instanceof ApiError && err.status && err.status < 500) {
+        // A 422 carries a raw pydantic message ("...The email address is too
+        // long (N characters too many)"); show friendly copy instead of
+        // echoing it. Other 4xx detail is already operator-safe.
+        if (err.status === 422) {
+          setServerErr("That doesn't look like a valid email.")
+          return
+        }
         setServerErr(err.detail ?? 'Server rejected this email.')
         return
       }
