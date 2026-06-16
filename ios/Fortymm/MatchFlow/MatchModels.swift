@@ -220,11 +220,30 @@ enum MatchRules {
     /// 1→1, 3→2, 5→3, 7→4
     static func gamesToWin(bestOf: Int) -> Int { Int(ceil(Double(bestOf) / 2)) }
 
-    /// To 11, win by 2 (deuce continues past 10–10).
+    /// The reason a completed game's score is illegal under table-tennis rules,
+    /// or nil when it's a legal final score. Mirrors `validate_game_score` in
+    /// api/app/schemas/match.py (and `illegalScoreReason` in
+    /// web-client/src/lib/scoring.ts) — keep in lockstep so the client never
+    /// lights up Post for a score the server will reject with a 422.
+    static func illegalScoreReason(_ a: Int, _ b: Int) -> String? {
+        let winner = max(a, b), loser = min(a, b)
+        if winner < 11 { return "The winning side must reach at least 11 points." }
+        if a == b { return "A game cannot end in a tie." }
+        if winner == 11 && loser > 9 {
+            return "At 10–10 the game enters deuce — the winner must lead by 2."
+        }
+        if winner > 11 {
+            if loser < 10 { return "A game can only go past 11 once both sides reach 10." }
+            if winner - loser != 2 { return "In a deuce game the winner leads by exactly 2 points." }
+        }
+        return nil
+    }
+
+    /// To 11, win by 2 (deuce continues past 10–10). A game is complete only
+    /// when both scores are entered and form a legal final score.
     static func gameComplete(_ g: Game) -> Bool {
         guard let a = g.a, let b = g.b else { return false }
-        let hi = max(a, b), lo = min(a, b)
-        return a != b && hi >= 11 && (hi - lo) >= 2
+        return illegalScoreReason(a, b) == nil
     }
 
     /// The winning side, only if the game is complete.
@@ -249,6 +268,29 @@ enum MatchRules {
         let sw = setsWon(games)
         let need = gamesToWin(bestOf: bestOf)
         return sw.a >= need || sw.b >= need
+    }
+
+    /// The canonical postable games: the gap-free run of completed games from
+    /// game 1 up to *and including* the game that decides the match, dropping
+    /// anything entered past the decider. Returns nil when the games entered so
+    /// far don't yet form a complete, validly-ordered, decided match — in which
+    /// case Post must not be offered. Mirrors `decidedSide` in
+    /// web-client/src/lib/scoring.ts and the finalize validator in
+    /// api/app/matches.py (no illegal scores, contiguous from game 1, no scored
+    /// games past the decider).
+    static func gamesThroughDecider(_ games: [Game], bestOf: Int) -> [Game]? {
+        let need = gamesToWin(bestOf: bestOf)
+        var a = 0, b = 0
+        for (i, g) in games.enumerated() {
+            // A gap (incomplete game) before the match is decided ⇒ not postable.
+            guard let winner = gameWinner(g) else { return nil }
+            switch winner {
+            case .you: a += 1
+            case .opponent: b += 1
+            }
+            if a >= need || b >= need { return Array(games.prefix(i + 1)) }
+        }
+        return nil
     }
 
     /// Elo delta, K = 26. Caller passes `won`; returns the signed change.
