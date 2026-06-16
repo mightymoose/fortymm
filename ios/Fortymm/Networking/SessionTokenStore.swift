@@ -12,6 +12,13 @@ actor SessionTokenStore {
     private var cached: String?
     private var didLoad = false
 
+    /// The double-submit CSRF token, captured from the server's non-HttpOnly
+    /// `csrf_token` cookie. In-memory only: it isn't a secret, and the API
+    /// reissues it on the `/v1/session` bootstrap the app makes on every launch
+    /// (see `get_session_endpoint`'s self-heal), so it needn't survive a cold
+    /// start in the Keychain the way the session token does.
+    private var csrf: String?
+
     init(keychain: KeychainStore = KeychainStore(account: "session-token")) {
         self.keychain = keychain
     }
@@ -25,6 +32,14 @@ actor SessionTokenStore {
         return cached
     }
 
+    /// The current CSRF token to echo back on mutating requests, or nil before
+    /// the session bootstrap has captured one.
+    func csrfToken() -> String? { csrf }
+
+    /// Capture the CSRF token from a `Set-Cookie`. No Keychain write — it lives
+    /// only for the process lifetime.
+    func updateCSRF(_ value: String) { csrf = value }
+
     /// Persist a freshly minted or rotated token. No-op if unchanged, so a
     /// resumed session doesn't rewrite the Keychain on every call.
     func update(_ token: String) {
@@ -34,9 +49,12 @@ actor SessionTokenStore {
         keychain.save(token)
     }
 
-    /// Forget the session (sign-out). Clears both the cache and the vault.
+    /// Forget the session (sign-out). Clears both the cache and the vault, plus
+    /// the companion CSRF token (the server clears its cookie alongside the
+    /// session, and a stale CSRF token is useless without the session anyway).
     func clear() {
         cached = nil
+        csrf = nil
         didLoad = true
         keychain.delete()
     }
