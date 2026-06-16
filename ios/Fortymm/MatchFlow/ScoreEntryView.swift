@@ -24,26 +24,19 @@ struct ScoreEntryView: View {
 
     private var you: MatchPlayer { MatchSeed.me }
     private var opp: MatchPlayer { config.opponent ?? .guest }
-    private var need: Int { MatchRules.gamesToWin(bestOf: config.bestOf) }
 
     private var current: Game { games.indices.contains(active) ? games[active] : Game() }
     private var currentValid: Bool { MatchRules.gameComplete(current) }
 
-    /// Tally over all games except the one being entered (so editing recomputes).
-    private var setsBefore: SetScore {
-        MatchRules.setsWon(games.enumerated().filter { $0.offset != active }.map(\.element))
-    }
-    /// Tally shown in the VS column — includes the current game if it's complete.
-    private var setsDisplay: SetScore {
-        var games = self.games.enumerated().filter { $0.offset != active }.map(\.element)
-        if currentValid { games.append(current) }
-        return MatchRules.setsWon(games)
-    }
-    /// True when the in-progress game's valid result reaches `need` for a side.
+    /// Tally shown in the VS column. `setsWon` already ignores incomplete games,
+    /// so counting over all slots (including the one being entered) is correct.
+    private var setsDisplay: SetScore { MatchRules.setsWon(games) }
+    /// True when the games entered so far form a complete, decided match — i.e.
+    /// there's a valid result to Post. Uses the same canonical rule as `post()`
+    /// so the Post button never appears for games the server would reject, and
+    /// never goes dead when it does appear.
     private var deciding: Bool {
-        guard currentValid, let w = MatchRules.gameWinner(current) else { return false }
-        let prospective = (w == .you ? setsBefore.a : setsBefore.b) + 1
-        return prospective >= need
+        MatchRules.gamesThroughDecider(games, bestOf: config.bestOf) != nil
     }
 
     var body: some View {
@@ -307,11 +300,12 @@ struct ScoreEntryView: View {
     }
 
     private func post() {
-        guard currentValid else { return }
-        // The completed games in play order (game 1…N). The coordinator posts
-        // these to `POST /v1/matches/{id}/results`; the server computes sets
-        // won, the winner, and any rating change — so we don't here.
-        let finalGames = games.filter(MatchRules.gameComplete)
+        // The completed games in play order, game 1 up to and including the
+        // decider — anything entered past the decider is dropped, matching the
+        // server's finalize rules. The coordinator posts these to
+        // `POST /v1/matches/{id}/results`; the server computes sets won, the
+        // winner, and any rating change — so we don't here.
+        guard let finalGames = MatchRules.gamesThroughDecider(games, bestOf: config.bestOf) else { return }
         focus = nil
         onPost(finalGames)
     }
