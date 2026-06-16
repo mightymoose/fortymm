@@ -1,4 +1,4 @@
-import { useCallback } from 'react'
+import { useCallback, useEffect } from 'react'
 import { createFileRoute, useNavigate, useRouter } from '@tanstack/react-router'
 import { zodValidator } from '@tanstack/zod-adapter'
 import {
@@ -95,9 +95,10 @@ function PlayersPage() {
   )
   const data = list.data
   const isLoading = list.isPending
+  const isFetching = list.isFetching
   const items = data?.items ?? []
   const total = data?.total ?? 0
-  const startIndex = (page - 1) * PAGE_SIZE
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
 
   // Rewrite the URL — `replace: true` keeps each keystroke from filling
   // browser history. Defaults are stripped so the URL stays clean.
@@ -128,6 +129,25 @@ function PlayersPage() {
     [setSearch],
   )
 
+  // Snap an out-of-range `?page=` back to the last valid page once the real
+  // total is known — a stale bookmark or paging past the end would otherwise
+  // render an empty roster under a nonsensical "Showing 51–40 of 40" footer
+  // (#373). Only act on a settled, current total: `isLoading` covers the
+  // pending/session-gated window (total still 0), and `isFetching` covers a
+  // `keepPreviousData` refetch still serving the prior filter's total. Mirrors
+  // the matches list clamp.
+  useEffect(() => {
+    if (!isLoading && !isFetching && page > totalPages) {
+      setPage(totalPages)
+    }
+  }, [isLoading, isFetching, page, totalPages, setPage])
+
+  // The redirect runs in an effect, so an out-of-range page paints for one
+  // frame first. Clamp the page the footer + seed numbering render with so the
+  // range math never shows start > end during that frame.
+  const displayPage = Math.min(page, totalPages)
+  const startIndex = (displayPage - 1) * PAGE_SIZE
+
   return (
     <AppShell>
       <div className="match-list-page">
@@ -142,7 +162,7 @@ function PlayersPage() {
           />
         </div>
         <PaginationFooter
-          page={page}
+          page={displayPage}
           setPage={setPage}
           total={total}
           pageSize={PAGE_SIZE}

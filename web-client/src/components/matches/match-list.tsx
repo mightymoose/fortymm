@@ -159,6 +159,13 @@ export const MatchList = () => {
   // shows start > end during that frame.
   const displayPage = Math.min(page, totalPages)
 
+  // A search, a non-"all" status tab, or paging past the end all narrow the
+  // list — drive the empty-state copy so a filtered/no-result view reads "No
+  // matches match your filters" instead of the cold-start "No matches yet"
+  // (#373).
+  const isFiltered =
+    q.trim().length > 0 || status !== 'all' || page > totalPages
+
   // Project the raw payload rows into the presentational view models the table
   // consumes — perspective, status tone, side labels, short id, and the
   // relative "started" label all resolve here, never inside the children.
@@ -186,6 +193,7 @@ export const MatchList = () => {
           <MatchListTable
             rows={rowViews}
             isLoading={isLoading}
+            isFiltered={isFiltered}
             onClear={onClear}
             navigate={navigate}
           />
