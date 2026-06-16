@@ -50,6 +50,41 @@ describe("GameGrid", () => {
     );
   });
 
+  it("renders all 7 game labels plus SETS for a BO7, inside the scroll container", async () => {
+    // Regression for #509: on a BO7 the columns can't shrink to fit a narrow
+    // viewport, so the trailing SETS column was clipped off-screen by the
+    // hero's `overflow: hidden`. The fix puts the grid track inside a
+    // horizontally scrollable `.md-games` boundary (the testid host) so every
+    // column — including SETS — stays in the DOM and reachable by scroll.
+    gameGridPage.render({
+      gameGrid: buildGameGridView({
+        bestOf: 7,
+        rows: [
+          buildGameGridRowView({
+            cells: Array.from({ length: 7 }, () => buildUnplayedCellView()),
+          }),
+          buildGameGridRowView({
+            name: "leo.mertens",
+            initials: "LM",
+            cells: Array.from({ length: 7 }, () => buildUnplayedCellView()),
+          }),
+        ],
+      }),
+    });
+
+    const grid = await gameGridPage.findGrid();
+    for (let g = 1; g <= 7; g += 1) {
+      expect(grid).toHaveTextContent(`G${g}`);
+    }
+    expect(grid).toHaveTextContent("SETS");
+
+    // The column track must live inside the `.md-games` scroll boundary so the
+    // overflow is scrollable rather than clipped by the hero section.
+    const track = gameGridPage.getGridTrack();
+    expect(track).not.toBeNull();
+    expect(grid).toContainElement(track);
+  });
+
   it("renders each row's cells and SETS total against the shared match id", async () => {
     gameGridPage.render({
       gameGrid: buildGameGridView({

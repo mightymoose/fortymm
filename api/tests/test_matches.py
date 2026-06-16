@@ -353,6 +353,55 @@ async def test_get_match_is_open_to_anonymous_callers(
     assert user_ids == {str(creator.id), str(opponent.id)}
 
 
+async def test_history_extras_are_gated_to_participants(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """Regression for #515: recent form / head-to-head / rating history is
+    rivalry metadata, not part of the public scorecard. A participant viewing
+    the match sees it; an anonymous holder of the share URL and a signed-in
+    spectator both get the scorecard with those extras empty/null."""
+    me = await start_session(api_client, db_session)
+    async with opponent_session(db_session, "gated-rival") as (rival_client, rival):
+        # A prior completed meeting gives both players recent form and seeds a
+        # head-to-head between them.
+        await _play_match_to_completion(
+            api_client, rival_client, rival.id, best_of=3, side_1_wins=True
+        )
+        # The current match between the same two players is what we view.
+        current = await _create_match(api_client, rival.id, best_of=3)
+
+        # A participant (me) sees the rich history payload.
+        mine = (await api_client.get(f"/v1/matches/{current['id']}")).json()
+        assert mine["recent_form"], "participant should see recent form"
+        assert mine["head_to_head"] is not None
+        assert mine["head_to_head"]["total_meetings"] == 1
+
+        # The other participant (the rival) sees it too.
+        theirs = (await rival_client.get(f"/v1/matches/{current['id']}")).json()
+        assert theirs["recent_form"]
+        assert theirs["head_to_head"] is not None
+
+        # A signed-in spectator who is not on either side gets the scorecard
+        # only — no form, no head-to-head.
+        async with make_client() as spectator_client:
+            await start_session(spectator_client, db_session)
+            spec = (await spectator_client.get(f"/v1/matches/{current['id']}")).json()
+        assert spec["recent_form"] == []
+        assert spec["head_to_head"] is None
+        assert all(s["rating_change"] is None for s in spec["sides"])
+
+        # An anonymous holder of the share URL likewise sees no history.
+        async with make_client() as anon_client:
+            anon = (await anon_client.get(f"/v1/matches/{current['id']}")).json()
+        assert anon["recent_form"] == []
+        assert anon["head_to_head"] is None
+        assert all(s["rating_change"] is None for s in anon["sides"])
+
+        # The scorecard itself is unaffected — both players still appear.
+        anon_ids = {p["user_id"] for s in anon["sides"] for p in s["players"]}
+        assert anon_ids == {str(me.id), str(rival.id)}
+
+
 async def test_get_match_is_rate_limited_per_ip(
     api_client: AsyncClient, db_session: AsyncSession
 ):
@@ -458,6 +507,54 @@ async def test_list_filter_by_status(api_client: AsyncClient, db_session: AsyncS
     assert [row["id"] for row in listing["items"]] == [in_progress["id"]]
     assert listing["status_counts"]["in_progress"] == 1
     assert listing["status_counts"]["completed"] == 1
+
+
+async def test_list_live_filter_excludes_awaiting_confirmation(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """Regression for #381: a posted-but-unconfirmed result is an in_progress
+    match with a signature ("Awaiting confirmation"). It must NOT count or list
+    under the Live filter — it has its own ``awaiting_confirmation`` bucket."""
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "rival") as (opp_client, opp):
+        live = await _create_match(api_client, opp.id, best_of=1)
+        # A second match with a posted (but unconfirmed) result: status stays
+        # in_progress, one signature recorded → "Awaiting confirmation".
+        awaiting = await _create_match(api_client, opp.id, best_of=1)
+        post = await api_client.post(
+            f"/v1/matches/{awaiting['id']}/results",
+            json={
+                "games": [
+                    {"game_number": 1, "side_1_points": 11, "side_2_points": 5},
+                ]
+            },
+        )
+        assert post.status_code == 201
+        assert post.json()["status"] == "in_progress"
+        assert post.json()["status_label"] == "Awaiting confirmation"
+
+    # Live filter: only the signature-free in_progress match.
+    live_listing = (
+        await api_client.get("/v1/matches", params={"status": "in_progress"})
+    ).json()
+    assert [row["id"] for row in live_listing["items"]] == [live["id"]]
+    assert live_listing["total"] == 1
+    assert live_listing["status_counts"]["in_progress"] == 1
+    assert live_listing["awaiting_confirmation_count"] == 1
+
+    # Awaiting filter: only the posted-but-unconfirmed match.
+    awaiting_listing = (
+        await api_client.get("/v1/matches", params={"status": "awaiting_confirmation"})
+    ).json()
+    assert [row["id"] for row in awaiting_listing["items"]] == [awaiting["id"]]
+    assert awaiting_listing["total"] == 1
+    assert awaiting_listing["items"][0]["status_label"] == "Awaiting confirmation"
+
+    # Unfiltered: both rows present, and the total counts each exactly once.
+    full = (await api_client.get("/v1/matches")).json()
+    assert full["total"] == 2
+    assert full["status_counts"]["in_progress"] == 1
+    assert full["awaiting_confirmation_count"] == 1
 
 
 async def test_list_q_filter_matches_any_player_username(

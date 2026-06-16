@@ -80,6 +80,14 @@ function LoginPage() {
               )
               return
             }
+            if (err.status === 422) {
+              // Pydantic's 422 detail leaks internals ("value is not a valid
+              // email address: The email address is too long (N characters
+              // too many)"). Show the same friendly copy the client-side
+              // validator uses instead of echoing it.
+              setServerError("That doesn't look like a valid email.")
+              return
+            }
             setServerError(err.detail ?? 'Something went wrong. Try again.')
             return
           }

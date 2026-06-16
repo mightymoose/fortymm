@@ -1,5 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
-import { Link, Navigate, useNavigate } from '@tanstack/react-router'
+import {
+  Link,
+  Navigate,
+  useBlocker,
+  useNavigate,
+} from '@tanstack/react-router'
 import { onlineManager, useQueryClient } from '@tanstack/react-query'
 import {
   Check,
@@ -25,6 +30,16 @@ import {
   type MatchResultsGameWrite,
 } from '@/api/matches'
 import { AppShell } from '@/components/app-shell'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { cn, initialsOf } from '@/lib/utils'
 import { decidedSide, illegalScoreReason } from '@/lib/scoring'
 import { useGameSaveState } from './score-saves'
@@ -89,6 +104,34 @@ function ScoreEntryInner({
   const [oppTyped, setOppTyped] = useState<string | null>(null)
   const meRef = useRef<HTMLInputElement>(null)
   const oppRef = useRef<HTMLInputElement>(null)
+  // Set when a per-cell clear is confirmed: the dialog otherwise restores focus
+  // to its trigger (the now-removed ✕), so we re-grab focus for the first empty
+  // input in the dialog's close-focus hook instead.
+  const refocusAfterCloseRef = useRef(false)
+  // The game whose saved score is pending a clear-confirmation, or `'active'`
+  // for the in-page Clear button (which clears the game being edited above).
+  // `null` means no confirmation is open. Clearing discards a recorded game, so
+  // it asks first rather than firing instantly (#387).
+  const [pendingClear, setPendingClear] = useState<number | 'active' | null>(
+    null,
+  )
+
+  // Guard against losing un-submitted typing on refresh/close or an in-app
+  // navigation (#441). `isDirty` is driven by the score change handlers as the
+  // user types (set below, once `data`-derived baselines are in scope) — the
+  // blocker only reads it. `submittingRef` is flipped just before the
+  // fire-and-forget Save (or an explicit Clear) navigates so that intentional
+  // hop is never blocked; it's a ref since it's read inside the blocker
+  // callbacks, not rendered.
+  const [isDirty, setIsDirty] = useState(false)
+  const submittingRef = useRef(false)
+  const { status, proceed, reset } = useBlocker({
+    // Blocks browser refresh/close (beforeunload) only while genuinely dirty.
+    enableBeforeUnload: () => isDirty,
+    // Blocks in-app route changes the same way — but never the Save hop.
+    shouldBlockFn: () => isDirty && !submittingRef.current,
+    withResolver: true,
+  })
 
   if (isLoading || !data) {
     return (
@@ -185,6 +228,27 @@ function ScoreEntryInner({
         ? String(persistedOpp)
         : '')
 
+  // The baseline is what the inputs read with no local typing — the failed
+  // scratch save, else the persisted score, else empty. Input is "dirty"
+  // (worth guarding on exit) only when the user has actually typed something
+  // that diverges from that baseline: a clean page, or input that merely
+  // matches what's already saved, must not nag. Updating the ref here (rather
+  // than in an effect) keeps the blocker reading the current-render truth.
+  const baselineMe =
+    failedMe != null ? String(failedMe) : persistedMe != null ? String(persistedMe) : ''
+  const baselineOpp =
+    failedOpp != null
+      ? String(failedOpp)
+      : persistedOpp != null
+        ? String(persistedOpp)
+        : ''
+  // Whether the live inputs (me/opp) diverge from the baseline — i.e. there's
+  // genuinely-unsaved typing worth guarding on exit. Recomputed by the change
+  // handlers below as the user types (a clean page, or input matching the
+  // saved score, isn't dirty).
+  const computeDirty = (nextMe: string, nextOpp: string) =>
+    nextMe !== baselineMe || nextOpp !== baselineOpp
+
   // Strip non-digits and cap at 3 digits. Two digits silently turned "100"
   // into "10", then the deuce/win-by-2 check fired against a value the user
   // never typed (#442). Three digits covers any real table-tennis score
@@ -192,15 +256,24 @@ function ScoreEntryInner({
   // illegalScoreReason always references exactly what was entered.
   const sanitize = (value: string) => value.replace(/[^0-9]/g, '').slice(0, 3)
   const onMeChange = (value: string) => {
-    setMeTyped(sanitize(value))
+    const next = sanitize(value)
+    setMeTyped(next)
+    setIsDirty(computeDirty(next, opp))
     if (finalizeMutation.error) finalizeMutation.reset()
   }
   const onOppChange = (value: string) => {
-    setOppTyped(sanitize(value))
+    const next = sanitize(value)
+    setOppTyped(next)
+    setIsDirty(computeDirty(me, next))
     if (finalizeMutation.error) finalizeMutation.reset()
   }
 
   const bothFilled = me !== '' && opp !== ''
+  // Exactly one side filled: the Save button is disabled, so without a word
+  // it's a dead end with no explanation (#387). Tell the user both scores are
+  // required and flag the still-empty field. Only after the user has started
+  // typing — a wholly-empty pair is the untouched initial state, not an error.
+  const oneSideFilled = (me !== '') !== (opp !== '')
   const localScoreError = bothFilled
     ? illegalScoreReason(Number(me), Number(opp))
     : null
@@ -250,6 +323,13 @@ function ScoreEntryInner({
     localScoreError !== null || finalizeApiError?.status === 422
   // The message line, though, surfaces every finalize error (409/500 included).
   const showScoreError = inputsInvalid || finalizeApiError !== null
+  // The "both scores required" hint is its own, lower-severity line — shown only
+  // when exactly one field is filled and there's no harder error to surface.
+  const showBothRequired = oneSideFilled && !showScoreError
+  // Per-side red flags: a genuine validation error paints both inputs; the
+  // both-required hint only flags the empty one.
+  const meInvalid = inputsInvalid || (showBothRequired && me === '')
+  const oppInvalid = inputsInvalid || (showBothRequired && opp === '')
 
   function predictNextScoringRoute() {
     if (!data) return matchDetailRoute(matchId)
@@ -288,6 +368,10 @@ function ScoreEntryInner({
     // double-click can land a second tap before React commits it — fire one
     // POST /results, not two (the second 409s on the already-posted result).
     if (finalizeMutation.isPending) return
+    // This is the sanctioned write path: any navigation it triggers (the
+    // synchronous next-game hop, or finalize's onSuccess to the match page)
+    // is intentional, so wave the unsaved-input blocker through it (#441).
+    submittingRef.current = true
     // Finalizing posts the canonical result — but that's the one write that
     // can't be faked offline. When offline we instead fall through to the
     // scratchpad save below, which stores the deciding game's score in the
@@ -338,27 +422,46 @@ function ScoreEntryInner({
     }
   }
 
-  function onClear() {
-    if (mode.kind !== 'edit') return
-    // Clearing is an explicit discard — drop any failed-save leftovers too, so
-    // a stale failure doesn't outlive the score it referred to.
-    forgetScoreSaves(queryClient, matchId, gameNumber)
-    deleteMutation.mutate(undefined, {
-      // After clearing, land back on this game's create route so the user
-      // can re-enter — same page, just with empty inputs and create-mode
-      // semantics. The remount's autoFocus puts focus on the me-input,
-      // which is the first empty input.
-      onSettled: () => navigate(scoringNewRoute(matchId, gameNumber)),
-    })
+  // Clearing discards a recorded game's score — an irreversible write. Both
+  // clear affordances (the in-page Clear button and the per-cell ✕) route
+  // through a confirmation dialog (#387); only on confirm do we actually fire
+  // the delete. `pendingClear` carries which game is being discarded.
+  function performClear() {
+    const target = pendingClear
+    setPendingClear(null)
+    if (target === null) return
+    if (target === 'active') {
+      if (mode.kind !== 'edit') return
+      // Clearing is an explicit discard — drop any failed-save leftovers too,
+      // so a stale failure doesn't outlive the score it referred to. The
+      // edit→new hop it triggers is intentional, so the unsaved-input blocker
+      // stays out (#441).
+      submittingRef.current = true
+      forgetScoreSaves(queryClient, matchId, gameNumber)
+      deleteMutation.mutate(undefined, {
+        // After clearing, land back on this game's create route so the user
+        // can re-enter — same page, just with empty inputs and create-mode
+        // semantics. The remount's autoFocus puts focus on the me-input,
+        // which is the first empty input.
+        onSettled: () => navigate(scoringNewRoute(matchId, gameNumber)),
+      })
+      return
+    }
+    // Per-cell ✕ — clears the score for any logged game from the scoreline
+    // strip. We refocus the first empty input on the current page so the user
+    // can keep typing (deferred to the dialog's close-focus hook).
+    forgetScoreSaves(queryClient, matchId, target)
+    cellDeleteMutation.mutate(target)
+    refocusAfterCloseRef.current = true
   }
 
-  // Per-cell ✕ — clears the score for any logged game from the scoreline
-  // strip. Fire-and-forget like the per-game writes; we just refocus the
-  // first empty input on the current page so the user can keep typing.
+  function onClear() {
+    if (mode.kind !== 'edit') return
+    setPendingClear('active')
+  }
+
   function onClearCell(n: number) {
-    forgetScoreSaves(queryClient, matchId, n)
-    cellDeleteMutation.mutate(n)
-    focusFirstEmpty()
+    setPendingClear(n)
   }
 
   function handleKey(
@@ -438,7 +541,7 @@ function ScoreEntryInner({
             inputRef={meRef}
             autoFocus
             disabled={inputsLocked}
-            invalid={inputsInvalid}
+            invalid={meInvalid}
             onChange={onMeChange}
             onKeyDown={(e) => handleKey(e, 'me')}
           />
@@ -458,7 +561,7 @@ function ScoreEntryInner({
             value={opp}
             inputRef={oppRef}
             disabled={inputsLocked}
-            invalid={inputsInvalid}
+            invalid={oppInvalid}
             onChange={onOppChange}
             onKeyDown={(e) => handleKey(e, 'opp')}
           />
@@ -469,6 +572,11 @@ function ScoreEntryInner({
             {localScoreError ??
               finalizeApiError?.detail ??
               finalizeApiError?.message}
+          </p>
+        )}
+        {showBothRequired && (
+          <p role="alert" className="mt-1.5 text-xs text-[color:var(--loss)]">
+            Enter both scores to save this game.
           </p>
         )}
 
@@ -511,7 +619,91 @@ function ScoreEntryInner({
           clearDisabled={inputsLocked || cellDeleteMutation.isPending}
         />
       </div>
+
+      <AlertDialog
+        open={pendingClear !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingClear(null)
+        }}
+      >
+        <AlertDialogContent
+          onCloseAutoFocus={(e) => {
+            // A confirmed per-cell clear removed its own ✕ trigger; rather than
+            // letting Radix restore focus to a detached node, put focus on the
+            // first empty input so the user can keep typing.
+            if (refocusAfterCloseRef.current) {
+              refocusAfterCloseRef.current = false
+              e.preventDefault()
+              focusFirstEmpty()
+            }
+          }}
+        >
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {pendingClear === 'active' || pendingClear === null
+                ? `Clear game ${gameNumber}?`
+                : `Clear game ${pendingClear}?`}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              This deletes the saved score for this game. You can re-enter it
+              afterwards.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Keep score</AlertDialogCancel>
+            <AlertDialogAction variant="destructive" onClick={performClear}>
+              Clear game
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <UnsavedScorePrompt
+        open={status === 'blocked'}
+        onLeave={proceed}
+        onStay={reset}
+      />
     </AppShell>
+  )
+}
+
+// The in-app leave confirmation for unsaved score input. A design-system
+// AlertDialog (not a bare confirm()), driven by the router blocker's resolver:
+// "Leave" proceeds with the blocked navigation, "Stay" cancels it. Browser
+// refresh/close is handled separately by the blocker's enableBeforeUnload.
+function UnsavedScorePrompt({
+  open,
+  onLeave,
+  onStay,
+}: {
+  open: boolean
+  onLeave?: () => void
+  onStay?: () => void
+}) {
+  return (
+    <AlertDialog
+      open={open}
+      onOpenChange={(next) => {
+        // Dismissing via overlay/Esc is a "stay" — don't drop the score.
+        if (!next) onStay?.()
+      }}
+    >
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Leave without saving?</AlertDialogTitle>
+          <AlertDialogDescription>
+            You've entered a score for this game but haven't saved it yet.
+            Leaving now discards it.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel onClick={onStay}>Keep editing</AlertDialogCancel>
+          <AlertDialogAction variant="destructive" onClick={onLeave}>
+            Discard &amp; leave
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   )
 }
 
@@ -549,7 +741,7 @@ function ScoreSide({
     </div>
   )
   const identity = (
-    <div>
+    <div className="id">
       <div className="nm">{name}</div>
       <div className="rt">
         Games won · <b>{wins}</b>

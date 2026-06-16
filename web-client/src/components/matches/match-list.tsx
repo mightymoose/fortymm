@@ -149,6 +149,9 @@ export const MatchList = () => {
   )
 
   const total = data?.total ?? 0
+  // True-live only: the server splits posted-but-unconfirmed results out of the
+  // `in_progress` count into `awaiting_confirmation_count`, so this no longer
+  // folds awaiting-confirmation matches into the Live headline (issue #381).
   const liveCount = data?.status_counts?.in_progress ?? 0
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
 
@@ -169,6 +172,13 @@ export const MatchList = () => {
   // shows start > end during that frame.
   const displayPage = Math.min(page, totalPages)
 
+  // A search, a non-"all" status tab, or paging past the end all narrow the
+  // list — drive the empty-state copy so a filtered/no-result view reads "No
+  // matches match your filters" instead of the cold-start "No matches yet"
+  // (#373).
+  const isFiltered =
+    q.trim().length > 0 || status !== 'all' || page > totalPages
+
   // Project the raw payload rows into the presentational view models the table
   // consumes — perspective, status tone, side labels, short id, the relative
   // "started" label, and the current-user-aware label/CTA all resolve here,
@@ -181,13 +191,15 @@ export const MatchList = () => {
   }, [data?.items])
   const tabs = useMemo(
     () =>
-      buildFilterTabs(
-        STATUS_TABS,
-        data?.status_counts,
-        TAB_TO_API,
-        data?.attention_count,
-      ),
-    [data?.status_counts, data?.attention_count],
+      buildFilterTabs(STATUS_TABS, data?.status_counts, TAB_TO_API, {
+        attentionCount: data?.attention_count,
+        awaitingCount: data?.awaiting_confirmation_count,
+      }),
+    [
+      data?.status_counts,
+      data?.attention_count,
+      data?.awaiting_confirmation_count,
+    ],
   )
 
   return (
@@ -207,6 +219,7 @@ export const MatchList = () => {
             isLoading={isLoading}
             isAttention={isAttention}
             query={q.trim()}
+            isFiltered={isFiltered}
             onClear={onClear}
             onClearSearch={onClearSearch}
             navigate={navigate}

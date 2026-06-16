@@ -4,15 +4,58 @@ import { ApiError } from "@/api/client";
 import { buildMatchDetails } from "@/mocks/factories/matches/match-details.factory";
 import { waitFor } from "@/test/utilities";
 
+import type { Query } from "@tanstack/react-query";
+
 import {
   matchDetailsQuery,
   matchDetailsResultFromPayload,
+  refetchWhileAwaitingConfirmation,
+  type MatchDetailsResult,
 } from "./match-details-query";
 import { matchDetailsQueryPage } from "./match-details-query.page";
+
+const queryWithStatusLabel = (
+  status_label: string,
+): Pick<Query<MatchDetailsResult>, "state"> => ({
+  state: {
+    data: matchDetailsResultFromPayload(buildMatchDetails({ status_label })),
+  } as Query<MatchDetailsResult>["state"],
+});
 
 describe("matchDetailsQuery", () => {
   it("throws on error so route-level error boundaries catch failures", () => {
     expect(matchDetailsQuery("m-1").throwOnError).toBe(true);
+  });
+
+  it("polls while awaiting the opponent's confirmation (#493)", () => {
+    // The reporter posts a result and leaves the page open; the opponent
+    // confirms in a different session, so nothing invalidates this cache.
+    // Polling is the only thing that flips the page off "Awaiting confirmation".
+    expect(matchDetailsQuery("m-1").refetchInterval).toBe(
+      refetchWhileAwaitingConfirmation,
+    );
+    expect(
+      refetchWhileAwaitingConfirmation(
+        queryWithStatusLabel("Awaiting confirmation"),
+      ),
+    ).toBeGreaterThan(0);
+  });
+
+  it.each(["Scheduled", "Live", "Final", "Disputed", "Voided"])(
+    "stops polling once the match settles (%s)",
+    (label) => {
+      expect(
+        refetchWhileAwaitingConfirmation(queryWithStatusLabel(label)),
+      ).toBe(false);
+    },
+  );
+
+  it("does not poll before any data has loaded", () => {
+    expect(
+      refetchWhileAwaitingConfirmation({
+        state: { data: undefined } as Query<MatchDetailsResult>["state"],
+      }),
+    ).toBe(false);
   });
 
   it("returns the parsed scoreboard view", async () => {

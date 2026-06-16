@@ -1665,6 +1665,10 @@ body.dark.fortymm-theme {
   display: flex;
   align-items: center;
   gap: 14px;
+  min-width: 0;
+}
+.fortymm-theme .se-head .id {
+  min-width: 0;
 }
 .fortymm-theme .se-head.right {
   justify-content: flex-end;
@@ -1694,6 +1698,9 @@ body.dark.fortymm-theme {
 .fortymm-theme .se-head .nm {
   font: 600 20px var(--font-ui);
   color: var(--fg-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .fortymm-theme .se-head .rt {
   font: 500 11px var(--font-mono);
@@ -2193,8 +2200,14 @@ body.dark.fortymm-theme {
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  /* Keep the "Games won · N" tally on mobile (#387): hiding it left the cramped
+     mobile header with no running score, and the big inputs already read as
+     blank panels — this is the only games-won readout near them. */
   .fortymm-theme .se-head .rt {
-    display: none;
+    display: block;
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    margin-top: 2px;
   }
   .fortymm-theme .se-mid {
     padding: 14px 6px;
@@ -2206,9 +2219,22 @@ body.dark.fortymm-theme {
   .fortymm-theme .se-games {
     font-size: 14px;
   }
+  /* On mobile the inputs sit edge-to-edge with no chrome, so an empty field
+     reads as a dark panel with only a faint "0" placeholder (#387). Give it a
+     visible field affordance — a subtle filled box with a border — so it's
+     legible as a tap target. */
   .fortymm-theme .big-input {
     font-size: 72px;
     padding: 6px 0 0;
+    background: var(--ink-900);
+    border: 1px solid var(--ink-600);
+    border-radius: 12px;
+  }
+  .fortymm-theme .big-input:focus {
+    border-color: var(--ball-500);
+  }
+  .fortymm-theme .big-input[aria-invalid='true'] {
+    border-color: var(--loss);
   }
 
   /* Single row of buttons, equal-width, full-bleed across the card. */
@@ -3054,15 +3080,25 @@ body.dark.fortymm-theme {
   margin-top: 32px;
   padding-top: 24px;
   border-top: 1px solid var(--border-subtle);
+  /* Scroll boundary for the grid: lives inside the .md-hero section (which is
+     overflow: hidden for its decorative grid-bg), so when the per-game columns
+     can't shrink to fit on narrow viewports (BO5/BO7) the trailing SETS column
+     stays reachable by horizontal scroll instead of being clipped off-screen.
+     See #509. */
+  overflow-x: auto;
+  scrollbar-width: thin;
 }
 .fortymm-theme .md-games__grid {
   display: grid;
   grid-template-columns:
     var(--md-games-kicker, 130px)
-    repeat(var(--md-games-count, 5), 1fr)
+    repeat(var(--md-games-count, 5), minmax(40px, 1fr))
     var(--md-games-total, 90px);
   gap: 8px;
   align-items: center;
+  /* Keep columns at their intrinsic width and let .md-games scroll, rather than
+     letting the grid overflow (and get clipped by) its ancestor. */
+  min-width: max-content;
 }
 .fortymm-theme .md-games__kicker {
   font: 600 11px var(--font-mono);

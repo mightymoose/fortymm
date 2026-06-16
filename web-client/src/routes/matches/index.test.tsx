@@ -349,6 +349,65 @@ describe('MatchesPage', () => {
     })
   })
 
+  it('reads a non-"all" status tab with no results as filtered, not a cold start (#373)', async () => {
+    // A status tab that filters everything out is NOT a first-run user — the
+    // empty state must offer Clear filters and not imply "No matches yet".
+    server.use(
+      http.get('*/v1/matches', () =>
+        HttpResponse.json(
+          matchListResponse({
+            items: [],
+            total: 0,
+            status_counts: { in_progress: 0 },
+          }),
+        ),
+      ),
+    )
+    renderMatchesPage('/matches?status=live')
+
+    expect(
+      await screen.findByText(/no matches match your filters/i),
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/^no matches yet$/i)).not.toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: /clear filters/i }),
+    ).toBeInTheDocument()
+  })
+
+  it('reads an out-of-range ?page= no-result frame as filtered, not a cold start (#373)', async () => {
+    // The clamp (#541) snaps the page back asynchronously; until it does, the
+    // out-of-range page paints an empty table. That frame must read as filtered
+    // ("No matches match your filters" + Clear filters) — `page > totalPages`
+    // feeds `isFiltered` — so it never flashes the cold-start "No matches yet".
+    server.use(
+      http.get('*/v1/matches', ({ request }) => {
+        const page = Number(
+          new URL(request.url).searchParams.get('page') ?? '1',
+        )
+        // 16 matches → one page. page=2 is out of range and returns no items,
+        // but the real total is still reported (so totalPages stays 1).
+        const items = page === 1 ? [matchListRow({ opponent: 'nguyen.t' })] : []
+        return HttpResponse.json(
+          matchListResponse({
+            items,
+            total: 16,
+            page,
+            status_counts: { pending: 16 },
+          }),
+        )
+      }),
+    )
+    renderMatchesPage('/matches?page=2')
+
+    // The out-of-range frame reads as filtered ("No matches match your
+    // filters"), not the cold-start "No matches yet" — proving `page >
+    // totalPages` feeds `isFiltered`. (The clamp then recovers the page; that
+    // recovery is asserted by the #541 test below.)
+    expect(
+      await screen.findByText(/no matches match your filters/i),
+    ).toBeInTheDocument()
+  })
+
   it('snaps an out-of-range ?page= back to the last valid page (#541)', async () => {
     server.use(
       http.get('*/v1/matches', ({ request }) => {

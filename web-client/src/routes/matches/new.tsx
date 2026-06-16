@@ -125,7 +125,11 @@ function MatchCard() {
         best_of: bestOf,
         rated: opponent !== null && rated,
       })
-      navigate(nextScoringDestination(created))
+      // Replace, don't push: the new-match form is a one-shot step, so the
+      // history stack shouldn't keep it. Otherwise browser/mobile Back from
+      // score entry re-opens the creation form for a match that already
+      // exists, instead of returning to wherever the user came from (#441).
+      navigate({ ...nextScoringDestination(created), replace: true })
     } catch (err) {
       setApiError(
         err instanceof ApiError

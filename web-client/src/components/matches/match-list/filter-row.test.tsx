@@ -42,9 +42,22 @@ describe("FilterRow", () => {
     filterRowPage.render(buildFilterRowProps());
 
     expect(filterRowPage.getTab(/^all/i)).toHaveTextContent("7");
-    expect(filterRowPage.getTab(/live/i)).toHaveTextContent("2");
+    expect(filterRowPage.getTab(/^live/i)).toHaveTextContent("2");
+    expect(filterRowPage.getTab(/awaiting/i)).toHaveTextContent("1");
     expect(filterRowPage.getTab(/up next/i)).toHaveTextContent("3");
-    expect(filterRowPage.getTab(/final/i)).toHaveTextContent("2");
+    expect(filterRowPage.getTab(/final/i)).toHaveTextContent("1");
+  });
+
+  it("renders an Awaiting tab distinct from Live (no live-dot)", async () => {
+    const user = userEvent.setup();
+    const setStatus = vi.fn();
+    filterRowPage.render(buildFilterRowProps({ setStatus }));
+
+    const awaiting = filterRowPage.getTab(/awaiting/i);
+    expect(awaiting.querySelector(".live-dot")).toBeNull();
+
+    await user.click(awaiting);
+    expect(setStatus).toHaveBeenCalledWith("awaiting");
   });
 
   it("omits the seg-count when a tab's count is null", () => {

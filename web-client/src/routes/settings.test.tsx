@@ -1,6 +1,9 @@
+import type React from 'react'
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import {
+  Link,
+  Outlet,
   RouterProvider,
   createMemoryHistory,
   createRootRoute,
@@ -63,14 +66,35 @@ async function renderSettings(initialEntry = '/settings') {
       mutations: { retry: false },
     },
   })
-  const rootRoute = createRootRoute()
+  // A persistent left-nav-style link lives in the root layout so tests can
+  // exercise in-app navigation away from the page (the #440 guard target).
+  const rootRoute = createRootRoute({
+    component: () => (
+      <>
+        {/* This ad-hoc test route isn't in the generated route tree, so the
+            typed `to` prop doesn't know it. Cast to satisfy the checker. */}
+        <Link
+          {...({ to: '/elsewhere' } as React.ComponentProps<typeof Link>)}
+          data-testid="nav-elsewhere"
+        >
+          Go elsewhere
+        </Link>
+        <Outlet />
+      </>
+    ),
+  })
   const settingsRoute = createRoute({
     getParentRoute: () => rootRoute,
     path: '/settings',
     component: SettingsPage,
   })
+  const elsewhereRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/elsewhere',
+    component: () => <div data-testid="elsewhere-page">Elsewhere</div>,
+  })
   const router = createRouter({
-    routeTree: rootRoute.addChildren([settingsRoute]),
+    routeTree: rootRoute.addChildren([settingsRoute, elsewhereRoute]),
     history: createMemoryHistory({ initialEntries: [initialEntry] }),
   })
   return render(
@@ -212,6 +236,25 @@ describe('SettingsPage username section', () => {
     const section = input.closest('section') as HTMLElement
     expect(within(section).getByText(/no spaces/i)).toBeInTheDocument()
   })
+
+  it('keeps the public-profile URL preview wrappable so a long username cannot overflow (#376)', async () => {
+    const user = userEvent.setup()
+    await renderSettings()
+
+    const input = await screen.findByLabelText(/^username$/i)
+    await user.clear(input)
+    // A long, valid (lowercase, no-space) username — the case that forced
+    // ~51px of horizontal overflow at 375px before the wrap fix.
+    await user.type(input, 'a-really-long-public-username-that-is-valid')
+
+    const section = input.closest('section') as HTMLElement
+    const urlPreview = within(section).getByText(/\/p\/players\//i)
+
+    // The mono URL span must be allowed to wrap inside the panel rather than
+    // forcing the row (and the viewport) wider than 375px. jsdom has no real
+    // layout engine, so we assert the break-enabling styles directly.
+    expect(urlPreview).toHaveStyle({ overflowWrap: 'anywhere', minWidth: '0px' })
+  })
 })
 
 describe('SettingsPage footer sign out', () => {
@@ -297,5 +340,100 @@ describe('SettingsPage notifications section', () => {
     expect(
       await screen.findByText(/aren't configured on the server/i),
     ).toBeInTheDocument()
+  })
+})
+
+describe('SettingsPage unsaved-changes guard (#440)', () => {
+  it('navigates freely when nothing is dirty', async () => {
+    const user = userEvent.setup()
+    await renderSettings()
+
+    await screen.findByLabelText(/^username$/i)
+    await user.click(screen.getByTestId('nav-elsewhere'))
+
+    expect(await screen.findByTestId('elsewhere-page')).toBeInTheDocument()
+    expect(
+      screen.queryByTestId('unsaved-changes-dialog'),
+    ).not.toBeInTheDocument()
+  })
+
+  it('blocks in-app navigation with a confirm dialog when an edit is unsaved', async () => {
+    const user = userEvent.setup()
+    await renderSettings()
+
+    const input = await screen.findByLabelText(/^username$/i)
+    await user.clear(input)
+    await user.type(input, 'rita.kovac-2')
+
+    await user.click(screen.getByTestId('nav-elsewhere'))
+
+    // Navigation is intercepted: the prompt shows and we're still on settings.
+    expect(
+      await screen.findByTestId('unsaved-changes-dialog'),
+    ).toBeInTheDocument()
+    expect(screen.queryByTestId('elsewhere-page')).not.toBeInTheDocument()
+  })
+
+  it('stays on the page when the user cancels the discard prompt', async () => {
+    const user = userEvent.setup()
+    await renderSettings()
+
+    const input = await screen.findByLabelText(/^username$/i)
+    await user.clear(input)
+    await user.type(input, 'rita.kovac-2')
+    await user.click(screen.getByTestId('nav-elsewhere'))
+
+    await screen.findByTestId('unsaved-changes-dialog')
+    await user.click(screen.getByRole('button', { name: /stay on this page/i }))
+
+    await waitFor(() =>
+      expect(
+        screen.queryByTestId('unsaved-changes-dialog'),
+      ).not.toBeInTheDocument(),
+    )
+    expect(screen.queryByTestId('elsewhere-page')).not.toBeInTheDocument()
+    expect(screen.getByLabelText(/^username$/i)).toBeInTheDocument()
+  })
+
+  it('proceeds with navigation when the user confirms discarding', async () => {
+    const user = userEvent.setup()
+    await renderSettings()
+
+    const input = await screen.findByLabelText(/^username$/i)
+    await user.clear(input)
+    await user.type(input, 'rita.kovac-2')
+    await user.click(screen.getByTestId('nav-elsewhere'))
+
+    await screen.findByTestId('unsaved-changes-dialog')
+    await user.click(screen.getByRole('button', { name: /discard changes/i }))
+
+    expect(await screen.findByTestId('elsewhere-page')).toBeInTheDocument()
+  })
+
+  it('clears the guard after a save, allowing navigation without a prompt', async () => {
+    const user = userEvent.setup()
+    await renderSettings()
+
+    const input = (await screen.findByLabelText(
+      /^username$/i,
+    )) as HTMLInputElement
+    await user.clear(input)
+    await user.type(input, 'rita.kovac-2')
+
+    const section = input.closest('section') as HTMLElement
+    const save = within(section).getByRole('button', { name: /save changes/i })
+    await waitFor(() => expect(save).toBeEnabled())
+    await user.click(save)
+
+    // Session now reports the saved username, so the section is clean again.
+    await waitFor(() =>
+      expect(mockSession.data.user.username).toBe('rita.kovac-2'),
+    )
+
+    await user.click(screen.getByTestId('nav-elsewhere'))
+    expect(await screen.findByTestId('elsewhere-page')).toBeInTheDocument()
+    expect(
+      screen.queryByTestId('unsaved-changes-dialog'),
+    ).not.toBeInTheDocument()
   })
 })

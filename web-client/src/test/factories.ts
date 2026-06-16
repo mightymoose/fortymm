@@ -273,8 +273,19 @@ export function matchListResponse(
   const baseCounts: Record<string, number> = Object.fromEntries(
     ALL_STATUSES.map((s) => [s, 0]),
   )
+  // Mirror the server: a posted-but-unconfirmed result is an in_progress row
+  // labelled "Awaiting confirmation". Count it under its own bucket and peel it
+  // out of in_progress so status_counts.in_progress reads as true-live (#381).
+  let awaiting = 0
   for (const item of items) {
-    baseCounts[item.status] = (baseCounts[item.status] ?? 0) + 1
+    if (
+      item.status === 'in_progress' &&
+      item.status_label === 'Awaiting confirmation'
+    ) {
+      awaiting += 1
+    } else {
+      baseCounts[item.status] = (baseCounts[item.status] ?? 0) + 1
+    }
   }
   const attention_count =
     overrides.attention_count ??
@@ -286,6 +297,7 @@ export function matchListResponse(
     total: items.length,
     status_counts: baseCounts,
     attention_count,
+    awaiting_confirmation_count: awaiting,
     ...overrides,
   }
 }

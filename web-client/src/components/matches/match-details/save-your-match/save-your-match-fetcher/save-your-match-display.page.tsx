@@ -66,6 +66,13 @@ const scoped = (container: Container) => ({
   getScoreBlips(): HTMLElement[] {
     return container.getAllByText(/^[0-9]+$/);
   },
+  /** The two avatar chips (viewer-first), so tests can assert win/loss tones. */
+  getAvatars(): HTMLElement[] {
+    const anchor = container.getByLabelText(/match summary/i) as HTMLElement;
+    return Array.from(
+      anchor.querySelectorAll<HTMLElement>(".md-save__avatar"),
+    );
+  },
 });
 
 /**

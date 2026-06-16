@@ -28,10 +28,15 @@ export type MatchGameScoreWrite = components['schemas']['MatchGameScoreWrite']
 export type MatchResultsWrite = components['schemas']['MatchResultsWrite']
 export type MatchResultsGameWrite = components['schemas']['MatchResultsGameWrite']
 export type MatchStatus = components['schemas']['MatchStatus']
+// The `/matches` list filter bucket. A superset of `MatchStatus`: it splits
+// `in_progress` into `in_progress` (true-live, no posted result) and
+// `awaiting_confirmation` (posted result, ≥1 signature) so the Live filter
+// can't silently fold in awaiting-confirmation rows (issue #381).
+export type MatchListFilter = components['schemas']['MatchListFilter']
 export type Scoreboard = components['schemas']['Scoreboard']
 
 export type MatchListParams = {
-  status?: MatchStatus
+  status?: MatchListFilter
   /** When true, request the current user's attention-ranked open matches; the
    * server ignores `status` in this mode. */
   attention?: boolean
@@ -328,6 +333,23 @@ export function scoreSaveMutationOptions(
     },
     onSuccess: (data: MatchDetails) =>
       applyScoreMutationCache(queryClient, matchId, data),
+    // Re-sync server truth whenever a save settles in error. A per-game write
+    // can lose a server-side race to a concurrent conflicting write (e.g. the
+    // opponent saved game 1 the other way first), so the server rejects ours
+    // and the success path never primes the cache. Without this, the match
+    // detail query keeps the stale games-won it last saw (the "Games won"
+    // counter on the entry screen reads `mySide.games_won` from
+    // `matchQueryKey`) until a manual reload (#564). Only invalidate the
+    // server-canonical match queries to refetch the resolved truth —
+    // deliberately *not* touching the mutation cache, so this game's
+    // failed-save scratch state survives to drive the failure banner /
+    // "Not saved" cell + retry UI.
+    onError: () => {
+      queryClient.invalidateQueries({ queryKey: matchQueryKey(matchId) })
+      queryClient.invalidateQueries({
+        queryKey: matchDetailsQueryKey(matchId),
+      })
+    },
   }
 }
 

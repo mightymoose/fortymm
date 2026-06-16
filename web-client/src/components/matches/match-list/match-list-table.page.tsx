@@ -19,16 +19,30 @@ const scoped = (container: Container) => ({
   getTable() {
     return container.getByRole('table')
   },
-  /** The empty-state copy heading, present only when not loading and no rows. */
+  /** The empty-state copy heading, present only when not loading and no rows.
+   * Matches either copy — the cold-start "No matches yet" or the filtered
+   * "No matches match your filters". */
   getEmptyState() {
-    return container.getByText(/no matches yet/i)
+    return container.getByText(/no matches (yet|match your filters)/i)
   },
   queryEmptyState() {
-    return container.queryByText(/no matches yet/i)
+    return container.queryByText(/no matches (yet|match your filters)/i)
   },
-  /** The empty-state "Clear filters" button. */
+  /** The cold-start (unfiltered) heading specifically. */
+  queryColdStartHeading() {
+    return container.queryByText(/^no matches yet$/i)
+  },
+  /** The filtered no-result heading specifically. */
+  queryFilteredHeading() {
+    return container.queryByText(/no matches match your filters/i)
+  },
+  /** The empty-state "Clear filters" button (filtered empty only). */
   getClearFiltersButton() {
     return container.getByRole('button', { name: /clear filters/i })
+  },
+  /** Nullable variant — the cold-start empty omits the Clear filters button. */
+  queryClearFiltersButton() {
+    return container.queryByRole('button', { name: /clear filters/i })
   },
   /** The Attention tab's calm "all caught up" empty-state heading. */
   getCaughtUpState() {
@@ -106,7 +120,7 @@ export const matchListTablePage = {
   /** Async-first accessor for the empty state — no `<table>` renders, so tests
    * await this instead of `findTable()` before reading synchronous accessors. */
   findEmptyState() {
-    return screen.findByText(/no matches yet/i)
+    return screen.findByText(/no matches (yet|match your filters)/i)
   },
 
   /** Async-first accessor for the Attention "all caught up" empty state. */

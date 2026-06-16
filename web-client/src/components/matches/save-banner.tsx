@@ -99,7 +99,14 @@ export function SaveBanner({ matchId, activeGameNumber }: SaveBannerProps) {
   // the active game's score finishes the match: we stay on it instead of
   // advancing, so it must appear here (informational; see `decidedHere`).
   const failed = wouldFinalize ? allFailed : otherFailed
-  const signature = failed.map((entry) => entry.gameNumber).join(',')
+  // Key the dismiss by each failure's identity, not just its game number: a
+  // single game that fails, is dismissed, then fails again on retry keeps the
+  // same failed set ({N}) but a fresh `submittedAt`, so folding the timestamp
+  // in re-surfaces the banner for the new failure instead of staying hidden
+  // (#528).
+  const signature = failed
+    .map((entry) => `${entry.gameNumber}:${entry.submittedAt}`)
+    .join(',')
 
   if (failed.length === 0 || signature === dismissedSignature) return null
 

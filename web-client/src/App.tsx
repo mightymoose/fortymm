@@ -2,6 +2,9 @@ import { useEffect, useState } from 'react'
 import { Link } from '@tanstack/react-router'
 import './landing.css'
 
+/** Public source repository — FortyMM is GPLv3 and open to contributors. */
+const GITHUB_URL = 'https://github.com/mightymoose/fortymm'
+
 function App() {
   return (
     <div className="fortymm-theme fortymm-landing">
@@ -56,27 +59,68 @@ function Logo({ size = 28 }: { size?: number }) {
 /*  Nav                                                               */
 /* ------------------------------------------------------------------ */
 function Nav() {
+  const [menuOpen, setMenuOpen] = useState(false)
+  const closeMenu = () => setMenuOpen(false)
+
+  const sectionLinks = (
+    <>
+      <a className="nav-link" href="#product" onClick={closeMenu}>Product</a>
+      <a className="nav-link" href="#tournaments" onClick={closeMenu}>Tournaments</a>
+      <a className="nav-link" href="#manifesto" onClick={closeMenu}>Manifesto</a>
+      <a className="nav-link" href="#faq" onClick={closeMenu}>FAQ</a>
+    </>
+  )
+
   return (
-    <nav className="nav">
+    <nav className={`nav ${menuOpen ? 'is-open' : ''}`}>
       <Logo size={26} />
-      <div className="nav-links">
-        <a className="nav-link" href="#product">Product</a>
-        <a className="nav-link" href="#tournaments">Tournaments</a>
-        <a className="nav-link" href="#manifesto">Manifesto</a>
-        <a className="nav-link" href="#faq">FAQ</a>
-      </div>
+      <div className="nav-links">{sectionLinks}</div>
       <div style={{ flex: 1 }} />
       <Link
-        className="nav-link"
+        className="nav-link nav-signin"
         to="/login"
         search={{ error: undefined, email: undefined }}
       >
         Sign in
       </Link>
-      <Link className="btn btn-primary" to="/matches/new">
+      <Link className="btn btn-primary nav-cta" to="/matches/new">
         <span className="btn-dot" />
         Start playing
       </Link>
+      <button
+        type="button"
+        className="nav-toggle"
+        aria-label={menuOpen ? 'Close menu' : 'Open menu'}
+        aria-expanded={menuOpen}
+        aria-controls="nav-mobile-menu"
+        onClick={() => setMenuOpen((open) => !open)}
+      >
+        <span className="nav-toggle-bar" />
+        <span className="nav-toggle-bar" />
+        <span className="nav-toggle-bar" />
+      </button>
+
+      {menuOpen && (
+        <div id="nav-mobile-menu" className="nav-mobile-menu">
+          {sectionLinks}
+          <Link
+            className="nav-link"
+            to="/login"
+            search={{ error: undefined, email: undefined }}
+            onClick={closeMenu}
+          >
+            Sign in
+          </Link>
+          <Link
+            className="btn btn-primary nav-mobile-cta"
+            to="/matches/new"
+            onClick={closeMenu}
+          >
+            <span className="btn-dot" />
+            Start playing
+          </Link>
+        </div>
+      )}
     </nav>
   )
 }
@@ -738,11 +782,11 @@ function TournamentsBand() {
             <li><span className="mono tb-k">04</span> Score live from the scorers' table.</li>
           </ul>
           <div className="tb-ctas">
-            <a className="btn btn-primary" href="#">
+            <Link className="btn btn-primary" to="/tournaments">
               <span className="btn-dot" />
               Start a tournament
-            </a>
-            <a className="btn btn-ghost" href="#">
+            </Link>
+            <a className="btn btn-ghost" href="#tournaments">
               See a sample schedule →
             </a>
           </div>
@@ -1056,12 +1100,20 @@ function CtaBand() {
             <span className="btn-dot" />
             Start playing now
           </Link>
-          <a className="btn btn-secondary btn-xl" href="#">
+          <span
+            className="btn btn-secondary btn-xl btn-disabled"
+            aria-disabled="true"
+            title="Coming soon — iOS is in beta"
+          >
             Get the iOS app
-          </a>
-          <a className="btn btn-secondary btn-xl" href="#">
+          </span>
+          <span
+            className="btn btn-secondary btn-xl btn-disabled"
+            aria-disabled="true"
+            title="Coming soon — Android is in beta"
+          >
             Get the Android app
-          </a>
+          </span>
         </div>
         <div className="cta-foot mono">
           ● Web is live · iOS in beta · Android in beta
@@ -1087,19 +1139,40 @@ function Footer() {
         </div>
         <FooterCol
           h="Product"
-          items={['Web app', 'iOS (beta)', 'Android (beta)', 'Spectator view', 'Changelog']}
+          items={[
+            { label: 'Web app', to: '/matches/new' },
+            { label: 'iOS (beta)', disabled: true },
+            { label: 'Android (beta)', disabled: true },
+            { label: 'Spectator view', disabled: true },
+            { label: 'Changelog', disabled: true },
+          ]}
         />
         <FooterCol
           h="For directors"
-          items={['Run a tournament', 'Scheduler', 'Sample draws', "Scorers' guide"]}
+          items={[
+            { label: 'Run a tournament', to: '/tournaments' },
+            { label: 'Scheduler', href: '#tournaments' },
+            { label: 'Sample draws', disabled: true },
+            { label: "Scorers' guide", disabled: true },
+          ]}
         />
         <FooterCol
           h="Community"
-          items={['Discord', 'GitHub', 'Clubs map', 'Contribute']}
+          items={[
+            { label: 'Discord', disabled: true },
+            { label: 'GitHub', href: GITHUB_URL, external: true },
+            { label: 'Clubs map', disabled: true },
+            { label: 'Contribute', href: GITHUB_URL, external: true },
+          ]}
         />
         <FooterCol
           h="Never"
-          items={['Ads', 'Trackers', 'Premium', 'Cookie banners']}
+          items={[
+            { label: 'Ads', disabled: true },
+            { label: 'Trackers', disabled: true },
+            { label: 'Premium', disabled: true },
+            { label: 'Cookie banners', disabled: true },
+          ]}
         />
       </div>
       <div className="footer-bar">
@@ -1110,15 +1183,57 @@ function Footer() {
   )
 }
 
-function FooterCol({ h, items }: { h: string; items: string[] }) {
+type FooterItem = {
+  label: string
+  /** In-app route (renders a TanStack <Link>). */
+  to?: string
+  /** Raw href: an external URL (with `external`) or an in-page `#anchor`. */
+  href?: string
+  /** Open in a new tab (set for off-site links). */
+  external?: boolean
+  /** No destination yet — render as inert, visibly-dimmed text, not a link. */
+  disabled?: boolean
+}
+
+function FooterCol({ h, items }: { h: string; items: FooterItem[] }) {
   return (
     <div className="ft-col">
       <div className="ft-col-h">{h}</div>
-      {items.map((i) => (
-        <a key={i} href="#" className="ft-col-i">
-          {i}
-        </a>
+      {items.map((item) => (
+        <FooterLink key={item.label} item={item} />
       ))}
     </div>
+  )
+}
+
+function FooterLink({ item }: { item: FooterItem }) {
+  const { label, to, href, external, disabled } = item
+
+  if (disabled || (!to && !href)) {
+    return (
+      <span className="ft-col-i ft-col-i-disabled" aria-disabled="true">
+        {label}
+      </span>
+    )
+  }
+
+  if (to) {
+    return (
+      <Link to={to} className="ft-col-i">
+        {label}
+      </Link>
+    )
+  }
+
+  return (
+    <a
+      href={href}
+      className="ft-col-i"
+      {...(external
+        ? { target: '_blank', rel: 'noreferrer noopener' }
+        : {})}
+    >
+      {label}
+    </a>
   )
 }
