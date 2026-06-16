@@ -38,6 +38,15 @@ struct AttentionPanelView {
     let waitingCount: Int
 }
 
+/// Whether the panel has nothing to show — no actionable rows, no overflow, and
+/// nobody waiting on others. The panel hides entirely in this case rather than
+/// rendering a standalone "all caught up" card (a calm empty state still shows
+/// when rows are empty but the footer has a waiting/overflow count to surface).
+/// Mirrors the web view-model's `isAttentionPanelEmpty`.
+func isAttentionPanelEmpty(_ view: AttentionPanelView) -> Bool {
+    view.rows.isEmpty && view.overflowCount == 0 && view.waitingCount == 0
+}
+
 /// The panel never grows unbounded — show the top 3 rows, roll the rest into
 /// the footer (mirrors the web's `ATTENTION_VISIBLE_LIMIT`).
 private let attentionVisibleLimit = 3
@@ -104,8 +113,9 @@ func projectAttentionPanel(
 /// plus a footer summarizing overflow + waiting counts and a "View all" link.
 /// Pure view-in — all ranking/labels/targets are decided by
 /// `projectAttentionPanel`. Buttons only route; they never finalize a result.
-/// Renders a calm empty state rather than disappearing when nothing is
-/// actionable. Mirrors the web dashboard's `AttentionPanel`.
+/// Hides entirely when there's nothing to surface; falls back to a calm empty
+/// state when there are no rows but the footer still has a waiting/overflow
+/// count to show. Mirrors the web dashboard's `AttentionPanel`.
 struct DashboardAttentionPanel: View {
     let view: AttentionPanelView
     /// Run the row's action — fetch the match and open scoring or detail.
@@ -114,6 +124,14 @@ struct DashboardAttentionPanel: View {
     let onViewAll: () -> Void
 
     var body: some View {
+        if isAttentionPanelEmpty(view) {
+            EmptyView()
+        } else {
+            panel
+        }
+    }
+
+    private var panel: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("Needs your attention")
                 .font(FMFont.ui(FMFont.md, weight: .semibold))

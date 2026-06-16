@@ -30,6 +30,7 @@ Run each suite the project ships. Use the project root as cwd. Run independent s
 - **Web client e2e (Playwright):** `cd web-client && npm run test:e2e`. Playwright defaults to port 5174 which collides with the dev compose web-client; set `PLAYWRIGHT_PORT` to a free port when the dev compose stack is up.
 - **Root e2e (Playwright + docker stack):** `cd e2e && npm test`. This suite drives the full docker compose stack; ensure it's running first (or skip if not applicable to this branch's changes).
 - **OpenAPI schema drift:** if `api/**` or `web-client/src/api/**` changed, run `mise run regen-api-types` then `git diff --exit-code web-client/src/api/schema.d.ts`. A non-empty diff means the committed schema is stale — commit the regenerated file.
+- **iOS app build (xcodebuild):** if `ios/**` changed, the compile is the gate (the app ships no XCTest target). Clean-build for the simulator **from the worktree's own `ios/` dir** (a worktree has its own checkout — building the main repo's `ios/` tests the wrong code): `rm -rf ios/build/sim && xcodebuild -project ios/Fortymm.xcodeproj -scheme Fortymm -configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' -derivedDataPath ios/build/sim build`. The `rm -rf` matters — incremental builds report `BUILD SUCCEEDED` while serving a stale dylib. A non-`** BUILD SUCCEEDED **` result stops the workflow.
 
 If any suite fails: stop, report the failure, do not push.
 
@@ -59,13 +60,54 @@ Skill(skill="code-review:code-review")
 
 ## Step 6 — QA review
 
+Pick the QA pass that matches what the branch actually changed — the `qa-review`
+skill drives a **web browser**, so it can only exercise web-client changes. A
+branch that touched `ios/**` needs the **iOS Simulator**; a browser pass against
+the web app would test code the branch never touched.
+
+### 6a. Web changes (`web-client/**`) → browser QA
+
 Run the `qa-review` workflow — the adversarial "Quinn" black-box pass against the prod-like QA stack:
 
 ```
 Skill(skill="qa-review")
 ```
 
-- **If Quinn finds bugs:** relay the bug report (with screenshots via SendUserFile) and raise them to the user. Ask what they want to do. Do **not** auto-fix without acknowledgement.
+### 6b. iOS changes (`ios/**`) → Simulator QA
+
+Drive the real built app in the iOS Simulator against the **real QA-stack API**
+(not MSW, not a unit test). The app reads `FMM_API_BASE_URL` at runtime and mints
+a **guest session automatically on launch** — so no email/magic-link auth is
+needed to reach an authenticated dashboard. Steps:
+
+1. **Stand up the QA API.** Same stack as 6a — `docker-compose.qa.yml`, nginx on
+   `:8085`. If it's already up (`curl -sf http://127.0.0.1:8085/api/v1/health`),
+   reuse it; an iOS-only change doesn't rebuild the web/API images. Otherwise:
+   `[ -f .env ] || cp <main-checkout>/.env .env && docker compose -f docker-compose.qa.yml up -d --build`.
+2. **Build + install + launch** (reuse the clean build from Step 2's iOS gate).
+   Find the bundle id with `grep PRODUCT_BUNDLE_IDENTIFIER ios/Fortymm.xcodeproj/project.pbxproj`
+   (currently `com.fortymm.ios-client`). On a booted simulator
+   (`xcrun simctl list devices booted`; boot one if none):
+   ```bash
+   APP=ios/build/sim/Build/Products/Debug-iphonesimulator/Fortymm.app
+   xcrun simctl terminate booted <bundle-id> 2>/dev/null
+   xcrun simctl uninstall booted <bundle-id> 2>/dev/null   # avoid stale install
+   xcrun simctl install booted "$APP"
+   SIMCTL_CHILD_FMM_API_BASE_URL="http://127.0.0.1:8085/api" xcrun simctl launch booted <bundle-id>
+   ```
+   `SIMCTL_CHILD_*` forwards the env var into the app; the base must include `/api`
+   (QA's nginx serves the API under `/api`, unlike UAT).
+3. **Drive + screenshot.** Capture with `xcrun simctl io booted screenshot <file>`
+   and tap/type with `idb ui tap <x> <y> --udid <udid>` (points, not pixels).
+   Save evidence to `.qa-review/` (gitignore it). Exercise the screens the branch
+   touched at the states that matter — e.g. for a conditional-render change,
+   screenshot **both** the present and absent states (create the data through the
+   app UI: New match → Start match seeds a scoreable "needs attention" item).
+   Verify there's no layout regression (leftover gap, clipped view, etc.).
+
+### Both paths
+
+- **If bugs are found:** relay the report (with screenshots via SendUserFile) and raise them to the user. Ask what they want to do. Do **not** auto-fix without acknowledgement.
 - **If it's clean:** continue to Step 7.
 
 ## Step 7 — Merge
