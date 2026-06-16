@@ -1,6 +1,6 @@
 import { api, unwrap } from "@/api/client";
 import type { MatchDetails } from "@/api/matches";
-import type { QueryFunctionContext } from "@tanstack/react-query";
+import type { Query, QueryFunctionContext } from "@tanstack/react-query";
 import z from "zod";
 
 const scoreboardSchema = z.object({
@@ -51,8 +51,35 @@ export function matchDetailsResultFromPayload(payload: MatchDetails) {
 /** The resolved shape `matchDetailsQuery`'s `queryFn` returns. */
 export type MatchDetailsResult = ReturnType<typeof matchDetailsResultFromPayload>;
 
+/** The server's lifecycle label for a posted-but-unconfirmed result (mirrors
+ * `_status_label` in api/app/matches.py). While a match sits here it is waiting
+ * on the *other* side to confirm — a transition that happens in a different
+ * browser session and so triggers no cache invalidation on this page. */
+const AWAITING_CONFIRMATION = "Awaiting confirmation";
+
+/** How often (ms) to re-poll `GET /v1/matches/{id}` while a result is awaiting
+ * the opponent's confirmation. */
+const AWAITING_CONFIRMATION_POLL_MS = 5_000;
+
+/** Poll only while the match is awaiting the opponent's confirmation, and stop
+ * once it leaves that state (confirmed → Final, or contested → Disputed).
+ *
+ * The reporter posts a result, then leaves the match page open; the opponent
+ * confirms in their own session. Nothing invalidates the reporter's cache, and
+ * the global client disables `refetchOnWindowFocus` with a 30s `staleTime`, so
+ * without this the page is stuck on "Awaiting confirmation" until a manual
+ * reload (#493). Returning `false` outside that state means a settled match
+ * isn't polled, so the open page goes quiet again once it resolves. */
+export function refetchWhileAwaitingConfirmation(
+  query: Pick<Query<MatchDetailsResult>, "state">,
+): number | false {
+  const label = query.state.data?.unmigrated.status_label;
+  return label === AWAITING_CONFIRMATION ? AWAITING_CONFIRMATION_POLL_MS : false;
+}
+
 export const matchDetailsQuery = (matchId: string) => ({
   queryKey: queryKey(matchId),
   queryFn: fetchMatchDetails,
   throwOnError: true,
+  refetchInterval: refetchWhileAwaitingConfirmation,
 });
