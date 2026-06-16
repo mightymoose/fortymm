@@ -1,4 +1,5 @@
 import { api, unwrap } from "@/api/client";
+import type { MatchDetails } from "@/api/matches";
 import type { QueryFunctionContext } from "@tanstack/react-query";
 import z from "zod";
 
@@ -35,14 +36,20 @@ const fetchMatchDetails = async ({
 
   const data = unwrap(`load match ${matchId}`, result);
 
-  return {
-    ...matchDetailsSchema.parse(data),
-    unmigrated: data,
-  };
+  return matchDetailsResultFromPayload(data);
 };
 
+/** Build the cache value `matchDetailsQuery` resolves to from a full
+ * `MatchDetails` payload the caller already holds. Used by the queryFn (from the
+ * GET response) and to seed the details cache from the `POST /v1/matches`
+ * response before navigating to a just-created match (#510). Runs the parse, so
+ * a malformed payload fails loudly rather than priming a bad cache entry. */
+export function matchDetailsResultFromPayload(payload: MatchDetails) {
+  return { ...matchDetailsSchema.parse(payload), unmigrated: payload };
+}
+
 /** The resolved shape `matchDetailsQuery`'s `queryFn` returns. */
-export type MatchDetailsResult = Awaited<ReturnType<typeof fetchMatchDetails>>;
+export type MatchDetailsResult = ReturnType<typeof matchDetailsResultFromPayload>;
 
 export const matchDetailsQuery = (matchId: string) => ({
   queryKey: queryKey(matchId),

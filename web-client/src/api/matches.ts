@@ -7,7 +7,10 @@ import {
 } from '@tanstack/react-query'
 import { ApiError, api, resolveBaseUrl, unwrap } from './client'
 import { DASHBOARD_QUERY_KEY } from './dashboard'
-import { matchDetailsQueryKey } from '@/components/matches/match-details/match-details-query'
+import {
+  matchDetailsQueryKey,
+  matchDetailsResultFromPayload,
+} from '@/components/matches/match-details/match-details-query'
 import type { components } from './schema'
 
 export type Player = components['schemas']['PlayerRead']
@@ -130,9 +133,22 @@ export function usePlayerSearch(term: string) {
  * 4xx `detail` inline on the form — no global error toast is attached here.
  */
 export function useCreateMatch() {
+  const queryClient = useQueryClient()
   return useMutation({
     mutationFn: async (input: MatchCreate): Promise<MatchDetails> =>
       unwrap('create match', await api.POST('/v1/matches', { body: input })),
+    // The create response already *is* the match-details payload, so seed the
+    // details query cache from it. The match-details page then renders from this
+    // warm entry — whether reached by an immediate redirect or later from the
+    // scoring screen — instead of racing a `GET /v1/matches/{id}` against the
+    // write we just committed: the read-after-write "We couldn't find that
+    // match" dead-end behind #510.
+    onSuccess: (created) => {
+      queryClient.setQueryData(
+        matchDetailsQueryKey(created.id),
+        matchDetailsResultFromPayload(created),
+      )
+    },
   })
 }
 
