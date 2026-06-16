@@ -5,7 +5,7 @@ import { buildHeadingProps } from "./heading.factory";
 import { statusChipPage } from "./heading/status-chip.page";
 
 const scoped = (container: Container) => ({
-  /** The status chip on the left of the strip; absent when `chip` is null. */
+  /** The status chip on the left of the strip — always present. */
   ...statusChipPage.within(container),
   /** The "SINGLES · BO5"-style format label on the right of the strip. */
   getFormatLabel() {

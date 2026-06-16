@@ -2,11 +2,11 @@ import { Badge } from "@/components/ui/badge";
 import { type StatusChipView } from "../../scoreboard-query";
 
 export interface StatusChipProps {
-  chip: NonNullable<StatusChipView>;
+  chip: StatusChipView;
 }
 
 const chipVariant: Record<
-  NonNullable<StatusChipView>["status"],
+  StatusChipView["status"],
   React.ComponentProps<typeof Badge>["variant"]
 > = {
   scheduled: "outline",

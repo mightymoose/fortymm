@@ -12,6 +12,7 @@ import { scoreboardPage } from "./scoreboard.page";
 /** A decided match whose selected view is a stable, assertable outcome. */
 const decidedMatch = () =>
   buildMatchDetails({
+    status_label: "Final",
     sides: [
       buildMatchDetailsSide({
         won: true,

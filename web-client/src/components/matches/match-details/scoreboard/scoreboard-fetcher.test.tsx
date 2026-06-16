@@ -13,6 +13,7 @@ import { scoreboardFetcherPage } from "./scoreboard-fetcher.page";
 /** A decided match whose selected view is a stable, assertable outcome. */
 const decidedMatch = () =>
   buildMatchDetails({
+    status_label: "Final",
     sides: [
       buildMatchDetailsSide({
         won: true,
@@ -81,7 +82,10 @@ describe("ScoreboardFetcher", () => {
   it("renders the heading strip from the selected view", async () => {
     scoreboardFetcherPage.mockEndpoint(() =>
       HttpResponse.json(
-        buildMatchDetails({ data: { scoreboard: { status: "final" } } }),
+        buildMatchDetails({
+          status_label: "Final",
+          data: { scoreboard: { status: "final" } },
+        }),
       ),
     );
 
