@@ -66,6 +66,35 @@ async function readSessionMerged(
   return null
 }
 
+const CSRF_COOKIE_NAME = 'csrf_token'
+const CSRF_HEADER_NAME = 'X-CSRF-Token'
+const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
+
+/** Read a non-HttpOnly cookie value by name from `document.cookie`. */
+function readCookie(name: string): string | null {
+  if (typeof document === 'undefined') return null
+  const prefix = `${name}=`
+  for (const part of document.cookie.split('; ')) {
+    if (part.startsWith(prefix)) {
+      return decodeURIComponent(part.slice(prefix.length))
+    }
+  }
+  return null
+}
+
+api.use({
+  // Double-submit CSRF: echo the server-set `csrf_token` cookie back in a
+  // header on every mutating request. The backend (app/main.py:csrf_protect)
+  // 403s any unsafe-method request whose header doesn't match the cookie.
+  onRequest({ request }) {
+    if (!SAFE_METHODS.has(request.method.toUpperCase())) {
+      const token = readCookie(CSRF_COOKIE_NAME)
+      if (token) request.headers.set(CSRF_HEADER_NAME, token)
+    }
+    return request
+  },
+})
+
 api.use({
   async onResponse({ response }) {
     // Reset the latch on any healthy response so a later genuine session-end

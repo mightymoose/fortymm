@@ -1,11 +1,13 @@
 import logging
 import os
+import secrets
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 
 import redis.asyncio as redis_asyncio
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Response
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy import text
 
@@ -16,6 +18,7 @@ from app.notifications.router import router as notifications_router
 from app.players import router as players_router
 from app.rate_limiting import init_rate_limit_redis, shutdown_rate_limit_redis
 from app.rbac import router as rbac_router
+from app.sessions import CSRF_COOKIE_NAME, CSRF_HEADER_NAME, CSRF_SAFE_METHODS
 from app.sessions import router as sessions_router
 
 log = logging.getLogger(__name__)
@@ -39,6 +42,28 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="FortyMM API", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def csrf_protect(
+    request: Request, call_next: Callable[[Request], Awaitable[Response]]
+) -> Response:
+    """Double-submit CSRF guard: every unsafe-method request must echo the
+    non-HttpOnly ``csrf_token`` cookie back in the ``X-CSRF-Token`` header. A
+    cross-origin attacker's page can ride along the cookie but can neither read
+    its value nor set a custom header, so it can't produce a match. The cookie
+    is issued/rotated alongside the session cookie in ``app.sessions``."""
+    if request.method not in CSRF_SAFE_METHODS:
+        cookie = request.cookies.get(CSRF_COOKIE_NAME)
+        header = request.headers.get(CSRF_HEADER_NAME)
+        if not cookie or not header or not secrets.compare_digest(cookie, header):
+            return JSONResponse(
+                status_code=403,
+                content={"detail": "CSRF token missing or invalid."},
+            )
+    return await call_next(request)
+
+
 app.include_router(sessions_router)
 app.include_router(rbac_router)
 app.include_router(matches_router)

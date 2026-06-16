@@ -1694,6 +1694,7 @@ export interface operations {
             path?: never;
             cookie?: {
                 session?: string | null;
+                csrf_token?: string | null;
             };
         };
         requestBody?: never;

@@ -25,7 +25,12 @@ from app.sessions import (
     SESSION_COOKIE_NAME,
     SESSION_TOKEN_CONTEXT,
 )
-from tests._helpers import make_client, make_user, start_session
+from tests._helpers import (
+    CSRF_EVENT_HOOKS,
+    make_client,
+    make_user,
+    start_session,
+)
 
 
 @pytest_asyncio.fixture
@@ -36,7 +41,9 @@ async def api_client(db_session: AsyncSession) -> AsyncIterator[AsyncClient]:
     app.dependency_overrides[get_session] = _override
     transport = ASGITransport(app=app)
     async with AsyncClient(
-        transport=transport, base_url="https://testserver"
+        transport=transport,
+        base_url="https://testserver",
+        event_hooks=CSRF_EVENT_HOOKS,
     ) as client:
         yield client
     app.dependency_overrides.clear()
