@@ -69,6 +69,11 @@ export function useGameSaveState(
 export interface FailedGameSave {
   gameNumber: number
   variables: MatchGameScoreWrite
+  /** When this failed save was fired. A re-failure of the same game produces a
+   * fresh timestamp, letting callers tell "the same game failed again" apart
+   * from "nothing changed" — the failed-save banner folds this into its dismiss
+   * key so a dismissed banner re-surfaces when a retry fails anew (#528). */
+  submittedAt: number
 }
 
 /**
@@ -98,5 +103,6 @@ export function useFailedGameSaves(matchId: string): FailedGameSave[] {
     .map((state) => ({
       gameNumber: state.gameNumber as number,
       variables: state.variables as MatchGameScoreWrite,
+      submittedAt: state.submittedAt,
     }))
 }
