@@ -8,11 +8,23 @@ import {
 } from 'react'
 import {
   createFileRoute,
+  useBlocker,
   useNavigate,
   useRouterState,
 } from '@tanstack/react-router'
 import { Check, Mail } from 'lucide-react'
 import { toast } from 'sonner'
+
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 
 import { ApiError } from '@/api/client'
 import { useSendTestNotification } from '@/api/notifications'
@@ -514,7 +526,13 @@ function ClaimBanner({
 /*  01 — Username                                                     */
 /* ------------------------------------------------------------------ */
 
-function UsernameSection({ currentUsername }: { currentUsername: string }) {
+function UsernameSection({
+  currentUsername,
+  onDirtyChange,
+}: {
+  currentUsername: string
+  onDirtyChange: (dirty: boolean) => void
+}) {
   const updateUsername = useUpdateUsername()
   const [val, setVal] = useState(currentUsername)
   const [touched, setTouched] = useState(false)
@@ -536,6 +554,13 @@ function UsernameSection({ currentUsername }: { currentUsername: string }) {
 
   const clientV = useMemo(() => validateUsername(val), [val])
   const dirty = val !== currentUsername
+  // Report dirtiness up so the page can guard against reload / navigation
+  // away while an edit is in flight (#440). Reset to clean on unmount so a
+  // stale flag can't keep the guard armed after the section is gone.
+  useEffect(() => {
+    onDirtyChange(dirty)
+    return () => onDirtyChange(false)
+  }, [dirty, onDirtyChange])
   // If the value contains a disallowed character (e.g. uppercase, whitespace,
   // punctuation outside the allowed set), surface that immediately — the user
   // just typed it and we want them to know it's not going through. Length
@@ -698,10 +723,12 @@ function EmailSection({
   email,
   confirmedAt,
   pendingEmail,
+  onDirtyChange,
 }: {
   email: string | null
   confirmedAt: string | null
   pendingEmail: string | null
+  onDirtyChange: (dirty: boolean) => void
 }) {
   const setEmail = useSetEmail()
   const resendEmail = useResendEmailConfirmation()
@@ -728,6 +755,11 @@ function EmailSection({
 
   const v = useMemo(() => validateEmail(val), [val])
   const dirty = val !== displayAddress
+  // Report dirtiness up so the page can guard reload / navigation away (#440).
+  useEffect(() => {
+    onDirtyChange(dirty)
+    return () => onDirtyChange(false)
+  }, [dirty, onDirtyChange])
   const showErr = serverErr ?? (touched && !v.ok ? v.err : null)
 
   const status = deriveEmailStatus({ email, confirmedAt, pendingEmail })
@@ -1083,6 +1115,20 @@ function SettingsPage() {
     if (id === 'sec-email' && sessionLoaded && !claimed) focusEmailInput()
   }, [hash, sessionLoaded, claimed])
 
+  // Aggregate each section's dirtiness so we can warn before a reload, tab
+  // close, or in-app navigation silently discards an in-progress edit (#440).
+  const [usernameDirty, setUsernameDirty] = useState(false)
+  const [emailDirty, setEmailDirty] = useState(false)
+  const anyDirty = usernameDirty || emailDirty
+
+  // `enableBeforeUnload` arms the native reload/close prompt; `withResolver`
+  // lets us replace the in-app browser confirm() with a design-system dialog.
+  const blocker = useBlocker({
+    shouldBlockFn: () => anyDirty,
+    enableBeforeUnload: () => anyDirty,
+    withResolver: true,
+  })
+
   return (
     <AppShell>
       <div className="fmm-settings">
@@ -1100,11 +1146,15 @@ function SettingsPage() {
             />
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-              <UsernameSection currentUsername={sessionUsername} />
+              <UsernameSection
+                currentUsername={sessionUsername}
+                onDirtyChange={setUsernameDirty}
+              />
               <EmailSection
                 email={sessionEmail}
                 confirmedAt={sessionConfirmedAt}
                 pendingEmail={sessionPendingEmail}
+                onDirtyChange={setEmailDirty}
               />
               <NotificationsSection />
             </div>
@@ -1170,6 +1220,35 @@ function SettingsPage() {
           </div>
         </TooltipProvider>
       </div>
+      <AlertDialog
+        open={blocker.status === 'blocked'}
+        onOpenChange={(open) => {
+          // Radix fires onOpenChange(false) on overlay click / Escape — treat
+          // that as "stay on the page" so a stray dismiss never discards edits.
+          if (!open) blocker.reset?.()
+        }}
+      >
+        <AlertDialogContent data-testid="unsaved-changes-dialog">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Discard unsaved changes?</AlertDialogTitle>
+            <AlertDialogDescription>
+              You have changes that haven't been saved. If you leave now, they'll
+              be lost.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => blocker.reset?.()}>
+              Stay on this page
+            </AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={() => blocker.proceed?.()}
+            >
+              Discard changes
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </AppShell>
   )
 }
