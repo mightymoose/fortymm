@@ -328,6 +328,23 @@ export function scoreSaveMutationOptions(
     },
     onSuccess: (data: MatchDetails) =>
       applyScoreMutationCache(queryClient, matchId, data),
+    // Re-sync server truth whenever a save settles in error. A per-game write
+    // can lose a server-side race to a concurrent conflicting write (e.g. the
+    // opponent saved game 1 the other way first), so the server rejects ours
+    // and the success path never primes the cache. Without this, the match
+    // detail query keeps the stale games-won it last saw (the "Games won"
+    // counter on the entry screen reads `mySide.games_won` from
+    // `matchQueryKey`) until a manual reload (#564). Only invalidate the
+    // server-canonical match queries to refetch the resolved truth —
+    // deliberately *not* touching the mutation cache, so this game's
+    // failed-save scratch state survives to drive the failure banner /
+    // "Not saved" cell + retry UI.
+    onError: () => {
+      queryClient.invalidateQueries({ queryKey: matchQueryKey(matchId) })
+      queryClient.invalidateQueries({
+        queryKey: matchDetailsQueryKey(matchId),
+      })
+    },
   }
 }
 
