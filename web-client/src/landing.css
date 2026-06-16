@@ -114,6 +114,12 @@
 }
 .fortymm-landing .btn-secondary .btn-dot { background: var(--ball-500); }
 
+.fortymm-landing .btn-disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
 /* ---------- Shared ---------- */
 .fortymm-landing .eyebrow {
   display: inline-flex;
@@ -1364,12 +1370,19 @@
   text-transform: uppercase;
 }
 .fortymm-landing .ft-col-i {
+  display: block;
   font: 500 14px var(--font-ui);
   color: var(--fg-2);
   cursor: pointer;
   transition: color var(--dur-fast) var(--ease-out);
+  text-decoration: none;
 }
-.fortymm-landing .ft-col-i:hover { color: var(--ball-500); }
+.fortymm-landing a.ft-col-i:hover { color: var(--ball-500); }
+.fortymm-landing .ft-col-i-disabled {
+  color: var(--fg-3);
+  cursor: default;
+}
+.fortymm-landing .ft-col-i-disabled:hover { color: var(--fg-3); }
 .fortymm-landing .footer-bar {
   max-width: 1200px;
   margin: 56px auto 0;

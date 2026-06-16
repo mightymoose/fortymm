@@ -75,4 +75,45 @@ describe('/ route', () => {
     renderAt('/?landing=1')
     await expectLandingVisible()
   })
+
+  it('has no inert href="#" anchors on the landing page', async () => {
+    const { container } = renderAt('/')
+    await expectLandingVisible()
+
+    // Every link must go somewhere real: an in-app route, an off-site URL, or
+    // an in-page section anchor (#product etc.). A bare href="#" is a no-op CTA
+    // and regresses issue #437.
+    const inert = Array.from(
+      container.querySelectorAll<HTMLAnchorElement>('a[href="#"]'),
+    )
+    expect(inert).toHaveLength(0)
+  })
+
+  it('wires the footer GitHub links to the public repository', async () => {
+    renderAt('/')
+    await expectLandingVisible()
+
+    for (const link of screen.getAllByRole('link', { name: /github|contribute/i })) {
+      expect(link).toHaveAttribute(
+        'href',
+        'https://github.com/mightymoose/fortymm',
+      )
+      expect(link).toHaveAttribute('target', '_blank')
+      expect(link).toHaveAttribute('rel', expect.stringContaining('noopener'))
+    }
+  })
+
+  it('renders affordances that do not exist yet as inert, non-link text', async () => {
+    renderAt('/')
+    await expectLandingVisible()
+
+    // "Get the iOS app" has no destination yet — it must not be a clickable link.
+    expect(
+      screen.queryByRole('link', { name: /get the ios app/i }),
+    ).not.toBeInTheDocument()
+    // Footer "Discord" has no invite URL yet — also not a link.
+    expect(
+      screen.queryByRole('link', { name: /^discord$/i }),
+    ).not.toBeInTheDocument()
+  })
 })
