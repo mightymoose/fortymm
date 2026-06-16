@@ -24,6 +24,15 @@ const scoped = (container: Container) => ({
   findGrid() {
     return container.findByTestId("scoreboard-game-grid");
   },
+  /** The inner grid track laying out the columns — the `.md-games__grid` child
+   * of the `.md-games` scroll container (the testid host). The track overflows
+   * the container on narrow viewports, which is what makes the trailing SETS
+   * column reachable by scroll instead of clipped off-screen (#509). */
+  getGridTrack() {
+    return container
+      .getByTestId("scoreboard-game-grid")
+      .querySelector(".md-games__grid") as HTMLElement | null;
+  },
   ...gameGridRowPage.within(container),
 });
 
