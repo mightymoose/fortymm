@@ -28,10 +28,15 @@ export type MatchGameScoreWrite = components['schemas']['MatchGameScoreWrite']
 export type MatchResultsWrite = components['schemas']['MatchResultsWrite']
 export type MatchResultsGameWrite = components['schemas']['MatchResultsGameWrite']
 export type MatchStatus = components['schemas']['MatchStatus']
+// The `/matches` list filter bucket. A superset of `MatchStatus`: it splits
+// `in_progress` into `in_progress` (true-live, no posted result) and
+// `awaiting_confirmation` (posted result, ≥1 signature) so the Live filter
+// can't silently fold in awaiting-confirmation rows (issue #381).
+export type MatchListFilter = components['schemas']['MatchListFilter']
 export type Scoreboard = components['schemas']['Scoreboard']
 
 export type MatchListParams = {
-  status?: MatchStatus
+  status?: MatchListFilter
   q?: string
   page: number
   page_size: number

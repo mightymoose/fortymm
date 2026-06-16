@@ -628,13 +628,30 @@ export function projectStreak(seeds: SeedMatch[]): DashboardStreak | null {
   return kind === null ? null : { kind, n }
 }
 
+/** A posted-but-unconfirmed result: an in_progress seed with ≥1 signature.
+ * Mirrors the server's "Awaiting confirmation" bucket (issue #381). */
+export function isAwaitingConfirmation(seed: SeedMatch): boolean {
+  return seed.status === 'in_progress' && seed.signatures.length > 0
+}
+
+/** Count of awaiting-confirmation seeds — its own bucket, peeled out of the
+ * in_progress status count so Live reads as true-live. */
+export function awaitingCountOf(seeds: SeedMatch[]): number {
+  return seeds.filter(isAwaitingConfirmation).length
+}
+
 /** Single source of truth for the per-status histogram returned alongside
- * the paginated list — the FE renders pill counts from this. */
+ * the paginated list — the FE renders pill counts from this. The in_progress
+ * count is true-live only: awaiting-confirmation seeds are split out into
+ * `awaitingCountOf` (issue #381). */
 export function statusCountsOf(seeds: SeedMatch[]): Record<string, number> {
   const counts: Record<string, number> = Object.fromEntries(
     ALL_STATUSES.map((s) => [s, 0]),
   )
-  for (const s of seeds) counts[s.status] = (counts[s.status] ?? 0) + 1
+  for (const s of seeds) {
+    if (isAwaitingConfirmation(s)) continue
+    counts[s.status] = (counts[s.status] ?? 0) + 1
+  }
   return counts
 }
 

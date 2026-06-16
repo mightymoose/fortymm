@@ -4,7 +4,7 @@ import { scoringNewRoute, type MatchListRow } from '@/api/matches'
 import type { components } from '@/api/schema'
 import { matchListRow } from '@/test/factories'
 import {
-  API_TO_TAB,
+  API_TO_TONE,
   STATUS_TABS,
   STATUS_TONE,
   TAB_TO_API,
@@ -132,10 +132,10 @@ describe('projectMatchListRow', () => {
     expect(projectMatchListRow(row).score.games).toBeNull()
   })
 
-  it('resolves the status tone from STATUS_TONE[API_TO_TAB[status]]', () => {
+  it('resolves the status tone from STATUS_TONE[API_TO_TONE[status]]', () => {
     const row = matchListRow({ status: 'disputed', status_label: 'Disputed' })
     const view = projectMatchListRow(row)
-    expect(view.status.toneClass).toBe(STATUS_TONE[API_TO_TAB.disputed])
+    expect(view.status.toneClass).toBe(STATUS_TONE[API_TO_TONE.disputed])
     expect(view.status.toneClass).toBe('status-tone-final')
     expect(view.status.label).toBe('Disputed')
   })
@@ -150,6 +150,29 @@ describe('projectMatchListRow', () => {
     expect(projectMatchListRow(matchListRow({ status: 'completed' })).status.isLive).toBe(
       false,
     )
+  })
+
+  // The #381 bug at the row level: a posted-but-unconfirmed result is an
+  // in_progress row labelled "Awaiting confirmation". It must NOT read as Live
+  // (no live-dot) and must take its own "called" tone, not the live tone.
+  it('does not mark an awaiting-confirmation row as live and re-tones it', () => {
+    const row = matchListRow({
+      status: 'in_progress',
+      status_label: 'Awaiting confirmation',
+    })
+    const view = projectMatchListRow(row)
+    expect(view.isLive).toBe(false)
+    expect(view.status.isLive).toBe(false)
+    expect(view.status.toneClass).toBe('status-tone-called')
+    expect(view.status.toneClass).not.toBe(STATUS_TONE.live)
+    expect(view.status.label).toBe('Awaiting confirmation')
+  })
+
+  it('still marks a signature-free in_progress row as live', () => {
+    const row = matchListRow({ status: 'in_progress', status_label: 'Live' })
+    const view = projectMatchListRow(row)
+    expect(view.isLive).toBe(true)
+    expect(view.status.toneClass).toBe('status-tone-live')
   })
 
   it('builds the aria label as "Open match: {s1} vs {s2}"', () => {
@@ -190,22 +213,19 @@ describe('projectMatchListRow', () => {
 })
 
 describe('buildFilterTabs', () => {
-  it('sums all status counts for the "all" tab', () => {
+  it('sums every status bucket plus the awaiting bucket for the "all" tab', () => {
     const tabs = buildFilterTabs(
       STATUS_TABS,
       { pending: 2, in_progress: 1, completed: 4 },
       TAB_TO_API,
+      3,
     )
     const all = tabs.find((t) => t.value === 'all')
-    expect(all?.count).toBe(7)
+    expect(all?.count).toBe(10)
   })
 
-  it('uses statusCounts[TAB_TO_API[value]] ?? 0 for each named tab', () => {
-    const tabs = buildFilterTabs(
-      STATUS_TABS,
-      { in_progress: 3 },
-      TAB_TO_API,
-    )
+  it('uses statusCounts[TAB_TO_API[value]] ?? 0 for each status-backed tab', () => {
+    const tabs = buildFilterTabs(STATUS_TABS, { in_progress: 3 }, TAB_TO_API, 0)
     const live = tabs.find((t) => t.value === 'live')
     const scheduled = tabs.find((t) => t.value === 'scheduled')
     expect(live?.count).toBe(3)
@@ -213,17 +233,40 @@ describe('buildFilterTabs', () => {
     expect(scheduled?.count).toBe(0)
   })
 
+  // The #381 fix at the count level: the Live count reads the (already
+  // awaiting-subtracted) in_progress count, the Awaiting count reads its own
+  // bucket. A posted-but-unconfirmed result is counted once, under Awaiting,
+  // never under Live.
+  it('reads the awaiting tab from awaitingCount, separate from live', () => {
+    const tabs = buildFilterTabs(
+      STATUS_TABS,
+      { in_progress: 2 },
+      TAB_TO_API,
+      5,
+    )
+    expect(tabs.find((t) => t.value === 'live')?.count).toBe(2)
+    expect(tabs.find((t) => t.value === 'awaiting')?.count).toBe(5)
+  })
+
   it('returns a null count for every tab when statusCounts is undefined', () => {
-    const tabs = buildFilterTabs(STATUS_TABS, undefined, TAB_TO_API)
+    const tabs = buildFilterTabs(STATUS_TABS, undefined, TAB_TO_API, 4)
     expect(tabs.every((t) => t.count === null)).toBe(true)
   })
 
+  it('treats a missing awaitingCount as 0', () => {
+    const tabs = buildFilterTabs(STATUS_TABS, { in_progress: 1 }, TAB_TO_API, undefined)
+    expect(tabs.find((t) => t.value === 'awaiting')?.count).toBe(0)
+  })
+
   it('carries the label and live flag through from the tab descriptors', () => {
-    const tabs = buildFilterTabs(STATUS_TABS, undefined, TAB_TO_API)
+    const tabs = buildFilterTabs(STATUS_TABS, undefined, TAB_TO_API, 0)
     const live = tabs.find((t) => t.value === 'live')
     expect(live?.label).toBe('Live')
     expect(live?.isLive).toBe(true)
     const all = tabs.find((t) => t.value === 'all')
     expect(all?.isLive).toBe(false)
+    const awaiting = tabs.find((t) => t.value === 'awaiting')
+    expect(awaiting?.label).toBe('Awaiting')
+    expect(awaiting?.isLive).toBe(false)
   })
 })

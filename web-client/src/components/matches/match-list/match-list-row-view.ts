@@ -1,11 +1,21 @@
-import type { MatchListRow, MatchStatus } from '@/api/matches'
+import type { MatchListFilter, MatchListRow } from '@/api/matches'
 import type { components } from '@/api/schema'
 import { matchDetailRoute, scoringNewRoute } from '@/api/matches'
-import { API_TO_TAB, STATUS_TONE } from './match-list-status'
+import {
+  API_TO_TONE,
+  STATUS_TONE,
+  type StatusKey,
+} from './match-list-status'
 import type { MatchListRowView } from './match-list-table/match-list-row'
 import type { FilterTabView } from './filter-row'
 
 type MatchListRowSide = components['schemas']['MatchDetailsSide']
+
+// The server-derived label for a posted-but-unconfirmed result (an in_progress
+// match with ≥1 signature; see `_status_label` in the API). The list re-tones
+// these rows to the dedicated "awaiting" treatment — they share the
+// `in_progress` DB status with true-live rows but aren't live anymore.
+export const AWAITING_CONFIRMATION_LABEL = 'Awaiting confirmation'
 
 /** Players joined by ' & ', or 'No opponent' for a null/empty side. (was sideLabel) */
 export function sideLabel(side: MatchListRowSide | null): string {
@@ -48,12 +58,19 @@ function projectPlayerChip(side: MatchListRowSide | null): {
 
 /** Project one raw row into the presentational view model the table renders. */
 export function projectMatchListRow(row: MatchListRow): MatchListRowView {
-  const tab = API_TO_TAB[row.status]
+  // An in_progress row with a posted result reads as "Awaiting confirmation",
+  // not Live — re-tone it and drop the live-dot so it stops masquerading as a
+  // live match (issue #381). The DB status is still in_progress, so the
+  // games-score still shows.
+  const isAwaiting =
+    row.status === 'in_progress' &&
+    row.status_label === AWAITING_CONFIRMATION_LABEL
+  const tone: StatusKey = isAwaiting ? 'awaiting' : API_TO_TONE[row.status]
   const side1 = row.sides.find((s) => s.side_number === 1) ?? row.sides[0]
   const side2 = row.sides.find((s) => s.side_number === 2) ?? null
   const showScore =
     row.status === 'in_progress' || row.status === 'completed'
-  const isLive = row.status === 'in_progress'
+  const isLive = row.status === 'in_progress' && !isAwaiting
 
   return {
     id: row.id,
@@ -71,7 +88,7 @@ export function projectMatchListRow(row: MatchListRow): MatchListRowView {
     },
     status: {
       label: row.status_label,
-      toneClass: STATUS_TONE[tab],
+      toneClass: STATUS_TONE[tone],
       isLive,
     },
     time: { when: formatCreatedAt(row.created_at) },
@@ -82,20 +99,38 @@ export function projectMatchListRow(row: MatchListRow): MatchListRowView {
   }
 }
 
-/** Build the FilterRow tab descriptors from the static tab list + status_counts. */
+/** Build the FilterRow tab descriptors from the static tab list + counts.
+ *
+ * Counts are bucketed exactly the way the server splits the list: `live` reads
+ * the (already awaiting-subtracted) `in_progress` count, the `awaiting` tab
+ * reads the dedicated `awaitingCount`, and `all` sums every status bucket plus
+ * the awaiting bucket — so a posted-but-unconfirmed result is counted once,
+ * under Awaiting, never under Live (issue #381). */
 export function buildFilterTabs(
   tabs: { value: FilterTabView['value']; label: string; live?: boolean }[],
   statusCounts: Record<string, number> | undefined,
-  tabToApi: Record<string, MatchStatus>,
+  tabToApi: Record<string, MatchListFilter>,
+  awaitingCount: number | undefined,
 ): FilterTabView[] {
-  return tabs.map((tab) => ({
-    value: tab.value,
-    label: tab.label,
-    isLive: tab.live ?? false,
-    count: !statusCounts
-      ? null
-      : tab.value === 'all'
-        ? Object.values(statusCounts).reduce((a, b) => a + b, 0)
-        : statusCounts[tabToApi[tab.value]] ?? 0,
-  }))
+  return tabs.map((tab) => {
+    const count = (): number | null => {
+      if (!statusCounts) return null
+      if (tab.value === 'all') {
+        return (
+          Object.values(statusCounts).reduce((a, b) => a + b, 0) +
+          (awaitingCount ?? 0)
+        )
+      }
+      if (tabToApi[tab.value] === 'awaiting_confirmation') {
+        return awaitingCount ?? 0
+      }
+      return statusCounts[tabToApi[tab.value]] ?? 0
+    }
+    return {
+      value: tab.value,
+      label: tab.label,
+      isLive: tab.live ?? false,
+      count: count(),
+    }
+  })
 }

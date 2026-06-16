@@ -1098,6 +1098,19 @@ export interface components {
             /** Name */
             name: string;
         };
+        /**
+         * MatchListFilter
+         * @description The selectable buckets on the ``/matches`` list filter.
+         *
+         *     Mostly a 1:1 echo of ``MatchStatus``, but ``awaiting_confirmation`` is a
+         *     *derived* bucket with no DB status of its own — it's an ``in_progress``
+         *     match that already carries at least one signature (a posted result waiting
+         *     on the other side; see ``_status_label``). The ``live`` filter therefore
+         *     means "``in_progress`` with **no** signature yet", so a posted-but-unconfirmed
+         *     result no longer silently inflates the Live tab / count (issue #381).
+         * @enum {string}
+         */
+        MatchListFilter: "pending" | "in_progress" | "awaiting_confirmation" | "completed" | "disputed" | "voided";
         /** MatchListResponse */
         MatchListResponse: {
             /** Items */
@@ -1112,6 +1125,8 @@ export interface components {
             status_counts: {
                 [key: string]: number;
             };
+            /** Awaiting Confirmation Count */
+            awaiting_confirmation_count: number;
         };
         /** MatchListRow */
         MatchListRow: {
@@ -2494,7 +2509,7 @@ export interface operations {
     list_matches_v1_matches_get: {
         parameters: {
             query?: {
-                status?: components["schemas"]["MatchStatus"] | null;
+                status?: components["schemas"]["MatchListFilter"] | null;
                 q?: string | null;
                 page?: number;
                 page_size?: number;
@@ -2565,7 +2580,7 @@ export interface operations {
     export_matches_csv_v1_matches_csv_get: {
         parameters: {
             query?: {
-                status?: components["schemas"]["MatchStatus"] | null;
+                status?: components["schemas"]["MatchListFilter"] | null;
                 q?: string | null;
             };
             header?: never;

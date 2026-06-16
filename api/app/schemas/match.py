@@ -1,3 +1,4 @@
+import enum
 import uuid
 from datetime import datetime
 
@@ -6,6 +7,25 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from app.models.match import MatchStatus
 from app.schemas.rating import RatingChange
 from app.schemas.view.match_details import MatchDetails as MatchDetailsView
+
+
+class MatchListFilter(enum.Enum):
+    """The selectable buckets on the ``/matches`` list filter.
+
+    Mostly a 1:1 echo of ``MatchStatus``, but ``awaiting_confirmation`` is a
+    *derived* bucket with no DB status of its own — it's an ``in_progress``
+    match that already carries at least one signature (a posted result waiting
+    on the other side; see ``_status_label``). The ``live`` filter therefore
+    means "``in_progress`` with **no** signature yet", so a posted-but-unconfirmed
+    result no longer silently inflates the Live tab / count (issue #381)."""
+
+    pending = "pending"
+    live = "in_progress"
+    awaiting_confirmation = "awaiting_confirmation"
+    completed = "completed"
+    disputed = "disputed"
+    voided = "voided"
+
 
 # Match lengths the client offers. All odd so one side can always reach a
 # strict majority of games; the DB additionally enforces "odd and >= 1".
@@ -213,7 +233,16 @@ class MatchListResponse(BaseModel):
     page: int
     page_size: int
     total: int
+    # Per-status counts (honoring ``q``, ignoring the status filter). The
+    # ``in_progress`` count here is *true-live only* — posted-but-unconfirmed
+    # results are split out into ``awaiting_confirmation_count`` so the Live tab
+    # / count can't silently fold them in (issue #381). ``in_progress`` +
+    # ``awaiting_confirmation_count`` is the total of all ``in_progress`` rows.
     status_counts: dict[MatchStatus, int]
+    # Count of ``in_progress`` matches with at least one signature — a posted
+    # result waiting on the other side ("Awaiting confirmation"). Its own bucket
+    # so it neither inflates Live nor needs the FE to re-derive it.
+    awaiting_confirmation_count: int
 
 
 # ----- score write (POST/PUT body) -----------------------------------------

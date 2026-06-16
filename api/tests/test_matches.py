@@ -455,6 +455,54 @@ async def test_list_filter_by_status(api_client: AsyncClient, db_session: AsyncS
     assert listing["status_counts"]["completed"] == 1
 
 
+async def test_list_live_filter_excludes_awaiting_confirmation(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """Regression for #381: a posted-but-unconfirmed result is an in_progress
+    match with a signature ("Awaiting confirmation"). It must NOT count or list
+    under the Live filter — it has its own ``awaiting_confirmation`` bucket."""
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "rival") as (opp_client, opp):
+        live = await _create_match(api_client, opp.id, best_of=1)
+        # A second match with a posted (but unconfirmed) result: status stays
+        # in_progress, one signature recorded → "Awaiting confirmation".
+        awaiting = await _create_match(api_client, opp.id, best_of=1)
+        post = await api_client.post(
+            f"/v1/matches/{awaiting['id']}/results",
+            json={
+                "games": [
+                    {"game_number": 1, "side_1_points": 11, "side_2_points": 5},
+                ]
+            },
+        )
+        assert post.status_code == 201
+        assert post.json()["status"] == "in_progress"
+        assert post.json()["status_label"] == "Awaiting confirmation"
+
+    # Live filter: only the signature-free in_progress match.
+    live_listing = (
+        await api_client.get("/v1/matches", params={"status": "in_progress"})
+    ).json()
+    assert [row["id"] for row in live_listing["items"]] == [live["id"]]
+    assert live_listing["total"] == 1
+    assert live_listing["status_counts"]["in_progress"] == 1
+    assert live_listing["awaiting_confirmation_count"] == 1
+
+    # Awaiting filter: only the posted-but-unconfirmed match.
+    awaiting_listing = (
+        await api_client.get("/v1/matches", params={"status": "awaiting_confirmation"})
+    ).json()
+    assert [row["id"] for row in awaiting_listing["items"]] == [awaiting["id"]]
+    assert awaiting_listing["total"] == 1
+    assert awaiting_listing["items"][0]["status_label"] == "Awaiting confirmation"
+
+    # Unfiltered: both rows present, and the total counts each exactly once.
+    full = (await api_client.get("/v1/matches")).json()
+    assert full["total"] == 2
+    assert full["status_counts"]["in_progress"] == 1
+    assert full["awaiting_confirmation_count"] == 1
+
+
 async def test_list_q_filter_matches_any_player_username(
     api_client: AsyncClient, db_session: AsyncSession
 ):

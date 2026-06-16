@@ -7,6 +7,8 @@ import {
   finalizeSeed,
   findMatch,
   MOCK_CURRENT_USER,
+  awaitingCountOf,
+  isAwaitingConfirmation,
   mockMatches,
   newMatchSeed,
   projectDashboardAttention,
@@ -54,6 +56,20 @@ function matchHasPlayerLike(m: SeedMatch, q: string): boolean {
     mockSession.data.user.username.toLowerCase().includes(q) ||
     (m.opponent?.username ?? '').toLowerCase().includes(q)
   )
+}
+
+/** Whether a seed falls in the requested `MatchListFilter` bucket. `in_progress`
+ * (Live) excludes posted-but-unconfirmed results; `awaiting_confirmation` is
+ * exactly those — mirrors the server split so a posted result never leaks into
+ * Live (issue #381). Shared by the list and CSV handlers. */
+function matchesListFilter(m: SeedMatch, statusFilter: string): boolean {
+  if (statusFilter === 'awaiting_confirmation') {
+    return isAwaitingConfirmation(m)
+  }
+  if (statusFilter === 'in_progress') {
+    return m.status === 'in_progress' && !isAwaitingConfirmation(m)
+  }
+  return m.status === statusFilter
 }
 
 // ----- /v1/players helpers --------------------------------------------------
@@ -554,7 +570,7 @@ export const handlers = [
       scoped = scoped.filter((m) => matchHasPlayerLike(m, q))
     }
     const filtered = statusFilter
-      ? scoped.filter((m) => m.status === statusFilter)
+      ? scoped.filter((m) => matchesListFilter(m, statusFilter))
       : scoped
 
     const esc = (v: string) =>
@@ -611,7 +627,7 @@ export const handlers = [
       scoped = scoped.filter((m) => matchHasPlayerLike(m, q))
     }
     const filtered = statusFilter
-      ? scoped.filter((m) => m.status === statusFilter)
+      ? scoped.filter((m) => matchesListFilter(m, statusFilter))
       : scoped
 
     const start = (page - 1) * pageSize
@@ -622,6 +638,7 @@ export const handlers = [
       page_size: pageSize,
       total: filtered.length,
       status_counts: statusCountsOf(scoped),
+      awaiting_confirmation_count: awaitingCountOf(scoped),
     })
   }),
 
