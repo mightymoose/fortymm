@@ -24,6 +24,14 @@ const scoped = (container: Container) => ({
   queryMessage(text: string | RegExp) {
     return container.queryByText(text)
   },
+  /** The mono eyebrow above the headline (e.g. "404 · Not found"). */
+  queryEyebrow(text: string | RegExp) {
+    return container.queryByText(text)
+  },
+  /** The Bebas display headline, exposed as a level-1 heading. */
+  queryHeadline() {
+    return container.queryByRole('heading', { level: 1 })
+  },
   /** The retry affordance — present for retryable errors (429, 5xx, network),
    * absent for the not-found dead end. */
   queryRetryButton() {

@@ -17,6 +17,24 @@ describe('MatchDetailsError', () => {
     expect(matchDetailsErrorPage.queryRetryButton()).not.toBeInTheDocument()
   })
 
+  it('renders the page-level state shape: mono eyebrow, Bebas headline, supporting copy', async () => {
+    matchDetailsErrorPage.render({ error: buildApiError(404, 'Match not found.') })
+
+    await matchDetailsErrorPage.findAlert()
+    // Eyebrow code chip above the headline.
+    expect(
+      matchDetailsErrorPage.queryEyebrow(/404 · not found/i),
+    ).toBeInTheDocument()
+    // The message is the headline (a level-1 heading).
+    expect(matchDetailsErrorPage.queryHeadline()).toHaveTextContent(
+      /couldn.t find that match/i,
+    )
+    // Supporting copy beneath the headline.
+    expect(
+      matchDetailsErrorPage.queryMessage(/may have been deleted/i),
+    ).toBeInTheDocument()
+  })
+
   it('shows friendly not-found copy without leaking the raw API detail for a malformed id (#152)', async () => {
     matchDetailsErrorPage.render({
       error: buildApiError(
