@@ -551,3 +551,56 @@ describe('NewMatchPage — opponent search', () => {
     )
   })
 })
+
+describe('NewMatchPage — mobile label layout (#388)', () => {
+  // These guard the DOM contract the responsive CSS in new.css relies on to
+  // keep labels and captions from crowding on a 375px screen. jsdom doesn't
+  // lay out, so we assert structure rather than measure pixels: the section
+  // head keeps the title and hint as two separate elements (so the flex
+  // `gap` / mobile column-stack apply between them, instead of one fused
+  // "OpponentOPTIONAL…" text node), and the unavailable caption stays a child
+  // of the field label (so its `margin-left:auto`/`padding-left` breathing
+  // room and the label's `flex-wrap` keep it off the "Rated match" label).
+  function recentWithOne() {
+    return http.get('*/v1/players/recent', () =>
+      HttpResponse.json([{ id: 'pl-1', username: 'ada.lovelace' }]),
+    )
+  }
+
+  it('renders the opponent title and hint as separate section-head children', async () => {
+    server.use(recentWithOne())
+    const { container } = renderNewMatch()
+
+    await screen.findByRole('button', { name: /ada\.lovelace/i })
+
+    const head = container.querySelector('.nm-section-head')
+    expect(head).not.toBeNull()
+    const title = head!.querySelector('.title')
+    const hint = head!.querySelector('.hint')
+    expect(title).toHaveTextContent(/^Opponent$/)
+    // The hint is its own element — not concatenated into the title — so the
+    // gap/column-stack rules have two boxes to space apart.
+    expect(hint).not.toBeNull()
+    expect(hint).not.toBe(title)
+    expect(hint).toHaveTextContent(/optional/i)
+  })
+
+  it('keeps the "unavailable" caption inside the rated field label', async () => {
+    server.use(recentWithOne())
+    const { container } = renderNewMatch()
+
+    // No opponent picked yet → the rated control is unavailable and shows the
+    // "No opponent · unavailable" caption.
+    await screen.findByRole('button', { name: /ada\.lovelace/i })
+
+    const fieldLabels = container.querySelectorAll('.nm-field-label')
+    const na = container.querySelector('.nm-field-label .na')
+    expect(na).not.toBeNull()
+    expect(na).toHaveTextContent(/no opponent.*unavailable/i)
+    // It lives within a field label that also carries the "Rated match" text,
+    // so the label's flex layout (wrap + margin) governs both.
+    const owner = Array.from(fieldLabels).find((el) => el.contains(na!))
+    expect(owner).toBeDefined()
+    expect(owner).toHaveTextContent(/rated match/i)
+  })
+})
