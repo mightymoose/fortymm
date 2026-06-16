@@ -1665,6 +1665,10 @@ body.dark.fortymm-theme {
   display: flex;
   align-items: center;
   gap: 14px;
+  min-width: 0;
+}
+.fortymm-theme .se-head .id {
+  min-width: 0;
 }
 .fortymm-theme .se-head.right {
   justify-content: flex-end;
@@ -1694,6 +1698,9 @@ body.dark.fortymm-theme {
 .fortymm-theme .se-head .nm {
   font: 600 20px var(--font-ui);
   color: var(--fg-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .fortymm-theme .se-head .rt {
   font: 500 11px var(--font-mono);

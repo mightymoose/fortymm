@@ -549,7 +549,7 @@ function ScoreSide({
     </div>
   )
   const identity = (
-    <div>
+    <div className="id">
       <div className="nm">{name}</div>
       <div className="rt">
         Games won · <b>{wins}</b>
