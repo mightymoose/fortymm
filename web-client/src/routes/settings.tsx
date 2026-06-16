@@ -650,10 +650,11 @@ function UsernameSection({ currentUsername }: { currentUsername: string }) {
           display: 'flex',
           alignItems: 'center',
           gap: 14,
+          minWidth: 0,
         }}
       >
         <UserAvatar name={val} size={36} dim={!clientV.ok} />
-        <div style={{ flex: 1 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
           <div
             style={{
               fontSize: 'var(--text-xs)',
@@ -670,6 +671,7 @@ function UsernameSection({ currentUsername }: { currentUsername: string }) {
               fontFamily: 'var(--font-mono)',
               fontSize: 'var(--text-base)',
               color: 'var(--fg-1)',
+              overflowWrap: 'anywhere',
             }}
           >
             {clientV.ok ? `@${val}` : '—'}
@@ -681,6 +683,8 @@ function UsernameSection({ currentUsername }: { currentUsername: string }) {
             fontSize: 'var(--text-xs)',
             color: 'var(--fg-muted)',
             letterSpacing: '0.08em',
+            minWidth: 0,
+            overflowWrap: 'anywhere',
           }}
         >
           {window.location.host}/p/players/{clientV.ok ? val : '—'}

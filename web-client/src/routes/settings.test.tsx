@@ -212,6 +212,25 @@ describe('SettingsPage username section', () => {
     const section = input.closest('section') as HTMLElement
     expect(within(section).getByText(/no spaces/i)).toBeInTheDocument()
   })
+
+  it('keeps the public-profile URL preview wrappable so a long username cannot overflow (#376)', async () => {
+    const user = userEvent.setup()
+    await renderSettings()
+
+    const input = await screen.findByLabelText(/^username$/i)
+    await user.clear(input)
+    // A long, valid (lowercase, no-space) username — the case that forced
+    // ~51px of horizontal overflow at 375px before the wrap fix.
+    await user.type(input, 'a-really-long-public-username-that-is-valid')
+
+    const section = input.closest('section') as HTMLElement
+    const urlPreview = within(section).getByText(/\/p\/players\//i)
+
+    // The mono URL span must be allowed to wrap inside the panel rather than
+    // forcing the row (and the viewport) wider than 375px. jsdom has no real
+    // layout engine, so we assert the break-enabling styles directly.
+    expect(urlPreview).toHaveStyle({ overflowWrap: 'anywhere', minWidth: '0px' })
+  })
 })
 
 describe('SettingsPage footer sign out', () => {
