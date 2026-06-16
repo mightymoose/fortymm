@@ -8,7 +8,7 @@ from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
-from httpx import ASGITransport, AsyncClient
+from httpx import ASGITransport, AsyncClient, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,6 +16,42 @@ from app.main import app as fastapi_app
 from app.models import User
 from app.notifications.apns import Environment, SendOutcome, SendResult
 from app.notifications.dependencies import get_push_sender
+from app.sessions import CSRF_COOKIE_NAME, CSRF_HEADER_NAME
+
+_CSRF_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+
+
+async def _attach_csrf_header(request: Request) -> None:
+    """httpx request hook that satisfies the app's double-submit CSRF guard on
+    every mutating request, mirroring the browser client.
+
+    If the client carries a real ``csrf_token`` cookie (it called
+    ``/v1/session``), echo that value in the ``X-CSRF-Token`` header. Tests that
+    bypass the session via ``dependency_overrides`` have no such cookie, so
+    inject a synthetic matching cookie/header pair — they still need to clear
+    the middleware. Tests exercising the *rejection* path build a client
+    without this hook."""
+    if request.method.upper() in _CSRF_SAFE_METHODS:
+        return
+    cookie_header = request.headers.get("cookie")
+    prefix = f"{CSRF_COOKIE_NAME}="
+    token: str | None = None
+    for part in (cookie_header or "").split("; "):
+        if part.startswith(prefix):
+            token = part[len(prefix) :]
+            break
+    if token is None:
+        token = "test-csrf-token"
+        pair = f"{prefix}{token}"
+        request.headers["cookie"] = (
+            f"{cookie_header}; {pair}" if cookie_header else pair
+        )
+    request.headers[CSRF_HEADER_NAME] = token
+
+
+# Pass to every test ``AsyncClient`` so the existing mutating-request tests keep
+# passing under the double-submit CSRF guard.
+CSRF_EVENT_HOOKS = {"request": [_attach_csrf_header]}
 
 
 async def start_session(api_client: AsyncClient, db_session: AsyncSession) -> User:
@@ -47,6 +83,7 @@ def make_client() -> AsyncClient:
     return AsyncClient(
         transport=ASGITransport(app=fastapi_app),
         base_url="https://testserver",
+        event_hooks=CSRF_EVENT_HOOKS,
     )
 
 

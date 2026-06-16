@@ -5,7 +5,11 @@ import { server } from '@/mocks/server'
 import { sessionResponse } from '@/test/factories'
 import { api, setSessionEndedHandler } from './client'
 
-afterEach(() => setSessionEndedHandler(null))
+afterEach(() => {
+  setSessionEndedHandler(null)
+  // Drop any csrf cookie a test set so it can't leak into the next one.
+  document.cookie = 'csrf_token=; max-age=0; path=/'
+})
 
 /** Force the middleware's internal latch back to "not firing" via a 200. */
 async function resetLatch() {
@@ -71,4 +75,48 @@ it('latches so a burst of 401s redirects only once', async () => {
   await api.GET('/v1/session')
 
   expect(handler).toHaveBeenCalledTimes(1)
+})
+
+it('echoes the csrf cookie in the X-CSRF-Token header on a mutation', async () => {
+  document.cookie = 'csrf_token=tok-123; path=/'
+  let seen: string | null = 'unset'
+  server.use(
+    http.delete('*/v1/session', ({ request }) => {
+      seen = request.headers.get('X-CSRF-Token')
+      return new HttpResponse(null, { status: 204 })
+    }),
+  )
+
+  await api.DELETE('/v1/session')
+
+  expect(seen).toBe('tok-123')
+})
+
+it('does not attach the csrf header on safe (GET) requests', async () => {
+  document.cookie = 'csrf_token=tok-123; path=/'
+  let seen: string | null = 'unset'
+  server.use(
+    http.get('*/v1/session', ({ request }) => {
+      seen = request.headers.get('X-CSRF-Token')
+      return HttpResponse.json(sessionResponse())
+    }),
+  )
+
+  await api.GET('/v1/session')
+
+  expect(seen).toBeNull()
+})
+
+it('attaches no header when there is no csrf cookie', async () => {
+  let seen: string | null = 'unset'
+  server.use(
+    http.delete('*/v1/session', ({ request }) => {
+      seen = request.headers.get('X-CSRF-Token')
+      return new HttpResponse(null, { status: 204 })
+    }),
+  )
+
+  await api.DELETE('/v1/session')
+
+  expect(seen).toBeNull()
 })

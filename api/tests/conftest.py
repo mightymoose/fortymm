@@ -18,6 +18,7 @@ from app import queue as queue_module
 from app.db import Base, get_session
 from app.main import app as fastapi_app
 from app.models import League, LeagueVisibility, RatingStrategy
+from tests._helpers import CSRF_EVENT_HOOKS
 
 
 @pytest.fixture(autouse=True)
@@ -215,7 +216,9 @@ async def api_client(db_session: AsyncSession) -> AsyncIterator[AsyncClient]:
     fastapi_app.dependency_overrides[get_session] = _override
     transport = ASGITransport(app=fastapi_app)
     async with AsyncClient(
-        transport=transport, base_url="https://testserver"
+        transport=transport,
+        base_url="https://testserver",
+        event_hooks=CSRF_EVENT_HOOKS,
     ) as client:
         yield client
     fastapi_app.dependency_overrides.clear()

@@ -52,6 +52,14 @@ log = logging.getLogger(__name__)
 router = APIRouter()
 
 SESSION_COOKIE_NAME = "session"
+# Non-HttpOnly companion cookie for the double-submit CSRF defense. The session
+# cookie is HttpOnly so a cross-origin attacker can't read it; this one is
+# readable by our own JS, which echoes it in the ``X-CSRF-Token`` header on
+# mutating requests. ``csrf_protect`` (app/main.py) rejects any unsafe-method
+# request whose header doesn't match this cookie. An attacker's page can ride
+# along the cookies but can neither read this value nor set the custom header.
+CSRF_COOKIE_NAME = "csrf_token"
+CSRF_HEADER_NAME = "x-csrf-token"
 SESSION_TOKEN_CONTEXT = "session"
 # Stable `code` on the 401 we raise when a cookie resolves to a tombstoned
 # (merged-away) guest, so clients can tell "your session was merged, sign in"
@@ -421,12 +429,30 @@ async def _create_session(db: AsyncSession) -> tuple[User, str]:
 
 
 def _set_session_cookie(response: Response, raw_token: str) -> None:
+    # Session cookie first so it leads the Set-Cookie list, then a fresh CSRF
+    # token. Every session rotation (create, merge sign-in, email confirm,
+    # magic-link consume) flows through here, so the CSRF token rotates with
+    # the session for free.
     response.set_cookie(
         key=SESSION_COOKIE_NAME,
         value=raw_token,
         max_age=int(SESSION_LIFETIME.total_seconds()),
         path="/",
         httponly=True,
+        secure=_cookie_secure(),
+        samesite="lax",
+    )
+    _set_csrf_cookie(response)
+
+
+def _set_csrf_cookie(response: Response) -> None:
+    response.set_cookie(
+        key=CSRF_COOKIE_NAME,
+        value=secrets.token_urlsafe(32),
+        max_age=int(SESSION_LIFETIME.total_seconds()),
+        path="/",
+        # Intentionally readable by JS — the client must echo it in a header.
+        httponly=False,
         secure=_cookie_secure(),
         samesite="lax",
     )
@@ -440,6 +466,13 @@ def _clear_session_cookie(response: Response) -> None:
         key=SESSION_COOKIE_NAME,
         path="/",
         httponly=True,
+        secure=_cookie_secure(),
+        samesite="lax",
+    )
+    response.delete_cookie(
+        key=CSRF_COOKIE_NAME,
+        path="/",
+        httponly=False,
         secure=_cookie_secure(),
         samesite="lax",
     )

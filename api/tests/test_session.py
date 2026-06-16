@@ -11,8 +11,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db import get_session
 from app.main import app
 from app.models import Permission, Role, RolePermission, User, UserRole, UserToken
-from app.sessions import SESSION_COOKIE_NAME, SESSION_TOKEN_CONTEXT
-from tests._helpers import make_client, start_session
+from app.sessions import (
+    CSRF_COOKIE_NAME,
+    CSRF_HEADER_NAME,
+    SESSION_COOKIE_NAME,
+    SESSION_TOKEN_CONTEXT,
+)
+from tests._helpers import CSRF_EVENT_HOOKS, make_client, start_session
 
 
 @pytest_asyncio.fixture
@@ -23,7 +28,9 @@ async def api_client(db_session: AsyncSession) -> AsyncIterator[AsyncClient]:
     app.dependency_overrides[get_session] = _override
     transport = ASGITransport(app=app)
     async with AsyncClient(
-        transport=transport, base_url="https://testserver"
+        transport=transport,
+        base_url="https://testserver",
+        event_hooks=CSRF_EVENT_HOOKS,
     ) as client:
         yield client
     app.dependency_overrides.clear()
@@ -411,3 +418,81 @@ async def test_authed_endpoint_with_merged_cookie_401s(
     assert response.json()["detail"]["code"] == "session_merged"
     # (A garbage / no-token cookie still mints — see
     # test_creates_new_session_when_cookie_invalid — only tombstones 401.)
+
+
+# ----- CSRF double-submit guard ---------------------------------------------
+
+
+@pytest_asyncio.fixture
+async def raw_client(db_session: AsyncSession) -> AsyncIterator[AsyncClient]:
+    """A client bound to the test app *without* the CSRF auto-attach hook, so
+    tests can drive the double-submit guard by hand."""
+
+    async def _override() -> AsyncIterator[AsyncSession]:
+        yield db_session
+
+    app.dependency_overrides[get_session] = _override
+    transport = ASGITransport(app=app)
+    async with AsyncClient(
+        transport=transport, base_url="https://testserver"
+    ) as client:
+        yield client
+    app.dependency_overrides.clear()
+
+
+async def test_session_issues_readable_csrf_cookie(raw_client: AsyncClient):
+    """GET /v1/session sets a non-HttpOnly csrf_token cookie the client JS can
+    read to echo back in the header."""
+    response = await raw_client.get("/v1/session")
+    assert response.status_code == 200
+
+    csrf_set_cookie = next(
+        h
+        for h in response.headers.get_list("set-cookie")
+        if h.lower().startswith(f"{CSRF_COOKIE_NAME}=")
+    )
+    assert "httponly" not in csrf_set_cookie.lower()
+    assert "samesite=lax" in csrf_set_cookie.lower()
+    assert raw_client.cookies.get(CSRF_COOKIE_NAME)
+
+
+async def test_mutating_request_without_csrf_header_is_rejected(
+    raw_client: AsyncClient,
+):
+    await raw_client.get("/v1/session")  # establishes both cookies
+    response = await raw_client.delete("/v1/session")
+    assert response.status_code == 403
+    assert "csrf" in response.json()["detail"].lower()
+
+
+async def test_mutating_request_with_mismatched_csrf_header_is_rejected(
+    raw_client: AsyncClient,
+):
+    await raw_client.get("/v1/session")
+    response = await raw_client.delete(
+        "/v1/session", headers={CSRF_HEADER_NAME: "not-the-cookie-value"}
+    )
+    assert response.status_code == 403
+
+
+async def test_mutating_request_with_matching_csrf_header_passes(
+    raw_client: AsyncClient,
+):
+    await raw_client.get("/v1/session")
+    token = raw_client.cookies.get(CSRF_COOKIE_NAME)
+    assert token
+    response = await raw_client.delete("/v1/session", headers={CSRF_HEADER_NAME: token})
+    assert response.status_code == 204
+    # Logout clears the CSRF cookie alongside the session cookie.
+    cleared = [
+        h
+        for h in response.headers.get_list("set-cookie")
+        if h.lower().startswith(f"{CSRF_COOKIE_NAME}=")
+    ]
+    assert cleared and "max-age=0" in cleared[0].lower()
+
+
+async def test_safe_methods_never_require_a_csrf_token(raw_client: AsyncClient):
+    """GET (and other safe methods) must pass even with no token at all."""
+    response = await raw_client.get("/v1/session")
+    assert response.status_code == 200

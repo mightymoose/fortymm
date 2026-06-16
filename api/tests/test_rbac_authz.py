@@ -16,6 +16,7 @@ from app.db import get_session
 from app.main import app
 from app.models import Permission, Role, RolePermission, User, UserRole
 from app.sessions import get_current_user
+from tests._helpers import CSRF_EVENT_HOOKS
 
 
 @pytest_asyncio.fixture
@@ -61,7 +62,11 @@ def _build_client(db_session: AsyncSession, user: User | None) -> AsyncClient:
 
     app.dependency_overrides[get_session] = _override_session
     app.dependency_overrides[get_current_user] = _override_user
-    return AsyncClient(transport=ASGITransport(app=app), base_url="https://testserver")
+    return AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="https://testserver",
+        event_hooks=CSRF_EVENT_HOOKS,
+    )
 
 
 @pytest_asyncio.fixture
