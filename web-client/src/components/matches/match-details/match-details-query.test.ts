@@ -4,7 +4,10 @@ import { ApiError } from "@/api/client";
 import { buildMatchDetails } from "@/mocks/factories/matches/match-details.factory";
 import { waitFor } from "@/test/utilities";
 
-import { matchDetailsQuery } from "./match-details-query";
+import {
+  matchDetailsQuery,
+  matchDetailsResultFromPayload,
+} from "./match-details-query";
 import { matchDetailsQueryPage } from "./match-details-query.page";
 
 describe("matchDetailsQuery", () => {
@@ -63,5 +66,26 @@ describe("matchDetailsQuery", () => {
     expect((result.current.error as ApiError).message).toBe(
       "Failed to load match m-1",
     );
+  });
+});
+
+describe("matchDetailsResultFromPayload", () => {
+  it("produces the same shape the queryFn resolves to, so a seeded cache reads identically", async () => {
+    const match = buildMatchDetails();
+    matchDetailsQueryPage.mockEndpoint(() => HttpResponse.json(match));
+
+    const { result } = matchDetailsQueryPage.render();
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    // Seeding from the payload the create response already holds yields exactly
+    // what a fresh fetch would have cached — no GET required (#510).
+    expect(matchDetailsResultFromPayload(match)).toEqual(result.current.data);
+  });
+
+  it("throws on a malformed payload rather than priming a bad cache entry", () => {
+    const malformed = buildMatchDetails({
+      data: { scoreboard: { status: "not-a-real-status" as never } },
+    });
+    expect(() => matchDetailsResultFromPayload(malformed)).toThrow();
   });
 });

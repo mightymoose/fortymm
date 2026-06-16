@@ -7,11 +7,17 @@ import {
   createRoute,
   createRouter,
 } from '@tanstack/react-router'
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import {
+  QueryClient,
+  QueryClientProvider,
+  useSuspenseQuery,
+} from '@tanstack/react-query'
+import { Suspense } from 'react'
 import { delay, http, HttpResponse } from 'msw'
 import { describe, expect, it } from 'vitest'
 import { server } from '@/mocks/server'
 import { matchDetails, sessionResponse } from '@/test/factories'
+import { matchDetailsQuery } from '@/components/matches/match-details/match-details-query'
 import { Route } from './new'
 
 // The page component isn't exported (route files should only export `Route`,
@@ -28,7 +34,10 @@ function pendingMatch() {
 
 function renderNewMatch() {
   const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
+    // Mirror the app's real client (`main.tsx`): a 30s staleTime is what keeps
+    // a freshly-primed match-details entry from being treated as stale and
+    // background-refetched the instant the page mounts (#510).
+    defaultOptions: { queries: { retry: false, staleTime: 30_000 } },
   })
   const rootRoute = createRootRoute()
   const newMatchRoute = createRoute({
@@ -54,12 +63,28 @@ function renderNewMatch() {
       return <div>Scoring route {matchId} game {gameNumber}</div>
     },
   })
+  // A stand-in for the real match-details page: it reads the same query the
+  // page does, so it renders from a primed cache and only hits the network on
+  // a cache miss.
+  const detailsRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/matches/$matchId',
+    component: () => {
+      const { matchId } = detailsRoute.useParams()
+      return (
+        <Suspense fallback={<div>Loading match…</div>}>
+          <DetailsProbe matchId={matchId} />
+        </Suspense>
+      )
+    },
+  })
   const router = createRouter({
     routeTree: rootRoute.addChildren([
       newMatchRoute,
       dashboardRoute,
       settingsRoute,
       scoringRoute,
+      detailsRoute,
     ]),
     history: createMemoryHistory({ initialEntries: ['/matches/new'] }),
   })
@@ -67,6 +92,15 @@ function renderNewMatch() {
     <QueryClientProvider client={queryClient}>
       <RouterProvider router={router} />
     </QueryClientProvider>,
+  )
+}
+
+function DetailsProbe({ matchId }: { matchId: string }) {
+  const { data } = useSuspenseQuery(matchDetailsQuery(matchId))
+  return (
+    <div>
+      Details route {matchId} status {data.data.scoreboard.status}
+    </div>
   )
 }
 
@@ -106,6 +140,42 @@ describe('NewMatchPage', () => {
       best_of: 5,
       rated: true,
     })
+  })
+
+  it('seeds the details cache from the create response, so a redirect to /matches/{id} renders without the racing GET (#510)', async () => {
+    const user = userEvent.setup()
+    // A match with no next game redirects straight to /matches/{id} rather than
+    // the scoring page — the exact path that hit the read-after-write 404.
+    const created = matchDetails({
+      id: 'm-test',
+      current_game: null,
+      data: { scoreboard: { status: 'final' } },
+    })
+    let detailsGetCalls = 0
+    server.use(
+      http.get('*/v1/players/recent', () => HttpResponse.json([])),
+      http.post('*/v1/matches', () =>
+        HttpResponse.json(created, { status: 201 }),
+      ),
+      // Stand in for the race: the just-created match still 404s if the page
+      // actually fetches it. The primed cache must make this unreachable.
+      http.get('*/v1/matches/:id', () => {
+        detailsGetCalls += 1
+        return HttpResponse.json({ detail: 'Match not found.' }, { status: 404 })
+      }),
+    )
+    renderNewMatch()
+
+    await user.click(
+      await screen.findByRole('button', { name: /start match/i }),
+    )
+
+    // The details page renders from the seeded cache — no "couldn't find that
+    // match" dead-end — and never touched the network.
+    expect(
+      await screen.findByText('Details route m-test status final'),
+    ).toBeInTheDocument()
+    expect(detailsGetCalls).toBe(0)
   })
 
   it('starts a single-sided unrated match when no opponent is chosen', async () => {
