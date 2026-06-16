@@ -34,13 +34,14 @@ const scoped = (container: Container) => ({
   getPlayerName(name: string) {
     return container.getByText(name)
   },
-  /** The trailing "Score" Link — present only when the row's `scoreRoute` is
-   * non-null. Absent otherwise. */
-  getScoreLink() {
-    return container.getByRole('link', { name: 'Score' })
+  /** The trailing action Link (e.g. "Enter score" / "Review result" / "Resolve
+   * dispute") — present only when the row's `action` is non-null. Pass the
+   * action label the row was built with. */
+  getActionLink(label: string) {
+    return container.getByRole('link', { name: label })
   },
-  queryScoreLink() {
-    return container.queryByRole('link', { name: 'Score' })
+  queryActionLink(label: string) {
+    return container.queryByRole('link', { name: label })
   },
   // Child query surfaces, scoped to the row, for wiring assertions. Each child's
   // internals are pinned by its own tests.

@@ -253,6 +253,7 @@ export function matchListRow(
     current_game_number: 1,
     can_score: true,
     can_confirm: false,
+    attention: null,
     ...rest,
   }
 }
@@ -275,12 +276,16 @@ export function matchListResponse(
   for (const item of items) {
     baseCounts[item.status] = (baseCounts[item.status] ?? 0) + 1
   }
+  const attention_count =
+    overrides.attention_count ??
+    items.filter((item) => item.attention !== null).length
   return {
     items,
     page: 1,
     page_size: 25,
     total: items.length,
     status_counts: baseCounts,
+    attention_count,
     ...overrides,
   }
 }

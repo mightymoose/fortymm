@@ -853,12 +853,8 @@ export function DashboardPage() {
   const showGuestPersistBanner = isGuest && (data?.completed_match_count ?? 0) >= 1
   const attentionView = useMemo(
     () =>
-      projectAttentionPanelView(
-        data?.attention ?? [],
-        data?.waiting_count ?? 0,
-        username,
-      ),
-    [data?.attention, data?.waiting_count, username],
+      projectAttentionPanelView(data?.attention ?? [], data?.waiting_count ?? 0),
+    [data?.attention, data?.waiting_count],
   )
   return (
     <div

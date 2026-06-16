@@ -30,6 +30,21 @@ const scoped = (container: Container) => ({
   getClearFiltersButton() {
     return container.getByRole('button', { name: /clear filters/i })
   },
+  /** The Attention tab's calm "all caught up" empty-state heading. */
+  getCaughtUpState() {
+    return container.getByText(/all caught up/i)
+  },
+  /** The search-with-no-results heading (either tab). */
+  getNoResultsState() {
+    return container.getByText(/no (attention )?matches for/i)
+  },
+  /** Buttons offered by the attention empty states. */
+  getViewAllMatchesButton() {
+    return container.getByRole('button', { name: /view all matches/i })
+  },
+  getClearSearchButton() {
+    return container.getByRole('button', { name: /clear search/i })
+  },
   // Column headers (Match/Players/Score/Status/Started) read as this table's
   // own queries.
   ...matchListTableHeadPage.within(container),
@@ -92,6 +107,16 @@ export const matchListTablePage = {
    * await this instead of `findTable()` before reading synchronous accessors. */
   findEmptyState() {
     return screen.findByText(/no matches yet/i)
+  },
+
+  /** Async-first accessor for the Attention "all caught up" empty state. */
+  findCaughtUpState() {
+    return screen.findByText(/all caught up/i)
+  },
+
+  /** Async-first accessor for the "no results for <query>" empty state. */
+  findNoResultsState() {
+    return screen.findByText(/no (attention )?matches for/i)
   },
 
   /**

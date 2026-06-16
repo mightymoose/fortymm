@@ -14,6 +14,7 @@ import {
   projectMatchDetails,
   projectRating,
   projectRecentResult,
+  rankAttentionSeeds,
   statusCountsOf,
   validateScore,
   type SeedMatch,
@@ -599,6 +600,7 @@ export const handlers = [
     await delay(250)
     const url = new URL(request.url)
     const statusFilter = url.searchParams.get('status') ?? null
+    const attention = url.searchParams.get('attention') === 'true'
     const q = url.searchParams.get('q')?.trim().toLowerCase() ?? ''
     const page = Math.max(1, Number(url.searchParams.get('page') ?? '1'))
     const pageSize = Math.max(
@@ -610,9 +612,15 @@ export const handlers = [
     if (q) {
       scoped = scoped.filter((m) => matchHasPlayerLike(m, q))
     }
-    const filtered = statusFilter
-      ? scoped.filter((m) => m.status === statusFilter)
-      : scoped
+    // The Attention badge reads this regardless of the active tab.
+    const attentionSeeds = rankAttentionSeeds(scoped)
+    // Attention is its own dimension: rank the open matches by urgency and
+    // ignore the status filter. Otherwise apply the status filter as before.
+    const filtered = attention
+      ? attentionSeeds
+      : statusFilter
+        ? scoped.filter((m) => m.status === statusFilter)
+        : scoped
 
     const start = (page - 1) * pageSize
     const slice = filtered.slice(start, start + pageSize)
@@ -622,6 +630,7 @@ export const handlers = [
       page_size: pageSize,
       total: filtered.length,
       status_counts: statusCountsOf(scoped),
+      attention_count: attentionSeeds.length,
     })
   }),
 

@@ -23,6 +23,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased, selectinload
 from sqlalchemy.sql.base import ExecutableOption
 
+from app.attention import (
+    attention_priority,
+    list_attention_kind,
+)
 from app.db import get_session
 from app.domain.match.models import Match as MatchModel
 from app.leagues import resolve_league
@@ -477,6 +481,46 @@ def _filtered_matches_query(
     return base if status_ is None else base.where(Match.status == status_)
 
 
+# Open statuses the Attention filter ranges over — the only ones where the
+# current user can still owe (or be owed) a move. Completed/voided drop out.
+_ATTENTION_STATUSES = (
+    MatchStatus.pending,
+    MatchStatus.in_progress,
+    MatchStatus.disputed,
+)
+
+
+def _attention_matches_query(
+    q: str | None, current_user_id: uuid.UUID
+) -> Select[tuple[Match]]:
+    """The caller's own open matches (optionally search-narrowed) — the row set
+    behind the Attention tab and its tab-badge count. Restricted to
+    participation, unlike the perspective-neutral browsing query."""
+    base = participant_filter(select(Match), current_user_id).where(
+        Match.status.in_(_ATTENTION_STATUSES)
+    )
+    if q:
+        base = _player_username_filter(base, q)
+    return base
+
+
+def _attention_sort_key(
+    match: Match, current_user_id: uuid.UUID
+) -> tuple[int, datetime]:
+    """Priority then oldest-first, so the most urgent (and most-stalled within a
+    bucket) attention rows float to the top — the same order the dashboard
+    panel uses."""
+    kind = list_attention_kind(match, current_user_id)
+    if kind is None:
+        # Defensive: an open participant match always classifies. Sink any
+        # surprise to the bottom rather than crash the page.
+        return (len(_ATTENTION_STATUSES) + 99, match.updated_at)
+    return (
+        attention_priority(kind, match.match_settings.affects_rating),
+        match.updated_at,
+    )
+
+
 @router.get("/matches.csv", response_class=Response)
 async def export_matches_csv(
     status_: MatchStatus | None = Query(default=None, alias="status"),
@@ -509,31 +553,23 @@ async def export_matches_csv(
 @router.get("/matches", response_model=MatchListResponse)
 async def list_matches(
     status_: MatchStatus | None = Query(default=None, alias="status"),
+    attention: bool = Query(
+        default=False,
+        description=(
+            "When true, return only the caller's open matches that need "
+            "attention (theirs or someone else's), ranked by urgency. This is "
+            "its own dimension — ``status`` is ignored when it's set."
+        ),
+    ),
     q: str | None = Query(default=None),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=25, ge=1, le=MAX_PAGE_SIZE),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_session),
 ) -> MatchListResponse:
-    # The list is open to every signed-in user. Writes still gate on
-    # `_is_participant` downstream.
-    matches = (
-        (
-            await db.execute(
-                _filtered_matches_query(q, status_)
-                .options(*match_eager_options())
-                .order_by(Match.created_at.desc())
-                .offset((page - 1) * page_size)
-                .limit(page_size)
-            )
-        )
-        .scalars()
-        .all()
-    )
-
-    # status_counts honors `q` but ignores the status filter, so it's built
-    # from its own aggregate. `total` then falls out of the same counts — no
-    # separate count round-trip needed.
+    # status_counts honors `q` but ignores the status/attention filter, so it's
+    # built from its own aggregate and powers the All/Live/Up-next/Final badges
+    # (and the browsing `total`) for either filter mode.
     counts_query = select(Match.status, func.count(Match.id))
     if q:
         counts_query = _player_username_filter(counts_query, q)
@@ -542,17 +578,80 @@ async def list_matches(
         await db.execute(counts_query.group_by(Match.status))
     ).all():
         status_counts[status_value] = count
-    total = (
-        status_counts[status_] if status_ is not None else sum(status_counts.values())
-    )
+
+    # The list is open to every signed-in user. Writes still gate on
+    # `_is_participant` downstream.
+    if attention:
+        # The Attention set is bounded by the caller's *open* matches — a handful
+        # even for an active player — so we load them all, rank by attention
+        # priority in Python (no SQL ordering captures the per-user bucketing),
+        # and paginate the sorted list. Its length *is* the tab-badge count, so
+        # no separate aggregate is needed on this path.
+        open_matches = (
+            (
+                await db.execute(
+                    _attention_matches_query(q, current_user.id).options(
+                        *match_eager_options()
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        ranked = sorted(
+            open_matches, key=lambda m: _attention_sort_key(m, current_user.id)
+        )
+        total = attention_count = len(ranked)
+        start = (page - 1) * page_size
+        items = [
+            _list_row(match, current_user.id)
+            for match in ranked[start : start + page_size]
+        ]
+    else:
+        matches = (
+            (
+                await db.execute(
+                    _filtered_matches_query(q, status_)
+                    .options(*match_eager_options())
+                    .order_by(Match.created_at.desc())
+                    .offset((page - 1) * page_size)
+                    .limit(page_size)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        items = [_list_row(match, current_user.id) for match in matches]
+        total = (
+            status_counts[status_]
+            if status_ is not None
+            else sum(status_counts.values())
+        )
+        # The Attention badge must read its own count even while another tab is
+        # active, so it's a dedicated participant-scoped aggregate (honoring `q`).
+        attention_count = await _attention_count(db, q, current_user.id)
 
     return MatchListResponse(
-        items=[_list_row(match, current_user.id) for match in matches],
+        items=items,
         page=page,
         page_size=page_size,
         total=total,
         status_counts=status_counts,
+        attention_count=attention_count,
     )
+
+
+async def _attention_count(
+    db: AsyncSession, q: str | None, current_user_id: uuid.UUID
+) -> int:
+    """Count of the caller's open matches under the active search — the Attention
+    tab's badge when a different tab is showing."""
+    query = participant_filter(select(func.count(Match.id)), current_user_id).where(
+        Match.status.in_(_ATTENTION_STATUSES)
+    )
+    if q:
+        query = _player_username_filter(query, q)
+    return int((await db.execute(query)).scalar_one())
 
 
 def _list_row(match: Match, current_user_id: uuid.UUID) -> MatchListRow:
@@ -577,6 +676,7 @@ def _list_row(match: Match, current_user_id: uuid.UUID) -> MatchListRow:
         current_game_number=next_number if is_participant else None,
         can_score=can_score,
         can_confirm=_can_confirm(match, current_user_id),
+        attention=list_attention_kind(match, current_user_id),
     )
 
 

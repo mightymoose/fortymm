@@ -95,15 +95,15 @@ describe('AttentionPanel', () => {
     expect(page.queryFooterText(/need attention/)).not.toBeInTheDocument()
   })
 
-  it('links "View all" to /matches scoped to the current user', async () => {
+  it('links "View all" to the matches Attention tab', async () => {
     page.render({
-      view: buildAttentionPanelView({ viewAllSearch: { q: 'rita.kovac' } }),
+      view: buildAttentionPanelView({ viewAllSearch: { status: 'attention' } }),
     })
 
     await page.findPanel()
     expect(page.getViewAllLink()).toHaveAttribute(
       'href',
-      '/matches?q=rita.kovac',
+      '/matches?status=attention',
     )
   })
 })

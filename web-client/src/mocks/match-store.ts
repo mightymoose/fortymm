@@ -442,6 +442,62 @@ function projectHeadToHead(
   }
 }
 
+type ListAttentionKind = NonNullable<MatchListRow['attention']>
+
+/** The matches-list attention bucket for a seed — mirrors
+ * `api/app/attention.py:list_attention_kind`. Unlike the dashboard classifier
+ * it also surfaces the passive `waiting_*` buckets (the list shows them as quiet
+ * rows). Null for a finished match (the mock treats every seed as the current
+ * user's). */
+export function listAttentionKind(seed: SeedMatch): ListAttentionKind | null {
+  switch (seed.status) {
+    case 'disputed':
+      return 'dispute'
+    case 'pending':
+      return 'waiting_others'
+    case 'in_progress':
+      if (seed.signatures.length > 0) {
+        const iSigned = seed.signatures.some(
+          (sig) => sig.user_id === MOCK_CURRENT_USER.id,
+        )
+        return iSigned ? 'waiting_opponent' : 'review'
+      }
+      return 'score'
+    default:
+      return null
+  }
+}
+
+// Priority for ranking the Attention tab — mirrors `attention_priority`.
+const LIST_ATTENTION_PRIORITY: Record<ListAttentionKind, number> = {
+  dispute: 0,
+  review: 1,
+  // score splits rated (2) / unrated (3) — handled in `listAttentionRank`.
+  score: 2,
+  waiting_opponent: 4,
+  waiting_others: 5,
+}
+
+function listAttentionRank(seed: SeedMatch, kind: ListAttentionKind): number {
+  if (kind === 'score' && !seed.affects_rating) return 3
+  return LIST_ATTENTION_PRIORITY[kind]
+}
+
+/** The Attention tab's row set: the current user's open matches, ranked by
+ * urgency then oldest-first — mirrors the BFF's attention path. */
+export function rankAttentionSeeds(seeds: SeedMatch[]): SeedMatch[] {
+  return seeds
+    .flatMap((seed) => {
+      const kind = listAttentionKind(seed)
+      return kind ? [{ seed, rank: listAttentionRank(seed, kind) }] : []
+    })
+    .sort(
+      (a, b) =>
+        a.rank - b.rank || a.seed.created_at.localeCompare(b.seed.created_at),
+    )
+    .map((row) => row.seed)
+}
+
 export function projectListRow(seed: SeedMatch): MatchListRow {
   const { mySide, opponentSide } = projectSides(seed)
   const nextNumber = currentGameNumber(seed)
@@ -458,6 +514,7 @@ export function projectListRow(seed: SeedMatch): MatchListRow {
     current_game_number: nextNumber,
     can_score: scorableSeed(seed),
     can_confirm: canConfirmSeed(seed),
+    attention: listAttentionKind(seed),
   }
 }
 

@@ -3,12 +3,12 @@ import { Search, X } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 
-import type { StatusKey } from './match-list-status'
+import type { TabValue } from './match-list-status'
 
 export interface FilterTabView {
-  /** Tab value passed back to setStatus: 'all' | StatusKey. */
-  value: 'all' | StatusKey
-  /** Visible label, e.g. 'All', 'Live', 'Up next', 'Final'. */
+  /** Tab value passed back to setStatus, e.g. 'attention' | 'all' | 'live'. */
+  value: TabValue
+  /** Visible label, e.g. 'Attention', 'All', 'Live', 'Up next', 'Final'. */
   label: string
   /** True for the Live tab — renders the leading live-dot. */
   isLive: boolean
@@ -21,8 +21,8 @@ export interface FilterRowProps {
   q: string
   setQ: (v: string) => void
   /** Currently-selected tab. */
-  status: 'all' | StatusKey
-  setStatus: (v: 'all' | StatusKey) => void
+  status: TabValue
+  setStatus: (v: TabValue) => void
   /** Pre-built tab descriptors with resolved counts. */
   tabs: FilterTabView[]
 }
@@ -52,7 +52,7 @@ export const FilterRow = ({ q, setQ, status, setStatus, tabs }: FilterRowProps) 
 
       <Tabs
         value={status}
-        onValueChange={(v) => setStatus(v as 'all' | StatusKey)}
+        onValueChange={(v) => setStatus(v as TabValue)}
       >
         <TabsList>
           {tabs.map((t) => (

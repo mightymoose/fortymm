@@ -334,6 +334,17 @@
   color: var(--info);
   background: rgba(111, 181, 255, 0.12);
 }
+/* Actionable attention rows (needs score / your review / disputed) — warm
+   accent so they read as "you have a move here". */
+.match-list-page .status-tone-attention {
+  color: var(--ball-400);
+  background: var(--bg-accent-soft);
+}
+/* Passive "waiting on someone else" rows — quiet, muted, never orange. */
+.match-list-page .status-tone-waiting {
+  color: var(--fg-2);
+  background: var(--bg-raised);
+}
 .match-list-page .status-pill .live-dot {
   width: 6px;
   height: 6px;

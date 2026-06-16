@@ -84,7 +84,7 @@ function AttentionFooter({
 }: {
   overflowCount: number
   waitingCount: number
-  viewAllSearch: { q: string | undefined }
+  viewAllSearch: { status: 'attention' }
 }) {
   const parts: string[] = []
   if (overflowCount > 0) {

@@ -106,16 +106,19 @@ describe('MatchListRow', () => {
     expect(scoped.getWhen('5d ago')).toHaveTextContent('5d ago')
   })
 
-  it('renders a Score Link to scoreRoute when scoreRoute is non-null, stopping row-click propagation from that cell', async () => {
+  it('renders the action Link to its route when action is non-null, stopping row-click propagation from that cell', async () => {
     const navigate = vi.fn() as unknown as NavigateFn
-    const scoreRoute = scoringNewRoute('m-9', 3)
+    const route = scoringNewRoute('m-9', 3)
     matchListRowPage.render({
       navigate,
-      row: buildMatchListRowView({ id: 'm-9', scoreRoute }),
+      row: buildMatchListRowView({
+        id: 'm-9',
+        action: { label: 'Enter score', route, primary: true },
+      }),
     })
 
     await matchListRowPage.findRow()
-    const link = matchListRowPage.getScoreLink()
+    const link = matchListRowPage.getActionLink('Enter score')
     expect(link).toHaveAttribute('href', '/matches/m-9/games/3/scores/new')
 
     // Clicking the trailing cell must not bubble up to the row's navigate.
@@ -123,12 +126,12 @@ describe('MatchListRow', () => {
     expect(navigate).not.toHaveBeenCalled()
   })
 
-  it('renders no Score Link when scoreRoute is null', async () => {
+  it('renders no action Link when action is null', async () => {
     matchListRowPage.render({
-      row: buildMatchListRowView({ scoreRoute: null }),
+      row: buildMatchListRowView({ action: null }),
     })
 
     await matchListRowPage.findRow()
-    expect(matchListRowPage.queryScoreLink()).toBeNull()
+    expect(matchListRowPage.queryActionLink('Enter score')).toBeNull()
   })
 })

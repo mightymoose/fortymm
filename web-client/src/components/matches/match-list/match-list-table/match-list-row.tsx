@@ -10,6 +10,22 @@ import { StatusBadge, type StatusBadgeView } from './match-list-row/status-badge
 import { TimeCell, type TimeCellView } from './match-list-row/time-cell'
 import type { NavigateFn } from '../match-list-status'
 
+/** The trailing-cell CTA for an actionable row (Enter score / Review result /
+ * Resolve dispute). Passive rows (waiting / final / non-participant) carry
+ * `action: null` and render no button. `primary` is true only for the page's
+ * top actionable bucket, which takes the filled orange button. */
+export interface RowActionView {
+  /** Button copy. */
+  label: string
+  /** Navigation target — the scoring page (score rows with a next game) or
+   * match detail (review/dispute, or a decided-but-unposted board). */
+  route:
+    | ReturnType<typeof matchDetailRoute>
+    | ReturnType<typeof scoringNewRoute>
+  /** Whether this row takes the primary (filled) button vs. the secondary one. */
+  primary: boolean
+}
+
 export interface MatchListRowView {
   /** Stable React key + used for navigation/preload targets. The raw match id. */
   id: string
@@ -26,8 +42,8 @@ export interface MatchListRowView {
   time: TimeCellView
   /** The {to,params} navigation target for the whole-row click + hover preload. */
   detailRoute: ReturnType<typeof matchDetailRoute>
-  /** The {to,params} for the Score Link in the trailing cell, or null when current_game_number is null (no Score button). */
-  scoreRoute: ReturnType<typeof scoringNewRoute> | null
+  /** The trailing-cell action, or null for a passive row (no button). */
+  action: RowActionView | null
 }
 
 export interface MatchListRowProps {
@@ -82,9 +98,13 @@ export const MatchListRow = ({ row, navigate }: MatchListRowProps) => {
         <TimeCell time={row.time} />
       </td>
       <td onClick={(e) => e.stopPropagation()}>
-        {row.scoreRoute !== null ? (
-          <Button asChild variant="default" size="sm">
-            <Link {...row.scoreRoute}>Score</Link>
+        {row.action !== null ? (
+          <Button
+            asChild
+            variant={row.action.primary ? 'default' : 'outline'}
+            size="sm"
+          >
+            <Link {...row.action.route}>{row.action.label}</Link>
           </Button>
         ) : null}
       </td>

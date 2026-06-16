@@ -21,7 +21,7 @@ export function buildAttentionRowView(
 }
 
 /** A panel with a single primary "Enter score" row, no overflow, nobody
- * waiting, and a "View all" link scoped to rita.kovac's matches. */
+ * waiting, and a "View all" link to the matches Attention tab. */
 export function buildAttentionPanelView(
   overrides: Partial<AttentionPanelView> = {},
 ): AttentionPanelView {
@@ -29,7 +29,7 @@ export function buildAttentionPanelView(
     rows: [buildAttentionRowView()],
     overflowCount: 0,
     waitingCount: 0,
-    viewAllSearch: { q: 'rita.kovac' },
+    viewAllSearch: { status: 'attention' },
     ...overrides,
   }
 }

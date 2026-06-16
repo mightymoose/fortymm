@@ -527,6 +527,109 @@ async def test_list_row_hides_scoring_affordance_from_spectators(
     assert row["can_score"] is False
 
 
+# ----- attention filter ---------------------------------------------------
+
+
+async def _post_bo1_result(
+    client: AsyncClient, match_id: str, *, s1: int = 11, s2: int = 5
+) -> dict:
+    response = await client.post(
+        f"/v1/matches/{match_id}/results",
+        json={"games": [{"game_number": 1, "side_1_points": s1, "side_2_points": s2}]},
+    )
+    assert response.status_code == 201
+    return response.json()
+
+
+async def test_list_attention_ranks_review_above_score(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "rival") as (opp_client, opp):
+        # A fresh rated match I still need to score.
+        scoring = await _create_match(api_client, opp.id, best_of=1)
+        # A match the opponent has posted a result on — now awaiting *my* review.
+        to_review = await _create_match(api_client, opp.id, best_of=1)
+        await _post_bo1_result(opp_client, to_review["id"])
+
+    listing = (await api_client.get("/v1/matches", params={"attention": "true"})).json()
+    rows = listing["items"]
+    # Review (priority 1) ranks above the rated score (priority 2).
+    assert [row["id"] for row in rows] == [to_review["id"], scoring["id"]]
+    assert [row["attention"] for row in rows] == ["review", "score"]
+    assert listing["total"] == 2
+    assert listing["attention_count"] == 2
+
+
+async def test_list_attention_excludes_finished_and_spectated_matches(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "rival") as (opp_client, opp):
+        open_match = await _create_match(api_client, opp.id, best_of=1)
+        # A finished match (post + confirm) — no longer an attention row.
+        done = await _create_match(api_client, opp.id, best_of=1)
+        await _post_bo1_result(api_client, done["id"])
+        assert (
+            await opp_client.post(f"/v1/matches/{done['id']}/confirmation")
+        ).status_code == 201
+    # A match between two strangers — visible when browsing, never in *my*
+    # attention list.
+    async with make_client() as other_client:
+        await start_session(other_client, db_session)
+        bystander = await make_user(db_session, "bystander")
+        spectated = await _create_match(other_client, bystander.id, best_of=1)
+
+    listing = (await api_client.get("/v1/matches", params={"attention": "true"})).json()
+    ids = {row["id"] for row in listing["items"]}
+    assert ids == {open_match["id"]}
+    assert done["id"] not in ids
+    assert spectated["id"] not in ids
+    assert listing["attention_count"] == 1
+
+
+async def test_list_attention_count_is_present_on_other_tabs(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    # The Attention badge must read its own count even while another tab is
+    # active, so attention_count rides every response.
+    await start_session(api_client, db_session)
+    opp = await make_user(db_session, "rival")
+    await _create_match(api_client, opp.id, best_of=1)
+    await _create_match(api_client, opp.id, best_of=1)
+
+    listing = (
+        await api_client.get("/v1/matches", params={"status": "completed"})
+    ).json()
+    assert listing["items"] == []
+    assert listing["attention_count"] == 2
+
+
+async def test_list_row_attention_kind_reflects_who_must_act(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "rival") as (opp_client, opp):
+        # I posted a result — it's waiting on the opponent's sign-off.
+        waiting = await _create_match(api_client, opp.id, best_of=1)
+        await _post_bo1_result(api_client, waiting["id"])
+        # A result the opponent posted, then I disputed — reopened.
+        disputed = await _create_match(api_client, opp.id, best_of=1)
+        await _post_bo1_result(opp_client, disputed["id"])
+        assert (
+            await api_client.post(f"/v1/matches/{disputed['id']}/dispute")
+        ).status_code == 200
+
+    listing = (await api_client.get("/v1/matches")).json()
+    by_id = {row["id"]: row["attention"] for row in listing["items"]}
+    assert by_id[waiting["id"]] == "waiting_opponent"
+    assert by_id[disputed["id"]] == "dispute"
+    # A disputed match is waiting on no one in particular — it's actionable for
+    # both sides — but the poster's awaiting-confirmation match reads as passive
+    # for them. Both still ride the attention set.
+    assert listing["attention_count"] == 2
+
+
 # ----- TT scoring rules ---------------------------------------------------
 
 

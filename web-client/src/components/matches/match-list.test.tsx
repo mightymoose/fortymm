@@ -41,6 +41,34 @@ describe('MatchList', () => {
     )
   })
 
+  it('renders the Attention tab and the action CTA for an attention row when deep-linked', async () => {
+    matchListPage.mockEndpoint(
+      matchListResponse({
+        items: [
+          matchListRow({
+            id: 'm-att',
+            opponent: 'nguyen.t',
+            status: 'in_progress',
+            attention: 'score',
+            current_game_number: 2,
+          }),
+        ],
+        total: 1,
+        status_counts: { in_progress: 1 },
+        attention_count: 1,
+      }),
+    )
+    matchListPage.render('/matches?status=attention')
+
+    await matchListPage.findRow('Open match: rita.kovac vs nguyen.t')
+    // The Attention tab exists in the filter row…
+    expect(matchListPage.filterRow.getTab(/attention/i)).toBeInTheDocument()
+    // …and the score row exposes an "Enter score" CTA into the scoring flow.
+    expect(
+      matchListPage.table.rows.getActionLink('Enter score'),
+    ).toHaveAttribute('href', '/matches/m-att/games/2/scores/new')
+  })
+
   it('projects raw rows into row view models before handing them to the table (a known opponent renders)', async () => {
     // Wiring only: the projection branches (perspective, score, tone, time) are
     // pinned by match-list-row-view.test.ts — here we only confirm the

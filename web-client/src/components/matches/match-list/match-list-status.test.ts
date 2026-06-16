@@ -22,6 +22,12 @@ describe('matchesSearchSchema', () => {
     }
   })
 
+  it('keeps the attention status', () => {
+    expect(matchesSearchSchema.parse({ status: 'attention' }).status).toBe(
+      'attention',
+    )
+  })
+
   it('drops a non-numeric page back to undefined', () => {
     expect(matchesSearchSchema.parse({ page: 'NaN' }).page).toBe(undefined)
   })
@@ -52,6 +58,17 @@ describe('listParamsFromSearch', () => {
 
   it('leaves status undefined when the search has none', () => {
     expect(listParamsFromSearch({}).status).toBe(undefined)
+  })
+
+  it('maps the attention tab to the attention flag with no status', () => {
+    const params = listParamsFromSearch({ status: 'attention' })
+    expect(params.attention).toBe(true)
+    expect(params.status).toBe(undefined)
+  })
+
+  it('leaves the attention flag unset for non-attention tabs', () => {
+    expect(listParamsFromSearch({ status: 'live' }).attention).toBe(undefined)
+    expect(listParamsFromSearch({}).attention).toBe(undefined)
   })
 
   it('passes a non-empty query through and drops an empty one', () => {
