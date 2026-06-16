@@ -138,10 +138,11 @@ export function useCreateMatch() {
     mutationFn: async (input: MatchCreate): Promise<MatchDetails> =>
       unwrap('create match', await api.POST('/v1/matches', { body: input })),
     // The create response already *is* the match-details payload, so seed the
-    // details cache from it. Navigating to the just-created match (directly, or
-    // via the scoring screen) then renders from this warm entry instead of
-    // racing a `GET /v1/matches/{id}` against the write we just committed — the
-    // read-after-write "We couldn't find that match" dead-end behind #510.
+    // details query cache from it. The match-details page then renders from this
+    // warm entry — whether reached by an immediate redirect or later from the
+    // scoring screen — instead of racing a `GET /v1/matches/{id}` against the
+    // write we just committed: the read-after-write "We couldn't find that
+    // match" dead-end behind #510.
     onSuccess: (created) => {
       queryClient.setQueryData(
         matchDetailsQueryKey(created.id),
