@@ -534,6 +534,68 @@ describe('ScoreEntry — create', () => {
   })
 })
 
+describe('ScoreEntry — name layout (#566)', () => {
+  // A long username used to overflow the score card on desktop: the desktop
+  // `.se-head .nm` rule had no clipping, and its flex parents didn't allow the
+  // text column to shrink. jsdom can't measure layout, so we assert the
+  // structural contract the CSS depends on: each name renders in `.se-head .nm`
+  // inside a `.se-head .id` shrink wrapper. Both must exist or the clipping
+  // (overflow/ellipsis + min-width:0) the CSS applies has nothing to bite on.
+  it('renders each username in a shrinkable .se-head .id > .nm wrapper', async () => {
+    const longName = 'this.is.a.really.long.username.that.overflows'
+    server.use(
+      http.get('*/v1/matches/m-1', () =>
+        HttpResponse.json(
+          inProgressMatch({
+            sides: [
+              {
+                side_number: 1,
+                players: [
+                  { user_id: 'u-me', username: longName, is_current_user: true },
+                ],
+                games_won: 1,
+                won: null,
+                is_current_user_side: true,
+              },
+              {
+                side_number: 2,
+                players: [
+                  {
+                    user_id: 'u-opp',
+                    username: 'nguyen.t',
+                    is_current_user: false,
+                  },
+                ],
+                games_won: 1,
+                won: null,
+                is_current_user_side: false,
+              },
+            ],
+          }),
+        ),
+      ),
+    )
+
+    const { container } = renderScoreEntry({
+      kind: 'create',
+      matchId: 'm-1',
+      gameNumber: 3,
+    })
+    await screen.findByRole('heading', { name: /enter game 3 score/i })
+
+    const nameEl = screen.getByText(longName)
+    // The name lives in `.se-head .nm` — the element the desktop overflow rule
+    // targets — nested in the `.id` shrink wrapper (`min-width: 0`).
+    expect(nameEl).toHaveClass('nm')
+    const idWrapper = nameEl.parentElement
+    expect(idWrapper).toHaveClass('id')
+    expect(idWrapper?.closest('.se-head')).not.toBeNull()
+    // Both heads carry the shrink wrapper, so neither name can push its column
+    // out of the card.
+    expect(container.querySelectorAll('.se-head .id')).toHaveLength(2)
+  })
+})
+
 describe('ScoreEntry — edit', () => {
   it('pre-populates inputs from the stored score and PUTs the new value', async () => {
     const user = userEvent.setup()
