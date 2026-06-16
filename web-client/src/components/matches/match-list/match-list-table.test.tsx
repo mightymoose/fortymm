@@ -14,21 +14,42 @@ describe('MatchListTable', () => {
     expect(matchListTablePage.queryEmptyState()).toBeNull()
   })
 
-  it('renders the empty state (icon, "No matches yet", sub copy, Clear filters button) when not loading and rows empty', async () => {
-    matchListTablePage.render({ isLoading: false, rows: [] })
+  it('renders the cold-start empty ("No matches yet", no Clear filters) when not loading, rows empty, and unfiltered', async () => {
+    matchListTablePage.render({ isLoading: false, rows: [], isFiltered: false })
 
     const heading = await matchListTablePage.findEmptyState()
     expect(heading).toHaveTextContent('No matches yet')
     expect(heading.closest('.empty')).toHaveTextContent(
-      "Start a new match or clear the filters to see what's being played.",
+      'Start a new match to see what’s being played.',
+    )
+    // A first-run user has nothing to clear — the button would be a no-op, so
+    // it's omitted (#373).
+    expect(matchListTablePage.queryClearFiltersButton()).toBeNull()
+  })
+
+  it('renders the filtered no-result empty ("No matches match your filters" + Clear filters) when a filter is active and rows empty', async () => {
+    // Regression for #373: a filtered/out-of-range no-result view must not
+    // imply the user has never played.
+    matchListTablePage.render({ isLoading: false, rows: [], isFiltered: true })
+
+    const heading = await matchListTablePage.findEmptyState()
+    expect(heading).toHaveTextContent('No matches match your filters')
+    expect(matchListTablePage.queryColdStartHeading()).toBeNull()
+    expect(heading.closest('.empty')).toHaveTextContent(
+      'Try a different search or clear the filters to see what’s being played.',
     )
     expect(matchListTablePage.getClearFiltersButton()).toBeInTheDocument()
   })
 
-  it('calls onClear when Clear filters is clicked', async () => {
+  it('calls onClear when Clear filters is clicked (filtered empty)', async () => {
     const user = userEvent.setup()
     const onClear = buildMatchListTableProps().onClear
-    matchListTablePage.render({ isLoading: false, rows: [], onClear })
+    matchListTablePage.render({
+      isLoading: false,
+      rows: [],
+      isFiltered: true,
+      onClear,
+    })
 
     await matchListTablePage.findEmptyState()
     await user.click(matchListTablePage.getClearFiltersButton())

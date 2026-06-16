@@ -16,6 +16,17 @@ export interface MatchListTableProps {
   isAttention: boolean
   /** The active (trimmed) search term, used to phrase the no-results state. */
   query: string
+  /**
+   * Whether a search, a non-"all" status tab, or an out-of-range page is
+   * narrowing the list. Drives the cold-start vs filtered empty copy when there
+   * is no search term: a filtered no-result reads "No matches match your
+   * filters" and offers a Clear filters button (the user has matches, just not
+   * here), while a genuinely empty list reads "No matches yet" — a first-run
+   * cold start where clearing filters is a no-op, so the button is omitted.
+   * Without this, a status-tab/out-of-range no-result view falsely implies the
+   * user has never played (#373).
+   */
+  isFiltered: boolean
   /** Clears all filters (used by "Clear filters" / "View all matches"). */
   onClear: () => void
   /** Clears only the search term, staying on the active tab. */
@@ -28,6 +39,7 @@ export const MatchListTable = ({
   isLoading,
   isAttention,
   query,
+  isFiltered,
   onClear,
   onClearSearch,
   navigate,
@@ -38,6 +50,7 @@ export const MatchListTable = ({
       <EmptyState
         isAttention={isAttention}
         query={query}
+        isFiltered={isFiltered}
         onClear={onClear}
         onClearSearch={onClearSearch}
       />
@@ -58,11 +71,13 @@ export const MatchListTable = ({
 function EmptyState({
   isAttention,
   query,
+  isFiltered,
   onClear,
   onClearSearch,
 }: {
   isAttention: boolean
   query: string
+  isFiltered: boolean
   onClear: () => void
   onClearSearch: () => void
 }) {
@@ -109,18 +124,33 @@ function EmptyState({
       </div>
     )
   }
+  // No search term, not the attention tab. A non-"all" status tab or an
+  // out-of-range page can still have narrowed the list to nothing (#373): say
+  // so and offer Clear filters. A genuinely empty list is a first-run cold
+  // start — clearing filters is a no-op, so the button is omitted.
   return (
     <div className="empty">
       <div className="empty-icon">
         <Inbox size={56} strokeWidth={1.5} />
       </div>
-      <div className="empty-title">No matches yet</div>
-      <div className="empty-sub">
-        Start a new match or clear the filters to see what's being played.
+      <div className="empty-title">
+        {isFiltered ? 'No matches match your filters' : 'No matches yet'}
       </div>
-      <Button variant="ghost" size="sm" className="empty-clear" onClick={onClear}>
-        Clear filters
-      </Button>
+      <div className="empty-sub">
+        {isFiltered
+          ? 'Try a different search or clear the filters to see what’s being played.'
+          : 'Start a new match to see what’s being played.'}
+      </div>
+      {isFiltered && (
+        <Button
+          variant="ghost"
+          size="sm"
+          className="empty-clear"
+          onClick={onClear}
+        >
+          Clear filters
+        </Button>
+      )}
     </div>
   )
 }
