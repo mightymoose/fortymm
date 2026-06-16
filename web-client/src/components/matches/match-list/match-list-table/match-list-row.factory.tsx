@@ -11,9 +11,9 @@ import { buildTimeCellView } from './match-list-row/time-cell.factory'
 
 /**
  * A final, viewer-won singles row: rita.kovac (winner) vs nguyen.t, showing a
- * final 2–1 score, no in-progress Score button (`scoreRoute: null`). The
- * default still mounts under the router harness (the row click + detail link),
- * but renders without the Score-Link branch.
+ * final 2–1 score, no action button (`action: null`). The default still mounts
+ * under the router harness (the row click + detail link), but renders without
+ * the action-Link branch.
  */
 export function buildMatchListRowView(
   overrides: Partial<MatchListRowView> = {},
@@ -29,7 +29,7 @@ export function buildMatchListRowView(
     status: buildStatusBadgeView(),
     time: buildTimeCellView(),
     detailRoute: matchDetailRoute('m-1'),
-    scoreRoute: null,
+    action: null,
     ...overrides,
   }
 }

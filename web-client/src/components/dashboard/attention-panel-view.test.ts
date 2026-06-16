@@ -10,7 +10,7 @@ describe('projectAttentionPanelView', () => {
       dashboardAttentionItem({ match_id: `m-${i}`, kind: 'score' }),
     )
 
-    const view = projectAttentionPanelView(items, 0, 'rita.kovac')
+    const view = projectAttentionPanelView(items, 0)
 
     expect(view.rows).toHaveLength(3)
     expect(view.rows.map((r) => r.matchId)).toEqual(['m-0', 'm-1', 'm-2'])
@@ -25,7 +25,6 @@ describe('projectAttentionPanelView', () => {
         dashboardAttentionItem({ match_id: 'm-score', kind: 'score' }),
       ],
       0,
-      'rita.kovac',
     )
 
     expect(view.rows.map((r) => r.primary)).toEqual([true, false, false])
@@ -38,7 +37,6 @@ describe('projectAttentionPanelView', () => {
         dashboardAttentionItem({ kind: 'score', affects_rating: true }),
       ],
       0,
-      'rita.kovac',
     )
 
     expect(view.rows.map((r) => r.primary)).toEqual([true, true])
@@ -54,7 +52,6 @@ describe('projectAttentionPanelView', () => {
         dashboardAttentionItem({ kind: 'score', affects_rating: false }),
       ],
       0,
-      'rita.kovac',
     )
 
     expect(view.rows.map((r) => r.primary)).toEqual([true, true, true])
@@ -75,7 +72,6 @@ describe('projectAttentionPanelView', () => {
         }),
       ],
       0,
-      'rita.kovac',
     )
 
     expect(view.rows[0].route).toEqual({
@@ -98,7 +94,6 @@ describe('projectAttentionPanelView', () => {
         }),
       ],
       0,
-      'rita.kovac',
     )
 
     expect(view.rows[0].route).toEqual({
@@ -114,41 +109,35 @@ describe('projectAttentionPanelView', () => {
         dashboardAttentionItem({ opponent_username: null }),
       ],
       0,
-      'rita.kovac',
     )
 
     expect(view.rows[0].headline).toBe('vs lively.otter')
     expect(view.rows[1].headline).toBe('No opponent')
   })
 
-  it('passes through the waiting count and scopes "View all" to the user', () => {
-    const view = projectAttentionPanelView([], 4, 'rita.kovac')
+  it('passes through the waiting count and points "View all" at the Attention tab', () => {
+    const view = projectAttentionPanelView([], 4)
 
     expect(view.rows).toHaveLength(0)
     expect(view.overflowCount).toBe(0)
     expect(view.waitingCount).toBe(4)
-    expect(view.viewAllSearch).toEqual({ q: 'rita.kovac' })
+    expect(view.viewAllSearch).toEqual({ status: 'attention' })
   })
 })
 
 describe('isAttentionPanelEmpty', () => {
   it('is empty when there are no rows, no overflow, and nobody waiting', () => {
-    expect(isAttentionPanelEmpty(projectAttentionPanelView([], 0, 'rita'))).toBe(
-      true,
-    )
+    expect(isAttentionPanelEmpty(projectAttentionPanelView([], 0))).toBe(true)
   })
 
   it('is not empty when matches are waiting on others', () => {
-    expect(isAttentionPanelEmpty(projectAttentionPanelView([], 3, 'rita'))).toBe(
-      false,
-    )
+    expect(isAttentionPanelEmpty(projectAttentionPanelView([], 3))).toBe(false)
   })
 
   it('is not empty when there are actionable rows', () => {
     const view = projectAttentionPanelView(
       [dashboardAttentionItem({ kind: 'score' })],
       0,
-      'rita',
     )
     expect(isAttentionPanelEmpty(view)).toBe(false)
   })
@@ -157,7 +146,7 @@ describe('isAttentionPanelEmpty', () => {
     const items = Array.from({ length: 5 }, (_, i) =>
       dashboardAttentionItem({ match_id: `m-${i}`, kind: 'score' }),
     )
-    expect(isAttentionPanelEmpty(projectAttentionPanelView(items, 0, 'r'))).toBe(
+    expect(isAttentionPanelEmpty(projectAttentionPanelView(items, 0))).toBe(
       false,
     )
   })

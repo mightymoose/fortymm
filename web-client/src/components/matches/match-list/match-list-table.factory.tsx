@@ -17,7 +17,10 @@ export function buildMatchListTableProps(
   return {
     rows: [buildMatchListRowView()],
     isLoading: false,
+    isAttention: false,
+    query: '',
     onClear: vi.fn(),
+    onClearSearch: vi.fn(),
     navigate: vi.fn() as unknown as NavigateFn,
     ...overrides,
   }

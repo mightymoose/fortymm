@@ -1112,6 +1112,8 @@ export interface components {
             status_counts: {
                 [key: string]: number;
             };
+            /** Attention Count */
+            attention_count: number;
         };
         /** MatchListRow */
         MatchListRow: {
@@ -1139,6 +1141,8 @@ export interface components {
             can_score: boolean;
             /** Can Confirm */
             can_confirm: boolean;
+            /** Attention */
+            attention: ("dispute" | "review" | "score" | "waiting_opponent" | "waiting_others") | null;
         };
         /**
          * MatchResultsGameWrite
@@ -2496,6 +2500,8 @@ export interface operations {
         parameters: {
             query?: {
                 status?: components["schemas"]["MatchStatus"] | null;
+                /** @description When true, return only the caller's open matches that need attention (theirs or someone else's), ranked by urgency. This is its own dimension — ``status`` is ignored when it's set. */
+                attention?: boolean;
                 q?: string | null;
                 page?: number;
                 page_size?: number;

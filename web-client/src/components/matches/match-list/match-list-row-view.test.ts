@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
-import { scoringNewRoute, type MatchListRow } from '@/api/matches'
+import {
+  matchDetailRoute,
+  scoringNewRoute,
+  type MatchListRow,
+} from '@/api/matches'
 import type { components } from '@/api/schema'
 import { matchListRow } from '@/test/factories'
 import {
@@ -15,6 +19,7 @@ import {
   projectMatchListRow,
   shortId,
   sideLabel,
+  topActionableKind,
 } from './match-list-row-view'
 
 type MatchListRowSide = components['schemas']['MatchDetailsSide']
@@ -173,19 +178,101 @@ describe('projectMatchListRow', () => {
     expect(view.side2.isWinner).toBe(false)
   })
 
-  it('omits the score route when current_game_number is null', () => {
-    const row = matchListRow({ current_game_number: null })
-    expect(projectMatchListRow(row).scoreRoute).toBeNull()
+  it('omits the action when the row has no attention bucket', () => {
+    const row = matchListRow({ attention: null, current_game_number: null })
+    expect(projectMatchListRow(row).action).toBeNull()
   })
 
-  it('links the score route to the current game otherwise', () => {
+  it('links a score action to the current game', () => {
     const row: MatchListRow = matchListRow({
       id: 'm-live',
+      attention: 'score',
       current_game_number: 3,
     })
-    expect(projectMatchListRow(row).scoreRoute).toEqual(
-      scoringNewRoute('m-live', 3),
+    const action = projectMatchListRow(row).action
+    expect(action?.label).toBe('Enter score')
+    expect(action?.route).toEqual(scoringNewRoute('m-live', 3))
+  })
+
+  it('routes a score action to detail when the board is decided but unposted', () => {
+    const row = matchListRow({
+      id: 'm-decided',
+      attention: 'score',
+      current_game_number: null,
+    })
+    const action = projectMatchListRow(row).action
+    expect(action?.label).toBe('Enter score')
+    expect(action?.route).toEqual(matchDetailRoute('m-decided'))
+  })
+
+  it('routes review and dispute actions to match detail', () => {
+    const review = matchListRow({ id: 'm-r', attention: 'review' })
+    expect(projectMatchListRow(review).action).toMatchObject({
+      label: 'Review result',
+      route: matchDetailRoute('m-r'),
+    })
+    const dispute = matchListRow({ id: 'm-d', attention: 'dispute' })
+    expect(projectMatchListRow(dispute).action).toMatchObject({
+      label: 'Resolve dispute',
+      route: matchDetailRoute('m-d'),
+    })
+  })
+
+  it('gives passive waiting rows no action', () => {
+    expect(
+      projectMatchListRow(matchListRow({ attention: 'waiting_opponent' }))
+        .action,
+    ).toBeNull()
+    expect(
+      projectMatchListRow(matchListRow({ attention: 'waiting_others' })).action,
+    ).toBeNull()
+  })
+
+  it('uses current-user-aware labels + tones for attention rows', () => {
+    const score = projectMatchListRow(matchListRow({ attention: 'score' }))
+    expect(score.status.label).toBe('Needs score')
+    expect(score.status.toneClass).toBe('status-tone-attention')
+
+    const review = projectMatchListRow(matchListRow({ attention: 'review' }))
+    expect(review.status.label).toBe('Needs your review')
+
+    const waiting = projectMatchListRow(
+      matchListRow({ attention: 'waiting_opponent' }),
     )
+    expect(waiting.status.label).toBe('Waiting on opponent')
+    expect(waiting.status.toneClass).toBe('status-tone-waiting')
+    // A passive waiting row never pulses, even though it's in_progress.
+    expect(waiting.status.isLive).toBe(false)
+  })
+
+  it('marks a row primary only when its bucket matches the page top kind', () => {
+    const row = matchListRow({ attention: 'score' })
+    expect(projectMatchListRow(row, 'score').action?.primary).toBe(true)
+    expect(projectMatchListRow(row, 'review').action?.primary).toBe(false)
+    expect(projectMatchListRow(row).action?.primary).toBe(false)
+  })
+})
+
+describe('topActionableKind', () => {
+  it('returns the most urgent actionable bucket present (dispute > review > score)', () => {
+    const rows = [
+      matchListRow({ attention: 'score' }),
+      matchListRow({ attention: 'review' }),
+      matchListRow({ attention: 'waiting_others' }),
+    ]
+    expect(topActionableKind(rows)).toBe('review')
+    expect(
+      topActionableKind([...rows, matchListRow({ attention: 'dispute' })]),
+    ).toBe('dispute')
+  })
+
+  it('ignores passive and non-attention rows, returning null when none are actionable', () => {
+    const rows = [
+      matchListRow({ attention: 'waiting_opponent' }),
+      matchListRow({ attention: 'waiting_others' }),
+      matchListRow({ attention: null }),
+    ]
+    expect(topActionableKind(rows)).toBeNull()
   })
 })
 
@@ -195,17 +282,14 @@ describe('buildFilterTabs', () => {
       STATUS_TABS,
       { pending: 2, in_progress: 1, completed: 4 },
       TAB_TO_API,
+      0,
     )
     const all = tabs.find((t) => t.value === 'all')
     expect(all?.count).toBe(7)
   })
 
   it('uses statusCounts[TAB_TO_API[value]] ?? 0 for each named tab', () => {
-    const tabs = buildFilterTabs(
-      STATUS_TABS,
-      { in_progress: 3 },
-      TAB_TO_API,
-    )
+    const tabs = buildFilterTabs(STATUS_TABS, { in_progress: 3 }, TAB_TO_API, 0)
     const live = tabs.find((t) => t.value === 'live')
     const scheduled = tabs.find((t) => t.value === 'scheduled')
     expect(live?.count).toBe(3)
@@ -213,13 +297,19 @@ describe('buildFilterTabs', () => {
     expect(scheduled?.count).toBe(0)
   })
 
-  it('returns a null count for every tab when statusCounts is undefined', () => {
-    const tabs = buildFilterTabs(STATUS_TABS, undefined, TAB_TO_API)
+  it('reads the Attention tab from attentionCount, independent of status_counts', () => {
+    const tabs = buildFilterTabs(STATUS_TABS, { in_progress: 3 }, TAB_TO_API, 5)
+    const attention = tabs.find((t) => t.value === 'attention')
+    expect(attention?.count).toBe(5)
+  })
+
+  it('returns a null count for every tab when counts are undefined', () => {
+    const tabs = buildFilterTabs(STATUS_TABS, undefined, TAB_TO_API, undefined)
     expect(tabs.every((t) => t.count === null)).toBe(true)
   })
 
   it('carries the label and live flag through from the tab descriptors', () => {
-    const tabs = buildFilterTabs(STATUS_TABS, undefined, TAB_TO_API)
+    const tabs = buildFilterTabs(STATUS_TABS, undefined, TAB_TO_API, undefined)
     const live = tabs.find((t) => t.value === 'live')
     expect(live?.label).toBe('Live')
     expect(live?.isLive).toBe(true)

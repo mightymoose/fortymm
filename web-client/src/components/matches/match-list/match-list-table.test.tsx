@@ -35,6 +35,55 @@ describe('MatchListTable', () => {
     expect(onClear).toHaveBeenCalledTimes(1)
   })
 
+  it('renders the "all caught up" state on the Attention tab with no rows and no search', async () => {
+    matchListTablePage.render({
+      isLoading: false,
+      rows: [],
+      isAttention: true,
+      query: '',
+    })
+
+    const heading = await matchListTablePage.findCaughtUpState()
+    expect(heading.closest('.empty')).toHaveTextContent(
+      'No matches need your attention right now.',
+    )
+    expect(matchListTablePage.getViewAllMatchesButton()).toBeInTheDocument()
+  })
+
+  it('calls onClear when "View all matches" is clicked from the caught-up state', async () => {
+    const user = userEvent.setup()
+    const onClear = vi.fn()
+    matchListTablePage.render({
+      isLoading: false,
+      rows: [],
+      isAttention: true,
+      query: '',
+      onClear,
+    })
+
+    await matchListTablePage.findCaughtUpState()
+    await user.click(matchListTablePage.getViewAllMatchesButton())
+    expect(onClear).toHaveBeenCalledTimes(1)
+  })
+
+  it('names the searched term and offers Clear search on the Attention tab when a query filters everything out', async () => {
+    const user = userEvent.setup()
+    const onClearSearch = vi.fn()
+    matchListTablePage.render({
+      isLoading: false,
+      rows: [],
+      isAttention: true,
+      query: 'silva',
+      onClearSearch,
+    })
+
+    const heading = await matchListTablePage.findNoResultsState()
+    expect(heading).toHaveTextContent('No attention matches for')
+    expect(heading).toHaveTextContent('silva')
+    await user.click(matchListTablePage.getClearSearchButton())
+    expect(onClearSearch).toHaveBeenCalledTimes(1)
+  })
+
   it('renders a table with one MatchListRow per row when rows are present', async () => {
     // Wiring only: row internals are pinned by match-list-row tests.
     const rows = [

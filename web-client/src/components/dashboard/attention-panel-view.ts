@@ -36,8 +36,10 @@ export interface AttentionPanelView {
   overflowCount: number
   /** Matches waiting on someone else — footer "N waiting on others". */
   waitingCount: number
-  /** Search params for the "View all" link to /matches. */
-  viewAllSearch: { q: string | undefined }
+  /** Search params for the "View all" link — opens /matches on the Attention
+   * tab so the same priority-ranked set the panel previews fills the page
+   * (PRD §"Dashboard Integration"). */
+  viewAllSearch: { status: 'attention' }
 }
 
 // A row's attention "bucket" — the unit the primary-button rule operates on.
@@ -92,7 +94,6 @@ export function isAttentionPanelEmpty(view: AttentionPanelView): boolean {
 export function projectAttentionPanelView(
   items: DashboardAttentionItem[],
   waitingCount: number,
-  username: string | undefined,
 ): AttentionPanelView {
   const visible = items.slice(0, ATTENTION_VISIBLE_LIMIT)
   // Items arrive pre-sorted by priority, so the first visible row defines the
@@ -111,6 +112,6 @@ export function projectAttentionPanelView(
     })),
     overflowCount: Math.max(0, items.length - ATTENTION_VISIBLE_LIMIT),
     waitingCount,
-    viewAllSearch: { q: username },
+    viewAllSearch: { status: 'attention' },
   }
 }

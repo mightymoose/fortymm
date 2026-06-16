@@ -32,6 +32,9 @@ export type Scoreboard = components['schemas']['Scoreboard']
 
 export type MatchListParams = {
   status?: MatchStatus
+  /** When true, request the current user's attention-ranked open matches; the
+   * server ignores `status` in this mode. */
+  attention?: boolean
   q?: string
   page: number
   page_size: number
@@ -165,6 +168,7 @@ export function matchListQueryOptions(params: MatchListParams) {
           params: {
             query: {
               status: params.status,
+              attention: params.attention,
               q: params.q,
               page: params.page,
               page_size: params.page_size,

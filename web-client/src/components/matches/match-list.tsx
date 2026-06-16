@@ -20,11 +20,12 @@ import {
   PAGE_SIZE,
   listParamsFromSearch,
   matchesSearchSchema,
-  type StatusKey,
+  type TabValue,
 } from './match-list/match-list-status'
 import {
   projectMatchListRow,
   buildFilterTabs,
+  topActionableKind,
 } from './match-list/match-list-row-view'
 import './match-list/match-list.css'
 
@@ -52,14 +53,18 @@ export const MatchList = () => {
   const navigate = useNavigate()
 
   const q = urlSearch.q ?? ''
-  const status: 'all' | StatusKey = urlSearch.status ?? 'all'
+  const status: TabValue = urlSearch.status ?? 'all'
+  const isAttention = status === 'attention'
   const page = urlSearch.page ?? 1
 
   // Debounce only the text search — tab and pagination clicks aren't a
   // hammer risk and should fire immediately so the table doesn't lag the
   // click by 300ms. The URL still updates synchronously on every change.
   const debouncedQ = useDebouncedValue(q.trim(), 300)
-  const apiStatus = status === 'all' ? undefined : TAB_TO_API[status]
+  // `all` and `attention` aren't API status values — both export the whole
+  // q-filtered set (the CSV endpoint has no attention dimension).
+  const apiStatus =
+    status === 'all' || status === 'attention' ? undefined : TAB_TO_API[status]
   // Built via the same helper the route loader uses, so a hover preload and the
   // live query share one cache key and the click renders from cache.
   const queryParams = useMemo(
@@ -102,7 +107,7 @@ export const MatchList = () => {
   )
 
   const changeStatus = useCallback(
-    (next: 'all' | StatusKey) => {
+    (next: TabValue) => {
       setSearch({
         status: next === 'all' ? undefined : next,
         page: undefined,
@@ -118,6 +123,11 @@ export const MatchList = () => {
   )
   const onClear = useCallback(() => {
     setSearch({ q: undefined, status: undefined, page: undefined })
+  }, [setSearch])
+  // Drop only the search term, staying on the active tab — used by the
+  // attention "No matches for …" empty state.
+  const onClearSearch = useCallback(() => {
+    setSearch({ q: undefined, page: undefined })
   }, [setSearch])
   const setPage = useCallback(
     (next: number) => {
@@ -160,15 +170,24 @@ export const MatchList = () => {
   const displayPage = Math.min(page, totalPages)
 
   // Project the raw payload rows into the presentational view models the table
-  // consumes — perspective, status tone, side labels, short id, and the
-  // relative "started" label all resolve here, never inside the children.
-  const rowViews = useMemo(
-    () => (data?.items ?? []).map((row) => projectMatchListRow(row)),
-    [data?.items],
-  )
+  // consumes — perspective, status tone, side labels, short id, the relative
+  // "started" label, and the current-user-aware label/CTA all resolve here,
+  // never inside the children. The page's top actionable bucket (computed once
+  // over all rows) decides which rows take the primary orange CTA.
+  const rowViews = useMemo(() => {
+    const items = data?.items ?? []
+    const primaryKind = topActionableKind(items)
+    return items.map((row) => projectMatchListRow(row, primaryKind))
+  }, [data?.items])
   const tabs = useMemo(
-    () => buildFilterTabs(STATUS_TABS, data?.status_counts, TAB_TO_API),
-    [data?.status_counts],
+    () =>
+      buildFilterTabs(
+        STATUS_TABS,
+        data?.status_counts,
+        TAB_TO_API,
+        data?.attention_count,
+      ),
+    [data?.status_counts, data?.attention_count],
   )
 
   return (
@@ -186,7 +205,10 @@ export const MatchList = () => {
           <MatchListTable
             rows={rowViews}
             isLoading={isLoading}
+            isAttention={isAttention}
+            query={q.trim()}
             onClear={onClear}
+            onClearSearch={onClearSearch}
             navigate={navigate}
           />
         </div>

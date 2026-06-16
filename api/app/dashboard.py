@@ -8,6 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.attention import attention_priority, list_attention_kind
 from app.db import get_session
 from app.matches import (
     current_game_number,
@@ -148,14 +149,6 @@ async def _load_my_rating_changes(
     return changes
 
 
-# Attention-priority ranking (PRD §5): lower number = more urgent. ``score``
-# splits into rated (2) vs unrated (3) by ``affects_rating``.
-_DISPUTE_PRIORITY = 0
-_REVIEW_PRIORITY = 1
-_RATED_SCORE_PRIORITY = 2
-_UNRATED_SCORE_PRIORITY = 3
-
-
 def _build_attention(
     in_progress: Sequence[Match],
     disputed: Sequence[Match],
@@ -170,49 +163,34 @@ def _build_attention(
     opponent" (footer) for them, while the reviewer hasn't signed and gets a
     ``review`` row. Pending/scheduled matches (``pending_count``) and our own
     posted-and-awaiting results are folded into ``waiting_count``; they never
-    render as rows.
+    render as rows. Classification + ranking come from the shared
+    ``app.attention`` module so this panel and the matches-list Attention filter
+    never disagree about who owes a move.
     """
     # (priority, sort_ts, item) — sorted by priority then oldest-first so a
     # long-stalled match floats to the top of its bucket.
     ranked: list[tuple[int, datetime, DashboardAttentionItem]] = []
     waiting = pending_count
 
-    for match in disputed:
+    for match in (*disputed, *in_progress):
+        kind = list_attention_kind(match, current_user_id)
+        # Passive "waiting" buckets are footer-only here; ``waiting_others``
+        # (pending) never reaches this loop — those matches are counted, not
+        # loaded — so only ``waiting_opponent`` (our posted-and-awaiting result)
+        # folds in.
+        if kind == "waiting_opponent" or kind == "waiting_others":
+            waiting += 1
+            continue
+        if kind is None:
+            continue
+        # kind is now narrowed to AttentionKind (dispute / review / score).
         ranked.append(
             (
-                _DISPUTE_PRIORITY,
+                attention_priority(kind, match.match_settings.affects_rating),
                 match.updated_at,
-                _attention_item(match, current_user_id, "dispute"),
+                _attention_item(match, current_user_id, kind),
             )
         )
-
-    for match in in_progress:
-        if match.signatures:
-            i_signed = any(sig.user_id == current_user_id for sig in match.signatures)
-            if i_signed:
-                # We posted the result; it's awaiting the opponent's sign-off.
-                waiting += 1
-            else:
-                ranked.append(
-                    (
-                        _REVIEW_PRIORITY,
-                        match.updated_at,
-                        _attention_item(match, current_user_id, "review"),
-                    )
-                )
-        else:
-            priority = (
-                _RATED_SCORE_PRIORITY
-                if match.match_settings.affects_rating
-                else _UNRATED_SCORE_PRIORITY
-            )
-            ranked.append(
-                (
-                    priority,
-                    match.updated_at,
-                    _attention_item(match, current_user_id, "score"),
-                )
-            )
 
     ranked.sort(key=lambda row: (row[0], row[1]))
     return [item for _, _, item in ranked], waiting

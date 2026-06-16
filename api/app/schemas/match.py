@@ -3,6 +3,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.attention import ListAttentionKind
 from app.models.match import MatchStatus
 from app.schemas.rating import RatingChange
 from app.schemas.view.match_details import MatchDetails as MatchDetailsView
@@ -206,6 +207,13 @@ class MatchListRow(BaseModel):
     # surface an "Awaiting your confirmation" CTA on rows the caller owes a
     # signature on.
     can_confirm: bool
+    # The current-user-aware attention bucket this row falls in (see
+    # ``app.attention``), or ``None`` when the row isn't an attention item for
+    # the caller — a completed/voided match, or a match the caller only
+    # spectates. The FE derives the row's current-user-aware status label and
+    # primary/secondary CTA from this (plus ``current_game_number`` for the
+    # scoring deep-link), falling back to ``status_label`` when it's ``None``.
+    attention: ListAttentionKind | None
 
 
 class MatchListResponse(BaseModel):
@@ -214,6 +222,10 @@ class MatchListResponse(BaseModel):
     page_size: int
     total: int
     status_counts: dict[MatchStatus, int]
+    # Count of the caller's *open* matches (any attention bucket) under the
+    # active search, independent of which status tab is selected — powers the
+    # Attention tab's badge even while another tab is showing. Always present.
+    attention_count: int
 
 
 # ----- score write (POST/PUT body) -----------------------------------------
