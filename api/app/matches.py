@@ -1610,7 +1610,19 @@ async def create_game_score(
         side_2_points=payload.side_2_points,
     )
 
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        # Two participants on the same game-entry page submitting at once both
+        # lazily insert the same game row (uq_match_games_match_id_game_number)
+        # and/or its score (uq_match_game_scores_match_game_id). The
+        # pre-checks above pass for both before either commits, so the loser of
+        # the race trips a unique constraint. Surface it as the same clean 409
+        # the sequential already-scored path returns, not a 500.
+        await db.rollback()
+        raise HTTPException(
+            status_code=409, detail="This game has already been scored."
+        ) from exc
 
     reloaded = await _load_match(db, match.id)
     assert reloaded is not None

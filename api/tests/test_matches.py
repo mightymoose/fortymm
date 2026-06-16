@@ -9,7 +9,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 
-from app.matches import confirm_match_result, dispute_match_result
+from app.matches import (
+    confirm_match_result,
+    create_game_score,
+    dispute_match_result,
+)
 from app.models import (
     League,
     LeagueVisibility,
@@ -21,6 +25,7 @@ from app.models import (
     User,
 )
 from app.notifications.apns import MATCH_RESULT_CONFIRMATION_CATEGORY
+from app.schemas.match import MatchGameScoreWrite
 from tests._helpers import (
     FakeSender,
     make_client,
@@ -720,6 +725,69 @@ async def test_score_create_409_when_game_already_scored(
     )
     assert second.status_code == 409
     assert second.json()["detail"] == "This game has already been scored."
+
+
+async def test_concurrent_score_create_returns_409_not_500(
+    api_client: AsyncClient, db_session: AsyncSession, engine: AsyncEngine
+):
+    """Regression for #362. Two participants sitting on the same
+    game-score-entry page who submit at the same instant both lazily insert
+    the same game row (``uq_match_games_match_id_game_number``); the loser of
+    the race trips the unique constraint at commit. Before the guard that
+    surfaced as a raw 500 — it must be the same clean 409 the sequential
+    already-scored path returns.
+
+    Driven on two *separate* DB sessions (real distinct Postgres connections)
+    via ``asyncio.gather`` so the constraint actually arbitrates — the shared
+    ``db_session`` override can't surface the race. An un-mapped
+    ``IntegrityError`` would escape ``run``'s ``HTTPException``-only ``except``
+    and fail the test loudly, which is exactly the 500 we're guarding against.
+    """
+    me = await start_session(api_client, db_session)
+    async with opponent_session(db_session, "race-opp") as (_opp_client, opp):
+        # A fresh rated match: both participants may score game 1, and the
+        # game row doesn't exist yet, so each request inserts it.
+        match = await _create_match(api_client, opp.id, best_of=5)
+        match_id = uuid.UUID(match["id"])
+        me_id, opp_id = me.id, opp.id
+
+        make_session = async_sessionmaker(engine, expire_on_commit=False)
+
+        async def run(user_id: uuid.UUID, side_1: int, side_2: int) -> object:
+            async with make_session() as session:
+                user = (
+                    await session.execute(select(User).where(User.id == user_id))
+                ).scalar_one()
+                payload = MatchGameScoreWrite(
+                    side_1_points=side_1, side_2_points=side_2
+                )
+                try:
+                    await create_game_score(match_id, payload, 1, user, session)
+                    return "ok"
+                except HTTPException as exc:
+                    return exc.status_code
+
+        outcomes = await asyncio.gather(run(me_id, 11, 9), run(opp_id, 5, 11))
+
+        # Exactly one write wins; the other is cleanly rejected with 409,
+        # never a 500 and never a second silent success.
+        assert sorted(str(o) for o in outcomes) == ["409", "ok"], outcomes
+        assert all(o != 500 for o in outcomes), outcomes
+
+        # The committed match holds exactly one score for game 1.
+        async with make_session() as verify:
+            scores = (
+                (
+                    await verify.execute(
+                        select(MatchGameScore)
+                        .join(MatchGame, MatchGameScore.match_game_id == MatchGame.id)
+                        .where(MatchGame.match_id == match_id)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            assert len(scores) == 1, scores
 
 
 async def test_score_create_422_when_game_number_exceeds_best_of(
