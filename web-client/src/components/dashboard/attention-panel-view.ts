@@ -40,14 +40,16 @@ export interface AttentionPanelView {
   viewAllSearch: { q: string | undefined }
 }
 
-// A row's attention "bucket" — the unit the primary-button rule operates on
-// (score rows split rated vs unrated; review/dispute are each their own
-// bucket). We deliberately do NOT re-encode the priority *ordering* here: the
-// server already sorts by it (PRD §5), so the first visible row is the
-// highest-priority bucket present, and every row sharing its bucket takes the
-// primary button (PRD §6.3).
+// A row's attention "bucket" — the unit the primary-button rule operates on.
+// It is keyed by the action *kind* (the button copy: dispute / review / score)
+// so same-type rows always share styling: all `Enter score` rows render primary
+// together or secondary together, regardless of rated-vs-unrated (PRD §6.3 —
+// "multiple same-type actionable items → all primary"). The rated/unrated split
+// only affects priority *ordering*, which the server already applies (PRD §5),
+// so the first visible row is the highest-priority bucket present and every row
+// sharing its kind takes the primary button.
 function bucketKey(item: DashboardAttentionItem): string {
-  return item.kind === 'score' ? `score-${item.affects_rating}` : item.kind
+  return item.kind
 }
 
 function actionLabelOf(kind: DashboardAttentionItem['kind']): string {
