@@ -86,13 +86,21 @@ function renderNewMatch() {
       scoringRoute,
       detailsRoute,
     ]),
-    history: createMemoryHistory({ initialEntries: ['/matches/new'] }),
+    history: createMemoryHistory({
+      // Seed a prior entry (the dashboard) so a Back from score entry has
+      // somewhere real to land — and the new-match form must not be it.
+      initialEntries: ['/dashboard', '/matches/new'],
+      initialIndex: 1,
+    }),
   })
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <RouterProvider router={router} />
-    </QueryClientProvider>,
-  )
+  return {
+    router,
+    ...render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    ),
+  }
 }
 
 function DetailsProbe({ matchId }: { matchId: string }) {
@@ -140,6 +148,36 @@ describe('NewMatchPage', () => {
       best_of: 5,
       rated: true,
     })
+  })
+
+  it('replaces the new-match form in history so Back from scoring does not re-open it (#441)', async () => {
+    const user = userEvent.setup()
+    server.use(
+      http.get('*/v1/players/recent', () => HttpResponse.json([])),
+      http.post('*/v1/matches', () =>
+        HttpResponse.json(pendingMatch(), { status: 201 }),
+      ),
+    )
+    const { router } = renderNewMatch()
+
+    await user.click(
+      await screen.findByRole('button', { name: /start match/i }),
+    )
+    await waitFor(() =>
+      expect(
+        screen.getByText('Scoring route m-test game 1'),
+      ).toBeInTheDocument(),
+    )
+
+    // Going Back must NOT return to the creation form (which would otherwise
+    // try to re-create the match) — it lands on the page before it.
+    router.history.back()
+    await waitFor(() =>
+      expect(screen.getByText('Dashboard route')).toBeInTheDocument(),
+    )
+    expect(
+      screen.queryByRole('button', { name: /start match/i }),
+    ).not.toBeInTheDocument()
   })
 
   it('seeds the details cache from the create response, so a redirect to /matches/{id} renders without the racing GET (#510)', async () => {

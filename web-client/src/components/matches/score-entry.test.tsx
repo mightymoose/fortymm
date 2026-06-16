@@ -1520,6 +1520,113 @@ describe('ScoreEntry — failed saves', () => {
   })
 })
 
+// ---------------------------------------------------------------------------
+// Unsaved-input guard (#441): typing a score and then leaving — via an in-app
+// route change — without pressing Save must prompt before discarding it. A
+// clean page (or input that matches the saved score) must not nag, and the
+// sanctioned Save/Clear paths must navigate without tripping the guard.
+// ---------------------------------------------------------------------------
+
+describe('ScoreEntry — unsaved-input guard', () => {
+  it('prompts before an in-app navigation away from unsaved typing, and "Keep editing" stays put', async () => {
+    const user = userEvent.setup()
+    server.use(
+      http.get('*/v1/matches/m-1', () => HttpResponse.json(inProgressMatch())),
+    )
+
+    renderScoringApp('/matches/m-1/games/3/scores/new')
+    await screen.findByRole('heading', { name: /enter game 3 score/i })
+
+    // Type a score but DON'T save it.
+    await user.type(
+      screen.getByRole('textbox', { name: 'rita.kovac score' }),
+      '11',
+    )
+
+    // Try to leave by tapping an already-scored game's scoreline cell.
+    await user.click(screen.getByRole('link', { name: /game 1, saved/i }))
+
+    // The leave prompt appears instead of navigating. (The modal dialog
+    // aria-hides the page behind it, so the heading isn't queryable here —
+    // we confirm we never left after dismissing the prompt below.)
+    const dialog = await screen.findByRole('alertdialog')
+    expect(dialog).toHaveTextContent(/leave without saving/i)
+
+    // "Keep editing" cancels the navigation — still on game 3 with the input.
+    await user.click(screen.getByRole('button', { name: /keep editing/i }))
+    await waitFor(() =>
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument(),
+    )
+    expect(
+      screen.getByRole('heading', { name: /enter game 3 score/i }),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('textbox', { name: 'rita.kovac score' }),
+    ).toHaveValue('11')
+  })
+
+  it('"Discard & leave" proceeds with the blocked navigation', async () => {
+    const user = userEvent.setup()
+    server.use(
+      http.get('*/v1/matches/m-1', () => HttpResponse.json(inProgressMatch())),
+    )
+
+    renderScoringApp('/matches/m-1/games/3/scores/new')
+    await screen.findByRole('heading', { name: /enter game 3 score/i })
+    await user.type(
+      screen.getByRole('textbox', { name: 'rita.kovac score' }),
+      '11',
+    )
+
+    await user.click(screen.getByRole('link', { name: /game 1, saved/i }))
+    await screen.findByRole('alertdialog')
+    await user.click(screen.getByRole('button', { name: /discard & leave/i }))
+
+    // Navigation goes through — game 1 opens in edit mode.
+    await screen.findByRole('heading', { name: /edit game 1 score/i })
+  })
+
+  it('does not prompt when leaving a clean page (nothing typed)', async () => {
+    const user = userEvent.setup()
+    server.use(
+      http.get('*/v1/matches/m-1', () => HttpResponse.json(inProgressMatch())),
+    )
+
+    renderScoringApp('/matches/m-1/games/3/scores/new')
+    await screen.findByRole('heading', { name: /enter game 3 score/i })
+
+    // No typing — leaving must be friction-free.
+    await user.click(screen.getByRole('link', { name: /game 1, saved/i }))
+    await screen.findByRole('heading', { name: /edit game 1 score/i })
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+  })
+
+  it('does not prompt after the fire-and-forget Save navigates to the next game', async () => {
+    const user = userEvent.setup()
+    server.use(
+      http.get('*/v1/matches/m-1', () => HttpResponse.json(inProgressMatch())),
+      http.post(
+        '*/v1/matches/m-1/games/3/scores/new',
+        () => new Promise<Response>(() => {}),
+      ),
+    )
+
+    renderScoringApp('/matches/m-1/games/3/scores/new')
+    await screen.findByRole('heading', { name: /enter game 3 score/i })
+    await user.type(
+      screen.getByRole('textbox', { name: 'rita.kovac score' }),
+      '11',
+    )
+    await user.type(screen.getByRole('textbox', { name: 'nguyen.t score' }), '4')
+
+    // Saving advances to game 4 with no leave prompt — the Save hop is
+    // sanctioned, not blocked.
+    await user.click(screen.getByRole('button', { name: /save game & next/i }))
+    await screen.findByRole('heading', { name: /enter game 4 score/i })
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+  })
+})
+
 afterEach(() => {
   // Restore connectivity so the offline test doesn't leak into others.
   onlineManager.setOnline(true)
