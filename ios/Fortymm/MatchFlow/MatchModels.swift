@@ -273,11 +273,17 @@ enum MatchRules {
     /// The canonical postable games: the gap-free run of completed games from
     /// game 1 up to *and including* the game that decides the match, dropping
     /// anything entered past the decider. Returns nil when the games entered so
-    /// far don't yet form a complete, validly-ordered, decided match — in which
-    /// case Post must not be offered. Mirrors `decidedSide` in
-    /// web-client/src/lib/scoring.ts and the finalize validator in
-    /// api/app/matches.py (no illegal scores, contiguous from game 1, no scored
-    /// games past the decider).
+    /// far don't yet form a complete, decided match — in which case Post must
+    /// not be offered.
+    ///
+    /// Assumes `games` is the dense, position-indexed slot array the score-entry
+    /// screen builds (index i ⇒ game i+1, length == bestOf). Contiguity, the
+    /// no-duplicate-game-numbers rule, and the bestOf bound that the server's
+    /// finalize validator (api/app/matches.py) and the web client's `decidedSide`
+    /// (web-client/src/lib/scoring.ts) check explicitly are guaranteed here by
+    /// that array shape rather than re-validated: a gap (incomplete slot) before
+    /// the decider yields nil, and games past the decider are truncated rather
+    /// than rejected (the client simply never posts them).
     static func gamesThroughDecider(_ games: [Game], bestOf: Int) -> [Game]? {
         let need = gamesToWin(bestOf: bestOf)
         var a = 0, b = 0

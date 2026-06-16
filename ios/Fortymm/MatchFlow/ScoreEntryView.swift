@@ -28,12 +28,9 @@ struct ScoreEntryView: View {
     private var current: Game { games.indices.contains(active) ? games[active] : Game() }
     private var currentValid: Bool { MatchRules.gameComplete(current) }
 
-    /// Tally shown in the VS column — includes the current game if it's complete.
-    private var setsDisplay: SetScore {
-        var games = self.games.enumerated().filter { $0.offset != active }.map(\.element)
-        if currentValid { games.append(current) }
-        return MatchRules.setsWon(games)
-    }
+    /// Tally shown in the VS column. `setsWon` already ignores incomplete games,
+    /// so counting over all slots (including the one being entered) is correct.
+    private var setsDisplay: SetScore { MatchRules.setsWon(games) }
     /// True when the games entered so far form a complete, decided match — i.e.
     /// there's a valid result to Post. Uses the same canonical rule as `post()`
     /// so the Post button never appears for games the server would reject, and
