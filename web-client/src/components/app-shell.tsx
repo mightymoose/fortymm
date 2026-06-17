@@ -4,9 +4,11 @@ import {
   Bell,
   ChevronDown,
   Gauge,
+  Inbox,
   Key,
   Megaphone,
   Shield,
+  SlidersHorizontal,
   TriangleAlert,
   Users,
 } from 'lucide-react'
@@ -93,6 +95,10 @@ const NAV_SECTIONS: NavSection[] = [
         label: 'Notifications',
         to: '/notifications',
         icon: <Bell size={18} strokeWidth={2} />,
+        children: [
+          { label: 'Inbox', to: '/notifications', icon: <Inbox size={15} strokeWidth={1.75} /> },
+          { label: 'Preferences', to: '/notifications/settings', icon: <SlidersHorizontal size={15} strokeWidth={1.75} /> },
+        ],
       },
     ],
   },

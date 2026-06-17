@@ -1,19 +1,17 @@
-import { createFileRoute } from '@tanstack/react-router'
+import { Outlet, createFileRoute } from '@tanstack/react-router'
 import { AppShell } from '@/components/app-shell'
-import { NotificationsPage } from '@/components/notifications/notifications-page'
-import { pageTitle } from '@/lib/page-title'
 
+// Layout route: the app chrome + an Outlet for the notifications sub-pages
+// (index = the feed list, /settings = the preferences matrix). The children
+// must render through this Outlet, so don't turn this back into a leaf page.
 export const Route = createFileRoute('/notifications')({
-  head: () => ({
-    meta: [{ title: pageTitle('Notifications') }],
-  }),
-  component: NotificationsRoute,
+  component: NotificationsLayout,
 })
 
-function NotificationsRoute() {
+function NotificationsLayout() {
   return (
     <AppShell>
-      <NotificationsPage />
+      <Outlet />
     </AppShell>
   )
 }
