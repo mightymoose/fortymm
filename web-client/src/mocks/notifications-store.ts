@@ -1,0 +1,173 @@
+import { http, HttpResponse } from 'msw'
+import type { components } from '@/api/schema'
+import { notificationPreferences } from '@/test/factories'
+
+type NotificationItem = components['schemas']['NotificationItem']
+type NotificationPreferences = components['schemas']['NotificationPreferences']
+type NotificationPreferencesUpdate =
+  components['schemas']['NotificationPreferencesUpdate']
+type BroadcastRequest = components['schemas']['BroadcastRequest']
+type BroadcastRecipient = components['schemas']['BroadcastRecipient']
+
+// A small in-memory feed so the dev bell + pages have something to render.
+// Mutated by mark-read / broadcast so the dev UI feels live.
+let feed: NotificationItem[] = [
+  {
+    id: 'mn-1',
+    category: 'result_confirm',
+    title: 'Confirm your score',
+    body: 'def. Patel, M. — you logged 3–1. Tap to confirm.',
+    link: '/matches/m-1',
+    action_label: 'Review',
+    delta: null,
+    read_at: null,
+    created_at: '2026-06-17T11:59:00.000Z',
+  },
+  {
+    id: 'mn-2',
+    category: 'opponent',
+    title: 'Okafor, D. challenged you',
+    body: 'Singles · Downtown TT · Thu 20:30',
+    link: null,
+    action_label: 'Accept',
+    delta: null,
+    read_at: null,
+    created_at: '2026-06-17T11:42:00.000Z',
+  },
+  {
+    id: 'mn-3',
+    category: 'rating_change',
+    title: 'Rating +12',
+    body: "You're now 1,847. Best of the month.",
+    link: null,
+    action_label: null,
+    delta: '+12',
+    read_at: '2026-06-17T11:05:00.000Z',
+    created_at: '2026-06-17T11:00:00.000Z',
+  },
+  {
+    id: 'mn-4',
+    category: 'tournament',
+    title: 'Spring Open · R16 posted',
+    body: 'You play the winner of Tran / Chen.',
+    link: null,
+    action_label: 'See draw',
+    delta: null,
+    read_at: '2026-06-16T20:00:00.000Z',
+    created_at: '2026-06-16T18:00:00.000Z',
+  },
+]
+
+let prefs: NotificationPreferences = notificationPreferences()
+
+const RECIPIENTS: BroadcastRecipient[] = [
+  { id: 'u-1', username: 'nguyen.t' },
+  { id: 'u-2', username: 'okafor.d' },
+  { id: 'u-3', username: 'silva.r' },
+  { id: 'u-4', username: 'patel.m' },
+  { id: 'u-5', username: 'johansen.a' },
+]
+
+const unreadCount = () => feed.filter((n) => n.read_at == null).length
+
+function applyPreferenceUpdate(update: NotificationPreferencesUpdate) {
+  for (const channel of update.channels ?? []) {
+    prefs = {
+      ...prefs,
+      channels: prefs.channels.map((c) =>
+        c.channel === channel.channel && !c.locked && c.available
+          ? { ...c, enabled: channel.enabled }
+          : c,
+      ),
+    }
+  }
+  for (const cell of update.cells ?? []) {
+    prefs = {
+      ...prefs,
+      categories: prefs.categories.map((category) =>
+        category.category === cell.category
+          ? {
+              ...category,
+              cells: category.cells.map((c) =>
+                c.channel === cell.channel && !c.locked
+                  ? { ...c, enabled: cell.enabled }
+                  : c,
+              ),
+            }
+          : category,
+      ),
+    }
+  }
+}
+
+export const notificationHandlers = [
+  http.get('*/v1/notifications/unread-count', () =>
+    HttpResponse.json({ unread_count: unreadCount() }),
+  ),
+
+  http.get('*/v1/notifications/broadcast/recipients', ({ request }) => {
+    const q = new URL(request.url).searchParams.get('q')?.toLowerCase() ?? ''
+    const matched = q
+      ? RECIPIENTS.filter((r) => r.username.toLowerCase().includes(q))
+      : RECIPIENTS
+    return HttpResponse.json({ recipients: matched, total: matched.length })
+  }),
+
+  http.post('*/v1/notifications/broadcast', async ({ request }) => {
+    const body = (await request.json()) as BroadcastRequest
+    const recipients =
+      body.recipients.mode === 'all'
+        ? RECIPIENTS.length
+        : body.recipients.user_ids.length
+    const channels = new Set<string>(body.channels)
+    const has = (c: string) => channels.has(c)
+    return HttpResponse.json({
+      recipients,
+      in_app_created: has('in_app') ? recipients : 0,
+      pushed: has('push') ? recipients : 0,
+      emailed: has('email') ? recipients : 0,
+    })
+  }),
+
+  http.get('*/v1/notifications', () =>
+    HttpResponse.json({
+      items: [...feed].sort((a, b) =>
+        b.created_at.localeCompare(a.created_at),
+      ),
+      unread_count: unreadCount(),
+    }),
+  ),
+
+  http.post('*/v1/notifications/read-all', () => {
+    let marked = 0
+    feed = feed.map((n) => {
+      if (n.read_at == null) {
+        marked += 1
+        return { ...n, read_at: '2026-06-17T12:00:00.000Z' }
+      }
+      return n
+    })
+    return HttpResponse.json({ marked })
+  }),
+
+  http.post('*/v1/notifications/:id/read', ({ params }) => {
+    const id = params.id as string
+    const item = feed.find((n) => n.id === id)
+    if (!item) {
+      return HttpResponse.json(
+        { detail: 'Notification not found.' },
+        { status: 404 },
+      )
+    }
+    const updated = { ...item, read_at: item.read_at ?? '2026-06-17T12:00:00.000Z' }
+    feed = feed.map((n) => (n.id === id ? updated : n))
+    return HttpResponse.json(updated)
+  }),
+
+  http.get('*/v1/notification-preferences', () => HttpResponse.json(prefs)),
+
+  http.patch('*/v1/notification-preferences', async ({ request }) => {
+    applyPreferenceUpdate((await request.json()) as NotificationPreferencesUpdate)
+    return HttpResponse.json(prefs)
+  }),
+]

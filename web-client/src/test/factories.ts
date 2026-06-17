@@ -365,3 +365,125 @@ export function dashboardRecentResult(
     ...overrides,
   }
 }
+
+// ----- notifications -------------------------------------------------------
+
+type NotificationItem = components['schemas']['NotificationItem']
+type NotificationFeed = components['schemas']['NotificationFeed']
+type NotificationPreferences = components['schemas']['NotificationPreferences']
+type NotificationChannelState = components['schemas']['NotificationChannelState']
+type NotificationCategoryPreference =
+  components['schemas']['NotificationCategoryPreference']
+type NotificationChannel = components['schemas']['NotificationChannel']
+type NotificationCategory = components['schemas']['NotificationCategory']
+type BroadcastRecipientList = components['schemas']['BroadcastRecipientList']
+type BroadcastResponse = components['schemas']['BroadcastResponse']
+
+const NOTIF_CHANNELS: NotificationChannel[] = ['in_app', 'push', 'email', 'sms']
+const NOTIF_CATEGORIES: NotificationCategory[] = [
+  'match_reminder',
+  'rating_change',
+  'tournament',
+  'opponent',
+  'result_confirm',
+]
+
+export function notificationItem(
+  overrides: Partial<NotificationItem> = {},
+): NotificationItem {
+  return {
+    id: nextId('n'),
+    category: 'result_confirm',
+    title: 'Confirm your score',
+    body: 'def. Patel, M. — you logged 3–1. Tap to confirm.',
+    link: '/matches/m-1',
+    action_label: 'Review',
+    delta: null,
+    read_at: null,
+    created_at: ISO,
+    ...overrides,
+  }
+}
+
+export function notificationFeed(
+  overrides: Partial<NotificationFeed> = {},
+): NotificationFeed {
+  return {
+    items: [notificationItem()],
+    unread_count: 1,
+    ...overrides,
+  }
+}
+
+function notifChannelDestination(channel: NotificationChannel): string {
+  if (channel === 'in_app') return 'Always on, in your feed'
+  if (channel === 'push') return '1 device'
+  if (channel === 'email') return 'you@fortymm.club'
+  return 'Not available yet'
+}
+
+function notifChannelState(
+  channel: NotificationChannel,
+): NotificationChannelState {
+  const available = channel !== 'sms'
+  const locked = channel === 'in_app'
+  return {
+    channel,
+    enabled: locked || available,
+    available,
+    locked,
+    destination: notifChannelDestination(channel),
+  }
+}
+
+function notifCategoryPref(
+  category: NotificationCategory,
+): NotificationCategoryPreference {
+  return {
+    category,
+    cells: NOTIF_CHANNELS.map((channel) => {
+      const locked =
+        category === 'match_reminder' &&
+        (channel === 'in_app' || channel === 'push')
+      const available = channel !== 'sms'
+      return { channel, enabled: locked ? true : available, locked }
+    }),
+  }
+}
+
+/** The default, no-overrides preferences matrix, mirroring the server's
+ * resolved defaults. */
+export function notificationPreferences(
+  overrides: Partial<NotificationPreferences> = {},
+): NotificationPreferences {
+  return {
+    channels: NOTIF_CHANNELS.map(notifChannelState),
+    categories: NOTIF_CATEGORIES.map(notifCategoryPref),
+    ...overrides,
+  }
+}
+
+export function broadcastRecipientList(
+  overrides: Partial<BroadcastRecipientList> = {},
+): BroadcastRecipientList {
+  return {
+    recipients: [
+      { id: nextId('u'), username: 'nguyen.t' },
+      { id: nextId('u'), username: 'okafor.d' },
+    ],
+    total: 2,
+    ...overrides,
+  }
+}
+
+export function broadcastResponse(
+  overrides: Partial<BroadcastResponse> = {},
+): BroadcastResponse {
+  return {
+    recipients: 2,
+    in_app_created: 2,
+    pushed: 0,
+    emailed: 0,
+    ...overrides,
+  }
+}

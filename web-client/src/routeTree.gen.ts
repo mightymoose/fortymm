@@ -19,18 +19,22 @@ import { Route as LoginWelcomeRouteImport } from './routes/login.welcome'
 import { Route as LoginVerifyingRouteImport } from './routes/login.verifying'
 import { Route as LoginSentRouteImport } from './routes/login.sent'
 import { Route as AppSettingsRouteImport } from './routes/_app/settings'
+import { Route as AppNotificationsRouteImport } from './routes/_app/notifications'
 import { Route as AppDashboardRouteImport } from './routes/_app/dashboard'
 import { Route as AppAdminRouteImport } from './routes/_app/admin'
 import { Route as AppTournamentsIndexRouteImport } from './routes/_app/tournaments/index'
 import { Route as AppPlayersIndexRouteImport } from './routes/_app/players/index'
+import { Route as AppNotificationsIndexRouteImport } from './routes/_app/notifications.index'
 import { Route as AppMatchesIndexRouteImport } from './routes/_app/matches/index'
 import { Route as AppAdminIndexRouteImport } from './routes/_app/admin.index'
 import { Route as AppTournamentsTournamentIdRouteImport } from './routes/_app/tournaments.$tournamentId'
 import { Route as AppPlayersUserIdRouteImport } from './routes/_app/players/$userId'
+import { Route as AppNotificationsSettingsRouteImport } from './routes/_app/notifications.settings'
 import { Route as AppMatchesNewRouteImport } from './routes/_app/matches/new'
 import { Route as AppAdminUsersRouteImport } from './routes/_app/admin.users'
 import { Route as AppAdminRolesRouteImport } from './routes/_app/admin.roles'
 import { Route as AppAdminPermissionsRouteImport } from './routes/_app/admin.permissions'
+import { Route as AppAdminBroadcastRouteImport } from './routes/_app/admin.broadcast'
 import { Route as AppMatchesMatchIdIndexRouteImport } from './routes/_app/matches.$matchId.index'
 import { Route as AppMatchesMatchIdGamesGameNumberScoresNewRouteImport } from './routes/_app/matches.$matchId.games.$gameNumber.scores.new'
 import { Route as AppMatchesMatchIdGamesGameNumberScoresEditRouteImport } from './routes/_app/matches.$matchId.games.$gameNumber.scores.edit'
@@ -84,6 +88,11 @@ const AppSettingsRoute = AppSettingsRouteImport.update({
   path: '/settings',
   getParentRoute: () => AppRouteRoute,
 } as any)
+const AppNotificationsRoute = AppNotificationsRouteImport.update({
+  id: '/notifications',
+  path: '/notifications',
+  getParentRoute: () => AppRouteRoute,
+} as any)
 const AppDashboardRoute = AppDashboardRouteImport.update({
   id: '/dashboard',
   path: '/dashboard',
@@ -103,6 +112,11 @@ const AppPlayersIndexRoute = AppPlayersIndexRouteImport.update({
   id: '/players/',
   path: '/players/',
   getParentRoute: () => AppRouteRoute,
+} as any)
+const AppNotificationsIndexRoute = AppNotificationsIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => AppNotificationsRoute,
 } as any)
 const AppMatchesIndexRoute = AppMatchesIndexRouteImport.update({
   id: '/matches/',
@@ -125,6 +139,12 @@ const AppPlayersUserIdRoute = AppPlayersUserIdRouteImport.update({
   path: '/players/$userId',
   getParentRoute: () => AppRouteRoute,
 } as any)
+const AppNotificationsSettingsRoute =
+  AppNotificationsSettingsRouteImport.update({
+    id: '/settings',
+    path: '/settings',
+    getParentRoute: () => AppNotificationsRoute,
+  } as any)
 const AppMatchesNewRoute = AppMatchesNewRouteImport.update({
   id: '/matches/new',
   path: '/matches/new',
@@ -143,6 +163,11 @@ const AppAdminRolesRoute = AppAdminRolesRouteImport.update({
 const AppAdminPermissionsRoute = AppAdminPermissionsRouteImport.update({
   id: '/permissions',
   path: '/permissions',
+  getParentRoute: () => AppAdminRoute,
+} as any)
+const AppAdminBroadcastRoute = AppAdminBroadcastRouteImport.update({
+  id: '/broadcast',
+  path: '/broadcast',
   getParentRoute: () => AppAdminRoute,
 } as any)
 const AppMatchesMatchIdIndexRoute = AppMatchesMatchIdIndexRouteImport.update({
@@ -170,19 +195,23 @@ export interface FileRoutesByFullPath {
   '/simulator': typeof SimulatorRoute
   '/admin': typeof AppAdminRouteWithChildren
   '/dashboard': typeof AppDashboardRoute
+  '/notifications': typeof AppNotificationsRouteWithChildren
   '/settings': typeof AppSettingsRoute
   '/login/sent': typeof LoginSentRoute
   '/login/verifying': typeof LoginVerifyingRoute
   '/login/welcome': typeof LoginWelcomeRoute
   '/login/': typeof LoginIndexRoute
+  '/admin/broadcast': typeof AppAdminBroadcastRoute
   '/admin/permissions': typeof AppAdminPermissionsRoute
   '/admin/roles': typeof AppAdminRolesRoute
   '/admin/users': typeof AppAdminUsersRoute
   '/matches/new': typeof AppMatchesNewRoute
+  '/notifications/settings': typeof AppNotificationsSettingsRoute
   '/players/$userId': typeof AppPlayersUserIdRoute
   '/tournaments/$tournamentId': typeof AppTournamentsTournamentIdRoute
   '/admin/': typeof AppAdminIndexRoute
   '/matches/': typeof AppMatchesIndexRoute
+  '/notifications/': typeof AppNotificationsIndexRoute
   '/players/': typeof AppPlayersIndexRoute
   '/tournaments/': typeof AppTournamentsIndexRoute
   '/matches/$matchId/': typeof AppMatchesMatchIdIndexRoute
@@ -200,14 +229,17 @@ export interface FileRoutesByTo {
   '/login/verifying': typeof LoginVerifyingRoute
   '/login/welcome': typeof LoginWelcomeRoute
   '/login': typeof LoginIndexRoute
+  '/admin/broadcast': typeof AppAdminBroadcastRoute
   '/admin/permissions': typeof AppAdminPermissionsRoute
   '/admin/roles': typeof AppAdminRolesRoute
   '/admin/users': typeof AppAdminUsersRoute
   '/matches/new': typeof AppMatchesNewRoute
+  '/notifications/settings': typeof AppNotificationsSettingsRoute
   '/players/$userId': typeof AppPlayersUserIdRoute
   '/tournaments/$tournamentId': typeof AppTournamentsTournamentIdRoute
   '/admin': typeof AppAdminIndexRoute
   '/matches': typeof AppMatchesIndexRoute
+  '/notifications': typeof AppNotificationsIndexRoute
   '/players': typeof AppPlayersIndexRoute
   '/tournaments': typeof AppTournamentsIndexRoute
   '/matches/$matchId': typeof AppMatchesMatchIdIndexRoute
@@ -223,19 +255,23 @@ export interface FileRoutesById {
   '/simulator': typeof SimulatorRoute
   '/_app/admin': typeof AppAdminRouteWithChildren
   '/_app/dashboard': typeof AppDashboardRoute
+  '/_app/notifications': typeof AppNotificationsRouteWithChildren
   '/_app/settings': typeof AppSettingsRoute
   '/login/sent': typeof LoginSentRoute
   '/login/verifying': typeof LoginVerifyingRoute
   '/login/welcome': typeof LoginWelcomeRoute
   '/login/': typeof LoginIndexRoute
+  '/_app/admin/broadcast': typeof AppAdminBroadcastRoute
   '/_app/admin/permissions': typeof AppAdminPermissionsRoute
   '/_app/admin/roles': typeof AppAdminRolesRoute
   '/_app/admin/users': typeof AppAdminUsersRoute
   '/_app/matches/new': typeof AppMatchesNewRoute
+  '/_app/notifications/settings': typeof AppNotificationsSettingsRoute
   '/_app/players/$userId': typeof AppPlayersUserIdRoute
   '/_app/tournaments/$tournamentId': typeof AppTournamentsTournamentIdRoute
   '/_app/admin/': typeof AppAdminIndexRoute
   '/_app/matches/': typeof AppMatchesIndexRoute
+  '/_app/notifications/': typeof AppNotificationsIndexRoute
   '/_app/players/': typeof AppPlayersIndexRoute
   '/_app/tournaments/': typeof AppTournamentsIndexRoute
   '/_app/matches/$matchId/': typeof AppMatchesMatchIdIndexRoute
@@ -251,19 +287,23 @@ export interface FileRouteTypes {
     | '/simulator'
     | '/admin'
     | '/dashboard'
+    | '/notifications'
     | '/settings'
     | '/login/sent'
     | '/login/verifying'
     | '/login/welcome'
     | '/login/'
+    | '/admin/broadcast'
     | '/admin/permissions'
     | '/admin/roles'
     | '/admin/users'
     | '/matches/new'
+    | '/notifications/settings'
     | '/players/$userId'
     | '/tournaments/$tournamentId'
     | '/admin/'
     | '/matches/'
+    | '/notifications/'
     | '/players/'
     | '/tournaments/'
     | '/matches/$matchId/'
@@ -281,14 +321,17 @@ export interface FileRouteTypes {
     | '/login/verifying'
     | '/login/welcome'
     | '/login'
+    | '/admin/broadcast'
     | '/admin/permissions'
     | '/admin/roles'
     | '/admin/users'
     | '/matches/new'
+    | '/notifications/settings'
     | '/players/$userId'
     | '/tournaments/$tournamentId'
     | '/admin'
     | '/matches'
+    | '/notifications'
     | '/players'
     | '/tournaments'
     | '/matches/$matchId'
@@ -303,19 +346,23 @@ export interface FileRouteTypes {
     | '/simulator'
     | '/_app/admin'
     | '/_app/dashboard'
+    | '/_app/notifications'
     | '/_app/settings'
     | '/login/sent'
     | '/login/verifying'
     | '/login/welcome'
     | '/login/'
+    | '/_app/admin/broadcast'
     | '/_app/admin/permissions'
     | '/_app/admin/roles'
     | '/_app/admin/users'
     | '/_app/matches/new'
+    | '/_app/notifications/settings'
     | '/_app/players/$userId'
     | '/_app/tournaments/$tournamentId'
     | '/_app/admin/'
     | '/_app/matches/'
+    | '/_app/notifications/'
     | '/_app/players/'
     | '/_app/tournaments/'
     | '/_app/matches/$matchId/'
@@ -407,6 +454,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppSettingsRouteImport
       parentRoute: typeof AppRouteRoute
     }
+    '/_app/notifications': {
+      id: '/_app/notifications'
+      path: '/notifications'
+      fullPath: '/notifications'
+      preLoaderRoute: typeof AppNotificationsRouteImport
+      parentRoute: typeof AppRouteRoute
+    }
     '/_app/dashboard': {
       id: '/_app/dashboard'
       path: '/dashboard'
@@ -434,6 +488,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/players/'
       preLoaderRoute: typeof AppPlayersIndexRouteImport
       parentRoute: typeof AppRouteRoute
+    }
+    '/_app/notifications/': {
+      id: '/_app/notifications/'
+      path: '/'
+      fullPath: '/notifications/'
+      preLoaderRoute: typeof AppNotificationsIndexRouteImport
+      parentRoute: typeof AppNotificationsRoute
     }
     '/_app/matches/': {
       id: '/_app/matches/'
@@ -463,6 +524,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppPlayersUserIdRouteImport
       parentRoute: typeof AppRouteRoute
     }
+    '/_app/notifications/settings': {
+      id: '/_app/notifications/settings'
+      path: '/settings'
+      fullPath: '/notifications/settings'
+      preLoaderRoute: typeof AppNotificationsSettingsRouteImport
+      parentRoute: typeof AppNotificationsRoute
+    }
     '/_app/matches/new': {
       id: '/_app/matches/new'
       path: '/matches/new'
@@ -491,6 +559,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppAdminPermissionsRouteImport
       parentRoute: typeof AppAdminRoute
     }
+    '/_app/admin/broadcast': {
+      id: '/_app/admin/broadcast'
+      path: '/broadcast'
+      fullPath: '/admin/broadcast'
+      preLoaderRoute: typeof AppAdminBroadcastRouteImport
+      parentRoute: typeof AppAdminRoute
+    }
     '/_app/matches/$matchId/': {
       id: '/_app/matches/$matchId/'
       path: '/matches/$matchId'
@@ -516,6 +591,7 @@ declare module '@tanstack/react-router' {
 }
 
 interface AppAdminRouteChildren {
+  AppAdminBroadcastRoute: typeof AppAdminBroadcastRoute
   AppAdminPermissionsRoute: typeof AppAdminPermissionsRoute
   AppAdminRolesRoute: typeof AppAdminRolesRoute
   AppAdminUsersRoute: typeof AppAdminUsersRoute
@@ -523,6 +599,7 @@ interface AppAdminRouteChildren {
 }
 
 const AppAdminRouteChildren: AppAdminRouteChildren = {
+  AppAdminBroadcastRoute: AppAdminBroadcastRoute,
   AppAdminPermissionsRoute: AppAdminPermissionsRoute,
   AppAdminRolesRoute: AppAdminRolesRoute,
   AppAdminUsersRoute: AppAdminUsersRoute,
@@ -533,9 +610,23 @@ const AppAdminRouteWithChildren = AppAdminRoute._addFileChildren(
   AppAdminRouteChildren,
 )
 
+interface AppNotificationsRouteChildren {
+  AppNotificationsSettingsRoute: typeof AppNotificationsSettingsRoute
+  AppNotificationsIndexRoute: typeof AppNotificationsIndexRoute
+}
+
+const AppNotificationsRouteChildren: AppNotificationsRouteChildren = {
+  AppNotificationsSettingsRoute: AppNotificationsSettingsRoute,
+  AppNotificationsIndexRoute: AppNotificationsIndexRoute,
+}
+
+const AppNotificationsRouteWithChildren =
+  AppNotificationsRoute._addFileChildren(AppNotificationsRouteChildren)
+
 interface AppRouteRouteChildren {
   AppAdminRoute: typeof AppAdminRouteWithChildren
   AppDashboardRoute: typeof AppDashboardRoute
+  AppNotificationsRoute: typeof AppNotificationsRouteWithChildren
   AppSettingsRoute: typeof AppSettingsRoute
   AppMatchesNewRoute: typeof AppMatchesNewRoute
   AppPlayersUserIdRoute: typeof AppPlayersUserIdRoute
@@ -551,6 +642,7 @@ interface AppRouteRouteChildren {
 const AppRouteRouteChildren: AppRouteRouteChildren = {
   AppAdminRoute: AppAdminRouteWithChildren,
   AppDashboardRoute: AppDashboardRoute,
+  AppNotificationsRoute: AppNotificationsRouteWithChildren,
   AppSettingsRoute: AppSettingsRoute,
   AppMatchesNewRoute: AppMatchesNewRoute,
   AppPlayersUserIdRoute: AppPlayersUserIdRoute,

@@ -1,10 +1,14 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { Link, useRouterState } from '@tanstack/react-router'
 import {
+  Bell,
   ChevronDown,
   Gauge,
+  Inbox,
   Key,
+  Megaphone,
   Shield,
+  SlidersHorizontal,
   TriangleAlert,
   Users,
 } from 'lucide-react'
@@ -12,6 +16,7 @@ import { useSession } from '@/api/session'
 import { Wordmark } from '@/components/wordmark'
 import { cn } from '@/lib/utils'
 import { PERM } from '@/lib/permissions'
+import { NotificationBell } from './notifications/notification-bell'
 import { UserMenu } from './user-menu'
 import { Badge } from '@/components/ui/badge'
 import {
@@ -87,6 +92,15 @@ const NAV_SECTIONS: NavSection[] = [
         to: '/players',
         icon: <Users size={18} strokeWidth={2} />,
       },
+      {
+        label: 'Notifications',
+        to: '/notifications',
+        icon: <Bell size={18} strokeWidth={2} />,
+        children: [
+          { label: 'Inbox', to: '/notifications', icon: <Inbox size={15} strokeWidth={1.75} /> },
+          { label: 'Preferences', to: '/notifications/settings', icon: <SlidersHorizontal size={15} strokeWidth={1.75} /> },
+        ],
+      },
     ],
   },
   {
@@ -115,6 +129,7 @@ const NAV_SECTIONS: NavSection[] = [
           { label: 'Roles', to: '/admin/roles', icon: <Shield size={15} strokeWidth={1.75} />, requires: PERM.AUTH_MANAGE },
           { label: 'Permissions', to: '/admin/permissions', icon: <Key size={15} strokeWidth={1.75} />, requires: PERM.AUTH_MANAGE },
           { label: 'Users', to: '/admin/users', icon: <Users size={15} strokeWidth={1.75} />, requires: PERM.AUTH_MANAGE },
+          { label: 'Broadcast', to: '/admin/broadcast', icon: <Megaphone size={15} strokeWidth={1.75} />, requires: PERM.NOTIFICATIONS_BROADCAST },
         ],
       },
     ],
@@ -353,6 +368,7 @@ export function AppShell({ children }: AppShellProps) {
                 </p>
               </PopoverContent>
             </Popover>
+            <NotificationBell />
             <UserMenu />
           </div>
         </header>
