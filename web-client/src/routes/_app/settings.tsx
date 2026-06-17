@@ -37,7 +37,6 @@ import {
   useUpdateUsername,
   type EmailStatus,
 } from '@/api/session'
-import { AppShell } from '@/components/app-shell'
 import { Turnstile, type TurnstileHandle } from '@/components/turnstile'
 import {
   Tooltip,
@@ -54,7 +53,7 @@ import {
 import { pageTitle } from '@/lib/page-title'
 import './settings.css'
 
-export const Route = createFileRoute('/settings')({
+export const Route = createFileRoute('/_app/settings')({
   head: () => ({
     meta: [{ title: pageTitle('Settings') }],
   }),
@@ -702,18 +701,6 @@ function UsernameSection({
             {clientV.ok ? `@${val}` : '—'}
           </div>
         </div>
-        <span
-          style={{
-            fontFamily: 'var(--font-mono)',
-            fontSize: 'var(--text-xs)',
-            color: 'var(--fg-muted)',
-            letterSpacing: '0.08em',
-            minWidth: 0,
-            overflowWrap: 'anywhere',
-          }}
-        >
-          {window.location.host}/p/players/{clientV.ok ? val : '—'}
-        </span>
       </div>
     </SectionCard>
   )
@@ -1141,7 +1128,7 @@ function SettingsPage() {
   })
 
   return (
-    <AppShell>
+    <>
       <div className="fmm-settings">
         <TooltipProvider>
           <div className="fmm-main-inner">
@@ -1260,6 +1247,6 @@ function SettingsPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </AppShell>
+    </>
   )
 }

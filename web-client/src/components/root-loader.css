@@ -1,0 +1,164 @@
+/* Session loader — "The Serve" (FortyMM design handoff: Session Loader v2).
+   A pulsing brand core inside three expanding serve rings, with rotating
+   warm-up lines below. Shown full-screen while the session bootstrap resolves;
+   the router crossfades to the page once the loader's route loader settles. */
+
+.root-loader {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-app);
+  font-family: var(--font-ui);
+}
+
+.root-loader__wordmark {
+  position: absolute;
+  top: 26px;
+  left: 30px;
+  opacity: 0.5;
+}
+
+/* —— pulsing core + serve rings —— */
+.root-loader__beacon {
+  position: relative;
+  width: 160px;
+  height: 160px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.root-loader__ring {
+  position: absolute;
+  width: 84px;
+  height: 84px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(255, 122, 26, 0.5);
+  animation: rootLoaderRing 3.6s var(--ease-out) infinite backwards;
+}
+.root-loader__ring:nth-child(2) {
+  animation-delay: 1.2s;
+}
+.root-loader__ring:nth-child(3) {
+  animation-delay: 2.4s;
+}
+
+.root-loader__core {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle at 35% 30%,
+    var(--ball-400),
+    var(--ball-500) 55%,
+    var(--ball-600) 100%
+  );
+  animation: rootLoaderCore 2.2s ease-in-out infinite;
+}
+
+/* —— rotating warm-up lines —— */
+.root-loader__lines {
+  position: relative;
+  height: 24px;
+  width: 340px;
+  margin-top: 34px;
+}
+
+.root-loader__line {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  font-size: 15px;
+  color: var(--fg-2);
+  animation: rootLoaderLine 12.5s linear infinite backwards;
+}
+.root-loader__line:nth-child(2) {
+  animation-delay: 2.5s;
+}
+.root-loader__line:nth-child(3) {
+  animation-delay: 5s;
+}
+.root-loader__line:nth-child(4) {
+  animation-delay: 7.5s;
+}
+.root-loader__line:nth-child(5) {
+  animation-delay: 10s;
+}
+
+.root-loader__line::before {
+  content: '';
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ball-500);
+}
+
+@keyframes rootLoaderRing {
+  0% {
+    transform: scale(0.5);
+    opacity: 0.4;
+  }
+  100% {
+    transform: scale(2.2);
+    opacity: 0;
+  }
+}
+
+@keyframes rootLoaderCore {
+  0%,
+  100% {
+    transform: scale(1);
+    box-shadow: 0 0 13px rgba(255, 122, 26, 0.45);
+  }
+  50% {
+    transform: scale(0.9);
+    box-shadow: 0 0 20px rgba(255, 122, 26, 0.7);
+  }
+}
+
+@keyframes rootLoaderLine {
+  0% {
+    opacity: 0;
+    transform: translateY(7px);
+  }
+  3% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  18% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  21% {
+    opacity: 0;
+    transform: translateY(-7px);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-7px);
+  }
+}
+
+/* Respect reduced-motion: hold the core + first line steady, drop the rings. */
+@media (prefers-reduced-motion: reduce) {
+  .root-loader__ring {
+    display: none;
+  }
+  .root-loader__core {
+    animation: none;
+    box-shadow: 0 0 16px rgba(255, 122, 26, 0.55);
+  }
+  .root-loader__line {
+    animation: none;
+    opacity: 0;
+  }
+  .root-loader__line:first-child {
+    opacity: 1;
+  }
+}

@@ -24,6 +24,23 @@ const SESSION = sessionResponse({
   },
 })
 
+/**
+ * Answer `/v1/session` with an admin session, nothing else. The `_app` layout
+ * loader establishes the session before any admin route renders, so MSW-off
+ * specs that bare-`goto` an admin URL (rather than going through
+ * `RbacStore.install`) must still answer the session bootstrap — otherwise the
+ * loader hangs on the session-loader screen and the page never mounts.
+ */
+export async function mockAdminSession(page: Page) {
+  await page.route('**/v1/session', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(SESSION),
+    }),
+  )
+}
+
 export interface FailureSpec {
   /** Matched against `${method} ${url}` — substring (string) or regex. */
   pattern: RegExp | string

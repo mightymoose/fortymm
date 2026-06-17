@@ -32,10 +32,6 @@ export function playerQueryKey(playerId: string) {
   return ['players', 'detail', playerId] as const
 }
 
-export function publicPlayerQueryKey(username: string) {
-  return ['players', 'public', username] as const
-}
-
 export function playerMatchesQueryKey(
   playerId: string,
   params: PlayerMatchListParams,
@@ -114,33 +110,10 @@ export function usePlayerById(
   return useQuery({ ...playerByIdQueryOptions(playerId), ...options })
 }
 
-/** Public profile-page bundle — same shape as the authed view, just keyed
- * by username. */
-export function publicPlayerByUsernameQueryOptions(username: string) {
-  return queryOptions({
-    queryKey: publicPlayerQueryKey(username),
-    queryFn: async (): Promise<PlayerDetail> =>
-      unwrap(
-        'load public player',
-        await api.GET('/v1/p/players/{username}', {
-          params: { path: { username } },
-        }),
-      ),
-    retry: false,
-    throwOnError: true,
-  })
-}
-
-export function usePublicPlayerByUsername(username: string) {
-  return useQuery(publicPlayerByUsernameQueryOptions(username))
-}
-
 /** Per-player paginated match list — pre-shaped from the player's
  * perspective so the FE doesn't have to flip set scores. The backend
- * endpoint is public (no session required) and IP-rate-limited, so this
- * single hook serves BOTH the authed `/players/$userId` and the public
- * `/p/players/$username` routes — they both already have the id by the
- * time they call it.
+ * endpoint is public (no session required) and IP-rate-limited. The authed
+ * `/players/$userId` route already has the id by the time it calls this.
  *
  * Intentionally NOT `throwOnError`: the profile page renders an inline
  * "Couldn't load matches · Try again" affordance for transient failures

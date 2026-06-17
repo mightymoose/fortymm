@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test'
 import { UsersPage } from './page-objects/rbac/users.page'
+import { mockAdminSession } from './page-objects/rbac/rbac-store'
 
 const BASE_SEED = {
   permissions: [
@@ -32,6 +33,7 @@ test.describe('Administration · Users', () => {
   })
 
   test('escalates a 500 on users fetch to the error boundary', async ({ page }) => {
+    await mockAdminSession(page)
     await page.route('**/api/v1/users', (route) =>
       route.fulfill({ status: 500, contentType: 'application/json', body: '{}' }),
     )

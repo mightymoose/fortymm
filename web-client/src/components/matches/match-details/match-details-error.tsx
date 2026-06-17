@@ -1,6 +1,5 @@
 import { Link, useRouter } from '@tanstack/react-router'
 
-import { AppShell } from '@/components/app-shell'
 import { ApiError } from '@/api/client'
 
 export interface MatchDetailsErrorProps {
@@ -77,5 +76,5 @@ export function MatchDetailsError({ error, reset }: MatchDetailsErrorProps) {
       </div>
     </div>
   )
-  return <AppShell>{body}</AppShell>
+  return body
 }
