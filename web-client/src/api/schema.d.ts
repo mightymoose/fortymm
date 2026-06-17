@@ -708,6 +708,150 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/notifications": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Notifications
+         * @description The caller's most recent notifications plus their unread total — the
+         *     single payload the bell dropdown and the notifications page render.
+         */
+        get: operations["list_notifications_v1_notifications_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/notifications/unread-count": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Unread Count
+         * @description Just the unread total — the lightweight endpoint the bell badge polls.
+         */
+        get: operations["get_unread_count_v1_notifications_unread_count_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/notifications/read-all": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Mark All Notifications Read */
+        post: operations["mark_all_notifications_read_v1_notifications_read_all_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/notifications/{notification_id}/read": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Mark Notification Read */
+        post: operations["mark_notification_read_v1_notifications__notification_id__read_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/notification-preferences": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Notification Preferences
+         * @description The caller's channel masters + per-category matrix, resolved against the
+         *     defaults (so locked/unavailable channels read correctly).
+         */
+        get: operations["get_notification_preferences_v1_notification_preferences_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Update Notification Preferences
+         * @description Partial update: only the listed channels/cells change. Attempts to alter
+         *     a locked or unavailable channel are ignored; the response reflects the
+         *     server-resolved state.
+         */
+        patch: operations["update_notification_preferences_v1_notification_preferences_patch"];
+        trace?: never;
+    };
+    "/v1/notifications/broadcast/recipients": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Broadcast Recipients
+         * @description Players the admin can target, filtered by username substring.
+         */
+        get: operations["list_broadcast_recipients_v1_notifications_broadcast_recipients_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/notifications/broadcast": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Broadcast Notification
+         * @description Send an announcement to all players or a hand-picked set. Filed as
+         *     tournament news, so each recipient only receives it on channels they
+         *     haven't muted for that category.
+         */
+        post: operations["broadcast_notification_v1_notifications_broadcast_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/tournaments": {
         parameters: {
             query?: never;
@@ -818,6 +962,87 @@ export interface components {
             postal: string;
             /** Country */
             country: string;
+        };
+        /**
+         * BroadcastRecipient
+         * @description One selectable player in the admin recipient picker.
+         */
+        BroadcastRecipient: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Username */
+            username: string;
+        };
+        /**
+         * BroadcastRecipientList
+         * @description Recipient-picker results: the matching players (capped) and the total
+         *     number that matched, so "select all" can report the true audience size.
+         */
+        BroadcastRecipientList: {
+            /** Recipients */
+            recipients: components["schemas"]["BroadcastRecipient"][];
+            /** Total */
+            total: number;
+        };
+        /**
+         * BroadcastRecipientsAll
+         * @description Send to every (live) player.
+         */
+        BroadcastRecipientsAll: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            mode: "all";
+        };
+        /**
+         * BroadcastRecipientsSelected
+         * @description Send to a hand-picked set of players.
+         */
+        BroadcastRecipientsSelected: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            mode: "selected";
+            /** User Ids */
+            user_ids: string[];
+        };
+        /**
+         * BroadcastRequest
+         * @description An admin broadcast: pick recipients, the channels to try, and the copy.
+         *
+         *     Broadcasts are filed under the *tournament* category, so each recipient only
+         *     receives it on a channel they haven't muted for tournament news — admin
+         *     reach still respects the player's preferences.
+         */
+        BroadcastRequest: {
+            /** Recipients */
+            recipients: components["schemas"]["BroadcastRecipientsAll"] | components["schemas"]["BroadcastRecipientsSelected"];
+            /** Channels */
+            channels: components["schemas"]["NotificationChannel"][];
+            /** Title */
+            title: string;
+            /** Body */
+            body: string;
+        };
+        /**
+         * BroadcastResponse
+         * @description What the broadcast did: how many players it targeted and, of those, how
+         *     many got an in-app record / push / email after preference filtering.
+         */
+        BroadcastResponse: {
+            /** Recipients */
+            recipients: number;
+            /** In App Created */
+            in_app_created: number;
+            /** Pushed */
+            pushed: number;
+            /** Emailed */
+            emailed: number;
         };
         /** ComponentHealth */
         ComponentHealth: {
@@ -1005,6 +1230,14 @@ export interface components {
              * Format: email
              */
             email: string;
+        };
+        /**
+         * MarkAllReadResponse
+         * @description How many previously-unread notifications were just marked read.
+         */
+        MarkAllReadResponse: {
+            /** Marked */
+            marked: number;
         };
         /**
          * MatchCreate
@@ -1363,6 +1596,152 @@ export interface components {
         MergeSummary: {
             /** Matches Moved */
             matches_moved: number;
+        };
+        /**
+         * NotificationCategory
+         * @description What a notification is about. Mirrors the product's notification kinds;
+         *     a user can mute each category independently per channel.
+         * @enum {string}
+         */
+        NotificationCategory: "match_reminder" | "rating_change" | "tournament" | "opponent" | "result_confirm";
+        /**
+         * NotificationCategoryCell
+         * @description One cell of the matrix: this category's setting for one channel.
+         *
+         *     ``enabled`` is the cell's own resolved state, independent of the channel
+         *     master — the UI greys the cell out when the master is off but preserves the
+         *     underlying choice. ``locked`` cells (e.g. match reminders in-app/push) are
+         *     always on and can't be changed.
+         */
+        NotificationCategoryCell: {
+            channel: components["schemas"]["NotificationChannel"];
+            /** Enabled */
+            enabled: boolean;
+            /** Locked */
+            locked: boolean;
+        };
+        /**
+         * NotificationCategoryPreference
+         * @description One row of the matrix: a category and its per-channel cells.
+         */
+        NotificationCategoryPreference: {
+            category: components["schemas"]["NotificationCategory"];
+            /** Cells */
+            cells: components["schemas"]["NotificationCategoryCell"][];
+        };
+        /**
+         * NotificationCellUpdate
+         * @description A requested change to one matrix cell.
+         */
+        NotificationCellUpdate: {
+            category: components["schemas"]["NotificationCategory"];
+            channel: components["schemas"]["NotificationChannel"];
+            /** Enabled */
+            enabled: boolean;
+        };
+        /**
+         * NotificationChannel
+         * @description How a notification reaches a user. ``in_app`` is the persisted feed (the
+         *     bell); the rest are external fan-out from the same stored record.
+         * @enum {string}
+         */
+        NotificationChannel: "in_app" | "push" | "email" | "sms";
+        /**
+         * NotificationChannelState
+         * @description One channel "sign-up" card at the top of the preferences page.
+         *
+         *     ``enabled`` is the resolved master toggle; ``available`` is whether the
+         *     server can deliver on this channel at all (SMS isn't wired up yet);
+         *     ``locked`` means the user can't switch it off (in-app is the feed itself);
+         *     ``destination`` is a human hint about where it lands (email address, device
+         *     count, ...), computed server-side.
+         */
+        NotificationChannelState: {
+            channel: components["schemas"]["NotificationChannel"];
+            /** Enabled */
+            enabled: boolean;
+            /** Available */
+            available: boolean;
+            /** Locked */
+            locked: boolean;
+            /** Destination */
+            destination?: string | null;
+        };
+        /**
+         * NotificationChannelUpdate
+         * @description A requested change to one channel master.
+         */
+        NotificationChannelUpdate: {
+            channel: components["schemas"]["NotificationChannel"];
+            /** Enabled */
+            enabled: boolean;
+        };
+        /**
+         * NotificationFeed
+         * @description The bell/notifications-page payload: the most recent notifications plus
+         *     the unread total (which can exceed ``len(items)`` when the feed is capped).
+         */
+        NotificationFeed: {
+            /** Items */
+            items: components["schemas"]["NotificationItem"][];
+            /** Unread Count */
+            unread_count: number;
+        };
+        /**
+         * NotificationItem
+         * @description One persisted notification, as the bell dropdown and the notifications
+         *     page render it. ``read_at`` is the source of truth for unread state — the
+         *     client derives ``unread = read_at is None`` rather than us shipping both.
+         */
+        NotificationItem: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            category: components["schemas"]["NotificationCategory"];
+            /** Title */
+            title: string;
+            /** Body */
+            body: string;
+            /** Link */
+            link?: string | null;
+            /** Action Label */
+            action_label?: string | null;
+            /** Delta */
+            delta?: string | null;
+            /** Read At */
+            read_at?: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /**
+         * NotificationPreferences
+         * @description The whole preferences page: the channel masters and the category matrix.
+         *     Returned by both GET and PATCH so the client always re-syncs to the
+         *     server-resolved truth (locked/unavailable channels can't be overridden).
+         */
+        NotificationPreferences: {
+            /** Channels */
+            channels: components["schemas"]["NotificationChannelState"][];
+            /** Categories */
+            categories: components["schemas"]["NotificationCategoryPreference"][];
+        };
+        /**
+         * NotificationPreferencesUpdate
+         * @description A partial update to the preferences. Only the channels/cells listed are
+         *     touched; everything else is left as-is. Attempts to change a locked or
+         *     unavailable channel/cell are ignored (the response reflects the real,
+         *     server-resolved state).
+         */
+        NotificationPreferencesUpdate: {
+            /** Channels */
+            channels?: components["schemas"]["NotificationChannelUpdate"][];
+            /** Cells */
+            cells?: components["schemas"]["NotificationCellUpdate"][];
         };
         /** PermissionCreate */
         PermissionCreate: {
@@ -2021,6 +2400,14 @@ export interface components {
             address?: components["schemas"]["Address"] | null;
             /** Table Catalogue */
             table_catalogue?: components["schemas"]["TournamentTable"][] | null;
+        };
+        /**
+         * UnreadCountResponse
+         * @description Just the unread total — the cheap endpoint the bell badge polls.
+         */
+        UnreadCountResponse: {
+            /** Unread Count */
+            unread_count: number;
         };
         /** UpdateCurrentUserRequest */
         UpdateCurrentUserRequest: {
@@ -3543,6 +3930,266 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TestNotificationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_notifications_v1_notifications_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationFeed"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_unread_count_v1_notifications_unread_count_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnreadCountResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    mark_all_notifications_read_v1_notifications_read_all_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MarkAllReadResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    mark_notification_read_v1_notifications__notification_id__read_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                notification_id: string;
+            };
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationItem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_notification_preferences_v1_notification_preferences_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationPreferences"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_notification_preferences_v1_notification_preferences_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NotificationPreferencesUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationPreferences"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_broadcast_recipients_v1_notifications_broadcast_recipients_get: {
+        parameters: {
+            query?: {
+                q?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BroadcastRecipientList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    broadcast_notification_v1_notifications_broadcast_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BroadcastRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BroadcastResponse"];
                 };
             };
             /** @description Validation Error */

@@ -29,6 +29,9 @@ from app.models import (
     Match,
     MatchSidePlayer,
     MatchSignature,
+    Notification,
+    NotificationChannelSetting,
+    NotificationPreference,
     RatingHistory,
     Tournament,
     User,
@@ -164,6 +167,19 @@ async def merge_user(
     # its cookie still resolves to this (now-tombstoned) row.
     await db.execute(delete(UserRole).where(UserRole.user_id == from_user_id))
     await db.execute(delete(DeviceToken).where(DeviceToken.user_id == from_user_id))
+    # A guest's in-app notifications and preference overrides are throwaway —
+    # drop them rather than carrying a tombstoned guest's feed onto the survivor.
+    await db.execute(delete(Notification).where(Notification.user_id == from_user_id))
+    await db.execute(
+        delete(NotificationChannelSetting).where(
+            NotificationChannelSetting.user_id == from_user_id
+        )
+    )
+    await db.execute(
+        delete(NotificationPreference).where(
+            NotificationPreference.user_id == from_user_id
+        )
+    )
     await db.execute(delete(RatingHistory).where(RatingHistory.user_id == from_user_id))
     await db.execute(
         delete(UserLeagueRating).where(UserLeagueRating.user_id == from_user_id)

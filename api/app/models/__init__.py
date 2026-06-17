@@ -8,6 +8,11 @@ from app.models.match_settings import MatchSettings, VerificationPolicy
 from app.models.match_side import MatchSide
 from app.models.match_side_player import MatchSidePlayer
 from app.models.match_signature import MatchSignature
+from app.models.notification import (
+    Notification,
+    NotificationChannelSetting,
+    NotificationPreference,
+)
 from app.models.permission import Permission
 from app.models.rating_history import RatingHistory, RatingHistorySource
 from app.models.rating_strategy import RatingStrategy
@@ -40,6 +45,9 @@ __all__ = [
     "MatchSidePlayer",
     "MatchSignature",
     "MatchStatus",
+    "Notification",
+    "NotificationChannelSetting",
+    "NotificationPreference",
     "Permission",
     "RatingHistory",
     "RatingHistorySource",

@@ -22,6 +22,7 @@ from app.models import (
     MatchGameScore,
     MatchSide,
     MatchStatus,
+    Notification,
     User,
 )
 from app.notifications.apns import MATCH_RESULT_CONFIRMATION_CATEGORY
@@ -2404,3 +2405,55 @@ async def test_posting_result_succeeds_when_opponent_has_no_device(
         assert response.status_code == 201
 
     assert sender.sent == []
+
+
+async def test_posting_result_records_in_app_notification_for_opponent(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """Posting a rated result persists an in-app notification (the bell/feed
+    record) for the side that owes a sign-off — not just a transient push. It
+    deep-links to the match and is filed under the result-confirmation category;
+    the poster gets nothing."""
+    me = await start_session(api_client, db_session)
+    me.username = "poster"
+    await db_session.commit()
+
+    sender = FakeSender()
+    use_sender(sender)
+
+    async with opponent_session(db_session, "rival") as (_opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=1)
+        response = await api_client.post(
+            f"/v1/matches/{match['id']}/results",
+            json={
+                "games": [{"game_number": 1, "side_1_points": 11, "side_2_points": 5}]
+            },
+        )
+        assert response.status_code == 201
+
+    opp_rows = (
+        (
+            await db_session.execute(
+                select(Notification).where(Notification.user_id == opp.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(opp_rows) == 1
+    stored = opp_rows[0]
+    assert stored.category == "result_confirm"
+    assert stored.link == f"/matches/{match['id']}"
+    assert stored.read_at is None
+
+    # The poster is never notified.
+    poster_rows = (
+        (
+            await db_session.execute(
+                select(Notification).where(Notification.user_id == me.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert poster_rows == []

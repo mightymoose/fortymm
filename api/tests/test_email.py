@@ -1060,3 +1060,89 @@ def test_email_refuses_to_send_when_smtp_unset_outside_dev(monkeypatch):
     monkeypatch.setenv("APP_BASE_URL", "https://example.com")
     with pytest.raises(RuntimeError, match="SMTP"):
         email_module.send_confirmation_email("a@b.com", "tok", "user")
+
+
+# ---- notification email ---------------------------------------------------
+
+
+def test_absolute_link_is_none_without_a_link(monkeypatch):
+    from app import email as email_module
+
+    monkeypatch.setenv("APP_BASE_URL", "https://fortymm.test")
+    assert email_module._absolute_link(None) is None
+    assert email_module._absolute_link("") is None
+
+
+def test_absolute_link_joins_a_relative_path(monkeypatch):
+    from app import email as email_module
+
+    monkeypatch.setenv("APP_BASE_URL", "https://fortymm.test")
+    assert (
+        email_module._absolute_link("/matches/abc")
+        == "https://fortymm.test/matches/abc"
+    )
+    # A missing leading slash is normalised, not doubled.
+    assert (
+        email_module._absolute_link("matches/abc") == "https://fortymm.test/matches/abc"
+    )
+
+
+def test_absolute_link_passes_through_an_absolute_url(monkeypatch):
+    from app import email as email_module
+
+    monkeypatch.setenv("APP_BASE_URL", "https://fortymm.test")
+    assert (
+        email_module._absolute_link("https://elsewhere.test/x")
+        == "https://elsewhere.test/x"
+    )
+
+
+def test_absolute_link_is_none_without_a_base(monkeypatch):
+    from app import email as email_module
+
+    monkeypatch.delenv("APP_BASE_URL", raising=False)
+    monkeypatch.delenv("FORTYMM_DEV", raising=False)
+    assert email_module._absolute_link("/matches/abc") is None
+
+
+def test_send_notification_email_builds_subject_body_and_link(monkeypatch):
+    from app import email as email_module
+
+    monkeypatch.setenv("SMTP_HOST", "smtp.test")
+    monkeypatch.setenv("APP_BASE_URL", "https://fortymm.test")
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        email_module, "_send_via_smtp", lambda message: captured.update(msg=message)
+    )
+
+    email_module.send_notification_email(
+        "player@example.com",
+        "Spring Open · R16 posted",
+        "You play the winner of Tran / Chen.",
+        "/matches/m-1",
+    )
+
+    message = captured["msg"]
+    assert message["Subject"] == "FortyMM · Spring Open · R16 posted"  # type: ignore[index]
+    assert message["To"] == "player@example.com"  # type: ignore[index]
+    body = message.get_content()  # type: ignore[attr-defined]
+    assert "Spring Open · R16 posted" in body
+    assert "You play the winner of Tran / Chen." in body
+    assert "https://fortymm.test/matches/m-1" in body
+
+
+def test_send_notification_email_omits_the_link_when_absent(monkeypatch):
+    from app import email as email_module
+
+    monkeypatch.setenv("SMTP_HOST", "smtp.test")
+    monkeypatch.setenv("APP_BASE_URL", "https://fortymm.test")
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        email_module, "_send_via_smtp", lambda message: captured.update(msg=message)
+    )
+
+    email_module.send_notification_email("player@example.com", "Heads up", "No link.")
+
+    body = captured["msg"].get_content()  # type: ignore[attr-defined]
+    assert "Heads up" in body
+    assert "https://" not in body

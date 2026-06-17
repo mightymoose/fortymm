@@ -21,6 +21,7 @@ import {
   validateScore,
   type SeedMatch,
 } from './match-store'
+import { notificationHandlers } from './notifications-store'
 import { createRbacState, dispatchRbac } from './rbac-engine'
 import { DEMO_SEED } from './rbac-store'
 import {
@@ -937,6 +938,7 @@ export const handlers = [
     }
     return new HttpResponse(null, { status: 204 })
   }),
+  ...notificationHandlers,
 
   ...RBAC_PATHS.flatMap((path) => [
     http.get(path, rbacHandler),
