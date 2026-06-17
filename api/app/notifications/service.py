@@ -14,7 +14,7 @@ import uuid
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, cast
+from typing import Any, assert_never, cast
 
 from sqlalchemy import CursorResult, delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert
@@ -457,18 +457,23 @@ class NotificationService:
     @staticmethod
     def _channel_destination(
         channel: NotificationChannel, user: User, device_count: int
-    ) -> str | None:
-        if channel is NotificationChannel.IN_APP:
-            return "Always on, in your feed"
-        if channel is NotificationChannel.PUSH:
-            if device_count == 0:
-                return "No devices yet — open the app"
-            return f"{device_count} device{'s' if device_count != 1 else ''}"
-        if channel is NotificationChannel.EMAIL:
-            if user.email and user.confirmed_at is not None:
-                return user.email
-            return "Add an email in settings"
-        return "Not available yet"
+    ) -> str:
+        # Exhaustive match (no catch-all): adding a channel becomes a mypy error
+        # at the assert_never, per api/CLAUDE.md's enum-mapping rule.
+        match channel:
+            case NotificationChannel.IN_APP:
+                return "Always on, in your feed"
+            case NotificationChannel.PUSH:
+                if device_count == 0:
+                    return "No devices yet — open the app"
+                return f"{device_count} device{'s' if device_count != 1 else ''}"
+            case NotificationChannel.EMAIL:
+                if user.email and user.confirmed_at is not None:
+                    return user.email
+                return "Add an email in settings"
+            case NotificationChannel.SMS:
+                return "Not available yet"
+        assert_never(channel)
 
     async def _channel_overrides(
         self, user_id: uuid.UUID
