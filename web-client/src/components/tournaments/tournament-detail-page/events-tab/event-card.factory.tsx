@@ -5,5 +5,5 @@ import type { EventCardProps } from './event-card'
 export function buildEventCardProps(
   overrides: Partial<EventCardProps> = {},
 ): EventCardProps {
-  return { event: buildEvent(), onOpen: () => {}, ...overrides }
+  return { event: buildEvent(), canEdit: true, onOpen: () => {}, ...overrides }
 }

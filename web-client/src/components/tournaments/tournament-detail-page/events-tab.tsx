@@ -55,7 +55,12 @@ export const EventsTab = ({
       ) : (
         <div className="flex flex-col gap-3">
           {tournament.events.map((ev) => (
-            <EventCard key={ev.id} event={ev} onOpen={() => onOpenEvent(ev)} />
+            <EventCard
+              key={ev.id}
+              event={ev}
+              canEdit={canEdit}
+              onOpen={() => onOpenEvent(ev)}
+            />
           ))}
         </div>
       )}

@@ -4,9 +4,11 @@ import { EventCard, type EventCardProps } from './event-card'
 import { buildEventCardProps } from './event-card.factory'
 
 const scoped = (container: Container) => ({
-  /** The full-card open target, named `Edit <event>`. */
-  getOpenButton(name: string) {
-    return container.getByRole('button', { name: `Edit ${name}` })
+  /** The full-card open target — labelled `Edit <event>` for an owner, or
+   * `View <event>` for a non-owner (read-only). Pass the verb to assert the
+   * read-only case. */
+  getOpenButton(name: string, verb: 'Edit' | 'View' = 'Edit') {
+    return container.getByRole('button', { name: `${verb} ${name}` })
   },
 })
 
