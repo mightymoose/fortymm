@@ -246,6 +246,10 @@ async def test_recipient_picker_search(
     api_client: AsyncClient, db_session: AsyncSession
 ):
     admin = await start_session(api_client, db_session)
+    # The admin's auto-generated coolname could itself contain "al" (e.g.
+    # "large-teal"), so pin it to a name the search query can't match.
+    admin.username = "broadcaster"
+    await db_session.commit()
     await grant_broadcast(db_session, admin)
     await make_user(db_session, "alice")
     await make_user(db_session, "alvin")
