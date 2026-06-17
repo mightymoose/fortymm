@@ -12,6 +12,14 @@ actor SessionTokenStore {
     private var cached: String?
     private var didLoad = false
 
+    /// Set when `cached` holds a token the Keychain write didn't persist — e.g.
+    /// a session minted on a background/locked launch, before the device's
+    /// first unlock, fails the `kSecAttrAccessibleAfterFirstUnlock`-gated write.
+    /// We retry the save on the next access so the token isn't silently lost on
+    /// the next cold launch (which would mint a brand-new guest, abandoning this
+    /// one's matches and rating).
+    private var needsPersist = false
+
     /// The double-submit CSRF token, captured from the server's non-HttpOnly
     /// `csrf_token` cookie. In-memory only: it isn't a secret, and the API
     /// reissues it on the `/v1/session` bootstrap the app makes on every launch
@@ -29,6 +37,7 @@ actor SessionTokenStore {
             cached = keychain.load()
             didLoad = true
         }
+        retryPersistIfNeeded()
         return cached
     }
 
@@ -46,7 +55,16 @@ actor SessionTokenStore {
         guard token != cached else { return }
         cached = token
         didLoad = true
-        keychain.save(token)
+        needsPersist = !keychain.save(token)
+    }
+
+    /// Re-attempt a previously-failed Keychain write. Called from `token()`,
+    /// which runs at the start of every request, so once the device is unlocked
+    /// the cached token gets persisted on the next request rather than waiting
+    /// for a token rotation.
+    private func retryPersistIfNeeded() {
+        guard needsPersist, let token = cached else { return }
+        needsPersist = !keychain.save(token)
     }
 
     /// Forget the session (sign-out). Clears both the cache and the vault, plus
@@ -55,6 +73,7 @@ actor SessionTokenStore {
     func clear() {
         cached = nil
         csrf = nil
+        needsPersist = false
         didLoad = true
         keychain.delete()
     }

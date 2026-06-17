@@ -17,14 +17,19 @@ struct KeychainStore {
         self.account = account
     }
 
-    func save(_ value: String) {
+    /// Persist `value`, returning whether the write succeeded. A write can fail
+    /// (e.g. `errSecInteractionNotAllowed` if attempted before the device's
+    /// first unlock, given `kSecAttrAccessibleAfterFirstUnlock`); the caller
+    /// must not assume the value is durably stored.
+    @discardableResult
+    func save(_ value: String) -> Bool {
         // Delete any existing item first so SecItemAdd can't fail with
         // errSecDuplicateItem.
         SecItemDelete(baseQuery as CFDictionary)
         var attributes = baseQuery
         attributes[kSecValueData as String] = Data(value.utf8)
         attributes[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
-        _ = SecItemAdd(attributes as CFDictionary, nil)
+        return SecItemAdd(attributes as CFDictionary, nil) == errSecSuccess
     }
 
     func load() -> String? {

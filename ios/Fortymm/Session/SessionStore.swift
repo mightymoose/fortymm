@@ -95,10 +95,17 @@ final class SessionStore: ObservableObject {
         state = .loading
         do {
             let response = try await client.getSession()
+            // While this getSession was in flight, a concurrent request may have
+            // flipped us to .signedOut (its session was merged away → token
+            // cleared → this call ran cookieless and minted a *fresh* guest), or
+            // a deep link may have resolved the session. Don't clobber either:
+            // only commit if we're still the in-flight load.
+            guard case .loading = state else { return }
             state = .loaded(response.data.user)
         } catch let APIError.sessionMerged(message, email) {
             signedOut(reason: message, email: email)
         } catch {
+            guard case .loading = state else { return }
             state = .failed(error.fmMessage)
         }
     }
