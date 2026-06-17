@@ -6,7 +6,6 @@ import {
 } from 'react-error-boundary'
 import { QueryErrorResetBoundary } from '@tanstack/react-query'
 import { ApiError } from '@/api/client'
-import { PERM } from '@/lib/permissions'
 import { Button } from '@/components/ui/button'
 
 const containerStyle = {
@@ -33,9 +32,11 @@ const detailStyle = {
 }
 
 function RbacErrorFallback({ error, resetErrorBoundary }: FallbackProps) {
-  // 403s come from the authorization.manage gate — show a clearer message
-  // than "something went wrong" so unauthorized direct-navigation reads as
-  // intentional rather than broken.
+  // 403s come from a server-side permission gate — show a clearer message than
+  // "something went wrong" so unauthorized direct-navigation reads as
+  // intentional rather than broken. This boundary wraps several admin pages
+  // (RBAC + tournaments), each gated on a different permission, so the copy is
+  // permission-agnostic rather than naming one specific permission.
   if (error instanceof ApiError && error.status === 403) {
     return (
       <div role="alert" style={containerStyle}>
@@ -44,8 +45,7 @@ function RbacErrorFallback({ error, resetErrorBoundary }: FallbackProps) {
         </div>
         <div style={titleStyle}>You don't have access to this page</div>
         <div style={detailStyle}>
-          Ask an administrator to grant you the{' '}
-          <code style={{ fontFamily: 'var(--font-mono)' }}>{PERM.AUTH_MANAGE}</code> permission.
+          Ask an administrator to grant you access to this page.
         </div>
       </div>
     )

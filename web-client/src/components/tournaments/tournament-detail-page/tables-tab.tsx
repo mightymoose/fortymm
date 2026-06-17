@@ -1,37 +1,57 @@
+import { useState } from 'react'
 import { Plus, Trash2 } from 'lucide-react'
 
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
 
+import { genId } from '../data/helpers'
 import type { Tournament, TournamentTable } from '../data/types'
 import { SectionHeader } from './section-header'
 
 export interface TablesTabProps {
   tournament: Tournament
-  /** The full table catalogue. */
-  allTables: TournamentTable[]
-  onUpdate: (tournament: Tournament) => void
+  /** This tournament's table catalogue (the venue tables it owns). */
+  catalogue: TournamentTable[]
+  /** Emit the next catalogue. The catalogue IS the assigned set — the API has
+   * no separate global table list, so removing a table drops it outright and
+   * the "Add" affordance creates a brand-new table. */
+  onChangeCatalogue: (catalogue: TournamentTable[]) => void
 }
 
-/** The Tables tab: the venue tables assigned to this tournament, each with the
- * events using it, plus a row of unassigned tables to add. */
-export const TablesTab = ({ tournament, allTables, onUpdate }: TablesTabProps) => {
-  const usage = tournament.tableIds
-    .map((id) => {
-      const table = allTables.find((t) => t.id === id)
-      const usingEvents = tournament.events
-        .filter((ev) => ev.pools.some((p) => p.tableIds.includes(id)))
-        .map((ev) => ev.name)
-      return table ? { table, usingEvents } : null
-    })
-    .filter((u): u is { table: TournamentTable; usingEvents: string[] } => u !== null)
+/** The Tables tab: the venue tables in this tournament's catalogue, each with
+ * the events using it, plus a form to add a new table. */
+export const TablesTab = ({
+  tournament,
+  catalogue,
+  onChangeCatalogue,
+}: TablesTabProps) => {
+  const [label, setLabel] = useState('')
+  const [court, setCourt] = useState('')
 
-  const available = allTables.filter((t) => !tournament.tableIds.includes(t.id))
+  const usage = catalogue.map((table) => {
+    const usingEvents = tournament.events
+      .filter((ev) => ev.pools.some((p) => p.tableIds.includes(table.id)))
+      .map((ev) => ev.name)
+    return { table, usingEvents }
+  })
 
   const removeTable = (id: string) =>
-    onUpdate({ ...tournament, tableIds: tournament.tableIds.filter((x) => x !== id) })
-  const addTable = (id: string) =>
-    onUpdate({ ...tournament, tableIds: [...tournament.tableIds, id] })
+    onChangeCatalogue(catalogue.filter((t) => t.id !== id))
+
+  const trimmedLabel = label.trim()
+  const canAdd = trimmedLabel.length > 0
+
+  const addTable = () => {
+    if (!canAdd) return
+    onChangeCatalogue([
+      ...catalogue,
+      { id: genId('table'), label: trimmedLabel, court: court.trim() },
+    ])
+    setLabel('')
+    setCourt('')
+  }
 
   return (
     <div>
@@ -85,27 +105,37 @@ export const TablesTab = ({ tournament, allTables, onUpdate }: TablesTabProps) =
         ))}
       </div>
 
-      {available.length > 0 && (
-        <div className="mt-6">
-          <div className="mb-2 text-[11px] font-semibold tracking-[0.12em] text-[color:var(--fg-3)] uppercase">
-            Add a table · {available.length} available
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {available.map((t) => (
-              <button
-                key={t.id}
-                type="button"
-                aria-label={`Add ${t.label}`}
-                onClick={() => addTable(t.id)}
-                className="inline-flex items-center gap-1.5 rounded-md border border-[color:var(--border-default)] bg-[color:var(--bg-card)] px-3 py-2 font-mono text-[13px] text-[color:var(--fg-1)] hover:bg-[color:var(--bg-hover)]"
-              >
-                <Plus size={12} />
-                {t.label}
-              </button>
-            ))}
-          </div>
+      <div className="mt-6">
+        <div className="mb-2 text-[11px] font-semibold tracking-[0.12em] text-[color:var(--fg-3)] uppercase">
+          Add a table
         </div>
-      )}
+        <form
+          className="flex flex-wrap items-center gap-2"
+          onSubmit={(e) => {
+            e.preventDefault()
+            addTable()
+          }}
+        >
+          <Input
+            aria-label="Table label"
+            placeholder="Label (e.g. T9)"
+            value={label}
+            onChange={(e) => setLabel(e.target.value)}
+            className="w-36"
+          />
+          <Input
+            aria-label="Court"
+            placeholder="Court"
+            value={court}
+            onChange={(e) => setCourt(e.target.value)}
+            className="w-28"
+          />
+          <Button type="submit" disabled={!canAdd}>
+            <Plus size={14} />
+            Add table
+          </Button>
+        </form>
+      </div>
     </div>
   )
 }

@@ -23,8 +23,28 @@ import {
 } from './match-store'
 import { createRbacState, dispatchRbac } from './rbac-engine'
 import { DEMO_SEED } from './rbac-store'
+import {
+  createEvent as createTournamentEvent,
+  createTournament,
+  deleteEvent as deleteTournamentEvent,
+  deleteTournament as deleteTournamentSeed,
+  findTournament,
+  listTournaments,
+  updateEvent as updateTournamentEvent,
+  updateTournament,
+} from './tournaments-store'
+import { PERM } from '@/lib/permissions'
 
-export const mockSession = sessionResponse({ user: { username: 'rita.kovac' } })
+export const mockSession = sessionResponse({
+  user: {
+    username: 'rita.kovac',
+    // The Administration nav *section* is gated on ADMIN_VIEW (app-shell), and
+    // its children on their own permission. Grant ADMIN_VIEW so the section
+    // expands, AUTH_MANAGE for the RBAC pages, and TOURNAMENT_MANAGE so the
+    // Tournaments item appears and its page loads under `npm run dev`.
+    permissions: [PERM.ADMIN_VIEW, PERM.AUTH_MANAGE, PERM.TOURNAMENT_MANAGE],
+  },
+})
 export const mockHealthy = healthCheck()
 
 export const mockPlayers = [
@@ -798,6 +818,124 @@ export const handlers = [
       rating: projectRating(mockMatches),
       completed_match_count: completedMatchCount,
     })
+  }),
+
+  // ----- tournaments (admin) ---------------------------------------------
+  // Dev-only handlers backed by `tournaments-store`. The seed includes rows
+  // owned by the dev user (editable, with events + pools) and one owned by
+  // `league.office` (can_edit: false) so the ownership gating is visible.
+  // PATCH/DELETE on a non-owned row (tournament or event) returns 403,
+  // mirroring the real API. The list and detail GET both return
+  // `TournamentDetailRead` (events included). Event sub-routes are registered
+  // before the bare `:tournamentId` so MSW matches them first.
+  http.get('*/v1/tournaments', async () => {
+    await delay(250)
+    return HttpResponse.json(listTournaments())
+  }),
+  http.post('*/v1/tournaments', async ({ request }) => {
+    await delay(250)
+    const body = (await readJson(request)) as
+      | components['schemas']['TournamentCreate']
+      | undefined
+    if (!body || !body.name?.trim()) return detail('Name is required.', 422)
+    return HttpResponse.json(createTournament(body), { status: 201 })
+  }),
+  http.post(
+    '*/v1/tournaments/:tournamentId/events',
+    async ({ params, request }) => {
+      await delay(250)
+      const body = (await readJson(request)) as
+        | components['schemas']['TournamentEventCreate']
+        | undefined
+      if (!body || !body.name?.trim()) return detail('Name is required.', 422)
+      const result = createTournamentEvent(String(params.tournamentId), body)
+      if (!result.ok) {
+        return detail(
+          result.status === 403
+            ? 'Only the creator can add events to this tournament.'
+            : 'Tournament not found.',
+          result.status,
+        )
+      }
+      return HttpResponse.json(result.event, { status: 201 })
+    },
+  ),
+  http.patch(
+    '*/v1/tournaments/:tournamentId/events/:eventId',
+    async ({ params, request }) => {
+      await delay(250)
+      const body = (await readJson(request)) as
+        | components['schemas']['TournamentEventUpdate']
+        | undefined
+      const result = updateTournamentEvent(
+        String(params.tournamentId),
+        String(params.eventId),
+        body ?? {},
+      )
+      if (!result.ok) {
+        return detail(
+          result.status === 403
+            ? 'Only the creator can edit this event.'
+            : 'Event not found.',
+          result.status,
+        )
+      }
+      return HttpResponse.json(result.event)
+    },
+  ),
+  http.delete(
+    '*/v1/tournaments/:tournamentId/events/:eventId',
+    async ({ params }) => {
+      await delay(250)
+      const result = deleteTournamentEvent(
+        String(params.tournamentId),
+        String(params.eventId),
+      )
+      if (!result.ok) {
+        return detail(
+          result.status === 403
+            ? 'Only the creator can delete this event.'
+            : 'Event not found.',
+          result.status,
+        )
+      }
+      return new HttpResponse(null, { status: 204 })
+    },
+  ),
+  http.get('*/v1/tournaments/:tournamentId', async ({ params }) => {
+    await delay(200)
+    const found = findTournament(String(params.tournamentId))
+    if (!found) return detail('Tournament not found.', 404)
+    return HttpResponse.json(found)
+  }),
+  http.patch('*/v1/tournaments/:tournamentId', async ({ params, request }) => {
+    await delay(250)
+    const body = (await readJson(request)) as
+      | components['schemas']['TournamentUpdate']
+      | undefined
+    const result = updateTournament(String(params.tournamentId), body ?? {})
+    if (!result.ok) {
+      return detail(
+        result.status === 403
+          ? 'Only the creator can edit this tournament.'
+          : 'Tournament not found.',
+        result.status,
+      )
+    }
+    return HttpResponse.json(result.tournament)
+  }),
+  http.delete('*/v1/tournaments/:tournamentId', async ({ params }) => {
+    await delay(250)
+    const result = deleteTournamentSeed(String(params.tournamentId))
+    if (!result.ok) {
+      return detail(
+        result.status === 403
+          ? 'Only the creator can delete this tournament.'
+          : 'Tournament not found.',
+        result.status,
+      )
+    }
+    return new HttpResponse(null, { status: 204 })
   }),
 
   ...RBAC_PATHS.flatMap((path) => [

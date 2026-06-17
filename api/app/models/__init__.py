@@ -13,6 +13,13 @@ from app.models.rating_history import RatingHistory, RatingHistorySource
 from app.models.rating_strategy import RatingStrategy
 from app.models.role import Role
 from app.models.role_permission import RolePermission
+from app.models.tournament import (
+    DrawType,
+    EventFormat,
+    Tournament,
+    TournamentEvent,
+    TournamentStatus,
+)
 from app.models.user import User
 from app.models.user_league_rating import UserLeagueRating
 from app.models.user_role import UserRole
@@ -20,6 +27,8 @@ from app.models.user_token import UserToken
 
 __all__ = [
     "DeviceToken",
+    "DrawType",
+    "EventFormat",
     "League",
     "LeagueMembership",
     "LeagueVisibility",
@@ -37,6 +46,9 @@ __all__ = [
     "RatingStrategy",
     "Role",
     "RolePermission",
+    "Tournament",
+    "TournamentEvent",
+    "TournamentStatus",
     "User",
     "UserLeagueRating",
     "UserRole",

@@ -1,6 +1,6 @@
-// Domain types for the tournament-admin (Tournament CRUD) UI. This is a
-// front-end-only prototype: the shapes mirror the design handoff, not a live
-// API. All data is seeded in-memory (see ./seed) and mutated through ./store.
+// Domain (camelCase) types for the tournament-admin UI. They mirror the design
+// handoff; `./api` adapts them to/from the snake_case API wire shapes in
+// `@/api/schema` (the data layer the route components read and write through).
 
 export type TournamentStatus = 'draft' | 'published' | 'live' | 'archived'
 

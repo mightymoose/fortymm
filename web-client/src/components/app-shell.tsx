@@ -6,6 +6,7 @@ import {
   Key,
   Shield,
   TriangleAlert,
+  Trophy,
   Users,
 } from 'lucide-react'
 import { useSession } from '@/api/session'
@@ -86,6 +87,14 @@ const NAV_SECTIONS: NavSection[] = [
         label: 'Players',
         to: '/players',
         icon: <Users size={18} strokeWidth={2} />,
+      },
+      {
+        // Top-level (not nested under Administration, which requires
+        // ADMIN_VIEW) so a Beta tester with only `tournament.manage` sees it.
+        label: 'Tournaments',
+        to: '/tournaments',
+        requires: PERM.TOURNAMENT_MANAGE,
+        icon: <Trophy size={18} strokeWidth={2} />,
       },
     ],
   },

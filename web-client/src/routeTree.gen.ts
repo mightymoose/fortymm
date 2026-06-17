@@ -18,6 +18,7 @@ import { Route as LoginIndexRouteImport } from './routes/login.index'
 import { Route as LoginWelcomeRouteImport } from './routes/login.welcome'
 import { Route as LoginVerifyingRouteImport } from './routes/login.verifying'
 import { Route as LoginSentRouteImport } from './routes/login.sent'
+import { Route as AppTournamentsRouteImport } from './routes/_app/tournaments'
 import { Route as AppSettingsRouteImport } from './routes/_app/settings'
 import { Route as AppDashboardRouteImport } from './routes/_app/dashboard'
 import { Route as AppAdminRouteImport } from './routes/_app/admin'
@@ -79,6 +80,11 @@ const LoginSentRoute = LoginSentRouteImport.update({
   path: '/login/sent',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AppTournamentsRoute = AppTournamentsRouteImport.update({
+  id: '/tournaments',
+  path: '/tournaments',
+  getParentRoute: () => AppRouteRoute,
+} as any)
 const AppSettingsRoute = AppSettingsRouteImport.update({
   id: '/settings',
   path: '/settings',
@@ -95,9 +101,9 @@ const AppAdminRoute = AppAdminRouteImport.update({
   getParentRoute: () => AppRouteRoute,
 } as any)
 const AppTournamentsIndexRoute = AppTournamentsIndexRouteImport.update({
-  id: '/tournaments/',
-  path: '/tournaments/',
-  getParentRoute: () => AppRouteRoute,
+  id: '/',
+  path: '/',
+  getParentRoute: () => AppTournamentsRoute,
 } as any)
 const AppPlayersIndexRoute = AppPlayersIndexRouteImport.update({
   id: '/players/',
@@ -116,9 +122,9 @@ const AppAdminIndexRoute = AppAdminIndexRouteImport.update({
 } as any)
 const AppTournamentsTournamentIdRoute =
   AppTournamentsTournamentIdRouteImport.update({
-    id: '/tournaments/$tournamentId',
-    path: '/tournaments/$tournamentId',
-    getParentRoute: () => AppRouteRoute,
+    id: '/$tournamentId',
+    path: '/$tournamentId',
+    getParentRoute: () => AppTournamentsRoute,
   } as any)
 const AppPlayersUserIdRoute = AppPlayersUserIdRouteImport.update({
   id: '/players/$userId',
@@ -171,6 +177,7 @@ export interface FileRoutesByFullPath {
   '/admin': typeof AppAdminRouteWithChildren
   '/dashboard': typeof AppDashboardRoute
   '/settings': typeof AppSettingsRoute
+  '/tournaments': typeof AppTournamentsRouteWithChildren
   '/login/sent': typeof LoginSentRoute
   '/login/verifying': typeof LoginVerifyingRoute
   '/login/welcome': typeof LoginWelcomeRoute
@@ -224,6 +231,7 @@ export interface FileRoutesById {
   '/_app/admin': typeof AppAdminRouteWithChildren
   '/_app/dashboard': typeof AppDashboardRoute
   '/_app/settings': typeof AppSettingsRoute
+  '/_app/tournaments': typeof AppTournamentsRouteWithChildren
   '/login/sent': typeof LoginSentRoute
   '/login/verifying': typeof LoginVerifyingRoute
   '/login/welcome': typeof LoginWelcomeRoute
@@ -252,6 +260,7 @@ export interface FileRouteTypes {
     | '/admin'
     | '/dashboard'
     | '/settings'
+    | '/tournaments'
     | '/login/sent'
     | '/login/verifying'
     | '/login/welcome'
@@ -304,6 +313,7 @@ export interface FileRouteTypes {
     | '/_app/admin'
     | '/_app/dashboard'
     | '/_app/settings'
+    | '/_app/tournaments'
     | '/login/sent'
     | '/login/verifying'
     | '/login/welcome'
@@ -400,6 +410,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LoginSentRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/_app/tournaments': {
+      id: '/_app/tournaments'
+      path: '/tournaments'
+      fullPath: '/tournaments'
+      preLoaderRoute: typeof AppTournamentsRouteImport
+      parentRoute: typeof AppRouteRoute
+    }
     '/_app/settings': {
       id: '/_app/settings'
       path: '/settings'
@@ -423,10 +440,10 @@ declare module '@tanstack/react-router' {
     }
     '/_app/tournaments/': {
       id: '/_app/tournaments/'
-      path: '/tournaments'
+      path: '/'
       fullPath: '/tournaments/'
       preLoaderRoute: typeof AppTournamentsIndexRouteImport
-      parentRoute: typeof AppRouteRoute
+      parentRoute: typeof AppTournamentsRoute
     }
     '/_app/players/': {
       id: '/_app/players/'
@@ -451,10 +468,10 @@ declare module '@tanstack/react-router' {
     }
     '/_app/tournaments/$tournamentId': {
       id: '/_app/tournaments/$tournamentId'
-      path: '/tournaments/$tournamentId'
+      path: '/$tournamentId'
       fullPath: '/tournaments/$tournamentId'
       preLoaderRoute: typeof AppTournamentsTournamentIdRouteImport
-      parentRoute: typeof AppRouteRoute
+      parentRoute: typeof AppTournamentsRoute
     }
     '/_app/players/$userId': {
       id: '/_app/players/$userId'
@@ -533,16 +550,29 @@ const AppAdminRouteWithChildren = AppAdminRoute._addFileChildren(
   AppAdminRouteChildren,
 )
 
+interface AppTournamentsRouteChildren {
+  AppTournamentsTournamentIdRoute: typeof AppTournamentsTournamentIdRoute
+  AppTournamentsIndexRoute: typeof AppTournamentsIndexRoute
+}
+
+const AppTournamentsRouteChildren: AppTournamentsRouteChildren = {
+  AppTournamentsTournamentIdRoute: AppTournamentsTournamentIdRoute,
+  AppTournamentsIndexRoute: AppTournamentsIndexRoute,
+}
+
+const AppTournamentsRouteWithChildren = AppTournamentsRoute._addFileChildren(
+  AppTournamentsRouteChildren,
+)
+
 interface AppRouteRouteChildren {
   AppAdminRoute: typeof AppAdminRouteWithChildren
   AppDashboardRoute: typeof AppDashboardRoute
   AppSettingsRoute: typeof AppSettingsRoute
+  AppTournamentsRoute: typeof AppTournamentsRouteWithChildren
   AppMatchesNewRoute: typeof AppMatchesNewRoute
   AppPlayersUserIdRoute: typeof AppPlayersUserIdRoute
-  AppTournamentsTournamentIdRoute: typeof AppTournamentsTournamentIdRoute
   AppMatchesIndexRoute: typeof AppMatchesIndexRoute
   AppPlayersIndexRoute: typeof AppPlayersIndexRoute
-  AppTournamentsIndexRoute: typeof AppTournamentsIndexRoute
   AppMatchesMatchIdIndexRoute: typeof AppMatchesMatchIdIndexRoute
   AppMatchesMatchIdGamesGameNumberScoresEditRoute: typeof AppMatchesMatchIdGamesGameNumberScoresEditRoute
   AppMatchesMatchIdGamesGameNumberScoresNewRoute: typeof AppMatchesMatchIdGamesGameNumberScoresNewRoute
@@ -552,12 +582,11 @@ const AppRouteRouteChildren: AppRouteRouteChildren = {
   AppAdminRoute: AppAdminRouteWithChildren,
   AppDashboardRoute: AppDashboardRoute,
   AppSettingsRoute: AppSettingsRoute,
+  AppTournamentsRoute: AppTournamentsRouteWithChildren,
   AppMatchesNewRoute: AppMatchesNewRoute,
   AppPlayersUserIdRoute: AppPlayersUserIdRoute,
-  AppTournamentsTournamentIdRoute: AppTournamentsTournamentIdRoute,
   AppMatchesIndexRoute: AppMatchesIndexRoute,
   AppPlayersIndexRoute: AppPlayersIndexRoute,
-  AppTournamentsIndexRoute: AppTournamentsIndexRoute,
   AppMatchesMatchIdIndexRoute: AppMatchesMatchIdIndexRoute,
   AppMatchesMatchIdGamesGameNumberScoresEditRoute:
     AppMatchesMatchIdGamesGameNumberScoresEditRoute,

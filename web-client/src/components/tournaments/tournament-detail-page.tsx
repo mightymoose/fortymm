@@ -39,9 +39,11 @@ import { TablesTab } from './tournament-detail-page/tables-tab'
 
 export interface TournamentDetailPageProps {
   tournament: Tournament
-  /** The full table catalogue (for the Tables tab). */
+  /** This tournament's table catalogue (for the Tables tab and pool editor). */
   allTables: TournamentTable[]
   onUpdate: (tournament: Tournament) => void
+  /** Persist an edited table catalogue (add/remove from the Tables tab). */
+  onChangeCatalogue: (catalogue: TournamentTable[]) => void
   onCreateEvent: (event: TournamentEvent) => void
   onUpdateEvent: (event: TournamentEvent) => void
   onDeleteEvent: (eventId: string) => void
@@ -70,6 +72,7 @@ export const TournamentDetailPage = ({
   tournament,
   allTables,
   onUpdate,
+  onChangeCatalogue,
   onCreateEvent,
   onUpdateEvent,
   onDeleteEvent,
@@ -219,8 +222,8 @@ export const TournamentDetailPage = ({
           <TabsContent value="tables">
             <TablesTab
               tournament={tournament}
-              allTables={allTables}
-              onUpdate={onUpdate}
+              catalogue={allTables}
+              onChangeCatalogue={onChangeCatalogue}
             />
           </TabsContent>
           <TabsContent value="schedule">

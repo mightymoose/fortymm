@@ -20,6 +20,7 @@ from app.rate_limiting import init_rate_limit_redis, shutdown_rate_limit_redis
 from app.rbac import router as rbac_router
 from app.sessions import CSRF_COOKIE_NAME, CSRF_HEADER_NAME, CSRF_SAFE_METHODS
 from app.sessions import router as sessions_router
+from app.tournaments import router as tournaments_router
 
 log = logging.getLogger(__name__)
 
@@ -70,6 +71,7 @@ app.include_router(matches_router)
 app.include_router(players_router)
 app.include_router(dashboard_router)
 app.include_router(notifications_router)
+app.include_router(tournaments_router)
 
 SOLVER_HEALTH_TIMEOUT = 10.0
 

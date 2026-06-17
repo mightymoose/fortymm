@@ -30,6 +30,7 @@ from app.models import (
     MatchSidePlayer,
     MatchSignature,
     RatingHistory,
+    Tournament,
     User,
     UserLeagueRating,
     UserRole,
@@ -72,6 +73,14 @@ async def merge_user(
     await db.execute(
         update(Match)
         .where(Match.created_by_user_id == from_user_id)
+        .values(created_by_user_id=to_user_id)
+    )
+
+    # Preserve tournament ownership across a guest→verified merge — re-point
+    # rather than letting the RESTRICT FK block the final tombstone delete.
+    await db.execute(
+        update(Tournament)
+        .where(Tournament.created_by_user_id == from_user_id)
         .values(created_by_user_id=to_user_id)
     )
 

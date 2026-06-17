@@ -7,11 +7,14 @@ const scoped = (container: Container) => ({
   getRemoveButton(label: string) {
     return container.getByRole('button', { name: `Remove ${label}` })
   },
-  getAddButton(label: string) {
-    return container.getByRole('button', { name: `Add ${label}` })
+  getLabelInput() {
+    return container.getByRole('textbox', { name: 'Table label' })
   },
-  queryAddButton(label: string) {
-    return container.queryByRole('button', { name: `Add ${label}` })
+  getCourtInput() {
+    return container.getByRole('textbox', { name: 'Court' })
+  },
+  getAddButton() {
+    return container.getByRole('button', { name: 'Add table' })
   },
 })
 
