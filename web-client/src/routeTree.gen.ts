@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as SimulatorRouteImport } from './routes/simulator'
 import { Route as SettingsRouteImport } from './routes/settings'
+import { Route as NotificationsRouteImport } from './routes/notifications'
 import { Route as DesignSystemRouteImport } from './routes/design-system'
 import { Route as DashboardRouteImport } from './routes/dashboard'
 import { Route as ConfirmEmailRouteImport } from './routes/confirm-email'
@@ -22,6 +23,7 @@ import { Route as MatchesIndexRouteImport } from './routes/matches/index'
 import { Route as LoginIndexRouteImport } from './routes/login.index'
 import { Route as AdminIndexRouteImport } from './routes/admin.index'
 import { Route as TournamentsTournamentIdRouteImport } from './routes/tournaments.$tournamentId'
+import { Route as SettingsNotificationsRouteImport } from './routes/settings.notifications'
 import { Route as PlayersUserIdRouteImport } from './routes/players/$userId'
 import { Route as MatchesNewRouteImport } from './routes/matches/new'
 import { Route as LoginWelcomeRouteImport } from './routes/login.welcome'
@@ -30,6 +32,7 @@ import { Route as LoginSentRouteImport } from './routes/login.sent'
 import { Route as AdminUsersRouteImport } from './routes/admin.users'
 import { Route as AdminRolesRouteImport } from './routes/admin.roles'
 import { Route as AdminPermissionsRouteImport } from './routes/admin.permissions'
+import { Route as AdminBroadcastRouteImport } from './routes/admin.broadcast'
 import { Route as MatchesMatchIdIndexRouteImport } from './routes/matches.$matchId.index'
 import { Route as PPlayersUsernameRouteImport } from './routes/p.players.$username'
 import { Route as MatchesMatchIdGamesGameNumberScoresNewRouteImport } from './routes/matches.$matchId.games.$gameNumber.scores.new'
@@ -43,6 +46,11 @@ const SimulatorRoute = SimulatorRouteImport.update({
 const SettingsRoute = SettingsRouteImport.update({
   id: '/settings',
   path: '/settings',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const NotificationsRoute = NotificationsRouteImport.update({
+  id: '/notifications',
+  path: '/notifications',
   getParentRoute: () => rootRouteImport,
 } as any)
 const DesignSystemRoute = DesignSystemRouteImport.update({
@@ -100,6 +108,11 @@ const TournamentsTournamentIdRoute = TournamentsTournamentIdRouteImport.update({
   path: '/tournaments/$tournamentId',
   getParentRoute: () => rootRouteImport,
 } as any)
+const SettingsNotificationsRoute = SettingsNotificationsRouteImport.update({
+  id: '/notifications',
+  path: '/notifications',
+  getParentRoute: () => SettingsRoute,
+} as any)
 const PlayersUserIdRoute = PlayersUserIdRouteImport.update({
   id: '/players/$userId',
   path: '/players/$userId',
@@ -140,6 +153,11 @@ const AdminPermissionsRoute = AdminPermissionsRouteImport.update({
   path: '/permissions',
   getParentRoute: () => AdminRoute,
 } as any)
+const AdminBroadcastRoute = AdminBroadcastRouteImport.update({
+  id: '/broadcast',
+  path: '/broadcast',
+  getParentRoute: () => AdminRoute,
+} as any)
 const MatchesMatchIdIndexRoute = MatchesMatchIdIndexRouteImport.update({
   id: '/matches/$matchId/',
   path: '/matches/$matchId/',
@@ -169,8 +187,10 @@ export interface FileRoutesByFullPath {
   '/confirm-email': typeof ConfirmEmailRoute
   '/dashboard': typeof DashboardRoute
   '/design-system': typeof DesignSystemRoute
-  '/settings': typeof SettingsRoute
+  '/notifications': typeof NotificationsRoute
+  '/settings': typeof SettingsRouteWithChildren
   '/simulator': typeof SimulatorRoute
+  '/admin/broadcast': typeof AdminBroadcastRoute
   '/admin/permissions': typeof AdminPermissionsRoute
   '/admin/roles': typeof AdminRolesRoute
   '/admin/users': typeof AdminUsersRoute
@@ -179,6 +199,7 @@ export interface FileRoutesByFullPath {
   '/login/welcome': typeof LoginWelcomeRoute
   '/matches/new': typeof MatchesNewRoute
   '/players/$userId': typeof PlayersUserIdRoute
+  '/settings/notifications': typeof SettingsNotificationsRoute
   '/tournaments/$tournamentId': typeof TournamentsTournamentIdRoute
   '/admin/': typeof AdminIndexRoute
   '/login/': typeof LoginIndexRoute
@@ -195,8 +216,10 @@ export interface FileRoutesByTo {
   '/confirm-email': typeof ConfirmEmailRoute
   '/dashboard': typeof DashboardRoute
   '/design-system': typeof DesignSystemRoute
-  '/settings': typeof SettingsRoute
+  '/notifications': typeof NotificationsRoute
+  '/settings': typeof SettingsRouteWithChildren
   '/simulator': typeof SimulatorRoute
+  '/admin/broadcast': typeof AdminBroadcastRoute
   '/admin/permissions': typeof AdminPermissionsRoute
   '/admin/roles': typeof AdminRolesRoute
   '/admin/users': typeof AdminUsersRoute
@@ -205,6 +228,7 @@ export interface FileRoutesByTo {
   '/login/welcome': typeof LoginWelcomeRoute
   '/matches/new': typeof MatchesNewRoute
   '/players/$userId': typeof PlayersUserIdRoute
+  '/settings/notifications': typeof SettingsNotificationsRoute
   '/tournaments/$tournamentId': typeof TournamentsTournamentIdRoute
   '/admin': typeof AdminIndexRoute
   '/login': typeof LoginIndexRoute
@@ -223,8 +247,10 @@ export interface FileRoutesById {
   '/confirm-email': typeof ConfirmEmailRoute
   '/dashboard': typeof DashboardRoute
   '/design-system': typeof DesignSystemRoute
-  '/settings': typeof SettingsRoute
+  '/notifications': typeof NotificationsRoute
+  '/settings': typeof SettingsRouteWithChildren
   '/simulator': typeof SimulatorRoute
+  '/admin/broadcast': typeof AdminBroadcastRoute
   '/admin/permissions': typeof AdminPermissionsRoute
   '/admin/roles': typeof AdminRolesRoute
   '/admin/users': typeof AdminUsersRoute
@@ -233,6 +259,7 @@ export interface FileRoutesById {
   '/login/welcome': typeof LoginWelcomeRoute
   '/matches/new': typeof MatchesNewRoute
   '/players/$userId': typeof PlayersUserIdRoute
+  '/settings/notifications': typeof SettingsNotificationsRoute
   '/tournaments/$tournamentId': typeof TournamentsTournamentIdRoute
   '/admin/': typeof AdminIndexRoute
   '/login/': typeof LoginIndexRoute
@@ -252,8 +279,10 @@ export interface FileRouteTypes {
     | '/confirm-email'
     | '/dashboard'
     | '/design-system'
+    | '/notifications'
     | '/settings'
     | '/simulator'
+    | '/admin/broadcast'
     | '/admin/permissions'
     | '/admin/roles'
     | '/admin/users'
@@ -262,6 +291,7 @@ export interface FileRouteTypes {
     | '/login/welcome'
     | '/matches/new'
     | '/players/$userId'
+    | '/settings/notifications'
     | '/tournaments/$tournamentId'
     | '/admin/'
     | '/login/'
@@ -278,8 +308,10 @@ export interface FileRouteTypes {
     | '/confirm-email'
     | '/dashboard'
     | '/design-system'
+    | '/notifications'
     | '/settings'
     | '/simulator'
+    | '/admin/broadcast'
     | '/admin/permissions'
     | '/admin/roles'
     | '/admin/users'
@@ -288,6 +320,7 @@ export interface FileRouteTypes {
     | '/login/welcome'
     | '/matches/new'
     | '/players/$userId'
+    | '/settings/notifications'
     | '/tournaments/$tournamentId'
     | '/admin'
     | '/login'
@@ -305,8 +338,10 @@ export interface FileRouteTypes {
     | '/confirm-email'
     | '/dashboard'
     | '/design-system'
+    | '/notifications'
     | '/settings'
     | '/simulator'
+    | '/admin/broadcast'
     | '/admin/permissions'
     | '/admin/roles'
     | '/admin/users'
@@ -315,6 +350,7 @@ export interface FileRouteTypes {
     | '/login/welcome'
     | '/matches/new'
     | '/players/$userId'
+    | '/settings/notifications'
     | '/tournaments/$tournamentId'
     | '/admin/'
     | '/login/'
@@ -333,7 +369,8 @@ export interface RootRouteChildren {
   ConfirmEmailRoute: typeof ConfirmEmailRoute
   DashboardRoute: typeof DashboardRoute
   DesignSystemRoute: typeof DesignSystemRoute
-  SettingsRoute: typeof SettingsRoute
+  NotificationsRoute: typeof NotificationsRoute
+  SettingsRoute: typeof SettingsRouteWithChildren
   SimulatorRoute: typeof SimulatorRoute
   LoginSentRoute: typeof LoginSentRoute
   LoginVerifyingRoute: typeof LoginVerifyingRoute
@@ -365,6 +402,13 @@ declare module '@tanstack/react-router' {
       path: '/settings'
       fullPath: '/settings'
       preLoaderRoute: typeof SettingsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/notifications': {
+      id: '/notifications'
+      path: '/notifications'
+      fullPath: '/notifications'
+      preLoaderRoute: typeof NotificationsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/design-system': {
@@ -444,6 +488,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof TournamentsTournamentIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/settings/notifications': {
+      id: '/settings/notifications'
+      path: '/notifications'
+      fullPath: '/settings/notifications'
+      preLoaderRoute: typeof SettingsNotificationsRouteImport
+      parentRoute: typeof SettingsRoute
+    }
     '/players/$userId': {
       id: '/players/$userId'
       path: '/players/$userId'
@@ -500,6 +551,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminPermissionsRouteImport
       parentRoute: typeof AdminRoute
     }
+    '/admin/broadcast': {
+      id: '/admin/broadcast'
+      path: '/broadcast'
+      fullPath: '/admin/broadcast'
+      preLoaderRoute: typeof AdminBroadcastRouteImport
+      parentRoute: typeof AdminRoute
+    }
     '/matches/$matchId/': {
       id: '/matches/$matchId/'
       path: '/matches/$matchId'
@@ -532,6 +590,7 @@ declare module '@tanstack/react-router' {
 }
 
 interface AdminRouteChildren {
+  AdminBroadcastRoute: typeof AdminBroadcastRoute
   AdminPermissionsRoute: typeof AdminPermissionsRoute
   AdminRolesRoute: typeof AdminRolesRoute
   AdminUsersRoute: typeof AdminUsersRoute
@@ -539,6 +598,7 @@ interface AdminRouteChildren {
 }
 
 const AdminRouteChildren: AdminRouteChildren = {
+  AdminBroadcastRoute: AdminBroadcastRoute,
   AdminPermissionsRoute: AdminPermissionsRoute,
   AdminRolesRoute: AdminRolesRoute,
   AdminUsersRoute: AdminUsersRoute,
@@ -547,13 +607,26 @@ const AdminRouteChildren: AdminRouteChildren = {
 
 const AdminRouteWithChildren = AdminRoute._addFileChildren(AdminRouteChildren)
 
+interface SettingsRouteChildren {
+  SettingsNotificationsRoute: typeof SettingsNotificationsRoute
+}
+
+const SettingsRouteChildren: SettingsRouteChildren = {
+  SettingsNotificationsRoute: SettingsNotificationsRoute,
+}
+
+const SettingsRouteWithChildren = SettingsRoute._addFileChildren(
+  SettingsRouteChildren,
+)
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AdminRoute: AdminRouteWithChildren,
   ConfirmEmailRoute: ConfirmEmailRoute,
   DashboardRoute: DashboardRoute,
   DesignSystemRoute: DesignSystemRoute,
-  SettingsRoute: SettingsRoute,
+  NotificationsRoute: NotificationsRoute,
+  SettingsRoute: SettingsRouteWithChildren,
   SimulatorRoute: SimulatorRoute,
   LoginSentRoute: LoginSentRoute,
   LoginVerifyingRoute: LoginVerifyingRoute,

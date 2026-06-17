@@ -55,6 +55,20 @@ def _login_url(raw_token: str) -> str:
     return f"{base}/login/verifying?{query}"
 
 
+def _absolute_link(link: str | None) -> str | None:
+    """Turn a relative in-app link (e.g. "/matches/<id>") into a clickable
+    absolute URL for the email body. Returns ``None`` when there's no link or
+    no configured base — the email still sends, just without the deep link."""
+    if not link:
+        return None
+    base = _app_base_url()
+    if base is None:
+        return None
+    if link.startswith(("http://", "https://")):
+        return link
+    return f"{base}/{link.lstrip('/')}"
+
+
 def _smtp_configured() -> bool:
     return bool(os.environ.get("SMTP_HOST"))
 
@@ -141,6 +155,34 @@ def send_login_email(to_email: str, raw_token: str, username: str) -> None:
         log_event="email_login_link",
         log_url=login_url,
         dev_label="sign-in",
+    )
+
+
+def send_notification_email(
+    to_email: str, title: str, body: str, link: str | None = None
+) -> None:
+    """Render and deliver a notification as email (the email delivery channel).
+    Invoked by the RQ worker for users who opted into email for a category.
+
+    Unlike the auth emails this carries no bearer token — just the notification
+    copy and an optional deep link — so it's safe to log the URL in any
+    environment."""
+    url = _absolute_link(link)
+    lines = [title, "", body]
+    if url:
+        lines += ["", url]
+    lines += [
+        "",
+        "Manage which notifications reach you in FortyMM → Settings → Notifications.",
+        "",
+    ]
+    _deliver(
+        to_email=to_email,
+        subject=f"FortyMM · {title}",
+        body="\n".join(lines),
+        log_event="email_notification",
+        log_url=url or "(no link)",
+        dev_label="notification",
     )
 
 

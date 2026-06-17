@@ -1,5 +1,6 @@
 import csv
 import io
+import logging
 import math
 import uuid
 from dataclasses import dataclass
@@ -50,6 +51,7 @@ from app.models import (
 from app.notifications.apns import MATCH_RESULT_CONFIRMATION_CATEGORY
 from app.notifications.dependencies import get_notification_service
 from app.notifications.service import NotificationService
+from app.notifications.taxonomy import NotificationCategory
 from app.players import escape_like
 from app.rate_limiting import RedisRateLimiter
 from app.ratings import get_calculator, state_rating_value, validate_state
@@ -80,6 +82,8 @@ from app.services.match_service import MatchService
 from app.sessions import get_current_user, get_optional_user
 
 router = APIRouter(prefix="/v1")
+
+log = logging.getLogger(__name__)
 
 MAX_PAGE_SIZE = 100
 RECENT_FORM_LIMIT = 5
@@ -1034,22 +1038,26 @@ def _result_confirmation_copy(
 async def _notify_result_posted(
     notifications: NotificationService, match: Match, poster_id: uuid.UUID
 ) -> None:
-    """Push a confirm/dispute prompt to every player on the side that now owes
-    a sign-off. Best-effort: ``send_to_user`` no-ops when push isn't
-    configured, and a delivery hiccup must not fail the result post (the
-    result is already committed by the time this runs)."""
+    """Record + deliver a confirm/dispute prompt to every player on the side
+    that now owes a sign-off. ``notify`` persists the in-app record (the bell
+    feed) and fans out push/email per the recipient's preferences. The APNs
+    ``category``/``data`` carry the Approve/Dispute action group and the match
+    id so a tapped push deep-links to the right match."""
     copy = _result_confirmation_copy(match, poster_id)
     recipient_side = opponent_side(match, poster_id)
     if copy is None or recipient_side is None:
         return
     title, body = copy
     for player in recipient_side.players:
-        await notifications.send_to_user(
-            player.user_id,
+        await notifications.notify(
+            user_id=player.user_id,
+            category=NotificationCategory.RESULT_CONFIRM,
             title=title,
             body=body,
-            category=MATCH_RESULT_CONFIRMATION_CATEGORY,
-            data={"match_id": str(match.id)},
+            link=f"/matches/{match.id}",
+            action_label="Review",
+            push_category=MATCH_RESULT_CONFIRMATION_CATEGORY,
+            push_data={"match_id": str(match.id)},
         )
 
 
@@ -1802,11 +1810,25 @@ async def post_match_result(
 
     reloaded = await _load_match(db, match.id)
     assert reloaded is not None
-    # Notify the side that now owes a sign-off, with Approve/Dispute actions.
-    if awaiting_confirmation:
-        await _notify_result_posted(notifications, reloaded, current_user.id)
     extras = await _load_view_extras(db, reloaded)
-    return _serialize_details(reloaded, current_user.id, extras)
+    details = _serialize_details(reloaded, current_user.id, extras)
+    # Record + notify the side that now owes a sign-off. Built after the
+    # response and best-effort: the result is already committed, so *nothing*
+    # here may turn the 201 into a 500 — not a DB error, and not a delivery-side
+    # failure (e.g. a malformed APNs key making jwt.encode raise). Hence the
+    # blanket catch, mirroring the fire-and-forget enqueue guards in
+    # app.sessions. The session is rolled back so the request's teardown is
+    # clean even when the failure was the in-app persist commit.
+    if awaiting_confirmation:
+        try:
+            await _notify_result_posted(notifications, reloaded, current_user.id)
+        except Exception:
+            await db.rollback()
+            log.exception(
+                "Failed to record result-confirmation notification",
+                extra={"match_id": str(match.id)},
+            )
+    return details
 
 
 @router.post(
