@@ -13,6 +13,7 @@ import {
   Users,
 } from 'lucide-react'
 import { useSession } from '@/api/session'
+import { Wordmark } from '@/components/wordmark'
 import { cn } from '@/lib/utils'
 import { PERM } from '@/lib/permissions'
 import { NotificationBell } from './notifications/notification-bell'
@@ -258,9 +259,7 @@ export function AppShell({ children }: AppShellProps) {
         aria-label="Main navigation"
       >
         <div className="app-shell__sidebar-header">
-          <div className="app-shell__wordmark">
-            FORTY<span className="accent">MM</span>
-          </div>
+          <Wordmark size={24} className="app-shell__wordmark" />
           <button
             type="button"
             className="app-shell__sidebar-close"

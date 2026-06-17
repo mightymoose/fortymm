@@ -6,6 +6,7 @@ import {
   createRootRoute,
   createRoute,
   createRouter,
+  useParams,
 } from '@tanstack/react-router'
 import {
   QueryClient,
@@ -95,7 +96,7 @@ function renderScoreEntry(spec: RouteSpec, options: { path?: string } = {}) {
     getParentRoute: () => rootRoute,
     path: '/matches/$matchId/games/$gameNumber/scores/new',
     component: function Stub() {
-      const params = scoringNew.useParams()
+      const params = useParams({ strict: false })
       return (
         <div>
           scoring-new {params.matchId} {params.gameNumber}
@@ -107,7 +108,7 @@ function renderScoreEntry(spec: RouteSpec, options: { path?: string } = {}) {
     getParentRoute: () => rootRoute,
     path: '/matches/$matchId/games/$gameNumber/scores/edit',
     component: function Stub() {
-      const params = scoringEdit.useParams()
+      const params = useParams({ strict: false })
       return (
         <div>
           scoring-edit {params.matchId} {params.gameNumber}
@@ -816,10 +817,10 @@ function renderScoringApp(initialPath: string) {
     getParentRoute: () => rootRoute,
     path: '/matches/$matchId/games/$gameNumber/scores/new',
     component: function NewEntry() {
-      const params = scoringNew.useParams()
+      const params = useParams({ strict: false })
       return (
         <ScoreEntry
-          matchId={params.matchId}
+          matchId={params.matchId!}
           gameNumber={Number(params.gameNumber)}
           mode={{ kind: 'create' }}
         />
@@ -830,10 +831,10 @@ function renderScoringApp(initialPath: string) {
     getParentRoute: () => rootRoute,
     path: '/matches/$matchId/games/$gameNumber/scores/edit',
     component: function EditEntry() {
-      const params = scoringEdit.useParams()
+      const params = useParams({ strict: false })
       return (
         <ScoreEntry
-          matchId={params.matchId}
+          matchId={params.matchId!}
           gameNumber={Number(params.gameNumber)}
           mode={{ kind: 'edit' }}
         />

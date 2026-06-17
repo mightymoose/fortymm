@@ -170,10 +170,10 @@ function summarizePlayer(p: {
  * we'll waste a second fetch on mount — the whole point of bundling. */
 const BUNDLED_MATCHES_PAGE_SIZE = 25
 
-/** PlayerDetail = PlayerSummary + first-page matches. Both profile
- * endpoints (`/v1/players/{id}` and `/v1/p/players/{username}`) return
- * this so the FE paints the profile page in one round trip; pagination
- * beyond page 1 falls through to `/v1/players/{id}/matches`. */
+/** PlayerDetail = PlayerSummary + first-page matches. The profile endpoint
+ * (`/v1/players/{id}`) returns this so the FE paints the profile page in one
+ * round trip; pagination beyond page 1 falls through to
+ * `/v1/players/{id}/matches`. */
 function playerDetail(p: {
   id: string
   username: string
@@ -407,18 +407,6 @@ export const handlers = [
     await delay(200)
     const playerId = String(params.playerId)
     const player = mockPlayerRoster().find((p) => p.id === playerId)
-    if (!player) {
-      return HttpResponse.json(
-        { detail: 'Player not found.' },
-        { status: 404 },
-      )
-    }
-    return HttpResponse.json(playerDetail(player))
-  }),
-  http.get('*/v1/p/players/:username', async ({ params }) => {
-    await delay(200)
-    const username = String(params.username)
-    const player = mockPlayerRoster().find((p) => p.username === username)
     if (!player) {
       return HttpResponse.json(
         { detail: 'Player not found.' },

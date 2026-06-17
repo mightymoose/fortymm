@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 
-import { BallLogo, Eyebrow } from '../atoms'
+import { Wordmark } from '@/components/wordmark'
+import { Eyebrow } from '../atoms'
 import { fineprint, linkInline } from '../styles'
 
 export type LinkCheckState = 'checking' | 'success' | 'expired' | 'missing'
@@ -107,7 +108,7 @@ export function LinkCheckPage({
       />
 
       <header className="fmm-linkcheck__header">
-        <BallLogo size={22} />
+        <Wordmark size={22} />
         <span className="fmm-linkcheck__pill" style={{ color: accent }}>
           {PILL_CODE[state]} · LINK
         </span>

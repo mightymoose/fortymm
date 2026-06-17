@@ -24,9 +24,8 @@ import { UserAvatar } from '@/components/ui/user-avatar'
 import './player-profile.css'
 
 /**
- * Profile surface shared by the authed `/players/$userId` route and the
- * public `/p/players/$username` route. Renders a Bebas hero (username +
- * rating) and a per-player matches list — no tabs.
+ * Profile surface for the authed `/players/$userId` route. Renders a Bebas
+ * hero (username + rating) and a per-player matches list — no tabs.
  *
  * The route fetches the player and passes it in; this component fetches the
  * matches itself (one query per loaded player.id). Both fetches are
@@ -41,14 +40,6 @@ export interface PlayerProfileProps {
   /** True while the route's profile query is pending — drives the hero
    * skeleton. */
   isPending: boolean
-  /** When false (the public route, for anonymous viewers) match rows render as
-   * static panels instead of links — there's nothing under /matches/:id to
-   * navigate to without a session. */
-  matchesAreLinks?: boolean
-  /** True when the component is rendered without AppShell (the public route).
-   * Zeros out the `--topbar-h` offset so the fixed-height layout fills the
-   * viewport instead of leaving a 64px dead strip at the bottom. */
-  standalone?: boolean
   /** 1-based page for the matches list. Owned by the route so pagination
    * state lives in the URL. */
   page: number
@@ -60,16 +51,11 @@ const PAGE_SIZE = 25
 export function PlayerProfile({
   player,
   isPending,
-  matchesAreLinks = true,
-  standalone = false,
   page,
   onPageChange,
 }: PlayerProfileProps) {
-  const rootClass =
-    'player-profile dark fortymm-theme' +
-    (standalone ? ' player-profile--standalone' : '')
   return (
-    <div className={rootClass}>
+    <div className="player-profile dark fortymm-theme">
       <Hero player={player} isPending={isPending} />
       <div className="player-profile__body">
         {player && (
@@ -79,7 +65,7 @@ export function PlayerProfile({
             // MatchesSection hydrates page 1 from this so we don't make
             // a second request on initial load.
             initialMatches={player.matches}
-            asLinks={matchesAreLinks}
+            asLinks
             page={page}
             onPageChange={onPageChange}
           />

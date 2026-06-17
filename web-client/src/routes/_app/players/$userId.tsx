@@ -3,54 +3,60 @@ import { createFileRoute, useNavigate, useRouter } from '@tanstack/react-router'
 import { zodValidator } from '@tanstack/zod-adapter'
 import { z } from 'zod'
 
-import {
-  publicPlayerByUsernameQueryOptions,
-  usePublicPlayerByUsername,
-} from '@/api/players'
+import { playerByIdQueryOptions, usePlayerById } from '@/api/players'
+import { SESSION_QUERY_KEY, useSession } from '@/api/session'
 import { PlayerProfile } from '@/components/players/player-profile'
 import { Button } from '@/components/ui/button'
 import { pageTitle } from '@/lib/page-title'
 
+// Matches list pagination lives in the URL so refresh / share / back works.
 const profileSearchSchema = z.object({
   page: z.coerce.number().int().min(2).optional().catch(undefined),
 })
 
-export const Route = createFileRoute('/p/players/$username')({
+export const Route = createFileRoute('/_app/players/$userId')({
   head: () => ({
     meta: [{ title: pageTitle('Player') }],
   }),
   validateSearch: zodValidator(profileSearchSchema),
-  // Public route — no session required, so warm the profile cache on hover/
-  // touch preload unconditionally; a click then renders instantly.
+  // Warm the profile cache on hover/touch preload without blocking navigation.
+  // Skip on a cold direct load where the session isn't resolved yet, so the
+  // prefetch can't 401 into the error boundary ahead of the component's
+  // session-gated query (same pattern as `/matches`).
   loader: ({ context, params }) => {
+    if (!context.queryClient.getQueryData(SESSION_QUERY_KEY)) return
     void context.queryClient.prefetchQuery(
-      publicPlayerByUsernameQueryOptions(params.username),
+      playerByIdQueryOptions(params.userId),
     )
   },
-  component: PublicPlayerRoute,
-  errorComponent: PublicPlayerError,
+  component: PlayerRoute,
+  errorComponent: PlayerRouteError,
 })
 
-function PublicPlayerRoute() {
-  const { username } = Route.useParams()
+function PlayerRoute() {
+  const { userId } = Route.useParams()
   const search = Route.useSearch()
   const page = search.page ?? 1
   const navigate = useNavigate()
 
-  // Public route — no session required; `throwOnError` flows non-2xx into
-  // `errorComponent` above.
-  const { data: player, isPending } = usePublicPlayerByUsername(username)
+  // Gate on the session so a first-visit direct-load doesn't race the
+  // session cookie. Profile query is `throwOnError`, so any non-2xx /
+  // network failure flows to `errorComponent` above.
+  const session = useSession()
+  const { data: player, isPending } = usePlayerById(userId, {
+    enabled: session.isSuccess,
+  })
 
   const setPage = useCallback(
     (next: number) => {
       void navigate({
-        to: '/p/players/$username',
-        params: { username },
+        to: '/players/$userId',
+        params: { userId },
         replace: true,
         search: { page: next > 1 ? next : undefined },
       })
     },
-    [navigate, username],
+    [navigate, userId],
   )
 
   return (
@@ -59,15 +65,13 @@ function PublicPlayerRoute() {
       isPending={isPending}
       page={page}
       onPageChange={setPage}
-      // Public route: match-detail links would 401 for anonymous viewers.
-      matchesAreLinks={false}
-      // No AppShell on this route, so the layout shouldn't subtract a topbar.
-      standalone
     />
   )
 }
 
-function PublicPlayerError({
+/** Route-level fallback for `throwOnError` profile-fetch failures. 4xx →
+ * "Player not found" (no point retrying the same id); 5xx → "Try again". */
+function PlayerRouteError({
   error,
   reset,
 }: {
@@ -75,31 +79,19 @@ function PublicPlayerError({
   reset: () => void
 }) {
   const router = useRouter()
+  // ApiError is what `unwrap` throws for non-2xx responses; treat 4xx as
+  // "no such player" and avoid offering a retry that will fail the same way.
   const status =
     typeof error === 'object' && error !== null && 'status' in error
       ? (error as { status: number }).status
       : 0
   const notFound = status >= 400 && status < 500
   return (
-    <div
-      role="alert"
-      style={{
-        minHeight: '100vh',
-        background: 'var(--bg-app)',
-        color: 'var(--fg-1)',
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
-        padding: '40px 24px',
-        textAlign: 'center',
-        gap: 8,
-      }}
-    >
-      <div style={{ fontSize: 18, fontWeight: 600, color: 'var(--fg-2)' }}>
+    <div role="alert" className="empty">
+      <div className="empty-title">
         {notFound ? 'Player not found.' : 'Couldn’t load this player.'}
       </div>
-      <div style={{ fontSize: 13, color: 'var(--fg-3)' }}>
+      <div className="empty-sub">
         {notFound
           ? 'The URL might be off, or this player has been removed.'
           : 'Something went wrong reaching the server.'}
@@ -108,6 +100,7 @@ function PublicPlayerError({
         <Button
           variant="ghost"
           size="sm"
+          className="empty-clear"
           onClick={() => {
             reset()
             router.invalidate()

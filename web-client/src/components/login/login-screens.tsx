@@ -4,7 +4,8 @@ import type { CSSProperties, FormEvent, ReactNode } from 'react'
 import { Turnstile, type TurnstileHandle } from '@/components/turnstile'
 import { HONEYPOT_STYLE, isValidEmail } from '@/lib/form-helpers'
 
-import { BallLogo, Eyebrow, RedirectStrip } from './atoms'
+import { Wordmark } from '@/components/wordmark'
+import { Eyebrow, RedirectStrip } from './atoms'
 import { btnGhost, btnPrimary, fineprint, linkInline } from './styles'
 import './login.css'
 
@@ -78,7 +79,7 @@ function HeroCol({
 }) {
   return (
     <>
-      <BallLogo size={26} />
+      <Wordmark size={26} />
 
       <div className="fmm-hero__body">
         <Eyebrow>{eyebrow}</Eyebrow>

@@ -7,7 +7,6 @@ import {
   useMatchList,
 } from '@/api/matches'
 import { useSession } from '@/api/session'
-import { AppShell } from '@/components/app-shell'
 import { useDebouncedValue } from '@/lib/use-debounced-value'
 
 import { ActionBar } from './match-list/action-bar'
@@ -203,36 +202,34 @@ export const MatchList = () => {
   )
 
   return (
-    <AppShell>
-      <div className="match-list-page">
-        <ActionBar liveCount={liveCount} exportHref={exportHref} />
-        <FilterRow
-          q={q}
-          setQ={changeQuery}
-          status={status}
-          setStatus={changeStatus}
-          tabs={tabs}
-        />
-        <div className="table-wrap">
-          <MatchListTable
-            rows={rowViews}
-            isLoading={isLoading}
-            isAttention={isAttention}
-            query={q.trim()}
-            isFiltered={isFiltered}
-            onClear={onClear}
-            onClearSearch={onClearSearch}
-            navigate={navigate}
-          />
-        </div>
-        <PaginationFooter
-          page={displayPage}
-          setPage={setPage}
-          total={total}
-          pageSize={PAGE_SIZE}
-          totalPages={totalPages}
+    <div className="match-list-page">
+      <ActionBar liveCount={liveCount} exportHref={exportHref} />
+      <FilterRow
+        q={q}
+        setQ={changeQuery}
+        status={status}
+        setStatus={changeStatus}
+        tabs={tabs}
+      />
+      <div className="table-wrap">
+        <MatchListTable
+          rows={rowViews}
+          isLoading={isLoading}
+          isAttention={isAttention}
+          query={q.trim()}
+          isFiltered={isFiltered}
+          onClear={onClear}
+          onClearSearch={onClearSearch}
+          navigate={navigate}
         />
       </div>
-    </AppShell>
+      <PaginationFooter
+        page={displayPage}
+        setPage={setPage}
+        total={total}
+        pageSize={PAGE_SIZE}
+        totalPages={totalPages}
+      />
+    </div>
   )
 }

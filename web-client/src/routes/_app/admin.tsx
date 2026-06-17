@@ -1,15 +1,14 @@
 import { Outlet, createFileRoute } from '@tanstack/react-router'
-import { AppShell } from '@/components/app-shell'
 import { AdminBreadcrumbAndCounts } from '@/components/rbac/admin-layout'
 import { RbacBoundary } from '@/components/rbac/error-fallback'
 
-export const Route = createFileRoute('/admin')({
+export const Route = createFileRoute('/_app/admin')({
   component: AdminLayout,
 })
 
 function AdminLayout() {
   return (
-    <AppShell>
+    <>
       <div
         style={{
           display: 'flex',
@@ -27,6 +26,6 @@ function AdminLayout() {
           </RbacBoundary>
         </div>
       </div>
-    </AppShell>
+    </>
   )
 }

@@ -10,48 +10,38 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as SimulatorRouteImport } from './routes/simulator'
-import { Route as SettingsRouteImport } from './routes/settings'
-import { Route as NotificationsRouteImport } from './routes/notifications'
 import { Route as DesignSystemRouteImport } from './routes/design-system'
-import { Route as DashboardRouteImport } from './routes/dashboard'
 import { Route as ConfirmEmailRouteImport } from './routes/confirm-email'
-import { Route as AdminRouteImport } from './routes/admin'
+import { Route as AppRouteRouteImport } from './routes/_app/route'
 import { Route as IndexRouteImport } from './routes/index'
-import { Route as TournamentsIndexRouteImport } from './routes/tournaments/index'
-import { Route as PlayersIndexRouteImport } from './routes/players/index'
-import { Route as NotificationsIndexRouteImport } from './routes/notifications.index'
-import { Route as MatchesIndexRouteImport } from './routes/matches/index'
 import { Route as LoginIndexRouteImport } from './routes/login.index'
-import { Route as AdminIndexRouteImport } from './routes/admin.index'
-import { Route as TournamentsTournamentIdRouteImport } from './routes/tournaments.$tournamentId'
-import { Route as PlayersUserIdRouteImport } from './routes/players/$userId'
-import { Route as NotificationsSettingsRouteImport } from './routes/notifications.settings'
-import { Route as MatchesNewRouteImport } from './routes/matches/new'
 import { Route as LoginWelcomeRouteImport } from './routes/login.welcome'
 import { Route as LoginVerifyingRouteImport } from './routes/login.verifying'
 import { Route as LoginSentRouteImport } from './routes/login.sent'
-import { Route as AdminUsersRouteImport } from './routes/admin.users'
-import { Route as AdminRolesRouteImport } from './routes/admin.roles'
-import { Route as AdminPermissionsRouteImport } from './routes/admin.permissions'
-import { Route as AdminBroadcastRouteImport } from './routes/admin.broadcast'
-import { Route as MatchesMatchIdIndexRouteImport } from './routes/matches.$matchId.index'
-import { Route as PPlayersUsernameRouteImport } from './routes/p.players.$username'
-import { Route as MatchesMatchIdGamesGameNumberScoresNewRouteImport } from './routes/matches.$matchId.games.$gameNumber.scores.new'
-import { Route as MatchesMatchIdGamesGameNumberScoresEditRouteImport } from './routes/matches.$matchId.games.$gameNumber.scores.edit'
+import { Route as AppSettingsRouteImport } from './routes/_app/settings'
+import { Route as AppNotificationsRouteImport } from './routes/_app/notifications'
+import { Route as AppDashboardRouteImport } from './routes/_app/dashboard'
+import { Route as AppAdminRouteImport } from './routes/_app/admin'
+import { Route as AppTournamentsIndexRouteImport } from './routes/_app/tournaments/index'
+import { Route as AppPlayersIndexRouteImport } from './routes/_app/players/index'
+import { Route as AppNotificationsIndexRouteImport } from './routes/_app/notifications.index'
+import { Route as AppMatchesIndexRouteImport } from './routes/_app/matches/index'
+import { Route as AppAdminIndexRouteImport } from './routes/_app/admin.index'
+import { Route as AppTournamentsTournamentIdRouteImport } from './routes/_app/tournaments.$tournamentId'
+import { Route as AppPlayersUserIdRouteImport } from './routes/_app/players/$userId'
+import { Route as AppNotificationsSettingsRouteImport } from './routes/_app/notifications.settings'
+import { Route as AppMatchesNewRouteImport } from './routes/_app/matches/new'
+import { Route as AppAdminUsersRouteImport } from './routes/_app/admin.users'
+import { Route as AppAdminRolesRouteImport } from './routes/_app/admin.roles'
+import { Route as AppAdminPermissionsRouteImport } from './routes/_app/admin.permissions'
+import { Route as AppAdminBroadcastRouteImport } from './routes/_app/admin.broadcast'
+import { Route as AppMatchesMatchIdIndexRouteImport } from './routes/_app/matches.$matchId.index'
+import { Route as AppMatchesMatchIdGamesGameNumberScoresNewRouteImport } from './routes/_app/matches.$matchId.games.$gameNumber.scores.new'
+import { Route as AppMatchesMatchIdGamesGameNumberScoresEditRouteImport } from './routes/_app/matches.$matchId.games.$gameNumber.scores.edit'
 
 const SimulatorRoute = SimulatorRouteImport.update({
   id: '/simulator',
   path: '/simulator',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const SettingsRoute = SettingsRouteImport.update({
-  id: '/settings',
-  path: '/settings',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const NotificationsRoute = NotificationsRouteImport.update({
-  id: '/notifications',
-  path: '/notifications',
   getParentRoute: () => rootRouteImport,
 } as any)
 const DesignSystemRoute = DesignSystemRouteImport.update({
@@ -59,19 +49,13 @@ const DesignSystemRoute = DesignSystemRouteImport.update({
   path: '/design-system',
   getParentRoute: () => rootRouteImport,
 } as any)
-const DashboardRoute = DashboardRouteImport.update({
-  id: '/dashboard',
-  path: '/dashboard',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const ConfirmEmailRoute = ConfirmEmailRouteImport.update({
   id: '/confirm-email',
   path: '/confirm-email',
   getParentRoute: () => rootRouteImport,
 } as any)
-const AdminRoute = AdminRouteImport.update({
-  id: '/admin',
-  path: '/admin',
+const AppRouteRoute = AppRouteRouteImport.update({
+  id: '/_app',
   getParentRoute: () => rootRouteImport,
 } as any)
 const IndexRoute = IndexRouteImport.update({
@@ -79,54 +63,9 @@ const IndexRoute = IndexRouteImport.update({
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const TournamentsIndexRoute = TournamentsIndexRouteImport.update({
-  id: '/tournaments/',
-  path: '/tournaments/',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const PlayersIndexRoute = PlayersIndexRouteImport.update({
-  id: '/players/',
-  path: '/players/',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const NotificationsIndexRoute = NotificationsIndexRouteImport.update({
-  id: '/',
-  path: '/',
-  getParentRoute: () => NotificationsRoute,
-} as any)
-const MatchesIndexRoute = MatchesIndexRouteImport.update({
-  id: '/matches/',
-  path: '/matches/',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const LoginIndexRoute = LoginIndexRouteImport.update({
   id: '/login/',
   path: '/login/',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const AdminIndexRoute = AdminIndexRouteImport.update({
-  id: '/',
-  path: '/',
-  getParentRoute: () => AdminRoute,
-} as any)
-const TournamentsTournamentIdRoute = TournamentsTournamentIdRouteImport.update({
-  id: '/tournaments/$tournamentId',
-  path: '/tournaments/$tournamentId',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const PlayersUserIdRoute = PlayersUserIdRouteImport.update({
-  id: '/players/$userId',
-  path: '/players/$userId',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const NotificationsSettingsRoute = NotificationsSettingsRouteImport.update({
-  id: '/settings',
-  path: '/settings',
-  getParentRoute: () => NotificationsRoute,
-} as any)
-const MatchesNewRoute = MatchesNewRouteImport.update({
-  id: '/matches/new',
-  path: '/matches/new',
   getParentRoute: () => rootRouteImport,
 } as any)
 const LoginWelcomeRoute = LoginWelcomeRouteImport.update({
@@ -144,170 +83,229 @@ const LoginSentRoute = LoginSentRouteImport.update({
   path: '/login/sent',
   getParentRoute: () => rootRouteImport,
 } as any)
-const AdminUsersRoute = AdminUsersRouteImport.update({
+const AppSettingsRoute = AppSettingsRouteImport.update({
+  id: '/settings',
+  path: '/settings',
+  getParentRoute: () => AppRouteRoute,
+} as any)
+const AppNotificationsRoute = AppNotificationsRouteImport.update({
+  id: '/notifications',
+  path: '/notifications',
+  getParentRoute: () => AppRouteRoute,
+} as any)
+const AppDashboardRoute = AppDashboardRouteImport.update({
+  id: '/dashboard',
+  path: '/dashboard',
+  getParentRoute: () => AppRouteRoute,
+} as any)
+const AppAdminRoute = AppAdminRouteImport.update({
+  id: '/admin',
+  path: '/admin',
+  getParentRoute: () => AppRouteRoute,
+} as any)
+const AppTournamentsIndexRoute = AppTournamentsIndexRouteImport.update({
+  id: '/tournaments/',
+  path: '/tournaments/',
+  getParentRoute: () => AppRouteRoute,
+} as any)
+const AppPlayersIndexRoute = AppPlayersIndexRouteImport.update({
+  id: '/players/',
+  path: '/players/',
+  getParentRoute: () => AppRouteRoute,
+} as any)
+const AppNotificationsIndexRoute = AppNotificationsIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => AppNotificationsRoute,
+} as any)
+const AppMatchesIndexRoute = AppMatchesIndexRouteImport.update({
+  id: '/matches/',
+  path: '/matches/',
+  getParentRoute: () => AppRouteRoute,
+} as any)
+const AppAdminIndexRoute = AppAdminIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => AppAdminRoute,
+} as any)
+const AppTournamentsTournamentIdRoute =
+  AppTournamentsTournamentIdRouteImport.update({
+    id: '/tournaments/$tournamentId',
+    path: '/tournaments/$tournamentId',
+    getParentRoute: () => AppRouteRoute,
+  } as any)
+const AppPlayersUserIdRoute = AppPlayersUserIdRouteImport.update({
+  id: '/players/$userId',
+  path: '/players/$userId',
+  getParentRoute: () => AppRouteRoute,
+} as any)
+const AppNotificationsSettingsRoute =
+  AppNotificationsSettingsRouteImport.update({
+    id: '/settings',
+    path: '/settings',
+    getParentRoute: () => AppNotificationsRoute,
+  } as any)
+const AppMatchesNewRoute = AppMatchesNewRouteImport.update({
+  id: '/matches/new',
+  path: '/matches/new',
+  getParentRoute: () => AppRouteRoute,
+} as any)
+const AppAdminUsersRoute = AppAdminUsersRouteImport.update({
   id: '/users',
   path: '/users',
-  getParentRoute: () => AdminRoute,
+  getParentRoute: () => AppAdminRoute,
 } as any)
-const AdminRolesRoute = AdminRolesRouteImport.update({
+const AppAdminRolesRoute = AppAdminRolesRouteImport.update({
   id: '/roles',
   path: '/roles',
-  getParentRoute: () => AdminRoute,
+  getParentRoute: () => AppAdminRoute,
 } as any)
-const AdminPermissionsRoute = AdminPermissionsRouteImport.update({
+const AppAdminPermissionsRoute = AppAdminPermissionsRouteImport.update({
   id: '/permissions',
   path: '/permissions',
-  getParentRoute: () => AdminRoute,
+  getParentRoute: () => AppAdminRoute,
 } as any)
-const AdminBroadcastRoute = AdminBroadcastRouteImport.update({
+const AppAdminBroadcastRoute = AppAdminBroadcastRouteImport.update({
   id: '/broadcast',
   path: '/broadcast',
-  getParentRoute: () => AdminRoute,
+  getParentRoute: () => AppAdminRoute,
 } as any)
-const MatchesMatchIdIndexRoute = MatchesMatchIdIndexRouteImport.update({
+const AppMatchesMatchIdIndexRoute = AppMatchesMatchIdIndexRouteImport.update({
   id: '/matches/$matchId/',
   path: '/matches/$matchId/',
-  getParentRoute: () => rootRouteImport,
+  getParentRoute: () => AppRouteRoute,
 } as any)
-const PPlayersUsernameRoute = PPlayersUsernameRouteImport.update({
-  id: '/p/players/$username',
-  path: '/p/players/$username',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const MatchesMatchIdGamesGameNumberScoresNewRoute =
-  MatchesMatchIdGamesGameNumberScoresNewRouteImport.update({
+const AppMatchesMatchIdGamesGameNumberScoresNewRoute =
+  AppMatchesMatchIdGamesGameNumberScoresNewRouteImport.update({
     id: '/matches/$matchId/games/$gameNumber/scores/new',
     path: '/matches/$matchId/games/$gameNumber/scores/new',
-    getParentRoute: () => rootRouteImport,
+    getParentRoute: () => AppRouteRoute,
   } as any)
-const MatchesMatchIdGamesGameNumberScoresEditRoute =
-  MatchesMatchIdGamesGameNumberScoresEditRouteImport.update({
+const AppMatchesMatchIdGamesGameNumberScoresEditRoute =
+  AppMatchesMatchIdGamesGameNumberScoresEditRouteImport.update({
     id: '/matches/$matchId/games/$gameNumber/scores/edit',
     path: '/matches/$matchId/games/$gameNumber/scores/edit',
-    getParentRoute: () => rootRouteImport,
+    getParentRoute: () => AppRouteRoute,
   } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
-  '/admin': typeof AdminRouteWithChildren
   '/confirm-email': typeof ConfirmEmailRoute
-  '/dashboard': typeof DashboardRoute
   '/design-system': typeof DesignSystemRoute
-  '/notifications': typeof NotificationsRouteWithChildren
-  '/settings': typeof SettingsRoute
   '/simulator': typeof SimulatorRoute
-  '/admin/broadcast': typeof AdminBroadcastRoute
-  '/admin/permissions': typeof AdminPermissionsRoute
-  '/admin/roles': typeof AdminRolesRoute
-  '/admin/users': typeof AdminUsersRoute
+  '/admin': typeof AppAdminRouteWithChildren
+  '/dashboard': typeof AppDashboardRoute
+  '/notifications': typeof AppNotificationsRouteWithChildren
+  '/settings': typeof AppSettingsRoute
   '/login/sent': typeof LoginSentRoute
   '/login/verifying': typeof LoginVerifyingRoute
   '/login/welcome': typeof LoginWelcomeRoute
-  '/matches/new': typeof MatchesNewRoute
-  '/notifications/settings': typeof NotificationsSettingsRoute
-  '/players/$userId': typeof PlayersUserIdRoute
-  '/tournaments/$tournamentId': typeof TournamentsTournamentIdRoute
-  '/admin/': typeof AdminIndexRoute
   '/login/': typeof LoginIndexRoute
-  '/matches/': typeof MatchesIndexRoute
-  '/notifications/': typeof NotificationsIndexRoute
-  '/players/': typeof PlayersIndexRoute
-  '/tournaments/': typeof TournamentsIndexRoute
-  '/p/players/$username': typeof PPlayersUsernameRoute
-  '/matches/$matchId/': typeof MatchesMatchIdIndexRoute
-  '/matches/$matchId/games/$gameNumber/scores/edit': typeof MatchesMatchIdGamesGameNumberScoresEditRoute
-  '/matches/$matchId/games/$gameNumber/scores/new': typeof MatchesMatchIdGamesGameNumberScoresNewRoute
+  '/admin/broadcast': typeof AppAdminBroadcastRoute
+  '/admin/permissions': typeof AppAdminPermissionsRoute
+  '/admin/roles': typeof AppAdminRolesRoute
+  '/admin/users': typeof AppAdminUsersRoute
+  '/matches/new': typeof AppMatchesNewRoute
+  '/notifications/settings': typeof AppNotificationsSettingsRoute
+  '/players/$userId': typeof AppPlayersUserIdRoute
+  '/tournaments/$tournamentId': typeof AppTournamentsTournamentIdRoute
+  '/admin/': typeof AppAdminIndexRoute
+  '/matches/': typeof AppMatchesIndexRoute
+  '/notifications/': typeof AppNotificationsIndexRoute
+  '/players/': typeof AppPlayersIndexRoute
+  '/tournaments/': typeof AppTournamentsIndexRoute
+  '/matches/$matchId/': typeof AppMatchesMatchIdIndexRoute
+  '/matches/$matchId/games/$gameNumber/scores/edit': typeof AppMatchesMatchIdGamesGameNumberScoresEditRoute
+  '/matches/$matchId/games/$gameNumber/scores/new': typeof AppMatchesMatchIdGamesGameNumberScoresNewRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/confirm-email': typeof ConfirmEmailRoute
-  '/dashboard': typeof DashboardRoute
   '/design-system': typeof DesignSystemRoute
-  '/settings': typeof SettingsRoute
   '/simulator': typeof SimulatorRoute
-  '/admin/broadcast': typeof AdminBroadcastRoute
-  '/admin/permissions': typeof AdminPermissionsRoute
-  '/admin/roles': typeof AdminRolesRoute
-  '/admin/users': typeof AdminUsersRoute
+  '/dashboard': typeof AppDashboardRoute
+  '/settings': typeof AppSettingsRoute
   '/login/sent': typeof LoginSentRoute
   '/login/verifying': typeof LoginVerifyingRoute
   '/login/welcome': typeof LoginWelcomeRoute
-  '/matches/new': typeof MatchesNewRoute
-  '/notifications/settings': typeof NotificationsSettingsRoute
-  '/players/$userId': typeof PlayersUserIdRoute
-  '/tournaments/$tournamentId': typeof TournamentsTournamentIdRoute
-  '/admin': typeof AdminIndexRoute
   '/login': typeof LoginIndexRoute
-  '/matches': typeof MatchesIndexRoute
-  '/notifications': typeof NotificationsIndexRoute
-  '/players': typeof PlayersIndexRoute
-  '/tournaments': typeof TournamentsIndexRoute
-  '/p/players/$username': typeof PPlayersUsernameRoute
-  '/matches/$matchId': typeof MatchesMatchIdIndexRoute
-  '/matches/$matchId/games/$gameNumber/scores/edit': typeof MatchesMatchIdGamesGameNumberScoresEditRoute
-  '/matches/$matchId/games/$gameNumber/scores/new': typeof MatchesMatchIdGamesGameNumberScoresNewRoute
+  '/admin/broadcast': typeof AppAdminBroadcastRoute
+  '/admin/permissions': typeof AppAdminPermissionsRoute
+  '/admin/roles': typeof AppAdminRolesRoute
+  '/admin/users': typeof AppAdminUsersRoute
+  '/matches/new': typeof AppMatchesNewRoute
+  '/notifications/settings': typeof AppNotificationsSettingsRoute
+  '/players/$userId': typeof AppPlayersUserIdRoute
+  '/tournaments/$tournamentId': typeof AppTournamentsTournamentIdRoute
+  '/admin': typeof AppAdminIndexRoute
+  '/matches': typeof AppMatchesIndexRoute
+  '/notifications': typeof AppNotificationsIndexRoute
+  '/players': typeof AppPlayersIndexRoute
+  '/tournaments': typeof AppTournamentsIndexRoute
+  '/matches/$matchId': typeof AppMatchesMatchIdIndexRoute
+  '/matches/$matchId/games/$gameNumber/scores/edit': typeof AppMatchesMatchIdGamesGameNumberScoresEditRoute
+  '/matches/$matchId/games/$gameNumber/scores/new': typeof AppMatchesMatchIdGamesGameNumberScoresNewRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
-  '/admin': typeof AdminRouteWithChildren
+  '/_app': typeof AppRouteRouteWithChildren
   '/confirm-email': typeof ConfirmEmailRoute
-  '/dashboard': typeof DashboardRoute
   '/design-system': typeof DesignSystemRoute
-  '/notifications': typeof NotificationsRouteWithChildren
-  '/settings': typeof SettingsRoute
   '/simulator': typeof SimulatorRoute
-  '/admin/broadcast': typeof AdminBroadcastRoute
-  '/admin/permissions': typeof AdminPermissionsRoute
-  '/admin/roles': typeof AdminRolesRoute
-  '/admin/users': typeof AdminUsersRoute
+  '/_app/admin': typeof AppAdminRouteWithChildren
+  '/_app/dashboard': typeof AppDashboardRoute
+  '/_app/notifications': typeof AppNotificationsRouteWithChildren
+  '/_app/settings': typeof AppSettingsRoute
   '/login/sent': typeof LoginSentRoute
   '/login/verifying': typeof LoginVerifyingRoute
   '/login/welcome': typeof LoginWelcomeRoute
-  '/matches/new': typeof MatchesNewRoute
-  '/notifications/settings': typeof NotificationsSettingsRoute
-  '/players/$userId': typeof PlayersUserIdRoute
-  '/tournaments/$tournamentId': typeof TournamentsTournamentIdRoute
-  '/admin/': typeof AdminIndexRoute
   '/login/': typeof LoginIndexRoute
-  '/matches/': typeof MatchesIndexRoute
-  '/notifications/': typeof NotificationsIndexRoute
-  '/players/': typeof PlayersIndexRoute
-  '/tournaments/': typeof TournamentsIndexRoute
-  '/p/players/$username': typeof PPlayersUsernameRoute
-  '/matches/$matchId/': typeof MatchesMatchIdIndexRoute
-  '/matches/$matchId/games/$gameNumber/scores/edit': typeof MatchesMatchIdGamesGameNumberScoresEditRoute
-  '/matches/$matchId/games/$gameNumber/scores/new': typeof MatchesMatchIdGamesGameNumberScoresNewRoute
+  '/_app/admin/broadcast': typeof AppAdminBroadcastRoute
+  '/_app/admin/permissions': typeof AppAdminPermissionsRoute
+  '/_app/admin/roles': typeof AppAdminRolesRoute
+  '/_app/admin/users': typeof AppAdminUsersRoute
+  '/_app/matches/new': typeof AppMatchesNewRoute
+  '/_app/notifications/settings': typeof AppNotificationsSettingsRoute
+  '/_app/players/$userId': typeof AppPlayersUserIdRoute
+  '/_app/tournaments/$tournamentId': typeof AppTournamentsTournamentIdRoute
+  '/_app/admin/': typeof AppAdminIndexRoute
+  '/_app/matches/': typeof AppMatchesIndexRoute
+  '/_app/notifications/': typeof AppNotificationsIndexRoute
+  '/_app/players/': typeof AppPlayersIndexRoute
+  '/_app/tournaments/': typeof AppTournamentsIndexRoute
+  '/_app/matches/$matchId/': typeof AppMatchesMatchIdIndexRoute
+  '/_app/matches/$matchId/games/$gameNumber/scores/edit': typeof AppMatchesMatchIdGamesGameNumberScoresEditRoute
+  '/_app/matches/$matchId/games/$gameNumber/scores/new': typeof AppMatchesMatchIdGamesGameNumberScoresNewRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
-    | '/admin'
     | '/confirm-email'
-    | '/dashboard'
     | '/design-system'
+    | '/simulator'
+    | '/admin'
+    | '/dashboard'
     | '/notifications'
     | '/settings'
-    | '/simulator'
+    | '/login/sent'
+    | '/login/verifying'
+    | '/login/welcome'
+    | '/login/'
     | '/admin/broadcast'
     | '/admin/permissions'
     | '/admin/roles'
     | '/admin/users'
-    | '/login/sent'
-    | '/login/verifying'
-    | '/login/welcome'
     | '/matches/new'
     | '/notifications/settings'
     | '/players/$userId'
     | '/tournaments/$tournamentId'
     | '/admin/'
-    | '/login/'
     | '/matches/'
     | '/notifications/'
     | '/players/'
     | '/tournaments/'
-    | '/p/players/$username'
     | '/matches/$matchId/'
     | '/matches/$matchId/games/$gameNumber/scores/edit'
     | '/matches/$matchId/games/$gameNumber/scores/new'
@@ -315,87 +313,73 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/confirm-email'
-    | '/dashboard'
     | '/design-system'
-    | '/settings'
     | '/simulator'
+    | '/dashboard'
+    | '/settings'
+    | '/login/sent'
+    | '/login/verifying'
+    | '/login/welcome'
+    | '/login'
     | '/admin/broadcast'
     | '/admin/permissions'
     | '/admin/roles'
     | '/admin/users'
-    | '/login/sent'
-    | '/login/verifying'
-    | '/login/welcome'
     | '/matches/new'
     | '/notifications/settings'
     | '/players/$userId'
     | '/tournaments/$tournamentId'
     | '/admin'
-    | '/login'
     | '/matches'
     | '/notifications'
     | '/players'
     | '/tournaments'
-    | '/p/players/$username'
     | '/matches/$matchId'
     | '/matches/$matchId/games/$gameNumber/scores/edit'
     | '/matches/$matchId/games/$gameNumber/scores/new'
   id:
     | '__root__'
     | '/'
-    | '/admin'
+    | '/_app'
     | '/confirm-email'
-    | '/dashboard'
     | '/design-system'
-    | '/notifications'
-    | '/settings'
     | '/simulator'
-    | '/admin/broadcast'
-    | '/admin/permissions'
-    | '/admin/roles'
-    | '/admin/users'
+    | '/_app/admin'
+    | '/_app/dashboard'
+    | '/_app/notifications'
+    | '/_app/settings'
     | '/login/sent'
     | '/login/verifying'
     | '/login/welcome'
-    | '/matches/new'
-    | '/notifications/settings'
-    | '/players/$userId'
-    | '/tournaments/$tournamentId'
-    | '/admin/'
     | '/login/'
-    | '/matches/'
-    | '/notifications/'
-    | '/players/'
-    | '/tournaments/'
-    | '/p/players/$username'
-    | '/matches/$matchId/'
-    | '/matches/$matchId/games/$gameNumber/scores/edit'
-    | '/matches/$matchId/games/$gameNumber/scores/new'
+    | '/_app/admin/broadcast'
+    | '/_app/admin/permissions'
+    | '/_app/admin/roles'
+    | '/_app/admin/users'
+    | '/_app/matches/new'
+    | '/_app/notifications/settings'
+    | '/_app/players/$userId'
+    | '/_app/tournaments/$tournamentId'
+    | '/_app/admin/'
+    | '/_app/matches/'
+    | '/_app/notifications/'
+    | '/_app/players/'
+    | '/_app/tournaments/'
+    | '/_app/matches/$matchId/'
+    | '/_app/matches/$matchId/games/$gameNumber/scores/edit'
+    | '/_app/matches/$matchId/games/$gameNumber/scores/new'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
-  AdminRoute: typeof AdminRouteWithChildren
+  AppRouteRoute: typeof AppRouteRouteWithChildren
   ConfirmEmailRoute: typeof ConfirmEmailRoute
-  DashboardRoute: typeof DashboardRoute
   DesignSystemRoute: typeof DesignSystemRoute
-  NotificationsRoute: typeof NotificationsRouteWithChildren
-  SettingsRoute: typeof SettingsRoute
   SimulatorRoute: typeof SimulatorRoute
   LoginSentRoute: typeof LoginSentRoute
   LoginVerifyingRoute: typeof LoginVerifyingRoute
   LoginWelcomeRoute: typeof LoginWelcomeRoute
-  MatchesNewRoute: typeof MatchesNewRoute
-  PlayersUserIdRoute: typeof PlayersUserIdRoute
-  TournamentsTournamentIdRoute: typeof TournamentsTournamentIdRoute
   LoginIndexRoute: typeof LoginIndexRoute
-  MatchesIndexRoute: typeof MatchesIndexRoute
-  PlayersIndexRoute: typeof PlayersIndexRoute
-  TournamentsIndexRoute: typeof TournamentsIndexRoute
-  PPlayersUsernameRoute: typeof PPlayersUsernameRoute
-  MatchesMatchIdIndexRoute: typeof MatchesMatchIdIndexRoute
-  MatchesMatchIdGamesGameNumberScoresEditRoute: typeof MatchesMatchIdGamesGameNumberScoresEditRoute
-  MatchesMatchIdGamesGameNumberScoresNewRoute: typeof MatchesMatchIdGamesGameNumberScoresNewRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -407,32 +391,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SimulatorRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/settings': {
-      id: '/settings'
-      path: '/settings'
-      fullPath: '/settings'
-      preLoaderRoute: typeof SettingsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/notifications': {
-      id: '/notifications'
-      path: '/notifications'
-      fullPath: '/notifications'
-      preLoaderRoute: typeof NotificationsRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/design-system': {
       id: '/design-system'
       path: '/design-system'
       fullPath: '/design-system'
       preLoaderRoute: typeof DesignSystemRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/dashboard': {
-      id: '/dashboard'
-      path: '/dashboard'
-      fullPath: '/dashboard'
-      preLoaderRoute: typeof DashboardRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/confirm-email': {
@@ -442,11 +405,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ConfirmEmailRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/admin': {
-      id: '/admin'
-      path: '/admin'
-      fullPath: '/admin'
-      preLoaderRoute: typeof AdminRouteImport
+    '/_app': {
+      id: '/_app'
+      path: ''
+      fullPath: '/'
+      preLoaderRoute: typeof AppRouteRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/': {
@@ -456,74 +419,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/tournaments/': {
-      id: '/tournaments/'
-      path: '/tournaments'
-      fullPath: '/tournaments/'
-      preLoaderRoute: typeof TournamentsIndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/players/': {
-      id: '/players/'
-      path: '/players'
-      fullPath: '/players/'
-      preLoaderRoute: typeof PlayersIndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/notifications/': {
-      id: '/notifications/'
-      path: '/'
-      fullPath: '/notifications/'
-      preLoaderRoute: typeof NotificationsIndexRouteImport
-      parentRoute: typeof NotificationsRoute
-    }
-    '/matches/': {
-      id: '/matches/'
-      path: '/matches'
-      fullPath: '/matches/'
-      preLoaderRoute: typeof MatchesIndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/login/': {
       id: '/login/'
       path: '/login'
       fullPath: '/login/'
       preLoaderRoute: typeof LoginIndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/admin/': {
-      id: '/admin/'
-      path: '/'
-      fullPath: '/admin/'
-      preLoaderRoute: typeof AdminIndexRouteImport
-      parentRoute: typeof AdminRoute
-    }
-    '/tournaments/$tournamentId': {
-      id: '/tournaments/$tournamentId'
-      path: '/tournaments/$tournamentId'
-      fullPath: '/tournaments/$tournamentId'
-      preLoaderRoute: typeof TournamentsTournamentIdRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/players/$userId': {
-      id: '/players/$userId'
-      path: '/players/$userId'
-      fullPath: '/players/$userId'
-      preLoaderRoute: typeof PlayersUserIdRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/notifications/settings': {
-      id: '/notifications/settings'
-      path: '/settings'
-      fullPath: '/notifications/settings'
-      preLoaderRoute: typeof NotificationsSettingsRouteImport
-      parentRoute: typeof NotificationsRoute
-    }
-    '/matches/new': {
-      id: '/matches/new'
-      path: '/matches/new'
-      fullPath: '/matches/new'
-      preLoaderRoute: typeof MatchesNewRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/login/welcome': {
@@ -547,122 +447,230 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LoginSentRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/admin/users': {
-      id: '/admin/users'
+    '/_app/settings': {
+      id: '/_app/settings'
+      path: '/settings'
+      fullPath: '/settings'
+      preLoaderRoute: typeof AppSettingsRouteImport
+      parentRoute: typeof AppRouteRoute
+    }
+    '/_app/notifications': {
+      id: '/_app/notifications'
+      path: '/notifications'
+      fullPath: '/notifications'
+      preLoaderRoute: typeof AppNotificationsRouteImport
+      parentRoute: typeof AppRouteRoute
+    }
+    '/_app/dashboard': {
+      id: '/_app/dashboard'
+      path: '/dashboard'
+      fullPath: '/dashboard'
+      preLoaderRoute: typeof AppDashboardRouteImport
+      parentRoute: typeof AppRouteRoute
+    }
+    '/_app/admin': {
+      id: '/_app/admin'
+      path: '/admin'
+      fullPath: '/admin'
+      preLoaderRoute: typeof AppAdminRouteImport
+      parentRoute: typeof AppRouteRoute
+    }
+    '/_app/tournaments/': {
+      id: '/_app/tournaments/'
+      path: '/tournaments'
+      fullPath: '/tournaments/'
+      preLoaderRoute: typeof AppTournamentsIndexRouteImport
+      parentRoute: typeof AppRouteRoute
+    }
+    '/_app/players/': {
+      id: '/_app/players/'
+      path: '/players'
+      fullPath: '/players/'
+      preLoaderRoute: typeof AppPlayersIndexRouteImport
+      parentRoute: typeof AppRouteRoute
+    }
+    '/_app/notifications/': {
+      id: '/_app/notifications/'
+      path: '/'
+      fullPath: '/notifications/'
+      preLoaderRoute: typeof AppNotificationsIndexRouteImport
+      parentRoute: typeof AppNotificationsRoute
+    }
+    '/_app/matches/': {
+      id: '/_app/matches/'
+      path: '/matches'
+      fullPath: '/matches/'
+      preLoaderRoute: typeof AppMatchesIndexRouteImport
+      parentRoute: typeof AppRouteRoute
+    }
+    '/_app/admin/': {
+      id: '/_app/admin/'
+      path: '/'
+      fullPath: '/admin/'
+      preLoaderRoute: typeof AppAdminIndexRouteImport
+      parentRoute: typeof AppAdminRoute
+    }
+    '/_app/tournaments/$tournamentId': {
+      id: '/_app/tournaments/$tournamentId'
+      path: '/tournaments/$tournamentId'
+      fullPath: '/tournaments/$tournamentId'
+      preLoaderRoute: typeof AppTournamentsTournamentIdRouteImport
+      parentRoute: typeof AppRouteRoute
+    }
+    '/_app/players/$userId': {
+      id: '/_app/players/$userId'
+      path: '/players/$userId'
+      fullPath: '/players/$userId'
+      preLoaderRoute: typeof AppPlayersUserIdRouteImport
+      parentRoute: typeof AppRouteRoute
+    }
+    '/_app/notifications/settings': {
+      id: '/_app/notifications/settings'
+      path: '/settings'
+      fullPath: '/notifications/settings'
+      preLoaderRoute: typeof AppNotificationsSettingsRouteImport
+      parentRoute: typeof AppNotificationsRoute
+    }
+    '/_app/matches/new': {
+      id: '/_app/matches/new'
+      path: '/matches/new'
+      fullPath: '/matches/new'
+      preLoaderRoute: typeof AppMatchesNewRouteImport
+      parentRoute: typeof AppRouteRoute
+    }
+    '/_app/admin/users': {
+      id: '/_app/admin/users'
       path: '/users'
       fullPath: '/admin/users'
-      preLoaderRoute: typeof AdminUsersRouteImport
-      parentRoute: typeof AdminRoute
+      preLoaderRoute: typeof AppAdminUsersRouteImport
+      parentRoute: typeof AppAdminRoute
     }
-    '/admin/roles': {
-      id: '/admin/roles'
+    '/_app/admin/roles': {
+      id: '/_app/admin/roles'
       path: '/roles'
       fullPath: '/admin/roles'
-      preLoaderRoute: typeof AdminRolesRouteImport
-      parentRoute: typeof AdminRoute
+      preLoaderRoute: typeof AppAdminRolesRouteImport
+      parentRoute: typeof AppAdminRoute
     }
-    '/admin/permissions': {
-      id: '/admin/permissions'
+    '/_app/admin/permissions': {
+      id: '/_app/admin/permissions'
       path: '/permissions'
       fullPath: '/admin/permissions'
-      preLoaderRoute: typeof AdminPermissionsRouteImport
-      parentRoute: typeof AdminRoute
+      preLoaderRoute: typeof AppAdminPermissionsRouteImport
+      parentRoute: typeof AppAdminRoute
     }
-    '/admin/broadcast': {
-      id: '/admin/broadcast'
+    '/_app/admin/broadcast': {
+      id: '/_app/admin/broadcast'
       path: '/broadcast'
       fullPath: '/admin/broadcast'
-      preLoaderRoute: typeof AdminBroadcastRouteImport
-      parentRoute: typeof AdminRoute
+      preLoaderRoute: typeof AppAdminBroadcastRouteImport
+      parentRoute: typeof AppAdminRoute
     }
-    '/matches/$matchId/': {
-      id: '/matches/$matchId/'
+    '/_app/matches/$matchId/': {
+      id: '/_app/matches/$matchId/'
       path: '/matches/$matchId'
       fullPath: '/matches/$matchId/'
-      preLoaderRoute: typeof MatchesMatchIdIndexRouteImport
-      parentRoute: typeof rootRouteImport
+      preLoaderRoute: typeof AppMatchesMatchIdIndexRouteImport
+      parentRoute: typeof AppRouteRoute
     }
-    '/p/players/$username': {
-      id: '/p/players/$username'
-      path: '/p/players/$username'
-      fullPath: '/p/players/$username'
-      preLoaderRoute: typeof PPlayersUsernameRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/matches/$matchId/games/$gameNumber/scores/new': {
-      id: '/matches/$matchId/games/$gameNumber/scores/new'
+    '/_app/matches/$matchId/games/$gameNumber/scores/new': {
+      id: '/_app/matches/$matchId/games/$gameNumber/scores/new'
       path: '/matches/$matchId/games/$gameNumber/scores/new'
       fullPath: '/matches/$matchId/games/$gameNumber/scores/new'
-      preLoaderRoute: typeof MatchesMatchIdGamesGameNumberScoresNewRouteImport
-      parentRoute: typeof rootRouteImport
+      preLoaderRoute: typeof AppMatchesMatchIdGamesGameNumberScoresNewRouteImport
+      parentRoute: typeof AppRouteRoute
     }
-    '/matches/$matchId/games/$gameNumber/scores/edit': {
-      id: '/matches/$matchId/games/$gameNumber/scores/edit'
+    '/_app/matches/$matchId/games/$gameNumber/scores/edit': {
+      id: '/_app/matches/$matchId/games/$gameNumber/scores/edit'
       path: '/matches/$matchId/games/$gameNumber/scores/edit'
       fullPath: '/matches/$matchId/games/$gameNumber/scores/edit'
-      preLoaderRoute: typeof MatchesMatchIdGamesGameNumberScoresEditRouteImport
-      parentRoute: typeof rootRouteImport
+      preLoaderRoute: typeof AppMatchesMatchIdGamesGameNumberScoresEditRouteImport
+      parentRoute: typeof AppRouteRoute
     }
   }
 }
 
-interface AdminRouteChildren {
-  AdminBroadcastRoute: typeof AdminBroadcastRoute
-  AdminPermissionsRoute: typeof AdminPermissionsRoute
-  AdminRolesRoute: typeof AdminRolesRoute
-  AdminUsersRoute: typeof AdminUsersRoute
-  AdminIndexRoute: typeof AdminIndexRoute
+interface AppAdminRouteChildren {
+  AppAdminBroadcastRoute: typeof AppAdminBroadcastRoute
+  AppAdminPermissionsRoute: typeof AppAdminPermissionsRoute
+  AppAdminRolesRoute: typeof AppAdminRolesRoute
+  AppAdminUsersRoute: typeof AppAdminUsersRoute
+  AppAdminIndexRoute: typeof AppAdminIndexRoute
 }
 
-const AdminRouteChildren: AdminRouteChildren = {
-  AdminBroadcastRoute: AdminBroadcastRoute,
-  AdminPermissionsRoute: AdminPermissionsRoute,
-  AdminRolesRoute: AdminRolesRoute,
-  AdminUsersRoute: AdminUsersRoute,
-  AdminIndexRoute: AdminIndexRoute,
+const AppAdminRouteChildren: AppAdminRouteChildren = {
+  AppAdminBroadcastRoute: AppAdminBroadcastRoute,
+  AppAdminPermissionsRoute: AppAdminPermissionsRoute,
+  AppAdminRolesRoute: AppAdminRolesRoute,
+  AppAdminUsersRoute: AppAdminUsersRoute,
+  AppAdminIndexRoute: AppAdminIndexRoute,
 }
 
-const AdminRouteWithChildren = AdminRoute._addFileChildren(AdminRouteChildren)
+const AppAdminRouteWithChildren = AppAdminRoute._addFileChildren(
+  AppAdminRouteChildren,
+)
 
-interface NotificationsRouteChildren {
-  NotificationsSettingsRoute: typeof NotificationsSettingsRoute
-  NotificationsIndexRoute: typeof NotificationsIndexRoute
+interface AppNotificationsRouteChildren {
+  AppNotificationsSettingsRoute: typeof AppNotificationsSettingsRoute
+  AppNotificationsIndexRoute: typeof AppNotificationsIndexRoute
 }
 
-const NotificationsRouteChildren: NotificationsRouteChildren = {
-  NotificationsSettingsRoute: NotificationsSettingsRoute,
-  NotificationsIndexRoute: NotificationsIndexRoute,
+const AppNotificationsRouteChildren: AppNotificationsRouteChildren = {
+  AppNotificationsSettingsRoute: AppNotificationsSettingsRoute,
+  AppNotificationsIndexRoute: AppNotificationsIndexRoute,
 }
 
-const NotificationsRouteWithChildren = NotificationsRoute._addFileChildren(
-  NotificationsRouteChildren,
+const AppNotificationsRouteWithChildren =
+  AppNotificationsRoute._addFileChildren(AppNotificationsRouteChildren)
+
+interface AppRouteRouteChildren {
+  AppAdminRoute: typeof AppAdminRouteWithChildren
+  AppDashboardRoute: typeof AppDashboardRoute
+  AppNotificationsRoute: typeof AppNotificationsRouteWithChildren
+  AppSettingsRoute: typeof AppSettingsRoute
+  AppMatchesNewRoute: typeof AppMatchesNewRoute
+  AppPlayersUserIdRoute: typeof AppPlayersUserIdRoute
+  AppTournamentsTournamentIdRoute: typeof AppTournamentsTournamentIdRoute
+  AppMatchesIndexRoute: typeof AppMatchesIndexRoute
+  AppPlayersIndexRoute: typeof AppPlayersIndexRoute
+  AppTournamentsIndexRoute: typeof AppTournamentsIndexRoute
+  AppMatchesMatchIdIndexRoute: typeof AppMatchesMatchIdIndexRoute
+  AppMatchesMatchIdGamesGameNumberScoresEditRoute: typeof AppMatchesMatchIdGamesGameNumberScoresEditRoute
+  AppMatchesMatchIdGamesGameNumberScoresNewRoute: typeof AppMatchesMatchIdGamesGameNumberScoresNewRoute
+}
+
+const AppRouteRouteChildren: AppRouteRouteChildren = {
+  AppAdminRoute: AppAdminRouteWithChildren,
+  AppDashboardRoute: AppDashboardRoute,
+  AppNotificationsRoute: AppNotificationsRouteWithChildren,
+  AppSettingsRoute: AppSettingsRoute,
+  AppMatchesNewRoute: AppMatchesNewRoute,
+  AppPlayersUserIdRoute: AppPlayersUserIdRoute,
+  AppTournamentsTournamentIdRoute: AppTournamentsTournamentIdRoute,
+  AppMatchesIndexRoute: AppMatchesIndexRoute,
+  AppPlayersIndexRoute: AppPlayersIndexRoute,
+  AppTournamentsIndexRoute: AppTournamentsIndexRoute,
+  AppMatchesMatchIdIndexRoute: AppMatchesMatchIdIndexRoute,
+  AppMatchesMatchIdGamesGameNumberScoresEditRoute:
+    AppMatchesMatchIdGamesGameNumberScoresEditRoute,
+  AppMatchesMatchIdGamesGameNumberScoresNewRoute:
+    AppMatchesMatchIdGamesGameNumberScoresNewRoute,
+}
+
+const AppRouteRouteWithChildren = AppRouteRoute._addFileChildren(
+  AppRouteRouteChildren,
 )
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
-  AdminRoute: AdminRouteWithChildren,
+  AppRouteRoute: AppRouteRouteWithChildren,
   ConfirmEmailRoute: ConfirmEmailRoute,
-  DashboardRoute: DashboardRoute,
   DesignSystemRoute: DesignSystemRoute,
-  NotificationsRoute: NotificationsRouteWithChildren,
-  SettingsRoute: SettingsRoute,
   SimulatorRoute: SimulatorRoute,
   LoginSentRoute: LoginSentRoute,
   LoginVerifyingRoute: LoginVerifyingRoute,
   LoginWelcomeRoute: LoginWelcomeRoute,
-  MatchesNewRoute: MatchesNewRoute,
-  PlayersUserIdRoute: PlayersUserIdRoute,
-  TournamentsTournamentIdRoute: TournamentsTournamentIdRoute,
   LoginIndexRoute: LoginIndexRoute,
-  MatchesIndexRoute: MatchesIndexRoute,
-  PlayersIndexRoute: PlayersIndexRoute,
-  TournamentsIndexRoute: TournamentsIndexRoute,
-  PPlayersUsernameRoute: PPlayersUsernameRoute,
-  MatchesMatchIdIndexRoute: MatchesMatchIdIndexRoute,
-  MatchesMatchIdGamesGameNumberScoresEditRoute:
-    MatchesMatchIdGamesGameNumberScoresEditRoute,
-  MatchesMatchIdGamesGameNumberScoresNewRoute:
-    MatchesMatchIdGamesGameNumberScoresNewRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

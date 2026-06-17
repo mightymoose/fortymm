@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link } from '@tanstack/react-router'
+import { Wordmark } from '@/components/wordmark'
 import './landing.css'
 
 /** Public source repository — FortyMM is GPLv3 and open to contributors. */
@@ -23,39 +24,6 @@ function App() {
 export default App
 
 /* ------------------------------------------------------------------ */
-/*  Logo                                                              */
-/* ------------------------------------------------------------------ */
-function Logo({ size = 28 }: { size?: number }) {
-  const gradId = `lg-${size}`
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-      <svg width={size} height={size} viewBox="0 0 80 80">
-        <defs>
-          <radialGradient id={gradId} cx="35%" cy="35%" r="65%">
-            <stop offset="0%" stopColor="#FFB57A" />
-            <stop offset="55%" stopColor="#FF7A1A" />
-            <stop offset="100%" stopColor="#B94700" />
-          </radialGradient>
-        </defs>
-        <circle cx="40" cy="40" r="36" fill={`url(#${gradId})`} />
-        <ellipse cx="30" cy="28" rx="10" ry="6" fill="#FFF" fillOpacity="0.22" />
-      </svg>
-      <span
-        style={{
-          fontFamily: "'Bebas Neue', sans-serif",
-          fontSize: size * 0.95,
-          letterSpacing: '0.04em',
-          color: 'var(--fg-1)',
-          lineHeight: 1,
-        }}
-      >
-        FORTYMM<span style={{ color: 'var(--ball-500)' }}>.</span>
-      </span>
-    </div>
-  )
-}
-
-/* ------------------------------------------------------------------ */
 /*  Nav                                                               */
 /* ------------------------------------------------------------------ */
 function Nav() {
@@ -73,7 +41,7 @@ function Nav() {
 
   return (
     <nav className={`nav ${menuOpen ? 'is-open' : ''}`}>
-      <Logo size={26} />
+      <Wordmark size={26} />
       <div className="nav-links">{sectionLinks}</div>
       <div style={{ flex: 1 }} />
       <Link
@@ -1131,7 +1099,7 @@ function Footer() {
     <footer className="footer">
       <div className="footer-inner">
         <div className="ft-brand">
-          <Logo size={22} />
+          <Wordmark size={22} />
           <p className="ft-tag">
             Made by players, in basements and rec centers.
             <br />© 2026 FortyMM. GPLv3. For the love of the game.
