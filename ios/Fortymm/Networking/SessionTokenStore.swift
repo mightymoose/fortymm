@@ -77,4 +77,20 @@ actor SessionTokenStore {
         didLoad = true
         keychain.delete()
     }
+
+    /// Clear the session only if `token` is still the one we hold, returning
+    /// whether it did. A response that drops the session (the merged-away 401)
+    /// belongs to the token the *request* sent; if a newer sign-in has since
+    /// replaced it, a stale in-flight request must not wipe the new token or
+    /// trigger a sign-out. Hydrate first so the comparison is against the real
+    /// stored token, not a not-yet-loaded `nil`.
+    func clearIfCurrent(_ token: String?) -> Bool {
+        if !didLoad {
+            cached = keychain.load()
+            didLoad = true
+        }
+        guard cached == token else { return false }
+        clear()
+        return true
+    }
 }

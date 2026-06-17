@@ -103,6 +103,12 @@ final class SessionStore: ObservableObject {
             guard case .loading = state else { return }
             state = .loaded(response.data.user)
         } catch let APIError.sessionMerged(message, email) {
+            // getSession sends the current token, and APIClient only raises this
+            // for a merge of the token it sent — so reaching here means *our*
+            // session was merged and signing out is right. Still gate on
+            // .loading for symmetry, so a state another task already resolved
+            // mid-flight isn't overwritten.
+            guard case .loading = state else { return }
             signedOut(reason: message, email: email)
         } catch {
             guard case .loading = state else { return }
