@@ -24,4 +24,21 @@ describe('EventsTab', () => {
     await userEvent.click(eventsTabPage.getNewEventButton())
     expect(onNewEvent).toHaveBeenCalledTimes(1)
   })
+
+  it('hides every "new event" affordance for a non-creator', () => {
+    eventsTabPage.render({
+      tournament: buildTournament({ events: [buildEvent()] }),
+      canEdit: false,
+    })
+    expect(eventsTabPage.queryNewEventButtons()).toHaveLength(0)
+  })
+
+  it('hides the empty-state CTA for a non-creator', () => {
+    eventsTabPage.render({
+      tournament: buildTournament({ events: [] }),
+      canEdit: false,
+    })
+    expect(document.body).toHaveTextContent('No events yet')
+    expect(eventsTabPage.queryNewEventButtons()).toHaveLength(0)
+  })
 })

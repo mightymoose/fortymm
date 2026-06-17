@@ -10,6 +10,7 @@ export function buildEventEditorProps(
     onOpenChange: () => {},
     event: buildEvent(),
     tables: buildTables(12),
+    canEdit: true,
     onSave: () => {},
     onDelete: () => {},
     ...overrides,

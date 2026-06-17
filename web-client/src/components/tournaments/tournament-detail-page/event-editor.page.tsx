@@ -10,8 +10,17 @@ const scoped = (container: Container) => ({
   getSaveButton() {
     return container.getByRole('button', { name: /Create event|Save changes/ })
   },
+  /** The save/create action — absent for a non-creator (`canEdit: false`),
+   * who gets a read-only view. */
+  querySaveButton() {
+    return container.queryByRole('button', { name: /Create event|Save changes/ })
+  },
   getCancelButton() {
     return container.getByRole('button', { name: 'Cancel' })
+  },
+  /** The footer dismiss button: "Cancel" when editable, "Done" when read-only. */
+  getDismissButton() {
+    return container.getByRole('button', { name: /Cancel|Done/ })
   },
   queryDeleteButton() {
     return container.queryByRole('button', { name: 'Delete event' })

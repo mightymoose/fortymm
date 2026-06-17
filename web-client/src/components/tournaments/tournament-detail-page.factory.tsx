@@ -10,6 +10,7 @@ export function buildTournamentDetailPageProps(
     tournament: buildTournament(),
     allTables: buildTables(12),
     onUpdate: () => {},
+    onChangeCatalogue: () => {},
     onCreateEvent: () => {},
     onUpdateEvent: () => {},
     onDeleteEvent: () => {},

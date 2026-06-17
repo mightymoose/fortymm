@@ -5,5 +5,10 @@ import type { DetailsTabProps } from './details-tab'
 export function buildDetailsTabProps(
   overrides: Partial<DetailsTabProps> = {},
 ): DetailsTabProps {
-  return { tournament: buildTournament(), onUpdate: () => {}, ...overrides }
+  return {
+    tournament: buildTournament(),
+    canEdit: true,
+    onUpdate: () => {},
+    ...overrides,
+  }
 }

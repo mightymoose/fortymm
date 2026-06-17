@@ -39,9 +39,11 @@ import { TablesTab } from './tournament-detail-page/tables-tab'
 
 export interface TournamentDetailPageProps {
   tournament: Tournament
-  /** The full table catalogue (for the Tables tab). */
+  /** This tournament's table catalogue (for the Tables tab and pool editor). */
   allTables: TournamentTable[]
   onUpdate: (tournament: Tournament) => void
+  /** Persist an edited table catalogue (add/remove from the Tables tab). */
+  onChangeCatalogue: (catalogue: TournamentTable[]) => void
   onCreateEvent: (event: TournamentEvent) => void
   onUpdateEvent: (event: TournamentEvent) => void
   onDeleteEvent: (eventId: string) => void
@@ -70,6 +72,7 @@ export const TournamentDetailPage = ({
   tournament,
   allTables,
   onUpdate,
+  onChangeCatalogue,
   onCreateEvent,
   onUpdateEvent,
   onDeleteEvent,
@@ -84,6 +87,7 @@ export const TournamentDetailPage = ({
     .map((id) => allTables.find((t) => t.id === id))
     .filter((t): t is TournamentTable => t !== undefined)
 
+  const canEdit = tournament.canEdit
   const range = effectiveDateRange(tournament)
   const entries = tournament.events.reduce((s, e) => s + (e.entered || 0), 0)
   const pools = tournament.events.reduce((s, e) => s + e.pools.length, 0)
@@ -112,6 +116,9 @@ export const TournamentDetailPage = ({
           ]}
           title={tournament.name}
           action={
+            // Lifecycle actions mutate the tournament — only the owner sees
+            // them; a non-creator gets the read-only header.
+            canEdit && (
             <div className="flex items-center gap-2">
               {tournament.status === 'draft' && (
                 <Button
@@ -140,6 +147,7 @@ export const TournamentDetailPage = ({
                 </Button>
               )}
             </div>
+            )
           }
         />
 
@@ -212,6 +220,7 @@ export const TournamentDetailPage = ({
           <TabsContent value="events">
             <EventsTab
               tournament={tournament}
+              canEdit={canEdit}
               onOpenEvent={openEvent}
               onNewEvent={openNewEvent}
             />
@@ -219,15 +228,20 @@ export const TournamentDetailPage = ({
           <TabsContent value="tables">
             <TablesTab
               tournament={tournament}
-              allTables={allTables}
-              onUpdate={onUpdate}
+              catalogue={allTables}
+              canEdit={canEdit}
+              onChangeCatalogue={onChangeCatalogue}
             />
           </TabsContent>
           <TabsContent value="schedule">
             <ScheduleTab tournament={tournament} />
           </TabsContent>
           <TabsContent value="details">
-            <DetailsTab tournament={tournament} onUpdate={onUpdate} />
+            <DetailsTab
+              tournament={tournament}
+              canEdit={canEdit}
+              onUpdate={onUpdate}
+            />
           </TabsContent>
         </div>
       </Tabs>
@@ -237,6 +251,7 @@ export const TournamentDetailPage = ({
         onOpenChange={setEditorOpen}
         event={editorEvent}
         tables={tournamentTables}
+        canEdit={canEdit}
         onSave={saveEvent}
         onDelete={(id) => {
           const ev = tournament.events.find((e) => e.id === id) ?? null

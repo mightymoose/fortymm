@@ -9,6 +9,9 @@ import { EventCard } from './events-tab/event-card'
 
 export interface EventsTabProps {
   tournament: Tournament
+  /** When false (a non-creator), the "New event" affordances are hidden and
+   * the tab is a read-only list of events. */
+  canEdit: boolean
   onOpenEvent: (event: TournamentEvent) => void
   onNewEvent: () => void
 }
@@ -17,6 +20,7 @@ export interface EventsTabProps {
  * empty state. */
 export const EventsTab = ({
   tournament,
+  canEdit,
   onOpenEvent,
   onNewEvent,
 }: EventsTabProps) => {
@@ -26,10 +30,12 @@ export const EventsTab = ({
         title="Events"
         subtitle="Singles, doubles, age- and rating-restricted brackets. Click any event to edit."
         action={
-          <Button onClick={onNewEvent}>
-            <Plus size={16} />
-            New event
-          </Button>
+          canEdit && (
+            <Button onClick={onNewEvent}>
+              <Plus size={16} />
+              New event
+            </Button>
+          )
         }
       />
       {tournament.events.length === 0 ? (
@@ -38,16 +44,23 @@ export const EventsTab = ({
           title="No events yet"
           hint="Add your first event — Open Singles, U1500, Women's, etc."
           action={
-            <Button onClick={onNewEvent}>
-              <Plus size={16} />
-              Add an event
-            </Button>
+            canEdit && (
+              <Button onClick={onNewEvent}>
+                <Plus size={16} />
+                Add an event
+              </Button>
+            )
           }
         />
       ) : (
         <div className="flex flex-col gap-3">
           {tournament.events.map((ev) => (
-            <EventCard key={ev.id} event={ev} onOpen={() => onOpenEvent(ev)} />
+            <EventCard
+              key={ev.id}
+              event={ev}
+              canEdit={canEdit}
+              onOpen={() => onOpenEvent(ev)}
+            />
           ))}
         </div>
       )}

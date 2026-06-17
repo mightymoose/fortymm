@@ -1,0 +1,184 @@
+"""create tournaments tables
+
+Revision ID: 0010
+Revises: 0009
+Create Date: 2026-06-17 00:00:00.000000
+
+Per the pre-deploy convention in api/CLAUDE.md, edits to this migration
+happen in place. No backfill — assumes a fresh / empty DB.
+"""
+from typing import Sequence, Union
+
+from alembic import op
+import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
+
+
+revision: str = "0010"
+down_revision: Union[str, None] = "0009"
+branch_labels: Union[str, Sequence[str], None] = None
+depends_on: Union[str, Sequence[str], None] = None
+
+
+# Enum types are created explicitly in upgrade() via `.create(...)` and
+# referenced with create_type=False so neither op.create_table nor Alembic
+# autogenerate attempts to create them a second time. The hyphenated values
+# mirror the front-end prototype's wire strings (the ORM persists the enum
+# *value*, not the member name, via values_callable).
+tournament_status_enum = postgresql.ENUM(
+    "draft",
+    "published",
+    "live",
+    "archived",
+    name="tournament_status",
+    create_type=False,
+)
+event_format_enum = postgresql.ENUM(
+    "singles",
+    "doubles",
+    "teams",
+    name="event_format",
+    create_type=False,
+)
+draw_type_enum = postgresql.ENUM(
+    "single-elim",
+    "double-elim",
+    "round-robin",
+    "rr-then-ko",
+    "swiss",
+    name="draw_type",
+    create_type=False,
+)
+
+
+def upgrade() -> None:
+    bind = op.get_bind()
+    tournament_status_enum.create(bind, checkfirst=True)
+    event_format_enum.create(bind, checkfirst=True)
+    draw_type_enum.create(bind, checkfirst=True)
+
+    op.create_table(
+        "tournaments",
+        sa.Column(
+            "id",
+            postgresql.UUID(as_uuid=True),
+            primary_key=True,
+            server_default=sa.text("gen_random_uuid()"),
+        ),
+        sa.Column("name", sa.String(length=255), nullable=False),
+        sa.Column("description", sa.Text(), nullable=True),
+        sa.Column(
+            "status",
+            tournament_status_enum,
+            nullable=False,
+            server_default="draft",
+        ),
+        sa.Column("start_date", sa.Date(), nullable=True),
+        sa.Column("end_date", sa.Date(), nullable=True),
+        sa.Column("address", postgresql.JSONB(), nullable=False),
+        sa.Column(
+            "table_catalogue",
+            postgresql.JSONB(),
+            nullable=False,
+            server_default=sa.text("'[]'::jsonb"),
+        ),
+        sa.Column(
+            "created_by_user_id",
+            postgresql.UUID(as_uuid=True),
+            sa.ForeignKey("users.id", ondelete="RESTRICT"),
+            nullable=False,
+        ),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
+    )
+    op.create_index(
+        "ix_tournaments_created_by_user_id_created_at",
+        "tournaments",
+        ["created_by_user_id", sa.text("created_at DESC")],
+    )
+
+    op.create_table(
+        "tournament_events",
+        sa.Column(
+            "id",
+            postgresql.UUID(as_uuid=True),
+            primary_key=True,
+            server_default=sa.text("gen_random_uuid()"),
+        ),
+        sa.Column(
+            "tournament_id",
+            postgresql.UUID(as_uuid=True),
+            sa.ForeignKey("tournaments.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
+        sa.Column("name", sa.String(length=255), nullable=False),
+        sa.Column("format", event_format_enum, nullable=False),
+        sa.Column("draw_type", draw_type_enum, nullable=False),
+        sa.Column("max_players", sa.Integer(), nullable=False),
+        sa.Column("entry_fee", sa.Numeric(precision=8, scale=2), nullable=False),
+        sa.Column(
+            "entered",
+            sa.Integer(),
+            nullable=False,
+            server_default=sa.text("0"),
+        ),
+        sa.Column("slot", postgresql.JSONB(), nullable=False),
+        sa.Column("match_settings", postgresql.JSONB(), nullable=False),
+        sa.Column(
+            "predicates",
+            postgresql.JSONB(),
+            nullable=False,
+            server_default=sa.text("'[]'::jsonb"),
+        ),
+        sa.Column(
+            "pools",
+            postgresql.JSONB(),
+            nullable=False,
+            server_default=sa.text("'[]'::jsonb"),
+        ),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
+    )
+    op.create_index(
+        "ix_tournament_events_tournament_id_created_at",
+        "tournament_events",
+        ["tournament_id", sa.text("created_at DESC")],
+    )
+
+
+def downgrade() -> None:
+    op.drop_index(
+        "ix_tournament_events_tournament_id_created_at",
+        table_name="tournament_events",
+    )
+    op.drop_table("tournament_events")
+
+    op.drop_index(
+        "ix_tournaments_created_by_user_id_created_at", table_name="tournaments"
+    )
+    op.drop_table("tournaments")
+
+    bind = op.get_bind()
+    draw_type_enum.drop(bind, checkfirst=True)
+    event_format_enum.drop(bind, checkfirst=True)
+    tournament_status_enum.drop(bind, checkfirst=True)

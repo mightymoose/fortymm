@@ -10,6 +10,11 @@ const scoped = (container: Container) => ({
     // first so the accessor resolves whether or not the list is empty.
     return container.getAllByRole('button', { name: /New event|Add an event/ })[0]
   },
+  /** The "New event" / "Add an event" create affordances — absent for a
+   * non-creator (`canEdit: false`). */
+  queryNewEventButtons() {
+    return container.queryAllByRole('button', { name: /New event|Add an event/ })
+  },
   ...eventCardPage.within(container),
 })
 

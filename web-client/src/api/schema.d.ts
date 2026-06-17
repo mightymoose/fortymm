@@ -852,6 +852,78 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/tournaments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Tournaments */
+        get: operations["list_tournaments_v1_tournaments_get"];
+        put?: never;
+        /** Create Tournament */
+        post: operations["create_tournament_v1_tournaments_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/tournaments/{tournament_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Tournament */
+        get: operations["get_tournament_v1_tournaments__tournament_id__get"];
+        put?: never;
+        post?: never;
+        /** Delete Tournament */
+        delete: operations["delete_tournament_v1_tournaments__tournament_id__delete"];
+        options?: never;
+        head?: never;
+        /** Update Tournament */
+        patch: operations["update_tournament_v1_tournaments__tournament_id__patch"];
+        trace?: never;
+    };
+    "/v1/tournaments/{tournament_id}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Event */
+        post: operations["create_event_v1_tournaments__tournament_id__events_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/tournaments/{tournament_id}/events/{event_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete Event */
+        delete: operations["delete_event_v1_tournaments__tournament_id__events__event_id__delete"];
+        options?: never;
+        head?: never;
+        /** Update Event */
+        patch: operations["update_event_v1_tournaments__tournament_id__events__event_id__patch"];
+        trace?: never;
+    };
     "/v1/health": {
         parameters: {
             query?: never;
@@ -873,6 +945,24 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /**
+         * Address
+         * @description A tournament venue address. Stored as a JSONB value-object.
+         */
+        Address: {
+            /** Venue */
+            venue: string;
+            /** Street */
+            street: string;
+            /** City */
+            city: string;
+            /** Region */
+            region: string;
+            /** Postal */
+            postal: string;
+            /** Country */
+            country: string;
+        };
         /**
          * BroadcastRecipient
          * @description One selectable player in the admin recipient picker.
@@ -1107,6 +1197,16 @@ export interface components {
              */
             registered: boolean;
         };
+        /**
+         * DrawType
+         * @enum {string}
+         */
+        DrawType: "single-elim" | "double-elim" | "round-robin" | "rr-then-ko" | "swiss";
+        /**
+         * EventFormat
+         * @enum {string}
+         */
+        EventFormat: "singles" | "doubles" | "teams";
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -1422,6 +1522,19 @@ export interface components {
         MatchResultsWrite: {
             /** Games */
             games: components["schemas"]["MatchResultsGameWrite"][];
+        };
+        /**
+         * MatchSettings
+         * @description Per-event match rules: rated flag + game count.
+         */
+        MatchSettings: {
+            /** Rated */
+            rated: boolean;
+            /**
+             * Length Games
+             * @enum {integer}
+             */
+            length_games: 1 | 3 | 5 | 7;
         };
         /**
          * MatchSignatureView
@@ -1834,6 +1947,38 @@ export interface components {
             form: string;
         };
         /**
+         * Pool
+         * @description A slice of tables reserved for a window of time within an event.
+         */
+        Pool: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            slot: components["schemas"]["Slot"];
+            /** Table Ids */
+            table_ids: string[];
+        };
+        /**
+         * Predicate
+         * @description An eligibility rule. ``value`` is a number (most fields), an enum key
+         *     (gender), a boolean (club), or a ``[min, max]`` pair for the ``between``
+         *     operator.
+         */
+        Predicate: {
+            /** Id */
+            id: string;
+            /**
+             * Field
+             * @enum {string}
+             */
+            field: "age" | "rating" | "gender" | "club";
+            /** Op */
+            op: string;
+            /** Value */
+            value: number | string | boolean | (number | null)[] | null;
+        };
+        /**
          * RatingChange
          * @description A user's rating delta on a single completed match.
          */
@@ -2002,6 +2147,19 @@ export interface components {
             email: string;
         };
         /**
+         * Slot
+         * @description A date-only (``YYYY-MM-DD``) window with ``HH:MM`` start/end. The strings
+         *     are kept as-is to mirror the front-end prototype's wire shape.
+         */
+        Slot: {
+            /** Date */
+            date: string;
+            /** Start */
+            start: string;
+            /** End */
+            end: string;
+        };
+        /**
          * Status
          * @enum {string}
          */
@@ -2018,6 +2176,230 @@ export interface components {
             sent: number;
             /** Pruned */
             pruned: number;
+        };
+        /** TournamentCreate */
+        TournamentCreate: {
+            /** Name */
+            name: string;
+            /** Description */
+            description?: string | null;
+            /** @default draft */
+            status: components["schemas"]["TournamentStatus"];
+            /** Start Date */
+            start_date?: string | null;
+            /** End Date */
+            end_date?: string | null;
+            address: components["schemas"]["Address"];
+            /** Table Catalogue */
+            table_catalogue?: components["schemas"]["TournamentTable"][];
+        };
+        /** TournamentDetailRead */
+        TournamentDetailRead: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Name */
+            name: string;
+            /** Description */
+            description: string | null;
+            status: components["schemas"]["TournamentStatus"];
+            /** Start Date */
+            start_date: string | null;
+            /** End Date */
+            end_date: string | null;
+            address: components["schemas"]["Address"];
+            /** Table Catalogue */
+            table_catalogue: components["schemas"]["TournamentTable"][];
+            /**
+             * Created By User Id
+             * Format: uuid
+             */
+            created_by_user_id: string;
+            /** Created By Username */
+            created_by_username: string;
+            /** Can Edit */
+            can_edit: boolean;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Events */
+            events: components["schemas"]["TournamentEventRead"][];
+        };
+        /** TournamentEventCreate */
+        TournamentEventCreate: {
+            /** Name */
+            name: string;
+            format: components["schemas"]["EventFormat"];
+            draw_type: components["schemas"]["DrawType"];
+            /** Max Players */
+            max_players: number;
+            /** Entry Fee */
+            entry_fee: number;
+            /**
+             * Entered
+             * @default 0
+             */
+            entered: number;
+            slot: components["schemas"]["Slot"];
+            match_settings: components["schemas"]["MatchSettings"];
+            /** Predicates */
+            predicates?: components["schemas"]["Predicate"][];
+            /** Pools */
+            pools?: components["schemas"]["Pool"][];
+        };
+        /** TournamentEventRead */
+        TournamentEventRead: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Tournament Id
+             * Format: uuid
+             */
+            tournament_id: string;
+            /** Name */
+            name: string;
+            format: components["schemas"]["EventFormat"];
+            draw_type: components["schemas"]["DrawType"];
+            /** Max Players */
+            max_players: number;
+            /** Entry Fee */
+            entry_fee: number;
+            /** Entered */
+            entered: number;
+            slot: components["schemas"]["Slot"];
+            match_settings: components["schemas"]["MatchSettings"];
+            /** Predicates */
+            predicates: components["schemas"]["Predicate"][];
+            /** Pools */
+            pools: components["schemas"]["Pool"][];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /**
+         * TournamentEventUpdate
+         * @description Partial update for an event. Absent fields are unchanged. Every column
+         *     these fields back — ``name``/``format``/``draw_type``/``max_players``/
+         *     ``entry_fee``/``slot``/``match_settings``/``predicates``/``pools`` — is NOT
+         *     NULL, so an explicit ``null`` on any of them is rejected (422);
+         *     ``predicates``/``pools`` replace wholesale when present. ``entered`` is a
+         *     server-managed registration count and is intentionally NOT updatable here —
+         *     sending it is a 422 via ``extra="forbid"``.
+         */
+        TournamentEventUpdate: {
+            /** Name */
+            name?: string | null;
+            format?: components["schemas"]["EventFormat"] | null;
+            draw_type?: components["schemas"]["DrawType"] | null;
+            /** Max Players */
+            max_players?: number | null;
+            /** Entry Fee */
+            entry_fee?: number | null;
+            slot?: components["schemas"]["Slot"] | null;
+            match_settings?: components["schemas"]["MatchSettings"] | null;
+            /** Predicates */
+            predicates?: components["schemas"]["Predicate"][] | null;
+            /** Pools */
+            pools?: components["schemas"]["Pool"][] | null;
+        };
+        /** TournamentRead */
+        TournamentRead: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Name */
+            name: string;
+            /** Description */
+            description: string | null;
+            status: components["schemas"]["TournamentStatus"];
+            /** Start Date */
+            start_date: string | null;
+            /** End Date */
+            end_date: string | null;
+            address: components["schemas"]["Address"];
+            /** Table Catalogue */
+            table_catalogue: components["schemas"]["TournamentTable"][];
+            /**
+             * Created By User Id
+             * Format: uuid
+             */
+            created_by_user_id: string;
+            /** Created By Username */
+            created_by_username: string;
+            /** Can Edit */
+            can_edit: boolean;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /**
+         * TournamentStatus
+         * @enum {string}
+         */
+        TournamentStatus: "draft" | "published" | "live" | "archived";
+        /**
+         * TournamentTable
+         * @description A physical table in the venue catalogue, referenced by id from pools.
+         */
+        TournamentTable: {
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            /** Court */
+            court: string;
+        };
+        /**
+         * TournamentUpdate
+         * @description Partial update. A field that is *absent* is left unchanged; an explicit
+         *     value replaces the current one. The columns backing ``name``, ``status``,
+         *     ``address``, and ``table_catalogue`` are NOT NULL, so for those an explicit
+         *     ``null`` is rejected (422) rather than allowed to reach the DB — "omitted"
+         *     and "cleared" are different. ``description``/``start_date``/``end_date`` are
+         *     nullable columns and may be cleared. ``table_catalogue`` replaces wholesale
+         *     when present.
+         */
+        TournamentUpdate: {
+            /** Name */
+            name?: string | null;
+            /** Description */
+            description?: string | null;
+            status?: components["schemas"]["TournamentStatus"] | null;
+            /** Start Date */
+            start_date?: string | null;
+            /** End Date */
+            end_date?: string | null;
+            address?: components["schemas"]["Address"] | null;
+            /** Table Catalogue */
+            table_catalogue?: components["schemas"]["TournamentTable"][] | null;
         };
         /**
          * UnreadCountResponse
@@ -3808,6 +4190,280 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BroadcastResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_tournaments_v1_tournaments_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TournamentDetailRead"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_tournament_v1_tournaments_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TournamentCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TournamentRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_tournament_v1_tournaments__tournament_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tournament_id: string;
+            };
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TournamentDetailRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_tournament_v1_tournaments__tournament_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tournament_id: string;
+            };
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_tournament_v1_tournaments__tournament_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tournament_id: string;
+            };
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TournamentUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TournamentRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_event_v1_tournaments__tournament_id__events_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tournament_id: string;
+            };
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TournamentEventCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TournamentEventRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_event_v1_tournaments__tournament_id__events__event_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tournament_id: string;
+                event_id: string;
+            };
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_event_v1_tournaments__tournament_id__events__event_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tournament_id: string;
+                event_id: string;
+            };
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TournamentEventUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TournamentEventRead"];
                 };
             };
             /** @description Validation Error */

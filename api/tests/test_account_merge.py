@@ -9,6 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.account_merge import merge_user
 from app.leagues import add_user_to_default_league, get_default_league
 from app.models import (
+    DrawType,
+    EventFormat,
     LeagueMembership,
     Match,
     MatchSettings,
@@ -18,6 +20,8 @@ from app.models import (
     MatchStatus,
     RatingHistory,
     RatingHistorySource,
+    Tournament,
+    TournamentEvent,
     User,
     UserLeagueRating,
     UserToken,
@@ -202,6 +206,65 @@ async def test_merge_skips_membership_when_target_already_a_member(
     )
     user_ids = [m.user_id for m in memberships]
     assert user_ids == [verified.id]
+
+
+async def test_merge_repoints_tournament_ownership(db_session: AsyncSession):
+    """``tournaments.created_by_user_id`` is RESTRICT on delete; the merge
+    re-points it to the verified user so the final tombstone delete isn't
+    blocked and the tournament keeps its owner (and its events)."""
+    ephemeral = await _make_ephemeral(db_session, "drifting-grouse")
+    verified = await _make_verified(db_session, "rita@example.com")
+
+    tournament = Tournament(
+        name="Guest Cup",
+        created_by_user_id=ephemeral.id,
+        address={
+            "venue": "Berkeley TT Club",
+            "street": "2727 Milvia St",
+            "city": "Berkeley",
+            "region": "CA",
+            "postal": "94703",
+            "country": "USA",
+        },
+        table_catalogue=[{"id": "t1", "label": "Table 1", "court": "A"}],
+    )
+    tournament.events.append(
+        TournamentEvent(
+            name="Open Singles",
+            format=EventFormat.singles,
+            draw_type=DrawType.single_elim,
+            max_players=32,
+            entry_fee=40,
+            entered=0,
+            slot={"date": "2026-06-13", "start": "09:00", "end": "18:00"},
+            match_settings={"rated": True, "length_games": 5},
+            predicates=[],
+            pools=[],
+        )
+    )
+    db_session.add(tournament)
+    await db_session.commit()
+    await db_session.refresh(tournament)
+
+    await merge_user(db_session, from_user_id=ephemeral.id, to_user_id=verified.id)
+    await db_session.commit()
+
+    await db_session.refresh(tournament)
+    assert tournament.created_by_user_id == verified.id
+
+    # The cascade-owned event survives the merge with its tournament.
+    events = (
+        (
+            await db_session.execute(
+                select(TournamentEvent).where(
+                    TournamentEvent.tournament_id == tournament.id
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert [e.name for e in events] == ["Open Singles"]
 
 
 async def test_merge_repoints_rating_history_created_by(

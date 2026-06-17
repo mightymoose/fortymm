@@ -32,4 +32,15 @@ describe('EventCard', () => {
     await userEvent.click(eventCardPage.getOpenButton('Open Singles'))
     expect(onOpen).toHaveBeenCalledTimes(1)
   })
+
+  it('labels the open affordance "View" for a non-owner (read-only)', () => {
+    eventCardPage.render({
+      event: buildEvent({ name: 'Open Singles' }),
+      canEdit: false,
+    })
+    expect(
+      eventCardPage.getOpenButton('Open Singles', 'View'),
+    ).toBeInTheDocument()
+    expect(document.body).toHaveTextContent('View')
+  })
 })

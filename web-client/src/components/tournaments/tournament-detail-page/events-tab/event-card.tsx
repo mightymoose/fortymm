@@ -1,4 +1,4 @@
-import { ChevronRight, Layers, Pencil, TrendingUp } from 'lucide-react'
+import { ChevronRight, Eye, Layers, Pencil, TrendingUp } from 'lucide-react'
 
 import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
@@ -10,13 +10,16 @@ import type { TournamentEvent } from '../../data/types'
 
 export interface EventCardProps {
   event: TournamentEvent
+  /** When false (a non-owner), the card opens a read-only editor — the
+   * affordance reads "View" instead of "Edit". */
+  canEdit: boolean
   onOpen: () => void
 }
 
 /** A row card for one event on the tournament's Events tab: title with rated /
  * best-of badges, eligibility chips, the time slot, pool/table counts, and an
  * entries fill bar. The whole card opens the editor. */
-export const EventCard = ({ event: ev, onOpen }: EventCardProps) => {
+export const EventCard = ({ event: ev, canEdit, onOpen }: EventCardProps) => {
   const fillPct = ev.maxPlayers
     ? Math.min(100, Math.round(((ev.entered || 0) / ev.maxPlayers) * 100))
     : 0
@@ -26,6 +29,10 @@ export const EventCard = ({ event: ev, onOpen }: EventCardProps) => {
   const drawLabel =
     DRAW_TYPE_OPTIONS.find((d) => d.value === ev.drawType)?.label ?? ev.drawType
   const tableCount = new Set(ev.pools.flatMap((p) => p.tableIds)).size
+  // The card opens the editor, which is read-only for a non-owner — so the
+  // affordance reads "View" (not "Edit") when the viewer can't mutate.
+  const actionLabel = canEdit ? 'Edit' : 'View'
+  const ActionIcon = canEdit ? Pencil : Eye
 
   return (
     <div className="group/ecard relative">
@@ -112,8 +119,8 @@ export const EventCard = ({ event: ev, onOpen }: EventCardProps) => {
 
           <div className="flex items-center gap-2">
             <span className="pointer-events-none inline-flex h-8 items-center gap-1.5 rounded-[10px] border border-[color:var(--border-default)] px-3 text-[13px] font-medium text-[color:var(--fg-1)]">
-              <Pencil size={14} />
-              Edit
+              <ActionIcon size={14} />
+              {actionLabel}
             </span>
             <ChevronRight size={16} className="text-[color:var(--fg-3)]" />
           </div>
@@ -122,7 +129,7 @@ export const EventCard = ({ event: ev, onOpen }: EventCardProps) => {
 
       <button
         type="button"
-        aria-label={`Edit ${ev.name}`}
+        aria-label={`${actionLabel} ${ev.name}`}
         onClick={onOpen}
         className="absolute inset-0 rounded-xl outline-offset-2"
       />

@@ -1,6 +1,6 @@
-// Domain types for the tournament-admin (Tournament CRUD) UI. This is a
-// front-end-only prototype: the shapes mirror the design handoff, not a live
-// API. All data is seeded in-memory (see ./seed) and mutated through ./store.
+// Domain (camelCase) types for the tournament-admin UI. They mirror the design
+// handoff; `./api` adapts them to/from the snake_case API wire shapes in
+// `@/api/schema` (the data layer the route components read and write through).
 
 export type TournamentStatus = 'draft' | 'published' | 'live' | 'archived'
 
@@ -89,6 +89,10 @@ export interface Tournament {
   id: string
   name: string
   status: TournamentStatus
+  /** True when the current user may edit/delete this tournament; the API's
+   * `can_edit`. Gates every mutation affordance — a non-creator sees the
+   * read-only view. */
+  canEdit: boolean
   /** Authoritative dates are derived from the event schedule; these are the
    * seeded fall-backs shown before any event exists. */
   startDate: string | null

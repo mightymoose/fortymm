@@ -3,13 +3,16 @@ import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { Button } from '@/components/ui/button'
 import { TournamentDetailPage } from '@/components/tournaments/tournament-detail-page'
 import {
-  createEvent,
-  deleteEvent,
-  updateEvent,
-  updateTournament,
+  eventToCreateBody,
+  eventToUpdateBody,
+  tournamentToUpdateBody,
+  useCreateEvent,
+  useDeleteEvent,
   useTables,
-  useTournaments,
-} from '@/components/tournaments/data/store'
+  useTournament,
+  useUpdateEvent,
+  useUpdateTournament,
+} from '@/components/tournaments/data/api'
 import { pageTitle } from '@/lib/page-title'
 
 export const Route = createFileRoute('/_app/tournaments/$tournamentId')({
@@ -22,12 +25,28 @@ export const Route = createFileRoute('/_app/tournaments/$tournamentId')({
 function TournamentDetailRoute() {
   const { tournamentId } = Route.useParams()
   const navigate = useNavigate()
-  const tournaments = useTournaments()
-  const allTables = useTables()
-  const tournament = tournaments.find((t) => t.id === tournamentId)
+  const { data: tournament, isPending } = useTournament(tournamentId)
+  const allTables = useTables(tournamentId)
+  const updateTournament = useUpdateTournament()
+  const createEvent = useCreateEvent(tournamentId)
+  const updateEvent = useUpdateEvent(tournamentId)
+  const deleteEvent = useDeleteEvent(tournamentId)
 
   const back = () => navigate({ to: '/tournaments' })
 
+  // First load: the query is pending and `tournament` is still undefined.
+  // Show a loading state rather than the not-found screen (which is only for a
+  // resolved 404).
+  if (isPending) {
+    return (
+      <div className="mx-auto flex max-w-[600px] items-center justify-center px-12 py-24 text-center">
+        <p className="text-[14px] text-[color:var(--fg-3)]">Loading tournament…</p>
+      </div>
+    )
+  }
+
+  // `useTournament` resolves to `null` on a 404 (a 403 bubbles to the
+  // RbacBoundary instead); show the not-found screen only after loading settles.
   if (!tournament) {
     return (
       <div className="mx-auto flex max-w-[600px] flex-col items-center gap-4 px-12 py-24 text-center">
@@ -46,10 +65,23 @@ function TournamentDetailRoute() {
     <TournamentDetailPage
       tournament={tournament}
       allTables={allTables}
-      onUpdate={updateTournament}
-      onCreateEvent={(ev) => createEvent(tournament.id, ev)}
-      onUpdateEvent={(ev) => updateEvent(tournament.id, ev)}
-      onDeleteEvent={(id) => deleteEvent(tournament.id, id)}
+      onUpdate={(next) =>
+        updateTournament.mutate({
+          id: next.id,
+          patch: tournamentToUpdateBody(next, allTables),
+        })
+      }
+      onChangeCatalogue={(catalogue) =>
+        updateTournament.mutate({
+          id: tournament.id,
+          patch: tournamentToUpdateBody(tournament, catalogue),
+        })
+      }
+      onCreateEvent={(ev) => createEvent.mutate(eventToCreateBody(ev))}
+      onUpdateEvent={(ev) =>
+        updateEvent.mutate({ eventId: ev.id, body: eventToUpdateBody(ev) })
+      }
+      onDeleteEvent={(id) => deleteEvent.mutate(id)}
       onBack={back}
     />
   )

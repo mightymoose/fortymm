@@ -6,6 +6,7 @@
 export const PERM = {
   ADMIN_VIEW: 'administration.view',
   AUTH_MANAGE: 'authorization.manage',
+  TOURNAMENT_MANAGE: 'tournament.manage',
   NOTIFICATIONS_BROADCAST: 'notifications.broadcast',
 } as const
 

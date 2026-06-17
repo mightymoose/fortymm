@@ -7,6 +7,7 @@ export function buildEventsTabProps(
 ): EventsTabProps {
   return {
     tournament: buildTournament(),
+    canEdit: true,
     onOpenEvent: () => {},
     onNewEvent: () => {},
     ...overrides,

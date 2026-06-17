@@ -2,14 +2,13 @@ import { createFileRoute, useNavigate } from '@tanstack/react-router'
 
 import { TournamentsListPage } from '@/components/tournaments/tournaments-list-page'
 import {
-  createTournament,
-  deleteTournament,
+  draftToCreateBody,
+  useCreateTournament,
+  useDeleteTournament,
   useTournaments,
-} from '@/components/tournaments/data/store'
+} from '@/components/tournaments/data/api'
 import { pageTitle } from '@/lib/page-title'
 
-// Tournament-admin (Tournament CRUD) routes are intentionally not linked from
-// the sidebar nav — they're reached directly by URL for now.
 export const Route = createFileRoute('/_app/tournaments/')({
   head: () => ({
     meta: [{ title: pageTitle('Tournaments') }],
@@ -20,6 +19,8 @@ export const Route = createFileRoute('/_app/tournaments/')({
 function TournamentsRoute() {
   const navigate = useNavigate()
   const tournaments = useTournaments()
+  const createTournament = useCreateTournament()
+  const deleteTournament = useDeleteTournament()
 
   return (
     <TournamentsListPage
@@ -30,14 +31,16 @@ function TournamentsRoute() {
           params: { tournamentId },
         })
       }
-      onCreate={(draft) => {
-        const tournamentId = createTournament(draft)
+      onCreate={async (draft) => {
+        const created = await createTournament.mutateAsync(
+          draftToCreateBody(draft),
+        )
         navigate({
           to: '/tournaments/$tournamentId',
-          params: { tournamentId },
+          params: { tournamentId: created.id },
         })
       }}
-      onDelete={deleteTournament}
+      onDelete={(id) => deleteTournament.mutate(id)}
     />
   )
 }

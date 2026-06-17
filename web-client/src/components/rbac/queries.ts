@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { toast } from 'sonner'
 import { api, unwrap } from '@/api/client'
+import { notifyError } from '@/lib/notify-error'
 import type { components } from '@/api/schema'
 
 export type Permission = components['schemas']['PermissionRead']
@@ -10,13 +10,6 @@ export type RbacUser = components['schemas']['RbacUserRead']
 const PERMISSIONS_KEY = ['permissions'] as const
 const ROLES_KEY = ['roles'] as const
 const USERS_KEY = ['rbac-users'] as const
-
-function notifyError(verb: string) {
-  return (error: unknown) => {
-    const message = error instanceof Error ? error.message : String(error)
-    toast.error(`Couldn't ${verb}`, { description: message })
-  }
-}
 
 export function usePermissions() {
   return useQuery({
