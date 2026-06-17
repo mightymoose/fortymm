@@ -29,7 +29,6 @@ import {
   type MatchGameScoreWrite,
   type MatchResultsGameWrite,
 } from '@/api/matches'
-import { AppShell } from '@/components/app-shell'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -135,9 +134,9 @@ function ScoreEntryInner({
 
   if (isLoading || !data) {
     return (
-      <AppShell>
+      <>
         <div aria-busy="true" data-testid="score-entry-loading" />
-      </AppShell>
+      </>
     )
   }
 
@@ -519,7 +518,7 @@ function ScoreEntryInner({
         : 'Save final game →'
 
   return (
-    <AppShell>
+    <>
       <div className="entry-wrap">
         <div className="entry-head">
           <h2>{heading}</h2>
@@ -663,7 +662,7 @@ function ScoreEntryInner({
         onLeave={proceed}
         onStay={reset}
       />
-    </AppShell>
+    </>
   )
 }
 

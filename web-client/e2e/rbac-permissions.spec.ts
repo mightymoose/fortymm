@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test'
 import { PermissionsPage } from './page-objects/rbac/permissions.page'
+import { mockAdminSession } from './page-objects/rbac/rbac-store'
 
 const BASE_SEED = {
   permissions: [
@@ -34,6 +35,7 @@ test.describe('Administration · Permissions', () => {
   })
 
   test('renders skeleton placeholders while permissions load', async ({ page }) => {
+    await mockAdminSession(page)
     let release: (() => void) | null = null
     await page.route('**/api/v1/permissions', async (route) => {
       await new Promise<void>((resolve) => {
@@ -54,6 +56,7 @@ test.describe('Administration · Permissions', () => {
   })
 
   test('escalates a 500 on initial load to the error boundary', async ({ page }) => {
+    await mockAdminSession(page)
     await page.route('**/api/v1/permissions', (route) =>
       route.fulfill({ status: 500, contentType: 'application/json', body: '{"detail":"boom"}' }),
     )

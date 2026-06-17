@@ -17,7 +17,7 @@ export {
   STATUS_KEYS,
 } from '@/components/matches/match-list/match-list-status'
 
-export const Route = createFileRoute('/matches/')({
+export const Route = createFileRoute('/_app/matches/')({
   head: () => ({
     meta: [{ title: pageTitle('Matches') }],
   }),

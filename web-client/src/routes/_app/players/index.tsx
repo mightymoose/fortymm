@@ -17,7 +17,6 @@ import {
   type PlayerSummary,
 } from '@/api/players'
 import { SESSION_QUERY_KEY, useSession } from '@/api/session'
-import { AppShell } from '@/components/app-shell'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
@@ -47,7 +46,7 @@ const playersSearchSchema = z.object({
 
 const PAGE_SIZE = 25
 
-export const Route = createFileRoute('/players/')({
+export const Route = createFileRoute('/_app/players/')({
   head: () => ({
     meta: [{ title: pageTitle('Players') }],
   }),
@@ -149,26 +148,24 @@ function PlayersPage() {
   const startIndex = (displayPage - 1) * PAGE_SIZE
 
   return (
-    <AppShell>
-      <div className="match-list-page">
-        <ActionBar total={total} />
-        <FilterRow q={q} setQ={setQ} />
-        <div className="table-wrap">
-          <PlayerTable
-            rows={items}
-            isLoading={isLoading}
-            startIndex={startIndex}
-            onClear={onClear}
-          />
-        </div>
-        <PaginationFooter
-          page={displayPage}
-          setPage={setPage}
-          total={total}
-          pageSize={PAGE_SIZE}
+    <div className="match-list-page">
+      <ActionBar total={total} />
+      <FilterRow q={q} setQ={setQ} />
+      <div className="table-wrap">
+        <PlayerTable
+          rows={items}
+          isLoading={isLoading}
+          startIndex={startIndex}
+          onClear={onClear}
         />
       </div>
-    </AppShell>
+      <PaginationFooter
+        page={displayPage}
+        setPage={setPage}
+        total={total}
+        pageSize={PAGE_SIZE}
+      />
+    </div>
   )
 }
 
@@ -400,25 +397,23 @@ function FormDots({ form }: { form: string }) {
 function PlayersListError({ reset }: { error: Error; reset: () => void }) {
   const router = useRouter()
   return (
-    <AppShell>
-      <div role="alert" className="empty">
-        <div className="empty-title">Couldn’t load players</div>
-        <div className="empty-sub">
-          Something went wrong reaching the server.
-        </div>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="empty-clear"
-          onClick={() => {
-            reset()
-            router.invalidate()
-          }}
-        >
-          Try again
-        </Button>
+    <div role="alert" className="empty">
+      <div className="empty-title">Couldn’t load players</div>
+      <div className="empty-sub">
+        Something went wrong reaching the server.
       </div>
-    </AppShell>
+      <Button
+        variant="ghost"
+        size="sm"
+        className="empty-clear"
+        onClick={() => {
+          reset()
+          router.invalidate()
+        }}
+      >
+        Try again
+      </Button>
+    </div>
   )
 }
 

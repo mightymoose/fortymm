@@ -3,7 +3,6 @@ import { Link, createFileRoute, useNavigate } from '@tanstack/react-router'
 import { ArrowRight } from 'lucide-react'
 import { z } from 'zod'
 
-import { AppShell } from '@/components/app-shell'
 import { ApiError } from '@/api/client'
 import { deriveEmailStatus, useSession } from '@/api/session'
 import {
@@ -17,7 +16,7 @@ import { pageTitle } from '@/lib/page-title'
 import { cn } from '@/lib/utils'
 import './new.css'
 
-export const Route = createFileRoute('/matches/new')({
+export const Route = createFileRoute('/_app/matches/new')({
   head: () => ({
     meta: [{ title: pageTitle('New match') }],
   }),
@@ -62,7 +61,7 @@ const matchFormSchema = z
 
 function NewMatchPage() {
   return (
-    <AppShell>
+    <>
       <div className="nm-page">
         <div className="nm-page-head">
           <h1>
@@ -71,7 +70,7 @@ function NewMatchPage() {
         </div>
         <MatchCard />
       </div>
-    </AppShell>
+    </>
   )
 }
 
