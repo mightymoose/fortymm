@@ -48,4 +48,11 @@ export default async function globalSetup() {
   }
 
   await waitForReady(BASE_URL, 120_000)
+  // `--wait` only gates on each container's own healthcheck, so the api is
+  // marked healthy as soon as it answers its internal probe — but nginx can
+  // still 502 the `/api` upstream for a beat after startup (the api isn't yet
+  // resolvable/accepting through the proxy). The app fires `GET /v1/session`
+  // immediately on load and hangs its session loader if that races the 502
+  // window, so also gate on the API *through nginx* before running tests.
+  await waitForReady(`${BASE_URL}/api/v1/health`, 120_000)
 }
