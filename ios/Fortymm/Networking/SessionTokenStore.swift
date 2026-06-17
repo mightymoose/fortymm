@@ -49,22 +49,19 @@ actor SessionTokenStore {
     /// only for the process lifetime.
     func updateCSRF(_ value: String) { csrf = value }
 
-    /// Persist a freshly minted or rotated token. When unchanged, skip the
-    /// rewrite but still retry a prior failed persist, so a resumed session
-    /// eventually lands in the Keychain even if its first write was blocked.
+    /// Persist a freshly minted or rotated token. No-op if unchanged, so a
+    /// resumed session doesn't rewrite the Keychain on every call.
     func update(_ token: String) {
-        guard token != cached else {
-            retryPersistIfNeeded()
-            return
-        }
+        guard token != cached else { return }
         cached = token
         didLoad = true
         needsPersist = !keychain.save(token)
     }
 
-    /// Re-attempt a previously-failed Keychain write. Called on every access, so
-    /// once the device is unlocked the cached token gets persisted on the next
-    /// request rather than waiting for a token rotation.
+    /// Re-attempt a previously-failed Keychain write. Called from `token()`,
+    /// which runs at the start of every request, so once the device is unlocked
+    /// the cached token gets persisted on the next request rather than waiting
+    /// for a token rotation.
     private func retryPersistIfNeeded() {
         guard needsPersist, let token = cached else { return }
         needsPersist = !keychain.save(token)
