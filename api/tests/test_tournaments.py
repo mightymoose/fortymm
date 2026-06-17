@@ -259,6 +259,18 @@ async def test_patch_explicit_null_address_returns_422(
     assert response.status_code == 422
 
 
+async def test_patch_explicit_null_table_catalogue_returns_422(
+    authed_client: tuple[AsyncClient, User],
+):
+    # table_catalogue is a NOT NULL column — an explicit null is a 422, not a 500.
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    response = await client.patch(
+        f"/v1/tournaments/{created['id']}", json={"table_catalogue": None}
+    )
+    assert response.status_code == 422
+
+
 async def test_delete_by_creator_removes_row(
     authed_client: tuple[AsyncClient, User],
     db_session: AsyncSession,
@@ -391,6 +403,60 @@ async def test_patch_event_explicit_null_name_returns_422(
     response = await client.patch(
         f"/v1/tournaments/{created['id']}/events/{event['id']}",
         json={"name": None},
+    )
+    assert response.status_code == 422
+
+
+async def test_patch_event_explicit_null_predicates_returns_422(
+    authed_client: tuple[AsyncClient, User],
+):
+    # predicates/pools are NOT NULL JSONB columns — explicit null is a 422.
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    event = (
+        await client.post(
+            f"/v1/tournaments/{created['id']}/events", json=_event_payload()
+        )
+    ).json()
+    response = await client.patch(
+        f"/v1/tournaments/{created['id']}/events/{event['id']}",
+        json={"predicates": None},
+    )
+    assert response.status_code == 422
+
+
+async def test_patch_event_explicit_null_pools_returns_422(
+    authed_client: tuple[AsyncClient, User],
+):
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    event = (
+        await client.post(
+            f"/v1/tournaments/{created['id']}/events", json=_event_payload()
+        )
+    ).json()
+    response = await client.patch(
+        f"/v1/tournaments/{created['id']}/events/{event['id']}",
+        json={"pools": None},
+    )
+    assert response.status_code == 422
+
+
+async def test_patch_event_rejects_server_managed_entered(
+    authed_client: tuple[AsyncClient, User],
+):
+    # ``entered`` is a server-managed registration count, not updatable via PATCH
+    # — extra="forbid" rejects it with a 422.
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    event = (
+        await client.post(
+            f"/v1/tournaments/{created['id']}/events", json=_event_payload()
+        )
+    ).json()
+    response = await client.patch(
+        f"/v1/tournaments/{created['id']}/events/{event['id']}",
+        json={"entered": 99},
     )
     assert response.status_code == 422
 

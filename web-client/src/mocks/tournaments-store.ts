@@ -328,7 +328,8 @@ export function updateEvent(
     draw_type: patch.draw_type ?? event.draw_type,
     max_players: patch.max_players ?? event.max_players,
     entry_fee: patch.entry_fee ?? event.entry_fee,
-    entered: patch.entered ?? event.entered,
+    // entered is server-managed — not in the PATCH body; keep the existing value.
+    entered: event.entered,
     slot: patch.slot ?? event.slot,
     match_settings: patch.match_settings ?? event.match_settings,
     predicates: patch.predicates ?? event.predicates,

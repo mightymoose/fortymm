@@ -14,6 +14,9 @@ export interface TablesTabProps {
   tournament: Tournament
   /** This tournament's table catalogue (the venue tables it owns). */
   catalogue: TournamentTable[]
+  /** When false (a non-creator), the add-table form and per-row Remove buttons
+   * are hidden and the tab is a read-only list of tables. */
+  canEdit: boolean
   /** Emit the next catalogue. The catalogue IS the assigned set — the API has
    * no separate global table list, so removing a table drops it outright and
    * the "Add" affordance creates a brand-new table. */
@@ -25,6 +28,7 @@ export interface TablesTabProps {
 export const TablesTab = ({
   tournament,
   catalogue,
+  canEdit,
   onChangeCatalogue,
 }: TablesTabProps) => {
   const [label, setLabel] = useState('')
@@ -75,14 +79,16 @@ export const TablesTab = ({
                   Court {table.court}
                 </div>
               </div>
-              <button
-                type="button"
-                aria-label={`Remove ${table.label}`}
-                onClick={() => removeTable(table.id)}
-                className="grid size-7 place-items-center rounded-md text-[color:var(--fg-3)] hover:bg-[color:var(--bg-hover)] hover:text-[color:var(--loss)]"
-              >
-                <Trash2 size={14} />
-              </button>
+              {canEdit && (
+                <button
+                  type="button"
+                  aria-label={`Remove ${table.label}`}
+                  onClick={() => removeTable(table.id)}
+                  className="grid size-7 place-items-center rounded-md text-[color:var(--fg-3)] hover:bg-[color:var(--bg-hover)] hover:text-[color:var(--loss)]"
+                >
+                  <Trash2 size={14} />
+                </button>
+              )}
             </div>
             {usingEvents.length > 0 ? (
               <div className="flex flex-wrap gap-1">
@@ -105,37 +111,39 @@ export const TablesTab = ({
         ))}
       </div>
 
-      <div className="mt-6">
-        <div className="mb-2 text-[11px] font-semibold tracking-[0.12em] text-[color:var(--fg-3)] uppercase">
-          Add a table
+      {canEdit && (
+        <div className="mt-6">
+          <div className="mb-2 text-[11px] font-semibold tracking-[0.12em] text-[color:var(--fg-3)] uppercase">
+            Add a table
+          </div>
+          <form
+            className="flex flex-wrap items-center gap-2"
+            onSubmit={(e) => {
+              e.preventDefault()
+              addTable()
+            }}
+          >
+            <Input
+              aria-label="Table label"
+              placeholder="Label (e.g. T9)"
+              value={label}
+              onChange={(e) => setLabel(e.target.value)}
+              className="w-36"
+            />
+            <Input
+              aria-label="Court"
+              placeholder="Court"
+              value={court}
+              onChange={(e) => setCourt(e.target.value)}
+              className="w-28"
+            />
+            <Button type="submit" disabled={!canAdd}>
+              <Plus size={14} />
+              Add table
+            </Button>
+          </form>
         </div>
-        <form
-          className="flex flex-wrap items-center gap-2"
-          onSubmit={(e) => {
-            e.preventDefault()
-            addTable()
-          }}
-        >
-          <Input
-            aria-label="Table label"
-            placeholder="Label (e.g. T9)"
-            value={label}
-            onChange={(e) => setLabel(e.target.value)}
-            className="w-36"
-          />
-          <Input
-            aria-label="Court"
-            placeholder="Court"
-            value={court}
-            onChange={(e) => setCourt(e.target.value)}
-            className="w-28"
-          />
-          <Button type="submit" disabled={!canAdd}>
-            <Plus size={14} />
-            Add table
-          </Button>
-        </form>
-      </div>
+      )}
     </div>
   )
 }

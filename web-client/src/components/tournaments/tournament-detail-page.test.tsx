@@ -40,6 +40,22 @@ describe('TournamentDetailPage', () => {
     expect(onCreateEvent).toHaveBeenCalledTimes(1)
   })
 
+  it('hides the lifecycle action for a non-creator', () => {
+    tournamentDetailPagePage.render({
+      tournament: buildTournament({ status: 'draft', canEdit: false }),
+    })
+    expect(
+      tournamentDetailPagePage.queryLifecycleButton(/Publish/),
+    ).toBeNull()
+  })
+
+  it('hides the "new event" affordance for a non-creator', () => {
+    tournamentDetailPagePage.render({
+      tournament: buildTournament({ events: [buildEvent()], canEdit: false }),
+    })
+    expect(tournamentDetailPagePage.queryNewEventButtons()).toHaveLength(0)
+  })
+
   it('navigates back via the breadcrumb', async () => {
     const onBack = vi.fn()
     tournamentDetailPagePage.render({

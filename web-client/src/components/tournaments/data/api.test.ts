@@ -104,6 +104,22 @@ describe('apiToTournament', () => {
     expect(tournament.description).toBe('')
   })
 
+  it('maps can_edit to canEdit when the user may edit', () => {
+    const tournament = apiToTournament(
+      buildTournamentDetailRead({ can_edit: true }),
+    )
+
+    expect(tournament.canEdit).toBe(true)
+  })
+
+  it('maps can_edit to canEdit when the user may not edit', () => {
+    const tournament = apiToTournament(
+      buildTournamentDetailRead({ can_edit: false }),
+    )
+
+    expect(tournament.canEdit).toBe(false)
+  })
+
   it('maps each embedded event through apiToEvent', () => {
     const tournament = apiToTournament(
       buildTournamentDetailRead({
@@ -123,6 +139,7 @@ describe('apiToTournament', () => {
 const draft: Omit<Tournament, 'id'> = {
   name: 'Autumn Cup',
   status: 'draft',
+  canEdit: true,
   startDate: '2026-09-01',
   endDate: '2026-09-02',
   description: 'A new draft.',

@@ -80,6 +80,7 @@ export function apiToTournament(t: TournamentDetailRead): Tournament {
     id: t.id,
     name: t.name,
     status: t.status,
+    canEdit: t.can_edit,
     description: t.description ?? '',
     startDate: t.start_date,
     endDate: t.end_date,

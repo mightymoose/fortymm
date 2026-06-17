@@ -33,4 +33,11 @@ describe('EventEditor', () => {
     await userEvent.click(eventEditorPage.getSectionTab('Match settings'))
     expect(screen.getByRole('switch', { name: 'Rated' })).toBeInTheDocument()
   })
+
+  it('hides save and delete for a non-creator (read-only view)', () => {
+    eventEditorPage.render({ event: buildEvent({ id: 'ev-1' }), canEdit: false })
+    expect(eventEditorPage.querySaveButton()).toBeNull()
+    expect(eventEditorPage.queryDeleteButton()).toBeNull()
+    expect(eventEditorPage.getDismissButton()).toHaveTextContent('Done')
+  })
 })

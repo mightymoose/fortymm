@@ -138,6 +138,8 @@ export function emptyTournament(): Omit<Tournament, 'id'> {
   return {
     name: '',
     status: 'draft',
+    // A brand-new tournament is created by, hence owned by, the current user.
+    canEdit: true,
     startDate: null,
     endDate: null,
     description: '',

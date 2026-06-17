@@ -140,10 +140,11 @@ class TournamentCreate(BaseModel):
 class TournamentUpdate(BaseModel):
     """Partial update. A field that is *absent* is left unchanged; an explicit
     value replaces the current one. The columns backing ``name``, ``status``,
-    and ``address`` are NOT NULL, so for those an explicit ``null`` is rejected
-    (422) rather than allowed to reach the DB — "omitted" and "cleared" are
-    different. ``description``/``start_date``/``end_date`` are nullable columns
-    and may be cleared. ``table_catalogue`` replaces wholesale when present."""
+    ``address``, and ``table_catalogue`` are NOT NULL, so for those an explicit
+    ``null`` is rejected (422) rather than allowed to reach the DB — "omitted"
+    and "cleared" are different. ``description``/``start_date``/``end_date`` are
+    nullable columns and may be cleared. ``table_catalogue`` replaces wholesale
+    when present."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -155,7 +156,7 @@ class TournamentUpdate(BaseModel):
     address: Address | None = None
     table_catalogue: list[TournamentTable] | None = None
 
-    @field_validator("name", "status", "address", mode="before")
+    @field_validator("name", "status", "address", "table_catalogue", mode="before")
     @classmethod
     def _reject_explicit_null(cls, value: Any) -> Any:
         # These map to NOT NULL columns. ``mode="before"`` runs even when the
@@ -182,12 +183,13 @@ class TournamentEventCreate(BaseModel):
 
 
 class TournamentEventUpdate(BaseModel):
-    """Partial update for an event. Absent fields are unchanged. The columns
-    backing ``name``/``format``/``draw_type``/``max_players``/``entry_fee``/
-    ``entered``/``slot``/``match_settings`` are NOT NULL, so an explicit
-    ``null`` on any of them is rejected (422). ``entered`` is nullable-typed
-    only to allow omission; it is never legitimately clearable to null.
-    ``predicates``/``pools`` replace wholesale when present."""
+    """Partial update for an event. Absent fields are unchanged. Every column
+    these fields back — ``name``/``format``/``draw_type``/``max_players``/
+    ``entry_fee``/``slot``/``match_settings``/``predicates``/``pools`` — is NOT
+    NULL, so an explicit ``null`` on any of them is rejected (422);
+    ``predicates``/``pools`` replace wholesale when present. ``entered`` is a
+    server-managed registration count and is intentionally NOT updatable here —
+    sending it is a 422 via ``extra="forbid"``."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -196,7 +198,6 @@ class TournamentEventUpdate(BaseModel):
     draw_type: DrawType | None = None
     max_players: int | None = Field(default=None, gt=0)
     entry_fee: float | None = Field(default=None, ge=0)
-    entered: int | None = None
     slot: Slot | None = None
     match_settings: MatchSettings | None = None
     predicates: list[Predicate] | None = None
@@ -208,9 +209,10 @@ class TournamentEventUpdate(BaseModel):
         "draw_type",
         "max_players",
         "entry_fee",
-        "entered",
         "slot",
         "match_settings",
+        "predicates",
+        "pools",
         mode="before",
     )
     @classmethod

@@ -69,6 +69,9 @@ export function buildTournament(
     id: 'bay-area-open-2026',
     name: 'Bay Area Open 2026',
     status: 'published',
+    // Existing component factories/tests build the creator's own tournaments,
+    // so default to editable; override `canEdit: false` for the read-only case.
+    canEdit: true,
     startDate: '2026-06-13',
     endDate: '2026-06-14',
     description: 'Two-day open. USATT-sanctioned, ratings-eligible.',

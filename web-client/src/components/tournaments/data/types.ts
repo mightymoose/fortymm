@@ -89,6 +89,10 @@ export interface Tournament {
   id: string
   name: string
   status: TournamentStatus
+  /** True when the current user may edit/delete this tournament; the API's
+   * `can_edit`. Gates every mutation affordance — a non-creator sees the
+   * read-only view. */
+  canEdit: boolean
   /** Authoritative dates are derived from the event schedule; these are the
    * seeded fall-backs shown before any event exists. */
   startDate: string | null

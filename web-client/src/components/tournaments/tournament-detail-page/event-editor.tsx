@@ -25,6 +25,9 @@ export interface EventEditorProps {
   event: TournamentEvent | null
   /** The tables available to this tournament (for the pools tab). */
   tables: TournamentTable[]
+  /** When false (a non-creator), the Save and Delete actions are hidden and the
+   * editor becomes a read-only view of the event. */
+  canEdit: boolean
   onSave: (event: TournamentEvent) => void
   onDelete: (id: string) => void
 }
@@ -44,6 +47,7 @@ export const EventEditor = ({
   onOpenChange,
   event,
   tables,
+  canEdit,
   onSave,
   onDelete,
 }: EventEditorProps) => {
@@ -104,20 +108,23 @@ export const EventEditor = ({
         )}
 
         <SheetFooter className="flex-row items-center border-t border-[color:var(--border-subtle)]">
-          {!isNew && draft && (
+          {canEdit && !isNew && draft && (
             <Button variant="destructive" onClick={() => onDelete(draft.id)}>
               <Trash2 size={16} />
               Delete event
             </Button>
           )}
           <span className="flex-1" />
+          {/* A non-creator can only dismiss the read-only view. */}
           <Button variant="ghost" onClick={() => onOpenChange(false)}>
-            Cancel
+            {canEdit ? 'Cancel' : 'Done'}
           </Button>
-          <Button disabled={!draft} onClick={() => draft && onSave(draft)}>
-            <Check size={16} />
-            {isNew ? 'Create event' : 'Save changes'}
-          </Button>
+          {canEdit && (
+            <Button disabled={!draft} onClick={() => draft && onSave(draft)}>
+              <Check size={16} />
+              {isNew ? 'Create event' : 'Save changes'}
+            </Button>
+          )}
         </SheetFooter>
       </SheetContent>
     </Sheet>

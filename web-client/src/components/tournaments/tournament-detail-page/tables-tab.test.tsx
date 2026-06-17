@@ -45,4 +45,13 @@ describe('TablesTab', () => {
       expect.objectContaining({ id: 't3' }),
     ])
   })
+
+  it('hides the add-table form and per-row removes for a non-creator', () => {
+    tablesTabPage.render({ catalogue: buildTables(3), canEdit: false })
+
+    expect(tablesTabPage.queryAddButton()).toBeNull()
+    expect(tablesTabPage.queryRemoveButton('T1')).toBeNull()
+    // The table list itself stays visible (read-only).
+    expect(document.body).toHaveTextContent('T1')
+  })
 })

@@ -1918,12 +1918,13 @@ export interface components {
         };
         /**
          * TournamentEventUpdate
-         * @description Partial update for an event. Absent fields are unchanged. The columns
-         *     backing ``name``/``format``/``draw_type``/``max_players``/``entry_fee``/
-         *     ``entered``/``slot``/``match_settings`` are NOT NULL, so an explicit
-         *     ``null`` on any of them is rejected (422). ``entered`` is nullable-typed
-         *     only to allow omission; it is never legitimately clearable to null.
-         *     ``predicates``/``pools`` replace wholesale when present.
+         * @description Partial update for an event. Absent fields are unchanged. Every column
+         *     these fields back — ``name``/``format``/``draw_type``/``max_players``/
+         *     ``entry_fee``/``slot``/``match_settings``/``predicates``/``pools`` — is NOT
+         *     NULL, so an explicit ``null`` on any of them is rejected (422);
+         *     ``predicates``/``pools`` replace wholesale when present. ``entered`` is a
+         *     server-managed registration count and is intentionally NOT updatable here —
+         *     sending it is a 422 via ``extra="forbid"``.
          */
         TournamentEventUpdate: {
             /** Name */
@@ -1934,8 +1935,6 @@ export interface components {
             max_players?: number | null;
             /** Entry Fee */
             entry_fee?: number | null;
-            /** Entered */
-            entered?: number | null;
             slot?: components["schemas"]["Slot"] | null;
             match_settings?: components["schemas"]["MatchSettings"] | null;
             /** Predicates */
@@ -2003,10 +2002,11 @@ export interface components {
          * TournamentUpdate
          * @description Partial update. A field that is *absent* is left unchanged; an explicit
          *     value replaces the current one. The columns backing ``name``, ``status``,
-         *     and ``address`` are NOT NULL, so for those an explicit ``null`` is rejected
-         *     (422) rather than allowed to reach the DB — "omitted" and "cleared" are
-         *     different. ``description``/``start_date``/``end_date`` are nullable columns
-         *     and may be cleared. ``table_catalogue`` replaces wholesale when present.
+         *     ``address``, and ``table_catalogue`` are NOT NULL, so for those an explicit
+         *     ``null`` is rejected (422) rather than allowed to reach the DB — "omitted"
+         *     and "cleared" are different. ``description``/``start_date``/``end_date`` are
+         *     nullable columns and may be cleared. ``table_catalogue`` replaces wholesale
+         *     when present.
          */
         TournamentUpdate: {
             /** Name */

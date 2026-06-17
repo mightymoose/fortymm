@@ -25,7 +25,7 @@ export const Route = createFileRoute('/_app/tournaments/$tournamentId')({
 function TournamentDetailRoute() {
   const { tournamentId } = Route.useParams()
   const navigate = useNavigate()
-  const { data: tournament } = useTournament(tournamentId)
+  const { data: tournament, isPending } = useTournament(tournamentId)
   const allTables = useTables(tournamentId)
   const updateTournament = useUpdateTournament()
   const createEvent = useCreateEvent(tournamentId)
@@ -34,8 +34,19 @@ function TournamentDetailRoute() {
 
   const back = () => navigate({ to: '/tournaments' })
 
+  // First load: the query is pending and `tournament` is still undefined.
+  // Show a loading state rather than the not-found screen (which is only for a
+  // resolved 404).
+  if (isPending) {
+    return (
+      <div className="mx-auto flex max-w-[600px] items-center justify-center px-12 py-24 text-center">
+        <p className="text-[14px] text-[color:var(--fg-3)]">Loading tournament…</p>
+      </div>
+    )
+  }
+
   // `useTournament` resolves to `null` on a 404 (a 403 bubbles to the
-  // RbacBoundary instead); show the existing not-found screen for it.
+  // RbacBoundary instead); show the not-found screen only after loading settles.
   if (!tournament) {
     return (
       <div className="mx-auto flex max-w-[600px] flex-col items-center gap-4 px-12 py-24 text-center">

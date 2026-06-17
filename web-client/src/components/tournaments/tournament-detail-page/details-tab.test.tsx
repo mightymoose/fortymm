@@ -21,4 +21,13 @@ describe('DetailsTab', () => {
       expect.objectContaining({ name: 'Bay Area Open 2026!' }),
     )
   })
+
+  it('disables the fields and hides save for a non-creator', () => {
+    detailsTabPage.render({
+      tournament: buildTournament({ name: 'Bay Area Open 2026' }),
+      canEdit: false,
+    })
+    expect(detailsTabPage.getNameInput()).toBeDisabled()
+    expect(detailsTabPage.querySaveButton()).toBeNull()
+  })
 })

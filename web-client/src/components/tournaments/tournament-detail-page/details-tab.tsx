@@ -13,6 +13,9 @@ import { SectionHeader } from './section-header'
 
 export interface DetailsTabProps {
   tournament: Tournament
+  /** When false (a non-creator), every field is disabled and the Save action
+   * is hidden — the tab is a read-only view of the tournament details. */
+  canEdit: boolean
   onUpdate: (tournament: Tournament) => void
 }
 
@@ -25,7 +28,11 @@ const STATUS_OPTIONS: { value: TournamentStatus; label: string }[] = [
 
 /** The Details tab: edit the tournament's name, description, status, and venue
  * address. Changes stage in a draft and commit on Save. */
-export const DetailsTab = ({ tournament, onUpdate }: DetailsTabProps) => {
+export const DetailsTab = ({
+  tournament,
+  canEdit,
+  onUpdate,
+}: DetailsTabProps) => {
   const [draft, setDraft] = useState<Tournament>(tournament)
   const [seen, setSeen] = useState(tournament)
   // Dirtiness is derivable: the draft diverges from the committed tournament
@@ -51,6 +58,7 @@ export const DetailsTab = ({ tournament, onUpdate }: DetailsTabProps) => {
         title="Tournament details"
         subtitle="Edit the basics. Players see this on the public page and registration emails."
         action={
+          canEdit &&
           dirty && (
             <div className="flex gap-2">
               <Button variant="ghost" onClick={() => setDraft(tournament)}>
@@ -75,6 +83,7 @@ export const DetailsTab = ({ tournament, onUpdate }: DetailsTabProps) => {
               {(id) => (
                 <Input
                   id={id}
+                  disabled={!canEdit}
                   value={draft.name}
                   onChange={(e) => update({ name: e.target.value })}
                 />
@@ -88,6 +97,7 @@ export const DetailsTab = ({ tournament, onUpdate }: DetailsTabProps) => {
                 <Textarea
                   id={id}
                   rows={4}
+                  disabled={!canEdit}
                   value={draft.description}
                   placeholder="Two-day open. USATT-sanctioned."
                   onChange={(e) => update({ description: e.target.value })}
@@ -99,6 +109,7 @@ export const DetailsTab = ({ tournament, onUpdate }: DetailsTabProps) => {
                 <ToggleGroup
                   type="single"
                   aria-labelledby={`${id}-label`}
+                  disabled={!canEdit}
                   value={draft.status}
                   onValueChange={(v) => v && update({ status: v as TournamentStatus })}
                   className="w-fit"
@@ -123,6 +134,7 @@ export const DetailsTab = ({ tournament, onUpdate }: DetailsTabProps) => {
               {(id) => (
                 <Input
                   id={id}
+                  disabled={!canEdit}
                   value={draft.address.venue}
                   onChange={(e) => updateAddress({ venue: e.target.value })}
                 />
@@ -132,6 +144,7 @@ export const DetailsTab = ({ tournament, onUpdate }: DetailsTabProps) => {
               {(id) => (
                 <Input
                   id={id}
+                  disabled={!canEdit}
                   value={draft.address.street}
                   onChange={(e) => updateAddress({ street: e.target.value })}
                 />
@@ -142,6 +155,7 @@ export const DetailsTab = ({ tournament, onUpdate }: DetailsTabProps) => {
                 {(id) => (
                   <Input
                     id={id}
+                    disabled={!canEdit}
                     value={draft.address.city}
                     onChange={(e) => updateAddress({ city: e.target.value })}
                   />
@@ -151,6 +165,7 @@ export const DetailsTab = ({ tournament, onUpdate }: DetailsTabProps) => {
                 {(id) => (
                   <Input
                     id={id}
+                    disabled={!canEdit}
                     value={draft.address.region}
                     onChange={(e) => updateAddress({ region: e.target.value })}
                   />
@@ -161,6 +176,7 @@ export const DetailsTab = ({ tournament, onUpdate }: DetailsTabProps) => {
                   <Input
                     id={id}
                     className="font-mono"
+                    disabled={!canEdit}
                     value={draft.address.postal}
                     onChange={(e) => updateAddress({ postal: e.target.value })}
                   />
@@ -171,6 +187,7 @@ export const DetailsTab = ({ tournament, onUpdate }: DetailsTabProps) => {
               {(id) => (
                 <Input
                   id={id}
+                  disabled={!canEdit}
                   value={draft.address.country}
                   onChange={(e) => updateAddress({ country: e.target.value })}
                 />
