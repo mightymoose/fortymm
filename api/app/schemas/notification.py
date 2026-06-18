@@ -78,6 +78,40 @@ class MarkAllReadResponse(BaseModel):
     marked: int
 
 
+# ----- display taxonomy (labels + order, DB-backed) -------------------------
+
+
+class NotificationTypeInfo(BaseModel):
+    """One notification category for display: its key plus the human labels and
+    ordering the UI renders. Sourced from the ``notification_types`` table so the
+    server owns the labels/order (the client keeps only icons/colours)."""
+
+    key: NotificationCategory
+    label: str
+    short: str
+    description: str | None = None
+
+
+class NotificationChannelInfo(BaseModel):
+    """One delivery channel for display: its key, label, and whether the server
+    can deliver on it (SMS is shown but unavailable). Sourced from the
+    ``notification_channels`` table."""
+
+    key: NotificationChannel
+    label: str
+    available: bool
+    description: str | None = None
+
+
+class NotificationTaxonomy(BaseModel):
+    """The shared display taxonomy — the ordered lists of categories and channels
+    every notification surface (preferences, feed filters, broadcast) renders.
+    Reference data, fetched once and cached on the client."""
+
+    types: list[NotificationTypeInfo]
+    channels: list[NotificationChannelInfo]
+
+
 # ----- preferences (per-channel masters + per-cell matrix) ------------------
 
 

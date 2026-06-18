@@ -21,7 +21,8 @@ class Notification(Base):
     ``category`` is a string (validated against
     ``app.notifications.taxonomy.NotificationCategory`` at the boundary) rather
     than a Postgres enum, matching ``DeviceToken.platform`` — adding a category
-    later needs no enum migration.
+    later needs no enum migration. It carries an FK to ``notification_types.key``
+    so a value off the taxonomy can't be stored.
     """
 
     __tablename__ = "notifications"
@@ -41,7 +42,11 @@ class Notification(Base):
         ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
     )
-    category: Mapped[str] = mapped_column(String(32), nullable=False)
+    category: Mapped[str] = mapped_column(
+        String(32),
+        ForeignKey("notification_types.key", ondelete="RESTRICT"),
+        nullable=False,
+    )
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     body: Mapped[str] = mapped_column(String(500), nullable=False)
     # Optional in-app affordances mirrored from the design's notification row:
@@ -90,7 +95,11 @@ class NotificationChannelSetting(Base):
         ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
     )
-    channel: Mapped[str] = mapped_column(String(16), nullable=False)
+    channel: Mapped[str] = mapped_column(
+        String(16),
+        ForeignKey("notification_channels.key", ondelete="RESTRICT"),
+        nullable=False,
+    )
     enabled: Mapped[bool] = mapped_column(nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -135,8 +144,16 @@ class NotificationPreference(Base):
         ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
     )
-    category: Mapped[str] = mapped_column(String(32), nullable=False)
-    channel: Mapped[str] = mapped_column(String(16), nullable=False)
+    category: Mapped[str] = mapped_column(
+        String(32),
+        ForeignKey("notification_types.key", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    channel: Mapped[str] = mapped_column(
+        String(16),
+        ForeignKey("notification_channels.key", ondelete="RESTRICT"),
+        nullable=False,
+    )
     enabled: Mapped[bool] = mapped_column(nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

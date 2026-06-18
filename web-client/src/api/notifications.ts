@@ -23,6 +23,8 @@ export type BroadcastResponse = components['schemas']['BroadcastResponse']
 export type BroadcastRecipient = components['schemas']['BroadcastRecipient']
 export type BroadcastRecipientList =
   components['schemas']['BroadcastRecipientList']
+export type NotificationTaxonomy =
+  components['schemas']['NotificationTaxonomy']
 
 // All notification queries hang off this prefix so a single
 // `invalidateQueries({ queryKey: NOTIFICATIONS_QUERY_KEY })` refreshes the bell
@@ -30,6 +32,9 @@ export type BroadcastRecipientList =
 export const NOTIFICATIONS_QUERY_KEY = ['notifications'] as const
 export const NOTIFICATION_PREFERENCES_QUERY_KEY = [
   'notification-preferences',
+] as const
+export const NOTIFICATION_TAXONOMY_QUERY_KEY = [
+  'notification-taxonomy',
 ] as const
 
 // The bell badge polls this lightweight count so a notification that arrives in
@@ -125,6 +130,25 @@ export function notificationPreferencesQueryOptions() {
 
 export function useNotificationPreferences() {
   return useQuery(notificationPreferencesQueryOptions())
+}
+
+/** The notification "display taxonomy" — the ordered, server-owned labels for
+ * categories and channels every surface renders. Reference data: it changes only
+ * with a deploy, so we never refetch it within a session. */
+export function notificationTaxonomyQueryOptions() {
+  return queryOptions({
+    queryKey: NOTIFICATION_TAXONOMY_QUERY_KEY,
+    queryFn: async (): Promise<NotificationTaxonomy> =>
+      unwrap(
+        'load notification taxonomy',
+        await api.GET('/v1/notification-taxonomy'),
+      ),
+    staleTime: Infinity,
+  })
+}
+
+export function useNotificationTaxonomy() {
+  return useQuery(notificationTaxonomyQueryOptions())
 }
 
 export function useUpdateNotificationPreferences() {

@@ -4,6 +4,7 @@ import type {
   BroadcastResponse,
   NotificationChannel,
   NotificationItem,
+  NotificationTaxonomy,
 } from '@/api/notifications'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -11,7 +12,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { cn } from '@/lib/utils'
-import { CHANNEL_META, CHANNEL_ORDER } from '../notification-meta'
+import { CHANNEL_VISUAL } from '../notification-meta'
 import { NotificationRow } from '../notification-row'
 import type { BroadcastAudience } from './build-broadcast-request'
 
@@ -30,6 +31,8 @@ export interface BroadcastViewProps {
   onToggleRecipient: (id: string) => void
   selectedCount: number
   channels: ReadonlySet<NotificationChannel>
+  /** Server-ordered channel taxonomy — drives the channel chips. */
+  channelInfos: NotificationTaxonomy['channels']
   onToggleChannel: (channel: NotificationChannel) => void
   title: string
   onTitleChange: (title: string) => void
@@ -58,6 +61,7 @@ export function BroadcastView(props: BroadcastViewProps) {
     onToggleRecipient,
     selectedCount,
     channels,
+    channelInfos,
     onToggleChannel,
     title,
     onTitleChange,
@@ -170,9 +174,9 @@ export function BroadcastView(props: BroadcastViewProps) {
             Channels
           </p>
           <div className="mb-6 flex flex-wrap gap-2">
-            {CHANNEL_ORDER.map((channel) => {
-              const meta = CHANNEL_META[channel]
-              const { Icon } = meta
+            {channelInfos.map((info) => {
+              const channel = info.key
+              const { Icon } = CHANNEL_VISUAL[channel]
               const on = channels.has(channel)
               return (
                 <button
@@ -189,7 +193,7 @@ export function BroadcastView(props: BroadcastViewProps) {
                   style={on ? { background: 'rgba(255,122,26,0.12)' } : undefined}
                 >
                   <Icon size={16} />
-                  {meta.label}
+                  {info.label}
                 </button>
               )
             })}

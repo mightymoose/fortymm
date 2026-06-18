@@ -13,6 +13,8 @@ from app.models.notification import (
     NotificationChannelSetting,
     NotificationPreference,
 )
+from app.models.notification_channel import NotificationChannel
+from app.models.notification_type import NotificationType
 from app.models.permission import Permission
 from app.models.rating_history import RatingHistory, RatingHistorySource
 from app.models.rating_strategy import RatingStrategy
@@ -46,8 +48,10 @@ __all__ = [
     "MatchSignature",
     "MatchStatus",
     "Notification",
+    "NotificationChannel",
     "NotificationChannelSetting",
     "NotificationPreference",
+    "NotificationType",
     "Permission",
     "RatingHistory",
     "RatingHistorySource",

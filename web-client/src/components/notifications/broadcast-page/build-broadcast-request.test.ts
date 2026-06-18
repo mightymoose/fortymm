@@ -1,8 +1,12 @@
+import type { NotificationChannel } from '@/api/notifications'
 import {
   buildBroadcastRequest,
   canSendBroadcast,
   type BroadcastDraft,
 } from './build-broadcast-request'
+
+// The canonical server channel order, as the taxonomy ships it.
+const CHANNEL_ORDER: NotificationChannel[] = ['in_app', 'push', 'email', 'sms']
 
 const draft = (overrides: Partial<BroadcastDraft> = {}): BroadcastDraft => ({
   audience: 'all',
@@ -43,13 +47,14 @@ describe('canSendBroadcast', () => {
 
 describe('buildBroadcastRequest', () => {
   it('sends mode "all" for everyone', () => {
-    const req = buildBroadcastRequest(draft())
+    const req = buildBroadcastRequest(draft(), CHANNEL_ORDER)
     expect(req.recipients).toEqual({ mode: 'all' })
   })
 
   it('sends the picked ids for a selected audience', () => {
     const req = buildBroadcastRequest(
       draft({ audience: 'selected', selectedIds: new Set(['u2', 'u1']) }),
+      CHANNEL_ORDER,
     )
     expect(req.recipients).toEqual({
       mode: 'selected',
@@ -60,6 +65,7 @@ describe('buildBroadcastRequest', () => {
   it('emits channels in canonical order regardless of selection order', () => {
     const req = buildBroadcastRequest(
       draft({ channels: new Set(['email', 'in_app', 'push']) }),
+      CHANNEL_ORDER,
     )
     expect(req.channels).toEqual(['in_app', 'push', 'email'])
   })
@@ -67,6 +73,7 @@ describe('buildBroadcastRequest', () => {
   it('trims the title and body', () => {
     const req = buildBroadcastRequest(
       draft({ title: '  Heads up  ', body: '  Be early.  ' }),
+      CHANNEL_ORDER,
     )
     expect(req.title).toBe('Heads up')
     expect(req.body).toBe('Be early.')

@@ -38,6 +38,12 @@ class NotificationChannel(StrEnum):
 # Channels the server can actually deliver on today. SMS has no provider wired
 # up, so it's surfaced in the preferences matrix (the design includes it) but
 # greyed out and never delivered — rather than pretending it works.
+#
+# At runtime, availability is read from ``notification_channels.is_available`` and
+# passed into the resolvers below — the DB row is the source of truth. This dict
+# mirrors those seeded values: the tests' conftest seeds the table straight from
+# it, and migration 0009 hardcodes the same booleans (migrations stay
+# self-contained and can't import app code).
 CHANNEL_AVAILABLE: dict[NotificationChannel, bool] = {
     NotificationChannel.IN_APP: True,
     NotificationChannel.PUSH: True,
@@ -78,23 +84,27 @@ def channel_default(channel: NotificationChannel) -> bool:
     return DEFAULT_CHANNEL_ENABLED[channel]
 
 
-def cell_default(category: NotificationCategory, channel: NotificationChannel) -> bool:
+def cell_default(
+    category: NotificationCategory, channel: NotificationChannel, available: bool
+) -> bool:
     """The out-of-the-box per-category/per-channel state, before any override.
-    Available channels start on; the unavailable SMS column starts off."""
+    Available channels start on; an unavailable column (SMS) starts off.
+    ``available`` comes from the ``notification_channels`` row."""
     if (category, channel) in LOCKED_CELLS:
         return True
-    return CHANNEL_AVAILABLE[channel]
+    return available
 
 
 def resolve_channel_enabled(
-    channel: NotificationChannel, override: bool | None
+    channel: NotificationChannel, available: bool, override: bool | None
 ) -> bool:
     """The effective master toggle: a locked channel is always on, an
     unavailable channel is always off, otherwise the stored override (or the
-    default when none is stored)."""
+    default when none is stored). ``available`` comes from the
+    ``notification_channels`` row."""
     if channel in LOCKED_CHANNELS:
         return True
-    if not CHANNEL_AVAILABLE[channel]:
+    if not available:
         return False
     return channel_default(channel) if override is None else override
 
@@ -102,13 +112,15 @@ def resolve_channel_enabled(
 def resolve_cell_enabled(
     category: NotificationCategory,
     channel: NotificationChannel,
+    available: bool,
     override: bool | None,
 ) -> bool:
     """The effective per-cell toggle, before the master gate. Locked cells are
     always on; unavailable channels always off; otherwise the override (or the
-    default when none is stored)."""
+    default when none is stored). ``available`` comes from the
+    ``notification_channels`` row."""
     if (category, channel) in LOCKED_CELLS:
         return True
-    if not CHANNEL_AVAILABLE[channel]:
+    if not available:
         return False
-    return cell_default(category, channel) if override is None else override
+    return cell_default(category, channel, available) if override is None else override

@@ -1,5 +1,4 @@
 import type { BroadcastRequest, NotificationChannel } from '@/api/notifications'
-import { CHANNEL_ORDER } from '../notification-meta'
 
 export type BroadcastAudience = 'all' | 'selected'
 
@@ -20,15 +19,19 @@ export function canSendBroadcast(
   return hasAudience && draft.channels.size > 0 && draft.title.trim().length > 0
 }
 
-/** Build the wire request from the draft. Channels are emitted in canonical
- * order (not Set-insertion order) so the payload is deterministic. */
-export function buildBroadcastRequest(draft: BroadcastDraft): BroadcastRequest {
+/** Build the wire request from the draft. Channels are emitted in the canonical
+ * server order (`channelOrder`, from the notification taxonomy) rather than
+ * Set-insertion order, so the payload is deterministic. */
+export function buildBroadcastRequest(
+  draft: BroadcastDraft,
+  channelOrder: readonly NotificationChannel[],
+): BroadcastRequest {
   return {
     recipients:
       draft.audience === 'all'
         ? { mode: 'all' }
         : { mode: 'selected', user_ids: [...draft.selectedIds] },
-    channels: CHANNEL_ORDER.filter((channel) => draft.channels.has(channel)),
+    channels: channelOrder.filter((channel) => draft.channels.has(channel)),
     title: draft.title.trim(),
     body: draft.body.trim(),
   }

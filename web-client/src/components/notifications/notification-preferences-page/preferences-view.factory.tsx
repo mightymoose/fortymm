@@ -1,4 +1,7 @@
-import { notificationPreferences } from '@/test/factories'
+import {
+  notificationPreferences,
+  notificationTaxonomy,
+} from '@/test/factories'
 import type { PreferencesViewProps } from './preferences-view'
 
 /** Default scenario: the out-of-the-box preferences (in-app locked on, push +
@@ -8,6 +11,7 @@ export function buildPreferencesViewProps(
 ): PreferencesViewProps {
   return {
     preferences: notificationPreferences(),
+    taxonomy: notificationTaxonomy(),
     onToggleChannel: () => {},
     onToggleCell: () => {},
     ...overrides,

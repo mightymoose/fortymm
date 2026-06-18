@@ -783,6 +783,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/notification-taxonomy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Notification Taxonomy
+         * @description The shared display taxonomy: the ordered category/channel lists with their
+         *     labels, read from the lookup tables. The preferences page, feed filters, and
+         *     broadcast tool all render their labels/order from this.
+         */
+        get: operations["get_notification_taxonomy_v1_notification_taxonomy_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/notification-preferences": {
         parameters: {
             query?: never;
@@ -1647,6 +1669,21 @@ export interface components {
          */
         NotificationChannel: "in_app" | "push" | "email" | "sms";
         /**
+         * NotificationChannelInfo
+         * @description One delivery channel for display: its key, label, and whether the server
+         *     can deliver on it (SMS is shown but unavailable). Sourced from the
+         *     ``notification_channels`` table.
+         */
+        NotificationChannelInfo: {
+            key: components["schemas"]["NotificationChannel"];
+            /** Label */
+            label: string;
+            /** Available */
+            available: boolean;
+            /** Description */
+            description?: string | null;
+        };
+        /**
          * NotificationChannelState
          * @description One channel "sign-up" card at the top of the preferences page.
          *
@@ -1742,6 +1779,33 @@ export interface components {
             channels?: components["schemas"]["NotificationChannelUpdate"][];
             /** Cells */
             cells?: components["schemas"]["NotificationCellUpdate"][];
+        };
+        /**
+         * NotificationTaxonomy
+         * @description The shared display taxonomy — the ordered lists of categories and channels
+         *     every notification surface (preferences, feed filters, broadcast) renders.
+         *     Reference data, fetched once and cached on the client.
+         */
+        NotificationTaxonomy: {
+            /** Types */
+            types: components["schemas"]["NotificationTypeInfo"][];
+            /** Channels */
+            channels: components["schemas"]["NotificationChannelInfo"][];
+        };
+        /**
+         * NotificationTypeInfo
+         * @description One notification category for display: its key plus the human labels and
+         *     ordering the UI renders. Sourced from the ``notification_types`` table so the
+         *     server owns the labels/order (the client keeps only icons/colours).
+         */
+        NotificationTypeInfo: {
+            key: components["schemas"]["NotificationCategory"];
+            /** Label */
+            label: string;
+            /** Short */
+            short: string;
+            /** Description */
+            description?: string | null;
         };
         /** PermissionCreate */
         PermissionCreate: {
@@ -4056,6 +4120,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["NotificationItem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_notification_taxonomy_v1_notification_taxonomy_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationTaxonomy"];
                 };
             };
             /** @description Validation Error */

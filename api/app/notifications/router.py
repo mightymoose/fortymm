@@ -21,6 +21,7 @@ from app.schemas.notification import (
     NotificationItem,
     NotificationPreferences,
     NotificationPreferencesUpdate,
+    NotificationTaxonomy,
     RegisterDeviceTokenRequest,
     TestNotificationResponse,
     UnreadCountResponse,
@@ -100,6 +101,20 @@ async def mark_notification_read(
     if item is None:
         raise HTTPException(status_code=404, detail="Notification not found.")
     return item
+
+
+# ----- display taxonomy -----------------------------------------------------
+
+
+@router.get("/v1/notification-taxonomy", response_model=NotificationTaxonomy)
+async def get_notification_taxonomy(
+    service: NotificationService = Depends(get_notification_service),
+    current_user: User = Depends(get_current_user),
+) -> NotificationTaxonomy:
+    """The shared display taxonomy: the ordered category/channel lists with their
+    labels, read from the lookup tables. The preferences page, feed filters, and
+    broadcast tool all render their labels/order from this."""
+    return await service.get_taxonomy()
 
 
 # ----- preferences ----------------------------------------------------------
