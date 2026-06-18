@@ -126,14 +126,7 @@ export const notificationHandlers = [
       body.recipients.mode === 'all'
         ? RECIPIENTS.length
         : body.recipients.user_ids.length
-    const channels = new Set<string>(body.channels)
-    const has = (c: string) => channels.has(c)
-    return HttpResponse.json({
-      recipients,
-      in_app_created: has('in_app') ? recipients : 0,
-      pushed: has('push') ? recipients : 0,
-      emailed: has('email') ? recipients : 0,
-    })
+    return HttpResponse.json({ recipients, queued: true })
   }),
 
   http.get('*/v1/notifications', () =>

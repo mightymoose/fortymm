@@ -1,8 +1,7 @@
-import { notificationTaxonomy } from '@/test/factories'
 import type { BroadcastViewProps } from './broadcast-view'
 
-/** Default scenario: two searchable players, in-app + push selected, nothing
- * picked yet, so the form is not yet sendable. */
+/** Default scenario: two searchable players, nothing picked yet, so the form is
+ * not yet sendable. */
 export function buildBroadcastViewProps(
   overrides: Partial<BroadcastViewProps> = {},
 ): BroadcastViewProps {
@@ -20,9 +19,6 @@ export function buildBroadcastViewProps(
     selectedIds: new Set<string>(),
     onToggleRecipient: () => {},
     selectedCount: 0,
-    channels: new Set(['in_app', 'push']),
-    channelInfos: notificationTaxonomy().channels,
-    onToggleChannel: () => {},
     title: '',
     onTitleChange: () => {},
     body: '',

@@ -526,9 +526,7 @@ export function broadcastResponse(
 ): BroadcastResponse {
   return {
     recipients: 2,
-    in_app_created: 2,
-    pushed: 0,
-    emailed: 0,
+    queued: true,
     ...overrides,
   }
 }

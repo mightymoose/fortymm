@@ -76,6 +76,7 @@ from app.schemas.match import (
     MatchResultsWrite,
     MatchSignatureView,
 )
+from app.schemas.notification import NotificationJob
 from app.schemas.rating import RatingChange
 from app.services.dependencies import get_match_service
 from app.services.match_service import MatchService
@@ -1038,9 +1039,9 @@ def _result_confirmation_copy(
 async def _notify_result_posted(
     notifications: NotificationService, match: Match, poster_id: uuid.UUID
 ) -> None:
-    """Record + deliver a confirm/dispute prompt to every player on the side
-    that now owes a sign-off. ``notify`` persists the in-app record (the bell
-    feed) and fans out push/email per the recipient's preferences. The APNs
+    """Queue a confirm/dispute prompt to every player on the side that now owes
+    a sign-off. Each enqueued job persists the in-app record (the bell feed) and
+    fans out push/email per the recipient's preferences in the worker. The APNs
     ``category``/``data`` carry the Approve/Dispute action group and the match
     id so a tapped push deep-links to the right match."""
     copy = _result_confirmation_copy(match, poster_id)
@@ -1049,15 +1050,17 @@ async def _notify_result_posted(
         return
     title, body = copy
     for player in recipient_side.players:
-        await notifications.notify(
-            user_id=player.user_id,
-            category=NotificationCategory.RESULT_CONFIRM,
-            title=title,
-            body=body,
-            link=f"/matches/{match.id}",
-            action_label="Review",
-            push_category=MATCH_RESULT_CONFIRMATION_CATEGORY,
-            push_data={"match_id": str(match.id)},
+        notifications.enqueue_notification(
+            NotificationJob(
+                user_id=player.user_id,
+                category=NotificationCategory.RESULT_CONFIRM,
+                title=title,
+                body=body,
+                link=f"/matches/{match.id}",
+                action_label="Review",
+                push_category=MATCH_RESULT_CONFIRMATION_CATEGORY,
+                push_data={"match_id": str(match.id)},
+            )
         )
 
 

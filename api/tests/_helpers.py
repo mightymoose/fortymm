@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
 from httpx import ASGITransport, AsyncClient, Request
+from rq import Queue
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,7 +17,21 @@ from app.main import app as fastapi_app
 from app.models import User
 from app.notifications.apns import Environment, SendOutcome, SendResult
 from app.notifications.dependencies import get_push_sender
+from app.notifications.jobs import DELIVER_NOTIFICATION_JOB
+from app.schemas.notification import NotificationJob
 from app.sessions import CSRF_COOKIE_NAME, CSRF_HEADER_NAME, CSRF_SAFE_METHODS
+
+
+def enqueued_notification_jobs(queue: Queue) -> list[NotificationJob]:
+    """The notification-delivery payloads enqueued so far, decoded back into
+    ``NotificationJob``. Under the async-style ``fake_notifications_queue`` the
+    worker body never runs, so tests assert on what was enqueued; channel
+    delivery itself is covered by the ``NotificationService.notify`` tests."""
+    jobs: list[NotificationJob] = []
+    for job in queue.get_jobs():
+        assert job.func_name == DELIVER_NOTIFICATION_JOB
+        jobs.append(NotificationJob.model_validate_json(job.args[0]))
+    return jobs
 
 
 async def _attach_csrf_header(request: Request) -> None:

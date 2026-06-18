@@ -2,12 +2,9 @@ import { useState } from 'react'
 import { ApiError } from '@/api/client'
 import {
   useBroadcastRecipients,
-  useNotificationTaxonomy,
   useSendBroadcast,
   type BroadcastResponse,
-  type NotificationChannel,
 } from '@/api/notifications'
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { useDebouncedValue } from '@/lib/use-debounced-value'
 import { BroadcastView } from './broadcast-page/broadcast-view'
 import {
@@ -30,9 +27,6 @@ export function BroadcastPage() {
   const [audience, setAudience] = useState<BroadcastAudience>('selected')
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [search, setSearch] = useState('')
-  const [channels, setChannels] = useState<Set<NotificationChannel>>(
-    new Set(['in_app', 'push']),
-  )
   const [title, setTitle] = useState('')
   const [body, setBody] = useState('')
   const [result, setResult] = useState<BroadcastResponse | null>(null)
@@ -42,10 +36,9 @@ export function BroadcastPage() {
   // by `search`; only the query keys off the settled value.
   const debouncedSearch = useDebouncedValue(search, 300)
   const recipients = useBroadcastRecipients(debouncedSearch)
-  const taxonomy = useNotificationTaxonomy()
   const send = useSendBroadcast()
 
-  const draft = { audience, selectedIds, channels, title, body }
+  const draft = { audience, selectedIds, title, body }
   const canSend = canSendBroadcast(draft) && !send.isPending
   const total = recipients.data?.total ?? 0
   const selectedCount = audience === 'all' ? total : selectedIds.size
@@ -61,29 +54,6 @@ export function BroadcastPage() {
       ? send.error.detail
       : "Couldn't send the broadcast. Try again."
     : null
-
-  // The channel chips render from the server taxonomy, so gate the whole tool on
-  // it (recipients are allowed to stream in via their own loading state).
-  if (taxonomy.isPending) {
-    return (
-      <p className="px-6 py-6 text-sm text-[color:var(--fg-muted)]">
-        Loading…
-      </p>
-    )
-  }
-
-  if (taxonomy.isError) {
-    return (
-      <div className="px-6 py-6">
-        <Alert variant="destructive">
-          <AlertTitle>Couldn't load the broadcast tool</AlertTitle>
-          <AlertDescription>Refresh to try again.</AlertDescription>
-        </Alert>
-      </div>
-    )
-  }
-
-  const channelOrder = taxonomy.data.channels.map((c) => c.key)
 
   return (
     <BroadcastView
@@ -104,12 +74,6 @@ export function BroadcastPage() {
         setSelectedIds((prev) => toggle(prev, id))
       }}
       selectedCount={selectedCount}
-      channels={channels}
-      channelInfos={taxonomy.data.channels}
-      onToggleChannel={(channel) => {
-        clearResult()
-        setChannels((prev) => toggle(prev, channel))
-      }}
       title={title}
       onTitleChange={(value) => {
         clearResult()
@@ -123,7 +87,7 @@ export function BroadcastPage() {
       canSend={canSend}
       sending={send.isPending}
       onSend={() =>
-        send.mutate(buildBroadcastRequest(draft, channelOrder), {
+        send.mutate(buildBroadcastRequest(draft), {
           onSuccess: (response) => setResult(response),
         })
       }

@@ -863,9 +863,10 @@ export interface paths {
         put?: never;
         /**
          * Broadcast Notification
-         * @description Send an announcement to all players or a hand-picked set. Filed as
-         *     tournament news, so each recipient only receives it on channels they
-         *     haven't muted for that category.
+         * @description Queue an announcement to all players or a hand-picked set. Filed as
+         *     tournament news, so each recipient only receives it on the channels they
+         *     haven't muted for that category. Delivery runs in the background — the
+         *     response reports how many players were targeted, not per-channel counts.
          */
         post: operations["broadcast_notification_v1_notifications_broadcast_post"];
         delete?: never;
@@ -1035,17 +1036,16 @@ export interface components {
         };
         /**
          * BroadcastRequest
-         * @description An admin broadcast: pick recipients, the channels to try, and the copy.
+         * @description An admin broadcast: pick recipients and the copy.
          *
          *     Broadcasts are filed under the *tournament* category, so each recipient only
-         *     receives it on a channel they haven't muted for tournament news — admin
-         *     reach still respects the player's preferences.
+         *     receives it on the channels they haven't muted for tournament news — the
+         *     server delivers per each player's preferences (there is no admin channel
+         *     override).
          */
         BroadcastRequest: {
             /** Recipients */
             recipients: components["schemas"]["BroadcastRecipientsAll"] | components["schemas"]["BroadcastRecipientsSelected"];
-            /** Channels */
-            channels: components["schemas"]["NotificationChannel"][];
             /** Title */
             title: string;
             /** Body */
@@ -1053,18 +1053,18 @@ export interface components {
         };
         /**
          * BroadcastResponse
-         * @description What the broadcast did: how many players it targeted and, of those, how
-         *     many got an in-app record / push / email after preference filtering.
+         * @description What the broadcast enqueued: how many players were targeted. Delivery
+         *     happens in the background (one job per recipient resolves that player's
+         *     preferences and delivers), so per-channel counts aren't known here.
          */
         BroadcastResponse: {
             /** Recipients */
             recipients: number;
-            /** In App Created */
-            in_app_created: number;
-            /** Pushed */
-            pushed: number;
-            /** Emailed */
-            emailed: number;
+            /**
+             * Queued
+             * @default true
+             */
+            queued: boolean;
         };
         /** ComponentHealth */
         ComponentHealth: {

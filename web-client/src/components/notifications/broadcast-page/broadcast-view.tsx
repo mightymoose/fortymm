@@ -2,9 +2,7 @@ import { CheckCircle2, Search, Send } from 'lucide-react'
 import type {
   BroadcastRecipient,
   BroadcastResponse,
-  NotificationChannel,
   NotificationItem,
-  NotificationTaxonomy,
 } from '@/api/notifications'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -12,7 +10,6 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { cn } from '@/lib/utils'
-import { CHANNEL_VISUAL } from '../notification-meta'
 import { NotificationRow } from '../notification-row'
 import type { BroadcastAudience } from './build-broadcast-request'
 
@@ -30,10 +27,6 @@ export interface BroadcastViewProps {
   selectedIds: ReadonlySet<string>
   onToggleRecipient: (id: string) => void
   selectedCount: number
-  channels: ReadonlySet<NotificationChannel>
-  /** Server-ordered channel taxonomy — drives the channel chips. */
-  channelInfos: NotificationTaxonomy['channels']
-  onToggleChannel: (channel: NotificationChannel) => void
   title: string
   onTitleChange: (title: string) => void
   body: string
@@ -46,8 +39,8 @@ export interface BroadcastViewProps {
 }
 
 /** The standalone admin broadcast tool, presentational: recipient picker,
- * compose form, channel-aware live preview, and send/result/error feedback.
- * Pure — all state + handlers come in as props. */
+ * compose form, live preview, and send/result/error feedback. Pure — all state
+ * + handlers come in as props. */
 export function BroadcastView(props: BroadcastViewProps) {
   const {
     recipients,
@@ -60,9 +53,6 @@ export function BroadcastView(props: BroadcastViewProps) {
     selectedIds,
     onToggleRecipient,
     selectedCount,
-    channels,
-    channelInfos,
-    onToggleChannel,
     title,
     onTitleChange,
     body,
@@ -75,11 +65,7 @@ export function BroadcastView(props: BroadcastViewProps) {
   } = props
 
   const hint =
-    selectedCount === 0
-      ? 'Pick at least one recipient.'
-      : channels.size === 0
-        ? 'Pick at least one channel.'
-        : 'Add a title.'
+    selectedCount === 0 ? 'Pick at least one recipient.' : 'Add a title.'
 
   return (
     <div className="grid gap-8 px-6 py-6 lg:grid-cols-[360px_1fr]">
@@ -170,34 +156,10 @@ export function BroadcastView(props: BroadcastViewProps) {
             Compose
           </h2>
 
-          <p className="mb-2 text-xs font-semibold text-[color:var(--fg-3)]">
-            Channels
+          <p className="mb-6 text-xs text-[color:var(--fg-muted)]">
+            Filed as tournament news — each player receives it on the channels
+            they haven't muted for that category.
           </p>
-          <div className="mb-6 flex flex-wrap gap-2">
-            {channelInfos.map((info) => {
-              const channel = info.key
-              const { Icon } = CHANNEL_VISUAL[channel]
-              const on = channels.has(channel)
-              return (
-                <button
-                  key={channel}
-                  type="button"
-                  aria-pressed={on}
-                  onClick={() => onToggleChannel(channel)}
-                  className={cn(
-                    'inline-flex items-center gap-2 rounded-[10px] border px-3.5 py-2 text-[13px] font-semibold transition-colors',
-                    on
-                      ? 'border-[color:var(--ball-500)] text-[color:var(--ball-500)]'
-                      : 'border-[color:var(--border-default)] text-[color:var(--fg-3)]',
-                  )}
-                  style={on ? { background: 'rgba(255,122,26,0.12)' } : undefined}
-                >
-                  <Icon size={16} />
-                  {info.label}
-                </button>
-              )
-            })}
-          </div>
 
           <label
             htmlFor="broadcast-title"
@@ -254,10 +216,12 @@ export function BroadcastView(props: BroadcastViewProps) {
           ) : result ? (
             <Alert className="mt-4 border-[color:rgba(0,226,154,0.3)] bg-[color:var(--bg-live-soft)]">
               <CheckCircle2 className="text-[color:var(--serve-500)]" />
-              <AlertTitle>Sent to {result.recipients} players</AlertTitle>
+              <AlertTitle>
+                Queued for {result.recipients} player
+                {result.recipients === 1 ? '' : 's'}
+              </AlertTitle>
               <AlertDescription>
-                In-app {result.in_app_created} · push {result.pushed} · email{' '}
-                {result.emailed}
+                Delivering in the background on each player's chosen channels.
               </AlertDescription>
             </Alert>
           ) : !canSend ? (
@@ -269,22 +233,14 @@ export function BroadcastView(props: BroadcastViewProps) {
           <h2 id="broadcast-preview-heading" className="ds-overline mb-3.5">
             Preview
           </h2>
-          <BroadcastPreview channels={channels} title={title} body={body} />
+          <BroadcastPreview title={title} body={body} />
         </section>
       </div>
     </div>
   )
 }
 
-function BroadcastPreview({
-  channels,
-  title,
-  body,
-}: {
-  channels: ReadonlySet<NotificationChannel>
-  title: string
-  body: string
-}) {
+function BroadcastPreview({ title, body }: { title: string; body: string }) {
   const safeTitle = title || 'Notification title'
   const safeBody = body || 'Your message shows up here.'
   const previewNotification: NotificationItem = {
@@ -300,77 +256,13 @@ function BroadcastPreview({
   }
 
   return (
-    <div className="flex flex-col gap-4">
-      {channels.has('in_app') ? (
-        <div>
-          <p className="mb-2 font-mono text-[11px] tracking-wider text-[color:var(--fg-muted)]">
-            IN-APP / BELL
-          </p>
-          <div className="overflow-hidden rounded-xl border border-[color:var(--border-subtle)] bg-[color:var(--bg-panel)]">
-            <NotificationRow notification={previewNotification} compact />
-          </div>
-        </div>
-      ) : null}
-
-      {channels.has('push') ? (
-        <div>
-          <p className="mb-2 font-mono text-[11px] tracking-wider text-[color:var(--fg-muted)]">
-            PUSH
-          </p>
-          <div className="flex gap-3 rounded-2xl border border-white/10 bg-[rgba(30,34,44,0.82)] p-3 shadow-lg backdrop-blur">
-            <span
-              className="size-9 shrink-0 rounded-[9px]"
-              style={{ background: 'var(--ball-500)' }}
-            />
-            <div className="min-w-0">
-              <p className="truncate text-[13px] font-bold text-white">
-                {safeTitle}
-              </p>
-              <p className="line-clamp-2 text-[12.5px] text-white/75">{safeBody}</p>
-            </div>
-          </div>
-        </div>
-      ) : null}
-
-      {channels.has('email') ? (
-        <div>
-          <p className="mb-2 font-mono text-[11px] tracking-wider text-[color:var(--fg-muted)]">
-            EMAIL
-          </p>
-          <div className="rounded-xl border border-[color:var(--border-subtle)] bg-[color:var(--bg-panel)] p-3.5">
-            <div className="mb-2 flex items-center gap-2 border-b border-[color:var(--ink-700)] pb-2">
-              <span
-                className="size-4 rounded-full"
-                style={{ background: 'var(--ball-500)' }}
-              />
-              <span className="text-xs font-semibold text-[color:var(--fg-2)]">
-                FortyMM
-              </span>
-              <span className="text-[11px] text-[color:var(--fg-muted)]">
-                · no-reply
-              </span>
-            </div>
-            <p className="mb-1 text-sm font-bold text-[color:var(--fg-1)]">
-              {safeTitle}
-            </p>
-            <p className="text-[12.5px] leading-relaxed text-[color:var(--fg-3)]">
-              {safeBody}
-            </p>
-          </div>
-        </div>
-      ) : null}
-
-      {channels.has('sms') ? (
-        <div>
-          <p className="mb-2 font-mono text-[11px] tracking-wider text-[color:var(--fg-muted)]">
-            SMS
-          </p>
-          <div className="max-w-[260px] rounded-2xl rounded-bl-sm bg-[#1d2733] px-3.5 py-2.5 text-[13px] leading-snug text-[color:var(--fg-1)]">
-            FortyMM: {safeTitle}
-            {body ? ` — ${safeBody}` : ''}
-          </div>
-        </div>
-      ) : null}
+    <div>
+      <p className="mb-2 font-mono text-[11px] tracking-wider text-[color:var(--fg-muted)]">
+        IN-APP / BELL
+      </p>
+      <div className="overflow-hidden rounded-xl border border-[color:var(--border-subtle)] bg-[color:var(--bg-panel)]">
+        <NotificationRow notification={previewNotification} compact />
+      </div>
     </div>
   )
 }

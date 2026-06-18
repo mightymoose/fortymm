@@ -361,25 +361,6 @@ async def test_notify_skips_muted_cell_even_with_channel_on(
     assert other.pushed == 1
 
 
-async def test_notify_restricts_to_candidate_channels(db_session: AsyncSession):
-    user = await make_user(db_session, "candidate")
-    await _add_device(db_session, user.id)
-    sender = FakeSender()
-    service = NotificationService(db_session, sender)
-
-    result = await service.notify(
-        user_id=user.id,
-        category=NotificationCategory.TOURNAMENT,
-        title="t",
-        body="b",
-        channels=[NotificationChannel.IN_APP],
-    )
-    # Only in-app was a candidate, so no push despite a registered device.
-    assert result.in_app_created is True
-    assert result.pushed == 0
-    assert sender.sent == []
-
-
 async def test_notify_missing_user_is_noop(db_session: AsyncSession):
     import uuid
 

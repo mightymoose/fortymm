@@ -5,6 +5,7 @@ from collections.abc import Awaitable, Callable
 import pytest
 from fastapi import HTTPException
 from httpx import AsyncClient
+from rq import Queue
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
@@ -22,18 +23,16 @@ from app.models import (
     MatchGameScore,
     MatchSide,
     MatchStatus,
-    Notification,
     User,
 )
 from app.notifications.apns import MATCH_RESULT_CONFIRMATION_CATEGORY
 from app.schemas.match import MatchGameScoreWrite
 from tests._helpers import (
-    FakeSender,
+    enqueued_notification_jobs,
     make_client,
     make_user,
     opponent_session,
     start_session,
-    use_sender,
 )
 
 # ----- create -------------------------------------------------------------
@@ -2250,36 +2249,24 @@ async def test_concurrent_confirm_and_dispute_serialize(
                 assert [s.won for s in sides] == [None, None]
 
 
-# ----- result-confirmation push -------------------------------------------
+# ----- result-confirmation delivery (enqueued to the worker) --------------
 
 
-async def _register_device(
-    client: AsyncClient, token: str, *, environment: str = "sandbox"
-) -> None:
-    response = await client.post(
-        "/v1/device-tokens",
-        json={"token": token, "platform": "ios", "environment": environment},
-    )
-    assert response.status_code == 200, response.text
-
-
-async def test_posting_result_pushes_confirmation_to_opponent(
-    api_client: AsyncClient, db_session: AsyncSession
+async def test_posting_result_enqueues_confirmation_for_opponent(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    fake_notifications_queue: Queue,
 ):
-    """When a player posts a result on a two-human match, the opponent gets a
-    push carrying the Approve/Dispute category, the match id, and copy with the
-    games-won score plus the individual game scores."""
+    """Posting a result on a two-human match enqueues one confirm/dispute
+    delivery for the opponent — filed under the result-confirmation category,
+    deep-linked to the match, carrying the Approve/Dispute push category + match
+    id, with recipient-framed copy. The poster gets nothing."""
     me = await start_session(api_client, db_session)
     me.username = "poster"
     await db_session.commit()
 
-    sender = FakeSender()
-    use_sender(sender)
-
-    async with opponent_session(db_session, "rival") as (opp_client, opp):
-        await _register_device(opp_client, "opp-device")
+    async with opponent_session(db_session, "rival") as (_opp_client, opp):
         match = await _create_match(api_client, opp.id, best_of=3)
-
         response = await api_client.post(
             f"/v1/matches/{match['id']}/results",
             json={
@@ -2292,54 +2279,28 @@ async def test_posting_result_pushes_confirmation_to_opponent(
         )
         assert response.status_code == 201
 
-    assert len(sender.sent) == 1
-    push = sender.sent[0]
-    assert push.token == "opp-device"
-    assert push.category == MATCH_RESULT_CONFIRMATION_CATEGORY
-    assert push.data == {"match_id": match["id"]}
-    # Recipient-framed games-won (poster won 2–1) and the per-game scores,
-    # oriented poster-first.
-    assert "poster reported beating you 2–1" in push.body
-    assert "11–7" in push.body
-    assert "9–11" in push.body
-    assert "11–8" in push.body
+    jobs = enqueued_notification_jobs(fake_notifications_queue)
+    assert [job.user_id for job in jobs] == [opp.id]
+    job = jobs[0]
+    assert job.category.value == "result_confirm"
+    assert job.link == f"/matches/{match['id']}"
+    assert job.push_category == MATCH_RESULT_CONFIRMATION_CATEGORY
+    assert job.push_data == {"match_id": match["id"]}
+    # Recipient-framed games-won (poster won 2–1) and the per-game scores.
+    assert "poster reported beating you 2–1" in job.body
+    assert "11–7" in job.body
+    assert "9–11" in job.body
+    assert "11–8" in job.body
 
 
-async def test_posting_result_does_not_push_to_the_poster(
-    api_client: AsyncClient, db_session: AsyncSession
-):
-    """Only the side that owes a sign-off is notified — never the poster, even
-    when both players have a device registered."""
-    await start_session(api_client, db_session)
-    await _register_device(api_client, "poster-device")
-
-    sender = FakeSender()
-    use_sender(sender)
-
-    async with opponent_session(db_session, "rival") as (opp_client, opp):
-        await _register_device(opp_client, "opp-device")
-        match = await _create_match(api_client, opp.id, best_of=1)
-
-        response = await api_client.post(
-            f"/v1/matches/{match['id']}/results",
-            json={
-                "games": [{"game_number": 1, "side_1_points": 11, "side_2_points": 5}]
-            },
-        )
-        assert response.status_code == 201
-
-    assert [push.token for push in sender.sent] == ["opp-device"]
-
-
-async def test_solo_result_sends_no_push(
-    api_client: AsyncClient, db_session: AsyncSession
+async def test_solo_result_enqueues_no_confirmation(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    fake_notifications_queue: Queue,
 ):
     """A solo (opponent-less) match finalizes on post with nobody to confirm —
-    so no confirmation push is fired."""
+    so no confirmation delivery is enqueued."""
     await start_session(api_client, db_session)
-
-    sender = FakeSender()
-    use_sender(sender)
 
     created = await api_client.post("/v1/matches", json={"best_of": 1, "rated": False})
     assert created.status_code == 201
@@ -2350,22 +2311,19 @@ async def test_solo_result_sends_no_push(
         json={"games": [{"game_number": 1, "side_1_points": 11, "side_2_points": 5}]},
     )
     assert response.status_code == 201
-    assert sender.sent == []
+    assert enqueued_notification_jobs(fake_notifications_queue) == []
 
 
-async def test_unrated_result_sends_no_push(
-    api_client: AsyncClient, db_session: AsyncSession
+async def test_unrated_result_enqueues_no_confirmation(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    fake_notifications_queue: Queue,
 ):
     """An unrated match finalizes on post with nothing for the opponent to
-    confirm — so no confirmation push is fired, even with a device
-    registered."""
+    confirm — so no confirmation delivery is enqueued."""
     await start_session(api_client, db_session)
 
-    sender = FakeSender()
-    use_sender(sender)
-
-    async with opponent_session(db_session, "rival") as (opp_client, opp):
-        await _register_device(opp_client, "opp-device")
+    async with opponent_session(db_session, "rival") as (_opp_client, opp):
         created = await api_client.post(
             "/v1/matches",
             json={"opponent_user_id": str(opp.id), "best_of": 1, "rated": False},
@@ -2381,79 +2339,4 @@ async def test_unrated_result_sends_no_push(
         )
         assert response.status_code == 201
 
-    assert sender.sent == []
-
-
-async def test_posting_result_succeeds_when_opponent_has_no_device(
-    api_client: AsyncClient, db_session: AsyncSession
-):
-    """The push is best-effort: an opponent with no registered device just
-    means nothing is sent — the result post still succeeds."""
-    await start_session(api_client, db_session)
-
-    sender = FakeSender()
-    use_sender(sender)
-
-    async with opponent_session(db_session, "rival") as (_opp_client, opp):
-        match = await _create_match(api_client, opp.id, best_of=1)
-        response = await api_client.post(
-            f"/v1/matches/{match['id']}/results",
-            json={
-                "games": [{"game_number": 1, "side_1_points": 11, "side_2_points": 5}]
-            },
-        )
-        assert response.status_code == 201
-
-    assert sender.sent == []
-
-
-async def test_posting_result_records_in_app_notification_for_opponent(
-    api_client: AsyncClient, db_session: AsyncSession
-):
-    """Posting a rated result persists an in-app notification (the bell/feed
-    record) for the side that owes a sign-off — not just a transient push. It
-    deep-links to the match and is filed under the result-confirmation category;
-    the poster gets nothing."""
-    me = await start_session(api_client, db_session)
-    me.username = "poster"
-    await db_session.commit()
-
-    sender = FakeSender()
-    use_sender(sender)
-
-    async with opponent_session(db_session, "rival") as (_opp_client, opp):
-        match = await _create_match(api_client, opp.id, best_of=1)
-        response = await api_client.post(
-            f"/v1/matches/{match['id']}/results",
-            json={
-                "games": [{"game_number": 1, "side_1_points": 11, "side_2_points": 5}]
-            },
-        )
-        assert response.status_code == 201
-
-    opp_rows = (
-        (
-            await db_session.execute(
-                select(Notification).where(Notification.user_id == opp.id)
-            )
-        )
-        .scalars()
-        .all()
-    )
-    assert len(opp_rows) == 1
-    stored = opp_rows[0]
-    assert stored.category == "result_confirm"
-    assert stored.link == f"/matches/{match['id']}"
-    assert stored.read_at is None
-
-    # The poster is never notified.
-    poster_rows = (
-        (
-            await db_session.execute(
-                select(Notification).where(Notification.user_id == me.id)
-            )
-        )
-        .scalars()
-        .all()
-    )
-    assert poster_rows == []
+    assert enqueued_notification_jobs(fake_notifications_queue) == []
