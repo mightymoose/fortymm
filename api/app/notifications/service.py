@@ -113,6 +113,13 @@ class NotificationService:
     def __init__(self, db: AsyncSession, sender: PushSender) -> None:
         self._db = db
         self._sender = sender
+        # The notification_types / notification_channels lookup tables are
+        # deploy-stable (never written at runtime), and the service is
+        # request-scoped, so load each once and reuse it for the request — a
+        # broadcast to N recipients otherwise re-queries the same tiny tables N
+        # times via _effective_channels.
+        self._type_rows: Sequence[NotificationType] | None = None
+        self._channel_rows: Sequence[NotificationChannelModel] | None = None
 
     # ----- device tokens (unchanged) ---------------------------------------
 
@@ -368,32 +375,36 @@ class NotificationService:
         return NotificationTaxonomy(types=types, channels=channels)
 
     async def _load_type_rows(self) -> Sequence[NotificationType]:
-        """Active notification-type rows in display order."""
-        return (
-            (
-                await self._db.execute(
-                    select(NotificationType)
-                    .where(NotificationType.is_active.is_(True))
-                    .order_by(NotificationType.display_order)
+        """Active notification-type rows in display order (cached per request)."""
+        if self._type_rows is None:
+            self._type_rows = (
+                (
+                    await self._db.execute(
+                        select(NotificationType)
+                        .where(NotificationType.is_active.is_(True))
+                        .order_by(NotificationType.display_order)
+                    )
                 )
+                .scalars()
+                .all()
             )
-            .scalars()
-            .all()
-        )
+        return self._type_rows
 
     async def _load_channel_rows(self) -> Sequence[NotificationChannelModel]:
-        """Active notification-channel rows in display order."""
-        return (
-            (
-                await self._db.execute(
-                    select(NotificationChannelModel)
-                    .where(NotificationChannelModel.is_active.is_(True))
-                    .order_by(NotificationChannelModel.display_order)
+        """Active notification-channel rows in display order (cached per request)."""
+        if self._channel_rows is None:
+            self._channel_rows = (
+                (
+                    await self._db.execute(
+                        select(NotificationChannelModel)
+                        .where(NotificationChannelModel.is_active.is_(True))
+                        .order_by(NotificationChannelModel.display_order)
+                    )
                 )
+                .scalars()
+                .all()
             )
-            .scalars()
-            .all()
-        )
+        return self._channel_rows
 
     async def _channel_order_and_availability(
         self,

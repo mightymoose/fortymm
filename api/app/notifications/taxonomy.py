@@ -39,10 +39,11 @@ class NotificationChannel(StrEnum):
 # up, so it's surfaced in the preferences matrix (the design includes it) but
 # greyed out and never delivered — rather than pretending it works.
 #
-# This is the *seed* source for ``notification_channels.is_available`` (migration
-# 0009 / the tests' conftest). At runtime, availability is read from that table
-# and passed into the resolvers below — the DB row is the source of truth, this
-# dict only initialises it so the two can't silently disagree.
+# At runtime, availability is read from ``notification_channels.is_available`` and
+# passed into the resolvers below — the DB row is the source of truth. This dict
+# mirrors those seeded values: the tests' conftest seeds the table straight from
+# it, and migration 0009 hardcodes the same booleans (migrations stay
+# self-contained and can't import app code).
 CHANNEL_AVAILABLE: dict[NotificationChannel, bool] = {
     NotificationChannel.IN_APP: True,
     NotificationChannel.PUSH: True,
