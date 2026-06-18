@@ -249,6 +249,7 @@ export function matchListRow(
     league: MOCK_DEFAULT_LEAGUE,
     sides: [mySide, opponentSide],
     best_of: 5,
+    affects_rating: true,
     created_at: ISO,
     current_game_number: 1,
     can_score: true,

@@ -719,6 +719,7 @@ def _list_row(match: Match, current_user_id: uuid.UUID) -> MatchListRow:
         league=MatchLeague(id=match.league.id, name=match.league.name),
         sides=[_side_schema(side, side_wins, current_user_id) for side in sides_sorted],
         best_of=match.match_settings.best_of,
+        affects_rating=match.match_settings.affects_rating,
         created_at=match.created_at,
         current_game_number=next_number if is_participant else None,
         can_score=can_score,

@@ -114,6 +114,10 @@ struct MatchListRowDTO: Decodable {
     let league: MatchLeagueDTO
     let sides: [MatchSideDTO]
     let bestOf: Int
+    /// Whether the match counts toward ratings. Authoritative (from match
+    /// settings), so the row labels rated vs. friendly without needing a
+    /// rating delta — list rows omit `rating_change`.
+    let affectsRating: Bool
     let createdAt: Date
     /// Next game to score; nil once every game is scored or the match is
     /// finalized. Game rows are created lazily, so this is a number, not an id.
