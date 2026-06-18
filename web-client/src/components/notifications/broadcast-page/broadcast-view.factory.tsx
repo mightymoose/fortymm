@@ -1,3 +1,4 @@
+import { notificationTaxonomy } from '@/test/factories'
 import type { BroadcastViewProps } from './broadcast-view'
 
 /** Default scenario: two searchable players, in-app + push selected, nothing
@@ -20,6 +21,7 @@ export function buildBroadcastViewProps(
     onToggleRecipient: () => {},
     selectedCount: 0,
     channels: new Set(['in_app', 'push']),
+    channelInfos: notificationTaxonomy().channels,
     onToggleChannel: () => {},
     title: '',
     onTitleChange: () => {},

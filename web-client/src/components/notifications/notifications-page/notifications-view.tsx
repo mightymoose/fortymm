@@ -1,23 +1,13 @@
 import { Inbox } from 'lucide-react'
-import type { NotificationItem } from '@/api/notifications'
+import type {
+  NotificationItem,
+  NotificationTaxonomy,
+} from '@/api/notifications'
 import { cn } from '@/lib/utils'
-import {
-  CATEGORY_META,
-  CATEGORY_ORDER,
-  type NotificationCategory,
-} from '../notification-meta'
+import type { NotificationCategory } from '../notification-meta'
 import { NotificationRow } from '../notification-row'
 
 export type NotificationFilter = 'all' | 'unread' | NotificationCategory
-
-const FILTERS: { key: NotificationFilter; label: string }[] = [
-  { key: 'all', label: 'All' },
-  { key: 'unread', label: 'Unread' },
-  ...CATEGORY_ORDER.map((category) => ({
-    key: category,
-    label: CATEGORY_META[category].short,
-  })),
-]
 
 function matchesFilter(item: NotificationItem, filter: NotificationFilter) {
   if (filter === 'all') return true
@@ -27,6 +17,8 @@ function matchesFilter(item: NotificationItem, filter: NotificationFilter) {
 
 export interface NotificationsViewProps {
   items: NotificationItem[]
+  /** Server-ordered category taxonomy — drives the filter pills. */
+  categoryTypes: NotificationTaxonomy['types']
   unreadCount: number
   filter: NotificationFilter
   onFilterChange: (filter: NotificationFilter) => void
@@ -38,6 +30,7 @@ export interface NotificationsViewProps {
  * filtered list (or an empty state). Pure — data + handlers come in as props. */
 export function NotificationsView({
   items,
+  categoryTypes,
   unreadCount,
   filter,
   onFilterChange,
@@ -45,6 +38,11 @@ export function NotificationsView({
   onMarkAllRead,
 }: NotificationsViewProps) {
   const shown = items.filter((item) => matchesFilter(item, filter))
+  const filters: { key: NotificationFilter; label: string }[] = [
+    { key: 'all', label: 'All' },
+    { key: 'unread', label: 'Unread' },
+    ...categoryTypes.map((type) => ({ key: type.key, label: type.short })),
+  ]
 
   return (
     <div className="mx-auto max-w-[760px] px-6 pt-9 pb-20">
@@ -72,7 +70,7 @@ export function NotificationsView({
       </div>
 
       <div className="my-4 flex flex-wrap gap-2" role="group" aria-label="Filter notifications">
-        {FILTERS.map(({ key, label }) => {
+        {filters.map(({ key, label }) => {
           const active = filter === key
           return (
             <button

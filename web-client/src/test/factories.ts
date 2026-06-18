@@ -378,6 +378,9 @@ type NotificationChannel = components['schemas']['NotificationChannel']
 type NotificationCategory = components['schemas']['NotificationCategory']
 type BroadcastRecipientList = components['schemas']['BroadcastRecipientList']
 type BroadcastResponse = components['schemas']['BroadcastResponse']
+type NotificationTaxonomy = components['schemas']['NotificationTaxonomy']
+type NotificationTypeInfo = components['schemas']['NotificationTypeInfo']
+type NotificationChannelInfo = components['schemas']['NotificationChannelInfo']
 
 const NOTIF_CHANNELS: NotificationChannel[] = ['in_app', 'push', 'email', 'sms']
 const NOTIF_CATEGORIES: NotificationCategory[] = [
@@ -459,6 +462,48 @@ export function notificationPreferences(
   return {
     channels: NOTIF_CHANNELS.map(notifChannelState),
     categories: NOTIF_CATEGORIES.map(notifCategoryPref),
+    ...overrides,
+  }
+}
+
+// The server taxonomy's labels/short/order, mirrored for tests. These MUST stay
+// in sync with the strings the old CATEGORY_META/CHANNEL_META carried, since the
+// page objects query by visible label text.
+const NOTIF_TYPE_INFOS: NotificationTypeInfo[] = [
+  { key: 'match_reminder', label: 'Match reminders', short: 'Match' },
+  { key: 'rating_change', label: 'Rating changes', short: 'Rating' },
+  { key: 'tournament', label: 'Tournament news', short: 'Tourney' },
+  { key: 'opponent', label: 'Challenges & friends', short: 'Social' },
+  { key: 'result_confirm', label: 'Score confirmations', short: 'Scores' },
+]
+
+const NOTIF_CHANNEL_INFOS: NotificationChannelInfo[] = [
+  { key: 'in_app', label: 'In-app', available: true },
+  { key: 'push', label: 'Push', available: true },
+  { key: 'email', label: 'Email', available: true },
+  { key: 'sms', label: 'SMS', available: false },
+]
+
+export function notificationTypeInfo(
+  overrides: Partial<NotificationTypeInfo> = {},
+): NotificationTypeInfo {
+  return { ...NOTIF_TYPE_INFOS[0], ...overrides }
+}
+
+export function notificationChannelInfo(
+  overrides: Partial<NotificationChannelInfo> = {},
+): NotificationChannelInfo {
+  return { ...NOTIF_CHANNEL_INFOS[0], ...overrides }
+}
+
+/** The display taxonomy — the server-owned, ordered category + channel labels
+ * every notification surface renders. */
+export function notificationTaxonomy(
+  overrides: Partial<NotificationTaxonomy> = {},
+): NotificationTaxonomy {
+  return {
+    types: NOTIF_TYPE_INFOS.map((t) => ({ ...t })),
+    channels: NOTIF_CHANNEL_INFOS.map((c) => ({ ...c })),
     ...overrides,
   }
 }

@@ -1,14 +1,17 @@
 import type {
   NotificationChannel,
   NotificationPreferences,
+  NotificationTaxonomy,
 } from '@/api/notifications'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Switch } from '@/components/ui/switch'
 import { cn } from '@/lib/utils'
-import { CATEGORY_META, CHANNEL_META } from '../notification-meta'
+import { CATEGORY_VISUAL, CHANNEL_VISUAL } from '../notification-meta'
 
 export interface PreferencesViewProps {
   preferences: NotificationPreferences
+  /** Server-owned display labels for categories + channels. */
+  taxonomy: NotificationTaxonomy
   onToggleChannel: (channel: NotificationChannel, enabled: boolean) => void
   onToggleCell: (
     category: NotificationPreferences['categories'][number]['category'],
@@ -21,11 +24,14 @@ export interface PreferencesViewProps {
  * per-category × per-channel mute matrix. Pure — state + handlers come in. */
 export function PreferencesView({
   preferences,
+  taxonomy,
   onToggleChannel,
   onToggleCell,
 }: PreferencesViewProps) {
   const channels = preferences.channels
   const channelByKey = new Map(channels.map((c) => [c.channel, c]))
+  const channelLabel = new Map(taxonomy.channels.map((c) => [c.key, c.label]))
+  const categoryLabel = new Map(taxonomy.types.map((t) => [t.key, t.label]))
 
   return (
     <div className="mx-auto max-w-[840px] px-6 pt-9 pb-20">
@@ -41,8 +47,8 @@ export function PreferencesView({
       <p className="ds-overline mb-3.5">Where we reach you</p>
       <div className="mb-9 grid grid-cols-1 gap-3 sm:grid-cols-2">
         {channels.map((channel) => {
-          const meta = CHANNEL_META[channel.channel]
-          const { Icon } = meta
+          const { Icon } = CHANNEL_VISUAL[channel.channel]
+          const label = channelLabel.get(channel.channel) ?? channel.channel
           const interactive = !channel.locked && channel.available
           return (
             <div
@@ -69,7 +75,7 @@ export function PreferencesView({
               </span>
               <span className="min-w-0 flex-1">
                 <span className="block text-[15px] font-semibold text-[color:var(--fg-1)]">
-                  {meta.label}
+                  {label}
                 </span>
                 <span className="block truncate text-xs text-[color:var(--fg-3)]">
                   {channel.destination}
@@ -81,7 +87,7 @@ export function PreferencesView({
                 onCheckedChange={(value) =>
                   onToggleChannel(channel.channel, value === true)
                 }
-                aria-label={`${meta.label} notifications`}
+                aria-label={`${label} notifications`}
               />
             </div>
           )
@@ -102,8 +108,8 @@ export function PreferencesView({
         >
           <div className="ds-overline px-4 py-3.5">Category</div>
           {channels.map((channel) => {
-            const meta = CHANNEL_META[channel.channel]
-            const { Icon } = meta
+            const { Icon } = CHANNEL_VISUAL[channel.channel]
+            const label = channelLabel.get(channel.channel) ?? channel.channel
             return (
               <div
                 key={channel.channel}
@@ -112,7 +118,7 @@ export function PreferencesView({
               >
                 <Icon size={17} className="text-[color:var(--fg-2)]" />
                 <span className="font-mono text-[10px] tracking-wide text-[color:var(--fg-3)] uppercase">
-                  {meta.label}
+                  {label}
                 </span>
               </div>
             )
@@ -120,8 +126,9 @@ export function PreferencesView({
         </div>
 
         {preferences.categories.map((row, i) => {
-          const meta = CATEGORY_META[row.category]
-          const { Icon } = meta
+          const visual = CATEGORY_VISUAL[row.category]
+          const { Icon } = visual
+          const rowLabel = categoryLabel.get(row.category) ?? row.category
           return (
             <div
               key={row.category}
@@ -135,12 +142,12 @@ export function PreferencesView({
               <div className="flex items-center gap-3 px-4 py-3.5">
                 <span
                   className="flex size-8 shrink-0 items-center justify-center rounded-[9px]"
-                  style={{ background: meta.tint, color: meta.color }}
+                  style={{ background: visual.tint, color: visual.color }}
                 >
                   <Icon size={17} />
                 </span>
                 <span className="text-sm font-semibold text-[color:var(--fg-1)]">
-                  {meta.label}
+                  {rowLabel}
                 </span>
               </div>
               {row.cells.map((cell) => {
@@ -159,7 +166,9 @@ export function PreferencesView({
                       onCheckedChange={(value) =>
                         onToggleCell(row.category, cell.channel, value === true)
                       }
-                      aria-label={`${meta.label} via ${CHANNEL_META[cell.channel].label}`}
+                      aria-label={`${rowLabel} via ${
+                        channelLabel.get(cell.channel) ?? cell.channel
+                      }`}
                     />
                   </div>
                 )

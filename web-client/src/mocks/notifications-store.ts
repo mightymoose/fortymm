@@ -1,6 +1,9 @@
 import { http, HttpResponse } from 'msw'
 import type { components } from '@/api/schema'
-import { notificationPreferences } from '@/test/factories'
+import {
+  notificationPreferences,
+  notificationTaxonomy,
+} from '@/test/factories'
 
 type NotificationItem = components['schemas']['NotificationItem']
 type NotificationPreferences = components['schemas']['NotificationPreferences']
@@ -101,6 +104,10 @@ function applyPreferenceUpdate(update: NotificationPreferencesUpdate) {
 }
 
 export const notificationHandlers = [
+  http.get('*/v1/notification-taxonomy', () =>
+    HttpResponse.json(notificationTaxonomy()),
+  ),
+
   http.get('*/v1/notifications/unread-count', () =>
     HttpResponse.json({ unread_count: unreadCount() }),
   ),

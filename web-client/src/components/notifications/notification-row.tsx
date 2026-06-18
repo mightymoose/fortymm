@@ -1,6 +1,6 @@
 import type { NotificationItem } from '@/api/notifications'
 import { cn } from '@/lib/utils'
-import { CATEGORY_META } from './notification-meta'
+import { CATEGORY_VISUAL } from './notification-meta'
 import { relativeTime } from './relative-time'
 
 export interface NotificationRowProps {
@@ -25,8 +25,8 @@ export function NotificationRow({
   now,
   onActivate,
 }: NotificationRowProps) {
-  const meta = CATEGORY_META[notification.category]
-  const { Icon } = meta
+  const visual = CATEGORY_VISUAL[notification.category]
+  const { Icon } = visual
   const unread = notification.read_at == null
   const delta = notification.delta
   const deltaUp = delta?.trim().startsWith('+') ?? false
@@ -50,7 +50,7 @@ export function NotificationRow({
           'flex shrink-0 items-center justify-center rounded-[10px]',
           compact ? 'size-9' : 'size-10',
         )}
-        style={{ background: meta.tint, color: meta.color }}
+        style={{ background: visual.tint, color: visual.color }}
       >
         <Icon size={compact ? 17 : 20} strokeWidth={1.9} />
       </span>
@@ -99,7 +99,7 @@ export function NotificationRow({
               compact ? 'text-xs' : 'text-[13px]',
             )}
             style={{
-              color: meta.color,
+              color: visual.color,
               borderColor: 'var(--border-default)',
             }}
           >

@@ -1,4 +1,5 @@
 import type { NotificationItem } from '@/api/notifications'
+import { notificationTaxonomy } from '@/test/factories'
 import { buildNotificationItem } from '../notification-row.factory'
 import type { NotificationsViewProps } from './notifications-view'
 
@@ -39,6 +40,7 @@ export function buildNotificationsViewProps(
 ): NotificationsViewProps {
   return {
     items: buildNotificationsItems(),
+    categoryTypes: notificationTaxonomy().types,
     unreadCount: 1,
     filter: 'all',
     onFilterChange: () => {},
