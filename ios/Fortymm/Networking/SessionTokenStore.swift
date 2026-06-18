@@ -31,12 +31,16 @@ actor SessionTokenStore {
         self.keychain = keychain
     }
 
+    /// Load the token from the Keychain into the cache once, on first access.
+    private func hydrate() {
+        guard !didLoad else { return }
+        cached = keychain.load()
+        didLoad = true
+    }
+
     /// The current token, lazily hydrated from the Keychain on first access.
     func token() -> String? {
-        if !didLoad {
-            cached = keychain.load()
-            didLoad = true
-        }
+        hydrate()
         retryPersistIfNeeded()
         return cached
     }
@@ -85,10 +89,7 @@ actor SessionTokenStore {
     /// trigger a sign-out. Hydrate first so the comparison is against the real
     /// stored token, not a not-yet-loaded `nil`.
     func clearIfCurrent(_ token: String?) -> Bool {
-        if !didLoad {
-            cached = keychain.load()
-            didLoad = true
-        }
+        hydrate()
         guard cached == token else { return false }
         clear()
         return true
