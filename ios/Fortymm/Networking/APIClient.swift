@@ -246,14 +246,34 @@ struct APIClient {
         )
     }
 
-    /// FastAPI errors come back as `{"detail": "..."}` (or `{"detail": [...]}`
-    /// for validation errors). Pull a human string out when we can.
+    /// FastAPI errors come back as `{"detail": "..."}` for hand-raised
+    /// `HTTPException`s, or `{"detail": [{"loc": ..., "msg": "...", ...}]}` for
+    /// request-validation (422) errors. Pull a human string out of either shape
+    /// — mirrors `extractDetail` in web-client/src/api/client.ts; keep in
+    /// lockstep. Without the array branch a 422 (e.g. a scoring rule the client
+    /// doesn't mirror) leaks as the bare "HTTP 422" fallback (#446).
     private static func detail(from data: Data) -> String? {
         struct StringDetail: Decodable { let detail: String }
         if let parsed = try? JSONDecoder().decode(StringDetail.self, from: data) {
-            return parsed.detail
+            return humanize(parsed.detail)
+        }
+        struct ValidationDetail: Decodable {
+            struct Item: Decodable { let msg: String }
+            let detail: [Item]
+        }
+        if let parsed = try? JSONDecoder().decode(ValidationDetail.self, from: data),
+           let first = parsed.detail.first {
+            return humanize(first.msg)
         }
         return nil
+    }
+
+    /// Strip pydantic's `"Value error, "` prefix from a validator message so the
+    /// UI shows the rule ("A game cannot end in a tie.") rather than the raw
+    /// framework wrapper (the iOS face of #151).
+    private static func humanize(_ message: String) -> String {
+        let prefix = "Value error, "
+        return message.hasPrefix(prefix) ? String(message.dropFirst(prefix.count)) : message
     }
 
     /// Parse the structured `session_merged` 401 body — `{"detail":{"code":

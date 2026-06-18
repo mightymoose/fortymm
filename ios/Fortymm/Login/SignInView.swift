@@ -38,7 +38,7 @@ struct SignInView: View {
                 + "We never made a password, so we can't lose yours."
         ) {
             VStack(alignment: .leading, spacing: 14) {
-                LoginEmailField(text: $email, invalid: invalid, focused: $focused)
+                LoginEmailField(text: $email, valid: validation.ok, invalid: invalid, focused: $focused)
                     .onChange(of: email) { _, _ in if serverError != nil { serverError = nil } }
 
                 TurnstileView(
