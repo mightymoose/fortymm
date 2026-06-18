@@ -437,14 +437,29 @@ struct LoginDivider: View {
     }
 }
 
-/// The email field: an "@" prefix box, a mono input, and a live VALID/FAILED
-/// status chip. `invalid` flips the accent to loss-red.
+/// The email field: an "@" prefix box, a mono input, and a live status chip.
+/// The chip is tri-state: green "VALID" only once the address actually passes
+/// validation (`valid`), red "FAILED" when flagged invalid, and a neutral dot
+/// while empty / not yet evaluated — so an untouched field never claims "VALID"
+/// for a blank or malformed address (#448). `invalid` flips the accent to
+/// loss-red.
 struct LoginEmailField: View {
     @Binding var text: String
+    var valid: Bool = false
     var invalid: Bool = false
     var focused: FocusState<Bool>.Binding
 
     private var tint: Color { invalid ? FMColor.loss : FMColor.ball500 }
+
+    // invalid wins over valid; neutral is the empty / not-yet-evaluated state.
+    private var chipText: String {
+        if invalid { return "● FAILED" }
+        return valid ? "● VALID" : "●"
+    }
+    private var chipColor: Color {
+        if invalid { return FMColor.loss }
+        return valid ? FMColor.serve500 : FMColor.fgMuted
+    }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -469,10 +484,10 @@ struct LoginEmailField: View {
             .autocorrectionDisabled()
             .submitLabel(.go)
             .padding(.horizontal, 14)
-            Text(invalid ? "● FAILED" : "● VALID")
+            Text(chipText)
                 .font(FMFont.mono(11))
                 .tracking(1.4)
-                .foregroundStyle(invalid ? FMColor.loss : FMColor.serve500)
+                .foregroundStyle(chipColor)
                 .padding(.trailing, 14)
         }
         .background(FMColor.bgCard)
