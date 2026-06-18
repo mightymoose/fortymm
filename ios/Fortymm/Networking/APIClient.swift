@@ -173,10 +173,14 @@ struct APIClient {
         }
         // Send the session and its CSRF companion as cookies. The server's
         // double-submit check compares the CSRF cookie against the header, so
-        // both must be present and equal on mutations.
+        // both must be present and equal on mutations. `sentToken` is captured
+        // so the response handling can tell whether a session-dropping reply
+        // pertains to the token *this* request used (vs. one a newer sign-in
+        // has since replaced).
+        let sentToken = await tokens.token()
         let csrf = await tokens.csrfToken()
         let cookieHeader = [
-            (await tokens.token()).map { "\(Self.sessionCookieName)=\($0)" },
+            sentToken.map { "\(Self.sessionCookieName)=\($0)" },
             csrf.map { "\(Self.csrfCookieName)=\($0)" },
         ].compactMap { $0 }.joined(separator: "; ")
         if !cookieHeader.isEmpty {
@@ -190,13 +194,14 @@ struct APIClient {
         guard let http = response as? HTTPURLResponse else {
             throw APIError.invalidResponse
         }
-        await captureSessionCookie(from: http, url: url)
-        guard (200..<300).contains(http.statusCode) else {
-            // A merged-away guest's cookie still resolves server-side, so this
-            // can land on *any* request — broadcast it (and drop the dead token)
-            // so the app routes to sign-in instead of acting as the ghost.
-            if http.statusCode == 401, let info = Self.mergedSessionInfo(from: data) {
-                await tokens.clear()
+        // A merged-away guest's cookie still resolves server-side, so this 401
+        // can land on *any* request. Handle it before the generic cookie capture
+        // and make it token-aware: only drop the token + broadcast the sign-out
+        // if the cookie this request sent is still the one we hold. Otherwise a
+        // stale in-flight request — whose token a newer sign-in already replaced
+        // — would wipe the *new* token and kick the user out of a live session.
+        if http.statusCode == 401, let info = Self.mergedSessionInfo(from: data) {
+            if await tokens.clearIfCurrent(sentToken) {
                 var userInfo: [String: Any] = ["message": info.message]
                 if let email = info.email { userInfo["email"] = email }
                 NotificationCenter.default.post(
@@ -204,6 +209,12 @@ struct APIClient {
                 )
                 throw APIError.sessionMerged(message: info.message, email: info.email)
             }
+            // Token already superseded — fail this request without disturbing the
+            // current session.
+            throw APIError.http(status: http.statusCode, detail: Self.detail(from: data))
+        }
+        await captureSessionCookie(from: http, url: url, sentToken: sentToken)
+        guard (200..<300).contains(http.statusCode) else {
             throw APIError.http(status: http.statusCode, detail: Self.detail(from: data))
         }
         do {
@@ -269,7 +280,9 @@ struct APIClient {
     /// out of the response and persist them. The API sets both together and
     /// folds them into the comma-joined `Set-Cookie` header; both use `Max-Age`
     /// (no comma-bearing `Expires`), so `HTTPCookie` splits them cleanly.
-    private func captureSessionCookie(from http: HTTPURLResponse, url: URL) async {
+    private func captureSessionCookie(
+        from http: HTTPURLResponse, url: URL, sentToken: String?
+    ) async {
         guard let header = http.value(forHTTPHeaderField: "Set-Cookie") else {
             return
         }
@@ -279,10 +292,11 @@ struct APIClient {
         )
         if let session = cookies.first(where: { $0.name == Self.sessionCookieName }) {
             if session.value.isEmpty {
-                // A clearing Set-Cookie (e.g. the session-merged 401 clears the
-                // dead cookie). Drop the stored token (and CSRF companion) so the
-                // next call starts cookieless and mints a fresh guest.
-                await tokens.clear()
+                // A clearing Set-Cookie. Drop the token only if it's still the
+                // one this request sent, so a stale reply can't wipe a token a
+                // newer sign-in already installed. (The merged-401 clear is
+                // handled before this, token-aware; this guards any other path.)
+                _ = await tokens.clearIfCurrent(sentToken)
             } else {
                 await tokens.update(session.value)
             }
