@@ -17,7 +17,13 @@ import app.models  # noqa: F401  -- ensures models register on Base.metadata
 from app import queue as queue_module
 from app.db import Base, get_session
 from app.main import app as fastapi_app
-from app.models import League, LeagueVisibility, RatingStrategy
+from app.models import League, LeagueVisibility, NotificationType, RatingStrategy
+from app.models import NotificationChannel as NotificationChannelModel
+from app.notifications.taxonomy import (
+    CHANNEL_AVAILABLE,
+    NotificationCategory,
+)
+from app.notifications.taxonomy import NotificationChannel as ChannelEnum
 from tests._helpers import CSRF_EVENT_HOOKS
 
 
@@ -180,6 +186,64 @@ async def rating_strategies(db_session: AsyncSession) -> dict[str, RatingStrateg
     db_session.add_all([glicko2, manual])
     await db_session.commit()
     return {"glicko2": glicko2, "manual": manual}
+
+
+# Display labels mirror the migration 0009 seed (and the former client-side
+# CATEGORY_META / CHANNEL_META). Migration 0009 inserts these in real
+# deployments; tests build via ``Base.metadata.create_all`` so we re-seed here.
+NOTIFICATION_TYPE_LABELS: dict[NotificationCategory, tuple[str, str]] = {
+    NotificationCategory.MATCH_REMINDER: ("Match reminders", "Match"),
+    NotificationCategory.RATING_CHANGE: ("Rating changes", "Rating"),
+    NotificationCategory.TOURNAMENT: ("Tournament news", "Tourney"),
+    NotificationCategory.OPPONENT: ("Challenges & friends", "Social"),
+    NotificationCategory.RESULT_CONFIRM: ("Score confirmations", "Scores"),
+}
+NOTIFICATION_CHANNEL_LABELS: dict[ChannelEnum, str] = {
+    ChannelEnum.IN_APP: "In-app",
+    ChannelEnum.PUSH: "Push",
+    ChannelEnum.EMAIL: "Email",
+    ChannelEnum.SMS: "SMS",
+}
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def notification_types(db_session: AsyncSession) -> list[NotificationType]:
+    """Seed the notification type lookup rows (one per NotificationCategory).
+    Autouse because the FK on notifications/preferences ``category`` requires the
+    parent rows to exist whenever a test creates a notification or preference."""
+    rows = [
+        NotificationType(
+            key=category.value,
+            name=NOTIFICATION_TYPE_LABELS[category][0],
+            short_label=NOTIFICATION_TYPE_LABELS[category][1],
+            display_order=order,
+        )
+        for order, category in enumerate(NotificationCategory, start=1)
+    ]
+    db_session.add_all(rows)
+    await db_session.commit()
+    return rows
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def notification_channels(
+    db_session: AsyncSession,
+) -> list[NotificationChannelModel]:
+    """Seed the notification channel lookup rows (one per NotificationChannel).
+    Autouse because the FK on the ``channel`` columns requires the parent rows.
+    ``is_available`` is seeded from ``CHANNEL_AVAILABLE`` so it can't drift."""
+    rows = [
+        NotificationChannelModel(
+            key=channel.value,
+            name=NOTIFICATION_CHANNEL_LABELS[channel],
+            display_order=order,
+            is_available=CHANNEL_AVAILABLE[channel],
+        )
+        for order, channel in enumerate(ChannelEnum, start=1)
+    ]
+    db_session.add_all(rows)
+    await db_session.commit()
+    return rows
 
 
 @pytest_asyncio.fixture(autouse=True)

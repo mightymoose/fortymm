@@ -26,11 +26,12 @@ from app.models import (
     Notification,
     NotificationChannelSetting,
     NotificationPreference,
+    NotificationType,
     User,
 )
+from app.models import NotificationChannel as NotificationChannelModel
 from app.notifications.apns import Environment, PushSender, SendOutcome
 from app.notifications.taxonomy import (
-    CHANNEL_AVAILABLE,
     LOCKED_CELLS,
     LOCKED_CHANNELS,
     NotificationCategory,
@@ -48,11 +49,14 @@ from app.schemas.notification import (
     MarkAllReadResponse,
     NotificationCategoryCell,
     NotificationCategoryPreference,
+    NotificationChannelInfo,
     NotificationChannelState,
     NotificationFeed,
     NotificationItem,
     NotificationPreferences,
     NotificationPreferencesUpdate,
+    NotificationTaxonomy,
+    NotificationTypeInfo,
     RegisterDeviceTokenRequest,
     TestNotificationResponse,
     UnreadCountResponse,
@@ -333,14 +337,104 @@ class NotificationService:
         await self._db.commit()
         return MarkAllReadResponse(marked=cast(CursorResult[Any], result).rowcount or 0)
 
+    # ----- display taxonomy (DB-backed labels + order) ---------------------
+
+    async def get_taxonomy(self) -> NotificationTaxonomy:
+        """The shared display taxonomy: the ordered category/channel lists with
+        their labels, read from the lookup tables. Every notification surface
+        (preferences, feed filters, broadcast) renders from this."""
+        type_rows = await self._load_type_rows()
+        channel_rows = await self._load_channel_rows()
+        types = [
+            NotificationTypeInfo(
+                key=category,
+                label=row.name,
+                short=row.short_label,
+                description=row.description,
+            )
+            for row in type_rows
+            if (category := _parse_category(row.key)) is not None
+        ]
+        channels = [
+            NotificationChannelInfo(
+                key=channel,
+                label=row.name,
+                available=row.is_available,
+                description=row.description,
+            )
+            for row in channel_rows
+            if (channel := _parse_channel(row.key)) is not None
+        ]
+        return NotificationTaxonomy(types=types, channels=channels)
+
+    async def _load_type_rows(self) -> Sequence[NotificationType]:
+        """Active notification-type rows in display order."""
+        return (
+            (
+                await self._db.execute(
+                    select(NotificationType)
+                    .where(NotificationType.is_active.is_(True))
+                    .order_by(NotificationType.display_order)
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+    async def _load_channel_rows(self) -> Sequence[NotificationChannelModel]:
+        """Active notification-channel rows in display order."""
+        return (
+            (
+                await self._db.execute(
+                    select(NotificationChannelModel)
+                    .where(NotificationChannelModel.is_active.is_(True))
+                    .order_by(NotificationChannelModel.display_order)
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+    async def _channel_order_and_availability(
+        self,
+    ) -> tuple[list[NotificationChannel], dict[NotificationChannel, bool]]:
+        """The active channels in display order plus their availability map,
+        both sourced from ``notification_channels``."""
+        order: list[NotificationChannel] = []
+        availability: dict[NotificationChannel, bool] = {}
+        for row in await self._load_channel_rows():
+            channel = _parse_channel(row.key)
+            if channel is None:
+                continue
+            order.append(channel)
+            availability[channel] = row.is_available
+        return order, availability
+
+    async def _category_order(self) -> list[NotificationCategory]:
+        """The active categories in display order, from ``notification_types``."""
+        order: list[NotificationCategory] = []
+        for row in await self._load_type_rows():
+            category = _parse_category(row.key)
+            if category is not None:
+                order.append(category)
+        return order
+
     # ----- preferences -----------------------------------------------------
 
     async def get_preferences(self, user: User) -> NotificationPreferences:
         channel_overrides = await self._channel_overrides(user.id)
         cell_overrides = await self._cell_overrides(user.id)
         device_count = await self._device_count(user.id)
+        channel_order, availability = await self._channel_order_and_availability()
+        category_order = await self._category_order()
         return self._build_preferences(
-            user, channel_overrides, cell_overrides, device_count
+            user,
+            channel_overrides,
+            cell_overrides,
+            device_count,
+            channel_order,
+            availability,
+            category_order,
         )
 
     async def update_preferences(
@@ -350,17 +444,22 @@ class NotificationService:
         default (and deleting overrides that fall back to the default).
         Locked/unavailable channels and cells are ignored — the user can't
         change them. Returns the freshly re-resolved preferences."""
+        _, availability = await self._channel_order_and_availability()
         for channel_update in update_req.channels:
             channel = channel_update.channel
-            if channel in LOCKED_CHANNELS or not CHANNEL_AVAILABLE[channel]:
+            if channel in LOCKED_CHANNELS or not availability.get(channel, False):
                 continue
             await self._set_channel_override(user.id, channel, channel_update.enabled)
         for cell_update in update_req.cells:
             cell = (cell_update.category, cell_update.channel)
-            if cell in LOCKED_CELLS or not CHANNEL_AVAILABLE[cell_update.channel]:
+            if cell in LOCKED_CELLS or not availability.get(cell_update.channel, False):
                 continue
             await self._set_cell_override(
-                user.id, cell_update.category, cell_update.channel, cell_update.enabled
+                user.id,
+                cell_update.category,
+                cell_update.channel,
+                cell_update.enabled,
+                availability.get(cell_update.channel, False),
             )
         await self._db.commit()
         return await self.get_preferences(user)
@@ -394,8 +493,9 @@ class NotificationService:
         category: NotificationCategory,
         channel: NotificationChannel,
         enabled: bool,
+        available: bool,
     ) -> None:
-        if enabled == cell_default(category, channel):
+        if enabled == cell_default(category, channel, available):
             await self._db.execute(
                 delete(NotificationPreference).where(
                     NotificationPreference.user_id == user_id,
@@ -423,18 +523,21 @@ class NotificationService:
         channel_overrides: dict[NotificationChannel, bool],
         cell_overrides: dict[tuple[NotificationCategory, NotificationChannel], bool],
         device_count: int,
+        channel_order: Sequence[NotificationChannel],
+        availability: Mapping[NotificationChannel, bool],
+        category_order: Sequence[NotificationCategory],
     ) -> NotificationPreferences:
         channels = [
             NotificationChannelState(
                 channel=channel,
                 enabled=resolve_channel_enabled(
-                    channel, channel_overrides.get(channel)
+                    channel, availability[channel], channel_overrides.get(channel)
                 ),
-                available=CHANNEL_AVAILABLE[channel],
+                available=availability[channel],
                 locked=channel in LOCKED_CHANNELS,
                 destination=self._channel_destination(channel, user, device_count),
             )
-            for channel in NotificationChannel
+            for channel in channel_order
         ]
         categories = [
             NotificationCategoryPreference(
@@ -443,14 +546,17 @@ class NotificationService:
                     NotificationCategoryCell(
                         channel=channel,
                         enabled=resolve_cell_enabled(
-                            category, channel, cell_overrides.get((category, channel))
+                            category,
+                            channel,
+                            availability[channel],
+                            cell_overrides.get((category, channel)),
                         ),
                         locked=(category, channel) in LOCKED_CELLS,
                     )
-                    for channel in NotificationChannel
+                    for channel in channel_order
                 ],
             )
-            for category in NotificationCategory
+            for category in category_order
         ]
         return NotificationPreferences(channels=channels, categories=categories)
 
@@ -521,11 +627,15 @@ class NotificationService:
     ) -> set[NotificationChannel]:
         channel_overrides = await self._channel_overrides(user_id)
         cell_overrides = await self._cell_overrides(user_id, category)
+        _, availability = await self._channel_order_and_availability()
         effective: set[NotificationChannel] = set()
         for channel in candidates:
-            master = resolve_channel_enabled(channel, channel_overrides.get(channel))
+            available = availability.get(channel, False)
+            master = resolve_channel_enabled(
+                channel, available, channel_overrides.get(channel)
+            )
             cell = resolve_cell_enabled(
-                category, channel, cell_overrides.get((category, channel))
+                category, channel, available, cell_overrides.get((category, channel))
             )
             if master and cell:
                 effective.add(channel)
