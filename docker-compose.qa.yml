@@ -118,7 +118,7 @@ services:
     image: axllent/mailpit:v1.30
     restart: unless-stopped
     ports:
-      - "${QA_MAILPIT_PORT:-8087}:8025"  # Mailpit web UI — http://127.0.0.1:8087
+      - "${QA_MAILPIT_PORT:-8087}:8025"  # Mailpit web UI (default http://127.0.0.1:8087)
 
   web-client:
     build:

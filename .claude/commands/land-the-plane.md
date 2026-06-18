@@ -80,10 +80,14 @@ Drive the real built app in the iOS Simulator against the **real QA-stack API**
 a **guest session automatically on launch** — so no email/magic-link auth is
 needed to reach an authenticated dashboard. Steps:
 
-1. **Stand up the QA API.** Same stack as 6a — `docker-compose.qa.yml`, nginx on
-   `:8085`. If it's already up (`curl -sf http://127.0.0.1:8085/api/v1/health`),
-   reuse it; an iOS-only change doesn't rebuild the web/API images. Otherwise:
-   `[ -f .env ] || cp <main-checkout>/.env .env && docker compose -f docker-compose.qa.yml up -d --build`.
+1. **Stand up the QA API.** Same stack as 6a — `docker-compose.qa.yml`, launched
+   via `scripts/qa-up.sh` so it picks a free port instead of hardcoding 8085
+   (several stacks may already be running). Capture the assigned URL:
+   `[ -f .env ] || cp <main-checkout>/.env .env` then
+   `eval "$(scripts/qa-up.sh "$(git rev-parse --abbrev-ref HEAD)" | tee /dev/stderr | tail -n1)"`.
+   The launcher reuses the stack if its id already maps to a running project, so
+   re-running for an iOS-only change won't rebuild the web/API images needlessly.
+   Use `$QA_URL` below.
 2. **Build + install + launch** (reuse the clean build from Step 2's iOS gate).
    Find the bundle id with `grep PRODUCT_BUNDLE_IDENTIFIER ios/Fortymm.xcodeproj/project.pbxproj`
    (currently `com.fortymm.ios-client`). On a booted simulator
@@ -93,10 +97,11 @@ needed to reach an authenticated dashboard. Steps:
    xcrun simctl terminate booted <bundle-id> 2>/dev/null
    xcrun simctl uninstall booted <bundle-id> 2>/dev/null   # avoid stale install
    xcrun simctl install booted "$APP"
-   SIMCTL_CHILD_FMM_API_BASE_URL="http://127.0.0.1:8085/api" xcrun simctl launch booted <bundle-id>
+   SIMCTL_CHILD_FMM_API_BASE_URL="$QA_URL/api" xcrun simctl launch booted <bundle-id>
    ```
    `SIMCTL_CHILD_*` forwards the env var into the app; the base must include `/api`
-   (QA's nginx serves the API under `/api`, unlike UAT).
+   (QA's nginx serves the API under `/api`, unlike UAT). `$QA_URL` comes from the
+   launcher in step 1.
 3. **Drive + screenshot.** Capture with `xcrun simctl io booted screenshot <file>`
    and tap/type with `idb ui tap <x> <y> --udid <udid>` (points, not pixels).
    Save evidence to `.qa-review/` (gitignore it). Exercise the screens the branch

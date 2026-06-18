@@ -33,7 +33,7 @@ port_free() { ! lsof -nP -iTCP:"$1" -sTCP:LISTEN >/dev/null 2>&1; }
 
 # Find the next free port at or above $1, skipping any already chosen.
 next_free_port() {
-  local p="$1"; shift
+  local start="$1" p="$1"; shift
   local taken=" $* "
   while [ "$p" -lt 65535 ]; do
     if [[ "$taken" != *" $p "* ]] && port_free "$p"; then
@@ -41,7 +41,7 @@ next_free_port() {
     fi
     p=$((p + 1))
   done
-  echo "ERROR: no free port found at or above $1" >&2; exit 1
+  echo "ERROR: no free port found at or above $start" >&2; exit 1
 }
 
 QA_PORT="${QA_PORT:-$(next_free_port 8085)}"
