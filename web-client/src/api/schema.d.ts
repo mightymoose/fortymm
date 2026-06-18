@@ -1507,6 +1507,8 @@ export interface components {
             sides: components["schemas"]["MatchDetailsSide"][];
             /** Best Of */
             best_of: number;
+            /** Affects Rating */
+            affects_rating: boolean;
             /**
              * Created At
              * Format: date-time

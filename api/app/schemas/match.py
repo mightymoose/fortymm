@@ -217,6 +217,10 @@ class MatchListRow(BaseModel):
     league: MatchLeague
     sides: list[MatchDetailsSide]
     best_of: int
+    # Whether this match counts toward player ratings. The authoritative flag
+    # (from match settings) so the list can label rated vs. friendly without
+    # loading rating history — list rows don't carry ``rating_change``.
+    affects_rating: bool
     created_at: datetime
     # Game rows are created lazily on the first score write, so the deeplink
     # target may not have an id yet. The list passes the game number; the FE

@@ -153,7 +153,10 @@ struct MatchService {
             // The list row omits can_finalize; the detail refetch (on open) fills
             // in the authoritative value and surfaces the "Post result" path.
             canFinalize: false,
-            ratedHint: nil, games: nil, h2h: nil,
+            // The list row carries the authoritative rated flag (rating_change is
+            // omitted on list rows), so don't infer rated from a missing delta —
+            // that mislabels finalized rated matches as "Friendly" (#453).
+            ratedHint: r.affectsRating, games: nil, h2h: nil,
             // The list row omits signatures; fall back to the games-won heuristic.
             // This row is transient anyway — the detail view refetches on open and
             // replaces it with the signature-accurate copy.

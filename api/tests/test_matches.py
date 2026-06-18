@@ -461,6 +461,32 @@ async def test_list_matches_shows_every_match_on_the_system(
     assert me.username not in usernames
 
 
+async def test_list_rows_carry_affects_rating(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    # The list row exposes the authoritative rated flag so a client can label
+    # rated vs. friendly without a rating delta (#453 — iOS mislabelled
+    # finalized rated matches as "Friendly" because list rows omit rating_change).
+    await start_session(api_client, db_session)
+    opponent = await make_user(db_session, "opponent")
+    rated = await _create_match(api_client, opponent.id)
+    unrated = (
+        await api_client.post(
+            "/v1/matches",
+            json={
+                "opponent_user_id": str(opponent.id),
+                "best_of": 5,
+                "rated": False,
+            },
+        )
+    ).json()
+
+    body = (await api_client.get("/v1/matches")).json()
+    by_id = {row["id"]: row for row in body["items"]}
+    assert by_id[rated["id"]]["affects_rating"] is True
+    assert by_id[unrated["id"]]["affects_rating"] is False
+
+
 async def test_list_q_filter_matches_caller_username(
     api_client: AsyncClient, db_session: AsyncSession
 ):

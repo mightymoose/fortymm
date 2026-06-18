@@ -508,6 +508,7 @@ export function projectListRow(seed: SeedMatch): MatchListRow {
     league: MOCK_DEFAULT_LEAGUE,
     sides: [mySide, opponentSide],
     best_of: seed.best_of,
+    affects_rating: seed.affects_rating,
     created_at: seed.created_at,
     // The next-playable-game deep-link target (null when decided/signed); the
     // editable flag follows the no-signature rule independently of it.
