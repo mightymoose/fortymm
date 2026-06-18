@@ -53,6 +53,7 @@ from app.schemas.notification import (
     NotificationChannelState,
     NotificationFeed,
     NotificationItem,
+    NotificationJob,
     NotificationPreferences,
     NotificationPreferencesUpdate,
     NotificationTaxonomy,
@@ -198,24 +199,24 @@ class NotificationService:
         link: str | None = None,
         action_label: str | None = None,
         delta: str | None = None,
-        channels: Collection[NotificationChannel] | None = None,
         push_category: str | None = None,
         push_data: Mapping[str, str] | None = None,
     ) -> NotifyResult:
         """Deliver one notification to one user across every channel the user's
-        preferences allow (intersected with ``channels`` when the caller
-        restricts the candidates, e.g. an admin broadcast).
+        preferences allow for the notification's category.
 
-        The in-app channel persists a ``Notification`` row — the durable record
-        the bell/feed read. Push reuses ``send_to_user`` (best-effort) and email
-        enqueues an RQ job (best-effort). A missing or tombstoned recipient is a
-        no-op."""
+        Runs in the RQ worker (enqueued via ``enqueue_notification`` /
+        ``enqueue_broadcast``). The in-app channel persists a ``Notification``
+        row — the durable record the bell/feed read. Push reuses ``send_to_user``
+        (best-effort) and email enqueues an RQ job (best-effort). A missing or
+        tombstoned recipient is a no-op."""
         user = await self._db.get(User, user_id)
         if user is None or user.merged_into_user_id is not None:
             return NotifyResult()
 
-        candidates = set(channels) if channels is not None else set(NotificationChannel)
-        effective = await self._effective_channels(user_id, category, candidates)
+        effective = await self._effective_channels(
+            user_id, category, set(NotificationChannel)
+        )
         result = NotifyResult()
 
         if NotificationChannel.IN_APP in effective:
@@ -270,6 +271,30 @@ class NotificationService:
             )
         except Exception:
             log.exception("Failed to enqueue notification email")
+            return False
+        return True
+
+    # ----- enqueueing background delivery ----------------------------------
+
+    def enqueue_notification(self, job: NotificationJob) -> bool:
+        """Hand one notification to the worker, which resolves the recipient's
+        preferences and delivers (see ``app.notifications.jobs``). Fire-and-
+        forget: a Redis hiccup must not fail the originating flow, so enqueue
+        failures are logged and swallowed (mirrors ``_enqueue_notification_email``)."""
+        # Imported lazily (not at module level) because app.notifications.jobs
+        # imports this service — a top-level import would be a cycle. The
+        # function-level import keeps the job name a single source of truth.
+        from app.notifications.jobs import DELIVER_NOTIFICATION_JOB
+
+        try:
+            queue_module.get_notifications_queue().enqueue(
+                DELIVER_NOTIFICATION_JOB,
+                job.model_dump_json(),
+                result_ttl=60,
+                failure_ttl=300,
+            )
+        except Exception:
+            log.exception("Failed to enqueue notification delivery")
             return False
         return True
 
@@ -665,42 +690,36 @@ class NotificationService:
 
     # ----- admin broadcast -------------------------------------------------
 
-    async def broadcast(
+    async def enqueue_broadcast(
         self,
         *,
         all_users: bool,
         user_ids: Sequence[uuid.UUID],
-        channels: Collection[NotificationChannel],
         title: str,
         body: str,
     ) -> BroadcastResponse:
-        """Fan a tournament-news notification out to the chosen recipients,
-        respecting each player's preferences. Counts users (not devices) who
-        actually got each delivery kind after preference filtering."""
-        targets = await self._broadcast_targets(all_users, user_ids)
-        in_app = pushed = emailed = 0
-        for target in targets:
-            result = await self.notify(
-                user_id=target.id,
-                category=BROADCAST_CATEGORY,
-                title=title,
-                body=body,
-                channels=channels,
+        """Resolve the target players and hand one delivery job per recipient to
+        the worker, which resolves *that* player's tournament-news preferences
+        and delivers accordingly. Returns the recipient count immediately —
+        actual delivery happens in the background."""
+        target_ids = await self._broadcast_target_ids(all_users, user_ids)
+        for target_id in target_ids:
+            self.enqueue_notification(
+                NotificationJob(
+                    user_id=target_id,
+                    category=BROADCAST_CATEGORY,
+                    title=title,
+                    body=body,
+                )
             )
-            in_app += int(result.in_app_created)
-            pushed += int(result.pushed > 0)
-            emailed += int(result.emailed)
-        return BroadcastResponse(
-            recipients=len(targets),
-            in_app_created=in_app,
-            pushed=pushed,
-            emailed=emailed,
-        )
+        return BroadcastResponse(recipients=len(target_ids))
 
-    async def _broadcast_targets(
+    async def _broadcast_target_ids(
         self, all_users: bool, user_ids: Sequence[uuid.UUID]
-    ) -> Sequence[User]:
-        query = select(User).where(User.merged_into_user_id.is_(None))
+    ) -> Sequence[uuid.UUID]:
+        # Only the ids are needed (one job per recipient), so don't hydrate
+        # full User rows — an "all users" broadcast would load the whole table.
+        query = select(User.id).where(User.merged_into_user_id.is_(None))
         if not all_users:
             if not user_ids:
                 return []

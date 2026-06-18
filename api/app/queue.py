@@ -6,6 +6,7 @@ from rq import Queue
 SOLVER_QUEUE = "solver"
 EMAIL_QUEUE = "email"
 RATINGS_QUEUE = "ratings"
+NOTIFICATIONS_QUEUE = "notifications"
 
 
 def _connection() -> Redis:
@@ -23,3 +24,7 @@ def get_email_queue() -> Queue:
 
 def get_ratings_queue() -> Queue:
     return Queue(RATINGS_QUEUE, connection=_connection())
+
+
+def get_notifications_queue() -> Queue:
+    return Queue(NOTIFICATIONS_QUEUE, connection=_connection())

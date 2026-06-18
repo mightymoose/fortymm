@@ -13,10 +13,6 @@ const scoped = (container: Container) => ({
   getRecipient(username: string) {
     return container.getByRole('checkbox', { name: username })
   },
-  /** A channel toggle chip, by channel label (In-app/Push/Email/SMS). */
-  getChannelChip(label: string) {
-    return container.getByRole('button', { name: label })
-  },
   getTitleInput() {
     return container.getByLabelText('Title')
   },
@@ -27,7 +23,7 @@ const scoped = (container: Container) => ({
     return container.getByRole('button', { name: /send to/i })
   },
   querySuccess() {
-    return container.queryByText(/sent to \d+ players/i)
+    return container.queryByText(/queued for \d+ player/i)
   },
   queryError() {
     return container.queryByText('Broadcast failed')
@@ -35,7 +31,7 @@ const scoped = (container: Container) => ({
   queryHint(text: string) {
     return container.queryByText(text)
   },
-  /** A preview channel section label (IN-APP / BELL, PUSH, EMAIL, SMS). */
+  /** A preview section label (e.g. IN-APP / BELL). */
   queryPreviewSection(label: string) {
     return container.queryByText(label)
   },
@@ -55,9 +51,6 @@ export const broadcastViewPage = {
   },
   async clickRecipient(username: string) {
     await userEvent.click(this.getRecipient(username))
-  },
-  async clickChannel(label: string) {
-    await userEvent.click(this.getChannelChip(label))
   },
   async clickSend() {
     await userEvent.click(this.getSendButton())

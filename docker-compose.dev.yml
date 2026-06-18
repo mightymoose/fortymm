@@ -60,7 +60,7 @@ services:
         condition: service_healthy
     volumes:
       - ./api:/app
-    command: rq worker --url redis://redis:6379/0 solver email ratings
+    command: rq worker --url redis://redis:6379/0 solver email ratings notifications
 
   web-client:
     build:

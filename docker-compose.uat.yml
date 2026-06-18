@@ -83,7 +83,7 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-    command: rq worker --url redis://redis:6379/0 solver email ratings
+    command: rq worker --url redis://redis:6379/0 solver email ratings notifications
 
   web-client:
     build:

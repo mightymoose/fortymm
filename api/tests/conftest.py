@@ -50,6 +50,20 @@ def fake_ratings_queue(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def fake_notifications_queue(monkeypatch):
+    """Async-style RQ queue against fakeredis: enqueues are recorded but the
+    ``deliver_notification`` body never runs (like ``fake_ratings_queue``, it
+    would open its own DB engine via ``app.db.get_engine()``, not the
+    testcontainers database). Delivery is covered by direct
+    ``NotificationService.notify`` tests; this fixture only lets callers assert
+    which jobs were enqueued."""
+    connection = fakeredis.FakeStrictRedis()
+    q = Queue(queue_module.NOTIFICATIONS_QUEUE, connection=connection, is_async=True)
+    monkeypatch.setattr(queue_module, "get_notifications_queue", lambda: q)
+    return q
+
+
+@pytest.fixture(autouse=True)
 def fake_email_queue(monkeypatch):
     """Sync RQ queue against fakeredis so enqueued jobs execute inline.
 

@@ -33,21 +33,6 @@ describe('BroadcastView', () => {
     expect(onToggleRecipient).toHaveBeenCalledWith('u-2')
   })
 
-  it('marks selected channels pressed and toggles them', async () => {
-    const onToggleChannel = vi.fn()
-    broadcastViewPage.render({ channels: new Set(['in_app']), onToggleChannel })
-    expect(broadcastViewPage.getChannelChip('In-app')).toHaveAttribute(
-      'aria-pressed',
-      'true',
-    )
-    expect(broadcastViewPage.getChannelChip('Email')).toHaveAttribute(
-      'aria-pressed',
-      'false',
-    )
-    await broadcastViewPage.clickChannel('Email')
-    expect(onToggleChannel).toHaveBeenCalledWith('email')
-  })
-
   it('disables send until the draft is valid', () => {
     broadcastViewPage.render({ canSend: false })
     expect(broadcastViewPage.getSendButton()).toBeDisabled()
@@ -61,14 +46,11 @@ describe('BroadcastView', () => {
     expect(onSend).toHaveBeenCalledTimes(1)
   })
 
-  it('shows a success summary with the returned counts', () => {
-    broadcastViewPage.render({
-      result: { recipients: 7, in_app_created: 7, pushed: 4, emailed: 2 },
-    })
-    expect(broadcastViewPage.querySuccess()).toHaveTextContent('Sent to 7 players')
-    expect(
-      broadcastViewPage.queryHint('In-app 7 · push 4 · email 2'),
-    ).toBeInTheDocument()
+  it('shows a queued summary with the recipient count', () => {
+    broadcastViewPage.render({ result: { recipients: 7, queued: true } })
+    expect(broadcastViewPage.querySuccess()).toHaveTextContent(
+      'Queued for 7 players',
+    )
   })
 
   it('shows an error alert on a failed send', () => {
@@ -84,26 +66,14 @@ describe('BroadcastView', () => {
       broadcastViewPage.queryHint('Pick at least one recipient.'),
     ).toBeInTheDocument()
 
-    broadcastViewPage.render({
-      canSend: false,
-      selectedCount: 2,
-      channels: new Set(),
-    })
-    expect(
-      broadcastViewPage.queryHint('Pick at least one channel.'),
-    ).toBeInTheDocument()
+    broadcastViewPage.render({ canSend: false, selectedCount: 2 })
+    expect(broadcastViewPage.queryHint('Add a title.')).toBeInTheDocument()
   })
 
-  it('previews only the selected channels', () => {
-    broadcastViewPage.render({ channels: new Set(['email']) })
-    expect(broadcastViewPage.queryPreviewSection('EMAIL')).toBeInTheDocument()
-    expect(broadcastViewPage.queryPreviewSection('IN-APP / BELL')).not.toBeInTheDocument()
-    expect(broadcastViewPage.queryPreviewSection('PUSH')).not.toBeInTheDocument()
-  })
-
-  it('previews in-app and push by default', () => {
+  it('previews the in-app notification', () => {
     broadcastViewPage.render()
-    expect(broadcastViewPage.queryPreviewSection('IN-APP / BELL')).toBeInTheDocument()
-    expect(broadcastViewPage.queryPreviewSection('PUSH')).toBeInTheDocument()
+    expect(
+      broadcastViewPage.queryPreviewSection('IN-APP / BELL'),
+    ).toBeInTheDocument()
   })
 })

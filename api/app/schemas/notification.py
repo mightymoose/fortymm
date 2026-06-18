@@ -218,28 +218,44 @@ BroadcastRecipients = Annotated[
 
 
 class BroadcastRequest(BaseModel):
-    """An admin broadcast: pick recipients, the channels to try, and the copy.
+    """An admin broadcast: pick recipients and the copy.
 
     Broadcasts are filed under the *tournament* category, so each recipient only
-    receives it on a channel they haven't muted for tournament news — admin
-    reach still respects the player's preferences."""
+    receives it on the channels they haven't muted for tournament news — the
+    server delivers per each player's preferences (there is no admin channel
+    override)."""
 
     model_config = ConfigDict(extra="forbid")
 
     recipients: BroadcastRecipients
-    channels: list[NotificationChannel] = Field(min_length=1)
     title: str = Field(min_length=1, max_length=100)
     body: str = Field(min_length=1, max_length=280)
 
 
 class BroadcastResponse(BaseModel):
-    """What the broadcast did: how many players it targeted and, of those, how
-    many got an in-app record / push / email after preference filtering."""
+    """What the broadcast enqueued: how many players were targeted. Delivery
+    happens in the background (one job per recipient resolves that player's
+    preferences and delivers), so per-channel counts aren't known here."""
 
     recipients: int
-    in_app_created: int
-    pushed: int
-    emailed: int
+    queued: bool = True
+
+
+class NotificationJob(BaseModel):
+    """The queue payload for one background delivery: a category + copy for a
+    single recipient. The worker resolves *this user's* preferences and delivers
+    on the channels they opted into — there is no channel restriction on the
+    payload. Serialized as JSON onto the ``notifications`` RQ queue."""
+
+    user_id: uuid.UUID
+    category: NotificationCategory
+    title: str
+    body: str
+    link: str | None = None
+    action_label: str | None = None
+    delta: str | None = None
+    push_category: str | None = None
+    push_data: dict[str, str] | None = None
 
 
 class BroadcastRecipient(BaseModel):
