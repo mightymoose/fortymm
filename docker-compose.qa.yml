@@ -13,8 +13,19 @@
 #
 # Unlike UAT (fronted by host Caddy at uat.fortymm.com), QA is local-only:
 # hit it directly at http://127.0.0.1:8085.
+#
+# Many at once: every host-facing knob is parameterized so independent QA
+# stacks can run side by side. Override per stack:
+#   QA_ID           project-name suffix; unset → project fortymm-qa
+#   QA_PORT         nginx host port AND the APP_BASE_URL email links point at
+#   QA_MAILPIT_PORT Mailpit web-UI host port
+# e.g.  QA_ID=pr604 QA_PORT=8090 QA_MAILPIT_PORT=8091 \
+#         docker compose -f docker-compose.qa.yml up -d --build
+# With no overrides the defaults below reproduce the original single stack
+# (project fortymm-qa, nginx 8085, mailpit 8087). scripts/qa-up.sh picks a
+# free port trio automatically.
 
-name: fortymm-qa
+name: fortymm-qa${QA_ID:+-${QA_ID}}
 
 # api and worker run the same image and load the same secrets; only their
 # environment/command/depends_on differ.
@@ -39,7 +50,7 @@ x-mailpit-smtp: &mailpit-smtp
   SMTP_USE_TLS: "false"
   SMTP_USERNAME: ""
   SMTP_PASSWORD: ""
-  APP_BASE_URL: http://127.0.0.1:8085
+  APP_BASE_URL: http://127.0.0.1:${QA_PORT:-8085}
 
 services:
   postgres:
@@ -107,7 +118,7 @@ services:
     image: axllent/mailpit:v1.30
     restart: unless-stopped
     ports:
-      - "8087:8025"  # Mailpit web UI — http://127.0.0.1:8087
+      - "${QA_MAILPIT_PORT:-8087}:8025"  # Mailpit web UI (default http://127.0.0.1:8087)
 
   web-client:
     build:
@@ -119,7 +130,7 @@ services:
   nginx:
     image: nginx:1.27-alpine
     ports:
-      - "8085:80"
+      - "${QA_PORT:-8085}:80"
     # uat.conf only references internal service names (api:8000,
     # web-client:80), so it is host-port-agnostic and shared as-is.
     volumes:

@@ -22,23 +22,30 @@ untested. QA runs against the real API through nginx, never the MSW dev server.
 ## 1. Stand up the QA stack (you do this, not Quinn)
 
 The QA stack is `docker-compose.qa.yml` — prod-like (built artifacts, no dev
-server), `fortymm-qa` project, nginx published on **:8085**. `up --build`
-rebuilds the images from the current worktree, so it always tests *this* branch.
+server). `up --build` rebuilds the images from the current worktree, so it
+always tests *this* branch. The stack is parameterized so several can run side
+by side (`QA_ID` → project `fortymm-qa-<id>`, `QA_PORT` → nginx host port +
+`APP_BASE_URL`, `QA_MAILPIT_PORT` → Mailpit UI). Do **not** hardcode 8085 —
+launch via `scripts/qa-up.sh`, which picks a free port trio per stack so a
+parallel `qa-review`/`land-the-plane` in another worktree never collides with
+or accidentally reuses your build.
 
 ```bash
 # .env is gitignored and lives in the main checkout; the worktree won't have it.
 [ -f .env ] || cp /Users/ryan/Development/fortymm/.env .env
 
-docker compose -f docker-compose.qa.yml up -d --build
-
-# Wait for the api entrypoint (migrate + seed) and smoke the real backend.
-# /api/v1/health is a real solver round-trip — needs the worker container up.
-until curl -sf -o /dev/null http://127.0.0.1:8085/api/v1/health; do sleep 2; done
-curl -s -o /dev/null -w "SPA: %{http_code}\n" http://127.0.0.1:8085/
+# Bring up an isolated stack (ID defaults to the current branch). The launcher
+# rebuilds, waits for /api/v1/health (a real solver round-trip — needs the
+# worker up), and prints a machine-readable last line; eval it to import
+# QA_URL / QA_MAILPIT_URL / QA_PROJECT while still streaming build progress.
+eval "$(scripts/qa-up.sh "$(git rev-parse --abbrev-ref HEAD)" | tee /dev/stderr | tail -n1)"
+echo "QA stack: $QA_URL  (project $QA_PROJECT)"
+curl -s -o /dev/null -w "SPA: %{http_code}\n" "$QA_URL/"
 ```
 
-If 8085 is taken (`lsof -i :8085`), the stack is already running — reuse it. If
-`up --build` recreates a subset of services later, also `restart nginx` or it
+Use `$QA_URL` (not a literal port) everywhere below — including the `BASE_URL`
+you hand Quinn. If `up --build` later recreates a subset of services, also
+`docker compose -p "$QA_PROJECT" -f docker-compose.qa.yml restart nginx` or it
 serves stale upstream IPs and 502s.
 
 Create a screenshots dir and note its **absolute** path — you'll pass it to
@@ -152,10 +159,12 @@ pkill -f 'remote-debugging-port=9222'
 pkill -f 'remote-debugging-port=9223'
 ```
 
-Tear down the stack unless the user wants it left up for their own poking:
+Tear down the stack unless the user wants it left up for their own poking. Use
+the project name captured from the launcher so you tear down *this* stack, not
+another worktree's:
 
 ```bash
-docker compose -f docker-compose.qa.yml down -v   # -v wipes QA data
+docker compose -p "$QA_PROJECT" -f docker-compose.qa.yml down -v   # -v wipes QA data
 ```
 
 Confirm teardown (Chromes closed, stack down, and whether you removed the copied
