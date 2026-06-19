@@ -699,6 +699,23 @@ def _enqueue_merge_email(to_email: str, raw_token: str, username: str) -> Job:
     )
 
 
+def _enqueue_no_account_email(to_email: str) -> Job:
+    """The tokenless 'no account for this email yet' notice. Carries no
+    credential — the account doesn't exist — so it takes neither a token nor a
+    username.
+
+    Not routed through ``_enqueue_email_job`` (which threads a raw token +
+    username), but it mirrors that helper's ``result_ttl`` / ``failure_ttl`` so
+    every email job ages out of the RQ registries on the same schedule. There's
+    no token to protect here — the short TTLs are just registry hygiene."""
+    return queue_module.get_email_queue().enqueue(
+        "app.email.send_no_account_email",
+        to_email,
+        result_ttl=60,
+        failure_ttl=300,
+    )
+
+
 def _enqueue_rating_recompute_after_merge(user_id: uuid.UUID) -> None:
     """Fire-and-forget the rating recompute for ``user_id`` after a merge.
 
@@ -1067,7 +1084,11 @@ async def request_login_email(
     belongs to a known account. Differential responses would let an
     attacker enumerate the user base by cycling guest sessions for fresh
     rate-limit budgets — the same enumeration vector the email-change flow
-    guards against.
+    guards against. An address with no account still gets a (tokenless)
+    "no account yet" email, so a known and an unknown address are
+    indistinguishable from the outside — same status, same shape, and a
+    piece of mail either way — rather than the unknown case silently
+    delivering nothing.
 
     Accounts whose email hasn't been confirmed yet get the confirmation
     link re-sent instead of a sign-in link. The login token would let
@@ -1090,6 +1111,7 @@ async def request_login_email(
         await db.execute(select(User).where(User.email == email))
     ).scalar_one_or_none()
     if user is None:
+        await _send_no_account_email_or_503(email)
         return LoginRequestAccepted(email=email)
 
     if user.confirmed_at is None:
@@ -1118,6 +1140,21 @@ async def _requesting_guest_id(
     ):
         return None
     return requester.id
+
+
+async def _send_no_account_email_or_503(email: str) -> None:
+    """Enqueue the tokenless 'no account yet' notice for an unknown address.
+
+    There's no DB write to guard, but on an enqueue failure we raise the same
+    503 the known-account path raises — so a Redis flap fails both paths
+    identically and the outcome never reveals whether the address exists."""
+    try:
+        _enqueue_no_account_email(email)
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Email service unavailable. Try again in a moment.",
+        ) from None
 
 
 async def _issue_and_send_login_email(

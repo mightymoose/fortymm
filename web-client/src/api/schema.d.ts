@@ -133,7 +133,11 @@ export interface paths {
          *     belongs to a known account. Differential responses would let an
          *     attacker enumerate the user base by cycling guest sessions for fresh
          *     rate-limit budgets — the same enumeration vector the email-change flow
-         *     guards against.
+         *     guards against. An address with no account still gets a (tokenless)
+         *     "no account yet" email, so a known and an unknown address are
+         *     indistinguishable from the outside — same status, same shape, and a
+         *     piece of mail either way — rather than the unknown case silently
+         *     delivering nothing.
          *
          *     Accounts whose email hasn't been confirmed yet get the confirmation
          *     link re-sent instead of a sign-in link. The login token would let
