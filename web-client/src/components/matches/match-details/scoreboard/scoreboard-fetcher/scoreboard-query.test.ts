@@ -540,6 +540,7 @@ describe("scoreboardQuery", () => {
         buildMatchDetails({
           id: "m-99",
           best_of: 5,
+          can_score: true,
           games: [
             buildMatchDetailsGame({
               score: buildMatchDetailsScore({
@@ -655,6 +656,7 @@ describe("scoreboardQuery", () => {
     scoreboardQueryPage.mockEndpoint(() =>
       HttpResponse.json(
         buildMatchDetails({
+          can_score: true,
           sides: [
             buildMatchDetailsSide({
               players: [
@@ -692,6 +694,37 @@ describe("scoreboardQuery", () => {
     expect(mine).toMatchObject({ name: "rita.kovac" });
     expect(mine.cells[0]).toMatchObject({ points: 7, editGameNumber: 1 });
     expect(theirs.cells[0]).toMatchObject({
+      points: 11,
+      editGameNumber: null,
+    });
+  });
+
+  it("carries no edit link on the viewer's own scored cell once the board is locked (can_score false)", async () => {
+    // A posted/confirmed result flips `can_score` to false: the scores can no
+    // longer be edited, so the viewer's own cells must render as plain text
+    // rather than links — otherwise they'd show a hand cursor on hover.
+    scoreboardQueryPage.mockEndpoint(() =>
+      HttpResponse.json(
+        buildMatchDetails({
+          can_score: false,
+          games: [
+            buildMatchDetailsGame({
+              score: buildMatchDetailsScore({
+                side_1_points: 11,
+                side_2_points: 7,
+              }),
+            }),
+          ],
+          data: { scoreboard: { status: "final" } },
+        }),
+      ),
+    );
+
+    const { result } = scoreboardQueryPage.render();
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    const [mine] = result.current.data!.gameGrid!.rows;
+    expect(mine.cells[0]).toMatchObject({
       points: 11,
       editGameNumber: null,
     });

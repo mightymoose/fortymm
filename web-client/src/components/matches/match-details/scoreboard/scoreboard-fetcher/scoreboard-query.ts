@@ -277,10 +277,12 @@ const selectGameGrid = (match: MatchDetailsResult): GameGridView | null => {
     slots.push(gamesByNumber.get(n) ?? null);
   }
 
-  // Per-cell edit links are gated on participation — spectators can't write
-  // scores — and only the viewer's own row carries them, so the user doesn't
-  // see two stacked links over the same game.
-  const canEdit = first.is_current_user_side;
+  // Per-cell edit links are gated on the server's `can_score` flag — which is
+  // false once a result is posted/confirmed (the board is locked) or for a
+  // spectator — and only the viewer's own row carries them, so the user doesn't
+  // see two stacked links over the same game, nor a hand cursor on scores that
+  // can no longer be edited.
+  const canEdit = details.can_score && first.is_current_user_side;
   return {
     matchId: details.id,
     bestOf: details.best_of,
