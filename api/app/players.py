@@ -2,8 +2,7 @@ import uuid
 from collections.abc import Iterable, Mapping
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from pyrate_limiter import Duration, Rate
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import Select, and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased, selectinload
@@ -20,7 +19,6 @@ from app.models import (
     User,
     UserLeagueRating,
 )
-from app.rate_limiting import RedisRateLimiter
 from app.schemas.player import (
     PlayerDetail,
     PlayerListResponse,
@@ -199,23 +197,6 @@ async def search_players(
 # W-L, form, per-set scores), so the FE doesn't join sides + games + flip
 # perspective. See `web-client/CLAUDE.md` BFF section.
 # ---------------------------------------------------------------------------
-
-
-async def _public_player_ip_key(request: Request) -> str:
-    """Per-IP key for the unauthenticated public profile endpoint — there's
-    no session cookie to bucket against, so IP is all we have."""
-    client = request.client
-    ip = client.host if client else "unknown"
-    return f"public-player-ip:{ip}"
-
-
-# 60/min per IP: comfortably above a human browsing several profiles in quick
-# succession, well below the volume needed to scrape the user table.
-public_player_ip_rate_limit = RedisRateLimiter(
-    rates=[Rate(60, Duration.MINUTE)],
-    bucket_key="public-player-ip",
-    identifier=_public_player_ip_key,
-)
 
 
 def _username_substring_filter[SelectT: Select[Any]](query: SelectT, q: str) -> SelectT:
@@ -398,17 +379,6 @@ async def _load_player_by_id(db: AsyncSession, player_id: uuid.UUID) -> User | N
     ).scalar_one_or_none()
 
 
-async def _load_player_by_username(db: AsyncSession, username: str) -> User | None:
-    return (
-        await db.execute(
-            select(User).where(
-                User.username == username,
-                User.merged_into_user_id.is_(None),
-            )
-        )
-    ).scalar_one_or_none()
-
-
 async def _summarize_one_player(
     db: AsyncSession, user: User, league_id: uuid.UUID
 ) -> PlayerSummary:
@@ -419,8 +389,7 @@ async def _summarize_one_player(
 async def _player_detail(
     db: AsyncSession, user: User, league_id: uuid.UUID
 ) -> PlayerDetail:
-    """Shared body for both `/v1/players/{id}` and
-    `/v1/p/players/{username}` — bundles the hero summary with the first
+    """Body for `/v1/players/{id}` — bundles the hero summary with the first
     page of matches so the profile page paints in one round trip. The FE
     seeds the matches-query cache from the embedded ``matches`` field;
     page 2+ falls through to `/v1/players/{id}/matches`."""
@@ -441,27 +410,6 @@ async def get_player(
     """Authed profile bundle for `/players/$userId` — hero + first page of
     matches in one response."""
     user = await _load_player_by_id(db, player_id)
-    if user is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Player not found."
-        )
-    league = await resolve_league(db, league_id)
-    return await _player_detail(db, user, league.id)
-
-
-@router.get(
-    "/p/players/{username}",
-    response_model=PlayerDetail,
-    dependencies=[Depends(public_player_ip_rate_limit)],
-)
-async def get_public_player(
-    username: str,
-    league_id: uuid.UUID | None = Query(default=None),
-    db: AsyncSession = Depends(get_session),
-) -> PlayerDetail:
-    """Public profile bundle for `/p/players/$username` — same shape as
-    the authed endpoint. No session required, rate-limited per-IP."""
-    user = await _load_player_by_username(db, username)
     if user is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Player not found."
@@ -555,10 +503,9 @@ async def _paginated_player_matches(
     page: int,
     page_size: int,
 ) -> PlayerMatchListResponse:
-    """Shared body for both `/v1/players/{id}/matches` and
-    `/v1/p/players/{username}/matches`. The two endpoints differ only in
-    how they resolve the player; the matches list shape, ordering, and
-    perspective flip are identical."""
+    """Per-player matches list backing `/v1/players/{id}/matches`: list
+    shape, newest-first ordering, and the perspective flip onto the
+    headline player's side."""
     participant = (
         select(MatchSidePlayer.id)
         .where(
@@ -590,27 +537,19 @@ async def _paginated_player_matches(
     )
 
 
-@router.get(
-    "/players/{player_id}/matches",
-    response_model=PlayerMatchListResponse,
-    dependencies=[Depends(public_player_ip_rate_limit)],
-)
+@router.get("/players/{player_id}/matches", response_model=PlayerMatchListResponse)
 async def list_player_matches(
     player_id: uuid.UUID,
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=LIST_DEFAULT_PAGE_SIZE, ge=1, le=LIST_MAX_PAGE_SIZE),
+    _current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_session),
 ) -> PlayerMatchListResponse:
-    """Paginated per-player match history backing the profile-page match
-    table on BOTH the authed (`/players/$userId`) and public
-    (`/p/players/$username`) surfaces — the public page has already
-    resolved username → id via `/v1/p/players/{username}`, so it has the
-    id to hit this endpoint with.
-
-    Public — no session required, IP-rate-limited (60/min) so the match
-    history can't be scraped from a single source. Newest-first by
-    ``created_at``. Sets are projected from the player's perspective so
-    the FE renders them without flipping sides.
+    """Paginated per-player match history backing page 2+ of the authed
+    profile page (`/players/$userId`); page 1 ships inline in the
+    `/v1/players/{id}` bundle. Newest-first by ``created_at``. Sets are
+    projected from the player's perspective so the FE renders them without
+    flipping sides.
     """
     user = await _load_player_by_id(db, player_id)
     if user is None:
