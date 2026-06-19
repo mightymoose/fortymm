@@ -3,6 +3,7 @@ import {
   useNotificationTaxonomy,
   useUpdateNotificationPreferences,
 } from '@/api/notifications'
+import { useSession } from '@/api/session'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { PreferencesView } from './notification-preferences-page/preferences-view'
 
@@ -11,6 +12,7 @@ import { PreferencesView } from './notification-preferences-page/preferences-vie
 export function NotificationPreferencesPage() {
   const preferences = useNotificationPreferences()
   const taxonomy = useNotificationTaxonomy()
+  const session = useSession()
   const update = useUpdateNotificationPreferences()
 
   if (preferences.isPending || taxonomy.isPending) {
@@ -36,6 +38,7 @@ export function NotificationPreferencesPage() {
     <PreferencesView
       preferences={preferences.data}
       taxonomy={taxonomy.data}
+      pendingEmail={session.data?.data.user.pending_email ?? null}
       onToggleChannel={(channel, enabled) =>
         update.mutate({ channels: [{ channel, enabled }], cells: [] })
       }

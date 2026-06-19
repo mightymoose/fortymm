@@ -12,6 +12,7 @@ export function buildPreferencesViewProps(
   return {
     preferences: notificationPreferences(),
     taxonomy: notificationTaxonomy(),
+    pendingEmail: null,
     onToggleChannel: () => {},
     onToggleCell: () => {},
     ...overrides,

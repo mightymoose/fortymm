@@ -437,6 +437,10 @@ function notifChannelState(
     available,
     locked,
     destination: notifChannelDestination(channel),
+    // The default scenario is a fully set-up account (email confirmed, a push
+    // device registered), matching the configured destinations above. The
+    // nudge tests flip this per channel.
+    setup_required: false,
   }
 }
 
