@@ -17,6 +17,10 @@ const scoped = (container: Container) => ({
   getNewButton() {
     return container.getAllByRole('button', { name: /New tournament/ })[0]
   },
+  /** All "New tournament" actions — empty when the caller can't create. */
+  queryNewButtons() {
+    return container.queryAllByRole('button', { name: /New tournament/ })
+  },
   getResultCount() {
     return container.getByText(/results?$/)
   },

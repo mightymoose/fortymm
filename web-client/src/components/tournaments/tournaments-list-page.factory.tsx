@@ -15,6 +15,7 @@ export function buildTournamentsListPageProps(
     onOpen: () => {},
     onCreate: () => {},
     onDelete: () => {},
+    canCreate: true,
     ...overrides,
   }
 }

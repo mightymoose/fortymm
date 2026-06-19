@@ -44,4 +44,13 @@ describe('TournamentCard', () => {
     await userEvent.click(tournamentCardPage.getDeleteButton('Summer Slam'))
     expect(onDelete).toHaveBeenCalledTimes(1)
   })
+
+  it('hides the delete control for a non-creator (canEdit: false)', () => {
+    tournamentCardPage.render({
+      tournament: buildTournament({ name: 'Summer Slam', canEdit: false }),
+    })
+
+    expect(tournamentCardPage.getOpenButton('Summer Slam')).toBeInTheDocument()
+    expect(tournamentCardPage.queryDeleteButton('Summer Slam')).toBeNull()
+  })
 })

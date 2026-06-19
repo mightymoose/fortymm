@@ -95,10 +95,10 @@ const NAV_SECTIONS: NavSection[] = [
       },
       {
         // Top-level (not nested under Administration, which requires
-        // ADMIN_VIEW) so a Beta tester with only `tournament.manage` sees it.
+        // ADMIN_VIEW) so a Beta tester with `tournament.view` sees it.
         label: 'Tournaments',
         to: '/tournaments',
-        requires: PERM.TOURNAMENT_MANAGE,
+        requires: PERM.TOURNAMENT_VIEW,
         icon: <Trophy size={18} strokeWidth={2} />,
       },
       {

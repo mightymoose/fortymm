@@ -13,6 +13,10 @@ const scoped = (container: Container) => ({
   getDeleteButton(name: string) {
     return container.getByRole('button', { name: `Delete ${name}` })
   },
+  /** The delete control, or null when absent (a non-creator's card). */
+  queryDeleteButton(name: string) {
+    return container.queryByRole('button', { name: `Delete ${name}` })
+  },
   /** The card's status pill, reusing the badge's own query. */
   ...statusBadgePage.within(container),
 })

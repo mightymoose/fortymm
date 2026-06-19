@@ -19,15 +19,20 @@ from app.schemas.tournament import (
 )
 from app.sessions import get_current_user
 
-# Every route here is gated on this permission (router-wide). PATCH, DELETE, and
-# all event mutations additionally require the caller to be the tournament's
-# creator.
-TOURNAMENT_PERMISSION = "tournament.manage"
+# Reads are gated on ``tournament.view`` and creation on ``tournament.create``
+# (both granted to the Beta-tester role in ``scripts/seed_rbac.py``). The
+# mutating routes — PATCH, DELETE, and every event mutation — carry NO
+# permission gate: they're owner-only, available solely to the user who created
+# the tournament (``_require_owner``). There is deliberately no
+# ``tournament.edit``/``tournament.delete``/``tournament.publish`` permission;
+# managing a tournament you created is a property of ownership, not a role grant.
+TOURNAMENT_VIEW = "tournament.view"
+TOURNAMENT_CREATE = "tournament.create"
 
-router = APIRouter(
-    prefix="/v1",
-    dependencies=[Depends(require_permission(TOURNAMENT_PERMISSION))],
-)
+require_view = require_permission(TOURNAMENT_VIEW)
+require_create = require_permission(TOURNAMENT_CREATE)
+
+router = APIRouter(prefix="/v1")
 
 
 # ----- helpers -------------------------------------------------------------
@@ -135,7 +140,11 @@ def _require_owner(t: Tournament, current_user: User) -> None:
 # ----- tournament routes ---------------------------------------------------
 
 
-@router.get("/tournaments", response_model=list[TournamentDetailRead])
+@router.get(
+    "/tournaments",
+    response_model=list[TournamentDetailRead],
+    dependencies=[Depends(require_view)],
+)
 async def list_tournaments(
     db: AsyncSession = Depends(get_session),
     current_user: User = Depends(get_current_user),
@@ -184,6 +193,7 @@ async def list_tournaments(
     "/tournaments",
     response_model=TournamentRead,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_create)],
 )
 async def create_tournament(
     payload: TournamentCreate,
@@ -212,7 +222,11 @@ async def create_tournament(
     )
 
 
-@router.get("/tournaments/{tournament_id}", response_model=TournamentDetailRead)
+@router.get(
+    "/tournaments/{tournament_id}",
+    response_model=TournamentDetailRead,
+    dependencies=[Depends(require_view)],
+)
 async def get_tournament(
     tournament_id: uuid.UUID,
     db: AsyncSession = Depends(get_session),

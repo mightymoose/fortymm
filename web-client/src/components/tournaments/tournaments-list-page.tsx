@@ -18,6 +18,9 @@ export interface TournamentsListPageProps {
   onOpen: (id: string) => void
   onCreate: (draft: Omit<Tournament, 'id'>) => void
   onDelete: (id: string) => void
+  /** Whether to surface the "New tournament" action — gated on the caller's
+   * `tournament.create` permission. Creating 403s without it, so hide it. */
+  canCreate: boolean
 }
 
 type StatusFilter = (typeof STATUS_FILTER_OPTIONS)[number]['value']
@@ -29,6 +32,7 @@ export const TournamentsListPage = ({
   onOpen,
   onCreate,
   onDelete,
+  canCreate,
 }: TournamentsListPageProps) => {
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState<StatusFilter>('all')
@@ -57,10 +61,12 @@ export const TournamentsListPage = ({
         title="Tournaments"
         subtitle={`${tournaments.length} total · ${activeCount} active. Create draws, schedule pools, publish to players.`}
         action={
-          <Button size="lg" onClick={() => setCreateOpen(true)}>
-            <Plus size={18} />
-            New tournament
-          </Button>
+          canCreate ? (
+            <Button size="lg" onClick={() => setCreateOpen(true)}>
+              <Plus size={18} />
+              New tournament
+            </Button>
+          ) : undefined
         }
       />
 
@@ -99,10 +105,12 @@ export const TournamentsListPage = ({
           title="No tournaments match"
           hint="Adjust the filters or create a new one."
           action={
-            <Button onClick={() => setCreateOpen(true)}>
-              <Plus size={16} />
-              New tournament
-            </Button>
+            canCreate ? (
+              <Button onClick={() => setCreateOpen(true)}>
+                <Plus size={16} />
+                New tournament
+              </Button>
+            ) : undefined
           }
         />
       ) : (

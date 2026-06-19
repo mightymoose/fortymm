@@ -17,7 +17,8 @@ from app.models import Permission, Role, RolePermission
 PERMISSIONS = [
     ("administration.view", "Open the Administration area and see the overview."),
     ("authorization.manage", "Manage roles, permissions, and user role assignments."),
-    ("tournament.manage", "Create and manage tournaments (beta)."),
+    ("tournament.view", "See the tournament list and tournament details."),
+    ("tournament.create", "Create a new tournament."),
     ("notifications.broadcast", "Send broadcast notifications to players."),
 ]
 
@@ -29,8 +30,9 @@ ROLES = [
     ),
     (
         "Beta tester",
-        "Early-access testers who can create and manage tournaments.",
-        ["tournament.manage"],
+        "Early-access testers who can view and create tournaments. Editing,"
+        " publishing, and deleting a tournament is reserved for its creator.",
+        ["tournament.view", "tournament.create"],
     ),
 ]
 

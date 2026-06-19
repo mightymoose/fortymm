@@ -41,9 +41,15 @@ export const mockSession = sessionResponse({
     username: 'rita.kovac',
     // The Administration nav *section* is gated on ADMIN_VIEW (app-shell), and
     // its children on their own permission. Grant ADMIN_VIEW so the section
-    // expands, AUTH_MANAGE for the RBAC pages, and TOURNAMENT_MANAGE so the
-    // Tournaments item appears and its page loads under `npm run dev`.
-    permissions: [PERM.ADMIN_VIEW, PERM.AUTH_MANAGE, PERM.TOURNAMENT_MANAGE],
+    // expands, AUTH_MANAGE for the RBAC pages, and TOURNAMENT_VIEW +
+    // TOURNAMENT_CREATE so the Tournaments item appears, its page loads, and the
+    // "New tournament" action shows under `npm run dev`.
+    permissions: [
+      PERM.ADMIN_VIEW,
+      PERM.AUTH_MANAGE,
+      PERM.TOURNAMENT_VIEW,
+      PERM.TOURNAMENT_CREATE,
+    ],
   },
 })
 export const mockHealthy = healthCheck()
