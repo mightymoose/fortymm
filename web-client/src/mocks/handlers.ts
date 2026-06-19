@@ -221,8 +221,8 @@ function playerDetail(p: {
   }
 }
 
-/** Shared by the authed and public per-player-matches handlers — projects
- * the player's matches and slices to the requested page. */
+/** Backs the per-player-matches handler — projects the player's matches and
+ * slices to the requested page. */
 function paginatedMatches(
   player: { id: string; username: string },
   request: Request,

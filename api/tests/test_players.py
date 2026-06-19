@@ -518,51 +518,6 @@ async def test_get_player_404_when_missing(
     assert response.status_code == 404
 
 
-async def test_get_public_player_does_not_require_session(
-    api_client: AsyncClient, db_session: AsyncSession
-):
-    """Public profile bundle: same shape as the authed variant — hero
-    summary + first-page matches inline."""
-    target = await make_user(db_session, "public.player")
-    opponent = await make_user(db_session, "public.opp")
-    await _record_match_with_winner(db_session, target, opponent, created_at=BASE_TIME)
-    async with make_client() as client:
-        response = await client.get("/v1/p/players/public.player")
-    assert response.status_code == 200
-    body = response.json()
-    assert body["id"] == str(target.id)
-    assert body["username"] == "public.player"
-    assert "session" not in response.cookies
-    # Embedded matches let the public profile paint in one request.
-    assert body["matches"]["total"] == 1
-    assert body["matches"]["items"][0]["opponent"]["username"] == "public.opp"
-    assert api_client is not None
-
-
-async def test_get_public_player_404_when_missing(
-    api_client: AsyncClient, db_session: AsyncSession
-):
-    async with make_client() as client:
-        response = await client.get("/v1/p/players/nobody.here")
-    assert response.status_code == 404
-    assert api_client is not None
-    assert db_session is not None
-
-
-async def test_get_public_player_is_rate_limited_per_ip(
-    api_client: AsyncClient, db_session: AsyncSession
-):
-    """After 60 requests in the same minute from one IP, the 61st returns 429."""
-    await make_user(db_session, "rl.public.player")
-    async with make_client() as client:
-        for i in range(60):
-            response = await client.get("/v1/p/players/rl.public.player")
-            assert response.status_code == 200, (i, response.text)
-        over = await client.get("/v1/p/players/rl.public.player")
-    assert over.status_code == 429
-    assert api_client is not None
-
-
 async def test_list_player_matches_returns_perspective_paginated(
     api_client: AsyncClient, db_session: AsyncSession
 ):
@@ -645,37 +600,13 @@ async def test_list_player_matches_404_when_player_missing(
     assert response.status_code == 404
 
 
-async def test_list_player_matches_does_not_require_a_session(
+async def test_list_player_matches_requires_a_session(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    """The matches endpoint is public — both the authed
-    `/players/$userId` page and the public `/p/players/$username` page
-    hit it with the same id (the public page resolves username → id via
-    `/v1/p/players/{username}` first). Rate-limited per-IP for both."""
-    target = await make_user(db_session, "anon.viewer.target")
-    opp = await make_user(db_session, "anon.viewer.opp")
-    await _record_match_with_winner(db_session, target, opp, created_at=BASE_TIME)
+    """The matches endpoint backs page 2+ of the authed profile page, so it
+    requires a session like the rest of `/players`."""
+    target = await make_user(db_session, "needs.auth.matches")
     async with make_client() as client:
         response = await client.get(f"/v1/players/{target.id}/matches")
-    assert response.status_code == 200
-    body = response.json()
-    assert body["total"] == 1
-    assert body["items"][0]["result"] == "W"
-    assert body["items"][0]["opponent"]["username"] == "anon.viewer.opp"
-    assert "session" not in response.cookies
-    assert api_client is not None
-
-
-async def test_list_player_matches_is_rate_limited_per_ip(
-    api_client: AsyncClient, db_session: AsyncSession
-):
-    """Per-IP rate limit (60/min) keeps the matches endpoint from being
-    scraped from a single source, even though it's now public."""
-    target = await make_user(db_session, "rl.matches.target")
-    async with make_client() as client:
-        for i in range(60):
-            response = await client.get(f"/v1/players/{target.id}/matches")
-            assert response.status_code == 200, (i, response.text)
-        over = await client.get(f"/v1/players/{target.id}/matches")
-    assert over.status_code == 429
+    assert response.status_code == 401
     assert api_client is not None

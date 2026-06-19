@@ -611,27 +611,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/p/players/{username}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Public Player
-         * @description Public profile bundle for `/p/players/$username` — same shape as
-         *     the authed endpoint. No session required, rate-limited per-IP.
-         */
-        get: operations["get_public_player_v1_p_players__username__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/v1/players/{player_id}/matches": {
         parameters: {
             query?: never;
@@ -641,16 +620,11 @@ export interface paths {
         };
         /**
          * List Player Matches
-         * @description Paginated per-player match history backing the profile-page match
-         *     table on BOTH the authed (`/players/$userId`) and public
-         *     (`/p/players/$username`) surfaces — the public page has already
-         *     resolved username → id via `/v1/p/players/{username}`, so it has the
-         *     id to hit this endpoint with.
-         *
-         *     Public — no session required, IP-rate-limited (60/min) so the match
-         *     history can't be scraped from a single source. Newest-first by
-         *     ``created_at``. Sets are projected from the player's perspective so
-         *     the FE renders them without flipping sides.
+         * @description Paginated per-player match history backing page 2+ of the authed
+         *     profile page (`/players/$userId`); page 1 ships inline in the
+         *     `/v1/players/{id}` bundle. Newest-first by ``created_at``. Sets are
+         *     projected from the player's perspective so the FE renders them without
+         *     flipping sides.
          */
         get: operations["list_player_matches_v1_players__player_id__matches_get"];
         put?: never;
@@ -1898,8 +1872,8 @@ export interface components {
          * PlayerDetail
          * @description Profile-page bundle: the hero (`PlayerSummary` fields) plus the
          *     first page of matches inline. Saves a round trip on initial load —
-         *     `GET /v1/players/{id}` (and the public `/v1/p/players/{username}`
-         *     variant) returns this so the profile page paints with one request.
+         *     `GET /v1/players/{id}` returns this so the profile page paints with one
+         *     request.
          *
          *     Pagination beyond page 1 still hits `GET /v1/players/{id}/matches`
          *     directly; the FE seeds page 1's cache from this `matches` field via
@@ -3894,39 +3868,6 @@ export interface operations {
             };
         };
     };
-    get_public_player_v1_p_players__username__get: {
-        parameters: {
-            query?: {
-                league_id?: string | null;
-            };
-            header?: never;
-            path: {
-                username: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PlayerDetail"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     list_player_matches_v1_players__player_id__matches_get: {
         parameters: {
             query?: {
@@ -3937,7 +3878,9 @@ export interface operations {
             path: {
                 player_id: string;
             };
-            cookie?: never;
+            cookie?: {
+                session?: string | null;
+            };
         };
         requestBody?: never;
         responses: {

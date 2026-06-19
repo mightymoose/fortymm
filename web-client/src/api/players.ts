@@ -111,9 +111,9 @@ export function usePlayerById(
 }
 
 /** Per-player paginated match list — pre-shaped from the player's
- * perspective so the FE doesn't have to flip set scores. The backend
- * endpoint is public (no session required) and IP-rate-limited. The authed
- * `/players/$userId` route already has the id by the time it calls this.
+ * perspective so the FE doesn't have to flip set scores. Backs page 2+ of
+ * the authed `/players/$userId` profile page, which already has the id by
+ * the time it calls this.
  *
  * Intentionally NOT `throwOnError`: the profile page renders an inline
  * "Couldn't load matches · Try again" affordance for transient failures
