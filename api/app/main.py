@@ -18,7 +18,12 @@ from app.notifications.router import router as notifications_router
 from app.players import router as players_router
 from app.rate_limiting import init_rate_limit_redis, shutdown_rate_limit_redis
 from app.rbac import router as rbac_router
-from app.sessions import CSRF_COOKIE_NAME, CSRF_HEADER_NAME, CSRF_SAFE_METHODS
+from app.sessions import (
+    CSRF_COOKIE_NAME,
+    CSRF_HEADER_NAME,
+    CSRF_SAFE_METHODS,
+    SESSION_COOKIE_NAME,
+)
 from app.sessions import router as sessions_router
 from app.tournaments import router as tournaments_router
 
@@ -49,12 +54,28 @@ app = FastAPI(title="FortyMM API", lifespan=lifespan)
 async def csrf_protect(
     request: Request, call_next: Callable[[Request], Awaitable[Response]]
 ) -> Response:
-    """Double-submit CSRF guard: every unsafe-method request must echo the
-    non-HttpOnly ``csrf_token`` cookie back in the ``X-CSRF-Token`` header. A
-    cross-origin attacker's page can ride along the cookie but can neither read
-    its value nor set a custom header, so it can't produce a match. The cookie
-    is issued/rotated alongside the session cookie in ``app.sessions``."""
-    if request.method not in CSRF_SAFE_METHODS:
+    """Double-submit CSRF guard: every unsafe-method request that rides an
+    established ``session`` cookie must echo the non-HttpOnly ``csrf_token``
+    cookie back in the ``X-CSRF-Token`` header. A cross-origin attacker's page
+    can ride along the cookie but can neither read its value nor set a custom
+    header, so it can't produce a match. The cookie is issued/rotated alongside
+    the session cookie in ``app.sessions``.
+
+    The guard only engages when a session cookie is present, because CSRF is
+    only meaningful against a request abusing a victim's *ambient authority* —
+    the session cookie the browser attaches automatically. A request with no
+    session cookie carries no such authority: it runs anonymously, so there is
+    nothing to forge. Exempting it is what lets the cold, cookieless auth flows
+    work — landing straight on ``/login`` to request a sign-in link, or opening
+    a magic-link / email-confirm on a device that never loaded the app (and so
+    was never issued a csrf_token cookie). Those endpoints are gated by their
+    own non-cookie credential — a captcha + rate limit on ``/login/request``, an
+    unguessable single-use token in the body on consume/confirm — so they don't
+    need (or get) CSRF cover. The moment a session cookie rides along, the
+    double-submit guard is enforced in full."""
+    if request.method not in CSRF_SAFE_METHODS and request.cookies.get(
+        SESSION_COOKIE_NAME
+    ):
         cookie = request.cookies.get(CSRF_COOKIE_NAME)
         header = request.headers.get(CSRF_HEADER_NAME)
         if not cookie or not header or not secrets.compare_digest(cookie, header):

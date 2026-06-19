@@ -28,6 +28,7 @@ from app.sessions import (
 from tests._helpers import (
     CSRF_EVENT_HOOKS,
     make_client,
+    make_raw_client,
     make_user,
     start_session,
 )
@@ -787,3 +788,38 @@ async def test_consume_skip_merge_signs_in_without_folding(
         await db_session.execute(select(User).where(User.id == guest.id))
     ).scalar_one()
     assert survivor.merged_into_user_id is None
+
+
+# ----- Cold, cookieless sign-in (regression for the direct-to-/login bug) ----
+
+
+@pytest_asyncio.fixture
+async def cold_client(db_session: AsyncSession) -> AsyncIterator[AsyncClient]:
+    """A client with no session cookie and *without* the CSRF auto-attach hook,
+    standing in for a browser that landed straight on ``/login`` (or opened a
+    magic link on a device that never loaded the app), so it was never issued
+    session/csrf cookies."""
+
+    async def _override() -> AsyncIterator[AsyncSession]:
+        yield db_session
+
+    app.dependency_overrides[get_session] = _override
+    async with make_raw_client() as client:
+        yield client
+    app.dependency_overrides.clear()
+
+
+async def test_request_login_succeeds_without_session_or_csrf_cookie(
+    cold_client: AsyncClient, db_session: AsyncSession, fake_email_queue
+):
+    """Landing cold on ``/login`` and requesting a link must not 403: the
+    request carries no session cookie, so the CSRF double-submit guard doesn't
+    engage (there is no ambient authority to forge), and captcha + rate limiting
+    still gate the endpoint."""
+    await _make_confirmed_user(db_session, "rita@example.com")
+
+    response = await cold_client.post("/v1/login/request", json=REQUEST_BODY)
+
+    assert response.status_code == 202
+    assert response.json() == {"email": "rita@example.com"}
+    assert cold_client.cookies.get(SESSION_COOKIE_NAME) is None

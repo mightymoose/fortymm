@@ -100,6 +100,16 @@ def make_client() -> AsyncClient:
     )
 
 
+def make_raw_client() -> AsyncClient:
+    """Like ``make_client`` but *without* the CSRF auto-attach hook, so a test
+    can drive the double-submit guard by hand — or stand in for a cold,
+    cookieless browser that was never issued session/csrf cookies."""
+    return AsyncClient(
+        transport=ASGITransport(app=fastapi_app),
+        base_url="https://testserver",
+    )
+
+
 @asynccontextmanager
 async def opponent_session(
     db_session: AsyncSession, username: str
