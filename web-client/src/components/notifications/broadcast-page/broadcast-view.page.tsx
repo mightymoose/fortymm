@@ -13,6 +13,9 @@ const scoped = (container: Container) => ({
   getRecipient(username: string) {
     return container.getByRole('checkbox', { name: username })
   },
+  getCategoryTrigger() {
+    return container.getByRole('combobox', { name: 'Category' })
+  },
   getTitleInput() {
     return container.getByLabelText('Title')
   },
@@ -30,6 +33,14 @@ const scoped = (container: Container) => ({
   },
   queryHint(text: string) {
     return container.queryByText(text)
+  },
+  /** The "Filed under <category> — …" compose caption. */
+  queryFiledUnder(label: string) {
+    return container.queryByText(
+      (_content: string, el: Element | null) =>
+        el?.tagName === 'P' &&
+        (el.textContent ?? '').startsWith(`Filed under ${label} —`),
+    )
   },
   /** A preview section label (e.g. IN-APP / BELL). */
   queryPreviewSection(label: string) {

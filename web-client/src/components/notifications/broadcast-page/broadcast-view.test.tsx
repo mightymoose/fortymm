@@ -76,4 +76,18 @@ describe('BroadcastView', () => {
       broadcastViewPage.queryPreviewSection('IN-APP / BELL'),
     ).toBeInTheDocument()
   })
+
+  it('shows the selected category on the trigger', () => {
+    broadcastViewPage.render({ category: 'rating_change' })
+    expect(broadcastViewPage.getCategoryTrigger()).toHaveTextContent(
+      'Rating change',
+    )
+  })
+
+  it('files the message under the selected category', () => {
+    broadcastViewPage.render({ category: 'rating_change' })
+    expect(
+      broadcastViewPage.queryFiledUnder('Rating change'),
+    ).toBeInTheDocument()
+  })
 })

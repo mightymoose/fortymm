@@ -77,10 +77,6 @@ FEED_LIMIT = 50
 # typeahead snappy while ``total`` still reports the true match count.
 RECIPIENT_LIMIT = 50
 
-# Admin broadcasts are filed as tournament news, so a player's tournament-news
-# preferences decide which channels actually reach them.
-BROADCAST_CATEGORY = NotificationCategory.TOURNAMENT
-
 
 class PushNotConfiguredError(Exception):
     """Raised when a push is requested but no APNs credentials are configured.
@@ -716,11 +712,12 @@ class NotificationService:
         *,
         all_users: bool,
         user_ids: Sequence[uuid.UUID],
+        category: NotificationCategory,
         title: str,
         body: str,
     ) -> BroadcastResponse:
         """Resolve the target players and hand one delivery job per recipient to
-        the worker, which resolves *that* player's tournament-news preferences
+        the worker, which resolves *that* player's preferences for ``category``
         and delivers accordingly. Returns the recipient count immediately —
         actual delivery happens in the background."""
         target_ids = await self._broadcast_target_ids(all_users, user_ids)
@@ -728,7 +725,7 @@ class NotificationService:
             self.enqueue_notification(
                 NotificationJob(
                     user_id=target_id,
-                    category=BROADCAST_CATEGORY,
+                    category=category,
                     title=title,
                     body=body,
                 )

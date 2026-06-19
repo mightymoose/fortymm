@@ -148,6 +148,67 @@ async def test_broadcast_selected_targets_only_those_players(
     assert [job.user_id for job in jobs] == [alice.id]
 
 
+async def test_broadcast_files_under_the_chosen_category(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    fake_notifications_queue: Queue,
+):
+    admin = await start_session(api_client, db_session)
+    await grant_broadcast(db_session, admin)
+    use_sender(FakeSender())
+
+    response = await api_client.post(
+        "/v1/notifications/broadcast",
+        json={
+            "recipients": {"mode": "all"},
+            "category": "rating_change",
+            "title": "New season ratings",
+            "body": "Your rating moved.",
+        },
+    )
+
+    assert response.status_code == 200
+    jobs = enqueued_notification_jobs(fake_notifications_queue)
+    assert jobs
+    assert all(job.category.value == "rating_change" for job in jobs)
+
+
+async def test_broadcast_defaults_to_tournament_when_category_omitted(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    fake_notifications_queue: Queue,
+):
+    admin = await start_session(api_client, db_session)
+    await grant_broadcast(db_session, admin)
+    use_sender(FakeSender())
+
+    response = await api_client.post(
+        "/v1/notifications/broadcast",
+        json={"recipients": {"mode": "all"}, "title": "Hi", "body": "Body"},
+    )
+
+    assert response.status_code == 200
+    jobs = enqueued_notification_jobs(fake_notifications_queue)
+    assert all(job.category.value == "tournament" for job in jobs)
+
+
+async def test_broadcast_rejects_an_unknown_category(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    admin = await start_session(api_client, db_session)
+    await grant_broadcast(db_session, admin)
+    response = await api_client.post(
+        "/v1/notifications/broadcast",
+        json={
+            "recipients": {"mode": "all"},
+            "category": "not_a_category",
+            "title": "Hi",
+            "body": "Body",
+        },
+    )
+    assert response.status_code == 422
+
+
 # ----- recipient picker -----------------------------------------------------
 
 

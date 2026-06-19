@@ -2,8 +2,10 @@ import { useState } from 'react'
 import { ApiError } from '@/api/client'
 import {
   useBroadcastRecipients,
+  useNotificationTaxonomy,
   useSendBroadcast,
   type BroadcastResponse,
+  type NotificationCategory,
 } from '@/api/notifications'
 import { useDebouncedValue } from '@/lib/use-debounced-value'
 import { BroadcastView } from './broadcast-page/broadcast-view'
@@ -27,6 +29,7 @@ export function BroadcastPage() {
   const [audience, setAudience] = useState<BroadcastAudience>('selected')
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [search, setSearch] = useState('')
+  const [category, setCategory] = useState<NotificationCategory>('tournament')
   const [title, setTitle] = useState('')
   const [body, setBody] = useState('')
   const [result, setResult] = useState<BroadcastResponse | null>(null)
@@ -36,9 +39,17 @@ export function BroadcastPage() {
   // by `search`; only the query keys off the settled value.
   const debouncedSearch = useDebouncedValue(search, 300)
   const recipients = useBroadcastRecipients(debouncedSearch)
+  const taxonomy = useNotificationTaxonomy()
   const send = useSendBroadcast()
 
-  const draft = { audience, selectedIds, title, body }
+  // The server owns the ordered category list + labels; fall back to the
+  // current category alone until the taxonomy loads so the select is never empty.
+  const categories = taxonomy.data?.types.map((t) => ({
+    value: t.key,
+    label: t.label,
+  })) ?? [{ value: category, label: category }]
+
+  const draft = { audience, selectedIds, category, title, body }
   const canSend = canSendBroadcast(draft) && !send.isPending
   const total = recipients.data?.total ?? 0
   const selectedCount = audience === 'all' ? total : selectedIds.size
@@ -74,6 +85,12 @@ export function BroadcastPage() {
         setSelectedIds((prev) => toggle(prev, id))
       }}
       selectedCount={selectedCount}
+      categories={categories}
+      category={category}
+      onCategoryChange={(value) => {
+        clearResult()
+        setCategory(value)
+      }}
       title={title}
       onTitleChange={(value) => {
         clearResult()

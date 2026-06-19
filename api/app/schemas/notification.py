@@ -229,16 +229,17 @@ BroadcastRecipients = Annotated[
 
 
 class BroadcastRequest(BaseModel):
-    """An admin broadcast: pick recipients and the copy.
+    """An admin broadcast: pick recipients, a category, and the copy.
 
-    Broadcasts are filed under the *tournament* category, so each recipient only
-    receives it on the channels they haven't muted for tournament news — the
-    server delivers per each player's preferences (there is no admin channel
-    override)."""
+    The chosen ``category`` decides which preference each recipient is delivered
+    against — each player only receives it on the channels they haven't muted for
+    that category (there is no admin channel override). Defaults to *tournament*
+    news when omitted."""
 
     model_config = ConfigDict(extra="forbid")
 
     recipients: BroadcastRecipients
+    category: NotificationCategory = NotificationCategory.TOURNAMENT
     title: str = Field(min_length=1, max_length=100)
     body: str = Field(min_length=1, max_length=280)
 

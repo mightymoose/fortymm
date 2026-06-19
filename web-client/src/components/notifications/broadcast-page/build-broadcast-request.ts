@@ -1,10 +1,11 @@
-import type { BroadcastRequest } from '@/api/notifications'
+import type { BroadcastRequest, NotificationCategory } from '@/api/notifications'
 
 export type BroadcastAudience = 'all' | 'selected'
 
 export interface BroadcastDraft {
   audience: BroadcastAudience
   selectedIds: ReadonlySet<string>
+  category: NotificationCategory
   title: string
   body: string
 }
@@ -26,6 +27,7 @@ export function buildBroadcastRequest(draft: BroadcastDraft): BroadcastRequest {
       draft.audience === 'all'
         ? { mode: 'all' }
         : { mode: 'selected', user_ids: [...draft.selectedIds] },
+    category: draft.category,
     title: draft.title.trim(),
     body: draft.body.trim(),
   }

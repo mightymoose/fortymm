@@ -19,6 +19,12 @@ export function buildBroadcastViewProps(
     selectedIds: new Set<string>(),
     onToggleRecipient: () => {},
     selectedCount: 0,
+    categories: [
+      { value: 'tournament', label: 'Tournament' },
+      { value: 'rating_change', label: 'Rating change' },
+    ],
+    category: 'tournament',
+    onCategoryChange: () => {},
     title: '',
     onTitleChange: () => {},
     body: '',
