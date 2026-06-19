@@ -46,15 +46,21 @@ async def test_default_channels(api_client: AsyncClient, db_session: AsyncSessio
         "available": True,
         "locked": True,
         "destination": "Always on, in your feed",
+        "setup_required": False,
     }
     assert channels["push"]["enabled"] is True
     assert channels["push"]["locked"] is False
     assert channels["push"]["destination"] == "No devices yet — open the app"
+    # No devices and no confirmed email yet: both prompt for setup.
+    assert channels["push"]["setup_required"] is True
     assert channels["email"]["enabled"] is True
     assert channels["email"]["destination"] == "Add an email in settings"
-    # SMS isn't wired up: surfaced but unavailable + off.
+    assert channels["email"]["setup_required"] is True
+    # SMS isn't wired up: surfaced but unavailable + off. Unavailable channels
+    # don't nudge for setup.
     assert channels["sms"]["available"] is False
     assert channels["sms"]["enabled"] is False
+    assert channels["sms"]["setup_required"] is False
 
 
 async def test_default_matrix_locks_match_reminders(
@@ -86,6 +92,8 @@ async def test_push_destination_reflects_device_count(
 
     data = (await api_client.get("/v1/notification-preferences")).json()
     assert _channels(data)["push"]["destination"] == "1 device"
+    # A registered device means push is set up — no nudge.
+    assert _channels(data)["push"]["setup_required"] is False
 
 
 async def test_email_destination_shows_confirmed_address(
@@ -98,6 +106,22 @@ async def test_email_destination_shows_confirmed_address(
 
     data = (await api_client.get("/v1/notification-preferences")).json()
     assert _channels(data)["email"]["destination"] == "player@fortymm.club"
+    # A confirmed address means email is set up — no nudge.
+    assert _channels(data)["email"]["setup_required"] is False
+
+
+async def test_email_setup_required_until_confirmed(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    user = await start_session(api_client, db_session)
+    # Address on file but not yet confirmed: the channel still can't deliver, so
+    # the nudge stays up.
+    user.email = "player@fortymm.club"
+    user.confirmed_at = None
+    await db_session.commit()
+
+    data = (await api_client.get("/v1/notification-preferences")).json()
+    assert _channels(data)["email"]["setup_required"] is True
 
 
 # ----- updates --------------------------------------------------------------

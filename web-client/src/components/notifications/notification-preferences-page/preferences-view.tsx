@@ -7,6 +7,8 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Switch } from '@/components/ui/switch'
 import { cn } from '@/lib/utils'
 import { CATEGORY_VISUAL, CHANNEL_VISUAL } from '../notification-meta'
+import { ChannelSetupNudge } from './channel-setup-nudge'
+import { CHANNEL_SETUP_NUDGE } from './channel-setup-nudge-content'
 
 export interface PreferencesViewProps {
   preferences: NotificationPreferences
@@ -50,45 +52,48 @@ export function PreferencesView({
           const { Icon } = CHANNEL_VISUAL[channel.channel]
           const label = channelLabel.get(channel.channel) ?? channel.channel
           const interactive = !channel.locked && channel.available
+          const nudge = channel.setup_required
+            ? CHANNEL_SETUP_NUDGE[channel.channel]
+            : undefined
           return (
-            <div
-              key={channel.channel}
-              className={cn(
-                'flex items-center gap-3 rounded-xl border bg-[color:var(--bg-card)] p-4 transition-opacity',
-                channel.enabled
-                  ? 'border-[color:var(--border-default)]'
-                  : 'border-[color:var(--border-subtle)] opacity-70',
-              )}
-            >
-              <span
-                className="flex size-9 shrink-0 items-center justify-center rounded-[10px]"
-                style={{
-                  background: channel.enabled
-                    ? 'rgba(255,122,26,0.12)'
-                    : 'var(--bg-raised)',
-                  color: channel.enabled
-                    ? 'var(--ball-500)'
-                    : 'var(--fg-3)',
-                }}
+            <div key={channel.channel} className="min-w-0">
+              <div
+                className={cn(
+                  'flex items-center gap-3 rounded-xl border bg-[color:var(--bg-card)] p-4 transition-opacity',
+                  channel.enabled
+                    ? 'border-[color:var(--border-default)]'
+                    : 'border-[color:var(--border-subtle)] opacity-70',
+                )}
               >
-                <Icon size={20} />
-              </span>
-              <span className="min-w-0 flex-1">
-                <span className="block text-[15px] font-semibold text-[color:var(--fg-1)]">
-                  {label}
+                <span
+                  className="flex size-9 shrink-0 items-center justify-center rounded-[10px]"
+                  style={{
+                    background: channel.enabled
+                      ? 'rgba(255,122,26,0.12)'
+                      : 'var(--bg-raised)',
+                    color: channel.enabled ? 'var(--ball-500)' : 'var(--fg-3)',
+                  }}
+                >
+                  <Icon size={20} />
                 </span>
-                <span className="block truncate text-xs text-[color:var(--fg-3)]">
-                  {channel.destination}
+                <span className="min-w-0 flex-1">
+                  <span className="block text-[15px] font-semibold text-[color:var(--fg-1)]">
+                    {label}
+                  </span>
+                  <span className="block truncate text-xs text-[color:var(--fg-3)]">
+                    {channel.destination}
+                  </span>
                 </span>
-              </span>
-              <Switch
-                checked={channel.enabled}
-                disabled={!interactive}
-                onCheckedChange={(value) =>
-                  onToggleChannel(channel.channel, value === true)
-                }
-                aria-label={`${label} notifications`}
-              />
+                <Switch
+                  checked={channel.enabled}
+                  disabled={!interactive}
+                  onCheckedChange={(value) =>
+                    onToggleChannel(channel.channel, value === true)
+                  }
+                  aria-label={`${label} notifications`}
+                />
+              </div>
+              {nudge && <ChannelSetupNudge {...nudge} />}
             </div>
           )
         })}

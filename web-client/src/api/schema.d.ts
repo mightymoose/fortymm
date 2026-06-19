@@ -1730,7 +1730,10 @@ export interface components {
          *     server can deliver on this channel at all (SMS isn't wired up yet);
          *     ``locked`` means the user can't switch it off (in-app is the feed itself);
          *     ``destination`` is a human hint about where it lands (email address, device
-         *     count, ...), computed server-side.
+         *     count, ...), computed server-side. ``setup_required`` is true when the
+         *     channel is available but the user hasn't completed the prerequisite to
+         *     actually receive on it (no confirmed email; no registered push devices), so
+         *     the UI can prompt them to finish setup.
          */
         NotificationChannelState: {
             channel: components["schemas"]["NotificationChannel"];
@@ -1742,6 +1745,11 @@ export interface components {
             locked: boolean;
             /** Destination */
             destination?: string | null;
+            /**
+             * Setup Required
+             * @default false
+             */
+            setup_required: boolean;
         };
         /**
          * NotificationChannelUpdate

@@ -133,13 +133,17 @@ class NotificationChannelState(BaseModel):
     server can deliver on this channel at all (SMS isn't wired up yet);
     ``locked`` means the user can't switch it off (in-app is the feed itself);
     ``destination`` is a human hint about where it lands (email address, device
-    count, ...), computed server-side."""
+    count, ...), computed server-side. ``setup_required`` is true when the
+    channel is available but the user hasn't completed the prerequisite to
+    actually receive on it (no confirmed email; no registered push devices), so
+    the UI can prompt them to finish setup."""
 
     channel: NotificationChannel
     enabled: bool
     available: bool
     locked: bool
     destination: str | None = None
+    setup_required: bool = False
 
 
 class NotificationCategoryCell(BaseModel):

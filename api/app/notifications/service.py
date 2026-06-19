@@ -593,6 +593,9 @@ class NotificationService:
                 available=availability[channel],
                 locked=channel in LOCKED_CHANNELS,
                 destination=self._channel_destination(channel, user, device_count),
+                setup_required=self._channel_setup_required(
+                    channel, user, device_count
+                ),
             )
             for channel in channel_order
         ]
@@ -636,6 +639,25 @@ class NotificationService:
                 return "Add an email in settings"
             case NotificationChannel.SMS:
                 return "Not available yet"
+        assert_never(channel)
+
+    @staticmethod
+    def _channel_setup_required(
+        channel: NotificationChannel, user: User, device_count: int
+    ) -> bool:
+        """Whether the user still has to do something before this channel can
+        deliver. Email needs a confirmed address; push needs a registered
+        device. In-app and (unavailable) SMS never prompt for setup."""
+        # Exhaustive match (no catch-all) per api/CLAUDE.md's enum-mapping rule.
+        match channel:
+            case NotificationChannel.IN_APP:
+                return False
+            case NotificationChannel.PUSH:
+                return device_count == 0
+            case NotificationChannel.EMAIL:
+                return not (user.email and user.confirmed_at is not None)
+            case NotificationChannel.SMS:
+                return False
         assert_never(channel)
 
     async def _channel_overrides(
