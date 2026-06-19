@@ -17,7 +17,7 @@ from app.sessions import (
     SESSION_COOKIE_NAME,
     SESSION_TOKEN_CONTEXT,
 )
-from tests._helpers import CSRF_EVENT_HOOKS, make_client, start_session
+from tests._helpers import CSRF_EVENT_HOOKS, make_client, make_raw_client, start_session
 
 
 @pytest_asyncio.fixture
@@ -432,10 +432,7 @@ async def raw_client(db_session: AsyncSession) -> AsyncIterator[AsyncClient]:
         yield db_session
 
     app.dependency_overrides[get_session] = _override
-    transport = ASGITransport(app=app)
-    async with AsyncClient(
-        transport=transport, base_url="https://testserver"
-    ) as client:
+    async with make_raw_client() as client:
         yield client
     app.dependency_overrides.clear()
 
@@ -496,6 +493,19 @@ async def test_safe_methods_never_require_a_csrf_token(raw_client: AsyncClient):
     """GET (and other safe methods) must pass even with no token at all."""
     response = await raw_client.get("/v1/session")
     assert response.status_code == 200
+
+
+async def test_mutating_request_without_session_cookie_is_exempt(
+    raw_client: AsyncClient,
+):
+    """A cookieless mutation carries no ambient authority to forge, so the
+    double-submit guard doesn't engage — it must pass without a csrf token. (A
+    fresh logout is idempotent, so DELETE /v1/session returns 204 here.) This is
+    what lets a browser landing straight on /login, or opening a magic link on a
+    device that never loaded the app, reach the auth endpoints at all."""
+    assert raw_client.cookies.get(SESSION_COOKIE_NAME) is None
+    response = await raw_client.delete("/v1/session")
+    assert response.status_code == 204
 
 
 async def test_session_reissues_csrf_cookie_when_dropped(raw_client: AsyncClient):
