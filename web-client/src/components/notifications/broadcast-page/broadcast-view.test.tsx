@@ -70,6 +70,18 @@ describe('BroadcastView', () => {
     expect(broadcastViewPage.queryHint('Add a title.')).toBeInTheDocument()
   })
 
+  it('surfaces an error in the recipient list when the search fails', () => {
+    broadcastViewPage.render({
+      recipients: [],
+      recipientTotal: 0,
+      recipientsError: true,
+      search: 'riko',
+    })
+    expect(broadcastViewPage.queryRecipientsError()).toBeInTheDocument()
+    // The error must not read as a misleading "no players" empty state.
+    expect(broadcastViewPage.queryNoMatch()).not.toBeInTheDocument()
+  })
+
   it('previews the in-app notification', () => {
     broadcastViewPage.render()
     expect(
