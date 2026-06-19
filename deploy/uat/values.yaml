@@ -1,0 +1,47 @@
+# Values for the fortymm-uat chart. Most knobs match docker-compose.uat.yml.
+# Images are built locally and `k3d image import`-ed, so pullPolicy is
+# IfNotPresent and no registry/repository prefix is used.
+
+images:
+  api:
+    repository: fortymm/api
+    tag: uat
+  web:
+    repository: fortymm/web
+    tag: uat
+  postgres: postgres:16-alpine
+  redis: redis:7-alpine
+  nginx: nginx:1.27-alpine
+
+pullPolicy: IfNotPresent
+
+# Non-secret runtime config (mirrors the `environment:` blocks in compose).
+config:
+  DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/fortymm
+  REDIS_URL: redis://redis:6379/0
+  SESSION_COOKIE_SECURE: "false"
+
+postgres:
+  user: postgres
+  password: postgres
+  db: fortymm
+  # k3d's default StorageClass.
+  storageClass: local-path
+  storageSize: 5Gi
+
+# Pre-created out-of-band by scripts/redeploy-uat.sh from .env and secrets/.
+secrets:
+  env: fortymm-uat-env
+  apns: fortymm-uat-apns
+
+# Container path APNS_AUTH_KEY_PATH points at in .env.
+apnsKeyPath: /run/secrets/apns_auth_key.p8
+# Key inside the APNs secret (filename used by --from-file).
+apnsKeyFile: apns_auth_key.p8
+
+worker:
+  queues: solver email ratings notifications
+
+# Routing nginx exposed on this NodePort; k3d maps host 8084 -> here and
+# host Caddy reverse-proxies 127.0.0.1:8084 to it.
+nginxNodePort: 30084

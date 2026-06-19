@@ -1,5 +1,9 @@
 # UAT stack — built artifacts, no dev server, isolated volumes.
 #
+# NOTE: UAT now deploys to Kubernetes via the Helm chart at deploy/uat/
+# (run scripts/redeploy-uat.sh). This compose file is kept as a documented
+# fallback / reference for the same topology; it is no longer the deploy path.
+#
 # Runs alongside the dev stack: project name `fortymm-uat` keeps networks,
 # containers, and volumes namespaced. Only `nginx` (8084) publishes a host
 # port; everything else is reachable only on the internal docker network. Use

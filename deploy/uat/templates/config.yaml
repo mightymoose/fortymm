@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: api-config
+  labels:
+    {{- include "fortymm-uat.labels" . | nindent 4 }}
+data:
+  {{- range $k, $v := .Values.config }}
+  {{ $k }}: {{ $v | quote }}
+  {{- end }}
+  # APNS_AUTH_KEY_PATH lives in the .env-backed Secret (it must match the file
+  # mount path, .Values.apnsKeyPath). Kept out of here to avoid a duplicate.

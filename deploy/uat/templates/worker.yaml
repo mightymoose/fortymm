@@ -1,0 +1,32 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker
+  labels:
+    {{- include "fortymm-uat.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "fortymm-uat.selector" (dict "component" "worker") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "fortymm-uat.selector" (dict "component" "worker") | nindent 8 }}
+    spec:
+      containers:
+        - name: worker
+          image: {{ include "fortymm-uat.apiImage" . }}
+          imagePullPolicy: {{ .Values.pullPolicy }}
+          command: ["rq", "worker", "--url", "{{ .Values.config.REDIS_URL }}", {{ range $i, $q := splitList " " .Values.worker.queues }}{{ if $i }}, {{ end }}{{ $q | quote }}{{ end }}]
+          envFrom:
+            {{- include "fortymm-uat.appEnvFrom" . | nindent 12 }}
+          volumeMounts:
+            - name: apns-key
+              mountPath: {{ .Values.apnsKeyPath }}
+              subPath: {{ .Values.apnsKeyFile }}
+              readOnly: true
+      volumes:
+        - name: apns-key
+          secret:
+            secretName: {{ .Values.secrets.apns }}

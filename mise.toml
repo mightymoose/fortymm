@@ -1,9 +1,12 @@
 [tools]
 node = "26.1.0"
 python = "3.13"
+# UAT deploys to a local k3d Kubernetes cluster via Helm (scripts/redeploy-uat.sh).
+helm = "latest"
+k3d = "latest"
 
 [tasks.redeploy-uat]
-description = "Rebuild and restart the fortymm-uat docker stack; smoke-check https://uat.fortymm.com"
+description = "Rebuild images and helm-deploy the fortymm-uat k3d cluster; smoke-check https://uat.fortymm.com"
 run = "./scripts/redeploy-uat.sh"
 
 [tasks.release-beta]
