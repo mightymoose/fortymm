@@ -20,6 +20,13 @@ struct ScoreEntryView: View {
     @State private var games: [Game] = []
     @State private var active = 0          // index being entered
     @State private var editing = false     // true when re-entering an already-complete game
+    // Raw text backing the two score fields for the *active* game. Kept verbatim
+    // so a malformed entry (extra characters, too many digits) is shown back to
+    // the user and flagged inline rather than silently stripped/truncated into a
+    // different number. Re-seeded from the stored Int? whenever the active slot
+    // changes. See `bind(_:)` / issue #627.
+    @State private var rawYou = ""
+    @State private var rawOpp = ""
     @FocusState private var focus: MatchSide?
 
     private var you: MatchPlayer { MatchSeed.me }
@@ -43,6 +50,7 @@ struct ScoreEntryView: View {
         VStack(spacing: 0) {
             header
             scoreboard
+            scoreError
             Spacer().frame(height: 12)
             scoreline
             actionRow
@@ -64,11 +72,32 @@ struct ScoreEntryView: View {
                 games = seeded
                 active = seeded.firstIndex { !MatchRules.gameComplete($0) } ?? 0
             }
+            syncRawFromActive()
             focusYou()
         }
-        // Switching game (or editing) → raise the keypad on your side.
-        .onChange(of: active) { _, _ in focusYou() }
+        // Switching game (or editing) → raise the keypad on your side and reset
+        // the raw fields to the newly-active slot's stored scores.
+        .onChange(of: active) { _, _ in syncRawFromActive(); focusYou() }
         .onChange(of: editing) { _, _ in focusYou() }
+    }
+
+    // MARK: Score error
+
+    /// Inline flag shown when either field holds a malformed entry — non-digit
+    /// characters or more than three digits. The Save / Post buttons are already
+    /// blocked (a malformed field parses to `nil`, so the game is incomplete);
+    /// this tells the user *why* rather than silently coercing their input.
+    @ViewBuilder
+    private var scoreError: some View {
+        if malformedField(rawYou) || malformedField(rawOpp) {
+            Text("Enter each score as digits only (up to 3) — nothing was changed for you.")
+                .font(FMFont.ui(12, weight: .medium))
+                .foregroundStyle(FMColor.loss)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, 24)
+                .padding(.top, 10)
+        }
     }
 
     // MARK: Header
@@ -234,20 +263,44 @@ struct ScoreEntryView: View {
 
     // MARK: Binding + actions
 
-    /// Two-digit numeric binding for one side, clamped to 40 (matches prototype).
+    /// Text binding for one side's score field. The raw text is kept verbatim
+    /// (so a malformed entry is shown back and flagged by `scoreError`) and
+    /// parsed into the model only when it's a clean score: a malformed entry
+    /// stores `nil`, leaving the game incomplete and Save / Post blocked, rather
+    /// than silently stripping non-digits or truncating to the last two as the
+    /// prototype did (issue #627).
     private func bind(_ side: MatchSide) -> Binding<String> {
         Binding(
-            get: {
-                let v = side == .you ? current.a : current.b
-                return v.map(String.init) ?? ""
-            },
+            get: { side == .you ? rawYou : rawOpp },
             set: { raw in
-                var digits = raw.filter(\.isNumber)
-                if digits.count > 2 { digits = String(digits.suffix(2)) }
-                let n = digits.isEmpty ? nil : min(40, Int(digits) ?? 0)
+                if side == .you { rawYou = raw } else { rawOpp = raw }
+                let n = Self.parseScore(raw)
                 setCurrent { side == .you ? ($0.a = n) : ($0.b = n) }
             }
         )
+    }
+
+    /// A clean score, or `nil` for empty *and* for malformed input. Accepts only
+    /// 1–3 ASCII digits; anything else (a decimal point, a pasted `11.5`, more
+    /// than three digits like `999999`) parses to `nil` so it can't masquerade
+    /// as a real score. Legality under table-tennis rules is enforced separately
+    /// by `MatchRules.illegalScoreReason`.
+    private static func parseScore(_ raw: String) -> Int? {
+        guard !raw.isEmpty, raw.count <= 3,
+              raw.allSatisfy({ $0 >= "0" && $0 <= "9" }) else { return nil }
+        return Int(raw)
+    }
+
+    /// True when the field holds something the user typed/pasted that isn't a
+    /// clean score (non-empty but unparseable) — drives the inline flag.
+    private func malformedField(_ raw: String) -> Bool {
+        !raw.isEmpty && Self.parseScore(raw) == nil
+    }
+
+    /// Re-seed the raw score fields from the active game's stored values.
+    private func syncRawFromActive() {
+        rawYou = current.a.map(String.init) ?? ""
+        rawOpp = current.b.map(String.init) ?? ""
     }
 
     private func setCurrent(_ mutate: (inout Game) -> Void) {
@@ -285,6 +338,7 @@ struct ScoreEntryView: View {
 
     private func clearEdit() {
         setCurrent { $0 = Game() }
+        syncRawFromActive()
         focusYou()
     }
 
