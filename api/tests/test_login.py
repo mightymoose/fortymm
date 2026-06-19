@@ -121,11 +121,16 @@ async def test_request_normalizes_email_to_lowercase(
     assert tokens[0].sent_to == "rita@example.com"
 
 
-async def test_request_for_unknown_email_returns_202_without_sending(
+async def test_request_for_unknown_email_sends_no_account_email_without_token(
     api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
 ):
+    """An unknown address mints no login token (no account to sign into) but
+    still gets a tokenless 'no account yet' email, so it's indistinguishable
+    from a known address from the outside — same 202, and a piece of mail
+    either way."""
     response = await api_client.post("/v1/login/request", json=REQUEST_BODY)
     assert response.status_code == 202
+    assert response.json() == {"email": "rita@example.com"}
 
     tokens = (
         (
@@ -137,7 +142,14 @@ async def test_request_for_unknown_email_returns_202_without_sending(
         .all()
     )
     assert tokens == []
-    assert fake_email_queue.finished_job_registry.count == 0
+
+    assert fake_email_queue.finished_job_registry.count == 1
+    job = fake_email_queue.fetch_job(
+        fake_email_queue.finished_job_registry.get_job_ids()[0]
+    )
+    assert job is not None
+    assert job.func_name == "app.email.send_no_account_email"
+    assert job.args == ("rita@example.com",)
 
 
 async def test_request_for_unconfirmed_account_resends_confirmation(

@@ -158,6 +158,45 @@ def send_login_email(to_email: str, raw_token: str, username: str) -> None:
     )
 
 
+def send_no_account_email(to_email: str) -> None:
+    """Delivered when someone asks for a sign-in link for an address that has no
+    FortyMM account yet.
+
+    Sending *something* to every requested address is what keeps the uniform
+    202 from ``/v1/login/request`` enumeration-safe: a known and an unknown
+    address now get identical treatment (same status, same shape, a piece of
+    mail) so neither the response nor an empty inbox reveals which addresses
+    exist. It also tells a real person who typo'd their address — or never
+    signed up — why no sign-in link arrived, instead of leaving them staring at
+    an empty inbox. Carries no bearer token, so the URL is safe to log
+    anywhere."""
+    base = _app_base_url()
+    lines = [
+        "Hi,",
+        "",
+        "Someone — probably you — asked for a sign-in link for this email "
+        "address, but there's no FortyMM account tied to it yet.",
+        "",
+        "To get started, open FortyMM and start playing as a guest, then claim "
+        "this email address in Settings to keep your matches and rating.",
+    ]
+    if base is not None:
+        lines += ["", base]
+    lines += [
+        "",
+        "If you didn't request this, you can safely ignore this email.",
+        "",
+    ]
+    _deliver(
+        to_email=to_email,
+        subject="About your FortyMM sign-in request",
+        body="\n".join(lines),
+        log_event="email_no_account",
+        log_url=base or "(no link)",
+        dev_label="no-account",
+    )
+
+
 def send_notification_email(
     to_email: str, title: str, body: str, link: str | None = None
 ) -> None:
