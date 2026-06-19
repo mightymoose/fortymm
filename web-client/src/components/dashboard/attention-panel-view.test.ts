@@ -17,6 +17,20 @@ describe('projectAttentionPanelView', () => {
     expect(view.overflowCount).toBe(2)
   })
 
+  it('derives overflow from the server total, not the capped row list', () => {
+    // The server caps the returned rows (ATTENTION_BANNERS_LIMIT) but reports
+    // the true actionable total, so the footer "+N more" must subtract the
+    // visible 3 from that total — never from the truncated array length.
+    const items = Array.from({ length: 10 }, (_, i) =>
+      dashboardAttentionItem({ match_id: `m-${i}`, kind: 'score' }),
+    )
+
+    const view = projectAttentionPanelView(items, 0, 47)
+
+    expect(view.rows).toHaveLength(3)
+    expect(view.overflowCount).toBe(44)
+  })
+
   it('marks only the highest-priority visible bucket as primary', () => {
     const view = projectAttentionPanelView(
       [

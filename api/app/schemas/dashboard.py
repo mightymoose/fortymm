@@ -80,10 +80,15 @@ class DashboardRating(BaseModel):
 
 
 class DashboardResponse(BaseModel):
-    # Every actionable match for the current user, pre-ranked by attention
-    # priority (§5 of the PRD). The FE renders the top 3 as rows and rolls the
-    # remainder into the footer's overflow count.
+    # The current user's most-urgent actionable matches, pre-ranked by attention
+    # priority (§5 of the PRD), capped server-side (``ATTENTION_BANNERS_LIMIT``)
+    # since the panel only renders the top few as rows. Not the full set — use
+    # ``attention_total_count`` for the true total and the footer overflow.
     attention: list[DashboardAttentionItem]
+    # Total actionable matches for the current user (disputes + in_progress the
+    # user hasn't signed), counted independently of the ``attention`` cap so the
+    # footer's "+N more need attention" stays accurate however many there are.
+    attention_total_count: int
     # Count of matches that need *someone else's* move (a result we posted
     # awaiting the opponent's sign-off, plus pending/scheduled matches). Shown
     # as footer text only — never a row.

@@ -88,10 +88,17 @@ export function isAttentionPanelEmpty(view: AttentionPanelView): boolean {
  * highest-priority *visible* bucket as primary (so a `Review result` beneath a
  * `Resolve dispute` renders secondary). Items arrive already sorted by the
  * server (PRD §5), so their order is preserved as-is.
+ *
+ * `attentionTotalCount` is the server's exact actionable-match total. The
+ * `items` array is itself capped server-side (`ATTENTION_BANNERS_LIMIT`), so
+ * overflow is derived from this total — not from `items.length`, which would
+ * under-count once the cap bites. Defaults to `items.length` for callers that
+ * pass an uncapped set.
  */
 export function projectAttentionPanelView(
   items: DashboardAttentionItem[],
   waitingCount: number,
+  attentionTotalCount: number = items.length,
 ): AttentionPanelView {
   const visible = items.slice(0, ATTENTION_VISIBLE_LIMIT)
   // Items arrive pre-sorted by priority, so the first visible row defines the
@@ -108,7 +115,7 @@ export function projectAttentionPanelView(
       primary: bucketKey(item) === topBucket,
       route: routeOf(item),
     })),
-    overflowCount: Math.max(0, items.length - ATTENTION_VISIBLE_LIMIT),
+    overflowCount: Math.max(0, attentionTotalCount - ATTENTION_VISIBLE_LIMIT),
     waitingCount,
     viewAllSearch: { status: 'attention' },
   }

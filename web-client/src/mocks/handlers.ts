@@ -805,7 +805,8 @@ export const handlers = [
   // ----- dashboard -------------------------------------------------------
   http.get('*/v1/dashboard', async () => {
     await delay(300)
-    const { attention, waiting_count } = projectDashboardAttention(mockMatches)
+    const { attention, attention_total_count, waiting_count } =
+      projectDashboardAttention(mockMatches)
     // Match the real BFF's participant-filtered COUNT, which doesn't care
     // whether the opponent slot is registered — projectRecentResult drops
     // null-opponent matches from the *display* list, but they still count
@@ -820,6 +821,7 @@ export const handlers = [
       .slice(0, 5)
     return HttpResponse.json({
       attention,
+      attention_total_count,
       waiting_count,
       recent_results: recentResults,
       rating: projectRating(mockMatches),
