@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor } from '@testing-library/react'
 import {
   RouterProvider,
   createMemoryHistory,
@@ -103,5 +103,67 @@ describe('player profile match-history pagination', () => {
     // Footer range is sane — start never exceeds the total.
     expect(screen.getByText(/showing/i).textContent).toContain('26–28')
     expect(screen.queryByText(/24951/)).not.toBeInTheDocument()
+  })
+
+  it('never flashes the cold empty state while redirecting an out-of-range page (#637)', async () => {
+    const TOTAL = 28
+    // Gate the last-valid-page (page 2) response so it stays in-flight while
+    // we assert what renders during the redirect. `keepPreviousData` keeps
+    // serving the empty out-of-range payload through this window, so a naive
+    // guard would fall through to "No matches yet" until page 2 lands.
+    let releasePage2: () => void = () => {}
+    const page2Gate = new Promise<void>((resolve) => {
+      releasePage2 = resolve
+    })
+
+    server.use(
+      http.get('*/v1/session', () => HttpResponse.json(sessionResponse())),
+      http.get('*/v1/players/:playerId', () =>
+        HttpResponse.json({
+          id: 'p-1',
+          username: 'rallymaster',
+          rating: 1234,
+          wins: 20,
+          losses: 8,
+          matches: {
+            items: matchRows(TOTAL, 1, 25),
+            page: 1,
+            page_size: 25,
+            total: TOTAL,
+          },
+        }),
+      ),
+      http.get('*/v1/players/:playerId/matches', async ({ request }) => {
+        const page = Number(new URL(request.url).searchParams.get('page') ?? '1')
+        if (page === 2) await page2Gate
+        return HttpResponse.json({
+          items: matchRows(TOTAL, page, 25),
+          page,
+          page_size: 25,
+          total: TOTAL,
+        })
+      }),
+    )
+
+    const { router } = renderProfile('/players/p-1?page=999')
+
+    // The effect redirects to page 2; its fetch is gated, so we sit in the
+    // redirect window with empty kept-previous rows.
+    await waitFor(() => {
+      expect(router.state.location.search).toEqual(
+        expect.objectContaining({ page: 2 }),
+      )
+    })
+    // The cold empty state must NOT show during the refetch — the skeleton
+    // holds instead.
+    expect(screen.queryByText(/no matches yet/i)).not.toBeInTheDocument()
+    expect(document.querySelector('table[aria-busy="true"]')).not.toBeNull()
+
+    // Release page 2 — the real rows replace the skeleton.
+    await act(async () => {
+      releasePage2()
+    })
+    expect(await screen.findByText('opp.25')).toBeInTheDocument()
+    expect(screen.queryByText(/no matches yet/i)).not.toBeInTheDocument()
   })
 })

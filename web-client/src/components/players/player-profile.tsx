@@ -216,9 +216,14 @@ function MatchesSection({
       <div className="player-profile__table-wrap">
         {isError ? (
           <MatchesError onRetry={() => void refetch()} />
-        ) : isPending || (rows.length === 0 && isOutOfRange) ? (
-          // Out-of-range: hold the skeleton while the effect above redirects
-          // to the last valid page, instead of flashing "No matches yet".
+        ) : isPending || (rows.length === 0 && (isOutOfRange || isFetching)) ? (
+          // Hold the skeleton — rather than flashing the cold "No matches yet"
+          // — across the whole out-of-range redirect, not just its first
+          // frame. After the effect snaps `?page=999` back to the last page,
+          // `keepPreviousData` keeps serving the empty out-of-range payload
+          // (so `isOutOfRange` is already false) while the valid page
+          // refetches; gating the empty-rows case on `isFetching` too covers
+          // that window.
           <MatchesSkeleton />
         ) : rows.length === 0 ? (
           <MatchesEmpty />
