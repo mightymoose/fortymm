@@ -7,6 +7,9 @@ import {
   type BroadcastResponse,
   type NotificationCategory,
 } from '@/api/notifications'
+import { useHasPermission, useSession } from '@/api/session'
+import { PERM } from '@/lib/permissions'
+import { AccessDenied } from '@/components/rbac/error-fallback'
 import { useDebouncedValue } from '@/lib/use-debounced-value'
 import { BroadcastView } from './broadcast-page/broadcast-view'
 import {
@@ -22,10 +25,25 @@ function toggle<T>(set: ReadonlySet<T>, value: T): Set<T> {
   return next
 }
 
-/** Route container for the admin broadcast tool — owns the recipient/compose
- * state and the recipients query + send mutation, and hands a pure view the
- * data + handlers. */
+/** Route gate for the admin broadcast tool. The server enforces
+ * `notifications.broadcast` on every endpoint, but the route itself must refuse
+ * to render the tool to an unauthorized user (matching the other admin
+ * surfaces) — otherwise the full UI shows and the recipient search just 403s on
+ * every keystroke. */
 export function BroadcastPage() {
+  const { isPending } = useSession()
+  const canBroadcast = useHasPermission(PERM.NOTIFICATIONS_BROADCAST)
+  // Wait for the session before deciding: `useHasPermission` reads false while
+  // it's in flight, so checking it during load would flash access-denied.
+  if (isPending) return null
+  if (!canBroadcast) return <AccessDenied />
+  return <BroadcastTool />
+}
+
+/** The tool itself — owns the recipient/compose state and the recipients query
+ * + send mutation, and hands a pure view the data + handlers. Only mounted once
+ * the gate confirms permission, so its data fetches never 403. */
+function BroadcastTool() {
   const [audience, setAudience] = useState<BroadcastAudience>('selected')
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [search, setSearch] = useState('')
@@ -71,6 +89,7 @@ export function BroadcastPage() {
       recipients={recipients.data?.recipients ?? []}
       recipientTotal={total}
       recipientsLoading={recipients.isPending}
+      recipientsError={recipients.isError}
       search={search}
       onSearchChange={setSearch}
       audience={audience}

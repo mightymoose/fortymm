@@ -12,6 +12,7 @@ export function buildBroadcastViewProps(
     ],
     recipientTotal: 2,
     recipientsLoading: false,
+    recipientsError: false,
     search: '',
     onSearchChange: () => {},
     audience: 'selected',

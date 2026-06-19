@@ -28,6 +28,7 @@ export interface BroadcastViewProps {
   recipients: BroadcastRecipient[]
   recipientTotal: number
   recipientsLoading: boolean
+  recipientsError: boolean
   search: string
   onSearchChange: (search: string) => void
   audience: BroadcastAudience
@@ -57,6 +58,7 @@ export function BroadcastView(props: BroadcastViewProps) {
     recipients,
     recipientTotal,
     recipientsLoading,
+    recipientsError,
     search,
     onSearchChange,
     audience,
@@ -119,7 +121,9 @@ export function BroadcastView(props: BroadcastViewProps) {
             Send to all players
           </span>
           <span className="font-mono text-xs text-[color:var(--fg-3)]">
-            {recipientTotal} {search ? 'matched' : 'players'}
+            {recipientsError
+              ? '— matched'
+              : `${recipientTotal} ${search ? 'matched' : 'players'}`}
           </span>
         </label>
 
@@ -147,7 +151,11 @@ export function BroadcastView(props: BroadcastViewProps) {
               </li>
             )
           })}
-          {!recipientsLoading && recipients.length === 0 ? (
+          {recipientsError ? (
+            <li className="px-4 py-10 text-center text-[13px] text-[color:var(--loss)]">
+              Couldn’t load players. Check your access and try again.
+            </li>
+          ) : !recipientsLoading && recipients.length === 0 ? (
             <li className="px-4 py-10 text-center text-[13px] text-[color:var(--fg-muted)]">
               No players match “{search}”.
             </li>

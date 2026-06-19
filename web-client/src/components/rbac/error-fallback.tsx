@@ -31,24 +31,31 @@ const detailStyle = {
   margin: '0 auto 18px',
 }
 
+/** The "you don't have access" panel. Rendered both reactively (a child
+ * endpoint 403s and trips the boundary) and proactively (a page checks the
+ * session's permissions before rendering the tool, so unauthorized
+ * direct-navigation never sees it). Copy is permission-agnostic because this
+ * boundary wraps several admin pages, each gated on a different permission. */
+export function AccessDenied() {
+  return (
+    <div role="alert" style={containerStyle}>
+      <div style={{ ...iconWrap, background: 'rgba(110, 130, 255, 0.12)' }}>
+        <Lock size={22} color="var(--info, #6e82ff)" strokeWidth={1.75} />
+      </div>
+      <div style={titleStyle}>You don't have access to this page</div>
+      <div style={detailStyle}>
+        Ask an administrator to grant you access to this page.
+      </div>
+    </div>
+  )
+}
+
 function RbacErrorFallback({ error, resetErrorBoundary }: FallbackProps) {
   // 403s come from a server-side permission gate — show a clearer message than
   // "something went wrong" so unauthorized direct-navigation reads as
-  // intentional rather than broken. This boundary wraps several admin pages
-  // (RBAC + tournaments), each gated on a different permission, so the copy is
-  // permission-agnostic rather than naming one specific permission.
+  // intentional rather than broken.
   if (error instanceof ApiError && error.status === 403) {
-    return (
-      <div role="alert" style={containerStyle}>
-        <div style={{ ...iconWrap, background: 'rgba(110, 130, 255, 0.12)' }}>
-          <Lock size={22} color="var(--info, #6e82ff)" strokeWidth={1.75} />
-        </div>
-        <div style={titleStyle}>You don't have access to this page</div>
-        <div style={detailStyle}>
-          Ask an administrator to grant you access to this page.
-        </div>
-      </div>
-    )
+    return <AccessDenied />
   }
   return (
     <div role="alert" style={containerStyle}>

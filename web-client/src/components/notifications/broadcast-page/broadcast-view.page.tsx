@@ -34,6 +34,14 @@ const scoped = (container: Container) => ({
   queryHint(text: string) {
     return container.queryByText(text)
   },
+  /** The recipient-list error row shown when the search request fails. */
+  queryRecipientsError() {
+    return container.queryByText(/Couldn’t load players/)
+  },
+  /** The recipient-list empty row shown when a search matches nobody. */
+  queryNoMatch() {
+    return container.queryByText(/No players match/)
+  },
   /** The "Filed under <category> — …" compose caption. */
   queryFiledUnder(label: string) {
     return container.queryByText(
