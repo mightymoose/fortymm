@@ -56,8 +56,10 @@ SESSION_COOKIE_NAME = "session"
 # cookie is HttpOnly so a cross-origin attacker can't read it; this one is
 # readable by our own JS, which echoes it in the ``X-CSRF-Token`` header on
 # mutating requests. ``csrf_protect`` (app/main.py) rejects any unsafe-method
-# request whose header doesn't match this cookie. An attacker's page can ride
-# along the cookies but can neither read this value nor set the custom header.
+# request that carries a session cookie whose header doesn't match this cookie
+# (a cookieless request has no ambient authority to forge, so the guard skips
+# it). An attacker's page can ride along the cookies but can neither read this
+# value nor set the custom header.
 CSRF_COOKIE_NAME = "csrf_token"
 CSRF_HEADER_NAME = "x-csrf-token"
 # Methods that can't mutate state are exempt from the CSRF check; OPTIONS
