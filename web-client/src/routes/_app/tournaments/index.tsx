@@ -7,6 +7,8 @@ import {
   useDeleteTournament,
   useTournaments,
 } from '@/components/tournaments/data/api'
+import { useHasPermission } from '@/api/session'
+import { PERM } from '@/lib/permissions'
 import { pageTitle } from '@/lib/page-title'
 
 export const Route = createFileRoute('/_app/tournaments/')({
@@ -21,10 +23,12 @@ function TournamentsRoute() {
   const tournaments = useTournaments()
   const createTournament = useCreateTournament()
   const deleteTournament = useDeleteTournament()
+  const canCreate = useHasPermission(PERM.TOURNAMENT_CREATE)
 
   return (
     <TournamentsListPage
       tournaments={tournaments}
+      canCreate={canCreate}
       onOpen={(tournamentId) =>
         navigate({
           to: '/tournaments/$tournamentId',

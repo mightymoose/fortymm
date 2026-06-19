@@ -2,13 +2,15 @@
 
 Unlike test_rbac (which bypasses the authz gate via dependency_overrides),
 these tests exercise the *real* permission gate: each client establishes a
-genuine session via ``GET /v1/session`` and is granted ``tournament.manage`` by
-inserting real Permission/Role/RolePermission/UserRole rows. Mutating requests
+genuine session via ``GET /v1/session`` and is granted ``tournament.view`` +
+``tournament.create`` by inserting real Permission/Role/RolePermission/UserRole
+rows. (Editing, deleting, and publishing are owner-only — no permission gates
+them — so there is nothing extra to grant for those.) Mutating requests
 carry the double-submit CSRF token via ``CSRF_EVENT_HOOKS`` (baked into both the
 ``api_client`` fixture and ``make_client``).
 """
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from typing import Any
 
 import pytest_asyncio
@@ -24,34 +26,31 @@ from app.models import (
     User,
     UserRole,
 )
-from app.tournaments import TOURNAMENT_PERMISSION
+from app.tournaments import TOURNAMENT_CREATE, TOURNAMENT_VIEW
 from tests._helpers import make_client, start_session
 
 
-async def _grant_tournament_manage(db_session: AsyncSession, user: User) -> None:
-    """Grant ``tournament.manage`` to ``user`` via real RBAC rows, reusing the
-    permission/role if a prior call already created them in this test."""
-    permission = (
-        await db_session.execute(
-            select(Permission).where(Permission.name == TOURNAMENT_PERMISSION)
-        )
-    ).scalar_one_or_none()
-    if permission is None:
-        permission = Permission(
-            name=TOURNAMENT_PERMISSION, description="Create and manage tournaments."
-        )
-        db_session.add(permission)
-        await db_session.flush()
-
-    role = (
-        await db_session.execute(select(Role).where(Role.name == "Beta tester"))
-    ).scalar_one_or_none()
-    if role is None:
-        role = Role(name="Beta tester", description="Early-access testers.")
-        db_session.add(role)
-        await db_session.flush()
+async def _grant_tournament_perms(
+    db_session: AsyncSession,
+    user: User,
+    names: Sequence[str] = (TOURNAMENT_VIEW, TOURNAMENT_CREATE),
+) -> None:
+    """Grant ``names`` to ``user`` via real RBAC rows. Each permission row is
+    reused if a prior call already created it; the user gets a dedicated role
+    carrying exactly ``names`` so different users can hold different subsets
+    (e.g. view-only vs view+create)."""
+    role = Role(name=f"grant-{user.id}", description="Per-user test grant.")
+    db_session.add(role)
+    await db_session.flush()
+    for name in names:
+        permission = (
+            await db_session.execute(select(Permission).where(Permission.name == name))
+        ).scalar_one_or_none()
+        if permission is None:
+            permission = Permission(name=name, description=name)
+            db_session.add(permission)
+            await db_session.flush()
         db_session.add(RolePermission(role_id=role.id, permission_id=permission.id))
-
     db_session.add(UserRole(user_id=user.id, role_id=role.id))
     await db_session.commit()
 
@@ -61,9 +60,9 @@ async def authed_client(
     api_client: AsyncClient, db_session: AsyncSession
 ) -> AsyncIterator[tuple[AsyncClient, User]]:
     """The primary ``api_client`` with a real session whose user holds
-    ``tournament.manage``."""
+    ``tournament.view`` + ``tournament.create``."""
     user = await start_session(api_client, db_session)
-    await _grant_tournament_manage(db_session, user)
+    await _grant_tournament_perms(db_session, user)
     yield api_client, user
 
 
@@ -523,10 +522,12 @@ async def test_permission_gate_blocks_user_without_permission(
     db_session: AsyncSession,
     authed_client: tuple[AsyncClient, User],
 ):
-    """A user WITHOUT ``tournament.manage`` is 403 on every route, including the
-    event routes. The ``authed_client`` fixture supplies a tournament + event
-    owned by someone else so the parametrized routes have a real target (the
-    gate runs before the 404/ownership checks)."""
+    """A user with NO tournament permissions is 403 on every route, including the
+    event routes. Reads/create are blocked by the ``tournament.view`` /
+    ``tournament.create`` gates; the owner-only mutations are blocked by the
+    ownership check (the caller has a session but didn't create the target). The
+    ``authed_client`` fixture supplies a tournament + event owned by someone else
+    so the routes have a real target."""
     owner_client, _ = authed_client
     target = (await owner_client.post("/v1/tournaments", json=_create_payload())).json()
     target_event = (
@@ -536,7 +537,7 @@ async def test_permission_gate_blocks_user_without_permission(
     ).json()
 
     async with make_client() as client:
-        # A bare guest session — no tournament.manage granted.
+        # A bare guest session — no tournament permissions granted.
         await start_session(client, db_session)
 
         assert (await client.get("/v1/tournaments")).status_code == 403
@@ -570,6 +571,29 @@ async def test_permission_gate_blocks_user_without_permission(
         ).status_code == 403
 
 
+async def test_view_permission_alone_reads_but_cannot_create(
+    db_session: AsyncSession,
+    authed_client: tuple[AsyncClient, User],
+):
+    """``tournament.view`` is its own grant, separate from create: a viewer can
+    list and read tournaments but POST /v1/tournaments is 403 without
+    ``tournament.create``."""
+    owner_client, _ = authed_client
+    target = (await owner_client.post("/v1/tournaments", json=_create_payload())).json()
+
+    async with make_client() as viewer_client:
+        viewer = await start_session(viewer_client, db_session)
+        await _grant_tournament_perms(db_session, viewer, names=(TOURNAMENT_VIEW,))
+
+        assert (await viewer_client.get("/v1/tournaments")).status_code == 200
+        assert (
+            await viewer_client.get(f"/v1/tournaments/{target['id']}")
+        ).status_code == 200
+        assert (
+            await viewer_client.post("/v1/tournaments", json=_create_payload())
+        ).status_code == 403
+
+
 # ----- ownership (permitted non-creator) -----------------------------------
 
 
@@ -577,9 +601,9 @@ async def test_non_creator_with_permission_can_read_but_not_modify(
     db_session: AsyncSession,
     authed_client: tuple[AsyncClient, User],
 ):
-    """A SECOND user who HAS ``tournament.manage`` but did not create the
-    tournament: GET detail -> 200 with can_edit False; PATCH/DELETE and all
-    event mutations -> 403."""
+    """A SECOND user who HAS view+create but did not create the tournament:
+    GET detail -> 200 with can_edit False; PATCH/DELETE and all event mutations
+    -> 403 (owner-only)."""
     owner_client, _ = authed_client
     target = (await owner_client.post("/v1/tournaments", json=_create_payload())).json()
     target_event = (
@@ -590,7 +614,7 @@ async def test_non_creator_with_permission_can_read_but_not_modify(
 
     async with make_client() as other_client:
         other = await start_session(other_client, db_session)
-        await _grant_tournament_manage(db_session, other)
+        await _grant_tournament_perms(db_session, other)
 
         got = await other_client.get(f"/v1/tournaments/{target['id']}")
         assert got.status_code == 200

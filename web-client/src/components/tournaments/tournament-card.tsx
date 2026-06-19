@@ -28,7 +28,9 @@ function CardStat({ label, value }: { label: string; value: number }) {
 
 /** A tournament summary card for the list grid: status, dates, name, venue,
  * and an events/entries/tables stat row. The whole card opens the tournament;
- * a delete control surfaces on hover. */
+ * a delete control surfaces on hover, but only for the tournament's creator
+ * (`canEdit`) — deleting is owner-only on the server, so a non-creator never
+ * sees a button that would 403. */
 export const TournamentCard = ({
   tournament: t,
   onOpen,
@@ -76,14 +78,16 @@ export const TournamentCard = ({
         onClick={onOpen}
         className="absolute inset-0 z-0 rounded-xl outline-offset-2"
       />
-      <button
-        type="button"
-        aria-label={`Delete ${t.name}`}
-        onClick={onDelete}
-        className="absolute top-2.5 right-2.5 z-10 grid size-7 place-items-center rounded-md text-[color:var(--fg-3)] opacity-0 transition-opacity group-hover/tcard:opacity-100 hover:bg-[color:var(--bg-hover)] hover:text-[color:var(--loss)] focus-visible:opacity-100"
-      >
-        <Trash2 size={14} />
-      </button>
+      {t.canEdit && (
+        <button
+          type="button"
+          aria-label={`Delete ${t.name}`}
+          onClick={onDelete}
+          className="absolute top-2.5 right-2.5 z-10 grid size-7 place-items-center rounded-md text-[color:var(--fg-3)] opacity-0 transition-opacity group-hover/tcard:opacity-100 hover:bg-[color:var(--bg-hover)] hover:text-[color:var(--loss)] focus-visible:opacity-100"
+        >
+          <Trash2 size={14} />
+        </button>
+      )}
     </div>
   )
 }

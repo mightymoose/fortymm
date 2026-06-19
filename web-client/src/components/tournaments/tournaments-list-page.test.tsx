@@ -44,4 +44,14 @@ describe('TournamentsListPage', () => {
     await userEvent.click(tournamentsListPagePage.getConfirmDeleteButton())
     expect(onDelete).toHaveBeenCalledWith('bay')
   })
+
+  it('shows the New tournament action when the caller can create', () => {
+    tournamentsListPagePage.render({ canCreate: true })
+    expect(tournamentsListPagePage.queryNewButtons().length).toBeGreaterThan(0)
+  })
+
+  it('hides every New tournament action when the caller cannot create', () => {
+    tournamentsListPagePage.render({ canCreate: false })
+    expect(tournamentsListPagePage.queryNewButtons()).toHaveLength(0)
+  })
 })
