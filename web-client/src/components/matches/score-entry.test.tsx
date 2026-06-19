@@ -1636,6 +1636,30 @@ describe('ScoreEntry — unsaved-input guard', () => {
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
   })
 
+  it('does not prompt for a stray "." typed over an already-saved score', async () => {
+    // Regression for #624 + #441: the field keeps malformed text verbatim now,
+    // so a trailing "." in "11." must not read as a change from the saved "11"
+    // and spuriously trip the unsaved-changes blocker — the dirty check
+    // compares digits only.
+    const user = userEvent.setup()
+    server.use(
+      http.get('*/v1/matches/m-1', () => HttpResponse.json(inProgressMatch())),
+    )
+
+    renderScoringApp('/matches/m-1/games/1/scores/edit')
+    await screen.findByRole('heading', { name: /edit game 1 score/i })
+
+    const meInput = screen.getByRole('textbox', { name: 'rita.kovac score' })
+    expect(meInput).toHaveValue('11')
+    await user.type(meInput, '.')
+    expect(meInput).toHaveValue('11.')
+
+    // Leaving for another saved game goes through with no leave prompt.
+    await user.click(screen.getByRole('link', { name: /game 2, saved/i }))
+    await screen.findByRole('heading', { name: /edit game 2 score/i })
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+  })
+
   it('does not prompt after the fire-and-forget Save navigates to the next game', async () => {
     const user = userEvent.setup()
     server.use(

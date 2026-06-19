@@ -244,9 +244,13 @@ function ScoreEntryInner({
   // Whether the live inputs (me/opp) diverge from the baseline — i.e. there's
   // genuinely-unsaved typing worth guarding on exit. Recomputed by the change
   // handlers below as the user types (a clean page, or input matching the
-  // saved score, isn't dirty).
+  // saved score, isn't dirty). Compared on digits only: the field now keeps
+  // malformed text verbatim (#624), and a stray "." in "11." over a saved "11"
+  // must not read as a change and spuriously trip the unsaved-changes blocker
+  // (#441) — the baseline is always a clean digit-string, so this matches it.
+  const digitsOnly = (value: string) => value.replace(/[^0-9]/g, '')
   const computeDirty = (nextMe: string, nextOpp: string) =>
-    nextMe !== baselineMe || nextOpp !== baselineOpp
+    digitsOnly(nextMe) !== baselineMe || digitsOnly(nextOpp) !== baselineOpp
 
   // Take the typed value verbatim — no stripping, no truncating. We only block
   // characters that can't begin a score (letters, sign) so non-numeric input
