@@ -248,22 +248,24 @@ function ScoreEntryInner({
   const computeDirty = (nextMe: string, nextOpp: string) =>
     nextMe !== baselineMe || nextOpp !== baselineOpp
 
-  // Strip non-digits and cap at 3 digits. Two digits silently turned "100"
-  // into "10", then the deuce/win-by-2 check fired against a value the user
-  // never typed (#442). Three digits covers any real table-tennis score
-  // (a long deuce game tops out well under 100) without that mutation, so
-  // illegalScoreReason always references exactly what was entered.
-  const sanitize = (value: string) => value.replace(/[^0-9]/g, '').slice(0, 3)
+  // Take the typed value verbatim — no stripping, no truncating. We only block
+  // characters that can't begin a score (letters, sign) so non-numeric input
+  // stays rejected as before; digits and a "." are kept. Earlier we stripped
+  // non-digits and capped at 3, but that quietly turned "11.5" into "115" and
+  // "999999" into "999" — plausible-looking scores the user never typed (#624).
+  // Keeping the raw text lets a malformed entry stay visible and get flagged
+  // inline (see `formatError`) instead of masquerading as a real score.
+  const isAcceptable = (value: string) => !/[^\d.]/.test(value)
   const onMeChange = (value: string) => {
-    const next = sanitize(value)
-    setMeTyped(next)
-    setIsDirty(computeDirty(next, opp))
+    if (!isAcceptable(value)) return
+    setMeTyped(value)
+    setIsDirty(computeDirty(value, opp))
     if (finalizeMutation.error) finalizeMutation.reset()
   }
   const onOppChange = (value: string) => {
-    const next = sanitize(value)
-    setOppTyped(next)
-    setIsDirty(computeDirty(me, next))
+    if (!isAcceptable(value)) return
+    setOppTyped(value)
+    setIsDirty(computeDirty(me, value))
     if (finalizeMutation.error) finalizeMutation.reset()
   }
 
@@ -273,9 +275,20 @@ function ScoreEntryInner({
   // required and flag the still-empty field. Only after the user has started
   // typing — a wholly-empty pair is the untouched initial state, not an error.
   const oneSideFilled = (me !== '') !== (opp !== '')
-  const localScoreError = bothFilled
-    ? illegalScoreReason(Number(me), Number(opp))
-    : null
+  // A filled side is well-formed only as 1–3 digits. Since the inputs are no
+  // longer coerced (#624), a decimal ("11.5") or an over-long run ("999999")
+  // reaches here verbatim — caught as a format error rather than silently
+  // becoming "115"/"999". Flagged on its own, before the both-filled scoring
+  // check, so it surfaces the moment the bad side is typed.
+  const meMalformed = me !== '' && !/^\d{1,3}$/.test(me)
+  const oppMalformed = opp !== '' && !/^\d{1,3}$/.test(opp)
+  const formatError =
+    meMalformed || oppMalformed
+      ? 'Enter each score as a whole number from 0 to 999.'
+      : null
+  const localScoreError =
+    formatError ??
+    (bothFilled ? illegalScoreReason(Number(me), Number(opp)) : null)
   const inputsValid = bothFilled && localScoreError === null
 
   // Build the hypothetical full-match games list including the current input,
@@ -325,10 +338,17 @@ function ScoreEntryInner({
   // The "both scores required" hint is its own, lower-severity line — shown only
   // when exactly one field is filled and there's no harder error to surface.
   const showBothRequired = oneSideFilled && !showScoreError
-  // Per-side red flags: a genuine validation error paints both inputs; the
+  // Per-side red flags: a format error paints only the malformed side; a
+  // genuine scoring error (illegal score / 422 drift) paints both inputs; the
   // both-required hint only flags the empty one.
-  const meInvalid = inputsInvalid || (showBothRequired && me === '')
-  const oppInvalid = inputsInvalid || (showBothRequired && opp === '')
+  const meInvalid =
+    meMalformed ||
+    (formatError === null && inputsInvalid) ||
+    (showBothRequired && me === '')
+  const oppInvalid =
+    oppMalformed ||
+    (formatError === null && inputsInvalid) ||
+    (showBothRequired && opp === '')
 
   function predictNextScoringRoute() {
     if (!data) return matchDetailRoute(matchId)
