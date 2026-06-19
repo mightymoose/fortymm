@@ -7,6 +7,7 @@ import {
 const draft = (overrides: Partial<BroadcastDraft> = {}): BroadcastDraft => ({
   audience: 'all',
   selectedIds: new Set(),
+  category: 'tournament',
   title: 'Spring Open is live',
   body: 'Brackets dropped.',
   ...overrides,
@@ -58,5 +59,10 @@ describe('buildBroadcastRequest', () => {
     )
     expect(req.title).toBe('Heads up')
     expect(req.body).toBe('Be early.')
+  })
+
+  it('forwards the chosen category', () => {
+    const req = buildBroadcastRequest(draft({ category: 'rating_change' }))
+    expect(req.category).toBe('rating_change')
   })
 })

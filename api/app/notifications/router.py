@@ -180,8 +180,8 @@ async def broadcast_notification(
     payload: BroadcastRequest,
     service: NotificationService = Depends(get_notification_service),
 ) -> BroadcastResponse:
-    """Queue an announcement to all players or a hand-picked set. Filed as
-    tournament news, so each recipient only receives it on the channels they
+    """Queue an announcement to all players or a hand-picked set, filed under the
+    chosen category, so each recipient only receives it on the channels they
     haven't muted for that category. Delivery runs in the background — the
     response reports how many players were targeted, not per-channel counts."""
     recipients = payload.recipients
@@ -190,6 +190,7 @@ async def broadcast_notification(
     return await service.enqueue_broadcast(
         all_users=all_users,
         user_ids=user_ids,
+        category=payload.category,
         title=payload.title,
         body=payload.body,
     )

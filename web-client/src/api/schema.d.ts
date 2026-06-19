@@ -889,8 +889,8 @@ export interface paths {
         put?: never;
         /**
          * Broadcast Notification
-         * @description Queue an announcement to all players or a hand-picked set. Filed as
-         *     tournament news, so each recipient only receives it on the channels they
+         * @description Queue an announcement to all players or a hand-picked set, filed under the
+         *     chosen category, so each recipient only receives it on the channels they
          *     haven't muted for that category. Delivery runs in the background — the
          *     response reports how many players were targeted, not per-channel counts.
          */
@@ -1062,16 +1062,18 @@ export interface components {
         };
         /**
          * BroadcastRequest
-         * @description An admin broadcast: pick recipients and the copy.
+         * @description An admin broadcast: pick recipients, a category, and the copy.
          *
-         *     Broadcasts are filed under the *tournament* category, so each recipient only
-         *     receives it on the channels they haven't muted for tournament news — the
-         *     server delivers per each player's preferences (there is no admin channel
-         *     override).
+         *     The chosen ``category`` decides which preference each recipient is delivered
+         *     against — each player only receives it on the channels they haven't muted for
+         *     that category (there is no admin channel override). Defaults to *tournament*
+         *     news when omitted.
          */
         BroadcastRequest: {
             /** Recipients */
             recipients: components["schemas"]["BroadcastRecipientsAll"] | components["schemas"]["BroadcastRecipientsSelected"];
+            /** @default tournament */
+            category: components["schemas"]["NotificationCategory"];
             /** Title */
             title: string;
             /** Body */

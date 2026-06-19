@@ -2,6 +2,7 @@ import { CheckCircle2, Search, Send } from 'lucide-react'
 import type {
   BroadcastRecipient,
   BroadcastResponse,
+  NotificationCategory,
   NotificationItem,
 } from '@/api/notifications'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -10,11 +11,18 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { cn } from '@/lib/utils'
+import { OptionSelect } from '../../tournaments/tournament-detail-page/event-editor/option-select'
 import { NotificationRow } from '../notification-row'
 import type { BroadcastAudience } from './build-broadcast-request'
 
 const TITLE_MAX = 100
 const BODY_MAX = 280
+
+/** A selectable broadcast category: the wire value plus its display label. */
+export interface BroadcastCategoryOption {
+  value: NotificationCategory
+  label: string
+}
 
 export interface BroadcastViewProps {
   recipients: BroadcastRecipient[]
@@ -27,6 +35,9 @@ export interface BroadcastViewProps {
   selectedIds: ReadonlySet<string>
   onToggleRecipient: (id: string) => void
   selectedCount: number
+  categories: BroadcastCategoryOption[]
+  category: NotificationCategory
+  onCategoryChange: (category: NotificationCategory) => void
   title: string
   onTitleChange: (title: string) => void
   body: string
@@ -53,6 +64,9 @@ export function BroadcastView(props: BroadcastViewProps) {
     selectedIds,
     onToggleRecipient,
     selectedCount,
+    categories,
+    category,
+    onCategoryChange,
     title,
     onTitleChange,
     body,
@@ -66,6 +80,9 @@ export function BroadcastView(props: BroadcastViewProps) {
 
   const hint =
     selectedCount === 0 ? 'Pick at least one recipient.' : 'Add a title.'
+
+  const categoryLabel =
+    categories.find((c) => c.value === category)?.label ?? category
 
   return (
     <div className="grid gap-8 px-6 py-6 lg:grid-cols-[360px_1fr]">
@@ -157,9 +174,23 @@ export function BroadcastView(props: BroadcastViewProps) {
           </h2>
 
           <p className="mb-6 text-xs text-[color:var(--fg-muted)]">
-            Filed as tournament news — each player receives it on the channels
+            Filed under {categoryLabel} — each player receives it on the channels
             they haven't muted for that category.
           </p>
+
+          <label
+            htmlFor="broadcast-category"
+            className="mb-2 block text-xs font-semibold text-[color:var(--fg-3)]"
+          >
+            Category
+          </label>
+          <OptionSelect
+            value={category}
+            options={categories}
+            onChange={(value) => onCategoryChange(value as NotificationCategory)}
+            ariaLabel="Category"
+            className="mb-5 w-full"
+          />
 
           <label
             htmlFor="broadcast-title"
@@ -233,19 +264,27 @@ export function BroadcastView(props: BroadcastViewProps) {
           <h2 id="broadcast-preview-heading" className="ds-overline mb-3.5">
             Preview
           </h2>
-          <BroadcastPreview title={title} body={body} />
+          <BroadcastPreview title={title} body={body} category={category} />
         </section>
       </div>
     </div>
   )
 }
 
-function BroadcastPreview({ title, body }: { title: string; body: string }) {
+function BroadcastPreview({
+  title,
+  body,
+  category,
+}: {
+  title: string
+  body: string
+  category: NotificationCategory
+}) {
   const safeTitle = title || 'Notification title'
   const safeBody = body || 'Your message shows up here.'
   const previewNotification: NotificationItem = {
     id: 'preview',
-    category: 'tournament',
+    category,
     title: safeTitle,
     body: safeBody,
     link: null,
