@@ -17,6 +17,7 @@ from app.schemas.notification import (
     BroadcastResponse,
     DeviceTokenResponse,
     MarkAllReadResponse,
+    MarkReadRequest,
     NotificationFeed,
     NotificationItem,
     NotificationPreferences,
@@ -79,6 +80,18 @@ async def get_unread_count(
 ) -> UnreadCountResponse:
     """Just the unread total — the lightweight endpoint the bell badge polls."""
     return await service.unread_count(current_user.id)
+
+
+@router.post("/v1/notifications/read", response_model=MarkAllReadResponse)
+async def mark_notifications_read(
+    payload: MarkReadRequest,
+    service: NotificationService = Depends(get_notification_service),
+    current_user: User = Depends(get_current_user),
+) -> MarkAllReadResponse:
+    """Mark a batch of notifications read — the endpoint the client flushes its
+    debounced "seen on screen" ids to. Owner-scoped and idempotent; ``marked``
+    counts only the rows that were still unread."""
+    return await service.mark_many_read(current_user.id, payload)
 
 
 @router.post("/v1/notifications/read-all", response_model=MarkAllReadResponse)

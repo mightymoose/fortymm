@@ -1,3 +1,5 @@
+import { render } from '@/test/utilities'
+import { NotificationRow } from './notification-row'
 import { buildNotificationItem } from './notification-row.factory'
 import { notificationRowPage } from './notification-row.page'
 
@@ -85,5 +87,105 @@ describe('NotificationRow', () => {
 
     expect(onActivate).toHaveBeenCalledTimes(1)
     expect(onActivate).toHaveBeenCalledWith(notification)
+  })
+
+  describe('onSeen (auto mark-read on scroll into view)', () => {
+    class MockIntersectionObserver {
+      static instances: MockIntersectionObserver[] = []
+      private elements: Element[] = []
+      private cb: IntersectionObserverCallback
+      constructor(cb: IntersectionObserverCallback) {
+        this.cb = cb
+        MockIntersectionObserver.instances.push(this)
+      }
+      observe(el: Element) {
+        this.elements.push(el)
+      }
+      unobserve() {}
+      disconnect() {}
+      takeRecords() {
+        return []
+      }
+      /** Simulate the observed rows crossing the visibility threshold. */
+      enterView() {
+        this.cb(
+          this.elements.map(
+            (target) => ({ isIntersecting: true, target }) as IntersectionObserverEntry,
+          ),
+          this as unknown as IntersectionObserver,
+        )
+      }
+    }
+
+    beforeEach(() => {
+      MockIntersectionObserver.instances = []
+      vi.stubGlobal('IntersectionObserver', MockIntersectionObserver)
+    })
+    afterEach(() => {
+      vi.unstubAllGlobals()
+    })
+
+    it('fires onSeen with the id once an unread row scrolls into view', () => {
+      const onSeen = vi.fn()
+      notificationRowPage.render({
+        notification: buildNotificationItem({ id: 'n-7', read_at: null }),
+        onSeen,
+      })
+
+      expect(onSeen).not.toHaveBeenCalled() // not yet on screen
+      MockIntersectionObserver.instances[0].enterView()
+
+      expect(onSeen).toHaveBeenCalledTimes(1)
+      expect(onSeen).toHaveBeenCalledWith('n-7')
+    })
+
+    it('does not observe an already-read row', () => {
+      const onSeen = vi.fn()
+      notificationRowPage.render({
+        notification: buildNotificationItem({
+          read_at: '2026-06-17T11:00:00.000Z',
+        }),
+        onSeen,
+      })
+
+      expect(MockIntersectionObserver.instances).toHaveLength(0)
+      expect(onSeen).not.toHaveBeenCalled()
+    })
+
+    it('does not track when no onSeen handler is given', () => {
+      notificationRowPage.render({
+        notification: buildNotificationItem({ read_at: null }),
+      })
+      expect(MockIntersectionObserver.instances).toHaveLength(0)
+    })
+
+    it('does not re-fire after an optimistic read rolls back to unread', () => {
+      // Simulates the failed-mark rollback: unread -> read (optimistic) -> unread
+      // again. The row must not re-arm and re-report, or a failing endpoint would
+      // get hammered every debounce window.
+      const onSeen = vi.fn()
+      const unread = buildNotificationItem({ id: 'n-9', read_at: null })
+      const { rerender } = render(
+        <NotificationRow notification={unread} onSeen={onSeen} />,
+      )
+
+      MockIntersectionObserver.instances[0].enterView()
+      expect(onSeen).toHaveBeenCalledTimes(1)
+      expect(MockIntersectionObserver.instances).toHaveLength(1)
+
+      // Optimistic mark-read, then a rollback flips it back to unread.
+      rerender(
+        <NotificationRow
+          notification={{ ...unread, read_at: '2026-06-17T12:00:00.000Z' }}
+          onSeen={onSeen}
+        />,
+      )
+      rerender(<NotificationRow notification={unread} onSeen={onSeen} />)
+
+      // The once-ever guard means no new observer was armed by the rollback, so
+      // there's nothing left to re-fire onSeen.
+      expect(MockIntersectionObserver.instances).toHaveLength(1)
+      expect(onSeen).toHaveBeenCalledTimes(1)
+    })
   })
 })

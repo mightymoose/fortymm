@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, assert_never, cast
 
-from sqlalchemy import CursorResult, delete, func, select, update
+from sqlalchemy import ColumnElement, CursorResult, delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -47,6 +47,7 @@ from app.schemas.notification import (
     BroadcastRecipientList,
     BroadcastResponse,
     MarkAllReadResponse,
+    MarkReadRequest,
     NotificationCategoryCell,
     NotificationCategoryPreference,
     NotificationChannelInfo,
@@ -357,17 +358,37 @@ class NotificationService:
             await self._db.refresh(notification)
         return NotificationItem.model_validate(notification)
 
-    async def mark_all_read(self, user_id: uuid.UUID) -> MarkAllReadResponse:
+    async def _mark_read_where(
+        self, *conditions: ColumnElement[bool]
+    ) -> MarkAllReadResponse:
+        """Stamp ``read_at`` on every notification matching ``conditions`` in one
+        statement; ``marked`` is how many rows actually flipped. Shared by the
+        batch and mark-all endpoints — callers supply the owner/unread scoping."""
         result = await self._db.execute(
-            update(Notification)
-            .where(
-                Notification.user_id == user_id,
-                Notification.read_at.is_(None),
-            )
-            .values(read_at=datetime.now(UTC))
+            update(Notification).where(*conditions).values(read_at=datetime.now(UTC))
         )
         await self._db.commit()
         return MarkAllReadResponse(marked=cast(CursorResult[Any], result).rowcount or 0)
+
+    async def mark_many_read(
+        self, user_id: uuid.UUID, payload: MarkReadRequest
+    ) -> MarkAllReadResponse:
+        """Mark a batch of notifications read in one statement. Scoped to the
+        owner and to still-unread rows, so ids that aren't theirs, don't exist,
+        or are already read are silently skipped — ``marked`` reports how many
+        rows actually flipped. Lets the client coalesce many on-screen rows into
+        a single round-trip."""
+        return await self._mark_read_where(
+            Notification.user_id == user_id,
+            Notification.id.in_(payload.ids),
+            Notification.read_at.is_(None),
+        )
+
+    async def mark_all_read(self, user_id: uuid.UUID) -> MarkAllReadResponse:
+        return await self._mark_read_where(
+            Notification.user_id == user_id,
+            Notification.read_at.is_(None),
+        )
 
     # ----- display taxonomy (DB-backed labels + order) ---------------------
 

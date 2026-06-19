@@ -749,6 +749,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/notifications/read": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Mark Notifications Read
+         * @description Mark a batch of notifications read — the endpoint the client flushes its
+         *     debounced "seen on screen" ids to. Owner-scoped and idempotent; ``marked``
+         *     counts only the rows that were still unread.
+         */
+        post: operations["mark_notifications_read_v1_notifications_read_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/notifications/read-all": {
         parameters: {
             query?: never;
@@ -1255,11 +1277,22 @@ export interface components {
         };
         /**
          * MarkAllReadResponse
-         * @description How many previously-unread notifications were just marked read.
+         * @description How many previously-unread notifications were just marked read — the
+         *     response shape for both ``read-all`` and the batched ``read`` endpoint.
          */
         MarkAllReadResponse: {
             /** Marked */
             marked: number;
+        };
+        /**
+         * MarkReadRequest
+         * @description A batch of notification ids to mark read in one round-trip. The client
+         *     debounces visible-on-screen rows into a single call rather than firing one
+         *     request per row.
+         */
+        MarkReadRequest: {
+            /** Ids */
+            ids: string[];
         };
         /**
          * MatchCreate
@@ -4058,6 +4091,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UnreadCountResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    mark_notifications_read_v1_notifications_read_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MarkReadRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MarkAllReadResponse"];
                 };
             };
             /** @description Validation Error */

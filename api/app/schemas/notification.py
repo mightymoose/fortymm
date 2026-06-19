@@ -72,8 +72,19 @@ class UnreadCountResponse(BaseModel):
     unread_count: int
 
 
+class MarkReadRequest(BaseModel):
+    """A batch of notification ids to mark read in one round-trip. The client
+    debounces visible-on-screen rows into a single call rather than firing one
+    request per row."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    ids: list[uuid.UUID] = Field(min_length=1)
+
+
 class MarkAllReadResponse(BaseModel):
-    """How many previously-unread notifications were just marked read."""
+    """How many previously-unread notifications were just marked read — the
+    response shape for both ``read-all`` and the batched ``read`` endpoint."""
 
     marked: int
 

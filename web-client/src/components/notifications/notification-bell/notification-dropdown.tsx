@@ -12,6 +12,8 @@ export interface NotificationDropdownProps {
   onActivate: (notification: NotificationItem) => void
   onMarkAllRead: () => void
   onSeeAll: () => void
+  /** Called with a row's id when it scrolls into view (auto mark-read). */
+  onSeen?: (id: string) => void
 }
 
 /**
@@ -27,6 +29,7 @@ export function NotificationDropdown({
   onActivate,
   onMarkAllRead,
   onSeeAll,
+  onSeen,
 }: NotificationDropdownProps) {
   const shown = items.slice(0, DROPDOWN_LIMIT)
 
@@ -88,7 +91,12 @@ export function NotificationDropdown({
                     : undefined
                 }
               >
-                <NotificationRow notification={item} compact onActivate={onActivate} />
+                <NotificationRow
+                  notification={item}
+                  compact
+                  onActivate={onActivate}
+                  onSeen={onSeen}
+                />
               </li>
             ))}
           </ul>

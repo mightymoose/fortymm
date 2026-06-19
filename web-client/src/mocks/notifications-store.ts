@@ -138,6 +138,20 @@ export const notificationHandlers = [
     }),
   ),
 
+  http.post('*/v1/notifications/read', async ({ request }) => {
+    const { ids } = (await request.json()) as { ids: string[] }
+    const targeted = new Set(ids)
+    let marked = 0
+    feed = feed.map((n) => {
+      if (targeted.has(n.id) && n.read_at == null) {
+        marked += 1
+        return { ...n, read_at: '2026-06-17T12:00:00.000Z' }
+      }
+      return n
+    })
+    return HttpResponse.json({ marked })
+  }),
+
   http.post('*/v1/notifications/read-all', () => {
     let marked = 0
     feed = feed.map((n) => {
