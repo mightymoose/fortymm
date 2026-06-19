@@ -116,7 +116,9 @@ export function useMarkNotificationRead() {
  *
  * We optimistically clear those rows' `read_at` and drop the unread badge so the
  * count falls the instant a notification is seen — the debounce would otherwise
- * leave the badge stale for ~1s — then reconcile against the server on settle.
+ * leave the badge stale for ~1s. On success we leave the optimistic state in
+ * place (the background polls reconcile any drift); only a failed write rolls
+ * back and re-syncs to server truth.
  */
 export function useMarkNotificationsRead() {
   const qc = useQueryClient()
