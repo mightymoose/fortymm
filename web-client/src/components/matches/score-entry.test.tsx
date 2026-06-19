@@ -459,11 +459,45 @@ describe('ScoreEntry — create', () => {
     expect(oppInput).toHaveValue('97')
     expect(screen.getByRole('alert')).toHaveTextContent(/leads by exactly 2/i)
 
-    // The field still caps at 3 digits so it can't grow unbounded — a 4th
-    // digit typed in one pass is dropped rather than accepted.
+    // A 4th digit is no longer truncated to a plausible 3-digit score (#624):
+    // the over-long value is kept verbatim and flagged as malformed instead.
     await user.clear(meInput)
     await user.type(meInput, '1005')
-    expect(meInput).toHaveValue('100')
+    expect(meInput).toHaveValue('1005')
+    expect(meInput).toHaveAttribute('aria-invalid', 'true')
+  })
+
+  it('flags malformed input instead of coercing it to a different number', async () => {
+    // Regression for #624: the field used to strip/truncate, so "11.5" became
+    // "115" and "999999" became "999" — values the user never typed that pass
+    // as real scores. The raw text is now kept and a malformed entry is flagged
+    // inline (with Save blocked) rather than silently transformed.
+    const user = userEvent.setup()
+    server.use(
+      http.get('*/v1/matches/m-1', () => HttpResponse.json(inProgressMatch())),
+    )
+
+    renderScoreEntry({ kind: 'create', matchId: 'm-1', gameNumber: 3 })
+    const meInput = await screen.findByRole('textbox', {
+      name: 'rita.kovac score',
+    })
+
+    // A decimal stays "11.5" — it never becomes "115" — and is flagged.
+    await user.type(meInput, '11.5')
+    expect(meInput).toHaveValue('11.5')
+    expect(meInput).toHaveAttribute('aria-invalid', 'true')
+    expect(screen.getByRole('alert')).toHaveTextContent(/whole number/i)
+
+    // Overflowing digits stay "999999" — not capped to a plausible "999".
+    await user.clear(meInput)
+    await user.type(meInput, '999999')
+    expect(meInput).toHaveValue('999999')
+    expect(meInput).toHaveAttribute('aria-invalid', 'true')
+
+    // Letters are still rejected at the keystroke, as before.
+    await user.clear(meInput)
+    await user.type(meInput, '1a2')
+    expect(meInput).toHaveValue('12')
   })
 
   it('redirects to the existing score\'s edit page when landing on /scores/new for an already-scored game', async () => {
@@ -1599,6 +1633,30 @@ describe('ScoreEntry — unsaved-input guard', () => {
     // No typing — leaving must be friction-free.
     await user.click(screen.getByRole('link', { name: /game 1, saved/i }))
     await screen.findByRole('heading', { name: /edit game 1 score/i })
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+  })
+
+  it('does not prompt for a stray "." typed over an already-saved score', async () => {
+    // Regression for #624 + #441: the field keeps malformed text verbatim now,
+    // so a trailing "." in "11." must not read as a change from the saved "11"
+    // and spuriously trip the unsaved-changes blocker — the dirty check
+    // compares digits only.
+    const user = userEvent.setup()
+    server.use(
+      http.get('*/v1/matches/m-1', () => HttpResponse.json(inProgressMatch())),
+    )
+
+    renderScoringApp('/matches/m-1/games/1/scores/edit')
+    await screen.findByRole('heading', { name: /edit game 1 score/i })
+
+    const meInput = screen.getByRole('textbox', { name: 'rita.kovac score' })
+    expect(meInput).toHaveValue('11')
+    await user.type(meInput, '.')
+    expect(meInput).toHaveValue('11.')
+
+    // Leaving for another saved game goes through with no leave prompt.
+    await user.click(screen.getByRole('link', { name: /game 2, saved/i }))
+    await screen.findByRole('heading', { name: /edit game 2 score/i })
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
   })
 
