@@ -24,6 +24,8 @@ export interface NotificationsViewProps {
   onFilterChange: (filter: NotificationFilter) => void
   onActivate: (notification: NotificationItem) => void
   onMarkAllRead: () => void
+  /** Called with a row's id when it scrolls into view (auto mark-read). */
+  onSeen?: (id: string) => void
 }
 
 /** The full notifications page: a Bebas header, category filter pills, and the
@@ -36,6 +38,7 @@ export function NotificationsView({
   onFilterChange,
   onActivate,
   onMarkAllRead,
+  onSeen,
 }: NotificationsViewProps) {
   const shown = items.filter((item) => matchesFilter(item, filter))
   const filters: { key: NotificationFilter; label: string }[] = [
@@ -116,7 +119,11 @@ export function NotificationsView({
                     : undefined
                 }
               >
-                <NotificationRow notification={item} onActivate={onActivate} />
+                <NotificationRow
+                  notification={item}
+                  onActivate={onActivate}
+                  onSeen={onSeen}
+                />
               </li>
             ))}
           </ul>

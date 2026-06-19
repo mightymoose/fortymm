@@ -9,6 +9,7 @@ import {
   NotificationsView,
   type NotificationFilter,
 } from './notifications-page/notifications-view'
+import { useAutoMarkRead } from './use-auto-mark-read'
 import { useFollowNotification } from './use-follow-notification'
 
 /** Route container for the full notifications page — wires the feed query, the
@@ -19,6 +20,7 @@ export function NotificationsPage() {
   const [filter, setFilter] = useState<NotificationFilter>('all')
   const follow = useFollowNotification()
   const markAll = useMarkAllNotificationsRead()
+  const markSeen = useAutoMarkRead()
 
   if (feed.isPending || taxonomy.isPending) {
     return (
@@ -48,6 +50,7 @@ export function NotificationsPage() {
       onFilterChange={setFilter}
       onActivate={follow}
       onMarkAllRead={() => markAll.mutate()}
+      onSeen={markSeen}
     />
   )
 }

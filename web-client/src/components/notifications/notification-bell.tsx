@@ -10,6 +10,7 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { cn } from '@/lib/utils'
 import { NotificationDropdown } from './notification-bell/notification-dropdown'
+import { useAutoMarkRead } from './use-auto-mark-read'
 import { useFollowNotification } from './use-follow-notification'
 
 /**
@@ -25,6 +26,7 @@ export function NotificationBell() {
   const feed = useQuery({ ...notificationFeedQueryOptions(), enabled: open })
   const markAll = useMarkAllNotificationsRead()
   const follow = useFollowNotification()
+  const markSeen = useAutoMarkRead()
 
   const unreadCount = unread.data?.unread_count ?? 0
   const badgeLabel = unreadCount > 99 ? '99+' : String(unreadCount)
@@ -81,6 +83,7 @@ export function NotificationBell() {
             setOpen(false)
           }}
           onMarkAllRead={() => markAll.mutate()}
+          onSeen={markSeen}
           onSeeAll={() => {
             setOpen(false)
             void router.history.push('/notifications')

@@ -86,4 +86,75 @@ describe('NotificationRow', () => {
     expect(onActivate).toHaveBeenCalledTimes(1)
     expect(onActivate).toHaveBeenCalledWith(notification)
   })
+
+  describe('onSeen (auto mark-read on scroll into view)', () => {
+    class MockIntersectionObserver {
+      static instances: MockIntersectionObserver[] = []
+      private elements: Element[] = []
+      private cb: IntersectionObserverCallback
+      constructor(cb: IntersectionObserverCallback) {
+        this.cb = cb
+        MockIntersectionObserver.instances.push(this)
+      }
+      observe(el: Element) {
+        this.elements.push(el)
+      }
+      unobserve() {}
+      disconnect() {}
+      takeRecords() {
+        return []
+      }
+      /** Simulate the observed rows crossing the visibility threshold. */
+      enterView() {
+        this.cb(
+          this.elements.map(
+            (target) => ({ isIntersecting: true, target }) as IntersectionObserverEntry,
+          ),
+          this as unknown as IntersectionObserver,
+        )
+      }
+    }
+
+    beforeEach(() => {
+      MockIntersectionObserver.instances = []
+      vi.stubGlobal('IntersectionObserver', MockIntersectionObserver)
+    })
+    afterEach(() => {
+      vi.unstubAllGlobals()
+    })
+
+    it('fires onSeen with the id once an unread row scrolls into view', () => {
+      const onSeen = vi.fn()
+      notificationRowPage.render({
+        notification: buildNotificationItem({ id: 'n-7', read_at: null }),
+        onSeen,
+      })
+
+      expect(onSeen).not.toHaveBeenCalled() // not yet on screen
+      MockIntersectionObserver.instances[0].enterView()
+
+      expect(onSeen).toHaveBeenCalledTimes(1)
+      expect(onSeen).toHaveBeenCalledWith('n-7')
+    })
+
+    it('does not observe an already-read row', () => {
+      const onSeen = vi.fn()
+      notificationRowPage.render({
+        notification: buildNotificationItem({
+          read_at: '2026-06-17T11:00:00.000Z',
+        }),
+        onSeen,
+      })
+
+      expect(MockIntersectionObserver.instances).toHaveLength(0)
+      expect(onSeen).not.toHaveBeenCalled()
+    })
+
+    it('does not track when no onSeen handler is given', () => {
+      notificationRowPage.render({
+        notification: buildNotificationItem({ read_at: null }),
+      })
+      expect(MockIntersectionObserver.instances).toHaveLength(0)
+    })
+  })
 })

@@ -2,6 +2,7 @@ import type { NotificationItem } from '@/api/notifications'
 import { cn } from '@/lib/utils'
 import { CATEGORY_VISUAL } from './notification-meta'
 import { relativeTime } from './relative-time'
+import { useSeenOnScreen } from './use-seen-on-screen'
 
 export interface NotificationRowProps {
   notification: NotificationItem
@@ -11,6 +12,12 @@ export interface NotificationRowProps {
   now?: Date
   /** Fired on click — the parent marks the row read and follows its link. */
   onActivate?: (notification: NotificationItem) => void
+  /**
+   * Fired once with the notification id when an unread row scrolls into view,
+   * so the parent can debounce-batch a "mark read" for everything seen. Omit it
+   * (e.g. in isolation tests) and the row does no viewport tracking.
+   */
+  onSeen?: (id: string) => void
 }
 
 /**
@@ -24,15 +31,21 @@ export function NotificationRow({
   compact = false,
   now,
   onActivate,
+  onSeen,
 }: NotificationRowProps) {
   const visual = CATEGORY_VISUAL[notification.category]
   const { Icon } = visual
   const unread = notification.read_at == null
   const delta = notification.delta
   const deltaUp = delta?.trim().startsWith('+') ?? false
+  // Only unread rows with a listening parent track visibility (auto mark-read).
+  const ref = useSeenOnScreen<HTMLButtonElement>(unread && onSeen != null, () =>
+    onSeen?.(notification.id),
+  )
 
   return (
     <button
+      ref={ref}
       type="button"
       onClick={() => onActivate?.(notification)}
       data-unread={unread}

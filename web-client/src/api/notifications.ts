@@ -38,8 +38,14 @@ export const NOTIFICATION_TAXONOMY_QUERY_KEY = [
 ] as const
 
 // The bell badge polls this lightweight count so a notification that arrives in
-// another tab/device surfaces without a manual refresh.
+// another tab/device surfaces without a manual refresh. We poll rather than
+// long-poll/WebSocket deliberately: the feed is low-frequency and per-user, so a
+// cheap interval GET beats standing up socket/pub-sub infra.
 const UNREAD_POLL_MS = 1000 * 60
+// Whenever the full feed is actually on screen (bell open, notifications page
+// mounted) refresh it on a tighter cadence so it stays live without a reload.
+// Off-screen the query isn't mounted, so nothing polls.
+const FEED_POLL_MS = 1000 * 30
 
 /**
  * Fire a test push to the current user's registered iOS devices. The backend
@@ -62,6 +68,7 @@ export function notificationFeedQueryOptions() {
     queryKey: [...NOTIFICATIONS_QUERY_KEY, 'feed'] as const,
     queryFn: async (): Promise<NotificationFeed> =>
       unwrap('load notifications', await api.GET('/v1/notifications')),
+    refetchInterval: FEED_POLL_MS,
   })
 }
 
@@ -97,6 +104,64 @@ export function useMarkNotificationRead() {
         }),
       ),
     onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: NOTIFICATIONS_QUERY_KEY })
+    },
+  })
+}
+
+/**
+ * Mark a batch of notifications read in one request. The "auto-mark on screen"
+ * flow debounces the ids of rows that scroll into view and flushes them here, so
+ * a burst of newly-seen rows costs one round-trip instead of one-per-row.
+ *
+ * We optimistically clear those rows' `read_at` and drop the unread badge so the
+ * count falls the instant a notification is seen — the debounce would otherwise
+ * leave the badge stale for ~1s — then reconcile against the server on settle.
+ */
+export function useMarkNotificationsRead() {
+  const qc = useQueryClient()
+  const feedKey = [...NOTIFICATIONS_QUERY_KEY, 'feed'] as const
+  const countKey = [...NOTIFICATIONS_QUERY_KEY, 'unread-count'] as const
+  return useMutation({
+    mutationFn: async (ids: string[]) =>
+      unwrap(
+        'mark notifications read',
+        await api.POST('/v1/notifications/read', { body: { ids } }),
+      ),
+    onMutate: async (ids) => {
+      const idSet = new Set(ids)
+      await qc.cancelQueries({ queryKey: NOTIFICATIONS_QUERY_KEY })
+      const prevFeed = qc.getQueryData<NotificationFeed>(feedKey)
+      const prevCount = qc.getQueryData<UnreadCount>(countKey)
+      // Decrement by how many targeted rows are *currently* unread, so a re-seen
+      // (already-read) row doesn't drive the badge negative.
+      const newlyRead =
+        prevFeed?.items.filter((n) => idSet.has(n.id) && n.read_at == null)
+          .length ?? 0
+      const readAt = new Date().toISOString()
+      if (prevFeed) {
+        qc.setQueryData<NotificationFeed>(feedKey, {
+          ...prevFeed,
+          items: prevFeed.items.map((n) =>
+            idSet.has(n.id) && n.read_at == null ? { ...n, read_at: readAt } : n,
+          ),
+          unread_count: Math.max(0, prevFeed.unread_count - newlyRead),
+        })
+      }
+      if (prevCount) {
+        qc.setQueryData<UnreadCount>(countKey, {
+          unread_count: Math.max(0, prevCount.unread_count - newlyRead),
+        })
+      }
+      return { prevFeed, prevCount }
+    },
+    // On success the optimistic state is already correct and the background
+    // polls reconcile any drift, so we deliberately don't invalidate here —
+    // that would force two refetches per debounced batch while scrolling. Only
+    // a failed write needs to re-sync to server truth.
+    onError: (_err, _ids, context) => {
+      if (context?.prevFeed) qc.setQueryData(feedKey, context.prevFeed)
+      if (context?.prevCount) qc.setQueryData(countKey, context.prevCount)
       void qc.invalidateQueries({ queryKey: NOTIFICATIONS_QUERY_KEY })
     },
   })

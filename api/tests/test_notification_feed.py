@@ -140,6 +140,63 @@ async def test_mark_missing_notification_404(
     assert response.status_code == 404
 
 
+async def test_mark_batch_read(api_client: AsyncClient, db_session: AsyncSession):
+    user = await start_session(api_client, db_session)
+    a = await make_notification(db_session, user.id, read=False)
+    b = await make_notification(db_session, user.id, read=False)
+    await make_notification(db_session, user.id, read=False)
+
+    response = await api_client.post(
+        "/v1/notifications/read", json={"ids": [str(a.id), str(b.id)]}
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"marked": 2}
+    # Only the two named were flipped; the third stays unread.
+    after = await api_client.get("/v1/notifications/unread-count")
+    assert after.json() == {"unread_count": 1}
+
+
+async def test_mark_batch_skips_foreign_already_read_and_missing(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    user = await start_session(api_client, db_session)
+    other = await make_user(db_session, "someone-else")
+    mine_unread = await make_notification(db_session, user.id, read=False)
+    mine_read = await make_notification(db_session, user.id, read=True)
+    theirs = await make_notification(db_session, other.id, read=False)
+
+    response = await api_client.post(
+        "/v1/notifications/read",
+        json={
+            "ids": [
+                str(mine_unread.id),
+                str(mine_read.id),
+                str(theirs.id),
+                str(uuid.uuid4()),
+            ]
+        },
+    )
+
+    assert response.status_code == 200
+    # Only the caller's still-unread row counts; foreign/read/missing are skipped.
+    assert response.json() == {"marked": 1}
+    still_theirs = (
+        await db_session.execute(
+            select(Notification).where(Notification.id == theirs.id)
+        )
+    ).scalar_one()
+    assert still_theirs.read_at is None
+
+
+async def test_mark_batch_rejects_empty_ids(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    await start_session(api_client, db_session)
+    response = await api_client.post("/v1/notifications/read", json={"ids": []})
+    assert response.status_code == 422
+
+
 async def test_mark_all_read(api_client: AsyncClient, db_session: AsyncSession):
     user = await start_session(api_client, db_session)
     await make_notification(db_session, user.id, read=False)
@@ -159,6 +216,11 @@ async def test_feed_requires_session(api_client: AsyncClient):
     assert (await api_client.get("/v1/notifications")).status_code == 401
     assert (await api_client.get("/v1/notifications/unread-count")).status_code == 401
     assert (await api_client.post("/v1/notifications/read-all")).status_code == 401
+    assert (
+        await api_client.post(
+            "/v1/notifications/read", json={"ids": [str(uuid.uuid4())]}
+        )
+    ).status_code == 401
 
 
 async def test_unknown_user_feed_is_independent(
