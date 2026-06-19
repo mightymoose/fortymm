@@ -61,7 +61,19 @@ let feed: NotificationItem[] = [
   },
 ]
 
-let prefs: NotificationPreferences = notificationPreferences()
+// Seed the dev mock with push + email needing setup so the preferences page
+// exercises its channel-setup nudges (the all-set-up state hides them).
+let prefs: NotificationPreferences = (() => {
+  const p = notificationPreferences()
+  p.channels = p.channels.map((c) =>
+    c.channel === 'push'
+      ? { ...c, setup_required: true, destination: 'No devices yet — open the app' }
+      : c.channel === 'email'
+        ? { ...c, setup_required: true, destination: 'Pending — check your inbox' }
+        : c,
+  )
+  return p
+})()
 
 const RECIPIENTS: BroadcastRecipient[] = [
   { id: 'u-1', username: 'nguyen.t' },

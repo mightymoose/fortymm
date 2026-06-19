@@ -51,7 +51,11 @@ export function PreferencesView({
       </p>
 
       <p className="ds-overline mb-3.5">Where we reach you</p>
-      <div className="mb-9 grid grid-cols-1 gap-3 sm:grid-cols-2">
+      {/* Masonry-style columns rather than a grid: each card carries an
+          optional setup nudge of its own height, and a row-aligned grid would
+          leave a tall gap beside any card whose neighbour has a nudge. Columns
+          let each card+nudge unit pack independently. */}
+      <div className="mb-9 columns-1 gap-3 sm:columns-2">
         {channels.map((channel) => {
           const { Icon } = CHANNEL_VISUAL[channel.channel]
           const label = channelLabel.get(channel.channel) ?? channel.channel
@@ -68,7 +72,7 @@ export function PreferencesView({
               ? 'Pending — check your inbox'
               : channel.destination
           return (
-            <div key={channel.channel} className="min-w-0">
+            <div key={channel.channel} className="mb-3 break-inside-avoid">
               <div
                 className={cn(
                   'flex items-center gap-3 rounded-xl border bg-[color:var(--bg-card)] p-4 transition-opacity',
