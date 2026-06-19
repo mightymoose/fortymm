@@ -7,6 +7,19 @@ test.describe('Administration · System Health', () => {
     await expect(admin.heading).toBeVisible()
   })
 
+  test('denies a visitor without administration.view, hiding the dashboard', async ({
+    page,
+  }) => {
+    // Regression for #622: the Overview leaked internal service hostnames to
+    // anyone who direct-navigated to /admin, because its only fetch (/v1/health)
+    // is public and never 403s to trip the reactive boundary.
+    const admin = await AdminPage.navigateTo(page, { permissions: [] })
+
+    await expect(admin.accessDenied).toBeVisible()
+    await expect(admin.widget).toHaveCount(0)
+    await expect(admin.heading).toHaveCount(0)
+  })
+
   test('shows operational state when every dependency is healthy', async ({
     page,
   }) => {
