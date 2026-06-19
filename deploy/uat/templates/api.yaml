@@ -1,0 +1,66 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  labels:
+    {{- include "fortymm-uat.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "fortymm-uat.selector" (dict "component" "api") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "fortymm-uat.selector" (dict "component" "api") | nindent 8 }}
+    spec:
+      containers:
+        - name: api
+          image: {{ include "fortymm-uat.apiImage" . }}
+          imagePullPolicy: {{ .Values.pullPolicy }}
+          # Migrations + seeds run in the migrate Job, not here.
+          command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+          envFrom:
+            {{- include "fortymm-uat.appEnvFrom" . | nindent 12 }}
+          ports:
+            - containerPort: 8000
+          volumeMounts:
+            - name: apns-key
+              mountPath: {{ .Values.apnsKeyPath }}
+              subPath: {{ .Values.apnsKeyFile }}
+              readOnly: true
+          # /v1/health depends on the DB being migrated and the worker reachable
+          # via redis, so it can be red for a while on first boot — keep the
+          # readiness window generous. Liveness is a plain TCP check so a not-yet
+          # -migrated DB doesn't trigger a restart loop.
+          readinessProbe:
+            httpGet:
+              path: /v1/health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 30
+          livenessProbe:
+            tcpSocket:
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            failureThreshold: 6
+      volumes:
+        - name: apns-key
+          secret:
+            secretName: {{ .Values.secrets.apns }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api
+  labels:
+    {{- include "fortymm-uat.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "fortymm-uat.selector" (dict "component" "api") | nindent 4 }}
+  ports:
+    - port: 8000
+      targetPort: 8000

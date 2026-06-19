@@ -1,0 +1,51 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  # Revision-scoped name: Jobs are immutable, so each release gets its own.
+  name: migrate-{{ .Release.Revision }}
+  labels:
+    {{- include "fortymm-uat.labels" . | nindent 4 }}
+  annotations:
+    # post-* so the in-chart postgres already exists (a pre-install hook would
+    # run before any non-hook resource is created, with no DB to migrate
+    # against). The Job waits for postgres, then migrates + seeds. api/worker
+    # may briefly serve before this finishes on an upgrade — acceptable for UAT.
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "0"
+    # Keep the last Job around so its logs are inspectable; only delete the
+    # prior one when creating a new hook.
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  backoffLimit: 3
+  # Reap finished Jobs after a day so they don't pile up.
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        {{- include "fortymm-uat.selector" (dict "component" "migrate") | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      initContainers:
+        - name: wait-for-postgres
+          image: {{ .Values.images.postgres }}
+          imagePullPolicy: {{ .Values.pullPolicy }}
+          command:
+            - sh
+            - -c
+            - |
+              until pg_isready -h postgres -p 5432 -U {{ .Values.postgres.user }}; do
+                echo "waiting for postgres..."; sleep 2
+              done
+      containers:
+        - name: migrate
+          image: {{ include "fortymm-uat.apiImage" . }}
+          imagePullPolicy: {{ .Values.pullPolicy }}
+          envFrom:
+            {{- include "fortymm-uat.appEnvFrom" . | nindent 12 }}
+          command:
+            - sh
+            - -c
+            - |
+              alembic upgrade head &&
+              python scripts/seed_rbac.py &&
+              python scripts/seed_leagues.py
