@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import {
   ChevronLeft,
   ChevronRight,
@@ -180,13 +181,29 @@ function MatchesSection({
   page: number
   onPageChange: (next: number) => void
 }) {
-  const { data, isPending, isError, refetch } = usePlayerMatches(
+  const { data, isPending, isFetching, isError, refetch } = usePlayerMatches(
     playerId,
     { page, page_size: PAGE_SIZE },
     { initialData: page === 1 ? initialMatches : undefined },
   )
   const rows = data?.items ?? []
   const total = data?.total ?? 0
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
+  const isOutOfRange = page > totalPages
+
+  // Snap an out-of-range `?page=` back to the last valid page once the real
+  // total is known — a stale bookmark or deep-link past the end would
+  // otherwise fetch an empty page and render the "No matches yet" empty state
+  // under a nonsensical "Showing 24951–28 of 28" footer (#637, same defect as
+  // #541 on the /matches list). Only act on a settled, current total:
+  // `isPending` covers the initial/session-gated window (where `total` is
+  // still 0), and `isFetching` covers a `keepPreviousData` refetch still
+  // serving the prior page's total.
+  useEffect(() => {
+    if (!isPending && !isFetching && isOutOfRange) {
+      onPageChange(totalPages)
+    }
+  }, [isPending, isFetching, isOutOfRange, totalPages, onPageChange])
 
   return (
     <section className="player-profile__section">
@@ -199,7 +216,9 @@ function MatchesSection({
       <div className="player-profile__table-wrap">
         {isError ? (
           <MatchesError onRetry={() => void refetch()} />
-        ) : isPending ? (
+        ) : isPending || (rows.length === 0 && isOutOfRange) ? (
+          // Out-of-range: hold the skeleton while the effect above redirects
+          // to the last valid page, instead of flashing "No matches yet".
           <MatchesSkeleton />
         ) : rows.length === 0 ? (
           <MatchesEmpty />
@@ -462,11 +481,16 @@ function PaginationFooter({
   pageSize: number
 }) {
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
-  const first = total === 0 ? 0 : (page - 1) * pageSize + 1
-  const last = Math.min(total, page * pageSize)
-  const tokens = paginationRange(page, totalPages)
-  const atFirst = page <= 1
-  const atLast = page >= totalPages
+  // Clamp a stale/out-of-range `page` to a valid one so the range math can
+  // never render start > end — e.g. the frame before the parent's redirect
+  // effect snaps a deep-linked `?page=999` back to the last page (#637). The
+  // footer is self-protecting regardless of what the caller passes.
+  const safePage = Math.min(Math.max(1, page), totalPages)
+  const first = total === 0 ? 0 : (safePage - 1) * pageSize + 1
+  const last = Math.min(total, safePage * pageSize)
+  const tokens = paginationRange(safePage, totalPages)
+  const atFirst = safePage <= 1
+  const atLast = safePage >= totalPages
 
   return (
     <div className="footer">
@@ -493,7 +517,7 @@ function PaginationFooter({
               variant="ghost"
               size="icon-sm"
               disabled={atFirst}
-              onClick={() => setPage(page - 1)}
+              onClick={() => setPage(safePage - 1)}
               aria-label="Previous page"
             >
               <ChevronLeft size={14} strokeWidth={2.4} />
@@ -508,7 +532,7 @@ function PaginationFooter({
               <PaginationItem key={i}>
                 <PaginationLink
                   href="#"
-                  isActive={t === page}
+                  isActive={t === safePage}
                   onClick={(e) => {
                     e.preventDefault()
                     setPage(t)
@@ -524,7 +548,7 @@ function PaginationFooter({
               variant="ghost"
               size="icon-sm"
               disabled={atLast}
-              onClick={() => setPage(page + 1)}
+              onClick={() => setPage(safePage + 1)}
               aria-label="Next page"
             >
               <ChevronRight size={14} strokeWidth={2.4} />
