@@ -7,11 +7,9 @@ describe('YourGameRow', () => {
     yourGameRowPage.render({ isLoading: true })
 
     await yourGameRowPage.findHeading()
+    expect(yourGameRowPage.ratingSkeleton.queryStatus()).not.toBeNull()
     expect(
-      yourGameRowPage.skeleton.querySkeleton('Loading rating'),
-    ).not.toBeNull()
-    expect(
-      yourGameRowPage.skeleton.querySkeleton('Loading recent matches'),
+      yourGameRowPage.recentResultsSkeleton.queryStatus(),
     ).not.toBeNull()
   })
 
