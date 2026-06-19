@@ -45,6 +45,7 @@ async def test_dashboard_empty_when_user_has_no_matches(
     assert response.status_code == 200
     body = response.json()
     assert body["attention"] == []
+    assert body["attention_total_count"] == 0
     assert body["waiting_count"] == 0
     assert body["recent_results"] == []
     assert body["completed_match_count"] == 0
@@ -89,6 +90,7 @@ async def test_dashboard_returns_score_attention_for_in_progress_match(
     assert item["current_game_number"] == 2
     # Nothing is waiting on the opponent yet.
     assert body["waiting_count"] == 0
+    assert body["attention_total_count"] == 1
     assert body["recent_results"] == []
 
 
@@ -250,7 +252,28 @@ async def test_dashboard_my_posted_result_counts_as_waiting(
 
     body = (await api_client.get("/v1/dashboard")).json()
     assert body["attention"] == []
+    assert body["attention_total_count"] == 0
     assert body["waiting_count"] == 1
+
+
+async def test_dashboard_caps_attention_rows_but_counts_them_all(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """A tournament player with more open matches than the banner cap gets the
+    most-urgent ATTENTION_BANNERS_LIMIT rows, while ``attention_total_count``
+    still reflects every actionable match so the footer's "+N more" is exact."""
+    from app.dashboard import ATTENTION_BANNERS_LIMIT
+
+    await start_session(api_client, db_session)
+    over_cap = ATTENTION_BANNERS_LIMIT + 2
+    for i in range(over_cap):
+        opp = await make_user(db_session, f"rival_{i}")
+        await _create_match(api_client, opp.id, best_of=5)
+
+    body = (await api_client.get("/v1/dashboard")).json()
+    assert len(body["attention"]) == ATTENTION_BANNERS_LIMIT
+    assert body["attention_total_count"] == over_cap
+    assert all(i["kind"] == "score" for i in body["attention"])
 
 
 async def test_dashboard_attention_priority_ranking(
@@ -299,6 +322,7 @@ async def test_dashboard_attention_priority_ranking(
         rated_score["id"],
         unrated_score["id"],
     ]
+    assert body["attention_total_count"] == 4
     assert body["waiting_count"] == 0
 
 

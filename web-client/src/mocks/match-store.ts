@@ -565,10 +565,18 @@ export function isWaitingSeed(seed: SeedMatch): boolean {
   )
 }
 
+// Mirrors the BFF's `ATTENTION_BANNERS_LIMIT`: the panel only renders a few
+// rows, so the server caps the eager-loaded set and reports the true total
+// separately (see api/app/dashboard.py).
+const ATTENTION_BANNERS_LIMIT = 10
+
 /** Build the dashboard attention payload from all seeds, pre-ranked oldest-
- * first within each priority bucket — mirrors the BFF's `_build_attention`. */
+ * first within each priority bucket — mirrors the BFF's `_build_attention`.
+ * The row list is capped at `ATTENTION_BANNERS_LIMIT`; `attention_total_count`
+ * carries the full actionable total so the footer's "+N more" stays exact. */
 export function projectDashboardAttention(seeds: SeedMatch[]): {
   attention: DashboardAttentionItem[]
+  attention_total_count: number
   waiting_count: number
 } {
   const ranked = seeds
@@ -586,11 +594,13 @@ export function projectDashboardAttention(seeds: SeedMatch[]): {
         a.classified.priority - b.classified.priority ||
         a.seed.created_at.localeCompare(b.seed.created_at),
     )
+  const attention = ranked.flatMap((row) => {
+    const item = projectAttention(row.seed)
+    return item ? [item] : []
+  })
   return {
-    attention: ranked.flatMap((row) => {
-      const item = projectAttention(row.seed)
-      return item ? [item] : []
-    }),
+    attention: attention.slice(0, ATTENTION_BANNERS_LIMIT),
+    attention_total_count: attention.length,
     waiting_count: seeds.filter(isWaitingSeed).length,
   }
 }

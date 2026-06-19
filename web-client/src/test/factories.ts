@@ -307,8 +307,12 @@ export function dashboardResponse(
   overrides: Partial<DashboardResponse> = {},
 ): DashboardResponse {
   const recent_results = overrides.recent_results ?? []
+  const attention = overrides.attention ?? []
   return {
-    attention: [],
+    attention,
+    // Mirrors the returned rows by default (no server-side cap in play).
+    // Override to model a capped panel with extra "+N more" overflow.
+    attention_total_count: attention.length,
     waiting_count: 0,
     recent_results,
     rating: dashboardRating(),

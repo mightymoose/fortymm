@@ -1218,6 +1218,8 @@ export interface components {
         DashboardResponse: {
             /** Attention */
             attention: components["schemas"]["DashboardAttentionItem"][];
+            /** Attention Total Count */
+            attention_total_count: number;
             /** Waiting Count */
             waiting_count: number;
             /** Recent Results */

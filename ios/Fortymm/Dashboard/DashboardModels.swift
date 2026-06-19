@@ -5,10 +5,15 @@ import Foundation
 /// `.convertFromSnakeCase`, so `recent_results` / `spark_data` / `my_rating_change`
 /// arrive as `recentResults` / `sparkData` / `myRatingChange`.
 struct DashboardResponse: Decodable {
-    /// Every actionable match for the current user, pre-ranked server-side by
-    /// attention priority (see `api/app/dashboard.py`). The UI renders the top
-    /// few as rows and rolls the remainder into the footer's overflow count.
+    /// The current user's most-urgent actionable matches, pre-ranked server-side
+    /// by attention priority (see `api/app/dashboard.py`). Capped server-side, so
+    /// this is NOT the full set — the UI renders the top few as rows and uses
+    /// `attentionTotalCount` (not this array's length) for the footer overflow.
     let attention: [DashboardAttentionItem]
+    /// Total actionable matches for the current user, counted server-side
+    /// independently of the `attention` cap so the footer's "+N more" stays
+    /// accurate however many there are.
+    let attentionTotalCount: Int
     /// Matches that need *someone else's* move — a result we posted awaiting the
     /// opponent's sign-off, plus pending/scheduled matches. Footer text only;
     /// never a row.
