@@ -58,6 +58,7 @@ export function buildMatchDetailsScore(
     side_1_points: side1,
     side_2_points: side2,
     winner_side_number: side1 > side2 ? 1 : 2,
+    version: 1,
     ...overrides,
   }
 }

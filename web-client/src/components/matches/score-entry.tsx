@@ -39,9 +39,11 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { Button } from '@/components/ui/button'
 import { cn, initialsOf } from '@/lib/utils'
 import { decidedSide, illegalScoreReason } from '@/lib/scoring'
-import { useGameSaveState } from './score-saves'
+import { isScoreConflict, useGameSaveState } from './score-saves'
 import { SaveBanner } from './save-banner'
 
 /** The non-null persisted score on a game. */
@@ -212,6 +214,14 @@ function ScoreEntryInner({
   const failedOpp =
     failedEntry &&
     (mySideNumber === 1 ? failedEntry.side_2_points : failedEntry.side_1_points)
+  // This game's last save was rejected because a concurrent participant had
+  // already saved it (a 409 from the conditional write). That's the data-loss
+  // case the version guard exists for: rather than silently overwrite their
+  // result, we show both scores and make the user re-decide against the
+  // committed value (`persistedScore` is the refetched server truth — the
+  // `onError` re-sync primed it). Distinct from a plain failed save, which the
+  // scoreline/banner just offer to retry.
+  const conflict = ownSave?.status === 'error' && isScoreConflict(ownSave.error)
   const me =
     meTyped ??
     (failedMe != null
@@ -487,6 +497,28 @@ function ScoreEntryInner({
     setPendingClear(n)
   }
 
+  // Conflict resolution. The user has seen both their rejected entry and the
+  // committed score; now they pick one — the explicit re-decision the version
+  // guard forces before any further write to this game.
+  function keepCommittedScore() {
+    // Drop our rejected scratch save; the inputs fall back to the committed
+    // score and the conflict notice clears.
+    forgetScoreSaves(queryClient, matchId, gameNumber)
+    setMeTyped(null)
+    setOppTyped(null)
+    setIsDirty(false)
+  }
+
+  function overwriteWithMyScore() {
+    if (!failedEntry) return
+    // Re-fire the save. The cache now holds the committed score (and its newer
+    // version), so the mutation PUTs with that fresh version and overwrites
+    // deliberately — no longer a blind last-write-wins, but a choice made
+    // against the value we just showed them.
+    submittingRef.current = true
+    saveMutation.mutate(failedEntry)
+  }
+
   function handleKey(
     e: React.KeyboardEvent<HTMLInputElement>,
     side: 'me' | 'opp',
@@ -553,6 +585,19 @@ function ScoreEntryInner({
         </div>
 
         <SaveBanner matchId={matchId} activeGameNumber={gameNumber} />
+
+        {conflict && (
+          <ScoreConflictNotice
+            meName={meName}
+            oppName={oppName}
+            committedMe={persistedMe ?? null}
+            committedOpp={persistedOpp ?? null}
+            yourMe={failedMe ?? null}
+            yourOpp={failedOpp ?? null}
+            onKeepCommitted={keepCommittedScore}
+            onUseMine={overwriteWithMyScore}
+          />
+        )}
 
         <div className="single-entry">
           <ScoreSide
@@ -732,6 +777,74 @@ function UnsavedScorePrompt({
   )
 }
 
+// Surfaced when this game's save was rejected because a concurrent participant
+// had already saved it. Shows the committed score alongside the user's rejected
+// entry and makes them choose — the deliberate re-decision the version guard
+// forces before any further write, so a stale entry can never silently clobber
+// the committed result (the last-write-wins bug this whole change kills). A
+// design-system Alert ("the app talking back"), loss-tinted to match SaveBanner.
+function ScoreConflictNotice({
+  meName,
+  oppName,
+  committedMe,
+  committedOpp,
+  yourMe,
+  yourOpp,
+  onKeepCommitted,
+  onUseMine,
+}: {
+  meName: string
+  oppName: string
+  committedMe: number | null
+  committedOpp: number | null
+  yourMe: number | null
+  yourOpp: number | null
+  onKeepCommitted: () => void
+  onUseMine: () => void
+}) {
+  const fmt = (value: number | null) => (value == null ? '—' : value)
+  return (
+    <Alert
+      role="alert"
+      variant="destructive"
+      className="save-banner mb-4 border-[color:var(--loss)]/45 bg-[color:var(--loss)]/10"
+    >
+      <TriangleAlert aria-hidden />
+      <AlertTitle>This game was saved by someone else.</AlertTitle>
+      <AlertDescription className="text-[color:var(--fg-3)]">
+        <span>
+          Saved score:{' '}
+          <strong className="text-[color:var(--fg-1)]">
+            {meName} {fmt(committedMe)}–{fmt(committedOpp)} {oppName}
+          </strong>
+          . Your entry was {fmt(yourMe)}–{fmt(yourOpp)}. Keep the saved score, or
+          replace it with yours.
+        </span>
+        <span className="mt-3 flex flex-wrap gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="border-[color:var(--loss)]/50 text-[color:var(--loss)] hover:bg-[color:var(--loss)]/10 hover:text-[color:var(--loss)]"
+            onClick={onKeepCommitted}
+          >
+            Keep saved score
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="border-[color:var(--loss)]/50 text-[color:var(--loss)] hover:bg-[color:var(--loss)]/10 hover:text-[color:var(--loss)]"
+            onClick={onUseMine}
+          >
+            Replace with my score
+          </Button>
+        </span>
+      </AlertDescription>
+    </Alert>
+  )
+}
+
 function ScoreSide({
   side,
   name,
@@ -882,6 +995,11 @@ function ScorelineCell({
   const status = isActive ? null : (save?.status ?? null)
   const saving = status === 'pending'
   const failed = status === 'error'
+  // A failure that's actually a concurrency conflict (opponent saved this game
+  // first). Same ⚠ treatment as a plain failed save, but labelled "Changed" —
+  // tapping it opens the edit screen, where the conflict notice lets the user
+  // resolve it against the committed score rather than blindly re-saving.
+  const conflict = failed && isScoreConflict(save?.error)
   const showResolved = resolved && status === 'success' && score != null
 
   // While saving or failed, show the just-entered scratch points (from the
@@ -934,7 +1052,7 @@ function ScorelineCell({
     </span>
   ) : failed ? (
     <span className="sl-status failed" aria-hidden>
-      Not saved
+      {conflict ? 'Changed' : 'Not saved'}
     </span>
   ) : null
 
@@ -1002,12 +1120,14 @@ function ScorelineCell({
 
   const target = score ? scoringEditRoute(matchId, n) : scoringNewRoute(matchId, n)
   // Failure can't be color-alone: the label spells it out for screen readers;
-  // sighted users get the ⚠ badge + "Not saved" micro-label.
-  const ariaLabel = failed
-    ? `Game ${n} didn't save, ${myPoints} to ${oppPoints}. Tap to fix.`
-    : score
-      ? `Game ${n}, saved, ${myPoints} to ${oppPoints}`
-      : `Game ${n}, not yet played`
+  // sighted users get the ⚠ badge + "Not saved" / "Changed" micro-label.
+  const ariaLabel = conflict
+    ? `Game ${n} was saved by someone else, now ${myPoints} to ${oppPoints}. Tap to review.`
+    : failed
+      ? `Game ${n} didn't save, ${myPoints} to ${oppPoints}. Tap to fix.`
+      : score
+        ? `Game ${n}, saved, ${myPoints} to ${oppPoints}`
+        : `Game ${n}, not yet played`
   return (
     <Link {...target} className={cls} aria-label={ariaLabel}>
       {inner}

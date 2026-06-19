@@ -67,7 +67,14 @@ const ALL_STATUSES: MatchStatus[] = [
 export type SeedGame = {
   id: string
   game_number: number
-  score: { id: string; side_1_points: number; side_2_points: number } | null
+  score: {
+    id: string
+    side_1_points: number
+    side_2_points: number
+    // Optimistic-concurrency token. Optional in fixtures (defaults to 1 in
+    // projection); the score-write handlers bump it on each PUT.
+    version?: number
+  } | null
 }
 
 export type SeedSignature = {
@@ -290,6 +297,7 @@ export function projectMatchDetails(seed: SeedMatch): MatchDetails {
             side_2_points: g.score.side_2_points,
             winner_side_number:
               g.score.side_1_points > g.score.side_2_points ? 1 : 2,
+            version: g.score.version ?? 1,
           }
         : null,
     }))

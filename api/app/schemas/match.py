@@ -87,6 +87,12 @@ class MatchDetailsScore(BaseModel):
     side_1_points: int
     side_2_points: int
     winner_side_number: int
+    # Optimistic-concurrency token. The score-entry page echoes this back as
+    # ``expected_version`` on the conditional PUT; a write whose expected
+    # version no longer matches the committed row is rejected (409) instead of
+    # overwriting a concurrent participant's save. A freshly created score is
+    # version 1.
+    version: int
 
 
 class MatchDetailsGame(BaseModel):
@@ -305,6 +311,31 @@ class MatchGameScoreWrite(BaseModel):
     def _table_tennis_rules(self) -> "MatchGameScoreWrite":
         validate_game_score(self.side_1_points, self.side_2_points)
         return self
+
+
+class MatchGameScoreUpdate(MatchGameScoreWrite):
+    """Conditional update body for ``PUT .../games/{n}/scores``.
+
+    Carries the optimistic-concurrency token the caller last read for this
+    game's score (``MatchDetailsScore.version``). The handler updates only if
+    the committed row is still at that version; otherwise a concurrent
+    participant has since saved this game, so the write is rejected with a 409
+    rather than silently overwriting their result. (Create — ``POST
+    .../scores/new`` — needs no token: the unique constraint already asserts no
+    prior score exists.)"""
+
+    # ``ge=0`` so a client that somehow holds a pre-create view can still send
+    # ``0``; in practice the FE only PUTs once it has a real version (>= 1).
+    expected_version: int = Field(ge=0)
+
+
+class MatchGameScoreConflict(BaseModel):
+    """409 body for a rejected conditional score write. ``committed_score`` is
+    the row as it actually stands now, so the client can show the user "your
+    stale entry vs. what's saved" before they re-decide."""
+
+    message: str
+    committed_score: MatchDetailsScore | None
 
 
 # ----- finalize body (POST /v1/matches/{id}/results) -----------------------

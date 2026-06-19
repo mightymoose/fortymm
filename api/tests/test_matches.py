@@ -964,7 +964,7 @@ async def test_score_update_overwrites_in_place(
 
     edited = await api_client.put(
         f"/v1/matches/{match['id']}/games/1/scores",
-        json={"side_1_points": 5, "side_2_points": 11},
+        json={"side_1_points": 5, "side_2_points": 11, "expected_version": 1},
     )
     assert edited.status_code == 200
     body = edited.json()
@@ -987,10 +987,58 @@ async def test_score_update_404_when_no_saved_score(
 
     response = await api_client.put(
         f"/v1/matches/{match['id']}/games/1/scores",
-        json={"side_1_points": 11, "side_2_points": 5},
+        json={"side_1_points": 11, "side_2_points": 5, "expected_version": 1},
     )
     assert response.status_code == 404
     assert response.json()["detail"] == "Score not found."
+
+
+async def test_score_update_409_on_stale_version(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """Regression for concurrent score-entry data loss. Two participants both
+    sit on game 1's edit page at version 1. One saves (bumping to version 2);
+    the other's save still claims version 1, so the conditional PUT must reject
+    it with a 409 carrying the committed score — never silently overwrite the
+    first writer's result, the last-write-wins bug this guard exists to kill."""
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "rival") as (opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=5)
+        # Game 1 first scored — both participants now hold version 1.
+        created = (
+            await api_client.post(
+                f"/v1/matches/{match['id']}/games/1/scores/new",
+                json={"side_1_points": 11, "side_2_points": 9},
+            )
+        ).json()
+        assert created["games"][0]["score"]["version"] == 1
+
+        # The opponent commits their correction first: 11–5 bumps v1 → v2.
+        first = await opp_client.put(
+            f"/v1/matches/{match['id']}/games/1/scores",
+            json={"side_1_points": 11, "side_2_points": 5, "expected_version": 1},
+        )
+        assert first.status_code == 200
+        assert first.json()["games"][0]["score"]["version"] == 2
+
+        # The stale writer still claims version 1: rejected, never applied.
+        stale = await api_client.put(
+            f"/v1/matches/{match['id']}/games/1/scores",
+            json={"side_1_points": 11, "side_2_points": 7, "expected_version": 1},
+        )
+        assert stale.status_code == 409
+        detail = stale.json()["detail"]
+        assert detail["committed_score"]["side_1_points"] == 11
+        assert detail["committed_score"]["side_2_points"] == 5
+        assert detail["committed_score"]["version"] == 2
+
+        # The committed score is exactly the opponent's — the stale 11–7 write
+        # left no trace.
+        db_session.expire_all()
+        scores = (await db_session.execute(select(MatchGameScore))).scalars().all()
+        assert len(scores) == 1
+        assert (scores[0].side_1_points, scores[0].side_2_points) == (11, 5)
+        assert scores[0].version == 2
 
 
 async def test_score_delete_clears_the_score_and_keeps_the_game(
@@ -1053,7 +1101,7 @@ async def test_non_participant_cannot_score(
         assert post.status_code == 404
         put = await api_client.put(
             f"/v1/matches/{created['id']}/games/1/scores",
-            json={"side_1_points": 11, "side_2_points": 4},
+            json={"side_1_points": 11, "side_2_points": 4, "expected_version": 1},
         )
         assert put.status_code == 404
         delete = await api_client.delete(f"/v1/matches/{created['id']}/games/1/scores")
@@ -1209,7 +1257,7 @@ async def test_score_endpoints_409_once_result_is_posted(
         assert post.status_code == 409
         put = await api_client.put(
             f"/v1/matches/{match['id']}/games/1/scores",
-            json={"side_1_points": 8, "side_2_points": 11},
+            json={"side_1_points": 8, "side_2_points": 11, "expected_version": 1},
         )
         assert put.status_code == 409
         delete = await api_client.delete(f"/v1/matches/{match['id']}/games/1/scores")
@@ -1242,7 +1290,7 @@ async def test_score_endpoints_409_once_match_is_completed(
         assert post.status_code == 409
         put = await api_client.put(
             f"/v1/matches/{match['id']}/games/1/scores",
-            json={"side_1_points": 8, "side_2_points": 11},
+            json={"side_1_points": 8, "side_2_points": 11, "expected_version": 1},
         )
         assert put.status_code == 409
         delete = await api_client.delete(f"/v1/matches/{match['id']}/games/1/scores")
@@ -1365,7 +1413,7 @@ async def test_can_finalize_flag_tracks_saved_scores(
     edited = (
         await api_client.put(
             f"/v1/matches/{match['id']}/games/2/scores",
-            json={"side_1_points": 5, "side_2_points": 11},
+            json={"side_1_points": 5, "side_2_points": 11, "expected_version": 1},
         )
     ).json()
     assert edited["can_finalize"] is False
@@ -1885,7 +1933,7 @@ async def test_dispute_clears_signatures_and_moves_to_disputed(
         # The disputer can now PUT a correction to flip the result.
         put = await opp_client.put(
             f"/v1/matches/{match['id']}/games/2/scores",
-            json={"side_1_points": 5, "side_2_points": 11},
+            json={"side_1_points": 5, "side_2_points": 11, "expected_version": 1},
         )
         assert put.status_code == 200
 

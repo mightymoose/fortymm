@@ -1,10 +1,21 @@
 import { useMutationState, type Mutation } from '@tanstack/react-query'
+import { ApiError } from '@/api/client'
 import {
   gameNumberFromScoreMutationKey,
   matchScoreMutationPrefix,
   scoreMutationKey,
   type MatchGameScoreWrite,
 } from '@/api/matches'
+
+/** A failed save is a *conflict* (vs. a network/server failure) when the
+ * server rejected the conditional write because a concurrent participant had
+ * already saved this game — a 409 (or 412). These must never be blindly
+ * retried: re-firing would re-issue the write against fresh state and silently
+ * overwrite the other save. The user resolves them against the committed value
+ * instead. */
+export function isScoreConflict(error: ApiError | null | undefined): boolean {
+  return error instanceof ApiError && (error.status === 409 || error.status === 412)
+}
 
 /**
  * View-model hooks over the per-game score-save mutations (`scoreMutationKey`).
@@ -24,8 +35,15 @@ export interface GameSaveState {
   /** The points last submitted for this game — shown in the cell while it's
    * saving or failed (they're the scratch data a retry re-sends). */
   variables: MatchGameScoreWrite | null
+  /** The error a failed save settled with — `null` unless `status === 'error'`.
+   * A 409/412 here is a concurrency conflict (`isScoreConflict`), which the UI
+   * surfaces distinctly from an ordinary failed save. */
+  error: ApiError | null
   submittedAt: number
 }
+
+const asApiError = (error: unknown): ApiError | null =>
+  error instanceof ApiError ? error : null
 
 // Stable, module-level selectors so the per-cell / per-render subscriptions
 // don't allocate a fresh closure each time.
@@ -33,6 +51,7 @@ const selectGameSaveState = (mutation: Mutation): GameSaveState => ({
   status: mutation.state.status as GameSaveStatus,
   variables:
     (mutation.state.variables as MatchGameScoreWrite | undefined) ?? null,
+  error: asApiError(mutation.state.error),
   submittedAt: mutation.state.submittedAt,
 })
 
@@ -40,12 +59,14 @@ interface ScoreSaveProbe {
   gameNumber: number | null
   status: GameSaveStatus
   variables: MatchGameScoreWrite | undefined
+  error: ApiError | null
   submittedAt: number
 }
 const selectScoreSaveProbe = (mutation: Mutation): ScoreSaveProbe => ({
   gameNumber: gameNumberFromScoreMutationKey(mutation.options.mutationKey),
   status: mutation.state.status as GameSaveStatus,
   variables: mutation.state.variables as MatchGameScoreWrite | undefined,
+  error: asApiError(mutation.state.error),
   submittedAt: mutation.state.submittedAt,
 })
 
@@ -69,6 +90,11 @@ export function useGameSaveState(
 export interface FailedGameSave {
   gameNumber: number
   variables: MatchGameScoreWrite
+  /** True when the failure is a concurrency conflict (409/412), not a network/
+   * server error. Conflicts can't be blindly retried (that would overwrite the
+   * concurrent save) — the banner routes them to a review-against-committed
+   * flow instead of its retry button. */
+  conflict: boolean
   /** When this failed save was fired. A re-failure of the same game produces a
    * fresh timestamp, letting callers tell "the same game failed again" apart
    * from "nothing changed" — the failed-save banner folds this into its dismiss
@@ -103,6 +129,7 @@ export function useFailedGameSaves(matchId: string): FailedGameSave[] {
     .map((state) => ({
       gameNumber: state.gameNumber as number,
       variables: state.variables as MatchGameScoreWrite,
+      conflict: isScoreConflict(state.error),
       submittedAt: state.submittedAt,
     }))
 }

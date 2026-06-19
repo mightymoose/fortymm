@@ -117,6 +117,12 @@ export function extractDetail(value: unknown): string | null {
   if (!value || typeof value !== 'object') return null
   const detail = (value as { detail?: unknown }).detail
   if (typeof detail === 'string') return detail
+  // Structured error bodies (e.g. the score-write 409 conflict, which also
+  // carries the committed score) put the human message under `detail.message`.
+  if (detail && typeof detail === 'object' && !Array.isArray(detail)) {
+    const message = (detail as { message?: unknown }).message
+    if (typeof message === 'string') return message
+  }
   if (Array.isArray(detail) && detail.length > 0) {
     const first = detail[0]
     if (first && typeof first === 'object' && 'msg' in first) {

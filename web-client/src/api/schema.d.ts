@@ -1443,6 +1443,8 @@ export interface components {
             side_2_points: number;
             /** Winner Side Number */
             winner_side_number: number;
+            /** Version */
+            version: number;
         };
         /** MatchDetailsSide */
         MatchDetailsSide: {
@@ -1457,6 +1459,37 @@ export interface components {
             /** Is Current User Side */
             is_current_user_side: boolean;
             rating_change?: components["schemas"]["RatingChange"] | null;
+        };
+        /**
+         * MatchGameScoreConflict
+         * @description 409 body for a rejected conditional score write. ``committed_score`` is
+         *     the row as it actually stands now, so the client can show the user "your
+         *     stale entry vs. what's saved" before they re-decide.
+         */
+        MatchGameScoreConflict: {
+            /** Message */
+            message: string;
+            committed_score: components["schemas"]["MatchDetailsScore"] | null;
+        };
+        /**
+         * MatchGameScoreUpdate
+         * @description Conditional update body for ``PUT .../games/{n}/scores``.
+         *
+         *     Carries the optimistic-concurrency token the caller last read for this
+         *     game's score (``MatchDetailsScore.version``). The handler updates only if
+         *     the committed row is still at that version; otherwise a concurrent
+         *     participant has since saved this game, so the write is rejected with a 409
+         *     rather than silently overwriting their result. (Create — ``POST
+         *     .../scores/new`` — needs no token: the unique constraint already asserts no
+         *     prior score exists.)
+         */
+        MatchGameScoreUpdate: {
+            /** Side 1 Points */
+            side_1_points: number;
+            /** Side 2 Points */
+            side_2_points: number;
+            /** Expected Version */
+            expected_version: number;
         };
         /** MatchGameScoreWrite */
         MatchGameScoreWrite: {
@@ -3566,7 +3599,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["MatchGameScoreWrite"];
+                "application/json": components["schemas"]["MatchGameScoreUpdate"];
             };
         };
         responses: {
@@ -3577,6 +3610,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["app__schemas__match__MatchDetails"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MatchGameScoreConflict"];
                 };
             };
             /** @description Validation Error */
