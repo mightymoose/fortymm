@@ -86,10 +86,17 @@ private func target(_ item: DashboardAttentionItem) -> AttentionTarget {
 /// `Resolve dispute` renders secondary). Items arrive already sorted by the
 /// server, so their order is preserved as-is. Mirrors the web's
 /// `projectAttentionPanelView`.
+///
+/// `attentionTotalCount` is the server's exact actionable-match total. The
+/// `items` array is itself capped server-side, so overflow is derived from this
+/// total — not from `items.count`, which would under-count once the cap bites.
+/// Defaults to `items.count` for callers that pass an uncapped set.
 func projectAttentionPanel(
     items: [DashboardAttentionItem],
-    waitingCount: Int
+    waitingCount: Int,
+    attentionTotalCount: Int? = nil
 ) -> AttentionPanelView {
+    let total = attentionTotalCount ?? items.count
     let visible = Array(items.prefix(attentionVisibleLimit))
     let topBucket = visible.first.map(bucketKey) ?? ""
     return AttentionPanelView(
@@ -103,7 +110,7 @@ func projectAttentionPanel(
                 target: target(item)
             )
         },
-        overflowCount: max(0, items.count - attentionVisibleLimit),
+        overflowCount: max(0, total - attentionVisibleLimit),
         waitingCount: waitingCount
     )
 }

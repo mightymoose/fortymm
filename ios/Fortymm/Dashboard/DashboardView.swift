@@ -138,7 +138,8 @@ struct DashboardView: View {
             DashboardAttentionPanel(
                 view: projectAttentionPanel(
                     items: data.attention,
-                    waitingCount: data.waitingCount
+                    waitingCount: data.waitingCount,
+                    attentionTotalCount: data.attentionTotalCount
                 ),
                 onAct: { act(on: $0) },
                 onViewAll: { onViewAll?(currentUsername) }
