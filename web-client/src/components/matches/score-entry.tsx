@@ -559,7 +559,6 @@ function ScoreEntryInner({
             side="me"
             name={meName}
             initials={meInitials}
-            wins={meWins}
             value={me}
             inputRef={meRef}
             autoFocus
@@ -571,16 +570,19 @@ function ScoreEntryInner({
 
           <div className="se-mid">
             <div className="se-vs">VS</div>
-            <div className="se-games">
-              {meWins} – {oppWins}
-            </div>
+            {/* Single-game matches: the games tally is always 0–0 until the one
+                game finalizes, so it's noise — drop it (#bridge-cse). */}
+            {bestOf > 1 && (
+              <div className="se-games">
+                {meWins} – {oppWins}
+              </div>
+            )}
           </div>
 
           <ScoreSide
             side="opp"
             name={oppName}
             initials={oppHasPlayer ? initialsOf(oppName) : null}
-            wins={oppWins}
             value={opp}
             inputRef={oppRef}
             disabled={inputsLocked}
@@ -734,7 +736,6 @@ function ScoreSide({
   side,
   name,
   initials,
-  wins,
   value,
   inputRef,
   autoFocus,
@@ -748,7 +749,6 @@ function ScoreSide({
   // `null` means there's no player on this side — render the ghost avatar
   // (dashed circle + person icon) instead of a contrived monogram.
   initials: string | null
-  wins: number
   value: string
   inputRef: React.RefObject<HTMLInputElement | null>
   autoFocus?: boolean
@@ -766,9 +766,6 @@ function ScoreSide({
   const identity = (
     <div className="id">
       <div className="nm">{name}</div>
-      <div className="rt">
-        Games won · <b>{wins}</b>
-      </div>
     </div>
   )
 
