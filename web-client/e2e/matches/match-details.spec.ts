@@ -24,6 +24,43 @@ const gameScore = (
 // to the not-found state without fetching). So fixtures driven through the
 // route must use a UUID-shaped id, not a readable `m-...` slug.
 const COMPLETED_WIN_ID = '00000000-0000-4000-8000-000000000001';
+const SCORABLE_ID = '00000000-0000-4000-8000-000000000002';
+
+/**
+ * A live, still-scorable singles match where the current user (side 1) has a
+ * won game (1, 11–7) and a lost game (2, 9–11). Because `can_score` is true,
+ * the current user's scored cells render as edit links (`<a>`) — the case the
+ * #472 color reset regresses on.
+ */
+const scorableMatch = (id: string): MatchDetails =>
+    matchDetails({
+        id,
+        status: 'in_progress',
+        status_label: 'Live',
+        sides: [
+            {
+                side_number: 1,
+                players: [
+                    { user_id: 'u-me', username: 'rita.kovac', is_current_user: true },
+                ],
+                games_won: 1,
+                won: null,
+                is_current_user_side: true,
+            },
+            {
+                side_number: 2,
+                players: [
+                    { user_id: 'pl-silva', username: 'silva.r', is_current_user: false },
+                ],
+                games_won: 1,
+                won: null,
+                is_current_user_side: false,
+            },
+        ],
+        games: [gameScore(1, 11, 7), gameScore(2, 9, 11)],
+        current_game: { game_number: 3 },
+        can_score: true,
+    });
 
 /** A decided singles match: rita.kovac beat silva.r, 3 games to 1. */
 const decidedMatch = (id: string): MatchDetails =>
@@ -108,8 +145,8 @@ test.describe('Match Details', () => {
         // as edit links (<a>), and the `.match-details a { color: inherit }`
         // reset used to out-rank the win/loss colors, leaving the row colorless.
         test('colors the editable (current-user) row win/loss cells like the opponent row', async ({ page }) => {
-            await matchDetailsPage.mock(decidedMatch(COMPLETED_WIN_ID));
-            await matchDetailsPage.goTo(COMPLETED_WIN_ID);
+            await matchDetailsPage.mock(scorableMatch(SCORABLE_ID));
+            await matchDetailsPage.goTo(SCORABLE_ID);
 
             const color = (testId: string) =>
                 page
