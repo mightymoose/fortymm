@@ -95,6 +95,25 @@ describe('PreferencesView', () => {
     expect(cta).toHaveAttribute('href', '/settings#sec-notifications')
   })
 
+  it('shows no nudge for an unavailable channel even if setup is required', async () => {
+    const base = notificationPreferences()
+    // A channel the server can't deliver on (available: false) shouldn't nudge —
+    // there's nothing the user can do — even if setup_required slips through.
+    const unavailable = {
+      ...base,
+      channels: base.channels.map((c) =>
+        c.channel === 'push'
+          ? { ...c, available: false, setup_required: true }
+          : c,
+      ),
+    }
+    preferencesViewPage.render({ preferences: unavailable })
+    await preferencesViewPage.findHeading()
+    expect(
+      preferencesViewPage.queryNudgeCta('Set up push'),
+    ).not.toBeInTheDocument()
+  })
+
   it('shows no setup nudge for a fully configured account', async () => {
     preferencesViewPage.render()
     await preferencesViewPage.findHeading()

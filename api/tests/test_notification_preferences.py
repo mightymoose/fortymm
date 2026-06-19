@@ -124,6 +124,25 @@ async def test_email_setup_required_until_confirmed(
     assert _channels(data)["email"]["setup_required"] is True
 
 
+async def test_setup_required_is_gated_on_availability(db_session: AsyncSession):
+    user = await make_user(db_session, "no-setup")
+    # Push's prerequisite is unmet (zero devices). If the channel is available,
+    # that's a nudge; if the server can't deliver on it at all, it isn't — there
+    # is nothing the user could do to make it work.
+    assert (
+        NotificationService._channel_setup_required(
+            NotificationChannel.PUSH, user, 0, available=True
+        )
+        is True
+    )
+    assert (
+        NotificationService._channel_setup_required(
+            NotificationChannel.PUSH, user, 0, available=False
+        )
+        is False
+    )
+
+
 # ----- updates --------------------------------------------------------------
 
 

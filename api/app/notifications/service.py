@@ -594,7 +594,7 @@ class NotificationService:
                 locked=channel in LOCKED_CHANNELS,
                 destination=self._channel_destination(channel, user, device_count),
                 setup_required=self._channel_setup_required(
-                    channel, user, device_count
+                    channel, user, device_count, availability[channel]
                 ),
             )
             for channel in channel_order
@@ -643,11 +643,18 @@ class NotificationService:
 
     @staticmethod
     def _channel_setup_required(
-        channel: NotificationChannel, user: User, device_count: int
+        channel: NotificationChannel,
+        user: User,
+        device_count: int,
+        available: bool,
     ) -> bool:
         """Whether the user still has to do something before this channel can
         deliver. Email needs a confirmed address; push needs a registered
-        device. In-app and (unavailable) SMS never prompt for setup."""
+        device. A channel the server can't deliver on at all (``available`` is
+        false, e.g. SMS today) never prompts for setup — there's nothing the
+        user can do to make it work — so the availability gate comes first."""
+        if not available:
+            return False
         # Exhaustive match (no catch-all) per api/CLAUDE.md's enum-mapping rule.
         match channel:
             case NotificationChannel.IN_APP:

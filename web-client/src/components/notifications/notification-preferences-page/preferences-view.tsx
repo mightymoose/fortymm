@@ -52,9 +52,10 @@ export function PreferencesView({
           const { Icon } = CHANNEL_VISUAL[channel.channel]
           const label = channelLabel.get(channel.channel) ?? channel.channel
           const interactive = !channel.locked && channel.available
-          const nudge = channel.setup_required
-            ? CHANNEL_SETUP_NUDGE[channel.channel]
-            : undefined
+          const nudge =
+            channel.available && channel.setup_required
+              ? CHANNEL_SETUP_NUDGE[channel.channel]
+              : undefined
           return (
             <div key={channel.channel} className="min-w-0">
               <div
