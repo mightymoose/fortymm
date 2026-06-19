@@ -1,10 +1,10 @@
 import type { ChannelSetupNudgeProps } from './channel-setup-nudge'
-import { CHANNEL_SETUP_NUDGE } from './channel-setup-nudge-content'
+import { channelSetupNudge } from './channel-setup-nudge-content'
 
-/** Default scenario: the real email setup nudge (no confirmed address on file),
- * sourced from the production content map so the fixture can't drift from it. */
+/** Default scenario: the real "add an email" nudge (no address on file),
+ * sourced from the production resolver so the fixture can't drift from it. */
 export function buildChannelSetupNudgeProps(
   overrides: Partial<ChannelSetupNudgeProps> = {},
 ): ChannelSetupNudgeProps {
-  return { ...CHANNEL_SETUP_NUDGE.email!, ...overrides }
+  return { ...channelSetupNudge('email', null)!, ...overrides }
 }

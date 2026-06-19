@@ -88,6 +88,24 @@ describe('PreferencesView', () => {
     expect(cta).toHaveAttribute('href', '/settings#sec-email')
   })
 
+  it('switches to a confirm-email nudge when an address is pending', async () => {
+    preferencesViewPage.render({
+      preferences: withSetupRequired('email', true),
+      pendingEmail: 'quinn@example.com',
+    })
+    await preferencesViewPage.findHeading()
+    // The pending variant replaces "Add email" and the card subtitle reflects
+    // the unconfirmed address instead of "Add an email in settings".
+    expect(preferencesViewPage.nudgeCta('Manage email')).toHaveAttribute(
+      'href',
+      '/settings#sec-email',
+    )
+    expect(preferencesViewPage.queryNudgeCta('Add email')).not.toBeInTheDocument()
+    expect(
+      preferencesViewPage.queryText('Pending — check your inbox'),
+    ).toBeInTheDocument()
+  })
+
   it('nudges to set up push when no devices are registered', async () => {
     preferencesViewPage.render({ preferences: withSetupRequired('push', true) })
     await preferencesViewPage.findHeading()

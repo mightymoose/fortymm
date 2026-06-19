@@ -8,12 +8,15 @@ import { Switch } from '@/components/ui/switch'
 import { cn } from '@/lib/utils'
 import { CATEGORY_VISUAL, CHANNEL_VISUAL } from '../notification-meta'
 import { ChannelSetupNudge } from './channel-setup-nudge'
-import { CHANNEL_SETUP_NUDGE } from './channel-setup-nudge-content'
+import { channelSetupNudge } from './channel-setup-nudge-content'
 
 export interface PreferencesViewProps {
   preferences: NotificationPreferences
   /** Server-owned display labels for categories + channels. */
   taxonomy: NotificationTaxonomy
+  /** The address awaiting confirmation, if any (from the session). Switches the
+   * email card + nudge from "add an email" to "confirm your email". */
+  pendingEmail?: string | null
   onToggleChannel: (channel: NotificationChannel, enabled: boolean) => void
   onToggleCell: (
     category: NotificationPreferences['categories'][number]['category'],
@@ -27,6 +30,7 @@ export interface PreferencesViewProps {
 export function PreferencesView({
   preferences,
   taxonomy,
+  pendingEmail = null,
   onToggleChannel,
   onToggleCell,
 }: PreferencesViewProps) {
@@ -54,8 +58,15 @@ export function PreferencesView({
           const interactive = !channel.locked && channel.available
           const nudge =
             channel.available && channel.setup_required
-              ? CHANNEL_SETUP_NUDGE[channel.channel]
+              ? channelSetupNudge(channel.channel, pendingEmail)
               : undefined
+          // The server's email destination ("Add an email in settings") is
+          // wrong once an address is on file but unconfirmed — reflect the
+          // pending state instead.
+          const destination =
+            channel.channel === 'email' && pendingEmail
+              ? 'Pending — check your inbox'
+              : channel.destination
           return (
             <div key={channel.channel} className="min-w-0">
               <div
@@ -82,7 +93,7 @@ export function PreferencesView({
                     {label}
                   </span>
                   <span className="block truncate text-xs text-[color:var(--fg-3)]">
-                    {channel.destination}
+                    {destination}
                   </span>
                 </span>
                 <Switch
