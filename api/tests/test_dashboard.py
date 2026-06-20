@@ -478,13 +478,18 @@ async def test_dashboard_percentile_shown_once_user_has_played(
 async def test_league_percentile_ranks_against_rated_members(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    """The percentile helper itself: a 1500 rating among 1200/1400/1600/1800
-    plus self is 3rd of 5 — 60th percentile."""
+    """The "Top N%" helper itself, against peers at 1200/1400/1600/1800 plus
+    self. "Top N%" counts the share at or above the rating, so a stronger
+    rating reads a *smaller* percentage:
+      - 1500 is 3rd of 5 (1500/1600/1800 at-or-above) → Top 60%
+      - the strongest rating reads Top 20% (1 of 5), not Top 100%
+      - the weakest reads Top 100% (5 of 5)."""
     me = await start_session(api_client, db_session)
     default_league = await _seed_rated_peers(db_session)
 
-    pct = await _league_percentile(db_session, default_league.id, 1500.0)
-    assert pct == 60
+    assert await _league_percentile(db_session, default_league.id, 1500.0) == 60
+    assert await _league_percentile(db_session, default_league.id, 1800.0) == 20
+    assert await _league_percentile(db_session, default_league.id, 1200.0) == 100
     _ = me
 
 
