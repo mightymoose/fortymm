@@ -2,11 +2,47 @@ import { HttpResponse } from "msw";
 import userEvent from "@testing-library/user-event";
 
 import { buildMatchDetails } from "@/mocks/factories/matches/match-details.factory";
-import { waitFor } from "@/test/utilities";
+import { fireEvent, waitFor } from "@/test/utilities";
 
 import { confirmationCalloutActivePage } from "./confirmation-callout-active.page";
 
 describe("ConfirmationCalloutActive", () => {
+  it("fires a single /confirmation when Confirm is double-clicked in one frame", async () => {
+    // Two synchronous clicks before React commits the `disabled` re-render —
+    // the double-tap that fired a duplicate POST /confirmation whose loser
+    // 409'd (#641 follow-up). `disabled={pending}` can't catch the second click
+    // here (it only takes effect next render), so the in-flight ref must.
+    let confirmHits = 0;
+    confirmationCalloutActivePage.mockConfirmationEndpoint(() => {
+      confirmHits += 1;
+      return new Promise<never>(() => {});
+    });
+    confirmationCalloutActivePage.render();
+
+    const button = confirmationCalloutActivePage.getConfirmButton();
+    fireEvent.click(button);
+    fireEvent.click(button);
+
+    await waitFor(() => expect(button).toBeDisabled());
+    expect(confirmHits).toBe(1);
+  });
+
+  it("fires a single /dispute when Dispute is double-clicked in one frame", async () => {
+    let disputeHits = 0;
+    confirmationCalloutActivePage.mockDisputeEndpoint(() => {
+      disputeHits += 1;
+      return new Promise<never>(() => {});
+    });
+    confirmationCalloutActivePage.render();
+
+    const button = confirmationCalloutActivePage.getDisputeButton();
+    fireEvent.click(button);
+    fireEvent.click(button);
+
+    await waitFor(() => expect(button).toBeDisabled());
+    expect(disputeHits).toBe(1);
+  });
+
   it("confirming posts to /confirmation exactly once and never /dispute", async () => {
     let confirmHits = 0;
     let disputeHits = 0;
