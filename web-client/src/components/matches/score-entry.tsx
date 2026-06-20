@@ -126,6 +126,16 @@ function ScoreEntryInner({
   // callbacks, not rendered.
   const [isDirty, setIsDirty] = useState(false)
   const submittingRef = useRef(false)
+  // Synchronous finalize-in-flight guard. `finalizeMutation.isPending` is a
+  // render snapshot that only flips on the next commit, so a fast double-click
+  // on "Finalize result" lands a second tap before React re-renders — firing
+  // two concurrent POST /results that pile up and wedge the backend (#641).
+  // This ref flips inside the click gesture, so the second tap is rejected
+  // regardless of render timing. Cleared on *error* only: a successful finalize
+  // navigates away from this screen, so the guard never needs to reopen on
+  // success — clearing on settle would reopen it a beat before the navigation
+  // lands, leaving a window for a duplicate. Error clears it so a retry works.
+  const finalizingRef = useRef(false)
   const { status, proceed, reset } = useBlocker({
     // Blocks browser refresh/close (beforeunload) only while genuinely dirty.
     enableBeforeUnload: () => isDirty,
@@ -397,11 +407,14 @@ function ScoreEntryInner({
     // swallows that 409 (it would surface as a conflict to review), so don't
     // let a double-tap reach it.
     if (saveMutation.isPending) return
-    // Same for a second submit while the finalize POST is in flight (#550). The
-    // submit button's `disabled` is only a render-time guard, so a fast
-    // double-click can land a second tap before React commits it — fire one
-    // POST /results, not two (the second 409s on the already-posted result).
-    if (finalizeMutation.isPending) return
+    // Same for a second submit while the finalize POST is in flight (#550,
+    // #641). `finalizeMutation.isPending` is a render snapshot and the submit
+    // button's `disabled` only takes effect on the next commit, so a fast
+    // double-click lands a second tap before React re-renders. The
+    // `finalizingRef` flips synchronously inside this gesture, so it catches
+    // the second tap even within the same frame — fire one POST /results, not
+    // two concurrent ones that wedge the backend.
+    if (finalizeMutation.isPending || finalizingRef.current) return
     // This is the sanctioned write path: any navigation it triggers (the
     // synchronous next-game hop, or finalize's onSuccess to the match page)
     // is intentional, so wave the unsaved-input blocker through it (#441).
@@ -412,9 +425,15 @@ function ScoreEntryInner({
     // mutation cache (visible as a failed cell) so it survives until the user
     // can post the result back online. Online, finalize as usual.
     if (wouldFinalize && onlineManager.isOnline()) {
+      finalizingRef.current = true
       finalizeMutation.mutate(
         { games: hypotheticalGames },
-        { onSuccess: () => navigate(matchDetailRoute(matchId)) },
+        {
+          onSuccess: () => navigate(matchDetailRoute(matchId)),
+          onError: () => {
+            finalizingRef.current = false
+          },
+        },
       )
       return
     }

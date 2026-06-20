@@ -2,7 +2,7 @@ import { HttpResponse } from "msw";
 import userEvent from "@testing-library/user-event";
 
 import { buildMatchDetails } from "@/mocks/factories/matches/match-details.factory";
-import { waitFor } from "@/test/utilities";
+import { fireEvent, waitFor } from "@/test/utilities";
 
 import { buildFinalizeCalloutView } from "./finalize-callout-active/finalize-callout-display.factory";
 import { finalizeCalloutActivePage } from "./finalize-callout-active.page";
@@ -20,6 +20,51 @@ describe("FinalizeCalloutActive", () => {
     await userEvent.click(finalizeCalloutActivePage.getPostButton());
 
     await waitFor(() => expect(postedBody).toEqual({ games: view.games }));
+  });
+
+  it("fires a single POST when the button is double-clicked in one frame", async () => {
+    // Two synchronous clicks before React commits the `disabled` re-render —
+    // the double-tap that fired two concurrent POST /results and wedged the
+    // backend (#641). `disabled={pending}` can't catch the second click here
+    // (it only takes effect next render), so the synchronous in-flight ref must.
+    let requests = 0;
+    finalizeCalloutActivePage.mockResultsEndpoint(() => {
+      requests += 1;
+      return new Promise<never>(() => {});
+    });
+    finalizeCalloutActivePage.render();
+
+    const button = finalizeCalloutActivePage.getPostButton();
+    fireEvent.click(button);
+    fireEvent.click(button);
+
+    await waitFor(() => expect(button).toBeDisabled());
+    expect(requests).toBe(1);
+  });
+
+  it("does not fire a second POST after the first one succeeds", async () => {
+    // The guard clears on error, not on settle: a successful post transitions
+    // the match to awaiting-confirmation and unmounts this callout, but for the
+    // beat before that re-render lands the button is still on screen and
+    // enabled. A rapid follow-up click in that window must NOT fire a duplicate
+    // POST that 409s (#641 follow-up QA found exactly this leak when the ref
+    // cleared on settle).
+    let requests = 0;
+    finalizeCalloutActivePage.mockResultsEndpoint(() => {
+      requests += 1;
+      return HttpResponse.json(buildMatchDetails(), { status: 201 });
+    });
+    finalizeCalloutActivePage.render();
+
+    const button = finalizeCalloutActivePage.getPostButton();
+    await userEvent.click(button);
+    await waitFor(() => expect(requests).toBe(1));
+    // First post settled successfully; the button is enabled again in this
+    // isolated harness (no parent to unmount it). A second click must still be
+    // swallowed by the guard.
+    await userEvent.click(button);
+    await waitFor(() => {});
+    expect(requests).toBe(1);
   });
 
   it("disables the CTA and shows the in-flight label while the post is pending", async () => {
