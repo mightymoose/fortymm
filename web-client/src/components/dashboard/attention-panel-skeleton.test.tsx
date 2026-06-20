@@ -10,11 +10,12 @@ describe('AttentionPanelSkeleton', () => {
     )
   })
 
-  // No-layout-shift contract: a heading bar, two action rows (avatar +
-  // headline + button each), and a footer line = 8 reserved shimmer bars.
-  it('reserves the heading, two action rows, and a footer', () => {
+  // Reserves only a single compact row — heading bar + one action row (avatar
+  // + headline + button) = 4 shimmer bars — because the real panel is
+  // conditional and a full-height skeleton would lurch the page on load.
+  it('reserves a heading and a single compact action row', () => {
     attentionPanelSkeletonPage.render()
 
-    expect(attentionPanelSkeletonPage.getAllShimmers()).toHaveLength(8)
+    expect(attentionPanelSkeletonPage.getAllShimmers()).toHaveLength(4)
   })
 })

@@ -2,19 +2,18 @@ import { Card } from '@/components/ui/card'
 
 import { Shimmer } from './shimmer'
 
-// Two placeholder rows — the loaded panel shows up to three, but two is enough
-// to read as "a list is loading" without over-reserving height for the common
-// one-or-two-item case. A panel that resolves to empty hides entirely, so the
-// reserved rows can never be more than a brief over-estimate.
-const ROWS = 2
-
 /**
  * Loading placeholder for the {@link AttentionPanel}, rendered by the dashboard
- * while its query resolves. Reuses the real panel's `Card` chrome, heading
- * strip, and row layout so the card occupies the same box the loaded panel will
- * — only the leaf heading/avatar/headline/button become shimmer bars. Mirrors
- * `AttentionPanel`'s markup by hand (the real tree isn't mounted during load),
- * so revisit it if that structure changes.
+ * while its query resolves. Unlike the other dashboard cards, the real attention
+ * panel is *conditional* — it hides entirely when nothing is pending, which is
+ * the common case — so a full-height skeleton would reserve a phantom panel that
+ * vanishes on load and lurches the rest of the page upward. We deliberately
+ * reserve only a single compact row (heading + one action row, no footer) to
+ * keep that shift small in both directions: a modest over-estimate when the
+ * panel turns out empty, a modest under-estimate when it has rows. Reuses the
+ * real panel's `Card` chrome and row classes; mirrors `AttentionPanel`'s markup
+ * by hand (the real tree isn't mounted during load), so revisit it if that
+ * structure changes.
  */
 export const AttentionPanelSkeleton = () => (
   <section
@@ -27,18 +26,10 @@ export const AttentionPanelSkeleton = () => (
       <div className="px-5 pt-4 pb-3">
         <Shimmer width={180} height={20} />
       </div>
-      {Array.from({ length: ROWS }, (_, i) => (
-        <div
-          key={i}
-          className="flex items-center gap-3 border-t border-[color:var(--ink-700)] px-5 py-3"
-        >
-          <Shimmer width={40} height={40} radius={20} />
-          <Shimmer height={16} style={{ flex: 1, maxWidth: 220 }} />
-          <Shimmer width={96} height={32} radius={8} />
-        </div>
-      ))}
-      <div className="border-t border-[color:var(--ink-700)] px-5 py-3">
-        <Shimmer width={140} height={13} />
+      <div className="flex items-center gap-3 border-t border-[color:var(--ink-700)] px-5 py-3">
+        <Shimmer width={40} height={40} radius={20} />
+        <Shimmer height={16} style={{ flex: 1, maxWidth: 220 }} />
+        <Shimmer width={96} height={32} radius={8} />
       </div>
     </Card>
   </section>
