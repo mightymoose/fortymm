@@ -1,0 +1,123 @@
+{{- if .Values.alloy.enabled }}
+{{- $a := .Values.alloy }}
+{{/*
+Grafana Alloy running a faro.receiver: ingests browser telemetry from the
+@grafana/faro-web-sdk in the SPA and fans it out — logs -> Loki, traces ->
+Tempo. The browser reaches it same-origin at /faro/collect via the routing
+nginx (deploy/uat), so both public (uat.fortymm.com) and tailnet users are
+captured. Abuse controls live on the receiver itself: CORS origin allowlist,
+request rate limiting, and a max payload size (a browser endpoint is inherently
+public — these cap the blast radius rather than authenticate callers).
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: alloy-config
+  labels:
+    {{- include "observability.labels" . | nindent 4 }}
+data:
+  config.alloy: |
+    faro.receiver "frontend" {
+      server {
+        listen_address           = "0.0.0.0"
+        listen_port              = {{ $a.faroPort }}
+        cors_allowed_origins     = {{ $a.corsAllowedOrigins | toJson }}
+        max_allowed_payload_size = {{ $a.maxPayloadSize | quote }}
+
+        rate_limiting {
+          enabled = true
+          rate    = {{ $a.rateLimitPerSecond }}
+        }
+      }
+
+      sourcemaps { }
+
+      output {
+        logs   = [loki.write.faro.receiver]
+        traces = [otelcol.exporter.otlp.tempo.input]
+      }
+    }
+
+    loki.write "faro" {
+      endpoint {
+        url = "http://loki:3100/loki/api/v1/push"
+      }
+      external_labels = {
+        source = "faro",
+        app    = "fortymm-web",
+      }
+    }
+
+    otelcol.exporter.otlp "tempo" {
+      client {
+        endpoint = "tempo:4317"
+        tls {
+          insecure = true
+        }
+      }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: alloy
+  labels:
+    {{- include "observability.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: alloy
+  template:
+    metadata:
+      labels:
+        app: alloy
+      annotations:
+        # Roll the pod when the receiver config (derived from these values) changes.
+        checksum/config: {{ $a | toYaml | sha256sum }}
+    spec:
+      containers:
+        - name: alloy
+          image: {{ $a.image }}
+          imagePullPolicy: {{ .Values.tailscaleProxies.pullPolicy }}
+          args:
+            - run
+            - --server.http.listen-addr=0.0.0.0:12345
+            - --storage.path=/var/lib/alloy/data
+            - /etc/alloy/config.alloy
+          ports:
+            - name: faro
+              containerPort: {{ $a.faroPort }}
+            - name: http
+              containerPort: 12345
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: 12345
+            initialDelaySeconds: 10
+          volumeMounts:
+            - name: config
+              mountPath: /etc/alloy
+            - name: data
+              mountPath: /var/lib/alloy
+      volumes:
+        - name: config
+          configMap:
+            name: alloy-config
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: alloy
+  labels:
+    {{- include "observability.labels" . | nindent 4 }}
+spec:
+  selector:
+    app: alloy
+  ports:
+    - name: faro
+      port: {{ $a.faroPort }}
+      targetPort: {{ $a.faroPort }}
+{{- end }}

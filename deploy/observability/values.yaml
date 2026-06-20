@@ -1,0 +1,124 @@
+# Values for the observability chart. Subchart values are nested under each
+# dependency's chart name. fullnameOverrides pin the Service names so the
+# Grafana datasource URLs and the tailscale proxy backends below stay stable
+# (otherwise Helm prefixes them with the umbrella release name).
+
+# --------------------------------------------------------------------------
+# kube-prometheus-stack: Prometheus + Grafana + Alertmanager + operator.
+# --------------------------------------------------------------------------
+kube-prometheus-stack:
+  fullnameOverride: kube-prometheus-stack
+  grafana:
+    fullnameOverride: kube-prometheus-stack-grafana
+    # Admin creds come from a Secret created out-of-band by redeploy-uat.sh
+    # from .env (GRAFANA_ADMIN_PASSWORD) — never committed to the chart.
+    admin:
+      existingSecret: grafana-admin
+      userKey: admin-user
+      passwordKey: admin-password
+    # Loki + Tempo datasources (Prometheus is auto-provisioned by the chart).
+    additionalDataSources:
+      - name: Loki
+        type: loki
+        access: proxy
+        url: http://loki:3100
+        isDefault: false
+      - name: Tempo
+        type: tempo
+        access: proxy
+        # grafana/tempo serves its HTTP/query API on 3200 (3100 is Loki's).
+        url: http://tempo:3200
+        isDefault: false
+
+# --------------------------------------------------------------------------
+# loki-stack: Loki + Promtail. Grafana/Prometheus subcharts disabled (we use
+# the ones from kube-prometheus-stack).
+# --------------------------------------------------------------------------
+loki-stack:
+  loki:
+    enabled: true
+    fullnameOverride: loki
+    # loki-stack pins Loki 2.6.1, which predates the log-volume feature
+    # (Grafana's "Logs volume" histogram + /loki/api/v1/index/volume, added in
+    # 2.8). Bump to 2.9.x and enable it so Explore shows volume.
+    image:
+      tag: 2.9.10
+    config:
+      limits_config:
+        volume_enabled: true
+  promtail:
+    enabled: true
+    config:
+      # loki service is pinned to `loki`, so point promtail at it explicitly
+      # (the chart default derives this from the umbrella release name).
+      clients:
+        - url: http://loki:3100/loki/api/v1/push
+      snippets:
+        # Keep cri parsing first, then redact email addresses before they ship.
+        pipelineStages:
+          - cri: {}
+          - replace:
+              expression: '(\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b)'
+              replace: '[REDACTED_EMAIL]'
+  grafana:
+    enabled: false
+    # Even with grafana disabled, loki-stack's sidecar.datasources defaults to
+    # enabled and emits a grafana_datasource ConfigMap with Loki as DEFAULT —
+    # that collides with kube-prometheus-stack's default (Prometheus) and
+    # duplicates the Loki datasource we provision above. Suppress it.
+    sidecar:
+      datasources:
+        enabled: false
+  prometheus:
+    enabled: false
+
+# --------------------------------------------------------------------------
+# Tempo (single binary). Note the doubled key: `tempo:` is the dependency,
+# the nested `tempo:` is the chart's own config block.
+# --------------------------------------------------------------------------
+tempo:
+  fullnameOverride: tempo
+  tempo:
+    metricsGenerator:
+      enabled: false
+
+# --------------------------------------------------------------------------
+# Grafana Alloy faro.receiver — ingests browser telemetry from the SPA's
+# @grafana/faro-web-sdk and forwards logs -> Loki, traces -> Tempo. Reached
+# same-origin at /faro/collect via the routing nginx (deploy/uat). The abuse
+# controls below run on the receiver itself (a browser endpoint can't be
+# authenticated — these cap volume/origin/size, see README/answer).
+# --------------------------------------------------------------------------
+alloy:
+  enabled: true
+  image: grafana/alloy:v1.17.0
+  faroPort: 12347
+  # Browser origins allowed cross-origin (CORS). The SPA posts SAME-origin via
+  # the routing nginx, so those aren't subject to CORS at all and the public
+  # origin alone suffices — don't commit the tailnet domain (per the repo's
+  # <tailnet>/${TS_CERT_DOMAIN} convention); add tailnet/extra origins here if
+  # a cross-origin client ever needs them.
+  corsAllowedOrigins:
+    - https://uat.fortymm.com
+  # Per-client request rate cap on the receiver.
+  rateLimitPerSecond: 50
+  maxPayloadSize: "5MiB"
+
+# --------------------------------------------------------------------------
+# Per-service tailscale serve proxies (option C — no Tailscale operator). One
+# tailnet node per service => one MagicDNS hostname each, auto-HTTPS, tailnet
+# only. TS_AUTHKEY is read from a Secret synced from .env by redeploy-uat.sh.
+# --------------------------------------------------------------------------
+tailscaleProxies:
+  enabled: true
+  image: tailscale/tailscale:stable
+  pullPolicy: IfNotPresent
+  authKeySecret: tailscale-authkey
+  authKeySecretKey: TS_AUTHKEY
+  services:
+    - hostname: grafana
+      backend: "http://kube-prometheus-stack-grafana:80"
+    - hostname: prometheus
+      backend: "http://kube-prometheus-stack-prometheus:9090"
+    - hostname: loki
+      backend: "http://loki:3100"

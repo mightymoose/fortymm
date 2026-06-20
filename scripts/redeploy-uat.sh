@@ -31,6 +31,16 @@ WEB_IMAGE="fortymm/web:uat"
 APNS_KEY="secrets/AuthKey_68VYRLMWWR.p8"
 UAT_URL="${UAT_URL:-https://uat.fortymm.com}"
 
+# Observability stack (kube-prometheus-stack + loki-stack + tempo) in its own
+# namespace/release. Set DEPLOY_OBSERVABILITY=false to skip it.
+OBS_NAMESPACE="monitoring"
+OBS_RELEASE="observability"
+OBS_CHART="deploy/observability"
+DEPLOY_OBSERVABILITY="${DEPLOY_OBSERVABILITY:-true}"
+
+# Read a single value from .env, stripping one layer of surrounding quotes.
+read_env() { grep "^$1=" .env | head -1 | cut -d= -f2- | sed -e "s/^[\"']//" -e "s/[\"']\$//"; }
+
 for bin in docker kubectl helm k3d; do
   command -v "$bin" >/dev/null 2>&1 || { echo "ERROR: '$bin' not found on PATH." >&2; exit 1; }
 done
@@ -82,7 +92,13 @@ kubectl get namespace "$NAMESPACE" >/dev/null 2>&1 || kubectl create namespace "
 echo
 echo "==> Building images"
 docker build -t "$API_IMAGE" -f api/Dockerfile.dev api
-docker build -t "$WEB_IMAGE" -f web-client/Dockerfile.uat web-client
+# Enable Grafana Faro in the UAT bundle: telemetry posts same-origin to
+# /faro/collect, which the routing nginx forwards to Alloy in `monitoring`.
+WEB_BUILD_ARGS=()
+if [ "$DEPLOY_OBSERVABILITY" = "true" ]; then
+  WEB_BUILD_ARGS+=(--build-arg "VITE_FARO_COLLECTOR_URL=/faro/collect")
+fi
+docker build -t "$WEB_IMAGE" "${WEB_BUILD_ARGS[@]+"${WEB_BUILD_ARGS[@]}"}" -f web-client/Dockerfile.uat web-client
 
 echo
 echo "==> Importing images into k3d"
@@ -108,6 +124,20 @@ if [ "$ts_enabled" = "true" ]; then
     echo "       set tailscale.enabled=false in deploy/uat/values.yaml to skip it." >&2
     exit 1
   }
+fi
+
+# The observability stack needs a Grafana admin password and (for its tailscale
+# proxies) the same TS_AUTHKEY. Fail fast here rather than mid-deploy.
+require_env() {
+  grep -qE "^$1=." .env || {
+    echo "ERROR: $1 missing/empty in .env ($2)." >&2
+    echo "       Add it to .env, or set DEPLOY_OBSERVABILITY=false." >&2
+    exit 1
+  }
+}
+if [ "$DEPLOY_OBSERVABILITY" = "true" ]; then
+  require_env GRAFANA_ADMIN_PASSWORD "Grafana admin password"
+  require_env TS_AUTHKEY "observability tailscale proxies"
 fi
 
 kubectl create secret generic fortymm-uat-env \
@@ -142,6 +172,47 @@ until curl -fsS --max-time 3 "$UAT_URL/api/v1/health" >/dev/null 2>&1; do
   fi
   sleep 2
 done
+
+# --- observability ----------------------------------------------------------
+# Separate release in the `monitoring` namespace: kube-prometheus-stack (Grafana
+# + Prometheus + Alertmanager), loki-stack (Loki + Promtail with email
+# redaction), Tempo. Each of Grafana/Prometheus/Loki gets a tailscale serve
+# proxy (private MagicDNS hostname). Chart deps are vendored at deploy time.
+if [ "$DEPLOY_OBSERVABILITY" = "true" ]; then
+  echo
+  echo "==> Deploying observability stack ($OBS_RELEASE -> $OBS_NAMESPACE)"
+  kubectl get namespace "$OBS_NAMESPACE" >/dev/null 2>&1 || kubectl create namespace "$OBS_NAMESPACE"
+
+  # Secrets from .env (never committed): Grafana admin creds + tailscale key.
+  kubectl create secret generic grafana-admin \
+    --namespace "$OBS_NAMESPACE" \
+    --from-literal=admin-user=admin \
+    --from-literal=admin-password="$(read_env GRAFANA_ADMIN_PASSWORD)" \
+    --dry-run=client -o yaml | kubectl apply -f -
+  kubectl create secret generic tailscale-authkey \
+    --namespace "$OBS_NAMESPACE" \
+    --from-literal=TS_AUTHKEY="$(read_env TS_AUTHKEY)" \
+    --dry-run=client -o yaml | kubectl apply -f -
+
+  # Vendor chart dependencies (helm dependency build reads Chart.lock).
+  helm repo add prometheus-community https://prometheus-community.github.io/helm-charts >/dev/null 2>&1 || true
+  helm repo add grafana https://grafana.github.io/helm-charts >/dev/null 2>&1 || true
+  helm repo update prometheus-community grafana >/dev/null
+  helm dependency build "$OBS_CHART"
+
+  echo
+  echo "==> helm upgrade --install $OBS_RELEASE"
+  helm upgrade --install "$OBS_RELEASE" "$OBS_CHART" \
+    --namespace "$OBS_NAMESPACE" \
+    --wait --timeout 10m
+
+  echo
+  echo "==> Observability pods"
+  kubectl get pods -n "$OBS_NAMESPACE"
+else
+  echo
+  echo "(skipping observability deploy; DEPLOY_OBSERVABILITY=$DEPLOY_OBSERVABILITY)"
+fi
 
 echo
 echo "==> Pod status"

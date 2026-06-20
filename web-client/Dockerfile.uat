@@ -12,6 +12,13 @@ COPY package.json package-lock.json .npmrc ./
 RUN npm ci
 
 COPY . .
+
+# Grafana Faro browser telemetry collector URL, baked into the bundle at build
+# time. Empty by default => Faro is a no-op (so the QA stack, which also builds
+# this Dockerfile, stays off). The UAT deploy passes /faro/collect.
+ARG VITE_FARO_COLLECTOR_URL=""
+ENV VITE_FARO_COLLECTOR_URL=$VITE_FARO_COLLECTOR_URL
+
 RUN npm run build
 
 FROM nginx:1.31-alpine

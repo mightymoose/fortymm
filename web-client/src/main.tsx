@@ -10,7 +10,12 @@ import { NotFoundPage } from '@/components/not-found-page'
 import { setSessionEndedHandler } from '@/api/client'
 import { SESSION_QUERY_KEY } from '@/api/session'
 import { clearAppEntered } from '@/lib/landing-redirect'
+import { initFaro } from '@/observability/faro'
 import { routeTree } from './routeTree.gen'
+
+// Start browser telemetry as early as possible so startup errors are captured.
+// No-op unless VITE_FARO_COLLECTOR_URL is set (UAT build only).
+void initFaro()
 
 const queryClient = new QueryClient({
   defaultOptions: {
