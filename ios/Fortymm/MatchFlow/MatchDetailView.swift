@@ -44,6 +44,10 @@ struct MatchDetailView: View {
                 }
                 .padding(.bottom, 120)
             }
+            // Pull-to-refresh: the one in-foreground way to pick up a cross-device
+            // change (the opponent confirmed/disputed) while staring at this screen,
+            // since there's no live poll. Mirrors the dashboard/matches-list pulls.
+            .refreshable { await refresh(force: true) }
             footer
             if actioning { FMBlockingSpinner() }
         }
