@@ -26,8 +26,15 @@ export function FinalizeCalloutActive({
   // the next render, so a fast double-click lands a second tap before React
   // commits the disable — firing two concurrent POST /results that pile up on
   // the backend (issue #641). This ref flips inside the click gesture, so the
-  // second tap is rejected regardless of render timing; `onSettled` clears it
-  // so a genuine retry after a failure still works.
+  // second tap is rejected regardless of render timing.
+  //
+  // Cleared on *error* only, never on success. A successful post transitions
+  // the match to awaiting-confirmation and unmounts this callout, so the guard
+  // never needs to reopen on success; clearing on settle instead would reopen
+  // it the instant the request resolves — a beat before that unmount lands —
+  // leaving a window where a rapid second click still fires a duplicate 409.
+  // Clearing on error keeps the guard shut through that window while still
+  // letting a genuine retry fire after a failure.
   const inFlightRef = useRef(false);
   return (
     <FinalizeCalloutDisplay
@@ -40,7 +47,7 @@ export function FinalizeCalloutActive({
         finalizeMutation.mutate(
           { games: view.games },
           {
-            onSettled: () => {
+            onError: () => {
               inFlightRef.current = false;
             },
           },

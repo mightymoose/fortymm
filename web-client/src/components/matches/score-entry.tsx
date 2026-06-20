@@ -131,8 +131,10 @@ function ScoreEntryInner({
   // on "Finalize result" lands a second tap before React re-renders — firing
   // two concurrent POST /results that pile up and wedge the backend (#641).
   // This ref flips inside the click gesture, so the second tap is rejected
-  // regardless of render timing; `onSettled` clears it so a retry after a
-  // finalize failure still works.
+  // regardless of render timing. Cleared on *error* only: a successful finalize
+  // navigates away from this screen, so the guard never needs to reopen on
+  // success — clearing on settle would reopen it a beat before the navigation
+  // lands, leaving a window for a duplicate. Error clears it so a retry works.
   const finalizingRef = useRef(false)
   const { status, proceed, reset } = useBlocker({
     // Blocks browser refresh/close (beforeunload) only while genuinely dirty.
@@ -428,7 +430,7 @@ function ScoreEntryInner({
         { games: hypotheticalGames },
         {
           onSuccess: () => navigate(matchDetailRoute(matchId)),
-          onSettled: () => {
+          onError: () => {
             finalizingRef.current = false
           },
         },
