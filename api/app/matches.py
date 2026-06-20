@@ -19,7 +19,7 @@ from fastapi import (
 )
 from pyrate_limiter import Duration, Rate
 from sqlalchemy import CursorResult, Select, func, select, update
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased, selectinload
 from sqlalchemy.sql.base import ExecutableOption
@@ -1632,7 +1632,20 @@ def _posted_decided_side(match: Match) -> int:
 # ----- scoring endpoints ---------------------------------------------------
 
 
-async def _lock_match_row(db: AsyncSession, match_id: uuid.UUID) -> None:
+class MatchLockUnavailable(Exception):
+    """``SELECT ... FOR UPDATE NOWAIT`` found the match row already locked by a
+    concurrent sign-off transaction. Raised by ``_lock_match_row(nowait=True)``
+    so the caller can translate it into a fast, clean 409 instead of blocking
+    on the lock (see ``post_match_result``)."""
+
+
+# Postgres SQLSTATE for a ``NOWAIT`` lock that could not be acquired.
+_LOCK_NOT_AVAILABLE = "55P03"
+
+
+async def _lock_match_row(
+    db: AsyncSession, match_id: uuid.UUID, *, nowait: bool = False
+) -> None:
     """Take a transaction-scoped row lock on the ``matches`` row so the
     sign-off transitions (``/results``, ``/confirmation``, ``/dispute``)
     serialize against each other.
@@ -1651,8 +1664,23 @@ async def _lock_match_row(db: AsyncSession, match_id: uuid.UUID) -> None:
     and acquiring it on its own line makes the lock-then-read ordering explicit
     — the subsequent load sees the serialized state. Locking just the parent
     row is enough — every sign-off transition reads and writes that match's
-    children under cover of this lock."""
-    await db.execute(select(Match.id).where(Match.id == match_id).with_for_update())
+    children under cover of this lock.
+
+    ``nowait=True`` adds ``NOWAIT``: if the row is already locked, Postgres
+    raises immediately instead of blocking, which we surface as
+    ``MatchLockUnavailable``. ``post_match_result`` uses this so a double-tapped
+    finalize doesn't park a request (and its pooled DB connection) on the lock
+    for the full duration of the in-flight post — the pile-up that wedged the
+    whole instance under a stray double-click (issue #641). The blocking form
+    is kept for /confirmation and /dispute, where a second concurrent caller is
+    a *legitimate* signer that must wait, re-read, and proceed."""
+    stmt = select(Match.id).where(Match.id == match_id).with_for_update(nowait=nowait)
+    try:
+        await db.execute(stmt)
+    except DBAPIError as exc:
+        if nowait and getattr(exc.orig, "sqlstate", None) == _LOCK_NOT_AVAILABLE:
+            raise MatchLockUnavailable from exc
+        raise
 
 
 async def _load_match_for_scoring(
@@ -1661,11 +1689,12 @@ async def _load_match_for_scoring(
     current_user_id: uuid.UUID,
     *,
     lock: bool = False,
+    nowait: bool = False,
 ) -> Match:
     # ``lock`` callers (the sign-off transitions) take the row lock *before*
     # the eager load so the match state they read is the serialized one.
     if lock:
-        await _lock_match_row(db, match_id)
+        await _lock_match_row(db, match_id, nowait=nowait)
     match = await _load_match(db, match_id)
     if match is None or not _is_participant(match, current_user_id):
         raise HTTPException(status_code=404, detail="Match not found.")
@@ -1846,7 +1875,22 @@ async def post_match_result(
     plus the rating update fire inside /confirmation when the final signature
     lands. Unrated matches (nothing at stake worth a second sign-off) and solo
     matches (no second party to attest) finalize immediately here."""
-    match = await _load_match_for_scoring(db, match_id, current_user.id, lock=True)
+    try:
+        match = await _load_match_for_scoring(
+            db, match_id, current_user.id, lock=True, nowait=True
+        )
+    except MatchLockUnavailable as exc:
+        # A concurrent /results is mid-flight (a double-tapped finalize). Only
+        # one result can be posted, so the loser of the race has no work to do —
+        # bail out fast with a 409 rather than blocking on the lock and tying up
+        # a connection for the duration of the in-flight post (issue #641). The
+        # winner's 201 carries the canonical result; the client refetches it.
+        await db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="A result is already being posted for this match. "
+            "Refresh to see the latest.",
+        ) from exc
     _enforce_scorable(match)
 
     try:

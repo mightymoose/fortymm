@@ -14,6 +14,7 @@ from app.matches import (
     confirm_match_result,
     create_game_score,
     dispute_match_result,
+    post_match_result,
 )
 from app.models import (
     League,
@@ -26,8 +27,14 @@ from app.models import (
     User,
 )
 from app.notifications.apns import MATCH_RESULT_CONFIRMATION_CATEGORY
-from app.schemas.match import MatchGameScoreWrite
+from app.notifications.service import NotificationService
+from app.schemas.match import (
+    MatchGameScoreWrite,
+    MatchResultsGameWrite,
+    MatchResultsWrite,
+)
 from tests._helpers import (
+    FakeSender,
     enqueued_notification_jobs,
     make_client,
     make_user,
@@ -1234,6 +1241,78 @@ async def test_results_409_when_already_posted(
             f"/v1/matches/{match['id']}/results", json=payload
         )
         assert second.status_code == 409
+
+
+async def test_concurrent_results_posts_do_not_pile_up(
+    api_client: AsyncClient, db_session: AsyncSession, engine: AsyncEngine
+):
+    """Regression for #641. A double-tapped "Finalize result" fires two
+    concurrent ``POST /results`` on the same match. The winner posts the
+    result; the loser must fail *fast* with a clean 409 instead of blocking on
+    the row lock for the duration of the in-flight post — that pile-up (each
+    waiter parking a pooled DB connection) is what wedged the whole instance.
+
+    ``post_match_result`` takes the lock with ``FOR UPDATE NOWAIT``, so the
+    racer that loses the lock raises immediately. Like
+    ``test_concurrent_confirm_and_dispute_serialize`` this drives the handler on
+    *separate* sessions via ``asyncio.gather`` so the lock genuinely contends.
+    """
+    me = await start_session(api_client, db_session)
+    async with opponent_session(db_session, "race-opp") as (_opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=1)
+        match_id = uuid.UUID(match["id"])
+        me_id = me.id
+
+        make_session = async_sessionmaker(engine, expire_on_commit=False)
+        payload = MatchResultsWrite(
+            games=[
+                MatchResultsGameWrite(game_number=1, side_1_points=11, side_2_points=4)
+            ]
+        )
+
+        async def run() -> object:
+            async with make_session() as session:
+                poster = (
+                    await session.execute(select(User).where(User.id == me_id))
+                ).scalar_one()
+                notifications = NotificationService(session, FakeSender())
+                try:
+                    await post_match_result(
+                        match_id, payload, poster, session, notifications
+                    )
+                    return "ok"
+                except HTTPException as exc:
+                    return exc.detail
+
+        outcomes = await asyncio.gather(run(), run())
+
+        # One result posted; the other cleanly rejected — never two successes.
+        # The loser's message is the NOWAIT fast-fail, not the blocking
+        # ``_enforce_scorable`` 409: under asyncio's single loop the winner
+        # acquires the lock at its first await and the loser hits NOWAIT before
+        # the winner commits — so this asserts the *fast* path, the actual #641
+        # fix, rather than a 409 that only arrives after a full lock-wait.
+        assert sorted(str(o) for o in outcomes) == [
+            "A result is already being posted for this match. "
+            "Refresh to see the latest.",
+            "ok",
+        ], outcomes
+
+        # The committed match holds its invariants: exactly one signature and
+        # the single canonical game, with no duplicate/orphan rows.
+        async with make_session() as verify:
+            final = (
+                await verify.execute(
+                    select(Match)
+                    .where(Match.id == match_id)
+                    .options(
+                        selectinload(Match.signatures),
+                        selectinload(Match.games),
+                    )
+                )
+            ).scalar_one()
+            assert len(final.signatures) == 1
+            assert len(final.games) == 1
 
 
 async def test_score_endpoints_409_once_result_is_posted(

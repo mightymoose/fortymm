@@ -1,3 +1,5 @@
+import { useRef } from "react";
+
 import { useFinalizeMatch } from "@/api/matches";
 import { ApiError } from "@/api/client";
 
@@ -20,13 +22,29 @@ export function FinalizeCalloutActive({
   const finalizeMutation = useFinalizeMatch(matchId);
   const error =
     finalizeMutation.error instanceof ApiError ? finalizeMutation.error : null;
+  // Synchronous double-submit guard. `disabled={pending}` only takes effect on
+  // the next render, so a fast double-click lands a second tap before React
+  // commits the disable — firing two concurrent POST /results that pile up on
+  // the backend (issue #641). This ref flips inside the click gesture, so the
+  // second tap is rejected regardless of render timing; `onSettled` clears it
+  // so a genuine retry after a failure still works.
+  const inFlightRef = useRef(false);
   return (
     <FinalizeCalloutDisplay
       pending={finalizeMutation.isPending}
       errorMessage={error ? (error.detail ?? error.message) : null}
       onPost={() => {
+        if (inFlightRef.current) return;
+        inFlightRef.current = true;
         finalizeMutation.reset();
-        finalizeMutation.mutate({ games: view.games });
+        finalizeMutation.mutate(
+          { games: view.games },
+          {
+            onSettled: () => {
+              inFlightRef.current = false;
+            },
+          },
+        );
       }}
     />
   );

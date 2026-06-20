@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import {
   RouterProvider,
@@ -375,6 +375,52 @@ describe('ScoreEntry — create', () => {
         { game_number: 3, side_1_points: 11, side_2_points: 3 },
       ],
     })
+  })
+
+  it('fires a single POST /results when "Post result" is double-clicked in one frame (#641)', async () => {
+    // A fast double-tap lands a second click before React commits the button's
+    // `disabled` re-render. That fired two concurrent POST /results that piled
+    // up and wedged the backend; the synchronous in-flight ref must swallow the
+    // second tap. Two *synchronous* fireEvent clicks reproduce the same-frame
+    // race (awaited user-event clicks would let the `disabled` attr alone block
+    // the second, hiding the regression).
+    const user = userEvent.setup()
+    let requests = 0
+    server.use(
+      http.get('*/v1/matches/m-1', () =>
+        HttpResponse.json(
+          inProgressMatch({
+            sides: participantSides({ meWins: 2, oppWins: 0 }),
+            games: [
+              { id: 'g-1', game_number: 1, score: score('s-1', 11, 4) },
+              { id: 'g-2', game_number: 2, score: score('s-2', 11, 6) },
+            ],
+            current_game: { game_number: 3 },
+          }),
+        ),
+      ),
+      // Never resolves — keeps the finalize in flight so the test can count the
+      // POSTs the double-click produced.
+      http.post('*/v1/matches/m-1/results', () => {
+        requests += 1
+        return new Promise<never>(() => {})
+      }),
+    )
+
+    renderScoreEntry({ kind: 'create', matchId: 'm-1', gameNumber: 3 })
+    const meInput = await screen.findByRole('textbox', {
+      name: 'rita.kovac score',
+    })
+    const oppInput = screen.getByRole('textbox', { name: 'nguyen.t score' })
+    await user.type(meInput, '11')
+    await user.type(oppInput, '3')
+
+    const postBtn = screen.getByRole('button', { name: /post result/i })
+    fireEvent.click(postBtn)
+    fireEvent.click(postBtn)
+
+    await waitFor(() => expect(postBtn).toBeDisabled())
+    expect(requests).toBe(1)
   })
 
   it('blocks an illegal final score client-side without hitting the server', async () => {
