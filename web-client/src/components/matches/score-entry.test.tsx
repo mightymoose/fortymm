@@ -1753,6 +1753,16 @@ describe('ScoreEntry — conflicts', () => {
 
     // Fire-and-forget advances us; the rejected save shows in the banner.
     await screen.findByRole('heading', { name: /enter game 3 score/i })
+
+    // The game 1 scoreline cell must show the COMMITTED score (11–5), not our
+    // rejected 12–10 entry — presenting the losing scratch there would imply
+    // our value won, the exact confusion the conflict flow prevents.
+    expect(
+      await screen.findByRole('link', {
+        name: /game 1 was saved by someone else as 11 to 5\. tap to review/i,
+      }),
+    ).toBeInTheDocument()
+
     await user.click(
       await screen.findByRole('button', { name: /review game 1/i }),
     )

@@ -1003,10 +1003,13 @@ function ScorelineCell({
   const conflict = failed && isScoreConflict(save?.error)
   const showResolved = resolved && status === 'success' && score != null
 
-  // While saving or failed, show the just-entered scratch points (from the
-  // mutation); otherwise the persisted score.
+  // While saving or plainly failed, show the just-entered scratch points (the
+  // retry surface). A *conflict* is different: our entry was rejected and the
+  // committed score is someone else's — so show that committed value, not our
+  // losing scratch, or the cell would present our rejected score as the live
+  // result (the very confusion the conflict flow exists to prevent).
   const points =
-    (saving || failed) && save?.variables
+    (saving || (failed && !conflict)) && save?.variables
       ? save.variables
       : score
         ? { side_1_points: score.side_1_points, side_2_points: score.side_2_points }
@@ -1123,7 +1126,7 @@ function ScorelineCell({
   // Failure can't be color-alone: the label spells it out for screen readers;
   // sighted users get the ⚠ badge + "Not saved" / "Changed" micro-label.
   const ariaLabel = conflict
-    ? `Game ${n} was saved by someone else, now ${myPoints} to ${oppPoints}. Tap to review.`
+    ? `Game ${n} was saved by someone else as ${myPoints} to ${oppPoints}. Tap to review.`
     : failed
       ? `Game ${n} didn't save, ${myPoints} to ${oppPoints}. Tap to fix.`
       : score
