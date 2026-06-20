@@ -98,7 +98,7 @@ WEB_BUILD_ARGS=()
 if [ "$DEPLOY_OBSERVABILITY" = "true" ]; then
   WEB_BUILD_ARGS+=(--build-arg "VITE_FARO_COLLECTOR_URL=/faro/collect")
 fi
-docker build -t "$WEB_IMAGE" "${WEB_BUILD_ARGS[@]}" -f web-client/Dockerfile.uat web-client
+docker build -t "$WEB_IMAGE" "${WEB_BUILD_ARGS[@]+"${WEB_BUILD_ARGS[@]}"}" -f web-client/Dockerfile.uat web-client
 
 echo
 echo "==> Importing images into k3d"
