@@ -54,6 +54,14 @@ struct DashboardView: View {
             // Returning to the foreground may surface cross-device changes (a
             // match the other player just confirmed) — refetch in place.
             .refetchOnForeground { Task { await store.load(force: true) } }
+            // The signed-in identity just changed under us — an in-app sign-in /
+            // account merge folded a new user into the session. The dashboard
+            // payload (rating, opponent) is now for the wrong account; refetch so
+            // Home isn't stale until a relaunch. `.onChange` skips the initial
+            // value, so this fires only on a later merge, not first load.
+            .onChange(of: session.username) { _, _ in
+                Task { await store.load(force: true) }
+            }
 
             if resumeLoading { FMBlockingSpinner() }
         }

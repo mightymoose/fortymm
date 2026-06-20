@@ -53,6 +53,12 @@ final class SessionStore: ObservableObject {
         return nil
     }
 
+    /// The signed-in username, or nil before the session resolves. A stable
+    /// identity handle for screens that need to refetch when the signed-in user
+    /// changes (a sign-in/merge flips a guest username to the account's), since
+    /// `state` isn't `Equatable` and can't be observed with `.onChange`.
+    var username: String? { user?.username }
+
     private let client: APIClient
     private var cancellables = Set<AnyCancellable>()
 
