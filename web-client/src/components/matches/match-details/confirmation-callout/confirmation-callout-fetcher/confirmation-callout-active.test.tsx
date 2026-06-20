@@ -43,6 +43,30 @@ describe("ConfirmationCalloutActive", () => {
     expect(disputeHits).toBe(1);
   });
 
+  it("does not fire a second confirmation after the first one succeeds", async () => {
+    // The guard clears on error, not on settle: a successful confirm unmounts
+    // this callout (match completed), but for the beat before that re-render
+    // lands the button is still on screen and enabled. A rapid follow-up click
+    // in that window must NOT fire a duplicate POST that 409s (#641 follow-up
+    // QA found exactly this leak when the ref was cleared on settle).
+    let confirmHits = 0;
+    confirmationCalloutActivePage.mockConfirmationEndpoint(() => {
+      confirmHits += 1;
+      return HttpResponse.json(buildMatchDetails(), { status: 201 });
+    });
+    confirmationCalloutActivePage.render();
+
+    const button = confirmationCalloutActivePage.getConfirmButton();
+    await userEvent.click(button);
+    await waitFor(() => expect(confirmHits).toBe(1));
+    // The first confirm has settled successfully; the button is enabled again
+    // in this isolated harness (no parent to unmount it). A second click must
+    // still be swallowed by the guard.
+    await userEvent.click(button);
+    await waitFor(() => {});
+    expect(confirmHits).toBe(1);
+  });
+
   it("confirming posts to /confirmation exactly once and never /dispute", async () => {
     let confirmHits = 0;
     let disputeHits = 0;
