@@ -389,14 +389,17 @@ async def _league_peak_rating(
 async def _league_percentile(
     db: AsyncSession, league_id: uuid.UUID, my_rating: float
 ) -> int | None:
-    """Percentile rank within the league: the share of rated members the user
-    is at or above. Returns None for leagues of one — nothing to compare to."""
-    total, at_or_below = (
+    """ "Top N%" rank within the league: the share of rated members at or above
+    the user's rating, so the strongest player reads a *small* percentage (e.g.
+    "Top 1%") and weaker players a larger one. Clamped to at least 1 so the top
+    player never reads "Top 0%". Returns None for leagues of one — nothing to
+    compare to."""
+    total, at_or_above = (
         await db.execute(
             select(
                 func.count(UserLeagueRating.id),
                 func.count(UserLeagueRating.id).filter(
-                    UserLeagueRating.rating_value <= my_rating
+                    UserLeagueRating.rating_value >= my_rating
                 ),
             ).where(
                 UserLeagueRating.league_id == league_id,
@@ -406,7 +409,7 @@ async def _league_percentile(
     ).one()
     if total <= 1:
         return None
-    return round(int(at_or_below) / int(total) * 100)
+    return max(1, round(int(at_or_above) / int(total) * 100))
 
 
 async def _spark_and_delta(
