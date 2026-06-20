@@ -389,7 +389,7 @@ async def _league_peak_rating(
 async def _league_percentile(
     db: AsyncSession, league_id: uuid.UUID, my_rating: float
 ) -> int | None:
-    """"Top N%" rank within the league: the share of rated members at or above
+    """ "Top N%" rank within the league: the share of rated members at or above
     the user's rating, so the strongest player reads a *small* percentage (e.g.
     "Top 1%") and weaker players a larger one. Clamped to at least 1 so the top
     player never reads "Top 0%". Returns None for leagues of one — nothing to
