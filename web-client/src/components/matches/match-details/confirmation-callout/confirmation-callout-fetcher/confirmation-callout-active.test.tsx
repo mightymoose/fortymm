@@ -2,11 +2,71 @@ import { HttpResponse } from "msw";
 import userEvent from "@testing-library/user-event";
 
 import { buildMatchDetails } from "@/mocks/factories/matches/match-details.factory";
-import { waitFor } from "@/test/utilities";
+import { fireEvent, waitFor } from "@/test/utilities";
 
 import { confirmationCalloutActivePage } from "./confirmation-callout-active.page";
 
 describe("ConfirmationCalloutActive", () => {
+  it("fires a single /confirmation when Confirm is double-clicked in one frame", async () => {
+    // Two synchronous clicks before React commits the `disabled` re-render —
+    // the double-tap that fired a duplicate POST /confirmation whose loser
+    // 409'd (#641 follow-up). `disabled={pending}` can't catch the second click
+    // here (it only takes effect next render), so the in-flight ref must.
+    let confirmHits = 0;
+    confirmationCalloutActivePage.mockConfirmationEndpoint(() => {
+      confirmHits += 1;
+      return new Promise<never>(() => {});
+    });
+    confirmationCalloutActivePage.render();
+
+    const button = confirmationCalloutActivePage.getConfirmButton();
+    fireEvent.click(button);
+    fireEvent.click(button);
+
+    await waitFor(() => expect(button).toBeDisabled());
+    expect(confirmHits).toBe(1);
+  });
+
+  it("fires a single /dispute when Dispute is double-clicked in one frame", async () => {
+    let disputeHits = 0;
+    confirmationCalloutActivePage.mockDisputeEndpoint(() => {
+      disputeHits += 1;
+      return new Promise<never>(() => {});
+    });
+    confirmationCalloutActivePage.render();
+
+    const button = confirmationCalloutActivePage.getDisputeButton();
+    fireEvent.click(button);
+    fireEvent.click(button);
+
+    await waitFor(() => expect(button).toBeDisabled());
+    expect(disputeHits).toBe(1);
+  });
+
+  it("does not fire a second confirmation after the first one succeeds", async () => {
+    // The guard clears on error, not on settle: a successful confirm unmounts
+    // this callout (match completed), but for the beat before that re-render
+    // lands the button is still on screen and enabled. A rapid follow-up click
+    // in that window must NOT fire a duplicate POST that 409s (#641 follow-up
+    // QA found exactly this leak when the ref was cleared on settle).
+    let confirmHits = 0;
+    confirmationCalloutActivePage.mockConfirmationEndpoint(() => {
+      confirmHits += 1;
+      return HttpResponse.json(buildMatchDetails(), { status: 201 });
+    });
+    confirmationCalloutActivePage.render();
+
+    const button = confirmationCalloutActivePage.getConfirmButton();
+    await userEvent.click(button);
+    await waitFor(() => expect(confirmHits).toBe(1));
+    // The first confirm has settled successfully; the button is enabled again
+    // in this isolated harness (no parent to unmount it). A second click must
+    // still be swallowed by the guard.
+    await userEvent.click(button);
+    await waitFor(() => {});
+    expect(confirmHits).toBe(1);
+  });
+
   it("confirming posts to /confirmation exactly once and never /dispute", async () => {
     let confirmHits = 0;
     let disputeHits = 0;
