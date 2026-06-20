@@ -10,10 +10,11 @@ import { render, screen, type Container } from '@/test/utilities'
 
 import { YourGameRow, type YourGameRowProps } from './your-game-row'
 import { buildYourGameRowProps } from './your-game-row.factory'
-import { skeletonCardPage } from './skeleton-card.page'
 import { emptyCardPage } from './your-game-row/empty-card.page'
 import { ratingCardPage } from './your-game-row/rating-card.page'
+import { ratingCardSkeletonPage } from './your-game-row/rating-card-skeleton.page'
 import { recentResultsCardPage } from './your-game-row/recent-results-card.page'
+import { recentResultsCardSkeletonPage } from './your-game-row/recent-results-card-skeleton.page'
 import { sectionHeaderPage } from './your-game-row/section-header.page'
 
 const scoped = (container: Container) => {
@@ -39,7 +40,8 @@ const scoped = (container: Container) => {
     ratingCard: ratingCardPage.within(container),
     recentResults: recentResultsCardPage.within(container),
     emptyCard: emptyCardPage.within(container),
-    skeleton: skeletonCardPage.within(container),
+    ratingSkeleton: ratingCardSkeletonPage.within(container),
+    recentResultsSkeleton: recentResultsCardSkeletonPage.within(container),
   }
 }
 

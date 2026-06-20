@@ -2,10 +2,10 @@ import { useMemo } from 'react'
 import { useDashboard } from '@/api/dashboard'
 import { deriveEmailStatus, useSession } from '@/api/session'
 import { AttentionPanel } from '@/components/dashboard/attention-panel'
+import { AttentionPanelSkeleton } from '@/components/dashboard/attention-panel-skeleton'
 import { projectAttentionPanelView } from '@/components/dashboard/attention-panel-view'
 import { GuestPersistBanner } from '@/components/dashboard/guest-persist-banner'
 import { PageTitle } from '@/components/dashboard/page-title'
-import { SkeletonCard } from '@/components/dashboard/skeleton-card'
 import { YourGameRow } from '@/components/dashboard/your-game-row'
 import { useMediaQuery } from '@/lib/use-media-query'
 
@@ -60,9 +60,7 @@ export function DashboardPage() {
       )}
       <PageTitle greeting={greeting} compact={compact} />
       {isLoading ? (
-        <div style={{ marginBottom: 32 }}>
-          <SkeletonCard label="Loading attention panel" height={160} />
-        </div>
+        <AttentionPanelSkeleton />
       ) : (
         <AttentionPanel
           view={attentionView}

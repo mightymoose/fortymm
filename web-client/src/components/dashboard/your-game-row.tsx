@@ -1,9 +1,10 @@
 import type { DashboardRating, DashboardRecentResult } from '@/api/dashboard'
 
-import { SkeletonCard } from './skeleton-card'
 import { EmptyCard } from './your-game-row/empty-card'
 import { RatingCard } from './your-game-row/rating-card'
+import { RatingCardSkeleton } from './your-game-row/rating-card-skeleton'
 import { RecentResultsCard } from './your-game-row/recent-results-card'
+import { RecentResultsCardSkeleton } from './your-game-row/recent-results-card-skeleton'
 import { SectionHeader } from './your-game-row/section-header'
 
 function ratingStrategyLabel(key: string): string {
@@ -46,7 +47,7 @@ export const YourGameRow = ({
       />
       <div className="your-game-grid">
         {isLoading ? (
-          <SkeletonCard label="Loading rating" height={260} />
+          <RatingCardSkeleton />
         ) : rating ? (
           <RatingCard rating={rating} />
         ) : (
@@ -56,7 +57,7 @@ export const YourGameRow = ({
           />
         )}
         {isLoading ? (
-          <SkeletonCard label="Loading recent matches" height={260} />
+          <RecentResultsCardSkeleton />
         ) : (
           <RecentResultsCard rows={recent} />
         )}
