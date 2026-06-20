@@ -129,10 +129,13 @@ const selectOutcome = (match: MatchDetailsResult): string | null => {
   // branch above can't pair a loser. Without this branch the null guard below
   // swallows the result and the hero heading reads just "Match" (#495). Trigger
   // only when exactly one side carries a player — a real opponent whose side
-  // simply isn't stamped lost yet falls through to the in-progress copy.
+  // simply isn't stamped lost yet falls through to the in-progress copy. The
+  // ghost side is still stamped `won === false`, so `loser` already points at
+  // it; read its real games_won — in solo play the ghost can take games, so
+  // hardcoding "to 0" understated the loser's tally whenever it won ≥1 (MA4).
   const playeredSides = sides.filter((s) => s.players[0]);
   if (winner?.players[0] && playeredSides.length === 1) {
-    return `${winner.players[0].username} finished, winning ${games(winner.games_won)} to 0`;
+    return `${winner.players[0].username} finished, winning ${games(winner.games_won)} to ${loser?.games_won ?? 0}`;
   }
 
   // Still in progress (or posted, awaiting confirmation): describe the current

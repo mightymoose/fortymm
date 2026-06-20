@@ -406,6 +406,41 @@ describe("scoreboardQuery", () => {
     );
   });
 
+  it("counts the games the ghost side won in a finished solo match (MA4)", async () => {
+    // In solo play the playerless ghost side can still take individual games, so
+    // it carries `won: false` with a non-zero games_won. The heading must report
+    // that tally rather than hardcoding "to 0", which dropped the ghost's wins.
+    scoreboardQueryPage.mockEndpoint(() =>
+      HttpResponse.json(
+        buildMatchDetails({
+          status_label: "Final",
+          sides: [
+            buildMatchDetailsSide({
+              won: true,
+              games_won: 3,
+              players: [buildMatchDetailsPlayer({ username: "rita.kovac" })],
+            }),
+            buildMatchDetailsSide({
+              side_number: 2,
+              won: false,
+              games_won: 1,
+              players: [],
+              is_current_user_side: false,
+            }),
+          ],
+          data: { scoreboard: { status: "final" } },
+        }),
+      ),
+    );
+
+    const { result } = scoreboardQueryPage.render();
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data?.outcome).toBe(
+      "rita.kovac finished, winning 3 games to 1",
+    );
+  });
+
   it("returns a null outcome when a side is missing entirely", async () => {
     scoreboardQueryPage.mockEndpoint(() =>
       HttpResponse.json(buildMatchDetails({ sides: [buildMatchDetailsSide()] })),
