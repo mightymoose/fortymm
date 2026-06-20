@@ -60,6 +60,11 @@ struct MatchScoreDTO: Decodable {
     let side1Points: Int
     let side2Points: Int
     let winnerSideNumber: Int
+    // Optimistic-concurrency token from the API. iOS scores a match locally and
+    // commits the whole result via POST /results (which 409s the second poster),
+    // so it never issues the per-game conditional write that consumes this — the
+    // field is decoded only to keep the model in sync with the API schema.
+    let version: Int
 }
 
 struct MatchGameDTO: Decodable {

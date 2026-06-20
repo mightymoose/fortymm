@@ -5,7 +5,7 @@ import math
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Annotated, Any
+from typing import Annotated, Any, cast
 
 from fastapi import (
     APIRouter,
@@ -18,7 +18,7 @@ from fastapi import (
     status,
 )
 from pyrate_limiter import Duration, Rate
-from sqlalchemy import Select, func, select
+from sqlalchemy import CursorResult, Select, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased, selectinload
@@ -67,6 +67,8 @@ from app.schemas.match import (
     MatchDetailsPlayerForm,
     MatchDetailsScore,
     MatchDetailsSide,
+    MatchGameScoreConflict,
+    MatchGameScoreUpdate,
     MatchGameScoreWrite,
     MatchLeague,
     MatchListFilter,
@@ -227,6 +229,52 @@ def _game_winner_side(score: MatchGameScore) -> int:
     return 1 if score.side_1_points > score.side_2_points else 2
 
 
+def _score_view(score: MatchGameScore) -> MatchDetailsScore:
+    return MatchDetailsScore(
+        id=score.id,
+        side_1_points=score.side_1_points,
+        side_2_points=score.side_2_points,
+        winner_side_number=_game_winner_side(score),
+        version=score.version,
+    )
+
+
+# One message for every score-write conflict — a concurrent participant already
+# saved this game. Both the create path (a second create loses the unique
+# constraint) and the update path (a stale version loses the conditional UPDATE)
+# raise it, always carrying the committed score so the client can show "your
+# entry vs. what's saved". Sharing one structured body is what lets the client
+# tell a real conflict apart from a plain-string 409 (e.g. a locked match) and
+# never blindly retry a conflict over the committed value.
+_SCORE_CONFLICT_MESSAGE = (
+    "This game was saved by someone else while you were editing. "
+    "Review the saved score before saving again."
+)
+
+
+def _score_conflict(committed: MatchDetailsScore | None) -> HTTPException:
+    return HTTPException(
+        status_code=409,
+        detail=MatchGameScoreConflict(
+            message=_SCORE_CONFLICT_MESSAGE,
+            committed_score=committed,
+        ).model_dump(mode="json"),
+    )
+
+
+async def _committed_score(
+    db: AsyncSession, match_id: uuid.UUID, game_number: int
+) -> MatchDetailsScore | None:
+    """The game's score as it actually stands now — for the conflict body after
+    a create lost the unique-constraint race (the committed row belongs to a
+    different transaction, so it isn't on our in-memory ``match``)."""
+    reloaded = await _load_match(db, match_id)
+    if reloaded is None:
+        return None
+    game = next((g for g in reloaded.games if g.game_number == game_number), None)
+    return _score_view(game.score) if game and game.score else None
+
+
 def side_win_counts(match: Match) -> dict[int, int]:
     counts = {side.side_number: 0 for side in match.sides}
     for game in match.games:
@@ -282,20 +330,12 @@ def _serialize_details(
     domain_match = domain_match or MatchModel.from_row(match)
     side_wins = side_win_counts(match)
 
-    def _score_schema(score: MatchGameScore) -> MatchDetailsScore:
-        return MatchDetailsScore(
-            id=score.id,
-            side_1_points=score.side_1_points,
-            side_2_points=score.side_2_points,
-            winner_side_number=_game_winner_side(score),
-        )
-
     games_sorted = sorted(match.games, key=lambda g: g.game_number)
     games = [
         MatchDetailsGame(
             id=game.id,
             game_number=game.game_number,
-            score=_score_schema(game.score) if game.score else None,
+            score=_score_view(game.score) if game.score else None,
         )
         for game in games_sorted
     ]
@@ -1644,6 +1684,7 @@ async def _load_match_for_scoring(
     "/matches/{match_id}/games/{game_number}/scores/new",
     response_model=MatchDetails,
     status_code=status.HTTP_201_CREATED,
+    responses={409: {"model": MatchGameScoreConflict}},
 )
 async def create_game_score(
     match_id: uuid.UUID,
@@ -1668,9 +1709,11 @@ async def create_game_score(
         game = MatchGame(game_number=game_number)
         match.games.append(game)
     elif game.score is not None:
-        raise HTTPException(
-            status_code=409, detail="This game has already been scored."
-        )
+        # A concurrent participant already created this game's score — the same
+        # conflict the update path guards against, just on first write. Hand
+        # back the committed score so the client surfaces it for review instead
+        # of overwriting it.
+        raise _score_conflict(_score_view(game.score))
 
     game.score = MatchGameScore(
         side_1_points=payload.side_1_points,
@@ -1682,13 +1725,13 @@ async def create_game_score(
     except IntegrityError as exc:
         # Two participants on the same game-entry page submitting at once both
         # lazily insert the same game row (uq_match_games_match_id_game_number)
-        # and/or its score (uq_match_game_scores_match_game_id). The
-        # pre-checks above pass for both before either commits, so the loser of
-        # the race trips a unique constraint. Surface it as the same clean 409
-        # the sequential already-scored path returns, not a 500.
+        # and/or its score (uq_match_game_scores_match_game_id). The pre-checks
+        # above pass for both before either commits, so the loser of the race
+        # trips a unique constraint. The committed row belongs to the winner's
+        # transaction, so reload to read it for the conflict body.
         await db.rollback()
-        raise HTTPException(
-            status_code=409, detail="This game has already been scored."
+        raise _score_conflict(
+            await _committed_score(db, match_id, game_number)
         ) from exc
 
     reloaded = await _load_match(db, match.id)
@@ -1700,10 +1743,11 @@ async def create_game_score(
 @router.put(
     "/matches/{match_id}/games/{game_number}/scores",
     response_model=MatchDetails,
+    responses={409: {"model": MatchGameScoreConflict}},
 )
 async def update_game_score(
     match_id: uuid.UUID,
-    payload: MatchGameScoreWrite,
+    payload: MatchGameScoreUpdate,
     game_number: Annotated[int, Path(ge=1, le=7)],
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_session),
@@ -1715,8 +1759,32 @@ async def update_game_score(
     if game is None or game.score is None:
         raise HTTPException(status_code=404, detail="Score not found.")
 
-    game.score.side_1_points = payload.side_1_points
-    game.score.side_2_points = payload.side_2_points
+    # Optimistic concurrency: replace the points only while the committed row is
+    # still at the version the caller last read. The ``WHERE version =`` clause
+    # is the whole guard — if a concurrent participant has saved this game since,
+    # zero rows match and we reject the write rather than overwrite their result
+    # (the data-loss the client used to walk into by re-issuing as a blind PUT).
+    result = await db.execute(
+        update(MatchGameScore)
+        .where(
+            MatchGameScore.id == game.score.id,
+            MatchGameScore.version == payload.expected_version,
+        )
+        .values(
+            side_1_points=payload.side_1_points,
+            side_2_points=payload.side_2_points,
+            version=MatchGameScore.version + 1,
+        )
+    )
+    if cast(CursorResult[Any], result).rowcount == 0:
+        # Lost the race: a concurrent participant saved this game since the
+        # caller last read it, so the conditional UPDATE matched no row. The
+        # update changed nothing, so there's nothing to undo — we just refresh
+        # the score to the value as it actually stands now and 409 (the request
+        # teardown rolls the no-op transaction back). The client shows "your
+        # stale entry vs. what's committed" rather than overwriting their save.
+        await db.refresh(game.score)
+        raise _score_conflict(_score_view(game.score))
 
     await db.commit()
 

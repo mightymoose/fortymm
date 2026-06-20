@@ -334,6 +334,7 @@ const RBAC_PATHS = [
 
 type MatchCreateBody = components['schemas']['MatchCreate']
 type MatchScoreBody = components['schemas']['MatchGameScoreWrite']
+type MatchScoreUpdateBody = components['schemas']['MatchGameScoreUpdate']
 type MatchResultsBody = components['schemas']['MatchResultsWrite']
 
 function detail(message: string, status = 422) {
@@ -712,12 +713,32 @@ export const handlers = [
         }
         seed.games.push(game)
       } else if (game.score !== null) {
-        return detail('This game has already been scored.', 409)
+        // A concurrent create — same structured conflict body the update path
+        // returns, carrying the committed score for the client to surface.
+        return HttpResponse.json(
+          {
+            detail: {
+              message:
+                'This game was saved by someone else while you were editing. ' +
+                'Review the saved score before saving again.',
+              committed_score: {
+                id: game.score.id,
+                side_1_points: game.score.side_1_points,
+                side_2_points: game.score.side_2_points,
+                winner_side_number:
+                  game.score.side_1_points > game.score.side_2_points ? 1 : 2,
+                version: game.score.version ?? 1,
+              },
+            },
+          },
+          { status: 409 },
+        )
       }
       game.score = {
         id: `s-${seed.id}-${gameNumber}-${Date.now().toString(36)}`,
         side_1_points: body.side_1_points,
         side_2_points: body.side_2_points,
+        version: 1,
       }
       return HttpResponse.json(projectMatchDetails(seed), { status: 201 })
     },
@@ -736,13 +757,38 @@ export const handlers = [
       if (!game || game.score === null) {
         return detail('Score not found.', 404)
       }
-      const body = (await readJson(request)) as MatchScoreBody
+      const body = (await readJson(request)) as MatchScoreUpdateBody
       const message = validateScore(body.side_1_points, body.side_2_points)
       if (message) return detail(message, 422)
+      // Optimistic concurrency: reject a stale write rather than overwrite a
+      // score a concurrent participant has since saved. Mirrors the server's
+      // 409-with-committed-score body.
+      const currentVersion = game.score.version ?? 1
+      if (body.expected_version !== currentVersion) {
+        return HttpResponse.json(
+          {
+            detail: {
+              message:
+                'This game was saved by someone else while you were editing. ' +
+                'Review the saved score before saving again.',
+              committed_score: {
+                id: game.score.id,
+                side_1_points: game.score.side_1_points,
+                side_2_points: game.score.side_2_points,
+                winner_side_number:
+                  game.score.side_1_points > game.score.side_2_points ? 1 : 2,
+                version: currentVersion,
+              },
+            },
+          },
+          { status: 409 },
+        )
+      }
       game.score = {
         id: game.score.id,
         side_1_points: body.side_1_points,
         side_2_points: body.side_2_points,
+        version: currentVersion + 1,
       }
       return HttpResponse.json(projectMatchDetails(seed))
     },

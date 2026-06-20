@@ -272,6 +272,15 @@ def upgrade() -> None:
         ),
         sa.Column("side_1_points", sa.SmallInteger(), nullable=False),
         sa.Column("side_2_points", sa.SmallInteger(), nullable=False),
+        # Optimistic-concurrency token; the conditional score PUT updates
+        # ``WHERE version = <client's expected>`` so a stale concurrent writer
+        # 409s instead of clobbering. New rows start at 1.
+        sa.Column(
+            "version",
+            sa.Integer(),
+            nullable=False,
+            server_default=sa.text("1"),
+        ),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),

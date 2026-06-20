@@ -6,6 +6,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Integer,
     SmallInteger,
     UniqueConstraint,
     func,
@@ -47,6 +48,16 @@ class MatchGameScore(Base):
     )
     side_1_points: Mapped[int] = mapped_column(SmallInteger, nullable=False)
     side_2_points: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    # Monotonic optimistic-concurrency token. Every committed write bumps it by
+    # one; the conditional PUT updates ``WHERE version = <client's expected>`` so
+    # a writer working from a stale view (a concurrent participant already saved
+    # this game) is rejected with a 409 instead of silently clobbering the
+    # committed score. A freshly created score starts at 1, so the create body
+    # needs no version and ``expected_version = 0`` cleanly means "I believe no
+    # score exists yet".
+    version: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("1")
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

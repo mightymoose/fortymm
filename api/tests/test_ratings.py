@@ -376,7 +376,7 @@ async def test_finalized_match_rejects_score_edits_and_keeps_rating_history(
         # Every score-write path is locked once the match is finalized.
         put = await api_client.put(
             f"/v1/matches/{body['id']}/games/1/scores",
-            json={"side_1_points": 11, "side_2_points": 5},
+            json={"side_1_points": 11, "side_2_points": 5, "expected_version": 1},
         )
         assert put.status_code == 409
         re_finalize = await api_client.post(

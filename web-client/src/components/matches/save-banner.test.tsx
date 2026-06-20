@@ -38,6 +38,7 @@ const inProgressMatch = matchDetails({
         side_1_points: 11,
         side_2_points: 8,
         winner_side_number: 1,
+        version: 1,
       },
     },
     {
@@ -48,6 +49,7 @@ const inProgressMatch = matchDetails({
         side_1_points: 9,
         side_2_points: 11,
         winner_side_number: 2,
+        version: 1,
       },
     },
   ],

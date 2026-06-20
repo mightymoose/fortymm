@@ -67,6 +67,7 @@ function score(
     side_1_points: myPoints,
     side_2_points: oppPoints,
     winner_side_number: myPoints > oppPoints ? 1 : 2,
+    version: 1,
   }
 }
 
@@ -238,39 +239,38 @@ describe('ScoreEntry — create', () => {
     )
   })
 
-  it('treats a 409 on the create POST as a successful re-save (#538)', async () => {
-    // A double-tapped Save fires the create POST twice; the second hits an
-    // already-saved game and 409s. The mutation must fall back to an update
-    // (PUT) so the game lands as saved and we advance — rather than the 409
-    // surfacing a false "didn't save" cell.
+  it('surfaces a conflict — and fires NO blind PUT — when the create POST 409s (#538 data-loss fix)', async () => {
+    // Was #538: a 409 on the create POST used to be swallowed and re-issued as
+    // a PUT, which silently overwrote the score a concurrent participant had
+    // already saved (last-write-wins data loss). Now the single conditional
+    // write never auto-promotes: the 409 surfaces as a conflict to review, and
+    // crucially no PUT fires behind the user's back.
     const user = userEvent.setup()
     let posts = 0
-    let putBody: unknown = null
-    const advanced = inProgressMatch({
-      sides: participantSides({ meWins: 2, oppWins: 1 }),
-      games: [
-        { id: 'g-1', game_number: 1, score: score('s-1', 11, 8) },
-        { id: 'g-2', game_number: 2, score: score('s-2', 9, 11) },
-        { id: 'g-3', game_number: 3, score: score('s-3', 11, 4) },
-      ],
-      current_game: { game_number: 4 },
-    })
+    let puts = 0
     server.use(
       http.get('*/v1/matches/m-1', () => HttpResponse.json(inProgressMatch())),
       http.post('*/v1/matches/m-1/games/3/scores/new', () => {
         posts += 1
         return HttpResponse.json(
-          { detail: 'Game already has a score.' },
+          {
+            detail: {
+              message:
+                'This game was saved by someone else while you were editing.',
+              committed_score: null,
+            },
+          },
           { status: 409 },
         )
       }),
-      http.put('*/v1/matches/m-1/games/3/scores', async ({ request }) => {
-        putBody = await request.json()
-        return HttpResponse.json(advanced)
+      http.put('*/v1/matches/m-1/games/3/scores', () => {
+        puts += 1
+        return HttpResponse.json(inProgressMatch())
       }),
     )
 
-    renderScoreEntry({ kind: 'create', matchId: 'm-1', gameNumber: 3 })
+    // Real next-game screen (not a stub) so the conflict banner is observable.
+    renderScoringApp('/matches/m-1/games/3/scores/new')
 
     await screen.findByRole('heading', { name: /enter game 3 score/i })
     await user.type(
@@ -280,11 +280,21 @@ describe('ScoreEntry — create', () => {
     await user.type(screen.getByRole('textbox', { name: 'nguyen.t score' }), '4')
     await user.click(screen.getByRole('button', { name: /save game & next/i }))
 
-    await waitFor(() =>
-      expect(screen.getByText('scoring-new m-1 4')).toBeInTheDocument(),
-    )
+    // Fire-and-forget still advances us to game 4.
+    await screen.findByRole('heading', { name: /enter game 4 score/i })
+
+    // The rejected save shows as a conflict to review — never a blind retry.
+    await screen.findByText(/game 3 was saved by someone else/i)
+    expect(
+      screen.getByRole('button', { name: /review game 3/i }),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: /^retry$/i }),
+    ).not.toBeInTheDocument()
+
+    // Exactly one write attempt: the create. No PUT walked around the 409.
     expect(posts).toBe(1)
-    expect(putBody).toEqual({ side_1_points: 11, side_2_points: 4 })
+    expect(puts).toBe(0)
   })
 
   it('flips the submit button to "Post result" when this score would decide the match', async () => {
@@ -703,7 +713,13 @@ describe('ScoreEntry — edit', () => {
     await waitFor(() =>
       expect(screen.getByText('scoring-new m-1 3')).toBeInTheDocument(),
     )
-    expect(captured).toEqual({ side_1_points: 12, side_2_points: 10 })
+    // The conditional write echoes the version the page read (the stored
+    // score is version 1), so the server can reject a stale overwrite.
+    expect(captured).toEqual({
+      side_1_points: 12,
+      side_2_points: 10,
+      expected_version: 1,
+    })
   })
 
   it('clears the saved score and lands back on the same game in create mode', async () => {
@@ -1683,6 +1699,196 @@ describe('ScoreEntry — unsaved-input guard', () => {
     await user.click(screen.getByRole('button', { name: /save game & next/i }))
     await screen.findByRole('heading', { name: /enter game 4 score/i })
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+  })
+})
+
+describe('ScoreEntry — conflicts', () => {
+  it('routes a conflicting edit to review, shows committed-vs-mine, and keeps the saved score', async () => {
+    const user = userEvent.setup()
+    let puts = 0
+    // The server's committed truth for game 1 is the opponent's 11–5 — what a
+    // refetch sees. Our edit will lose the version race and 409.
+    const committed = () =>
+      inProgressMatch({
+        games: [
+          { id: 'g-1', game_number: 1, score: score('s-1', 11, 5) },
+          { id: 'g-2', game_number: 2, score: score('s-2', 9, 11) },
+        ],
+      })
+    server.use(
+      http.get('*/v1/matches/m-1', () => HttpResponse.json(committed())),
+      http.put('*/v1/matches/m-1/games/1/scores', () => {
+        puts += 1
+        return HttpResponse.json(
+          {
+            detail: {
+              message:
+                'This game was saved by someone else while you were editing.',
+              committed_score: {
+                id: 's-1',
+                side_1_points: 11,
+                side_2_points: 5,
+                winner_side_number: 1,
+                version: 3,
+              },
+            },
+          },
+          { status: 409 },
+        )
+      }),
+    )
+
+    renderScoringApp('/matches/m-1/games/1/scores/edit')
+
+    const meInput = await screen.findByRole('textbox', {
+      name: 'rita.kovac score',
+    })
+    await waitFor(() => expect(meInput).toHaveValue('11'))
+    await user.clear(meInput)
+    await user.type(meInput, '12')
+    const oppInput = screen.getByRole('textbox', { name: 'nguyen.t score' })
+    await user.clear(oppInput)
+    await user.type(oppInput, '10')
+    await user.click(screen.getByRole('button', { name: /save changes/i }))
+
+    // Fire-and-forget advances us; the rejected save shows in the banner.
+    await screen.findByRole('heading', { name: /enter game 3 score/i })
+
+    // The game 1 scoreline cell must show the COMMITTED score (11–5), not our
+    // rejected 12–10 entry — presenting the losing scratch there would imply
+    // our value won, the exact confusion the conflict flow prevents.
+    expect(
+      await screen.findByRole('link', {
+        name: /game 1 was saved by someone else as 11 to 5\. tap to review/i,
+      }),
+    ).toBeInTheDocument()
+
+    await user.click(
+      await screen.findByRole('button', { name: /review game 1/i }),
+    )
+
+    // Back on game 1's edit screen, the in-page conflict notice shows the
+    // committed score and our rejected entry, and makes us choose.
+    await screen.findByRole('heading', { name: /edit game 1 score/i })
+    const notice = (
+      await screen.findByText(/this game was saved by someone else/i)
+    ).closest('[role="alert"]') as HTMLElement
+    expect(notice).toHaveTextContent(/rita\.kovac 11.5 nguyen\.t/)
+    expect(notice).toHaveTextContent(/your entry was 12.10/i)
+
+    // "Keep saved score" discards our entry; the notice clears and the inputs
+    // fall back to the committed score.
+    await user.click(
+      screen.getByRole('button', { name: /keep saved score/i }),
+    )
+    await waitFor(() =>
+      expect(
+        screen.queryByText(/this game was saved by someone else/i),
+      ).not.toBeInTheDocument(),
+    )
+    expect(
+      screen.getByRole('textbox', { name: 'rita.kovac score' }),
+    ).toHaveValue('11')
+    expect(
+      screen.getByRole('textbox', { name: 'nguyen.t score' }),
+    ).toHaveValue('5')
+
+    // Keeping never writes — only the one rejected PUT ever fired.
+    expect(puts).toBe(1)
+  })
+
+  it('overwrites with my score when I choose to replace, using the version from the conflict body', async () => {
+    const user = userEvent.setup()
+    const putBodies: Array<Record<string, number>> = []
+    // The committed row sits at version 1 until our stale write loses the race;
+    // the opponent's winning write has bumped it to 2. A refetch reflects that.
+    let committedVersion = 1
+    server.use(
+      http.get('*/v1/matches/m-1', () =>
+        HttpResponse.json(
+          inProgressMatch({
+            games: [
+              {
+                id: 'g-1',
+                game_number: 1,
+                score: {
+                  id: 's-1',
+                  side_1_points: 11,
+                  side_2_points: 5,
+                  winner_side_number: 1,
+                  version: committedVersion,
+                },
+              },
+              { id: 'g-2', game_number: 2, score: score('s-2', 9, 11) },
+            ],
+          }),
+        ),
+      ),
+      http.put('*/v1/matches/m-1/games/1/scores', async ({ request }) => {
+        const body = (await request.json()) as Record<string, number>
+        putBodies.push(body)
+        // First write claims version 1 and loses; the committed row is now at
+        // version 2. The 409 carries that committed score so the client can
+        // re-decide and re-fire with the fresh version.
+        if (putBodies.length === 1) {
+          committedVersion = 2
+          return HttpResponse.json(
+            {
+              detail: {
+                message: 'This game was saved by someone else.',
+                committed_score: {
+                  id: 's-1',
+                  side_1_points: 11,
+                  side_2_points: 5,
+                  winner_side_number: 1,
+                  version: 2,
+                },
+              },
+            },
+            { status: 409 },
+          )
+        }
+        return HttpResponse.json(inProgressMatch())
+      }),
+    )
+
+    renderScoringApp('/matches/m-1/games/1/scores/edit')
+
+    const meInput = await screen.findByRole('textbox', {
+      name: 'rita.kovac score',
+    })
+    await waitFor(() => expect(meInput).toHaveValue('11'))
+    await user.clear(meInput)
+    await user.type(meInput, '12')
+    const oppInput = screen.getByRole('textbox', { name: 'nguyen.t score' })
+    await user.clear(oppInput)
+    await user.type(oppInput, '10')
+    await user.click(screen.getByRole('button', { name: /save changes/i }))
+
+    await screen.findByRole('heading', { name: /enter game 3 score/i })
+    await user.click(
+      await screen.findByRole('button', { name: /review game 1/i }),
+    )
+    await screen.findByRole('heading', { name: /edit game 1 score/i })
+    await user.click(
+      screen.getByRole('button', { name: /replace with my score/i }),
+    )
+
+    // The replace re-fires the write — a deliberate overwrite against the
+    // version we just showed the user. The first attempt claimed the stale
+    // version 1; the replace must claim the refreshed version 2 (from the 409
+    // body), or it would just 409 again.
+    await waitFor(() => expect(putBodies).toHaveLength(2))
+    expect(putBodies[0]).toMatchObject({
+      side_1_points: 12,
+      side_2_points: 10,
+      expected_version: 1,
+    })
+    expect(putBodies[1]).toMatchObject({
+      side_1_points: 12,
+      side_2_points: 10,
+      expected_version: 2,
+    })
   })
 })
 

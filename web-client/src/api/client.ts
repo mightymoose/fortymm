@@ -117,6 +117,12 @@ export function extractDetail(value: unknown): string | null {
   if (!value || typeof value !== 'object') return null
   const detail = (value as { detail?: unknown }).detail
   if (typeof detail === 'string') return detail
+  // Structured error bodies (e.g. the score-write 409 conflict, which also
+  // carries the committed score) put the human message under `detail.message`.
+  if (detail && typeof detail === 'object' && !Array.isArray(detail)) {
+    const message = (detail as { message?: unknown }).message
+    if (typeof message === 'string') return message
+  }
   if (Array.isArray(detail) && detail.length > 0) {
     const first = detail[0]
     if (first && typeof first === 'object' && 'msg' in first) {
@@ -130,17 +136,47 @@ export function extractDetail(value: unknown): string | null {
  * Thrown by `unwrap` for non-2xx responses. Carries the HTTP status so callers
  * can branch on it (e.g. surface a 409 inline on a form field instead of as a
  * toast). For network/decode failures with no response, status is 0.
+ *
+ * `body` is the raw parsed error response body (e.g. `{ detail: ... }`), kept so
+ * callers that need a *structured* detail — like the score-write 409 conflict,
+ * which carries the committed score — can read it without re-fetching. `detail`
+ * remains the human message extracted from it.
  */
 export class ApiError extends Error {
   readonly status: number
   readonly detail: string | null
+  readonly body: unknown
 
-  constructor(status: number, detail: string | null, label: string) {
+  constructor(status: number, detail: string | null, label: string, body?: unknown) {
     super(detail ?? `Failed to ${label}`)
     this.name = 'ApiError'
     this.status = status
     this.detail = detail
+    this.body = body
   }
+}
+
+/**
+ * The structured conflict detail when `error` is a score-write 409/412 whose
+ * body carries `{ detail: { message, committed_score } }` — i.e. a genuine
+ * concurrency conflict (a concurrent participant saved this game), as opposed to
+ * a plain-string 409 (e.g. a locked match). Returns `null` for anything else, so
+ * callers can tell the two apart instead of treating every 409 as a conflict.
+ */
+export function conflictDetail(
+  error: ApiError,
+): { message?: string; committed_score: unknown } | null {
+  if (error.status !== 409 && error.status !== 412) return null
+  const detail = (error.body as { detail?: unknown } | null | undefined)?.detail
+  if (
+    detail &&
+    typeof detail === 'object' &&
+    !Array.isArray(detail) &&
+    'committed_score' in detail
+  ) {
+    return detail as { message?: string; committed_score: unknown }
+  }
+  return null
 }
 
 /**
@@ -155,7 +191,7 @@ export function unwrap<T>(
 ): T {
   const { data, error, response } = result
   if (error) {
-    throw new ApiError(response?.status ?? 0, extractDetail(error), label)
+    throw new ApiError(response?.status ?? 0, extractDetail(error), label, error)
   }
   if (data === undefined && !options.allowEmpty) {
     throw new ApiError(response?.status ?? 0, null, label)

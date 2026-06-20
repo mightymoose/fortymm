@@ -5,7 +5,7 @@ import {
   useQuery,
   useQueryClient,
 } from '@tanstack/react-query'
-import { ApiError, api, resolveBaseUrl, unwrap } from './client'
+import { ApiError, api, conflictDetail, resolveBaseUrl, unwrap } from './client'
 import { DASHBOARD_QUERY_KEY } from './dashboard'
 import {
   matchDetailsQueryKey,
@@ -25,6 +25,8 @@ export type ScoreboardStatus = components['schemas']['Status']
 export type MatchListResponse = components['schemas']['MatchListResponse']
 export type MatchListRow = components['schemas']['MatchListRow']
 export type MatchGameScoreWrite = components['schemas']['MatchGameScoreWrite']
+export type MatchGameScoreUpdate =
+  components['schemas']['MatchGameScoreUpdate']
 export type MatchResultsWrite = components['schemas']['MatchResultsWrite']
 export type MatchResultsGameWrite = components['schemas']['MatchResultsGameWrite']
 export type MatchStatus = components['schemas']['MatchStatus']
@@ -242,6 +244,22 @@ export function useMatch(matchId: string) {
   return useQuery(matchQueryOptions(matchId))
 }
 
+/** Return a copy of `match` with game `gameNumber`'s score replaced — used to
+ * splice the committed score from a conflict 409 into the cache so the conflict
+ * notice and a follow-up "Replace" read the up-to-date version immediately. */
+function withGameScore(
+  match: MatchDetails,
+  gameNumber: number,
+  score: MatchDetails['games'][number]['score'],
+): MatchDetails {
+  return {
+    ...match,
+    games: match.games.map((g) =>
+      g.game_number === gameNumber ? { ...g, score } : g,
+    ),
+  }
+}
+
 /** Cache work shared by both score mutations: prime the detail cache from the
  * mutation response and invalidate the list / dashboard so they re-read the
  * derived status, scoreboard, and next-up state. */
@@ -300,36 +318,36 @@ export function scoreSaveMutationOptions(
       const cached = queryClient.getQueryData<MatchDetails>(
         matchQueryKey(matchId),
       )
-      const hasScore = Boolean(
-        cached?.games.find((g) => g.game_number === gameNumber)?.score,
-      )
+      const existing = cached?.games.find(
+        (g) => g.game_number === gameNumber,
+      )?.score
       const path = { match_id: matchId, game_number: gameNumber }
-      const putScore = async () =>
-        unwrap(
+      // Exactly one conditional write per save — no swallow-and-retry. Editing
+      // an existing score asserts the version we last read: if a concurrent
+      // participant saved this game since, the server 409s instead of letting
+      // us clobber their result. We deliberately do NOT catch that 409 and
+      // re-issue the other verb — that promotion was the last-write-wins
+      // data-loss path. The rejection surfaces as a conflict the user must
+      // resolve against fresh state (see `onError` re-sync + the conflict UI).
+      if (existing) {
+        return unwrap(
           'update score',
           await api.PUT('/v1/matches/{match_id}/games/{game_number}/scores', {
             params: { path },
-            body: input,
+            body: { ...input, expected_version: existing.version },
           }),
         )
-      if (hasScore) return putScore()
-      try {
-        return unwrap(
-          'submit score',
-          await api.POST(
-            '/v1/matches/{match_id}/games/{game_number}/scores/new',
-            { params: { path }, body: input },
-          ),
-        )
-      } catch (err) {
-        // A concurrent save (e.g. a double-tapped Save button, #538) already
-        // created this game's score, so the create 409s before our cache
-        // reflected it. The per-game write is idempotent scratchpad state, so
-        // re-issue it as an update — the game lands as saved instead of the
-        // 409 surfacing a false "Game N didn't save" cell.
-        if (err instanceof ApiError && err.status === 409) return putScore()
-        throw err
       }
+      // No score yet → create. The unique constraint asserts "no prior score",
+      // so a concurrent create loses the race with a clean 409 (again surfaced,
+      // never retried).
+      return unwrap(
+        'submit score',
+        await api.POST(
+          '/v1/matches/{match_id}/games/{game_number}/scores/new',
+          { params: { path }, body: input },
+        ),
+      )
     },
     onSuccess: (data: MatchDetails) =>
       applyScoreMutationCache(queryClient, matchId, data),
@@ -344,7 +362,25 @@ export function scoreSaveMutationOptions(
     // deliberately *not* touching the mutation cache, so this game's
     // failed-save scratch state survives to drive the failure banner /
     // "Not saved" cell + retry UI.
-    onError: () => {
+    onError: (error: unknown) => {
+      // On a conflict, the 409 body carries the committed score *and its new
+      // version*. Patch it straight into the cache so the conflict notice shows
+      // the right value and a subsequent "Replace with my score" PUTs the fresh
+      // `expected_version` immediately — without racing the invalidate refetch
+      // below (which only settles a network round-trip later).
+      if (error instanceof ApiError) {
+        const committed = conflictDetail(error)?.committed_score as
+          | MatchDetails['games'][number]['score']
+          | null
+          | undefined
+        if (committed) {
+          queryClient.setQueryData<MatchDetails>(
+            matchQueryKey(matchId),
+            (prev) =>
+              prev ? withGameScore(prev, gameNumber, committed) : prev,
+          )
+        }
+      }
       queryClient.invalidateQueries({ queryKey: matchQueryKey(matchId) })
       queryClient.invalidateQueries({
         queryKey: matchDetailsQueryKey(matchId),

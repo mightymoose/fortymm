@@ -6,6 +6,7 @@ import { ApiError } from '@/api/client'
 import {
   fireScoreSave,
   matchDetailRoute,
+  scoringEditRoute,
   useFinalizeMatch,
   useMatch,
 } from '@/api/matches'
@@ -44,12 +45,26 @@ export interface SaveBannerProps {
  * Built on the design-system Alert (it's the app talking back, not a content
  * panel), loss-tinted.
  */
-export function SaveBanner({ matchId, activeGameNumber }: SaveBannerProps) {
+export function SaveBanner(props: SaveBannerProps) {
+  // Two distinct banners stacked: concurrency conflicts (which must NOT be
+  // blindly retried — that's the data-loss path) get their own review-against-
+  // committed surface; ordinary save failures keep the retry/finalize banner.
+  return (
+    <>
+      <ConflictReviewBanner {...props} />
+      <FailedSaveBanner {...props} />
+    </>
+  )
+}
+
+function FailedSaveBanner({ matchId, activeGameNumber }: SaveBannerProps) {
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const { data } = useMatch(matchId)
   const finalizeMutation = useFinalizeMatch(matchId)
-  const allFailed = useFailedGameSaves(matchId)
+  // Conflicts are handled by ConflictReviewBanner — exclude them here so the
+  // retry/finalize path never re-fires a stale write over the committed score.
+  const allFailed = useFailedGameSaves(matchId).filter((entry) => !entry.conflict)
   const otherFailed = allFailed.filter(
     (entry) => entry.gameNumber !== activeGameNumber,
   )
@@ -210,6 +225,82 @@ export function SaveBanner({ matchId, activeGameNumber }: SaveBannerProps) {
             {posting ? 'Posting…' : retryLabel}
           </Button>
         )}
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          aria-label="Dismiss"
+          className="text-[color:var(--fg-muted)]"
+          onClick={() => setDismissedSignature(signature)}
+        >
+          <XIcon />
+        </Button>
+      </AlertAction>
+    </Alert>
+  )
+}
+
+/**
+ * Conflict surface for games saved out from under the user — a concurrent
+ * participant committed a different score, so the conditional write 409'd.
+ * Unlike a plain failed save, this offers NO retry: re-firing would push the
+ * stale entry over the committed score (the exact last-write-wins data loss the
+ * version guard prevents). It routes the user to the game's edit screen, where
+ * the conflict notice shows committed-vs-theirs and makes them re-decide.
+ *
+ * The active game is omitted — its own edit screen already renders the in-page
+ * conflict notice (mirrors how FailedSaveBanner omits the active game).
+ */
+function ConflictReviewBanner({ matchId, activeGameNumber }: SaveBannerProps) {
+  const navigate = useNavigate()
+  const conflicts = useFailedGameSaves(matchId).filter(
+    (entry) => entry.conflict && entry.gameNumber !== activeGameNumber,
+  )
+  const [dismissedSignature, setDismissedSignature] = useState<string | null>(
+    null,
+  )
+
+  if (conflicts.length === 0) return null
+  const signature = conflicts
+    .map((entry) => `${entry.gameNumber}:${entry.submittedAt}`)
+    .join(',')
+  if (signature === dismissedSignature) return null
+
+  const single = conflicts.length === 1
+  const title = single
+    ? `Game ${conflicts[0].gameNumber} was saved by someone else.`
+    : `${conflicts.length} games were saved by someone else.`
+
+  return (
+    <Alert
+      variant="destructive"
+      className="save-banner mb-4 border-[color:var(--loss)]/45 bg-[color:var(--loss)]/10 has-data-[slot=alert-action]:pr-12"
+    >
+      <TriangleAlert aria-hidden />
+      <AlertTitle>{title}</AlertTitle>
+      <AlertDescription className="text-[color:var(--fg-3)]">
+        <span>
+          Review {single ? 'it' : 'them'} against the saved score before saving
+          again — your entry wasn't applied.
+        </span>
+        <span className="mt-3 flex flex-wrap gap-2">
+          {conflicts.map((entry) => (
+            <Button
+              key={entry.gameNumber}
+              type="button"
+              variant="outline"
+              size="sm"
+              className="border-[color:var(--loss)]/50 text-[color:var(--loss)] hover:bg-[color:var(--loss)]/10 hover:text-[color:var(--loss)]"
+              onClick={() =>
+                navigate(scoringEditRoute(matchId, entry.gameNumber))
+              }
+            >
+              Review game {entry.gameNumber}
+            </Button>
+          ))}
+        </span>
+      </AlertDescription>
+      <AlertAction className="top-3 -translate-y-0">
         <Button
           type="button"
           variant="ghost"
