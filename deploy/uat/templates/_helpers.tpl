@@ -86,6 +86,25 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
+    # Browser telemetry (Grafana Faro) -> Alloy faro.receiver in the
+    # `monitoring` namespace (deploy/observability). resolver + variable
+    # upstream so this nginx starts even before the observability release
+    # exists (serves 502 on /faro until it does) and picks up a new Alloy
+    # ClusterIP without an nginx restart. 10.43.0.10 is the k3d CoreDNS
+    # (kube-dns) ClusterIP. Telemetry payloads are small; cap the body size.
+    location /faro/ {
+        resolver 10.43.0.10 valid=10s;
+        set $faro_upstream alloy.monitoring.svc.cluster.local:12347;
+        client_max_body_size 5m;
+        rewrite ^/faro/(.*)$ /$1 break;
+        proxy_pass http://$faro_upstream;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
     # Direct API paths — FastAPI mounts routes at /v1/*; /openapi.json,
     # /docs, /redoc are FastAPI's defaults.
     location ~ ^/(v1|openapi\.json|docs|redoc)(/|$) {

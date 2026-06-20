@@ -1,0 +1,115 @@
+{{- if .Values.tailscaleProxies.enabled }}
+{{- $top := . }}
+{{- $p := .Values.tailscaleProxies }}
+{{/*
+One tailscale node per service (Grafana / Prometheus / Loki). Each registers a
+distinct MagicDNS hostname and `tailscale serve`s HTTPS:443 -> its backend
+Service. State persists in a per-node Secret so identity survives restarts.
+Userspace networking — no NET_ADMIN / /dev/net/tun needed on k3d.
+
+Prereqs (admin console): MagicDNS + HTTPS certs enabled, and a reusable
+non-ephemeral auth key in .env as TS_AUTHKEY (redeploy-uat.sh syncs it into the
+`{{ $p.authKeySecret }}` Secret in this namespace).
+*/}}
+{{- range $svc := $p.services }}
+{{- $name := printf "ts-%s" $svc.hostname }}
+{{- $stateSecret := printf "tailscale-state-%s" $svc.hostname }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "observability.labels" $top | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "observability.labels" $top | nindent 4 }}
+rules:
+  # Create the state secret on first run...
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create"]
+  # ...then read/update only that one secret on subsequent runs.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["{{ $stateSecret }}"]
+    verbs: ["get", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "observability.labels" $top | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+roleRef:
+  kind: Role
+  name: {{ $name }}
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ printf "ts-serve-%s" $svc.hostname }}
+  labels:
+    {{- include "observability.labels" $top | nindent 4 }}
+data:
+  serve.json: |
+    {{- include "observability.tailscaleServe" $svc.backend | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "observability.labels" $top | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{ $name }}
+  # Only one node identity may be active at a time; don't run two side-by-side.
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: {{ $name }}
+      annotations:
+        checksum/serve: {{ include "observability.tailscaleServe" $svc.backend | sha256sum }}
+    spec:
+      serviceAccountName: {{ $name }}
+      containers:
+        - name: tailscale
+          image: {{ $p.image }}
+          imagePullPolicy: {{ $p.pullPolicy }}
+          env:
+            - name: TS_KUBE_SECRET
+              value: {{ $stateSecret | quote }}
+            - name: TS_USERSPACE
+              value: "true"
+            - name: TS_HOSTNAME
+              value: {{ $svc.hostname | quote }}
+            - name: TS_SERVE_CONFIG
+              value: /etc/tailscale/serve.json
+            - name: TS_AUTHKEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $p.authKeySecret }}
+                  key: {{ $p.authKeySecretKey }}
+          volumeMounts:
+            - name: serve
+              mountPath: /etc/tailscale
+              readOnly: true
+      volumes:
+        - name: serve
+          configMap:
+            name: {{ printf "ts-serve-%s" $svc.hostname }}
+{{- end }}
+{{- end }}
