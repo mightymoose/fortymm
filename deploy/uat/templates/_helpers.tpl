@@ -33,6 +33,28 @@ Shared env for api / worker / migrate: the non-secret ConfigMap plus the
 {{- end -}}
 
 {{/*
+tailscale serve config — terminates HTTPS on the tailnet node and proxies to
+the in-cluster routing nginx Service. ${TS_CERT_DOMAIN} is substituted by the
+container with the node's MagicDNS name at startup. Defined here so the
+ConfigMap can render it and the Deployment can checksum it (to roll the pod
+when the serve config changes).
+*/}}
+{{- define "fortymm-uat.tailscaleServe" -}}
+{
+  "TCP": {
+    "443": { "HTTPS": true }
+  },
+  "Web": {
+    "${TS_CERT_DOMAIN}:443": {
+      "Handlers": {
+        "/": { "Proxy": "http://nginx:80" }
+      }
+    }
+  }
+}
+{{- end -}}
+
+{{/*
 Routing nginx config — mirrors nginx/uat.conf (the docker-compose router).
 The `api` and `web-client` upstreams resolve to the same-named k8s Services.
 Defined here so the ConfigMap can render it and the Deployment can checksum it

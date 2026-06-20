@@ -1,0 +1,112 @@
+{{- if .Values.tailscale.enabled }}
+{{/*
+Tailscale proxy: puts the routing nginx onto the tailnet as a private MagicDNS
+node (https://{{ .Values.tailscale.hostname }}.<tailnet>.ts.net) with automatic
+HTTPS via `tailscale serve`. Purely additive — nginx, the NodePort, and the
+public Caddy path are untouched.
+
+Prerequisites in the Tailscale admin console: HTTPS certificates + MagicDNS
+enabled, and a reusable (non-ephemeral, e.g. tag:uat) auth key in .env as
+TS_AUTHKEY (it lands in the {{ .Values.secrets.env }} secret via --from-env-file).
+*/}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: tailscale
+  labels:
+    {{- include "fortymm-uat.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: tailscale
+  labels:
+    {{- include "fortymm-uat.labels" . | nindent 4 }}
+rules:
+  # Create the state secret on first run...
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create"]
+  # ...then read/update only that one secret on subsequent runs, so the node
+  # identity persists across pod restarts (no re-auth, same machine).
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["{{ .Values.tailscale.stateSecret }}"]
+    verbs: ["get", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: tailscale
+  labels:
+    {{- include "fortymm-uat.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: tailscale
+roleRef:
+  kind: Role
+  name: tailscale
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tailscale-serve
+  labels:
+    {{- include "fortymm-uat.labels" . | nindent 4 }}
+data:
+  serve.json: |
+    {{- include "fortymm-uat.tailscaleServe" . | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tailscale
+  labels:
+    {{- include "fortymm-uat.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "fortymm-uat.selector" (dict "component" "tailscale") | nindent 6 }}
+  # The state lives in a Secret (RWO-free), but only one node identity may be
+  # active at a time, so don't run two pods side-by-side during a rollout.
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        {{- include "fortymm-uat.selector" (dict "component" "tailscale") | nindent 8 }}
+      annotations:
+        # Roll the pod when the serve config changes.
+        checksum/serve: {{ include "fortymm-uat.tailscaleServe" . | sha256sum }}
+    spec:
+      serviceAccountName: tailscale
+      containers:
+        - name: tailscale
+          image: {{ .Values.tailscale.image }}
+          imagePullPolicy: {{ .Values.pullPolicy }}
+          env:
+            - name: TS_KUBE_SECRET
+              value: {{ .Values.tailscale.stateSecret | quote }}
+            # Userspace networking — no NET_ADMIN / /dev/net/tun needed in k3d.
+            - name: TS_USERSPACE
+              value: "true"
+            - name: TS_HOSTNAME
+              value: {{ .Values.tailscale.hostname | quote }}
+            - name: TS_SERVE_CONFIG
+              value: /etc/tailscale/serve.json
+            - name: TS_AUTHKEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.env }}
+                  key: TS_AUTHKEY
+          volumeMounts:
+            - name: serve
+              mountPath: /etc/tailscale
+              readOnly: true
+      volumes:
+        - name: serve
+          configMap:
+            name: tailscale-serve
+{{- end }}

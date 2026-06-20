@@ -96,6 +96,20 @@ echo "==> Syncing secrets from .env and $APNS_KEY"
 [ -f .env ] || { echo "ERROR: .env not found (copy .env.example and fill in)." >&2; exit 1; }
 [ -f "$APNS_KEY" ] || { echo "ERROR: $APNS_KEY not found." >&2; exit 1; }
 
+# The tailscale proxy reads TS_AUTHKEY from the .env-backed secret. When it's
+# enabled in the chart, fail fast with a clear message rather than a CrashLooping
+# pod. Read tailscale.enabled straight from the chart values (same source of
+# truth the deploy uses) so this check honors the flag it advertises.
+ts_enabled=$(helm show values "$CHART" | awk '/^tailscale:/{f=1;next} f&&/^[^[:space:]]/{f=0} f&&/^[[:space:]]+enabled:/{print $2;exit}')
+if [ "$ts_enabled" = "true" ]; then
+  grep -qE '^TS_AUTHKEY=.' .env || {
+    echo "ERROR: TS_AUTHKEY missing/empty in .env (tailscale.enabled=true)." >&2
+    echo "       Add a reusable auth key (Tailscale admin -> Settings -> Keys), or" >&2
+    echo "       set tailscale.enabled=false in deploy/uat/values.yaml to skip it." >&2
+    exit 1
+  }
+fi
+
 kubectl create secret generic fortymm-uat-env \
   --namespace "$NAMESPACE" --from-env-file=.env \
   --dry-run=client -o yaml | kubectl apply -f -
