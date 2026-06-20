@@ -45,3 +45,16 @@ worker:
 # Routing nginx exposed on this NodePort; k3d maps host 8084 -> here and
 # host Caddy reverse-proxies 127.0.0.1:8084 to it.
 nginxNodePort: 30084
+
+# Tailscale proxy: puts the stack on the tailnet as a private MagicDNS node
+# (https://<hostname>.<tailnet>.ts.net) fronting the routing nginx. Additive —
+# leaves the public Caddy/NodePort path untouched.
+tailscale:
+  enabled: true
+  image: tailscale/tailscale:stable
+  hostname: fortymm-uat
+  # TS_AUTHKEY is read from the .env-backed secret (secrets.env), into which
+  # redeploy-uat.sh already loads every .env line — so a TS_AUTHKEY=... line in
+  # .env is all that's needed.
+  # Where the proxy persists its tailnet identity (survives pod restarts).
+  stateSecret: tailscale-state
