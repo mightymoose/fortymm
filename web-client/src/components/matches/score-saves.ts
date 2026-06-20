@@ -1,5 +1,5 @@
 import { useMutationState, type Mutation } from '@tanstack/react-query'
-import { ApiError } from '@/api/client'
+import { ApiError, conflictDetail } from '@/api/client'
 import {
   gameNumberFromScoreMutationKey,
   matchScoreMutationPrefix,
@@ -8,13 +8,14 @@ import {
 } from '@/api/matches'
 
 /** A failed save is a *conflict* (vs. a network/server failure) when the
- * server rejected the conditional write because a concurrent participant had
- * already saved this game — a 409 (or 412). These must never be blindly
- * retried: re-firing would re-issue the write against fresh state and silently
- * overwrite the other save. The user resolves them against the committed value
- * instead. */
+ * server rejected the write because a concurrent participant had already saved
+ * this game — a 409/412 carrying the committed score (`conflictDetail`). These
+ * must never be blindly retried: re-firing would re-issue the write against
+ * fresh state and silently overwrite the other save. The user resolves them
+ * against the committed value instead. A plain-string 409 (e.g. a locked match)
+ * is NOT a conflict — it's an ordinary failed save. */
 export function isScoreConflict(error: ApiError | null | undefined): boolean {
-  return error instanceof ApiError && (error.status === 409 || error.status === 412)
+  return error instanceof ApiError && conflictDetail(error) !== null
 }
 
 /**

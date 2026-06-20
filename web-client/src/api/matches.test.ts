@@ -104,6 +104,66 @@ it('re-syncs the match detail query after a rejected score save (#564)', async (
   expect(synced.sides[1].games_won).toBe(1)
 })
 
+it('primes the cache with the committed score from a conflict 409 (so a follow-up Replace reads the fresh version)', async () => {
+  const matchId = 'm-conflict'
+  // The client last read this game's score at version 1.
+  const seeded: MatchDetails = matchDetails({
+    id: matchId,
+    games: [
+      {
+        id: 'g-1',
+        game_number: 1,
+        score: {
+          id: 's-1',
+          side_1_points: 11,
+          side_2_points: 5,
+          winner_side_number: 1,
+          version: 1,
+        },
+      },
+    ],
+  })
+  queryClient.setQueryData(matchQueryKey(matchId), seeded)
+
+  server.use(
+    // The conditional PUT loses the race: 409 carrying the committed score at
+    // its new version 2.
+    http.put('*/v1/matches/:matchId/games/:gameNumber/scores', () =>
+      HttpResponse.json(
+        {
+          detail: {
+            message: 'This game was saved by someone else.',
+            committed_score: {
+              id: 's-1',
+              side_1_points: 11,
+              side_2_points: 5,
+              winner_side_number: 1,
+              version: 2,
+            },
+          },
+        },
+        { status: 409 },
+      ),
+    ),
+    // The re-sync refetch never settles — so this test proves the cache holds
+    // the committed version from the 409 *body*, not from a refetch.
+    http.get('*/v1/matches/:matchId', () => new Promise<Response>(() => {})),
+  )
+
+  await fireScoreSave(queryClient, matchId, 1, {
+    side_1_points: 7,
+    side_2_points: 11,
+  })
+
+  // The committed score (and its new version 2) was spliced into the cache by
+  // onError — so a subsequent "Replace with my score" PUTs expected_version 2,
+  // not the stale 1 it would otherwise read while the refetch is in flight.
+  const patched = queryClient.getQueryData<MatchDetails>(matchQueryKey(matchId))
+  const score = patched?.games.find((g) => g.game_number === 1)?.score
+  expect(score?.version).toBe(2)
+  expect(score?.side_2_points).toBe(5)
+})
+
 it('marks the match detail query stale on a rejected save (#564)', async () => {
   const matchId = 'm-564b'
   // Seed an active (fetched, fresh) query so we can observe it being invalidated.

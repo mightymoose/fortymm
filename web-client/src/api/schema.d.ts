@@ -3574,6 +3574,15 @@ export interface operations {
                     "application/json": components["schemas"]["app__schemas__match__MatchDetails"];
                 };
             };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MatchGameScoreConflict"];
+                };
+            };
             /** @description Validation Error */
             422: {
                 headers: {

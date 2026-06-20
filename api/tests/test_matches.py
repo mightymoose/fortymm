@@ -847,7 +847,13 @@ async def test_score_create_409_when_game_already_scored(
         json={"side_1_points": 11, "side_2_points": 5},
     )
     assert second.status_code == 409
-    assert second.json()["detail"] == "This game has already been scored."
+    # A second create is the same conflict the update path guards against — the
+    # 409 carries the committed score (the first write's 11–4) so the client can
+    # surface it for review rather than overwrite it.
+    detail = second.json()["detail"]
+    assert detail["committed_score"]["side_1_points"] == 11
+    assert detail["committed_score"]["side_2_points"] == 4
+    assert detail["committed_score"]["version"] == 1
 
 
 async def test_concurrent_score_create_returns_409_not_500(

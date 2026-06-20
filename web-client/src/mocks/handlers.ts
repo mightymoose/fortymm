@@ -713,7 +713,26 @@ export const handlers = [
         }
         seed.games.push(game)
       } else if (game.score !== null) {
-        return detail('This game has already been scored.', 409)
+        // A concurrent create — same structured conflict body the update path
+        // returns, carrying the committed score for the client to surface.
+        return HttpResponse.json(
+          {
+            detail: {
+              message:
+                'This game was saved by someone else while you were editing. ' +
+                'Review the saved score before saving again.',
+              committed_score: {
+                id: game.score.id,
+                side_1_points: game.score.side_1_points,
+                side_2_points: game.score.side_2_points,
+                winner_side_number:
+                  game.score.side_1_points > game.score.side_2_points ? 1 : 2,
+                version: game.score.version ?? 1,
+              },
+            },
+          },
+          { status: 409 },
+        )
       }
       game.score = {
         id: `s-${seed.id}-${gameNumber}-${Date.now().toString(36)}`,

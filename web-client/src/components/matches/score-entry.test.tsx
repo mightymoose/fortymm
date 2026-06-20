@@ -1787,15 +1787,28 @@ describe('ScoreEntry — conflicts', () => {
     expect(puts).toBe(1)
   })
 
-  it('overwrites with my score when I choose to replace, using the refreshed version', async () => {
+  it('overwrites with my score when I choose to replace, using the version from the conflict body', async () => {
     const user = userEvent.setup()
     const putBodies: Array<Record<string, number>> = []
+    // The committed row sits at version 1 until our stale write loses the race;
+    // the opponent's winning write has bumped it to 2. A refetch reflects that.
+    let committedVersion = 1
     server.use(
       http.get('*/v1/matches/m-1', () =>
         HttpResponse.json(
           inProgressMatch({
             games: [
-              { id: 'g-1', game_number: 1, score: score('s-1', 11, 5) },
+              {
+                id: 'g-1',
+                game_number: 1,
+                score: {
+                  id: 's-1',
+                  side_1_points: 11,
+                  side_2_points: 5,
+                  winner_side_number: 1,
+                  version: committedVersion,
+                },
+              },
               { id: 'g-2', game_number: 2, score: score('s-2', 9, 11) },
             ],
           }),
@@ -1804,8 +1817,11 @@ describe('ScoreEntry — conflicts', () => {
       http.put('*/v1/matches/m-1/games/1/scores', async ({ request }) => {
         const body = (await request.json()) as Record<string, number>
         putBodies.push(body)
-        // First write loses the race; the replace re-fires and wins.
+        // First write claims version 1 and loses; the committed row is now at
+        // version 2. The 409 carries that committed score so the client can
+        // re-decide and re-fire with the fresh version.
         if (putBodies.length === 1) {
+          committedVersion = 2
           return HttpResponse.json(
             {
               detail: {
@@ -1815,7 +1831,7 @@ describe('ScoreEntry — conflicts', () => {
                   side_1_points: 11,
                   side_2_points: 5,
                   winner_side_number: 1,
-                  version: 1,
+                  version: 2,
                 },
               },
             },
@@ -1849,9 +1865,20 @@ describe('ScoreEntry — conflicts', () => {
     )
 
     // The replace re-fires the write — a deliberate overwrite against the
-    // version we just showed the user (not a blind auto-retry).
+    // version we just showed the user. The first attempt claimed the stale
+    // version 1; the replace must claim the refreshed version 2 (from the 409
+    // body), or it would just 409 again.
     await waitFor(() => expect(putBodies).toHaveLength(2))
-    expect(putBodies[1]).toMatchObject({ side_1_points: 12, side_2_points: 10 })
+    expect(putBodies[0]).toMatchObject({
+      side_1_points: 12,
+      side_2_points: 10,
+      expected_version: 1,
+    })
+    expect(putBodies[1]).toMatchObject({
+      side_1_points: 12,
+      side_2_points: 10,
+      expected_version: 2,
+    })
   })
 })
 

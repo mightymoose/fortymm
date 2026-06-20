@@ -392,9 +392,10 @@ function ScoreEntryInner({
   function onSubmit() {
     if (!inputsValid) return
     // Ignore a second Save while the per-game save is still in flight (#538):
-    // a double-tap would otherwise fire a duplicate POST that 409s. The save is
-    // idempotent server-side, so this is just to avoid the wasted round-trip —
-    // the mutationFn also treats a 409 as a successful re-save as a backstop.
+    // a double-tap would otherwise fire a duplicate create that 409s. This
+    // synchronous guard is the only protection now — the mutationFn no longer
+    // swallows that 409 (it would surface as a conflict to review), so don't
+    // let a double-tap reach it.
     if (saveMutation.isPending) return
     // Same for a second submit while the finalize POST is in flight (#550). The
     // submit button's `disabled` is only a render-time guard, so a fast

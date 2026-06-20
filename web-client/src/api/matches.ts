@@ -5,7 +5,7 @@ import {
   useQuery,
   useQueryClient,
 } from '@tanstack/react-query'
-import { api, resolveBaseUrl, unwrap } from './client'
+import { ApiError, api, conflictDetail, resolveBaseUrl, unwrap } from './client'
 import { DASHBOARD_QUERY_KEY } from './dashboard'
 import {
   matchDetailsQueryKey,
@@ -244,6 +244,22 @@ export function useMatch(matchId: string) {
   return useQuery(matchQueryOptions(matchId))
 }
 
+/** Return a copy of `match` with game `gameNumber`'s score replaced — used to
+ * splice the committed score from a conflict 409 into the cache so the conflict
+ * notice and a follow-up "Replace" read the up-to-date version immediately. */
+function withGameScore(
+  match: MatchDetails,
+  gameNumber: number,
+  score: MatchDetails['games'][number]['score'],
+): MatchDetails {
+  return {
+    ...match,
+    games: match.games.map((g) =>
+      g.game_number === gameNumber ? { ...g, score } : g,
+    ),
+  }
+}
+
 /** Cache work shared by both score mutations: prime the detail cache from the
  * mutation response and invalidate the list / dashboard so they re-read the
  * derived status, scoreboard, and next-up state. */
@@ -346,7 +362,25 @@ export function scoreSaveMutationOptions(
     // deliberately *not* touching the mutation cache, so this game's
     // failed-save scratch state survives to drive the failure banner /
     // "Not saved" cell + retry UI.
-    onError: () => {
+    onError: (error: unknown) => {
+      // On a conflict, the 409 body carries the committed score *and its new
+      // version*. Patch it straight into the cache so the conflict notice shows
+      // the right value and a subsequent "Replace with my score" PUTs the fresh
+      // `expected_version` immediately — without racing the invalidate refetch
+      // below (which only settles a network round-trip later).
+      if (error instanceof ApiError) {
+        const committed = conflictDetail(error)?.committed_score as
+          | MatchDetails['games'][number]['score']
+          | null
+          | undefined
+        if (committed) {
+          queryClient.setQueryData<MatchDetails>(
+            matchQueryKey(matchId),
+            (prev) =>
+              prev ? withGameScore(prev, gameNumber, committed) : prev,
+          )
+        }
+      }
       queryClient.invalidateQueries({ queryKey: matchQueryKey(matchId) })
       queryClient.invalidateQueries({
         queryKey: matchDetailsQueryKey(matchId),
