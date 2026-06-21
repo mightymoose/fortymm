@@ -16,7 +16,7 @@ import { TournamentCard } from './tournament-card'
 export interface TournamentsListPageProps {
   tournaments: Tournament[]
   onOpen: (id: string) => void
-  onCreate: (draft: Omit<Tournament, 'id'>) => void
+  onCreate: (draft: Omit<Tournament, 'id'>) => void | Promise<void>
   onDelete: (id: string) => void
   /** Whether to surface the "New tournament" action — gated on the caller's
    * `tournament.create` permission. Creating 403s without it, so hide it. */
@@ -126,13 +126,13 @@ export const TournamentsListPage = ({
         </div>
       )}
 
+      {/* The modal owns its submit lifecycle: it awaits onCreate and closes
+          itself (via onOpenChange) only on success, surfacing a failure inline
+          instead of closing over it (#614). */}
       <NewTournamentModal
         open={createOpen}
         onOpenChange={setCreateOpen}
-        onCreate={(draft) => {
-          onCreate(draft)
-          setCreateOpen(false)
-        }}
+        onCreate={onCreate}
       />
       <ConfirmDeleteDialog
         open={pendingDelete !== null}

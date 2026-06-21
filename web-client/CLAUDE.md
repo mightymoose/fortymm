@@ -38,6 +38,30 @@ custom element only when nothing in the design system is a reasonable fit.
 
 ## Forms
 
+**Every form that submits a mutation uses React Hook Form + Zod.** Drive the
+form with `useForm({ resolver: zodResolver(schema) })` and validate
+client-side against a Zod schema that **mirrors the server's constraints**
+(e.g. `z.string().trim().min(1).max(255)` for a column that is `VARCHAR(255)`
+and `NOT NULL`) — so the user gets an inline message instead of a bare 4xx.
+`EditRoleModal` (`src/components/rbac/roles-page.tsx`) and
+`NewTournamentModal` are the reference implementations.
+
+- **Surface server 4xx inline, don't swallow it.** Submit with
+  `handleSubmit(async (v) => { try { await mutateAsync(...) } catch (e) { ... } })`,
+  and in the catch map an `ApiError` with status 422/409 to
+  `form.setError('<field>', { type: 'server', message: e.detail ?? '…' })`;
+  toast anything else. A modal must close itself **only on success** — never
+  unconditionally after firing the mutation, or a rejected request becomes a
+  silent failure (#614).
+- **Don't attach a global `onError` toast to a mutation a form surfaces
+  inline.** The form owns its errors; a global toast would double up. (See the
+  convention note on the RBAC form mutations in `rbac/queries.ts`.)
+- **Don't gate the submit button on `formState.isValid`.** `handleSubmit`
+  already blocks an invalid submit and renders the inline error; a
+  `disabled={!isValid}` button forces a `useEffect(trigger)` workaround for
+  edit forms (defaults that start valid) and leaves the user staring at a dead
+  button with no explanation. Disable on `isSubmitting` only.
+
 Show field validation errors inline, directly below the field, in red. Set
 `aria-invalid` on the `<Input>` and render the message as a `<p>` beneath it:
 
