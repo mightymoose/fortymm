@@ -1075,9 +1075,20 @@ body.dark.fortymm-theme {
 @media (max-width: 520px) {
   .app-shell__topbar {
     padding: 0 12px;
+    gap: 8px;
   }
   .app-shell__brand .app-shell__wordmark {
     font-size: 18px;
+  }
+  .app-shell__actions {
+    gap: 6px;
+  }
+  /* At the narrowest phones the actions cluster (Alpha badge + bell + user
+     menu) overflows the 320px viewport. The user-name is already hidden on
+     mobile, leaving the chevron beside a bare avatar — drop it here to reclaim
+     the width and keep the top nav inside the viewport (#661). */
+  .app-shell__user-menu-chev {
+    display: none;
   }
 }
 
