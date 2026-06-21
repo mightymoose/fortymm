@@ -260,6 +260,10 @@
   flex: 1;
   min-height: 0;
   overflow: auto;
+  /* Query the wrap's own width (not the viewport) for the mobile horizontal
+   * scroll below — keeps the table responsive to its real available space
+   * regardless of the surrounding layout. */
+  container-type: inline-size;
 }
 
 .player-profile__section-title {
@@ -370,17 +374,23 @@
 
 .player-profile table.matches {
   width: 100%;
-  /* The cells are `white-space: nowrap` with fixed-width Date/Score/Result
-   * columns whose total exceeds a phone viewport. Without a min-width the
-   * table stays capped at 100% and the rightmost Result column overflows its
-   * cell (clipped) instead of widening the table — so the `overflow: auto`
-   * `.player-profile__table-wrap` never gets a horizontal scrollbar. Forcing
-   * the table to its content width makes the wrap scroll on mobile while
-   * `width: 100%` still fills the table on desktop. */
-  min-width: max-content;
   border-collapse: separate;
   border-spacing: 0;
   font-family: var(--font-ui);
+}
+/* The cells are `white-space: nowrap` with fixed-width Date/Score/Result
+ * columns whose total exceeds a phone viewport. Without a min-width the table
+ * stays capped at 100% and the rightmost Result column overflows its cell
+ * (clipped) instead of widening the table — so the `overflow: auto` wrap never
+ * gets a horizontal scrollbar. When the wrap is narrower than the table's
+ * content, force the table to its content width so the wrap scrolls; above
+ * 960px `width: 100%` fills it with no scrollbar. Keyed on the wrap's own width
+ * (container query) rather than the viewport so it tracks real available
+ * space. */
+@container (max-width: 960px) {
+  .player-profile table.matches {
+    min-width: max-content;
+  }
 }
 
 .player-profile table.matches thead th {

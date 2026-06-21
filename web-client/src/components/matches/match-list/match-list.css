@@ -151,20 +151,31 @@
   flex: 1;
   min-width: 0;
   overflow: auto;
+  /* Query the wrap's own width (not the viewport) below, so the table reacts
+   * to its real available space — the sidebar collapses at 960px, so the same
+   * viewport maps to different table widths and a viewport media query can't
+   * tell when the table is actually too narrow. */
+  container-type: inline-size;
 }
 .match-list-page table.matches {
   width: 100%;
-  /* `white-space: nowrap` cells plus fixed-width Score/Status/Started columns
-   * exceed a phone viewport. Without a min-width the table stays capped at
-   * 100% and the rightmost Status/action columns overflow their cells
-   * (clipped) instead of widening the table, so the `overflow: auto`
-   * `.table-wrap` never gets a horizontal scrollbar. Forcing the table to its
-   * content width makes the wrap scroll on mobile; `width: 100%` still fills
-   * it on desktop. */
-  min-width: max-content;
   border-collapse: separate;
   border-spacing: 0;
   font-family: var(--font-ui);
+}
+/* `white-space: nowrap` cells plus fixed-width Score/Status/Started columns
+ * exceed a phone viewport. Without a min-width the table stays capped at 100%
+ * and the rightmost Status/action columns overflow their cells (clipped)
+ * instead of widening the table, so the `overflow: auto` wrap never gets a
+ * horizontal scrollbar. When the wrap is narrower than the table's content
+ * (≤960px — phones, tablets, and the narrow-desktop band just after the
+ * sidebar reappears), force the table to its content width so the wrap scrolls.
+ * Above 960px the wrap fits the table's ~910px normal content, so `width: 100%`
+ * fills it with no scrollbar. */
+@container (max-width: 960px) {
+  .match-list-page table.matches {
+    min-width: max-content;
+  }
 }
 .match-list-page table.matches thead th {
   position: sticky;
