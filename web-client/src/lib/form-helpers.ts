@@ -19,6 +19,11 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/
 // FAILED before submit instead of leaking that server string.
 export const MAX_EMAIL_LENGTH = 254
 
+// RFC 5321 §4.5.3.1.1 also caps the local part (before the @) at 64 chars. The
+// API rejects an oversize local part with a 422 (#615); mirror it so the badge
+// flips to FAILED before submit instead of leaking that server string.
+export const MAX_EMAIL_LOCAL_PART_LENGTH = 64
+
 export interface Validation {
   ok: boolean
   err?: string
@@ -32,5 +37,10 @@ export function validateEmail(e: string): Validation {
 }
 
 export function isValidEmail(e: string): boolean {
-  return e.length <= MAX_EMAIL_LENGTH && EMAIL_RE.test(e)
+  // EMAIL_RE guarantees a single '@', so the local part is everything before it.
+  return (
+    e.length <= MAX_EMAIL_LENGTH &&
+    EMAIL_RE.test(e) &&
+    e.slice(0, e.lastIndexOf('@')).length <= MAX_EMAIL_LOCAL_PART_LENGTH
+  )
 }

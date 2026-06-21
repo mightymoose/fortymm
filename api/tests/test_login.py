@@ -282,6 +282,20 @@ async def test_request_rejects_invalid_email_format(api_client: AsyncClient):
     assert response.status_code == 422
 
 
+async def test_request_rejects_oversize_local_part(
+    api_client: AsyncClient, fake_email_queue
+):
+    """RFC 5321 caps the local part at 64 chars; a longer one is rejected
+    before any mail is enqueued (#615)."""
+    oversize = "a" * 65 + "@example.com"
+    response = await api_client.post(
+        "/v1/login/request",
+        json={**REQUEST_BODY, "email": oversize},
+    )
+    assert response.status_code == 422
+    assert fake_email_queue.finished_job_registry.count == 0
+
+
 # ---- consume endpoint ----------------------------------------------------
 
 

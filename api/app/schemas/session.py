@@ -1,6 +1,28 @@
 from datetime import datetime
+from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import AfterValidator, BaseModel, ConfigDict, EmailStr, Field
+
+# RFC 5321 §4.5.3.1.1 caps the local part (before the ``@``) at 64 octets and
+# the whole address at 254. ``EmailStr`` / email-validator enforces the 254
+# total but NOT the 64-char local part, so an oversize local part validates and
+# we'd enqueue mail to it (#615). Reject it explicitly on inbound addresses.
+EMAIL_LOCAL_PART_MAX_LENGTH = 64
+
+
+def _validate_local_part_length(value: str) -> str:
+    local_part, _, _ = value.rpartition("@")
+    if len(local_part) > EMAIL_LOCAL_PART_MAX_LENGTH:
+        raise ValueError(
+            "The email address's local part is too long "
+            f"(maximum {EMAIL_LOCAL_PART_MAX_LENGTH} characters)."
+        )
+    return value
+
+
+# Use for inbound addresses we'll act on (send mail / persist). Response echoes
+# can stay plain ``EmailStr`` — they re-emit an already-validated value.
+BoundedEmailStr = Annotated[EmailStr, AfterValidator(_validate_local_part_length)]
 
 # Lowercase alphanumerics with optional dots/hyphens/underscores between them.
 # Must start and end with an alphanumeric so we don't store names that look
@@ -60,7 +82,7 @@ class CaptchaProtectedRequest(BaseModel):
 
 
 class SetEmailRequest(CaptchaProtectedRequest):
-    email: EmailStr
+    email: BoundedEmailStr
 
 
 class ResendEmailRequest(CaptchaProtectedRequest):
@@ -76,7 +98,7 @@ class ConfirmEmailRequest(BaseModel):
 
 
 class RequestLoginRequest(CaptchaProtectedRequest):
-    email: EmailStr
+    email: BoundedEmailStr
 
 
 class LoginRequestAccepted(BaseModel):
