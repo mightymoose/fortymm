@@ -273,8 +273,9 @@ struct ScoreEntryView: View {
         Binding(
             get: { side == .you ? rawYou : rawOpp },
             set: { raw in
-                if side == .you { rawYou = raw } else { rawOpp = raw }
-                let n = Self.parseScore(raw)
+                let cleaned = Self.normalizeScoreText(raw)
+                if side == .you { rawYou = cleaned } else { rawOpp = cleaned }
+                let n = Self.parseScore(cleaned)
                 setCurrent { side == .you ? ($0.a = n) : ($0.b = n) }
             }
         )
@@ -289,6 +290,16 @@ struct ScoreEntryView: View {
         guard !raw.isEmpty, raw.count <= 3,
               raw.allSatisfy({ $0 >= "0" && $0 <= "9" }) else { return nil }
         return Int(raw)
+    }
+
+    /// Collapse a clean digit run to its canonical form so the field shows the
+    /// same number it evaluates to: "011" → "11", "00" → "0". A lone "0" and the
+    /// empty field are left as-is, and a malformed entry (non-digits, >3 digits)
+    /// is returned verbatim so `scoreError` still flags it rather than being
+    /// silently rewritten. Fixes the leading-zeros half of #446.
+    private static func normalizeScoreText(_ raw: String) -> String {
+        guard let n = parseScore(raw) else { return raw }
+        return String(n)
     }
 
     /// True when the field holds something the user typed/pasted that isn't a
