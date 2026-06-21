@@ -19,11 +19,18 @@ const scoped = (container: Container) => ({
   queryDialog() {
     return container.queryByRole('dialog')
   },
+  /** The inline validation/error text under a field (the `Field` hint), once it
+   * appears — absent until a failed submit or an invalid edit. */
+  findError(message: string | RegExp) {
+    return container.findByText(message)
+  },
 })
 
 /**
  * Test page-object for `NewTournamentModal`. The dialog portals to the body, so
- * accessors resolve against `screen` rather than a wrapper subtree.
+ * accessors resolve against `screen` rather than a wrapper subtree. Inline
+ * errors are async (the zod resolver runs on submit), so assert them with
+ * `await page.findError(...)`.
  */
 export const newTournamentModalPage = {
   render(overrides: Partial<NewTournamentModalProps> = {}) {

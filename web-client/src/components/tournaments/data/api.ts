@@ -240,14 +240,18 @@ export function useTables(id: string): TournamentTable[] {
 
 // ----- mutations -----------------------------------------------------------
 
-/** Create a bare tournament. Returns the created id for navigation. */
+/** Create a bare tournament. Returns the created id for navigation.
+ *
+ * No global `onError` toast: `NewTournamentModal` awaits this via `mutateAsync`
+ * and surfaces a 4xx inline on the name field (and toasts the rest itself), so
+ * a global toast here would double up. (Same convention as the RBAC form
+ * mutations — see `rbac/queries.ts`.) */
 export function useCreateTournament() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: async (body: TournamentCreate): Promise<TournamentRead> =>
       unwrap('create tournament', await api.POST('/v1/tournaments', { body })),
     onSuccess: () => qc.invalidateQueries({ queryKey: TOURNAMENTS_KEY }),
-    onError: notifyError('create the tournament'),
   })
 }
 
