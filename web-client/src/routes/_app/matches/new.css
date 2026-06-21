@@ -13,6 +13,11 @@
   --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.55);
 
   position: relative;
+  /* Clip the decorative ::before glow, which bleeds 200px past the right edge
+     (right: -200px) and would otherwise add a constant 200px of horizontal
+     page scroll at every viewport (#93). overflow-x: clip contains it without
+     establishing a scroll container or affecting vertical layout. */
+  overflow-x: clip;
   width: 100%;
   max-width: 980px;
   margin: 0 auto;
@@ -376,11 +381,12 @@
 }
 .nm-recent-grid {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
 }
 .nm-chip {
   display: flex;
+  min-width: 0;
   align-items: center;
   gap: 10px;
   padding: 10px 12px;
