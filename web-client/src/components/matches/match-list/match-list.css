@@ -114,6 +114,28 @@
   flex: 1;
 }
 
+/* On a phone the search box and the status tabs each wrap onto their own row
+ * (`.filter-row` is `flex-wrap: wrap`). The shadcn `TabsList` is
+ * `inline-flex w-fit` with no wrapping or scrolling, so the rightmost chip
+ * ("Up next" / "Final") clips off the edge. Let the tab strip take the full
+ * wrapped row and scroll horizontally instead of clipping. Desktop is
+ * untouched — there the whole row fits on one line. */
+@media (max-width: 640px) {
+  .match-list-page .filter-row [data-slot='tabs'] {
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+  .match-list-page .filter-row [data-slot='tabs-list'] {
+    max-width: 100%;
+    justify-content: flex-start;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .match-list-page .filter-row [data-slot='tabs-list']::-webkit-scrollbar {
+    display: none;
+  }
+}
+
 .match-list-page .filter-label {
   font-family: var(--font-ui);
   font-size: 10px;
@@ -132,6 +154,14 @@
 }
 .match-list-page table.matches {
   width: 100%;
+  /* `white-space: nowrap` cells plus fixed-width Score/Status/Started columns
+   * exceed a phone viewport. Without a min-width the table stays capped at
+   * 100% and the rightmost Status/action columns overflow their cells
+   * (clipped) instead of widening the table, so the `overflow: auto`
+   * `.table-wrap` never gets a horizontal scrollbar. Forcing the table to its
+   * content width makes the wrap scroll on mobile; `width: 100%` still fills
+   * it on desktop. */
+  min-width: max-content;
   border-collapse: separate;
   border-spacing: 0;
   font-family: var(--font-ui);
