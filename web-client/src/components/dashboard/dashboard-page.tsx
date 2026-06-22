@@ -58,7 +58,11 @@ export function DashboardPage() {
           rating={data.rating ? Math.round(data.rating.current) : null}
         />
       )}
-      <PageTitle greeting={greeting} compact={compact} />
+      <PageTitle
+        greeting={greeting}
+        compact={compact}
+        loading={session.isLoading}
+      />
       {isLoading ? (
         <AttentionPanelSkeleton />
       ) : (
