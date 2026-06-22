@@ -377,14 +377,14 @@ function SubmitRow({
           )}
         </div>
         <div className="sub">
-          {lengthCopy}
-          <span className="dot">·</span>
+          {lengthCopy}{' '}
+          <span className="dot">·</span>{' '}
           {effectivelyRated ? (
             <span className="rated">Rated</span>
           ) : (
             <span className="unrated">Unrated</span>
-          )}
-          <span className="dot">·</span>
+          )}{' '}
+          <span className="dot">·</span>{' '}
           games to 11, win by 2
         </div>
         {error && (

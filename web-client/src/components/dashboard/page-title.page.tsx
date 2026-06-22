@@ -16,6 +16,12 @@ const scoped = (container: Container) => ({
   getHeading(name: string | RegExp) {
     return container.getByRole('heading', { name })
   },
+  /** The greeting placeholder bar shown while the session is in flight, or
+   * null once it has resolved. The heading keeps its `role` and gains an
+   * `aria-busy`/`aria-label` while loading (mirroring `UserMenu`). */
+  queryGreetingSkeleton() {
+    return container.queryByRole('heading', { name: /loading greeting/i })
+  },
   /** The optional subtitle line, or null when none was supplied. */
   querySubtitle(text: string | RegExp) {
     return container.queryByText(text)

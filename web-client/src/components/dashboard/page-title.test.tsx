@@ -21,6 +21,20 @@ describe('PageTitle', () => {
     expect(pageTitlePage.querySubtitle('Two matches to score')).toBeNull()
   })
 
+  it('renders a placeholder bar instead of the greeting while loading', async () => {
+    pageTitlePage.render({ greeting: 'Hi, @rita.kovac', loading: true })
+
+    expect(await pageTitlePage.findHeading(/loading greeting/i)).toBeInTheDocument()
+    expect(pageTitlePage.querySubtitle(/rita\.kovac/)).toBeNull()
+  })
+
+  it('shows the greeting and no placeholder once loaded', async () => {
+    pageTitlePage.render({ greeting: 'Hi, @rita.kovac', loading: false })
+
+    await pageTitlePage.findHeading(/Hi, @rita\.kovac/)
+    expect(pageTitlePage.queryGreetingSkeleton()).toBeNull()
+  })
+
   it('links the "Log a match" action to /matches/new', async () => {
     pageTitlePage.render()
 

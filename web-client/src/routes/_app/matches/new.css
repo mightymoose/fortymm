@@ -735,7 +735,6 @@
   color: var(--fg-3);
 }
 .nm-summary .read .sub .dot {
-  margin: 0 10px;
   color: var(--ink-500);
 }
 .nm-summary .read .nm-error {
