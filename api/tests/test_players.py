@@ -9,6 +9,7 @@ from app.models import (
     MatchSettings,
     MatchSide,
     MatchSidePlayer,
+    MatchSignature,
     MatchStatus,
     User,
     UserLeagueRating,
@@ -339,12 +340,17 @@ async def _record_match_with_winner(
     *,
     created_at: datetime,
     status: MatchStatus = MatchStatus.completed,
+    signed_by: User | None = None,
 ) -> Match:
     """Persist a singles match with explicit winner/loser so W-L and form
     assertions are deterministic. Same shape as `_record_match` but flips
     `MatchSide.won` on the right side. ``won`` is stamped only for completed
     matches, mirroring the API: since #485 it's written at the moment a match
-    becomes final, never while one is still in progress."""
+    becomes final, never while one is still in progress.
+
+    ``signed_by`` seeds a single ``MatchSignature`` from that user (a
+    posted-but-unconfirmed result), so an ``in_progress`` match can be put in
+    the "Awaiting confirmation" bucket (#364)."""
     settings = MatchSettings(team_size=1, best_of=5, affects_rating=False)
     league = await get_default_league(db_session)
     match = Match(
@@ -360,6 +366,8 @@ async def _record_match_with_winner(
     side1.players.append(MatchSidePlayer(match=match, user=winner))
     side2 = MatchSide(match=match, side_number=2, won=False if completed else None)
     side2.players.append(MatchSidePlayer(match=match, user=loser))
+    if signed_by is not None:
+        match.signatures.append(MatchSignature(user_id=signed_by.id))
     db_session.add(match)
     await db_session.commit()
     return match
@@ -571,6 +579,53 @@ async def test_list_player_matches_result_hidden_while_awaiting_confirmation(
     row = body["items"][0]
     assert row["status"] == "in_progress"
     assert row["result"] is None
+    # No signature posted yet → genuinely live, not awaiting confirmation.
+    assert row["awaiting_confirmation"] is False
+
+
+async def test_list_player_matches_flags_awaiting_confirmation(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """An ``in_progress`` match with a posted-but-unconfirmed result (at least
+    one signature) reports ``awaiting_confirmation: true`` so the profile chip
+    can distinguish it from a genuinely-live match — both sit at
+    ``in_progress`` (#364). A true-live match (no signature) and a completed
+    match both report false."""
+    await start_session(api_client, db_session)
+    target = await make_user(db_session, "await.flag.target")
+    rival = await make_user(db_session, "await.flag.rival")
+
+    # Awaiting: in_progress with a signature from the result-poster.
+    await _record_match_with_winner(
+        db_session,
+        target,
+        rival,
+        created_at=BASE_TIME + timedelta(days=2),
+        status=MatchStatus.in_progress,
+        signed_by=target,
+    )
+    # True-live: in_progress, no signature.
+    await _record_match_with_winner(
+        db_session,
+        target,
+        rival,
+        created_at=BASE_TIME + timedelta(days=1),
+        status=MatchStatus.in_progress,
+    )
+    # Completed: never awaiting.
+    await _record_match_with_winner(db_session, target, rival, created_at=BASE_TIME)
+
+    response = await api_client.get(f"/v1/players/{target.id}/matches")
+    assert response.status_code == 200
+    items = response.json()["items"]
+    assert len(items) == 3
+    # Newest-first: awaiting, then live, then completed.
+    assert items[0]["status"] == "in_progress"
+    assert items[0]["awaiting_confirmation"] is True
+    assert items[1]["status"] == "in_progress"
+    assert items[1]["awaiting_confirmation"] is False
+    assert items[2]["status"] == "completed"
+    assert items[2]["awaiting_confirmation"] is False
 
 
 async def test_list_player_matches_excludes_other_players_matches(

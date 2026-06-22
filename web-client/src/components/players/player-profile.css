@@ -307,6 +307,14 @@
   border-color: rgba(255, 77, 109, 0.4);
 }
 
+/* A result posted but not yet confirmed by the opponent (#364). Distinct
+   amber/"warn" tone so it never reads as the green "LIVE" chip or a W/L. */
+.player-profile__result-chip--awaiting {
+  color: var(--warn);
+  background: rgba(255, 196, 61, 0.1);
+  border-color: rgba(255, 196, 61, 0.4);
+}
+
 /* ----- Per-set score chips ----- */
 .player-profile__sets {
   display: inline-flex;

@@ -2002,6 +2002,11 @@ export interface components {
             sets: components["schemas"]["PlayerMatchSet"][];
             /** Result */
             result?: ("W" | "L") | null;
+            /**
+             * Awaiting Confirmation
+             * @default false
+             */
+            awaiting_confirmation: boolean;
         };
         /**
          * PlayerMatchSet
