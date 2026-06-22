@@ -1,5 +1,5 @@
 ---
-description: Ship the current branch end-to-end — run /simplify, all test suites, commit, push, open a PR, /code-review and /qa-review it, then merge if everything passes (raising any issues to the user first).
+description: Ship the current branch end-to-end — run /simplify, all test suites, commit, push, open a PR, /code-review, /security-review and /qa-review it, then merge if everything passes (raising any issues to the user first).
 ---
 
 End-to-end "ship it" workflow for the current branch. Run the steps below **in order**. If any step fails, stop and report the failure to the user — do not skip ahead.
@@ -58,14 +58,25 @@ Skill(skill="code-review:code-review")
 - **If it surfaces issues:** stop and raise them to the user. Ask what they want to do (e.g. fix now, fix later, or proceed anyway). Do **not** auto-fix without acknowledgement — simplify + tests already passed and any further edits need their own re-test/push cycle. Only continue to Step 6 once the user has decided; if they choose to fix first, that resets the workflow (re-run the relevant suites and re-push before resuming).
 - **If it's clean:** continue to Step 6.
 
-## Step 6 — QA review
+## Step 6 — Security review
+
+Invoke the built-in `security-review` skill — a security audit of the pending changes on the branch:
+
+```
+Skill(skill="security-review")
+```
+
+- **If it surfaces vulnerabilities:** stop and raise them to the user, same as code review — report each finding (severity, location, why it matters) and ask what they want to do. Do **not** auto-fix without acknowledgement; fixing resets the workflow (re-run the relevant suites and re-push before resuming).
+- **If it's clean:** continue to Step 7.
+
+## Step 7 — QA review
 
 Pick the QA pass that matches what the branch actually changed — the `qa-review`
 skill drives a **web browser**, so it can only exercise web-client changes. A
 branch that touched `ios/**` needs the **iOS Simulator**; a browser pass against
 the web app would test code the branch never touched.
 
-### 6a. Web changes (`web-client/**`) → browser QA
+### 7a. Web changes (`web-client/**`) → browser QA
 
 Run the `qa-review` workflow — the adversarial "Quinn" black-box pass against the prod-like QA stack:
 
@@ -73,14 +84,14 @@ Run the `qa-review` workflow — the adversarial "Quinn" black-box pass against 
 Skill(skill="qa-review")
 ```
 
-### 6b. iOS changes (`ios/**`) → Simulator QA
+### 7b. iOS changes (`ios/**`) → Simulator QA
 
 Drive the real built app in the iOS Simulator against the **real QA-stack API**
 (not MSW, not a unit test). The app reads `FMM_API_BASE_URL` at runtime and mints
 a **guest session automatically on launch** — so no email/magic-link auth is
 needed to reach an authenticated dashboard. Steps:
 
-1. **Stand up the QA API.** Same stack as 6a — `docker-compose.qa.yml`, launched
+1. **Stand up the QA API.** Same stack as 7a — `docker-compose.qa.yml`, launched
    via `scripts/qa-up.sh` so it picks a free port instead of hardcoding 8085
    (several stacks may already be running). Capture the assigned URL:
    `[ -f .env ] || cp <main-checkout>/.env .env` then
@@ -113,9 +124,9 @@ needed to reach an authenticated dashboard. Steps:
 ### Both paths
 
 - **If bugs are found:** relay the report (with screenshots via SendUserFile) and raise them to the user. Ask what they want to do. Do **not** auto-fix without acknowledgement.
-- **If it's clean:** continue to Step 7.
+- **If it's clean:** continue to Step 8.
 
-## Step 7 — Merge
+## Step 8 — Merge
 
 Only reach this step if **every** prior step passed clean — green tests, no code-review issues, no QA bugs (or the user explicitly chose to proceed despite something). Merge the PR:
 
@@ -127,4 +138,4 @@ Use `--squash` unless the user asked for a different merge strategy. If the merg
 
 ## Reporting
 
-End with a single-line summary listing: simplify outcome, each suite's result, commit + push status, the PR URL, code-review outcome, QA-review verdict, and merge status. Keep it terse — the user can read the diff.
+End with a single-line summary listing: simplify outcome, each suite's result, commit + push status, the PR URL, code-review outcome, security-review outcome, QA-review verdict, and merge status. Keep it terse — the user can read the diff.
