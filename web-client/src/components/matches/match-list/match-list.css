@@ -51,6 +51,37 @@
   animation: ball-pulse 1.4s ease-in-out infinite;
 }
 
+/* On a phone the single-line action bar can't fit title + crumb + LIVE pill +
+ * both buttons, so they overlap and the "+ New match" CTA falls off the edge
+ * entirely (#156). Let the bar wrap: title + LIVE pill share the first row, the
+ * two CTAs drop to a full-width second row as comfortable touch targets. The
+ * decorative crumb has no room and the section is already titled "Matches", so
+ * drop it rather than truncate it mid-word. Desktop (one line) is untouched. */
+@media (max-width: 640px) {
+  .match-list-page .action-bar {
+    height: auto;
+    min-height: 56px;
+    flex-wrap: wrap;
+    padding: 12px 16px;
+    gap: 10px 12px;
+  }
+  .match-list-page .action-bar-crumb {
+    display: none;
+  }
+  .match-list-page .action-bar-title {
+    margin-right: auto;
+  }
+  /* Force the CTAs onto their own row below the title/pill. */
+  .match-list-page .action-bar .filter-spacer {
+    flex-basis: 100%;
+    height: 0;
+  }
+  /* Export + New match split the second row so the primary CTA stays reachable. */
+  .match-list-page .action-bar > a {
+    flex: 1 1 0;
+  }
+}
+
 /* ============ Filter row ============ */
 .match-list-page .filter-row {
   padding: 16px 24px;
