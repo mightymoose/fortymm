@@ -294,6 +294,7 @@ function projectPlayerMatches(player: {
         opponent: { id: opponentId, username: opponentUsername },
         sets,
         result,
+        awaiting_confirmation: false,
       }
     })
 }

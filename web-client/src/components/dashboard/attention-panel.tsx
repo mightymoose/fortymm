@@ -88,8 +88,11 @@ function AttentionFooter({
   if (waitingCount > 0) parts.push(`${waitingCount} waiting on others`)
   return (
     <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-[color:var(--ink-700)] px-5 py-3 text-[13px] text-[color:var(--chalk-500)]">
-      {parts.map((part) => (
-        <span key={part}>{part} ·</span>
+      {parts.map((part, index) => (
+        <span key={part}>
+          {index > 0 && <span aria-hidden="true">·&nbsp;</span>}
+          {part}
+        </span>
       ))}
       <Link
         to="/matches"

@@ -80,6 +80,14 @@ class PlayerMatchRow(BaseModel):
     # ``None`` while the match is still pending / in_progress / disputed /
     # voided. The FE keys the WIN/LOSS/LIVE/UP NEXT chip off `status` + this.
     result: Literal["W", "L"] | None = None
+    # True when a result has been posted but not yet confirmed by the
+    # opponent — i.e. ``status`` is still ``in_progress`` *and* the match
+    # carries at least one signature. This is the same "Awaiting confirmation"
+    # bucket matches.py derives via ``_status_label``; it's surfaced as a
+    # boolean here so the profile chip can distinguish a posted-but-unconfirmed
+    # result from a genuinely-live match (both sit at ``in_progress``) without
+    # the FE having to load signatures (#364).
+    awaiting_confirmation: bool = False
 
 
 class PlayerMatchListResponse(BaseModel):

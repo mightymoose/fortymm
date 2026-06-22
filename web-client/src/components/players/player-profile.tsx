@@ -400,7 +400,12 @@ function MatchRowComponent({
         )}
       </td>
       <td>
-        <ResultChip status={m.status} won={won} lost={lost} />
+        <ResultChip
+          status={m.status}
+          awaitingConfirmation={m.awaiting_confirmation}
+          won={won}
+          lost={lost}
+        />
       </td>
     </tr>
   )
@@ -408,13 +413,26 @@ function MatchRowComponent({
 
 function ResultChip({
   status,
+  awaitingConfirmation,
   won,
   lost,
 }: {
   status: PlayerMatchRow['status']
+  awaitingConfirmation: boolean
   won: boolean
   lost: boolean
 }) {
+  // A posted-but-unconfirmed result and a genuinely-live match both sit at
+  // `in_progress`; check the awaiting flag first so the former gets its own
+  // "AWAITING" chip instead of the green "LIVE" one (#364). Mirrors the
+  // matches list's "Awaiting" bucket.
+  if (awaitingConfirmation) {
+    return (
+      <span className="player-profile__result-chip player-profile__result-chip--awaiting">
+        AWAITING
+      </span>
+    )
+  }
   if (status === 'in_progress') {
     return (
       <span className="player-profile__result-chip player-profile__result-chip--live">

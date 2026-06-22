@@ -11,6 +11,35 @@ describe('PaginationFooter', () => {
     )
   })
 
+  it('renders an in-range page range correctly', () => {
+    // Page 2 of 4, 100 results, 25/page => Showing 26–50.
+    paginationFooterPage.render({
+      page: 2,
+      total: 100,
+      pageSize: 25,
+      totalPages: 4,
+    })
+
+    expect(paginationFooterPage.getInfo()).toHaveTextContent(
+      'Showing 26–50 of 100 matches',
+    )
+  })
+
+  it('clamps an out-of-range page to the last page range (start <= end)', () => {
+    // A deep-linked ?page=999 against a 25-result list (1 page) must not render
+    // "Showing 24951–25000 of 25" — the footer clamps to the last valid page.
+    paginationFooterPage.render({
+      page: 999,
+      total: 25,
+      pageSize: 25,
+      totalPages: 1,
+    })
+
+    expect(paginationFooterPage.getInfo()).toHaveTextContent(
+      'Showing 1–25 of 25 matches',
+    )
+  })
+
   it('shows a 0 range when there are no matches', () => {
     paginationFooterPage.render({ page: 1, total: 0, pageSize: 25, totalPages: 1 })
 

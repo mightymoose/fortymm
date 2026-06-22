@@ -27,6 +27,7 @@ function matchRows(count: number, page: number, pageSize: number) {
       result: 'W' as const,
       status: 'completed' as const,
       created_at: '2026-06-01T12:00:00Z',
+      awaiting_confirmation: false,
     }))
 }
 
@@ -165,5 +166,55 @@ describe('player profile match-history pagination', () => {
     })
     expect(await screen.findByText('opp.25')).toBeInTheDocument()
     expect(screen.queryByText(/no matches yet/i)).not.toBeInTheDocument()
+  })
+
+  it('labels an awaiting-confirmation match "AWAITING", not "LIVE" (#364)', async () => {
+    // Two in_progress rows: one genuinely live (no signature), one with a
+    // posted-but-unconfirmed result. They must render distinct chips.
+    const rows = [
+      {
+        id: 'm-awaiting',
+        opponent: { id: 'opp-a', username: 'opp.awaiting' },
+        sets: [{ mine: 11, theirs: 9 }],
+        result: null,
+        status: 'in_progress' as const,
+        created_at: '2026-06-02T12:00:00Z',
+        awaiting_confirmation: true,
+      },
+      {
+        id: 'm-live',
+        opponent: { id: 'opp-l', username: 'opp.live' },
+        sets: [],
+        result: null,
+        status: 'in_progress' as const,
+        created_at: '2026-06-01T12:00:00Z',
+        awaiting_confirmation: false,
+      },
+    ]
+    const bundle = { items: rows, page: 1, page_size: 25, total: rows.length }
+    server.use(
+      http.get('*/v1/session', () => HttpResponse.json(sessionResponse())),
+      http.get('*/v1/players/:playerId', () =>
+        HttpResponse.json({
+          id: 'p-1',
+          username: 'rallymaster',
+          rating: 1234,
+          wins: 20,
+          losses: 8,
+          matches: bundle,
+        }),
+      ),
+      http.get('*/v1/players/:playerId/matches', () =>
+        HttpResponse.json(bundle),
+      ),
+    )
+
+    renderProfile('/players/p-1')
+
+    // The awaiting row reads AWAITING; the live row still reads LIVE.
+    expect(await screen.findByText('AWAITING')).toBeInTheDocument()
+    expect(screen.getByText('LIVE')).toBeInTheDocument()
+    // The awaiting row must NOT be labelled LIVE.
+    expect(screen.getAllByText('LIVE')).toHaveLength(1)
   })
 })

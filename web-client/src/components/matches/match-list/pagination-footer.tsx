@@ -31,11 +31,16 @@ export const PaginationFooter = ({
   pageSize,
   totalPages,
 }: PaginationFooterProps) => {
-  const first = total === 0 ? 0 : (page - 1) * pageSize + 1
-  const last = Math.min(total, page * pageSize)
-  const tokens = paginationRange(page, totalPages)
-  const atFirst = page <= 1
-  const atLast = page >= totalPages
+  // Clamp a stale/out-of-range `page` to a valid one so the range math can
+  // never render start > end — e.g. the frame before the parent's redirect
+  // effect snaps a deep-linked `?page=999` back to the last page (#637). The
+  // footer is self-protecting regardless of what the caller passes.
+  const safePage = Math.min(Math.max(1, page), totalPages)
+  const first = total === 0 ? 0 : (safePage - 1) * pageSize + 1
+  const last = Math.min(total, safePage * pageSize)
+  const tokens = paginationRange(safePage, totalPages)
+  const atFirst = safePage <= 1
+  const atLast = safePage >= totalPages
 
   return (
     <div className="footer">
@@ -62,7 +67,7 @@ export const PaginationFooter = ({
               variant="ghost"
               size="icon-sm"
               disabled={atFirst}
-              onClick={() => setPage(page - 1)}
+              onClick={() => setPage(safePage - 1)}
               aria-label="Previous page"
             >
               <ChevronLeft size={14} strokeWidth={2.4} />
@@ -77,7 +82,7 @@ export const PaginationFooter = ({
               <PaginationItem key={i}>
                 <PaginationLink
                   href="#"
-                  isActive={t === page}
+                  isActive={t === safePage}
                   onClick={(e) => {
                     e.preventDefault()
                     setPage(t)
@@ -93,7 +98,7 @@ export const PaginationFooter = ({
               variant="ghost"
               size="icon-sm"
               disabled={atLast}
-              onClick={() => setPage(page + 1)}
+              onClick={() => setPage(safePage + 1)}
               aria-label="Next page"
             >
               <ChevronRight size={14} strokeWidth={2.4} />
