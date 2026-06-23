@@ -29,6 +29,7 @@ from app.attention import (
     list_attention_kind,
 )
 from app.db import get_session
+from app.domain.match.labels import status_label as _status_label
 from app.domain.match.models import Match as MatchModel
 from app.leagues import resolve_league
 from app.mappers.match_details_mapper import serialize_match_details
@@ -197,27 +198,6 @@ def _all_sides_signed(match: Match) -> bool:
     flip in ``POST /confirmation``."""
     signers = {sig.user_id for sig in match.signatures}
     return all(any(p.user_id in signers for p in side.players) for side in match.sides)
-
-
-def _status_label(match: Match) -> str:
-    """User-facing label for a match's lifecycle position. An ``in_progress``
-    match with at least one signature has a posted result waiting on the
-    other side — surface that distinctly so the FE doesn't need to know
-    about ``signatures`` to render it."""
-    if match.status == MatchStatus.in_progress and match.signatures:
-        return "Awaiting confirmation"
-    # Exhaustive — adding an enum member is a type error until handled.
-    match match.status:
-        case MatchStatus.pending:
-            return "Scheduled"
-        case MatchStatus.in_progress:
-            return "Live"
-        case MatchStatus.completed:
-            return "Final"
-        case MatchStatus.disputed:
-            return "Disputed"
-        case MatchStatus.voided:
-            return "Voided"
 
 
 def _games_to_win(best_of: int) -> int:

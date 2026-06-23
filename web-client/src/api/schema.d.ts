@@ -1992,6 +1992,8 @@ export interface components {
              */
             id: string;
             status: components["schemas"]["MatchStatus"];
+            /** Status Label */
+            status_label: string;
             /**
              * Created At
              * Format: date-time

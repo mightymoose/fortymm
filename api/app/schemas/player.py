@@ -71,6 +71,11 @@ class PlayerMatchRow(BaseModel):
 
     id: uuid.UUID
     status: MatchStatus
+    # User-facing lifecycle label (shared `_status_label` mapping). Carries the
+    # derived "Awaiting confirmation" bucket that `status` alone can't express
+    # (an in_progress match with a posted result waiting on the other side), so
+    # the public profile doesn't mislabel awaiting rows as "LIVE" (issue #364).
+    status_label: str
     created_at: datetime
     opponent: PlayerMatchOpponent
     # Newest-first list of per-game scores. Empty when no games have been

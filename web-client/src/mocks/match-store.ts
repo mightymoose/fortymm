@@ -240,7 +240,7 @@ function projectSides(seed: SeedMatch): {
   return { mySide, opponentSide }
 }
 
-function seedStatusLabel(seed: SeedMatch): string {
+export function seedStatusLabel(seed: SeedMatch): string {
   if (seed.status === 'in_progress' && seed.signatures.length > 0) {
     return 'Awaiting confirmation'
   }

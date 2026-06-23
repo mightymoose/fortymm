@@ -9,6 +9,7 @@ from sqlalchemy.orm import aliased, selectinload
 from sqlalchemy.sql.base import ExecutableOption
 
 from app.db import get_session
+from app.domain.match.labels import status_label
 from app.leagues import resolve_league
 from app.models import (
     Match,
@@ -419,14 +420,17 @@ async def get_player(
 
 
 def _player_matches_eager() -> tuple[ExecutableOption, ...]:
-    """Eager-load sides + side players + per-game scores. Matches the
-    structure matches.py uses for its detail view but skips match_settings
-    + league/rating_strategy since the per-player row doesn't render those."""
+    """Eager-load sides + side players + per-game scores + signatures. Matches
+    the structure matches.py uses for its detail view but skips match_settings
+    + league/rating_strategy since the per-player row doesn't render those.
+    Signatures are needed so the row's ``status_label`` can split the derived
+    ``Awaiting confirmation`` bucket out of ``Live`` (issue #364)."""
     return (
         selectinload(Match.sides)
         .selectinload(MatchSide.players)
         .selectinload(MatchSidePlayer.user),
         selectinload(Match.games).selectinload(MatchGame.score),
+        selectinload(Match.signatures),
     )
 
 
@@ -490,6 +494,7 @@ def _serialize_player_match(match: Match, player_id: uuid.UUID) -> PlayerMatchRo
     return PlayerMatchRow(
         id=match.id,
         status=match.status,
+        status_label=status_label(match),
         created_at=match.created_at,
         opponent=opponent,
         sets=sets,

@@ -17,6 +17,7 @@ import {
   projectRating,
   projectRecentResult,
   rankAttentionSeeds,
+  seedStatusLabel,
   statusCountsOf,
   validateScore,
   type SeedMatch,
@@ -290,6 +291,7 @@ function projectPlayerMatches(player: {
       return {
         id: m.id,
         status: m.status,
+        status_label: seedStatusLabel(m),
         created_at: m.created_at,
         opponent: { id: opponentId, username: opponentUsername },
         sets,

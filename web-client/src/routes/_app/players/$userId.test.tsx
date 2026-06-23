@@ -26,6 +26,7 @@ function matchRows(count: number, page: number, pageSize: number) {
       sets: [{ mine: 11, theirs: 7 }],
       result: 'W' as const,
       status: 'completed' as const,
+      status_label: 'Final' as const,
       created_at: '2026-06-01T12:00:00Z',
     }))
 }
@@ -165,5 +166,60 @@ describe('player profile match-history pagination', () => {
     })
     expect(await screen.findByText('opp.25')).toBeInTheDocument()
     expect(screen.queryByText(/no matches yet/i)).not.toBeInTheDocument()
+  })
+})
+
+describe('player profile result chip (#364)', () => {
+  it('labels an awaiting-confirmation match AWAITING, not LIVE', async () => {
+    // An in_progress match with a posted result waiting on the other side.
+    // The server distinguishes it via `status_label`; the chip must not show
+    // it as plain LIVE (indistinguishable from a genuinely live match).
+    const awaitingRow = {
+      id: 'm-awaiting',
+      opponent: { id: 'opp-1', username: 'pending.pat' },
+      sets: [{ mine: 11, theirs: 7 }],
+      result: null,
+      status: 'in_progress' as const,
+      status_label: 'Awaiting confirmation' as const,
+      created_at: '2026-06-01T12:00:00Z',
+    }
+    // A genuinely live match (no posted result) stays LIVE.
+    const liveRow = {
+      id: 'm-live',
+      opponent: { id: 'opp-2', username: 'live.lee' },
+      sets: [],
+      result: null,
+      status: 'in_progress' as const,
+      status_label: 'Live' as const,
+      created_at: '2026-06-02T12:00:00Z',
+    }
+    const matches = {
+      items: [liveRow, awaitingRow],
+      page: 1,
+      page_size: 25,
+      total: 2,
+    }
+    server.use(
+      http.get('*/v1/session', () => HttpResponse.json(sessionResponse())),
+      http.get('*/v1/players/:playerId', () =>
+        HttpResponse.json({
+          id: 'p-1',
+          username: 'rallymaster',
+          rating: 1234,
+          wins: 0,
+          losses: 0,
+          matches,
+        }),
+      ),
+      http.get('*/v1/players/:playerId/matches', () =>
+        HttpResponse.json(matches),
+      ),
+    )
+
+    renderProfile('/players/p-1')
+
+    expect(await screen.findByText('AWAITING')).toBeInTheDocument()
+    // The live row still reads LIVE — the awaiting row didn't swallow it.
+    expect(screen.getByText('LIVE')).toBeInTheDocument()
   })
 })

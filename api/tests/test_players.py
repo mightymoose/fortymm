@@ -9,6 +9,7 @@ from app.models import (
     MatchSettings,
     MatchSide,
     MatchSidePlayer,
+    MatchSignature,
     MatchStatus,
     User,
     UserLeagueRating,
@@ -339,12 +340,17 @@ async def _record_match_with_winner(
     *,
     created_at: datetime,
     status: MatchStatus = MatchStatus.completed,
+    signed_by: User | None = None,
 ) -> Match:
     """Persist a singles match with explicit winner/loser so W-L and form
     assertions are deterministic. Same shape as `_record_match` but flips
     `MatchSide.won` on the right side. ``won`` is stamped only for completed
     matches, mirroring the API: since #485 it's written at the moment a match
-    becomes final, never while one is still in progress."""
+    becomes final, never while one is still in progress.
+
+    ``signed_by`` attaches a single ``MatchSignature`` — an ``in_progress``
+    match with one models the "posted result awaiting the other side's
+    confirmation" state."""
     settings = MatchSettings(team_size=1, best_of=5, affects_rating=False)
     league = await get_default_league(db_session)
     match = Match(
@@ -360,6 +366,8 @@ async def _record_match_with_winner(
     side1.players.append(MatchSidePlayer(match=match, user=winner))
     side2 = MatchSide(match=match, side_number=2, won=False if completed else None)
     side2.players.append(MatchSidePlayer(match=match, user=loser))
+    if signed_by is not None:
+        match.signatures.append(MatchSignature(match=match, user=signed_by))
     db_session.add(match)
     await db_session.commit()
     return match
@@ -570,6 +578,37 @@ async def test_list_player_matches_result_hidden_while_awaiting_confirmation(
     assert body["total"] == 1
     row = body["items"][0]
     assert row["status"] == "in_progress"
+    assert row["result"] is None
+    # No signature yet → genuinely live, not awaiting confirmation.
+    assert row["status_label"] == "Live"
+
+
+async def test_list_player_matches_labels_awaiting_confirmation_distinctly(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """An in_progress match with a posted result (one signature) is awaiting
+    the other side's confirmation. The public profile must surface that as
+    ``Awaiting confirmation`` rather than mislabeling it ``Live`` (issue #364)
+    — the status enum alone can't express the derived bucket, so the row
+    carries the shared ``status_label``."""
+    await start_session(api_client, db_session)
+    target = await make_user(db_session, "awaiting2.target")
+    rival = await make_user(db_session, "awaiting2.rival")
+    await _record_match_with_winner(
+        db_session,
+        target,
+        rival,
+        created_at=BASE_TIME,
+        status=MatchStatus.in_progress,
+        signed_by=target,
+    )
+
+    response = await api_client.get(f"/v1/players/{target.id}/matches")
+    assert response.status_code == 200
+    row = response.json()["items"][0]
+    assert row["status"] == "in_progress"
+    assert row["status_label"] == "Awaiting confirmation"
+    # Still no official outcome while unconfirmed.
     assert row["result"] is None
 
 

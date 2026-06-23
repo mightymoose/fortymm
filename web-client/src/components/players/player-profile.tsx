@@ -400,22 +400,44 @@ function MatchRowComponent({
         )}
       </td>
       <td>
-        <ResultChip status={m.status} won={won} lost={lost} />
+        <ResultChip
+          status={m.status}
+          statusLabel={m.status_label}
+          won={won}
+          lost={lost}
+        />
       </td>
     </tr>
   )
 }
 
+// Mirrors the server's `_status_label` (api/app/domain/match/labels.py): an
+// in_progress match with a posted result waiting on the other side. The status
+// enum alone can't distinguish it from a genuinely live match, so we key off
+// the server-derived label (issue #364).
+const AWAITING_CONFIRMATION_LABEL = 'Awaiting confirmation'
+
 function ResultChip({
   status,
+  statusLabel,
   won,
   lost,
 }: {
   status: PlayerMatchRow['status']
+  statusLabel: PlayerMatchRow['status_label']
   won: boolean
   lost: boolean
 }) {
   if (status === 'in_progress') {
+    if (statusLabel === AWAITING_CONFIRMATION_LABEL) {
+      // A posted-but-unconfirmed result — distinct from genuinely live, so an
+      // anonymous viewer can tell the result isn't final/ratified yet.
+      return (
+        <span className="player-profile__result-chip player-profile__result-chip--pending">
+          AWAITING
+        </span>
+      )
+    }
     return (
       <span className="player-profile__result-chip player-profile__result-chip--live">
         LIVE
