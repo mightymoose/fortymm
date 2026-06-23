@@ -632,12 +632,18 @@ async def _pending_change_token(
     re-deliver) — now that ``user.email`` no longer mirrors the pending
     address, the token is the only source of truth for the resend target.
     Also drives the ``pending_email`` field on the session response."""
+    # Defensive determinism: today ``_issue_confirmation_token`` deletes prior
+    # change tokens before inserting, so at most one is pending. If a future
+    # path ever leaves more than one, return the most recent. ``id`` is a random
+    # UUIDv4, not a sequence, so order by ``created_at`` (the real recency
+    # signal); ``id.desc()`` is only a stable tiebreak.
     result = await db.execute(
         select(UserToken)
         .where(
             UserToken.user_id == user_id,
             _pending_email_token_clause(),
         )
+        .order_by(UserToken.created_at.desc(), UserToken.id.desc())
         .limit(1)
     )
     return result.scalar_one_or_none()

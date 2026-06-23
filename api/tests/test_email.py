@@ -1,6 +1,6 @@
 import hashlib
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 import pytest_asyncio
@@ -137,6 +137,40 @@ async def test_set_email_is_pending_only(
 
     finished = fake_email_queue.finished_job_registry
     assert finished.count == 1
+
+
+async def test_pending_email_reflects_most_recent_token(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """Defensive determinism (issue #277): ``set_email`` rotates change tokens
+    so only one is ever pending, but if more than one is present the session's
+    ``pending_email`` must reflect the *most recent* by ``created_at`` — not an
+    arbitrary row, since ``UserToken.id`` is a random UUID, not a sequence."""
+    user = await start_session(api_client, db_session)
+    older = datetime(2026, 1, 1, tzinfo=UTC)
+    db_session.add_all(
+        [
+            UserToken(
+                user_id=user.id,
+                context=EMAIL_CHANGE_CONTEXT_PREFIX,
+                token=b"older-token",
+                sent_to="older@example.com",
+                created_at=older,
+            ),
+            UserToken(
+                user_id=user.id,
+                context=EMAIL_CHANGE_CONTEXT_PREFIX,
+                token=b"newer-token",
+                sent_to="newer@example.com",
+                created_at=older + timedelta(hours=1),
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    response = await api_client.get("/v1/session")
+    assert response.status_code == 200
+    assert response.json()["data"]["user"]["pending_email"] == "newer@example.com"
 
 
 async def test_set_email_requires_session(api_client: AsyncClient):
