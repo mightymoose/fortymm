@@ -25,7 +25,7 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           # The changed-files diff needs the base branch and full history, not
           # the default shallow checkout.
