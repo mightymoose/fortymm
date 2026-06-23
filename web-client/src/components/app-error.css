@@ -1,0 +1,30 @@
+/* Global error boundary screen (#292). Full-screen, self-themed fallback shown
+   when a route loader/component throws without its own errorComponent — most
+   notably the `_app` session bootstrap failing. Mirrors the root loader's
+   full-bleed framing so the failed-startup state reads as part of the same
+   surface, and centers the shared `.md-error-state` block. */
+
+.app-error {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-app);
+  font-family: var(--font-ui);
+  overflow: auto;
+}
+
+.app-error__wordmark {
+  position: absolute;
+  top: 26px;
+  left: 30px;
+  opacity: 0.5;
+}
+
+/* The shared error block is left-aligned with a tall min-height for in-page
+   use; here it's centered in the viewport, so drop the min-height and let it
+   size to its content. */
+.app-error .md-error-state {
+  min-height: 0;
+}
