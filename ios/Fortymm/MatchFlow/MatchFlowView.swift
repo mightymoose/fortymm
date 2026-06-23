@@ -60,7 +60,9 @@ struct MatchFlowView: View {
                 NewMatchView(
                     opponent: $opponent, bestOf: $bestOf, rated: $rated,
                     onStart: start,
-                    onCancel: { onClose(true) }
+                    // Cancel just dismisses the cover, leaving `selection` on the
+                    // tab the flow was launched from (e.g. Home) — not Matches.
+                    onCancel: { onClose(false) }
                 )
                 .transition(.opacity)
             case .score:
