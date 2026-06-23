@@ -18,11 +18,12 @@ describe("HeadToHead", () => {
 
     headToHeadPage.render();
 
-    // Pending: only HeadToHead's real Suspense fallback, no card yet.
-    expect(headToHeadPage.queryLoading()).toBeInTheDocument();
+    // Pending: only HeadToHead's real Suspense fallback, no card yet. The row
+    // mounts under a router, so the fallback appears a tick after render.
+    expect(await headToHeadPage.findLoading()).toBeInTheDocument();
     expect(headToHeadPage.queryError()).not.toBeInTheDocument();
 
-    await waitForElementToBeRemoved(headToHeadPage.queryLoading());
+    await waitForElementToBeRemoved(() => headToHeadPage.queryLoading());
     expect(headToHeadPage.getCard()).toBeInTheDocument();
   });
 
@@ -35,7 +36,8 @@ describe("HeadToHead", () => {
 
     headToHeadPage.render({ matchId: "m-42" });
 
-    await waitForElementToBeRemoved(headToHeadPage.queryLoading());
+    await headToHeadPage.findLoading();
+    await waitForElementToBeRemoved(() => headToHeadPage.queryLoading());
     expect(requestedMatchId).toBe("m-42");
   });
 
@@ -44,7 +46,8 @@ describe("HeadToHead", () => {
 
     headToHeadPage.render();
 
-    await waitForElementToBeRemoved(headToHeadPage.queryLoading());
+    await headToHeadPage.findLoading();
+    await waitForElementToBeRemoved(() => headToHeadPage.queryLoading());
     // Wiring only: card content is pinned by the query and display tests.
     expect(headToHeadPage.getLeftCount()).toHaveTextContent(/^2$/);
   });
@@ -56,7 +59,8 @@ describe("HeadToHead", () => {
 
     headToHeadPage.render();
 
-    await waitForElementToBeRemoved(headToHeadPage.queryLoading());
+    await headToHeadPage.findLoading();
+    await waitForElementToBeRemoved(() => headToHeadPage.queryLoading());
     expect(headToHeadPage.queryCard()).not.toBeInTheDocument();
     expect(headToHeadPage.queryError()).not.toBeInTheDocument();
   });
@@ -66,7 +70,8 @@ describe("HeadToHead", () => {
 
     headToHeadPage.render();
 
-    await waitForElementToBeRemoved(headToHeadPage.queryLoading());
+    await headToHeadPage.findLoading();
+    await waitForElementToBeRemoved(() => headToHeadPage.queryLoading());
     expect(headToHeadPage.queryError()).toBeInTheDocument();
   });
 });

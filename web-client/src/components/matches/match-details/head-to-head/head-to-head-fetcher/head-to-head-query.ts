@@ -10,10 +10,12 @@ import { orderedSides, type MatchDetailsSide } from "../../ordered-sides";
  * Game counts and the win flag are aligned to the card's left/right anchor so
  * the component does no per-row re-mapping. */
 export type HeadToHeadMeetingView = {
-  /** The past match's id — a stable React key; not currently linked. */
+  /** The past match's id — a stable React key and the link target for the row. */
   matchId: string;
   /** Pre-formatted meeting date, e.g. "May 8". */
   dateLabel: string;
+  /** True when the meeting moved ratings; drives the "Rated" row marker. */
+  rated: boolean;
   /** Games won by the left (perspective-first) side in that meeting. */
   leftGamesWon: number;
   /** Games won by the right side in that meeting. */
@@ -80,6 +82,7 @@ const selectHeadToHead = (match: MatchDetailsResult): HeadToHeadView | null => {
     recentMeetings: raw.recent_meetings.map((m) => ({
       matchId: m.match_id,
       dateLabel: fmtDateShort(m.completed_at),
+      rated: m.rated,
       leftGamesWon: swap ? m.side_2_games_won : m.side_1_games_won,
       rightGamesWon: swap ? m.side_1_games_won : m.side_2_games_won,
       leftWon:

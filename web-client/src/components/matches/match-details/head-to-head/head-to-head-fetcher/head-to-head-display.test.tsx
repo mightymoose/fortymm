@@ -3,16 +3,18 @@ import { headToHeadDisplayPage } from "./head-to-head-display.page";
 import { buildHeadToHeadMeetingView } from "./head-to-head-display/meeting-row.factory";
 
 describe("HeadToHeadDisplay", () => {
-  it("renders the card as a region named by its heading", () => {
+  it("renders the card as a region named by its heading", async () => {
     headToHeadDisplayPage.render();
 
+    await headToHeadDisplayPage.findCard();
     expect(headToHeadDisplayPage.getCard()).toBeInTheDocument();
     expect(headToHeadDisplayPage.getTitle()).toHaveTextContent("Head to head");
   });
 
-  it("shows the side labels and win counts", () => {
+  it("shows the side labels and win counts", async () => {
     headToHeadDisplayPage.render();
 
+    await headToHeadDisplayPage.findCard();
     expect(headToHeadDisplayPage.getLeftLabel()).toHaveTextContent(
       "rita.kovac",
     );
@@ -23,9 +25,10 @@ describe("HeadToHeadDisplay", () => {
     expect(headToHeadDisplayPage.getRightCount()).toHaveTextContent(/^1$/);
   });
 
-  it("tones the leading side's count as the winner", () => {
+  it("tones the leading side's count as the winner", async () => {
     headToHeadDisplayPage.render();
 
+    await headToHeadDisplayPage.findCard();
     expect(headToHeadDisplayPage.getLeftCount()).toHaveClass(
       "md-h2h__count--win",
     );
@@ -34,21 +37,23 @@ describe("HeadToHeadDisplay", () => {
     );
   });
 
-  it("pluralizes the meeting count for several meetings", () => {
+  it("pluralizes the meeting count for several meetings", async () => {
     headToHeadDisplayPage.render();
 
+    await headToHeadDisplayPage.findCard();
     expect(headToHeadDisplayPage.getMeta()).toHaveTextContent("3 MEETINGS");
   });
 
-  it("singularizes the meeting count for a single meeting", () => {
+  it("singularizes the meeting count for a single meeting", async () => {
     headToHeadDisplayPage.render({
       headToHead: buildHeadToHeadView({ totalMeetings: 1 }),
     });
 
+    await headToHeadDisplayPage.findCard();
     expect(headToHeadDisplayPage.getMeta()).toHaveTextContent("1 MEETING");
   });
 
-  it("renders one row per recent meeting, with the bar, when there are meetings", () => {
+  it("renders one row per recent meeting, with the bar, when there are meetings", async () => {
     headToHeadDisplayPage.render({
       headToHead: buildHeadToHeadView({
         recentMeetings: [
@@ -58,6 +63,7 @@ describe("HeadToHeadDisplay", () => {
       }),
     });
 
+    await headToHeadDisplayPage.findCard();
     expect(headToHeadDisplayPage.queryBar()).toBeInTheDocument();
     expect(headToHeadDisplayPage.queryEmpty()).not.toBeInTheDocument();
     expect(headToHeadDisplayPage.getRows()).toHaveLength(2);
@@ -70,7 +76,7 @@ describe("HeadToHeadDisplay", () => {
     );
   });
 
-  it("shows the start-of-rivalry empty state with no bar or rows", () => {
+  it("shows the start-of-rivalry empty state with no bar or rows", async () => {
     headToHeadDisplayPage.render({
       headToHead: buildHeadToHeadView({
         totalMeetings: 0,
@@ -80,6 +86,7 @@ describe("HeadToHeadDisplay", () => {
       }),
     });
 
+    await headToHeadDisplayPage.findCard();
     expect(headToHeadDisplayPage.queryEmpty()).toHaveTextContent(
       /start of the rivalry/,
     );

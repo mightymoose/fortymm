@@ -1,9 +1,32 @@
 import * as React from "react"
 import { Dialog as SheetPrimitive } from "radix-ui"
+import { cva, type VariantProps } from "class-variance-authority"
 
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { XIcon } from "lucide-react"
+
+// Each side's classes are plain (unmodified) utilities so a consumer's width
+// override merges cleanly via tailwind-merge — no `!important` needed (#623).
+// The data-attribute approach buried width behind `data-[side=right]:w-[320px]`,
+// which tailwind-merge can't dedupe against a bare `w-[560px]`, forcing callers
+// to reach for `!important`.
+const sheetVariants = cva(
+  "fixed z-50 flex flex-col bg-popover bg-clip-padding p-6 text-sm text-popover-foreground shadow-[0_12px_32px_rgba(0,0,0,0.55)] transition duration-200 ease-in-out data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0",
+  {
+    variants: {
+      side: {
+        top: "inset-x-0 top-0 h-auto border-b data-open:slide-in-from-top-10 data-closed:slide-out-to-top-10",
+        bottom:
+          "inset-x-0 bottom-0 h-auto border-t data-open:slide-in-from-bottom-10 data-closed:slide-out-to-bottom-10",
+        left: "inset-y-0 left-0 h-full w-[320px] border-r data-open:slide-in-from-left-10 data-closed:slide-out-to-left-10",
+        right:
+          "inset-y-0 right-0 h-full w-[320px] border-l data-open:slide-in-from-right-10 data-closed:slide-out-to-right-10",
+      },
+    },
+    defaultVariants: { side: "right" },
+  }
+)
 
 function Sheet({ ...props }: React.ComponentProps<typeof SheetPrimitive.Root>) {
   return <SheetPrimitive.Root data-slot="sheet" {...props} />
@@ -49,20 +72,17 @@ function SheetContent({
   side = "right",
   showCloseButton = true,
   ...props
-}: React.ComponentProps<typeof SheetPrimitive.Content> & {
-  side?: "top" | "right" | "bottom" | "left"
-  showCloseButton?: boolean
-}) {
+}: React.ComponentProps<typeof SheetPrimitive.Content> &
+  VariantProps<typeof sheetVariants> & {
+    showCloseButton?: boolean
+  }) {
   return (
     <SheetPortal>
       <SheetOverlay />
       <SheetPrimitive.Content
         data-slot="sheet-content"
         data-side={side}
-        className={cn(
-          "fixed z-50 flex flex-col bg-popover bg-clip-padding p-6 text-sm text-popover-foreground shadow-[0_12px_32px_rgba(0,0,0,0.55)] transition duration-200 ease-in-out data-[side=bottom]:inset-x-0 data-[side=bottom]:bottom-0 data-[side=bottom]:h-auto data-[side=bottom]:border-t data-[side=left]:inset-y-0 data-[side=left]:left-0 data-[side=left]:h-full data-[side=left]:w-[320px] data-[side=left]:border-r data-[side=right]:inset-y-0 data-[side=right]:right-0 data-[side=right]:h-full data-[side=right]:w-[320px] data-[side=right]:border-l data-[side=top]:inset-x-0 data-[side=top]:top-0 data-[side=top]:h-auto data-[side=top]:border-b data-open:animate-in data-open:fade-in-0 data-[side=bottom]:data-open:slide-in-from-bottom-10 data-[side=left]:data-open:slide-in-from-left-10 data-[side=right]:data-open:slide-in-from-right-10 data-[side=top]:data-open:slide-in-from-top-10 data-closed:animate-out data-closed:fade-out-0 data-[side=bottom]:data-closed:slide-out-to-bottom-10 data-[side=left]:data-closed:slide-out-to-left-10 data-[side=right]:data-closed:slide-out-to-right-10 data-[side=top]:data-closed:slide-out-to-top-10",
-          className
-        )}
+        className={cn(sheetVariants({ side }), className)}
         {...props}
       >
         {children}

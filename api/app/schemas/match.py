@@ -152,6 +152,7 @@ class MatchDetailsH2HMeeting(BaseModel):
     side_1_games_won: int
     side_2_games_won: int
     winner_side_number: int | None
+    rated: bool
 
 
 class MatchDetailsH2H(BaseModel):

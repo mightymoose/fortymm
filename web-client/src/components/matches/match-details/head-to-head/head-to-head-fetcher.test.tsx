@@ -20,10 +20,11 @@ describe("HeadToHeadFetcher", () => {
 
     headToHeadFetcherPage.render();
 
-    expect(headToHeadFetcherPage.queryLoading()).toBeInTheDocument();
+    // The row mounts under a router, so the fallback appears a tick after render.
+    expect(await headToHeadFetcherPage.findLoading()).toBeInTheDocument();
     expect(headToHeadFetcherPage.queryCard()).not.toBeInTheDocument();
 
-    await waitForElementToBeRemoved(headToHeadFetcherPage.queryLoading());
+    await waitForElementToBeRemoved(() => headToHeadFetcherPage.queryLoading());
     expect(headToHeadFetcherPage.getCard()).toBeInTheDocument();
     // The default record's counts, projected through the query.
     expect(headToHeadFetcherPage.getLeftCount()).toHaveTextContent(/^2$/);
@@ -37,7 +38,8 @@ describe("HeadToHeadFetcher", () => {
 
     headToHeadFetcherPage.render();
 
-    await waitForElementToBeRemoved(headToHeadFetcherPage.queryLoading());
+    await headToHeadFetcherPage.findLoading();
+    await waitForElementToBeRemoved(() => headToHeadFetcherPage.queryLoading());
     expect(headToHeadFetcherPage.queryCard()).not.toBeInTheDocument();
     expect(headToHeadFetcherPage.queryError()).not.toBeInTheDocument();
   });
@@ -49,7 +51,8 @@ describe("HeadToHeadFetcher", () => {
 
     headToHeadFetcherPage.render();
 
-    await waitForElementToBeRemoved(headToHeadFetcherPage.queryLoading());
+    await headToHeadFetcherPage.findLoading();
+    await waitForElementToBeRemoved(() => headToHeadFetcherPage.queryLoading());
     expect(headToHeadFetcherPage.queryError()).toBeInTheDocument();
     expect(headToHeadFetcherPage.queryCard()).not.toBeInTheDocument();
   });

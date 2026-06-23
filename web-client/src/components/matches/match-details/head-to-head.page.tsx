@@ -5,7 +5,8 @@ import {
   type MatchDetailsResolver,
 } from "@/mocks/endpoints/matches/match-details.endpoint";
 import { server } from "@/mocks/server";
-import { render, screen, type Container } from "@/test/utilities";
+import { renderUnderMatchRoute } from "@/test/match-route";
+import { screen, type Container } from "@/test/utilities";
 
 import { HeadToHead, type HeadToHeadProps } from "./head-to-head";
 import { headToHeadDisplayPage } from "./head-to-head/head-to-head-fetcher/head-to-head-display.page";
@@ -19,6 +20,13 @@ const scoped = (container: Container) => ({
    * unambiguous when composed alongside the other sections' status regions. */
   queryLoading() {
     return container.queryByRole("status", {
+      name: /loading head-to-head record/i,
+    });
+  },
+  /** Async variant — the tree mounts under a router that resolves a tick after
+   * render, so the fallback appears asynchronously. */
+  findLoading() {
+    return container.findByRole("status", {
       name: /loading head-to-head record/i,
     });
   },
@@ -61,7 +69,7 @@ export const headToHeadPage = {
       ...overrides,
     };
 
-    render(
+    renderUnderMatchRoute(
       <ErrorBoundary
         fallbackRender={() => (
           <div role="alert">Couldn’t load the head-to-head record</div>

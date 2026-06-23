@@ -47,12 +47,40 @@ describe("headToHeadQuery", () => {
         {
           matchId: "m-h2h-1",
           dateLabel: fmtDateShort("2026-05-08T18:00:00Z"),
+          rated: true,
           leftGamesWon: 3,
           rightGamesWon: 2,
           leftWon: true,
         },
       ],
     });
+  });
+
+  it("carries each meeting's rated flag through to the view", async () => {
+    headToHeadQueryPage.mockEndpoint(() =>
+      HttpResponse.json(
+        matchWithH2H({
+          head_to_head: buildMatchDetailsH2H({
+            recent_meetings: [
+              buildMatchDetailsH2HMeeting({ match_id: "m-rated", rated: true }),
+              buildMatchDetailsH2HMeeting({
+                match_id: "m-casual",
+                rated: false,
+              }),
+            ],
+          }),
+        }),
+      ),
+    );
+
+    const result = await renderH2H();
+
+    expect(
+      result.current.data?.recentMeetings.map((m) => [m.matchId, m.rated]),
+    ).toEqual([
+      ["m-rated", true],
+      ["m-casual", false],
+    ]);
   });
 
   it("swaps counts, scores and the win flag when the viewer is on side 2", async () => {
