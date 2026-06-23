@@ -1,5 +1,6 @@
 import { Outlet, createFileRoute } from '@tanstack/react-router'
 import { AppShell } from '@/components/app-shell'
+import { AppError } from '@/components/app-error'
 import { RootLoader } from '@/components/root-loader'
 import { sessionQueryOptions } from '@/api/session'
 
@@ -14,11 +15,21 @@ import { sessionQueryOptions } from '@/api/session'
  * Pathless (`_app`) → adds no URL segment, so child paths (`/dashboard`,
  * `/matches`, …) are unchanged. The chrome lives here so children render only
  * their page content.
+ *
+ * `errorComponent` owns the session-bootstrap failure (#292): when the loader's
+ * `ensureQueryData` rejects, every session-gated child page (`enabled:
+ * session.isSuccess`) would otherwise sit on a silent forever-skeleton. Routing
+ * it here gives a branded retry. Scoped to `_app` (not a global
+ * `defaultErrorComponent`) on purpose: this boundary sits outside AppShell, so
+ * it never lands *inside* a child's own React error boundary the way a
+ * per-route default would (e.g. the admin/tournament `RbacBoundary` that wraps
+ * its `<Outlet>` — a global default would shadow its 403/error handling).
  */
 export const Route = createFileRoute('/_app')({
   loader: ({ context }) =>
     context.queryClient.ensureQueryData(sessionQueryOptions()),
   pendingComponent: RootLoader,
+  errorComponent: AppError,
   component: AppLayout,
 })
 
