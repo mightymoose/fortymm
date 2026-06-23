@@ -70,7 +70,7 @@ export const EventEditor = ({
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
         side="right"
-        className="!w-full gap-0 p-0 sm:!w-[820px] sm:!max-w-[820px]"
+        className="w-full gap-0 p-0 sm:w-[820px] sm:max-w-[820px]"
       >
         <SheetHeader className="border-b border-[color:var(--border-subtle)]">
           <SheetDescription className="text-[11px] font-semibold tracking-[0.14em] uppercase">

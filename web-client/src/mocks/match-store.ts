@@ -440,6 +440,7 @@ function projectHeadToHead(
       side_1_games_won: side1,
       side_2_games_won: side2,
       winner_side_number: winner,
+      rated: m.affects_rating,
     })
   }
   return {

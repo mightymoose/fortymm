@@ -489,6 +489,7 @@ describe("MatchDetails — page wiring", () => {
             side_1_games_won: 1,
             side_2_games_won: 3,
             winner_side_number: 2,
+            rated: true,
           },
           {
             match_id: "m-h2h-2",
@@ -496,6 +497,7 @@ describe("MatchDetails — page wiring", () => {
             side_1_games_won: 3,
             side_2_games_won: 0,
             winner_side_number: 1,
+            rated: true,
           },
           {
             match_id: "m-h2h-1",
@@ -503,6 +505,7 @@ describe("MatchDetails — page wiring", () => {
             side_1_games_won: 3,
             side_2_games_won: 2,
             winner_side_number: 1,
+            rated: false,
           },
         ],
       },

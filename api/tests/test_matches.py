@@ -1757,6 +1757,39 @@ async def test_details_head_to_head_counts_prior_meetings_per_side(
     assert h2h["side_2_wins"] == 1
     # Most-recent meeting is the one I just lost.
     assert h2h["recent_meetings"][0]["winner_side_number"] == 2
+    # Every meeting here went through the rated sign-off flow.
+    assert all(m["rated"] for m in h2h["recent_meetings"])
+
+
+async def test_details_head_to_head_flags_rated_vs_unrated_meetings(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """Each meeting row carries whether it moved ratings, so the card can mark
+    rated meetings apart from casual ones (#500)."""
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "h2h-mixed-rival") as (
+        rival_client,
+        rival,
+    ):
+        # A rated prior meeting (full sign-off) ...
+        await _play_match_to_completion(
+            api_client, rival_client, rival.id, best_of=3, side_1_wins=True
+        )
+        # ... and an unrated one, which finalizes straight from /results.
+        unrated = await api_client.post(
+            "/v1/matches",
+            json={"opponent_user_id": str(rival.id), "best_of": 3, "rated": False},
+        )
+        assert unrated.status_code == 201
+        unrated_id = unrated.json()["id"]
+        await _post_results(api_client, unrated_id)
+
+        current = await _create_match(api_client, rival.id, best_of=5)
+
+    h2h = (await api_client.get(f"/v1/matches/{current['id']}")).json()["head_to_head"]
+    rated_by_match = {m["match_id"]: m["rated"] for m in h2h["recent_meetings"]}
+    assert rated_by_match[unrated_id] is False
+    assert any(rated_by_match.values())
 
 
 async def test_details_head_to_head_excludes_meetings_after_this_match(

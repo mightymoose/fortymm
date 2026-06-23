@@ -119,6 +119,7 @@ export function buildMatchDetailsH2HMeeting(
     side_1_games_won: 3,
     side_2_games_won: 2,
     winner_side_number: 1,
+    rated: true,
     ...overrides,
   }
 }

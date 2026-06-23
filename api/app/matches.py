@@ -1284,7 +1284,7 @@ async def _load_head_to_head(
             _history_base_query(current_match_id, before=match.created_at), user_a
         ),
         user_b,
-    )
+    ).options(selectinload(Match.match_settings))
     rows = (await db.execute(rows_query.limit(H2H_MEETINGS_LIMIT))).scalars().all()
 
     meetings: list[MatchDetailsH2HMeeting] = []
@@ -1305,6 +1305,7 @@ async def _load_head_to_head(
                 side_1_games_won=a_games,
                 side_2_games_won=b_games,
                 winner_side_number=winner_side,
+                rated=past.match_settings.affects_rating,
             )
         )
 

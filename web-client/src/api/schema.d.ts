@@ -1386,6 +1386,8 @@ export interface components {
             side_2_games_won: number;
             /** Winner Side Number */
             winner_side_number: number | null;
+            /** Rated */
+            rated: boolean;
         };
         /** MatchDetailsPlayer */
         MatchDetailsPlayer: {

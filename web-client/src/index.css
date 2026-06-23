@@ -3642,16 +3642,34 @@ body.dark.fortymm-theme {
   grid-template-columns: 70px 1fr auto auto;
   align-items: center;
   gap: 10px;
-  padding: 10px 0;
+  padding: 10px 8px;
+  margin: 0 -8px;
+  border-radius: var(--radius-sm);
   border-bottom: 1px solid var(--border-subtle);
+  color: inherit;
+  text-decoration: none;
+  transition: background var(--dur-fast) var(--ease-out);
 }
 .fortymm-theme .md-h2h__row:last-child {
   border-bottom: 0;
+}
+.fortymm-theme .md-h2h__row:hover {
+  background: var(--bg-hover);
+}
+.fortymm-theme .md-h2h__row:focus-visible {
+  outline: 2px solid var(--serve-500);
+  outline-offset: -2px;
 }
 .fortymm-theme .md-h2h__date {
   font: 500 11px var(--font-mono);
   color: var(--fg-3);
   letter-spacing: 0.06em;
+}
+.fortymm-theme .md-h2h__meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
 }
 .fortymm-theme .md-h2h__label {
   font: 500 12px var(--font-ui);
@@ -3659,6 +3677,16 @@ body.dark.fortymm-theme {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.fortymm-theme .md-h2h__tag {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--serve-500);
+  font: 600 9px var(--font-mono);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--serve-500);
 }
 .fortymm-theme .md-h2h__label--tonight {
   font-weight: 600;

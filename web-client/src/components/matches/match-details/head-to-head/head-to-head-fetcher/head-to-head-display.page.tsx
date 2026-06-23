@@ -1,4 +1,5 @@
-import { render, screen, within, type Container } from "@/test/utilities";
+import { renderUnderMatchRoute } from "@/test/match-route";
+import { screen, within, type Container } from "@/test/utilities";
 
 import {
   HeadToHeadDisplay,
@@ -16,6 +17,11 @@ const scoped = (container: Container) => {
   return {
     /** The card's `<section>` landmark, named by its visible heading. */
     getCard,
+    /** Async variant — the card mounts under a router that resolves the rows'
+     * typed links asynchronously, so first reads should await this. */
+    findCard() {
+      return container.findByRole("region", { name: "Head to head" });
+    },
     queryCard() {
       return container.queryByRole("region", { name: "Head to head" });
     },
@@ -72,7 +78,7 @@ const scoped = (container: Container) => {
 export const headToHeadDisplayPage = {
   render(overrides: Partial<HeadToHeadDisplayProps> = {}) {
     const props = buildHeadToHeadDisplayProps(overrides);
-    render(<HeadToHeadDisplay {...props} />);
+    renderUnderMatchRoute(<HeadToHeadDisplay {...props} />);
   },
 
   /**

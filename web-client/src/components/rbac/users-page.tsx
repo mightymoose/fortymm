@@ -319,7 +319,7 @@ function UserDrawer({
 }) {
   return (
     <Sheet open={!!user} onOpenChange={(o) => !o && onClose()}>
-      <SheetContent side="right" className="!w-[560px] !max-w-full !sm:max-w-full p-0">
+      <SheetContent side="right" className="w-[560px] max-w-full p-0">
         {user && (
           <UserDrawerBody
             key={user.id}
