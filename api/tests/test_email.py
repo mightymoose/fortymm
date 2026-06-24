@@ -574,6 +574,48 @@ async def test_confirm_email_rejects_unknown_token(
     assert response.status_code == 400
 
 
+async def test_confirm_email_rejects_an_expired_token(
+    api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
+):
+    """An email-change link past its lifetime is rejected and burned, so a
+    leaked or forwarded link can't be redeemed indefinitely."""
+    user = await start_session(api_client, db_session)
+    raw_token = await _capture_raw_token(api_client, db_session, fake_email_queue)
+
+    # Age the token past its 24h lifetime.
+    token_row = (
+        await db_session.execute(
+            select(UserToken).where(
+                UserToken.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX)
+            )
+        )
+    ).scalar_one()
+    token_row.created_at = datetime.now(UTC) - timedelta(hours=25)
+    await db_session.commit()
+
+    response = await api_client.post("/v1/me/email/confirm", json={"token": raw_token})
+    assert response.status_code == 400
+
+    # The address change did not take effect...
+    await db_session.refresh(user)
+    assert user.email != "rita@example.com"
+    assert user.confirmed_at is None
+
+    # ...and the stale token is burned.
+    remaining = (
+        (
+            await db_session.execute(
+                select(UserToken).where(
+                    UserToken.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX)
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert remaining == []
+
+
 async def test_confirm_email_works_from_a_different_browser(
     api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
 ):

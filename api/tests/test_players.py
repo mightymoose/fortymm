@@ -160,6 +160,25 @@ async def test_recent_opponents_excludes_the_current_user(
     assert me.username not in _usernames(response)
 
 
+async def test_recent_opponents_excludes_merged_ghost_opponents(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    me = await start_session(api_client, db_session)
+    ghost = await make_user(db_session, "ghost")
+    survivor = await make_user(db_session, "survivor")
+    await _record_match(db_session, me, ghost, created_at=BASE_TIME)
+
+    # ``ghost`` was folded into another account: a tombstone, not a real user.
+    ghost.merged_into_user_id = survivor.id
+    await db_session.commit()
+
+    response = await api_client.get("/v1/players/recent")
+    assert response.status_code == 200
+    # The tombstoned opponent must not surface as a selectable player, even
+    # though it leads the recency ordering.
+    assert "ghost" not in _usernames(response)
+
+
 async def test_recent_opponents_is_empty_without_other_users(
     api_client: AsyncClient, db_session: AsyncSession
 ):
