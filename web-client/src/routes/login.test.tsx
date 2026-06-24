@@ -228,6 +228,54 @@ describe('/login/sent flow', () => {
     expect(await screen.findByText(/new link sent/i)).toBeInTheDocument()
   })
 
+  it('throttles Resend with a cooldown right after the link was sent, so a rapid burst stays put (#616)', async () => {
+    let requests = 0
+    server.use(
+      http.post('*/v1/login/request', async ({ request }) => {
+        requests += 1
+        const body = (await request.json()) as { email: string }
+        return HttpResponse.json({ email: body.email }, { status: 202 })
+      }),
+    )
+    // A just-sent link (sentAt ≈ now) opens the cooldown window.
+    const { router } = renderAt(
+      `/login/sent?email=rita@example.com&sentAt=${Date.now()}`,
+    )
+
+    // The button shows the cooldown countdown and is disabled.
+    const resendBtn = await screen.findByRole('button', {
+      name: /resend in \d+s/i,
+    })
+    expect(resendBtn).toBeDisabled()
+
+    // A synchronous click burst neither fires a request nor bounces to /login.
+    fireEvent.click(resendBtn)
+    fireEvent.click(resendBtn)
+    fireEvent.click(resendBtn)
+
+    expect(requests).toBe(0)
+    expect(router.state.location.pathname).toBe('/login/sent')
+  })
+
+  it('keeps the user on the sent screen and shows guidance when a resend errors (#616)', async () => {
+    server.use(
+      http.post('*/v1/login/request', () =>
+        HttpResponse.json({ detail: 'Too Many Requests' }, { status: 429 }),
+      ),
+    )
+    const user = userEvent.setup()
+    // Old sentAt → cooldown already elapsed, so Resend is enabled.
+    const { router } = renderAt('/login/sent?email=rita@example.com&sentAt=1000')
+
+    const resendBtn = await screen.findByRole('button', { name: /^resend$/i })
+    await waitFor(() => expect(resendBtn).toBeEnabled())
+    await user.click(resendBtn)
+
+    expect(await screen.findByText(/lot of links/i)).toBeInTheDocument()
+    // Did NOT bounce back to /login.
+    expect(router.state.location.pathname).toBe('/login/sent')
+  })
+
   it('"Start over" routes back to /login with the email prefilled', async () => {
     const user = userEvent.setup()
     const { router } = renderAt('/login/sent?email=rita@example.com&sentAt=1000')
