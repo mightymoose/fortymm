@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import {
   RouterProvider,
@@ -61,6 +61,34 @@ describe('AppError (global session-bootstrap boundary)', () => {
     expect(
       screen.getByRole('button', { name: 'Try again' }),
     ).toBeInTheDocument()
+  })
+
+  it('renders nothing on a session_merged 401, deferring to the /login redirect', async () => {
+    // The global session-ended middleware owns this case (clear + redirect);
+    // AppError must not flash its generic "Something went wrong" screen (#672).
+    server.use(
+      http.get(
+        '*/v1/session',
+        () =>
+          HttpResponse.json(
+            { detail: { code: 'session_merged', message: 'Merged away.' } },
+            { status: 401 },
+          ),
+      ),
+    )
+
+    const { container } = renderApp()
+
+    // The boundary still catches the rejected loader (no dashboard content),
+    // but renders null instead of the generic error screen.
+    await waitFor(() =>
+      expect(screen.queryByText('dashboard-content')).not.toBeInTheDocument(),
+    )
+    expect(screen.queryByText('Something went wrong.')).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: 'Try again' }),
+    ).not.toBeInTheDocument()
+    expect(container).toBeEmptyDOMElement()
   })
 
   it('recovers to the page when retry succeeds', async () => {
