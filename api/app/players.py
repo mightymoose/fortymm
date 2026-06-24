@@ -115,7 +115,10 @@ async def list_recent_opponents(
                         mine.user_id == current_user.id,
                     ),
                 )
-                .where(User.id != current_user.id)
+                .where(
+                    User.id != current_user.id,
+                    User.merged_into_user_id.is_(None),
+                )
                 .group_by(User.id)
                 # Stable tiebreaker so ties on created_at (seed data, tests,
                 # concurrent creates) don't reorder across requests. Matches

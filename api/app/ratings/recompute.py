@@ -36,6 +36,18 @@ from app.ratings.registry import get_calculator
 from app.ratings.validation import validate_state
 
 
+def _decided_sides(match: Match) -> tuple[MatchSide, MatchSide] | None:
+    """Return ``(winning_side, losing_side)`` for a decided binary result, or
+    ``None`` when the match has no clear winner/loser — a forfeit/void/partial
+    write leaves ``MatchSide.won`` as ``None``. Such a match never produced a
+    rating delta, so the cascade skips it rather than crashing on the lookup."""
+    winning_side = next((s for s in match.sides if s.won is True), None)
+    losing_side = next((s for s in match.sides if s.won is False), None)
+    if winning_side is None or losing_side is None:
+        return None
+    return winning_side, losing_side
+
+
 async def recompute_league_ratings(
     db: AsyncSession,
     league_id: uuid.UUID,
@@ -111,8 +123,10 @@ async def recompute_league_ratings(
     affected_users: set[uuid.UUID] = set(seed_user_ids)
     affected_matches: list[Match] = []
     for match in matches:
-        winning_side = next(s for s in match.sides if s.won is True)
-        losing_side = next(s for s in match.sides if s.won is False)
+        decided = _decided_sides(match)
+        if decided is None:
+            continue
+        winning_side, losing_side = decided
         participants = {
             winning_side.players[0].user_id,
             losing_side.players[0].user_id,
@@ -170,8 +184,10 @@ async def recompute_league_ratings(
             ulr.rating_value = value
 
     for match in affected_matches:
-        winning_side = next(s for s in match.sides if s.won is True)
-        losing_side = next(s for s in match.sides if s.won is False)
+        decided = _decided_sides(match)
+        if decided is None:
+            continue
+        winning_side, losing_side = decided
         winner_id = winning_side.players[0].user_id
         loser_id = losing_side.players[0].user_id
         if winner_id not in states_by_user or loser_id not in states_by_user:

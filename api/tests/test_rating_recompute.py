@@ -305,6 +305,67 @@ async def test_recompute_restores_user_to_last_pre_window_rating(
     assert opp_row.previous_rating_value == 1550.0
 
 
+# ----- non-binary outcomes ------------------------------------------------
+
+
+async def test_recompute_skips_matches_without_a_decided_outcome(
+    db_session: AsyncSession,
+    rating_strategies: dict[str, RatingStrategy],
+):
+    """A completed-but-undecided match (e.g. a void/forfeit that leaves
+    ``MatchSide.won`` as ``None``) has no rating delta to rebuild. The cascade
+    must skip it rather than crash on the ``next(...)`` winner lookup, which
+    would otherwise roll back every league in the same recompute run."""
+    league = await get_default_league(db_session)
+    strategy = rating_strategies["glicko2"]
+    me = await make_user(db_session, "me")
+    opp = await make_user(db_session, "opp")
+    for user in (me, opp):
+        await _seed_rating(db_session, league, user.id, strategy)
+
+    base = datetime(2026, 5, 1, tzinfo=UTC)
+    # A normal decided match the cascade should still process...
+    decided = await _build_completed_match(db_session, league, me, opp, base)
+    # ...and an undecided one sharing both players: no winner/loser flag.
+    settings = MatchSettings(team_size=1, best_of=1, affects_rating=True)
+    undecided = Match(
+        match_settings=settings,
+        league=league,
+        created_by_user_id=me.id,
+        status=MatchStatus.completed,
+    )
+    side1 = MatchSide(match=undecided, side_number=1, won=None, score=0)
+    side1.players.append(MatchSidePlayer(match=undecided, user=me))
+    side2 = MatchSide(match=undecided, side_number=2, won=None, score=0)
+    side2.players.append(MatchSidePlayer(match=undecided, user=opp))
+    db_session.add(undecided)
+    await db_session.commit()
+    await db_session.refresh(undecided)
+    await db_session.execute(
+        text("UPDATE matches SET created_at = :ts, updated_at = :ts WHERE id = :id"),
+        {"ts": base + timedelta(hours=1), "id": undecided.id},
+    )
+    await db_session.commit()
+
+    # Must not raise.
+    await recompute_league_ratings(db_session, league.id, {me.id})
+    await db_session.commit()
+
+    # The decided match still produced its history; the undecided one produced none.
+    rows = (
+        (
+            await db_session.execute(
+                select(RatingHistory).where(
+                    RatingHistory.match_id.in_([decided.id, undecided.id])
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert {row.match_id for row in rows} == {decided.id}
+
+
 # ----- idempotency --------------------------------------------------------
 
 

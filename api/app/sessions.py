@@ -86,6 +86,10 @@ EMAIL_CHANGE_CONTEXT_PREFIX = "change:"
 EMAIL_MERGE_CONTEXT_PREFIX = "merge:"
 LOGIN_TOKEN_CONTEXT = "login"
 LOGIN_TOKEN_LIFETIME = timedelta(minutes=15)
+# Email-change and account-merge confirmation links are mailed (so they tolerate
+# slower inbox round-trips than an in-app sign-in) but still expire, so a leaked
+# or forwarded link can't be redeemed indefinitely.
+EMAIL_CONFIRM_TOKEN_LIFETIME = timedelta(hours=24)
 SESSION_LIFETIME = timedelta(days=30)
 EMAIL_TAKEN_DETAIL = "That email is already in use."
 
@@ -110,6 +114,15 @@ def _target_id_from_merge_context(context: str) -> uuid.UUID | None:
         return uuid.UUID(context.removeprefix(EMAIL_MERGE_CONTEXT_PREFIX))
     except ValueError:
         return None
+
+
+def _token_expired(token_row: UserToken, lifetime: timedelta) -> bool:
+    """True once ``token_row`` is older than ``lifetime``. Normalizes a
+    possibly-naïve ``created_at`` to UTC so the comparison is timezone-safe."""
+    issued_at = token_row.created_at
+    if issued_at.tzinfo is None:
+        issued_at = issued_at.replace(tzinfo=UTC)
+    return datetime.now(UTC) - issued_at > lifetime
 
 
 def _pending_email_token_clause() -> ColumnElement[bool]:
@@ -968,6 +981,13 @@ async def confirm_email(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="That confirmation link is invalid or expired.",
         )
+    if _token_expired(token_row, EMAIL_CONFIRM_TOKEN_LIFETIME):
+        await db.delete(token_row)
+        await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="That confirmation link is invalid or expired.",
+        )
     if token_row.context.startswith(EMAIL_MERGE_CONTEXT_PREFIX):
         return await _confirm_account_merge(
             db, response, token_row, skip_merge=payload.skip_merge
@@ -1272,10 +1292,7 @@ async def consume_login_token(
             detail="That sign-in link is invalid or expired.",
         )
 
-    issued_at = token_row.created_at
-    if issued_at.tzinfo is None:
-        issued_at = issued_at.replace(tzinfo=UTC)
-    if datetime.now(UTC) - issued_at > LOGIN_TOKEN_LIFETIME:
+    if _token_expired(token_row, LOGIN_TOKEN_LIFETIME):
         await db.delete(token_row)
         await db.commit()
         raise HTTPException(
