@@ -117,12 +117,9 @@ def _target_id_from_merge_context(context: str) -> uuid.UUID | None:
 
 
 def _token_expired(token_row: UserToken, lifetime: timedelta) -> bool:
-    """True once ``token_row`` is older than ``lifetime``. Normalizes a
-    possibly-naïve ``created_at`` to UTC so the comparison is timezone-safe."""
-    issued_at = token_row.created_at
-    if issued_at.tzinfo is None:
-        issued_at = issued_at.replace(tzinfo=UTC)
-    return datetime.now(UTC) - issued_at > lifetime
+    """True once ``token_row`` is older than ``lifetime``. ``created_at`` is a
+    ``DateTime(timezone=True)`` column, so it is always timezone-aware here."""
+    return datetime.now(UTC) - token_row.created_at > lifetime
 
 
 def _pending_email_token_clause() -> ColumnElement[bool]:
