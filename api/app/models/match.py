@@ -47,6 +47,11 @@ class Match(Base):
             "status",
             text("updated_at DESC"),
         ),
+        Index(
+            "ix_matches_status_completed_at",
+            "status",
+            text("completed_at DESC"),
+        ),
         Index("ix_matches_league_id", "league_id"),
     )
 
@@ -84,6 +89,23 @@ class Match(Base):
         onupdate=func.now(),
         nullable=False,
     )
+    # Stamped once the match reaches ``completed`` and kept stable thereafter —
+    # editing a completed match (which bumps ``updated_at``) must not move it in
+    # or out of another match's historical window. Cleared back to NULL when a
+    # match is disputed (un-completed) and re-stamped on the next completion.
+    # NULL for any match that hasn't completed. History/form/H2H queries anchor
+    # on this, not on the mutable ``updated_at``.
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    def mark_completed(self) -> None:
+        """Flip to ``completed`` and stamp the stable completion time in one
+        step, so the "completed ⟹ ``completed_at`` is set" invariant the
+        history/form/H2H windows rely on can't be half-applied by a caller that
+        sets the status but forgets the stamp."""
+        self.status = MatchStatus.completed
+        self.completed_at = func.now()
 
     match_settings: Mapped[MatchSettings] = relationship(back_populates="matches")
     league: Mapped["League"] = relationship(back_populates="matches")

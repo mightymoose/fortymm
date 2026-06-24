@@ -1139,7 +1139,9 @@ def _history_base_query(
 
     Pass ``before`` to restrict to matches completed before that instant, so a
     match viewed in the past shows the form as it stood then rather than the
-    players' current form."""
+    players' current form. Ordering and the ``before`` cutoff both key off the
+    stable ``completed_at`` (not the mutable ``updated_at``) so editing an old
+    completed match can't shuffle it within — or out of — a history window."""
     query = (
         select(Match)
         .where(
@@ -1147,10 +1149,10 @@ def _history_base_query(
             Match.id != current_match_id,
         )
         .options(*_match_history_options())
-        .order_by(Match.updated_at.desc())
+        .order_by(Match.completed_at.desc())
     )
     if before is not None:
-        query = query.where(Match.updated_at < before)
+        query = query.where(Match.completed_at < before)
     return query
 
 
@@ -1247,7 +1249,7 @@ async def _load_career_before(
                 player.user_id == user_id,
                 Match.status == MatchStatus.completed,
                 Match.id != current_match_id,
-                Match.updated_at < before,
+                Match.completed_at < before,
             )
         )
     ).one()
@@ -1257,6 +1259,8 @@ async def _load_career_before(
 def _build_form_result(past_match: Match, user_id: uuid.UUID) -> MatchDetailsFormResult:
     mine = my_side(past_match, user_id)
     assert mine is not None  # participant_filter guarantees membership
+    # The history query filters status == completed, so completed_at is set.
+    assert past_match.completed_at is not None
     side_wins = side_win_counts(past_match)
     player_games = side_wins.get(mine.side_number, 0)
     opp_games = sum(wins for n, wins in side_wins.items() if n != mine.side_number)
@@ -1266,7 +1270,7 @@ def _build_form_result(past_match: Match, user_id: uuid.UUID) -> MatchDetailsFor
         player_games_won=player_games,
         opponent_games_won=opp_games,
         opponent_username=opponent_username(past_match, user_id),
-        completed_at=past_match.updated_at,
+        completed_at=past_match.completed_at,
     )
 
 
@@ -1292,6 +1296,8 @@ async def _load_head_to_head(
         past_a = my_side(past, user_a)
         past_b = my_side(past, user_b)
         assert past_a is not None and past_b is not None
+        # The history query filters status == completed, so completed_at is set.
+        assert past.completed_at is not None
         side_wins = side_win_counts(past)
         a_games = side_wins.get(past_a.side_number, 0)
         b_games = side_wins.get(past_b.side_number, 0)
@@ -1301,7 +1307,7 @@ async def _load_head_to_head(
         meetings.append(
             MatchDetailsH2HMeeting(
                 match_id=past.id,
-                completed_at=past.updated_at,
+                completed_at=past.completed_at,
                 side_1_games_won=a_games,
                 side_2_games_won=b_games,
                 winner_side_number=winner_side,
@@ -1330,7 +1336,7 @@ async def _load_head_to_head(
         .where(
             Match.status == MatchStatus.completed,
             Match.id != current_match_id,
-            Match.updated_at < match.created_at,
+            Match.completed_at < match.created_at,
             a_player.user_id == user_a,
             b_player.user_id == user_b,
             a_side.id != b_side.id,
@@ -1910,7 +1916,7 @@ async def post_match_result(
     if not awaiting_confirmation:
         # Solo / unrated path: no second sign-off needed — finalize
         # immediately, no signature row inserted.
-        match.status = MatchStatus.completed
+        match.mark_completed()
         _set_side_won(match, decided_side)
         await _apply_rating_update(db, match)
     else:
@@ -1969,7 +1975,7 @@ async def confirm_match_result(
         db, match, current_user.id, "You've already signed this match."
     )
     if _all_sides_signed(match):
-        match.status = MatchStatus.completed
+        match.mark_completed()
         _set_side_won(match, _posted_decided_side(match))
         await _apply_rating_update(db, match)
 
@@ -2010,6 +2016,9 @@ async def dispute_match_result(
     # Scoring is reopened anyway (no signatures + ``disputed`` is non-terminal),
     # and re-posting via /results flips it back to ``in_progress``.
     match.status = MatchStatus.disputed
+    # Un-completed: drop the completion stamp so a re-post stamps a fresh one
+    # and this match doesn't linger in any history window while disputed.
+    match.completed_at = None
     for side in match.sides:
         # ``side.won`` is only stamped at completion now, so it's still None
         # on an awaiting-confirmation match — nulling it here is defensive.
