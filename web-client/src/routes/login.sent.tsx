@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react'
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
 
+import { ApiError } from '@/api/client'
 import { useRequestLogin } from '@/api/session'
 import { ScreenSent, ScreenSentBounced } from '@/components/login/login-screens'
 import { Turnstile, type TurnstileHandle } from '@/components/turnstile'
@@ -27,6 +28,7 @@ function LoginSentPage() {
   // the link without bouncing through /login to re-run the challenge.
   const [captchaToken, setCaptchaToken] = useState<string | null>(null)
   const [resendMessage, setResendMessage] = useState<string | null>(null)
+  const [resendError, setResendError] = useState<string | null>(null)
   const captchaRef = useRef<TurnstileHandle | null>(null)
   const inFlight = useRef(false)
 
@@ -41,12 +43,15 @@ function LoginSentPage() {
 
   // "Resend" re-issues the link in place: POST a new request with the held
   // captcha token, reset the expiry countdown (a new sentAt), and reset the
-  // widget so the next resend gets a fresh token. A captcha/network failure
-  // falls back to the full /login flow rather than stranding the user here.
+  // widget so the next resend gets a fresh token. The Resend control is
+  // cooldown-throttled (see ScreenSent), so a failure here means a genuine
+  // server error — surface it inline and keep the user on this screen (they
+  // still hold their original link) rather than bouncing them to /login.
   const resend = () => {
     if (inFlight.current || !email || !captchaToken) return
     inFlight.current = true
     setResendMessage(null)
+    setResendError(null)
     requestLogin.mutate(
       { email, captchaToken },
       {
@@ -58,7 +63,13 @@ function LoginSentPage() {
             search: { email, sentAt: Date.now(), error: undefined },
           })
         },
-        onError: () => startOver(),
+        onError: (err) => {
+          setResendError(
+            err instanceof ApiError && err.status === 429
+              ? "That's a lot of links — give it a minute before resending again."
+              : "Couldn't resend just now. Try again in a moment, or start over.",
+          )
+        },
         onSettled: () => {
           inFlight.current = false
           // Turnstile tokens are single-use; drop the spent one and ask the
@@ -91,6 +102,7 @@ function LoginSentPage() {
         onResend={email && captchaToken ? resend : undefined}
         resending={requestLogin.isPending}
         resendMessage={resendMessage}
+        resendError={resendError}
       />
       <Turnstile
         handleRef={(h) => {

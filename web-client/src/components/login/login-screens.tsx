@@ -13,6 +13,11 @@ import './login.css'
 // LOGIN_TOKEN_LIFETIME. The countdown owns this so routes only pass send time.
 const LOGIN_LINK_TTL_MS = 15 * 60 * 1000
 
+// Resend is throttled for a short window after each send so a rapid click
+// burst can't hammer the (per-hour rate-limited) request endpoint into a 429.
+// Anchored on `sentAt`, which re-stamps on every send.
+const RESEND_COOLDOWN_MS = 30 * 1000
+
 /* ─── Brand atoms ───────────────────────────────────────────────────── */
 
 function Display({
@@ -583,6 +588,25 @@ function BounceReceipt({ email }: { email: string }) {
   )
 }
 
+/** Seconds left on the resend cooldown for a link sent at `sentAt` (epoch-ms),
+ *  ticking down to 0. Mirrors ExpiresCountdown's derive-now-during-render
+ *  approach so a fresh send time takes effect immediately. */
+function useResendCooldown(sentAt: number) {
+  const readyAt = sentAt + RESEND_COOLDOWN_MS
+  const [now, setNow] = useState(() => Date.now())
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      const t = Date.now()
+      setNow(t)
+      if (t >= readyAt) clearInterval(id)
+    }, 1000)
+    return () => clearInterval(id)
+  }, [readyAt])
+
+  return Math.max(0, Math.ceil((readyAt - now) / 1000))
+}
+
 /** Live countdown to a sign-in link's expiry. `sentAt` is the epoch-ms send
  *  time; this owns the link lifetime (matches the API's LOGIN_TOKEN_LIFETIME),
  *  ticks once a second, and at zero flips to a spent "Link expired" treatment
@@ -986,6 +1010,7 @@ export interface ScreenSentProps {
   onStartOver?: () => void
   resending?: boolean
   resendMessage?: string | null
+  resendError?: string | null
 }
 
 export function ScreenSent({
@@ -995,10 +1020,15 @@ export function ScreenSent({
   onStartOver,
   resending = false,
   resendMessage = null,
+  resendError = null,
 }: ScreenSentProps) {
   // Stable fallback so the countdown doesn't reset every render when no
   // send time was threaded in.
   const [fallbackSentAt] = useState(() => Date.now())
+  // Throttle Resend right after a send so rapid clicks can't bounce the user
+  // off this screen (the request endpoint is rate-limited); show the wait.
+  const cooldown = useResendCooldown(sentAt ?? fallbackSentAt)
+  const resendDisabled = resending || !onResend || cooldown > 0
   return (
     <Shell
       left={
@@ -1029,13 +1059,21 @@ export function ScreenSent({
               style={{
                 ...btnGhost,
                 flex: 1,
-                opacity: resending ? 0.7 : 1,
-                cursor: resending ? 'wait' : 'pointer',
+                opacity: resendDisabled ? 0.7 : 1,
+                cursor: resending
+                  ? 'wait'
+                  : resendDisabled
+                    ? 'not-allowed'
+                    : 'pointer',
               }}
               onClick={onResend}
-              disabled={resending || !onResend}
+              disabled={resendDisabled}
             >
-              {resending ? 'Resending…' : 'Resend'}
+              {resending
+                ? 'Resending…'
+                : cooldown > 0
+                  ? `Resend in ${cooldown}s`
+                  : 'Resend'}
             </button>
             <button
               type="button"
@@ -1054,6 +1092,16 @@ export function ScreenSent({
               style={{ marginTop: 6 }}
             >
               {resendMessage}
+            </p>
+          )}
+
+          {resendError && (
+            <p
+              className="fmm-help fmm-help--err"
+              role="alert"
+              style={{ marginTop: 6 }}
+            >
+              {resendError}
             </p>
           )}
 
