@@ -47,7 +47,12 @@ class MatchCreate(BaseModel):
 
     opponent_user_id: uuid.UUID | None = None
     league_id: uuid.UUID | None = None
-    best_of: int = Field(description="Total games to play; one of 1, 3, 5, 7.")
+    # ``strict`` rejects non-integer JSON (e.g. the string "5") with a 422
+    # rather than coercing it before ``_best_of_allowed`` runs. The OpenAPI
+    # contract still exposes this as a plain integer.
+    best_of: int = Field(
+        strict=True, description="Total games to play; one of 1, 3, 5, 7."
+    )
     rated: bool = True
 
     @field_validator("best_of")

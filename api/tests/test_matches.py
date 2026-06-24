@@ -1,12 +1,13 @@
 import asyncio
 import uuid
 from collections.abc import Awaitable, Callable
+from datetime import datetime, timedelta
 
 import pytest
 from fastapi import HTTPException
 from httpx import AsyncClient
 from rq import Queue
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 
@@ -243,6 +244,25 @@ async def test_even_best_of_is_rejected(
         json={
             "opponent_user_id": str(opponent.id),
             "best_of": 4,
+            "rated": True,
+        },
+    )
+    assert response.status_code == 422
+
+
+async def test_best_of_rejects_a_numeric_string(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """``best_of`` is a strict int: the JSON string "5" is rejected with a 422
+    rather than coerced to 5 (which would slip past ``_best_of_allowed``)."""
+    await start_session(api_client, db_session)
+    opponent = await make_user(db_session, "string-rival")
+
+    response = await api_client.post(
+        "/v1/matches",
+        json={
+            "opponent_user_id": str(opponent.id),
+            "best_of": "5",
             "rated": True,
         },
     )
@@ -1730,6 +1750,41 @@ async def test_details_recent_form_excludes_matches_after_this_one(
     my_match_ids = {r["match_id"] for r in forms[str(me.id)]["recent_results"]}
     assert earlier["id"] in my_match_ids
     assert later["id"] not in my_match_ids
+
+
+async def test_details_recent_form_is_stable_when_a_prior_match_is_edited(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """History windows anchor on the stable ``completed_at``, not the mutable
+    ``updated_at``. Editing an old completed match *after* the current match was
+    created (which bumps ``updated_at`` past it) must not drop it out of recent
+    form — it was still completed beforehand."""
+    me = await start_session(api_client, db_session)
+    opp = await make_user(db_session, "edit-rival")
+    async with opponent_session(db_session, "edit-third-party") as (
+        other_client,
+        other,
+    ):
+        earlier = await _play_match_to_completion(
+            api_client, other_client, other.id, best_of=3, side_1_wins=True
+        )
+        current = await _create_match(api_client, opp.id, best_of=3)
+
+    # Simulate a late edit to the already-completed prior match: shove its
+    # ``updated_at`` to well after the current match's ``created_at``. Under the
+    # old (updated_at-based) cutoff this would evict it from recent form.
+    current_created_at = datetime.fromisoformat(current["created_at"])
+    await db_session.execute(
+        update(Match)
+        .where(Match.id == uuid.UUID(earlier["id"]))
+        .values(updated_at=current_created_at + timedelta(days=1))
+    )
+    await db_session.commit()
+
+    detail = (await api_client.get(f"/v1/matches/{current['id']}")).json()
+    forms = {f["user_id"]: f for f in detail["recent_form"]}
+    my_match_ids = {r["match_id"] for r in forms[str(me.id)]["recent_results"]}
+    assert earlier["id"] in my_match_ids
 
 
 async def test_details_head_to_head_counts_prior_meetings_per_side(

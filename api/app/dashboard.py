@@ -108,7 +108,10 @@ async def get_dashboard(
         participant_filter(select(Match), current_user.id)
         .where(Match.status == MatchStatus.completed)
         .options(*match_eager_options())
-        .order_by(Match.updated_at.desc())
+        # Recent-first by the stable completion time, not the mutable
+        # ``updated_at`` — editing an old completed match must not bump it back
+        # to the top of recent results.
+        .order_by(Match.completed_at.desc())
         .limit(RECENT_RESULTS_LIMIT)
     )
     # Exact attention totals, independent of the eager-load cap above so the
@@ -270,6 +273,8 @@ def _build_recent_result(
 ) -> DashboardRecentResult:
     mine = resolve_my_side(match, current_user_id)
     assert mine is not None  # query filters to participants
+    # The completed_q filters status == completed, so completed_at is set.
+    assert match.completed_at is not None
     side_wins = side_win_counts(match)
     my_games_won = side_wins.get(mine.side_number, 0)
     opp_games_won = sum(
@@ -281,7 +286,7 @@ def _build_recent_result(
         is_win=my_games_won > opp_games_won,
         my_games_won=my_games_won,
         opponent_games_won=opp_games_won,
-        completed_at=match.updated_at,
+        completed_at=match.completed_at,
         my_rating_change=my_rating_change,
     )
 
@@ -468,7 +473,8 @@ async def _current_streak(
                     Match.status == MatchStatus.completed,
                     MatchSide.won.is_not(None),
                 )
-                .order_by(Match.updated_at.desc())
+                # Most-recent-completion first; stable under later edits.
+                .order_by(Match.completed_at.desc())
                 .limit(STREAK_SCAN_LIMIT)
             )
         )

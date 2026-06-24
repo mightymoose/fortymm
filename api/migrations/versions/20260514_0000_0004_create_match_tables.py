@@ -5,6 +5,7 @@ Revises: 0003
 Create Date: 2026-05-14 00:00:00.000000
 
 """
+
 from typing import Sequence, Union
 
 from alembic import op
@@ -79,9 +80,7 @@ def upgrade() -> None:
             server_default=sa.func.now(),
             nullable=False,
         ),
-        sa.CheckConstraint(
-            "team_size IN (1, 2)", name="ck_match_settings_team_size"
-        ),
+        sa.CheckConstraint("team_size IN (1, 2)", name="ck_match_settings_team_size"),
         sa.CheckConstraint(
             "best_of >= 1 AND best_of % 2 = 1", name="ck_match_settings_best_of"
         ),
@@ -125,6 +124,15 @@ def upgrade() -> None:
             server_default=sa.func.now(),
             nullable=False,
         ),
+        # Stable completion timestamp, stamped once the match reaches
+        # ``completed`` and left untouched when the row is later edited (which
+        # would bump ``updated_at``). NULL until/unless completed. Recent-form,
+        # career-before, and H2H history windows anchor on this.
+        sa.Column(
+            "completed_at",
+            sa.DateTime(timezone=True),
+            nullable=True,
+        ),
     )
     op.create_index(
         "ix_matches_created_by_user_id_created_at",
@@ -138,12 +146,21 @@ def upgrade() -> None:
         "matches",
         ["status", sa.text("created_at DESC")],
     )
-    # Supports the dashboard's "last 5 completed" view, which orders by
-    # updated_at (no dedicated completed_at column).
+    # Supports the dashboard's open-match attention lists (in_progress /
+    # disputed), which order by updated_at (last activity). The completed-match
+    # views moved to ix_matches_status_completed_at.
     op.create_index(
         "ix_matches_status_updated_at",
         "matches",
         ["status", sa.text("updated_at DESC")],
+    )
+    # Supports the match-details history windows (recent form / career-before /
+    # H2H), which filter status == completed and order by / cut off on the
+    # stable completed_at.
+    op.create_index(
+        "ix_matches_status_completed_at",
+        "matches",
+        ["status", sa.text("completed_at DESC")],
     )
 
     op.create_table(
@@ -171,9 +188,7 @@ def upgrade() -> None:
         sa.UniqueConstraint(
             "match_id", "side_number", name="uq_match_sides_match_id_side_number"
         ),
-        sa.CheckConstraint(
-            "side_number IN (1, 2)", name="ck_match_sides_side_number"
-        ),
+        sa.CheckConstraint("side_number IN (1, 2)", name="ck_match_sides_side_number"),
         sa.CheckConstraint("score >= 0", name="ck_match_sides_score"),
     )
     op.create_index("ix_match_sides_match_id", "match_sides", ["match_id"])
@@ -213,9 +228,7 @@ def upgrade() -> None:
             "match_id", "user_id", name="uq_match_side_players_match_id_user_id"
         ),
     )
-    op.create_index(
-        "ix_match_side_players_user_id", "match_side_players", ["user_id"]
-    )
+    op.create_index("ix_match_side_players_user_id", "match_side_players", ["user_id"])
     op.create_index(
         "ix_match_side_players_match_side_id",
         "match_side_players",
@@ -293,9 +306,7 @@ def upgrade() -> None:
             server_default=sa.func.now(),
             nullable=False,
         ),
-        sa.UniqueConstraint(
-            "match_game_id", name="uq_match_game_scores_match_game_id"
-        ),
+        sa.UniqueConstraint("match_game_id", name="uq_match_game_scores_match_game_id"),
         sa.CheckConstraint(
             "side_1_points >= 0", name="ck_match_game_scores_side_1_points"
         ),
