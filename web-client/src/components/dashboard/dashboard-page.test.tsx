@@ -140,6 +140,24 @@ describe('DashboardPage', () => {
     ).toBeInTheDocument()
   })
 
+  it('falls back to a bare "Hi" when the session fails to load (#287)', async () => {
+    // A 401 (session merged away) errors immediately — the session query skips
+    // its retry on 401 — so the page settles into its error state.
+    server.use(
+      http.get('*/v1/session', () => new HttpResponse(null, { status: 401 })),
+    )
+    renderDashboard()
+
+    // No username is available on a session error, so the greeting renders
+    // without one rather than reading a stale value.
+    expect(
+      await screen.findByRole('heading', { name: /^Hi\.?$/ }),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole('heading', { name: /Hi, @/ }),
+    ).not.toBeInTheDocument()
+  })
+
   it('hides the attention panel and shows the empty recent-results card when nothing is pending', async () => {
     server.use(
       http.get('*/v1/dashboard', () =>

@@ -20,7 +20,11 @@ export function DashboardPage() {
   const dashboard = useDashboard({ enabled: session.isSuccess })
   const isLoading = dashboard.isPending
   const data = dashboard.data
-  const user = session.data?.data.user
+  // Explicitly drop the user on a session error so the greeting falls back to a
+  // bare "Hi" rather than reading a stale value — mirrors UserMenu's
+  // `!isError && data ? … : 'Guest'` pattern (#287).
+  const user =
+    !session.isError && session.data ? session.data.data.user : undefined
   const username = user?.username
   const greeting = username ? `Hi, @${username}` : 'Hi'
   // Guest with at least one completed match — "you have things to lose now".
