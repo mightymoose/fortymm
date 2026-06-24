@@ -13,6 +13,11 @@ struct ScoreEntryView: View {
     /// Hand the completed games (in order, game 1…N) up to the coordinator,
     /// which posts them to the API and renders the server's result.
     var onPost: ([Game]) -> Void
+    /// The signed-in player's username, so the "you" panel labels your side with
+    /// the same handle the posted result, list, and detail views show (and that
+    /// the web scoreboard shows) — rather than a generic "You". Falls back to the
+    /// `MatchSeed.me` placeholder when the session hasn't surfaced a username yet.
+    var meName: String? = nil
     var onExit: () -> Void
 
     // One slot per game in the match; any slot can be entered or edited in any
@@ -29,7 +34,10 @@ struct ScoreEntryView: View {
     @State private var rawOpp = ""
     @FocusState private var focus: MatchSide?
 
-    private var you: MatchPlayer { MatchSeed.me }
+    private var you: MatchPlayer {
+        guard let name = meName, !name.isEmpty else { return MatchSeed.me }
+        return MatchPlayer(handle: name, initials: name.fmInitials, you: true)
+    }
     private var opp: MatchPlayer { config.opponent ?? .guest }
 
     private var current: Game { games.indices.contains(active) ? games[active] : Game() }

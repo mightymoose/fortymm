@@ -309,11 +309,11 @@ enum MatchRules {
 // MARK: - Seed data
 
 enum MatchSeed {
-    /// Stand-in for the signed-in player, used only on the live score-entry
-    /// scoreboard (the "you" panel) while a game is in progress. The session
-    /// doesn't surface the user's id/handle app-wide, so the entry screen
-    /// labels your side generically; the *posted* result and every list/detail
-    /// view render the real username from the API response.
+    /// Generic stand-in for the signed-in player on the live score-entry
+    /// scoreboard (the "you" panel), used only as a fallback before the session
+    /// has surfaced a username. Once it has, `ScoreEntryView.meName` carries the
+    /// real handle so the entry screen matches the posted result and every
+    /// list/detail view (and the web scoreboard) instead of labelling you "You".
     static let me = MatchPlayer(handle: "You", initials: "YOU",
                                 avatarColor: .slate, rating: 1500, you: true)
 }
