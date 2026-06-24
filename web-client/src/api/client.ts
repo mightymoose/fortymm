@@ -113,6 +113,24 @@ api.use({
   },
 })
 
+/**
+ * True when `error` is the structured `session_merged` 401 — the user's guest
+ * account was merged away on another device. The global response middleware
+ * (`setSessionEndedHandler`) already handles this by redirecting to `/login`, so
+ * UI error boundaries should defer to that redirect rather than show a generic
+ * "something went wrong" screen (#672). A *bare* 401 (no `session_merged` code)
+ * is not this case and should still surface normally.
+ */
+export function isSessionMergedError(error: unknown): boolean {
+  if (!(error instanceof ApiError) || error.status !== 401) return false
+  const detail = (error.body as { detail?: unknown } | null | undefined)?.detail
+  return (
+    !!detail &&
+    typeof detail === 'object' &&
+    (detail as { code?: unknown }).code === 'session_merged'
+  )
+}
+
 export function extractDetail(value: unknown): string | null {
   if (!value || typeof value !== 'object') return null
   const detail = (value as { detail?: unknown }).detail

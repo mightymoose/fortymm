@@ -3,7 +3,7 @@ import { http, HttpResponse } from 'msw'
 
 import { server } from '@/mocks/server'
 import { sessionResponse } from '@/test/factories'
-import { api, setSessionEndedHandler } from './client'
+import { ApiError, api, isSessionMergedError, setSessionEndedHandler } from './client'
 
 afterEach(() => {
   setSessionEndedHandler(null)
@@ -75,6 +75,34 @@ it('latches so a burst of 401s redirects only once', async () => {
   await api.GET('/v1/session')
 
   expect(handler).toHaveBeenCalledTimes(1)
+})
+
+it('isSessionMergedError recognizes only the structured session_merged 401', () => {
+  const merged = new ApiError(401, 'gone', 'load session', {
+    detail: { code: 'session_merged', message: 'gone' },
+  })
+  expect(isSessionMergedError(merged)).toBe(true)
+
+  // A bare 401 (no structured code) is not the merge case.
+  expect(
+    isSessionMergedError(
+      new ApiError(401, 'unauthorized', 'load session', {
+        detail: 'authentication required',
+      }),
+    ),
+  ).toBe(false)
+  // A different code, or a non-401, or a non-ApiError, all fall through.
+  expect(
+    isSessionMergedError(
+      new ApiError(401, null, 'x', { detail: { code: 'unauthenticated' } }),
+    ),
+  ).toBe(false)
+  expect(
+    isSessionMergedError(
+      new ApiError(403, null, 'x', { detail: { code: 'session_merged' } }),
+    ),
+  ).toBe(false)
+  expect(isSessionMergedError(new Error('boom'))).toBe(false)
 })
 
 it('echoes the csrf cookie in the X-CSRF-Token header on a mutation', async () => {
