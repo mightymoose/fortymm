@@ -16,6 +16,11 @@ struct MatchFlowView: View {
     /// Close the flow. `toMatches` = land on the Matches tab (vs. just dismiss).
     var onClose: (_ toMatches: Bool) -> Void
 
+    /// Loaded session, so the scoring scoreboard can label your side with your
+    /// real username instead of a generic "You" (issue #451). Propagated into the
+    /// full-screen cover from `RootView`, which injects it.
+    @EnvironmentObject private var session: SessionStore
+
     init(
         service: MatchService = .shared,
         resume: ResumeScoring? = nil,
@@ -70,6 +75,7 @@ struct MatchFlowView: View {
                     config: config,
                     initialGames: resume?.games ?? [],
                     onPost: post,
+                    meName: session.username,
                     // Resuming has no setup step to fall back to — exiting closes
                     // the flow (back to wherever it was launched from).
                     onExit: {
