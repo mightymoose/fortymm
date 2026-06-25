@@ -95,6 +95,9 @@ export type SeedMatch = {
   // lands the first signature; cleared by ``POST /dispute``; "full" (one row
   // per side with players) once the match has been confirmed.
   signatures: SeedSignature[]
+  // Who disputed the most recently posted result. Set by ``POST /dispute``,
+  // cleared by ``POST /results``; null on any non-disputed match.
+  disputed_by_user_id: string | null
 }
 
 function gamesToWin(bestOf: number): number {
@@ -321,6 +324,7 @@ export function projectMatchDetails(seed: SeedMatch): MatchDetails {
     can_finalize: canFinalizeSeed(seed),
     can_confirm: canConfirmSeed(seed),
     signatures: seedSignatureViews(seed),
+    disputed_by_user_id: seed.disputed_by_user_id,
     recent_form: projectRecentForm(seed, priors),
     head_to_head: projectHeadToHead(seed, priors),
     data: { scoreboard: { status: seedScoreboardStatus(seed.status) } },
@@ -738,6 +742,7 @@ export function buildInitialSeeds(): SeedMatch[] {
   return [
     {
       id: 'm-pending-1',
+      disputed_by_user_id: null,
       status: 'pending',
       best_of: 5,
       affects_rating: true,
@@ -749,6 +754,7 @@ export function buildInitialSeeds(): SeedMatch[] {
     },
     {
       id: 'm-2207',
+      disputed_by_user_id: null,
       status: 'in_progress',
       best_of: 5,
       affects_rating: true,
@@ -771,6 +777,7 @@ export function buildInitialSeeds(): SeedMatch[] {
     },
     {
       id: 'm-completed-win-1',
+      disputed_by_user_id: null,
       status: 'completed',
       best_of: 5,
       affects_rating: true,
@@ -807,6 +814,7 @@ export function buildInitialSeeds(): SeedMatch[] {
     },
     {
       id: 'm-completed-loss-1',
+      disputed_by_user_id: null,
       status: 'completed',
       best_of: 3,
       affects_rating: true,
@@ -832,6 +840,7 @@ export function buildInitialSeeds(): SeedMatch[] {
     },
     {
       id: 'm-completed-win-2',
+      disputed_by_user_id: null,
       status: 'completed',
       best_of: 3,
       affects_rating: true,
@@ -921,6 +930,7 @@ export function newMatchSeed(input: {
     opponent: input.opponent,
     games: [],
     signatures: [],
+    disputed_by_user_id: null,
   }
   return seed
 }
@@ -993,6 +1003,9 @@ export function finalizeSeed(
     },
   }))
 
+  // A fresh result supersedes any prior dispute.
+  seed.disputed_by_user_id = null
+
   if (seed.opponent === null || !seed.affects_rating) {
     // Solo or unrated match — no second sign-off needed, finalize
     // immediately (mirror the API, issue #485).
@@ -1037,6 +1050,7 @@ export function disputeSeed(seed: SeedMatch, userId: string): string | null {
   if (guard) return guard
   seed.signatures = []
   seed.status = 'disputed'
+  seed.disputed_by_user_id = userId
   return null
 }
 

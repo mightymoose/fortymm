@@ -212,6 +212,11 @@ class MatchDetails(BaseModel):
     # ``optional`` in the generated TS types; declared as required keeps the
     # FE from defending against ``undefined`` at every read.
     signatures: list[MatchSignatureView]
+    # The participant who disputed the most recently posted result, or None on
+    # any non-disputed match. Perspective-neutral (like ``sides``): the FE
+    # resolves the username from the sides and shows the submitter — the
+    # participant who is *not* this user — that their result was disputed.
+    disputed_by_user_id: uuid.UUID | None
     recent_form: list[MatchDetailsPlayerForm] = Field(default_factory=list)
     head_to_head: MatchDetailsH2H | None = None
     # In-progress replacement view model, exposed alongside the current fields

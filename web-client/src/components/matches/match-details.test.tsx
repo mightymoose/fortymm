@@ -2,8 +2,63 @@ import { screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { matchDetails } from "@/test/factories";
+import {
+  buildMatchDetailsData,
+  buildScoreboard,
+} from "@/mocks/factories/matches/scoreboard.factory";
 
 import { matchDetailsPage } from "./match-details.page";
+
+describe("MatchDetails — dispute-notice seam", () => {
+  it("renders the dispute notice for the submitter of a disputed result (#360)", async () => {
+    // The submitter (u-me) posted 2-0; the opponent (nguyen.t) disputed, so the
+    // backend cleared signatures, nulled the won flags, moved to `disputed`,
+    // and recorded nguyen.t as the disputer. Wiring only: notice content is
+    // pinned by the dispute-notice query and display tests.
+    const match = matchDetails({
+      id: "m-disp",
+      status: "disputed",
+      status_label: "Disputed",
+      sides: [
+        {
+          side_number: 1,
+          players: [{ user_id: "u-me", username: "me", is_current_user: true }],
+          games_won: 2,
+          won: null,
+          is_current_user_side: true,
+        },
+        {
+          side_number: 2,
+          players: [
+            { user_id: "u-opp", username: "nguyen.t", is_current_user: false },
+          ],
+          games_won: 0,
+          won: null,
+          is_current_user_side: false,
+        },
+      ],
+      games: [],
+      current_game: null,
+      can_score: true,
+      can_confirm: false,
+      signatures: [],
+      disputed_by_user_id: "u-opp",
+      data: buildMatchDetailsData({
+        scoreboard: buildScoreboard({ status: "final" }),
+      }),
+    });
+    matchDetailsPage.mockMatch("m-disp", match);
+
+    matchDetailsPage.render("m-disp");
+
+    await waitFor(() =>
+      expect(matchDetailsPage.disputeNotice.getNotice()).toBeInTheDocument(),
+    );
+    expect(matchDetailsPage.disputeNotice.getHeadline()).toHaveTextContent(
+      "nguyen.t disputed your result.",
+    );
+  });
+});
 
 /**
  * The match-details page suite. The page is now an assembly of self-fetching

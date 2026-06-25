@@ -456,12 +456,15 @@ export interface paths {
          *     discarded; the payload's games (validated as a complete, decided match)
          *     become canon.
          *
-         *     For a rated match the caller's signature is recorded and status stays
-         *     ``in_progress`` until every side signs — the other side acts on the posted
-         *     result via ``POST /confirmation`` or ``POST /dispute``, and ``side.won``
-         *     plus the rating update fire inside /confirmation when the final signature
-         *     lands. Unrated matches (nothing at stake worth a second sign-off) and solo
-         *     matches (no second party to attest) finalize immediately here.
+         *     A new ``MatchResult`` row is created carrying an immutable snapshot of the
+         *     claimed board; a prior disputed result stays as history. For a rated match
+         *     the caller's ``confirm`` response is recorded on it and status stays
+         *     ``in_progress`` until every side confirms — the other side acts on the
+         *     posted result via ``POST /confirmation`` or ``POST /dispute``, and
+         *     ``side.won`` plus the rating update fire inside /confirmation when the final
+         *     confirm lands. Unrated matches (nothing at stake worth a second sign-off)
+         *     and solo matches (no second party to attest) finalize immediately here, with
+         *     the result created already ``confirmed``.
          */
         post: operations["post_match_result_v1_matches__match_id__results_post"];
         delete?: never;
@@ -481,10 +484,10 @@ export interface paths {
         put?: never;
         /**
          * Confirm Match Result
-         * @description Sign off on a posted result. When this is the last signature needed
-         *     (every side has at least one signing player) the match flips to
-         *     ``completed``, ``side.won`` is stamped from the posted games, and the
-         *     rating update runs — exactly once.
+         * @description Sign off on a posted result. When this is the last confirm needed
+         *     (every side has at least one confirming player) the result flips to
+         *     ``confirmed``, the match to ``completed``, ``side.won`` is stamped from the
+         *     posted games, and the rating update runs — exactly once.
          */
         post: operations["confirm_match_result_v1_matches__match_id__confirmation_post"];
         delete?: never;
@@ -504,11 +507,13 @@ export interface paths {
         put?: never;
         /**
          * Dispute Match Result
-         * @description Reject a posted result. Every signature is cleared and the side
-         *     win flags reset to ``None``; the canonical score rows themselves stay in
-         *     place so the disputer can navigate to the contested game and PUT a
-         *     corrected score. The per-game endpoints unblock automatically once
-         *     signatures are empty (see ``_enforce_scorable``).
+         * @description Reject a posted result. A ``dispute`` response is recorded on the pending
+         *     result, marking it ``disputed`` (it stays as history — its ``games``
+         *     snapshot preserves the rejected board), and the side win flags reset to
+         *     ``None``. The working ``match_games`` themselves stay in place so the
+         *     disputer can navigate to the contested game and PUT a corrected score; the
+         *     per-game endpoints unblock automatically once the result is no longer
+         *     pending (see ``_enforce_scorable``).
          */
         post: operations["dispute_match_result_v1_matches__match_id__dispute_post"];
         delete?: never;
@@ -2593,6 +2598,8 @@ export interface components {
             can_confirm: boolean;
             /** Signatures */
             signatures: components["schemas"]["MatchSignatureView"][];
+            /** Disputed By User Id */
+            disputed_by_user_id: string | null;
             /** Recent Form */
             recent_form?: components["schemas"]["MatchDetailsPlayerForm"][];
             head_to_head?: components["schemas"]["MatchDetailsH2H"] | null;
