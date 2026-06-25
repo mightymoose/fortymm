@@ -23,8 +23,12 @@ from app.models import (
     Match,
     MatchGame,
     MatchGameScore,
+    MatchResult,
+    MatchResultResponse,
     MatchSide,
     MatchStatus,
+    ResultOutcome,
+    ResultResponseKind,
     User,
 )
 from app.notifications.apns import MATCH_RESULT_CONFIRMATION_CATEGORY
@@ -1318,20 +1322,22 @@ async def test_concurrent_results_posts_do_not_pile_up(
             "ok",
         ], outcomes
 
-        # The committed match holds its invariants: exactly one signature and
-        # the single canonical game, with no duplicate/orphan rows.
+        # The committed match holds its invariants: exactly one posted result
+        # carrying one confirm response, and the single canonical game, with no
+        # duplicate/orphan rows.
         async with make_session() as verify:
             final = (
                 await verify.execute(
                     select(Match)
                     .where(Match.id == match_id)
                     .options(
-                        selectinload(Match.signatures),
+                        selectinload(Match.results).selectinload(MatchResult.responses),
                         selectinload(Match.games),
                     )
                 )
             ).scalar_one()
-            assert len(final.signatures) == 1
+            assert len(final.results) == 1
+            assert len(final.results[0].responses) == 1
             assert len(final.games) == 1
 
 
@@ -2063,10 +2069,10 @@ async def test_confirmation_finalizes_and_lands_second_signature(
 async def test_dispute_clears_signatures_and_moves_to_disputed(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    """``POST /dispute`` deletes every signature on the match, moves it to the
-    ``disputed`` status, drops the side.won flags back to None, and leaves the
-    canonical games in place so the disputer can navigate to the contested game
-    and PUT a correction."""
+    """``POST /dispute`` marks the pending result disputed (so the BFF surfaces
+    no signatures), moves the match to the ``disputed`` status, drops the
+    side.won flags back to None, and leaves the working games in place so the
+    disputer can navigate to the contested game and PUT a correction."""
     await start_session(api_client, db_session)
     async with opponent_session(db_session, "dispute-opp") as (opp_client, opp):
         match = await _create_match(api_client, opp.id, best_of=3)
@@ -2080,7 +2086,7 @@ async def test_dispute_clears_signatures_and_moves_to_disputed(
         assert body["signatures"] == []
         sides = sorted(body["sides"], key=lambda s: s["side_number"])
         assert [s["won"] for s in sides] == [None, None]
-        # games_won still reflects the canonical scores (they're preserved so
+        # games_won still reflects the working scores (they're preserved so
         # the disputer can edit just the contested one); only the "this side
         # won" claim is rescinded.
         assert [s["games_won"] for s in sides] == [2, 0]
@@ -2089,10 +2095,11 @@ async def test_dispute_clears_signatures_and_moves_to_disputed(
         # un-scored in 1..best_of. Otherwise the dashboard / list / scoring
         # page deep-links into a phantom game.
         assert body["current_game"] is None
-        # ...but the match IS scorable again: clearing the signatures reopens
-        # the scratchpad, so can_score is True even though there's no next game
-        # to play (the disputer edits the contested game in place). Editability
-        # follows the signature, not whether the board currently decides it.
+        # ...but the match IS scorable again: a disputed (terminal) result is
+        # no longer pending, so the scratchpad reopens and can_score is True even
+        # though there's no next game to play (the disputer edits the contested
+        # game in place). Editability follows the pending result, not whether the
+        # board currently decides it.
         assert body["can_score"] is True
         # The saved scores are still valid + decided, so a mistaken dispute can
         # be undone by re-posting them unchanged (back into the sign-off flow).
@@ -2109,6 +2116,35 @@ async def test_dispute_clears_signatures_and_moves_to_disputed(
             json={"side_1_points": 5, "side_2_points": 11, "expected_version": 1},
         )
         assert put.status_code == 200
+
+
+async def test_dispute_records_disputer_and_repost_clears_it(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """``disputed_by_user_id`` identifies who rejected the result — the BFF uses
+    it to tell the submitter their result was disputed apart from the otherwise
+    symmetric disputed board. It's None until a dispute, set to the disputer on
+    dispute, and cleared again when a fresh result is posted."""
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "disputer-opp") as (opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=3)
+        posted = await _post_results(api_client, match["id"])
+        # No dispute yet — the field is absent (None).
+        assert posted["disputed_by_user_id"] is None
+
+        dispute = await opp_client.post(f"/v1/matches/{match['id']}/dispute")
+        assert dispute.status_code == 200
+        # The opponent (not the submitter) is recorded as the disputer.
+        assert dispute.json()["disputed_by_user_id"] == str(opp.id)
+
+        # The submitter sees the same attribution on their own fetch — that's
+        # what powers "your opponent disputed your result".
+        mine = await api_client.get(f"/v1/matches/{match['id']}")
+        assert mine.json()["disputed_by_user_id"] == str(opp.id)
+
+        # Re-posting a result supersedes the dispute and clears the attribution.
+        re_post = await _post_results(api_client, match["id"])
+        assert re_post["disputed_by_user_id"] is None
 
 
 async def test_results_on_solo_finalizes_with_no_signature_row(
@@ -2236,29 +2272,40 @@ async def test_confirmation_409_after_already_finalized(
         assert again.status_code == 409
 
 
-async def test_signature_unique_violation_returns_409_not_500(
+async def test_response_unique_violation_returns_409_not_500(
     api_client: AsyncClient, db_session: AsyncSession
 ):
     """The ``_enforce_*`` predicates catch a same-user double-sign before
     the insert, but a racing in-flight transaction can still slip past
-    them and trip ``uq_match_signatures_match_id_user_id`` at commit. Map
-    that to a 409 instead of a 500 so the user sees a coherent error on a
+    them and trip ``uq_match_result_responses_result_id_user_id`` at commit.
+    Map that to a 409 instead of a 500 so the user sees a coherent error on a
     rapid double-click / retry / browser-back refire.
 
-    Simulated here by stuffing a pre-existing signature into the DB
-    *after* the in-process handler's predicate read; commit then fails on
-    the unique constraint and the helper should translate to 409."""
-    from app.models import MatchSignature
-
+    Simulated here by stuffing a pre-existing response into the DB *after* the
+    in-process handler's predicate read; commit then fails on the unique
+    constraint and the helper should translate to 409."""
     await start_session(api_client, db_session)
     async with opponent_session(db_session, "race-opp") as (opp_client, opp):
         match = await _create_match(api_client, opp.id, best_of=3)
         await _post_results(api_client, match["id"])
 
-        # Race surrogate: insert a duplicate opponent signature directly so
-        # the next /confirmation appends a second MatchSignature(opp.id)
+        # Race surrogate: insert a duplicate opponent response on the pending
+        # result directly so the next /confirmation appends a second response
         # and 409s on the unique constraint at commit.
-        db_session.add(MatchSignature(match_id=uuid.UUID(match["id"]), user_id=opp.id))
+        result = (
+            await db_session.execute(
+                select(MatchResult).where(
+                    MatchResult.match_id == uuid.UUID(match["id"])
+                )
+            )
+        ).scalar_one()
+        db_session.add(
+            MatchResultResponse(
+                result_id=result.id,
+                user_id=opp.id,
+                kind=ResultResponseKind.confirm,
+            )
+        )
         await db_session.commit()
 
         response = await opp_client.post(f"/v1/matches/{match['id']}/confirmation")
@@ -2294,6 +2341,97 @@ async def test_dispute_then_repost_finalizes_with_fresh_signatures(
             str(me.id),
             str(opp.id),
         }
+
+
+async def _load_results(db_session: AsyncSession, match_id: str) -> list[MatchResult]:
+    """Every posted result on the match, oldest first, with responses loaded —
+    the per-result history the new model preserves."""
+    return list(
+        (
+            await db_session.execute(
+                select(MatchResult)
+                .where(MatchResult.match_id == uuid.UUID(match_id))
+                .options(selectinload(MatchResult.responses))
+                .order_by(MatchResult.submitted_at)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+
+async def test_disputed_result_snapshot_survives_rescore(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """A disputed result stays as immutable history: its ``games`` snapshot
+    preserves the rejected board even after the working scratchpad is re-scored
+    to a different game — the model now records *what was disputed* (#366)."""
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "history-opp") as (opp_client, opp):
+        opp_id = opp.id  # capture before expire_all() below detaches ``opp``
+        match = await _create_match(api_client, opp.id, best_of=3)
+        # Claim a 2-0 board (game 2 is 11-7), then have the opponent reject it.
+        await api_client.post(
+            f"/v1/matches/{match['id']}/results",
+            json={
+                "games": [
+                    {"game_number": 1, "side_1_points": 11, "side_2_points": 4},
+                    {"game_number": 2, "side_1_points": 11, "side_2_points": 7},
+                ]
+            },
+        )
+        await opp_client.post(f"/v1/matches/{match['id']}/dispute")
+
+        # Re-score the working board's game 2 to a different (losing) score.
+        put = await opp_client.put(
+            f"/v1/matches/{match['id']}/games/2/scores",
+            json={"side_1_points": 5, "side_2_points": 11, "expected_version": 1},
+        )
+        assert put.status_code == 200
+
+        db_session.expire_all()
+        results = await _load_results(db_session, match["id"])
+        assert len(results) == 1
+        disputed = results[0]
+        assert disputed.outcome == ResultOutcome.disputed
+        # The snapshot is the originally-claimed board, NOT the re-scored one:
+        # game 2 is still 11-7, even though the working board now reads 5-11.
+        by_number = {g["game_number"]: g for g in disputed.games}
+        assert by_number[2]["side_1_points"] == 11
+        assert by_number[2]["side_2_points"] == 7
+        # The disputed result carries both the submitter's confirm and the
+        # opponent's dispute response as history.
+        kinds = {(r.user_id, r.kind) for r in disputed.responses}
+        assert (opp_id, ResultResponseKind.dispute) in kinds
+
+
+async def test_match_accumulates_results_across_dispute_repost_cycles(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """Each ``POST /results`` is its own first-class row, so a match that
+    bounces through dispute→repost cycles accumulates one ``MatchResult`` per
+    posting with the right terminal ``outcome`` — the prior ones survive as
+    history rather than being mutated away."""
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "cycles-opp") as (opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=3)
+
+        # Post → dispute, post → dispute, post → confirm: three results.
+        await _post_results(api_client, match["id"])
+        await opp_client.post(f"/v1/matches/{match['id']}/dispute")
+        await _post_results(api_client, match["id"])
+        await opp_client.post(f"/v1/matches/{match['id']}/dispute")
+        await _post_results(api_client, match["id"])
+        confirm = await opp_client.post(f"/v1/matches/{match['id']}/confirmation")
+        assert confirm.status_code == 201
+
+        db_session.expire_all()
+        results = await _load_results(db_session, match["id"])
+        assert [r.outcome for r in results] == [
+            ResultOutcome.disputed,
+            ResultOutcome.disputed,
+            ResultOutcome.confirmed,
+        ]
 
 
 async def test_dispute_zeros_side_score_to_match_won_reset(
@@ -2480,19 +2618,33 @@ async def test_concurrent_confirm_and_dispute_serialize(
                 await verify.execute(
                     select(Match)
                     .where(Match.id == match_id)
-                    .options(selectinload(Match.sides), selectinload(Match.signatures))
+                    .options(
+                        selectinload(Match.sides),
+                        selectinload(Match.results).selectinload(MatchResult.responses),
+                    )
                 )
             ).scalar_one()
             sides = sorted(final.sides, key=lambda s: s.side_number)
+            # Exactly one result was posted, whichever transition won.
+            assert len(final.results) == 1
+            result = final.results[0]
+            confirms = [
+                r for r in result.responses if r.kind == ResultResponseKind.confirm
+            ]
             if final.status == MatchStatus.completed:
-                # Confirm won: a real outcome and both signatures present.
+                # Confirm won: the result is confirmed, both confirms present,
+                # and a real outcome stamped.
                 assert {s.won for s in sides} == {True, False}, [s.won for s in sides]
-                assert len(final.signatures) == 2
+                assert result.outcome == ResultOutcome.confirmed
+                assert len(confirms) == 2
             else:
-                # Dispute won: moved to disputed with no live signatures and no
-                # recorded winner.
+                # Dispute won: the result is terminally disputed (its dispute
+                # response recorded), the match disputed, no recorded winner.
                 assert final.status == MatchStatus.disputed
-                assert final.signatures == []
+                assert result.outcome == ResultOutcome.disputed
+                assert any(
+                    r.kind == ResultResponseKind.dispute for r in result.responses
+                )
                 assert [s.won for s in sides] == [None, None]
 
 

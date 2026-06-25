@@ -16,6 +16,7 @@ from app.models import (
     MatchSide,
     MatchSidePlayer,
     MatchStatus,
+    ResultOutcome,
     User,
     UserLeagueRating,
 )
@@ -432,8 +433,8 @@ def _player_matches_eager() -> tuple[ExecutableOption, ...]:
         selectinload(Match.games).selectinload(MatchGame.score),
         # Needed to derive the "Awaiting confirmation" boolean (#364): an
         # ``in_progress`` match with a posted-but-unconfirmed result carries
-        # at least one signature.
-        selectinload(Match.signatures),
+        # a pending ``MatchResult``.
+        selectinload(Match.results),
     )
 
 
@@ -500,8 +501,8 @@ def _serialize_player_match(match: Match, player_id: uuid.UUID) -> PlayerMatchRo
     # internals (api/CLAUDE.md: routers must not depend on each other). The FE
     # uses this to render a distinct chip instead of the green "LIVE" one a
     # genuinely-live ``in_progress`` match gets (#364).
-    awaiting_confirmation = match.status == MatchStatus.in_progress and bool(
-        match.signatures
+    awaiting_confirmation = match.status == MatchStatus.in_progress and any(
+        r.outcome == ResultOutcome.pending for r in match.results
     )
 
     return PlayerMatchRow(

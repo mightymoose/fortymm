@@ -1,5 +1,6 @@
 import { Breadcrumb } from './match-details/breadcrumb'
 import { ConfirmationCallout } from './match-details/confirmation-callout'
+import { DisputeNotice } from './match-details/dispute-notice'
 import { FinalizeCallout } from './match-details/finalize-callout'
 import { HeadToHead } from './match-details/head-to-head'
 import { MatchInfo } from './match-details/match-info'
@@ -31,6 +32,10 @@ export function MatchDetails({ matchId }: { matchId: string }) {
         </div>
 
         <ConfirmationCallout matchId={matchId} />
+
+        {/* Takes the callout slot once the result is disputed — the
+            confirmation callout goes quiet (status is no longer `live`). */}
+        <DisputeNotice matchId={matchId} />
 
         <FinalizeCallout matchId={matchId} />
 

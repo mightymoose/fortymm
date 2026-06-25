@@ -13,9 +13,9 @@ from app.models.match_settings import MatchSettings
 if TYPE_CHECKING:
     from app.models.league import League
     from app.models.match_game import MatchGame
+    from app.models.match_result import MatchResult
     from app.models.match_side import MatchSide
     from app.models.match_side_player import MatchSidePlayer
-    from app.models.match_signature import MatchSignature
     from app.models.user import User
 
 
@@ -128,8 +128,9 @@ class Match(Base):
         cascade="all",
         passive_deletes=True,
     )
-    signatures: Mapped[list["MatchSignature"]] = relationship(
+    results: Mapped[list["MatchResult"]] = relationship(
         back_populates="match",
         cascade="all, delete-orphan",
         passive_deletes=True,
+        order_by="MatchResult.submitted_at",
     )

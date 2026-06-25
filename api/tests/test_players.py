@@ -6,11 +6,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.leagues import get_default_league
 from app.models import (
     Match,
+    MatchResult,
+    MatchResultResponse,
     MatchSettings,
     MatchSide,
     MatchSidePlayer,
-    MatchSignature,
     MatchStatus,
+    ResultOutcome,
+    ResultResponseKind,
     User,
     UserLeagueRating,
 )
@@ -367,9 +370,9 @@ async def _record_match_with_winner(
     matches, mirroring the API: since #485 it's written at the moment a match
     becomes final, never while one is still in progress.
 
-    ``signed_by`` seeds a single ``MatchSignature`` from that user (a
-    posted-but-unconfirmed result), so an ``in_progress`` match can be put in
-    the "Awaiting confirmation" bucket (#364)."""
+    ``signed_by`` seeds a pending ``MatchResult`` submitted (and confirmed) by
+    that user — a posted-but-unconfirmed result — so an ``in_progress`` match
+    can be put in the "Awaiting confirmation" bucket (#364)."""
     settings = MatchSettings(team_size=1, best_of=5, affects_rating=False)
     league = await get_default_league(db_session)
     match = Match(
@@ -386,7 +389,15 @@ async def _record_match_with_winner(
     side2 = MatchSide(match=match, side_number=2, won=False if completed else None)
     side2.players.append(MatchSidePlayer(match=match, user=loser))
     if signed_by is not None:
-        match.signatures.append(MatchSignature(user_id=signed_by.id))
+        result = MatchResult(
+            submitted_by_user_id=signed_by.id,
+            games=[],
+            outcome=ResultOutcome.pending,
+        )
+        result.responses.append(
+            MatchResultResponse(user_id=signed_by.id, kind=ResultResponseKind.confirm)
+        )
+        match.results.append(result)
     db_session.add(match)
     await db_session.commit()
     return match

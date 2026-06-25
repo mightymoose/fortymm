@@ -27,8 +27,9 @@ from app.models import (
     DeviceToken,
     LeagueMembership,
     Match,
+    MatchResult,
+    MatchResultResponse,
     MatchSidePlayer,
-    MatchSignature,
     Notification,
     NotificationChannelSetting,
     NotificationPreference,
@@ -69,7 +70,7 @@ async def merge_user(
     matches_moved = await _repoint_match_side_players(
         db, from_user_id=from_user_id, to_user_id=to_user_id
     )
-    await _repoint_match_signatures(
+    await _repoint_match_result_responses(
         db, from_user_id=from_user_id, to_user_id=to_user_id
     )
 
@@ -77,6 +78,15 @@ async def merge_user(
         update(Match)
         .where(Match.created_by_user_id == from_user_id)
         .values(created_by_user_id=to_user_id)
+    )
+
+    # Re-point posted-result authorship: ``match_results.submitted_by_user_id``
+    # is RESTRICT, and the row is match history we keep — so move it to the
+    # survivor rather than dropping it. No uniqueness to dodge.
+    await db.execute(
+        update(MatchResult)
+        .where(MatchResult.submitted_by_user_id == from_user_id)
+        .values(submitted_by_user_id=to_user_id)
     )
 
     # Preserve tournament ownership across a guest→verified merge — re-point
@@ -156,9 +166,11 @@ async def merge_user(
     await db.execute(
         delete(MatchSidePlayer).where(MatchSidePlayer.user_id == from_user_id)
     )
-    # Same RESTRICT story for match_signatures — defensive drop after repoint.
+    # Same RESTRICT story for match_result_responses — defensive drop after
+    # repoint. (match_results.submitted_by has no uniqueness, so its repoint
+    # above always covers every row — no defensive drop needed there.)
     await db.execute(
-        delete(MatchSignature).where(MatchSignature.user_id == from_user_id)
+        delete(MatchResultResponse).where(MatchResultResponse.user_id == from_user_id)
     )
 
     # We tombstone rather than DELETE the user, so the rows that used to ride
@@ -234,26 +246,26 @@ async def _repoint_match_side_players(
     return cast(CursorResult[Any], result).rowcount or 0
 
 
-async def _repoint_match_signatures(
+async def _repoint_match_result_responses(
     db: AsyncSession,
     *,
     from_user_id: uuid.UUID,
     to_user_id: uuid.UUID,
 ) -> None:
-    """Re-point match_signatures from ephemeral → verified. UNIQUE(match_id,
-    user_id) collides only if both users somehow already signed the same
-    match — left out by NOT EXISTS; the ephemeral row will then be dropped by
-    the defensive ``DELETE`` in ``merge_user``."""
+    """Re-point match_result_responses from ephemeral → verified.
+    UNIQUE(result_id, user_id) collides only if both users somehow already
+    responded to the same result — left out by NOT EXISTS; the ephemeral row
+    will then be dropped by the defensive ``DELETE`` in ``merge_user``."""
     await db.execute(
         text(
             """
-            UPDATE match_signatures AS ms
+            UPDATE match_result_responses AS mrr
             SET user_id = :to_id
-            WHERE ms.user_id = :from_id
+            WHERE mrr.user_id = :from_id
               AND NOT EXISTS (
-                SELECT 1 FROM match_signatures other
+                SELECT 1 FROM match_result_responses other
                 WHERE other.user_id = :to_id
-                  AND other.match_id = ms.match_id
+                  AND other.result_id = mrr.result_id
               )
             """
         ),

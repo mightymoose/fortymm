@@ -13,13 +13,16 @@ from app.models import (
     EventFormat,
     LeagueMembership,
     Match,
+    MatchResult,
+    MatchResultResponse,
     MatchSettings,
     MatchSide,
     MatchSidePlayer,
-    MatchSignature,
     MatchStatus,
     RatingHistory,
     RatingHistorySource,
+    ResultOutcome,
+    ResultResponseKind,
     Tournament,
     TournamentEvent,
     User,
@@ -67,6 +70,28 @@ async def _record_match(db: AsyncSession, creator: User, *players: User) -> Matc
     await db.commit()
     await db.refresh(match)
     return match
+
+
+async def _record_result(
+    db: AsyncSession, match: Match, *, submitted_by: User, responders: list[User]
+) -> MatchResult:
+    """Attach a pending ``MatchResult`` to ``match`` with a ``confirm`` response
+    from each ``responders`` user — the new home for what used to be
+    ``match_signatures``."""
+    result = MatchResult(
+        match_id=match.id,
+        submitted_by_user_id=submitted_by.id,
+        games=[],
+        outcome=ResultOutcome.pending,
+    )
+    for user in responders:
+        result.responses.append(
+            MatchResultResponse(user_id=user.id, kind=ResultResponseKind.confirm)
+        )
+    db.add(result)
+    await db.commit()
+    await db.refresh(result)
+    return result
 
 
 # ----- happy path ---------------------------------------------------------
@@ -297,6 +322,26 @@ async def test_merge_repoints_rating_history_created_by(
     assert row.created_by_user_id == verified.id
 
 
+async def test_merge_repoints_match_result_submitted_by(db_session: AsyncSession):
+    """``match_results.submitted_by_user_id`` is RESTRICT and the result is match
+    history we keep — so the merge re-points it onto the survivor, otherwise the
+    posted result would keep crediting the tombstoned ghost."""
+    ephemeral = await _make_ephemeral(db_session, "wandering-heron")
+    verified = await _make_verified(db_session, "submitter@example.com")
+    opponent = await _make_verified(db_session, "opponent@example.com")
+
+    match = await _record_match(db_session, ephemeral, ephemeral, opponent)
+    result = await _record_result(
+        db_session, match, submitted_by=ephemeral, responders=[ephemeral]
+    )
+
+    await merge_user(db_session, from_user_id=ephemeral.id, to_user_id=verified.id)
+    await db_session.commit()
+
+    await db_session.refresh(result)
+    assert result.submitted_by_user_id == verified.id
+
+
 # ----- counts -------------------------------------------------------------
 
 
@@ -374,36 +419,37 @@ async def test_merge_with_user_league_rating_collision_drops_ephemeral(
     assert [r.user_id for r in rows] == [verified.id]
 
 
-async def test_merge_repoints_match_signatures(db_session: AsyncSession):
-    """``match_signatures`` is RESTRICT on user_id, so the merge must re-point
-    every signature row from the ephemeral user onto the verified user — same
-    contract as ``match_side_players``. Otherwise the final ephemeral-user
+async def test_merge_repoints_match_result_responses(db_session: AsyncSession):
+    """``match_result_responses`` is RESTRICT on user_id, so the merge must
+    re-point every response row from the ephemeral user onto the verified user —
+    same contract as ``match_side_players``. Otherwise the final ephemeral-user
     delete would either fail (RESTRICT block) or orphan the audit row."""
     ephemeral = await _make_ephemeral(db_session, "drifting-grouse")
     verified = await _make_verified(db_session, "rita@example.com")
     opponent = await _make_ephemeral(db_session, "spinning-otter")
     match = await _record_match(db_session, ephemeral, ephemeral, opponent)
-
-    db_session.add(MatchSignature(match_id=match.id, user_id=ephemeral.id))
-    db_session.add(MatchSignature(match_id=match.id, user_id=opponent.id))
-    await db_session.commit()
+    result = await _record_result(
+        db_session, match, submitted_by=ephemeral, responders=[ephemeral, opponent]
+    )
 
     await merge_user(db_session, from_user_id=ephemeral.id, to_user_id=verified.id)
     await db_session.commit()
 
-    sigs = (
+    responses = (
         (
             await db_session.execute(
-                select(MatchSignature).where(MatchSignature.match_id == match.id)
+                select(MatchResultResponse).where(
+                    MatchResultResponse.result_id == result.id
+                )
             )
         )
         .scalars()
         .all()
     )
-    user_ids = {sig.user_id for sig in sigs}
+    user_ids = {r.user_id for r in responses}
     assert user_ids == {verified.id, opponent.id}
     # And the ephemeral user is tombstoned, not dropped — the RESTRICT FK on
-    # match_signatures.user_id was satisfied by the re-point above.
+    # match_result_responses.user_id was satisfied by the re-point above.
     ephemeral_row = (
         await db_session.execute(select(User).where(User.id == ephemeral.id))
     ).scalar_one_or_none()
@@ -411,34 +457,36 @@ async def test_merge_repoints_match_signatures(db_session: AsyncSession):
     assert ephemeral_row.merged_into_user_id == verified.id
 
 
-async def test_merge_with_match_signature_collision_drops_ephemeral(
+async def test_merge_with_match_response_collision_drops_ephemeral(
     db_session: AsyncSession,
 ):
-    """If both users somehow already signed the same match, the NOT EXISTS
-    guard skips the re-point and the defensive DELETE in ``merge_user`` drops
-    the leftover ephemeral row so the user delete still succeeds."""
+    """If both users somehow already responded to the same result, the NOT
+    EXISTS guard skips the re-point and the defensive DELETE in ``merge_user``
+    drops the leftover ephemeral row so the user delete still succeeds."""
     ephemeral = await _make_ephemeral(db_session, "drifting-grouse")
     verified = await _make_verified(db_session, "rita@example.com")
     opponent = await _make_ephemeral(db_session, "spinning-otter")
     match = await _record_match(db_session, ephemeral, ephemeral, opponent)
 
-    # Both users carry a signature on the same match — impossible in normal
+    # Both users carry a response on the same result — impossible in normal
     # flow but defended against here.
-    db_session.add(MatchSignature(match_id=match.id, user_id=ephemeral.id))
-    db_session.add(MatchSignature(match_id=match.id, user_id=verified.id))
-    await db_session.commit()
+    result = await _record_result(
+        db_session, match, submitted_by=ephemeral, responders=[ephemeral, verified]
+    )
 
     await merge_user(db_session, from_user_id=ephemeral.id, to_user_id=verified.id)
     await db_session.commit()
 
-    sigs = (
+    responses = (
         (
             await db_session.execute(
-                select(MatchSignature).where(MatchSignature.match_id == match.id)
+                select(MatchResultResponse).where(
+                    MatchResultResponse.result_id == result.id
+                )
             )
         )
         .scalars()
         .all()
     )
-    # Verified's pre-existing signature survives; ephemeral's is dropped.
-    assert [sig.user_id for sig in sigs] == [verified.id]
+    # Verified's pre-existing response survives; ephemeral's is dropped.
+    assert [r.user_id for r in responses] == [verified.id]

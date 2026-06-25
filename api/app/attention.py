@@ -18,7 +18,7 @@ means the list and the dashboard can never disagree about who owes a move.
 import uuid
 from typing import Literal
 
-from app.models import Match, MatchStatus
+from app.models import Match, MatchStatus, ResultOutcome
 
 # The bucket an open match falls in for the current user. A superset of the
 # dashboard's narrower ``AttentionKind``: the list also surfaces the passive
@@ -63,11 +63,19 @@ def list_attention_kind(
         case MatchStatus.pending:
             return "waiting_others"
         case MatchStatus.in_progress:
-            if match.signatures:
-                i_signed = any(
-                    sig.user_id == current_user_id for sig in match.signatures
+            # A pending posted result is awaiting a confirm/dispute. The poster
+            # (who confirmed at post time) is waiting on the opponent; the other
+            # side owes a review. Inlined rather than importing matches.py's
+            # ``pending_result`` to keep this module free of the router.
+            pending = next(
+                (r for r in match.results if r.outcome == ResultOutcome.pending),
+                None,
+            )
+            if pending is not None:
+                i_responded = any(
+                    resp.user_id == current_user_id for resp in pending.responses
                 )
-                return "waiting_opponent" if i_signed else "review"
+                return "waiting_opponent" if i_responded else "review"
             return "score"
         case MatchStatus.completed | MatchStatus.voided:
             return None

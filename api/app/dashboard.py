@@ -23,11 +23,14 @@ from app.matches import (
 from app.models import (
     League,
     Match,
+    MatchResult,
+    MatchResultResponse,
     MatchSide,
     MatchSidePlayer,
-    MatchSignature,
     MatchStatus,
     RatingHistory,
+    ResultOutcome,
+    ResultResponseKind,
     User,
     UserLeagueRating,
 )
@@ -79,14 +82,18 @@ async def get_dashboard(
     # the cheap aggregates below — so an active tournament player doesn't pay to
     # load every open match (#216).
     #
-    # An in_progress match the current user has *already signed* is "waiting on
-    # the opponent": it's never an attention row, only a waiting count, so we
+    # An in_progress match the current user has *already confirmed* is "waiting
+    # on the opponent": it's never an attention row, only a waiting count, so we
     # exclude it from the eager load entirely rather than load-then-discard it.
+    # "Confirmed" = a ``confirm`` response by this user on the pending result.
     my_signature_exists = (
-        select(MatchSignature.id)
+        select(MatchResultResponse.id)
+        .join(MatchResult, MatchResult.id == MatchResultResponse.result_id)
         .where(
-            MatchSignature.match_id == Match.id,
-            MatchSignature.user_id == current_user.id,
+            MatchResult.match_id == Match.id,
+            MatchResult.outcome == ResultOutcome.pending,
+            MatchResultResponse.user_id == current_user.id,
+            MatchResultResponse.kind == ResultResponseKind.confirm,
         )
         .exists()
     )

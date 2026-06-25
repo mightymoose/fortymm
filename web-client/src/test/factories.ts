@@ -208,6 +208,7 @@ export function matchDetails(
     can_finalize: false,
     can_confirm: false,
     signatures: [],
+    disputed_by_user_id: null,
     recent_form: [mySide, opponentSide]
       .filter((s) => s.players.length > 0)
       .map((s) => ({

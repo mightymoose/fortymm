@@ -39,12 +39,23 @@ match_status_enum = postgresql.ENUM(
     name="match_status",
     create_type=False,
 )
+# Lifecycle of one posted result (``match_results.outcome``). See
+# app/models/match_result.py:ResultOutcome.
+result_outcome_enum = postgresql.ENUM(
+    "pending",
+    "confirmed",
+    "disputed",
+    "superseded",
+    name="result_outcome",
+    create_type=False,
+)
 
 
 def upgrade() -> None:
     bind = op.get_bind()
     verification_policy_enum.create(bind, checkfirst=True)
     match_status_enum.create(bind, checkfirst=True)
+    result_outcome_enum.create(bind, checkfirst=True)
 
     op.create_table(
         "match_settings",
@@ -162,6 +173,49 @@ def upgrade() -> None:
         "matches",
         ["status", sa.text("completed_at DESC")],
     )
+
+    # A posted result — one row per ``POST /results``. The claimed board is an
+    # immutable JSONB snapshot (``games``); the working ``match_games``
+    # scratchpad stays the live, editable board. Confirm/dispute attach as
+    # ``match_result_responses`` rows (created in revision 0007).
+    op.create_table(
+        "match_results",
+        sa.Column(
+            "id",
+            postgresql.UUID(as_uuid=True),
+            primary_key=True,
+            server_default=sa.text("gen_random_uuid()"),
+        ),
+        sa.Column(
+            "match_id",
+            postgresql.UUID(as_uuid=True),
+            sa.ForeignKey("matches.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
+        # RESTRICT (not CASCADE) so an ephemeral-user delete during account
+        # merge can't silently drop a result row; the merge service repoints
+        # submitted_by_user_id explicitly. See app/account_merge.py.
+        sa.Column(
+            "submitted_by_user_id",
+            postgresql.UUID(as_uuid=True),
+            sa.ForeignKey("users.id", ondelete="RESTRICT"),
+            nullable=False,
+        ),
+        sa.Column(
+            "submitted_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
+        sa.Column(
+            "outcome",
+            result_outcome_enum,
+            nullable=False,
+            server_default="pending",
+        ),
+        sa.Column("games", postgresql.JSONB(), nullable=False),
+    )
+    op.create_index("ix_match_results_match_id", "match_results", ["match_id"])
 
     op.create_table(
         "match_sides",
@@ -321,9 +375,11 @@ def downgrade() -> None:
     op.drop_table("match_games")
     op.drop_table("match_side_players")
     op.drop_table("match_sides")
+    op.drop_table("match_results")
     op.drop_table("matches")
     op.drop_table("match_settings")
 
     bind = op.get_bind()
+    result_outcome_enum.drop(bind, checkfirst=True)
     match_status_enum.drop(bind, checkfirst=True)
     verification_policy_enum.drop(bind, checkfirst=True)
