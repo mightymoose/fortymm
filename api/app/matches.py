@@ -469,6 +469,12 @@ def _serialize_details(
         can_confirm=(
             current_user_id is not None and _can_confirm(match, current_user_id)
         ),
+        # True iff the current user posted the pending result and can retract it
+        # (the submitter's escape hatch — they can't confirm/dispute their own
+        # result). Drives the "Withdraw result" CTA.
+        can_withdraw=(
+            current_user_id is not None and _can_withdraw(match, current_user_id)
+        ),
         signatures=_signature_views(match),
         disputed_by_user_id=disputer_of(match),
         recent_form=extras.recent_form,
@@ -1107,6 +1113,48 @@ def _can_confirm(match: Match, user_id: uuid.UUID | None) -> bool:
     return True
 
 
+def _enforce_withdrawable(match: Match, user_id: uuid.UUID) -> MatchResult:
+    """Preconditions for ``POST /withdrawal`` — the submitter retracting their
+    own still-pending result. Caller is already known to be a participant
+    (``_load_match_for_scoring`` handles the 404). Returns the pending result so
+    the handler doesn't re-load it. Symmetric to ``_enforce_confirmable`` but
+    for the *opposite* party: confirm/dispute are for the side that owes a
+    sign-off, withdrawal is for the side that posted."""
+    if match.status != MatchStatus.in_progress:
+        raise HTTPException(
+            status_code=409,
+            detail="This match is no longer awaiting confirmation.",
+        )
+    result = pending_result(match)
+    if result is None:
+        raise HTTPException(
+            status_code=409,
+            detail="No posted result to withdraw. Post the result first.",
+        )
+    if result.submitted_by_user_id != user_id:
+        raise HTTPException(
+            status_code=409,
+            detail="Only the player who posted this result can withdraw it.",
+        )
+    return result
+
+
+def _can_withdraw(match: Match, user_id: uuid.UUID | None) -> bool:
+    """Mirrors ``_enforce_withdrawable`` as a boolean for the BFF surface.
+    True iff a ``POST /withdrawal`` from ``user_id`` would currently succeed
+    (ignoring transport-layer auth)."""
+    if user_id is None:
+        return False
+    if match.status != MatchStatus.in_progress:
+        return False
+    if not _is_participant(match, user_id):
+        return False
+    result = pending_result(match)
+    if result is None:
+        return False
+    return result.submitted_by_user_id == user_id
+
+
 # ----- result-confirmation push -------------------------------------------
 
 # En-dash between scores reads better than a hyphen in notification copy.
@@ -1723,6 +1771,18 @@ def _set_side_won(match: Match, decided_side: int) -> None:
         side.won = side.side_number == decided_side
 
 
+def _reset_sides_for_reopen(match: Match) -> None:
+    """Rewind the denormalized side outcome when a posted result is sent back to
+    a re-scorable board (a /dispute or /withdrawal). ``side.won`` is only stamped
+    at completion now, so it's still None on an awaiting-confirmation match —
+    nulling it is defensive. ``side.score`` is the games-won mirror — zero it so a
+    direct DB reader doesn't see won=None with score>0 (the games still imply
+    2-1 etc., but the BFF derives that from MatchGame, not from side.score)."""
+    for side in match.sides:
+        side.won = None
+        side.score = 0
+
+
 def _requires_confirmation(match: Match) -> bool:
     """Only rated matches go through the sign-off round-trip. Confirmation
     exists to protect ratings from one-sided claims; an unrated match has no
@@ -2166,15 +2226,51 @@ async def dispute_match_result(
     # Un-completed: drop the completion stamp so a re-post stamps a fresh one
     # and this match doesn't linger in any history window while disputed.
     match.completed_at = None
-    for side in match.sides:
-        # ``side.won`` is only stamped at completion now, so it's still None
-        # on an awaiting-confirmation match — nulling it here is defensive.
-        # ``side.score`` is the denormalized games-won mirror — zero it so a
-        # direct DB reader doesn't see won=None with score>0 (the games still
-        # imply 2-1 etc., but the BFF derives that from MatchGame, not from
-        # side.score).
-        side.won = None
-        side.score = 0
+    _reset_sides_for_reopen(match)
+
+    await db.commit()
+
+    reloaded = await _load_match(db, match.id)
+    assert reloaded is not None
+    extras = await _load_view_extras(db, reloaded)
+    return _serialize_details(reloaded, current_user.id, extras)
+
+
+@router.post(
+    "/matches/{match_id}/withdrawal",
+    response_model=MatchDetails,
+    # 200 (not 201): like /dispute, withdrawal is terminal for the pending
+    # result rather than creating a confirmable resource — it rewinds the match
+    # to a live, re-scorable board.
+    status_code=status.HTTP_200_OK,
+)
+async def withdraw_match_result(
+    match_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+) -> MatchDetails:
+    """Retract a result the caller posted that's still awaiting the other
+    side's sign-off — the submitter's escape hatch for a typo they spotted
+    after posting (they can't confirm or dispute their own result).
+
+    The pending result is marked ``superseded`` (it stays as history — its
+    ``games`` snapshot preserves the retracted board) and the match returns to a
+    plain ``in_progress`` / ``Live`` state with no pending result. The working
+    ``match_games`` stay in place, so scoring reopens (see ``_enforce_scorable``)
+    and the submitter can correct the wrong game and re-post via ``/results``.
+    Distinct from ``disputed``: nobody rejected the result, so the match reads
+    as ordinary Live rather than surfacing a disputer."""
+    match = await _load_match_for_scoring(db, match_id, current_user.id, lock=True)
+    result = _enforce_withdrawable(match, current_user.id)
+
+    # ``superseded`` (the reserved "a pending result was retracted/replaced"
+    # outcome) keeps the row as history while contributing no signatures and no
+    # disputer to the BFF — so the match reads as a clean reopened board.
+    result.outcome = ResultOutcome.superseded
+    # Already ``in_progress`` (a pending result implies it), but set explicitly
+    # to mirror /dispute and stay correct if the lifecycle ever changes.
+    match.status = MatchStatus.in_progress
+    _reset_sides_for_reopen(match)
 
     await db.commit()
 

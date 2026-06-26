@@ -182,6 +182,7 @@ export function buildMatchDetails(
     can_score: false,
     can_finalize: false,
     can_confirm: false,
+    can_withdraw: false,
     signatures: [],
     disputed_by_user_id: null,
     recent_form: [],

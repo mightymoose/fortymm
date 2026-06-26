@@ -2147,6 +2147,124 @@ async def test_dispute_records_disputer_and_repost_clears_it(
         assert re_post["disputed_by_user_id"] is None
 
 
+async def test_can_withdraw_flag_is_submitter_only(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """After a result is posted, the submitter (who can't confirm/dispute their
+    own result) gets ``can_withdraw=True`` and ``can_confirm=False``; the side
+    that owes a sign-off gets the mirror image."""
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "withdraw-flag-opp") as (opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=3)
+        posted = await _post_results(api_client, match["id"])
+        # Submitter: can withdraw, can't confirm.
+        assert posted["can_withdraw"] is True
+        assert posted["can_confirm"] is False
+
+        # Opponent: can confirm/dispute, can't withdraw someone else's post.
+        opp_view = (await opp_client.get(f"/v1/matches/{match['id']}")).json()
+        assert opp_view["can_withdraw"] is False
+        assert opp_view["can_confirm"] is True
+
+
+async def test_withdraw_supersedes_result_and_reopens_match(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """``POST /withdrawal`` lets the submitter retract their own pending result:
+    it's marked ``superseded`` (no signatures, no disputer surfaced), the match
+    returns to a plain ``Live`` state (not ``disputed``), and scoring reopens so
+    the submitter can correct the wrong game and re-post."""
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "withdraw-opp") as (opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=3)
+        await _post_results(api_client, match["id"])
+
+        withdraw = await api_client.post(f"/v1/matches/{match['id']}/withdrawal")
+        assert withdraw.status_code == 200
+        body = withdraw.json()
+        # Plain Live — not Disputed: nobody rejected the result.
+        assert body["status"] == "in_progress"
+        assert body["status_label"] == "Live"
+        assert body["signatures"] == []
+        assert body["disputed_by_user_id"] is None
+        sides = sorted(body["sides"], key=lambda s: s["side_number"])
+        assert [s["won"] for s in sides] == [None, None]
+        # Working games preserved, board still decided → re-scorable + re-postable.
+        assert [s["games_won"] for s in sides] == [2, 0]
+        assert body["can_score"] is True
+        assert body["can_finalize"] is True
+        # Nothing pending now, so the submitter can't withdraw again.
+        assert body["can_withdraw"] is False
+
+        # The submitter can edit the contested game and re-post into sign-off.
+        put = await api_client.put(
+            f"/v1/matches/{match['id']}/games/2/scores",
+            json={"side_1_points": 11, "side_2_points": 9, "expected_version": 1},
+        )
+        assert put.status_code == 200
+        re_post = await _post_results(api_client, match["id"])
+        assert re_post["status_label"] == "Awaiting confirmation"
+
+
+async def test_opponent_cannot_withdraw_submitters_result(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """Withdrawal is the *submitter's* escape hatch. The side that owes a
+    sign-off must confirm or dispute instead — withdrawing isn't theirs."""
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "withdraw-opp2") as (opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=3)
+        await _post_results(api_client, match["id"])
+
+        resp = await opp_client.post(f"/v1/matches/{match['id']}/withdrawal")
+        assert resp.status_code == 409
+        assert "posted this result" in resp.json()["detail"]
+
+
+async def test_withdraw_409_when_no_result_posted(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "withdraw-early-opp") as (_opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=3)
+        resp = await api_client.post(f"/v1/matches/{match['id']}/withdrawal")
+        assert resp.status_code == 409
+        assert "No posted result" in resp.json()["detail"]
+
+
+async def test_non_participant_cannot_withdraw(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """A non-participant gets 404, mirroring the other write paths — no way to
+    learn the match exists."""
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "withdraw-np-opp") as (_opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=3)
+        await _post_results(api_client, match["id"])
+        async with make_client() as bystander_client:
+            await start_session(bystander_client, db_session)
+            resp = await bystander_client.post(f"/v1/matches/{match['id']}/withdrawal")
+            assert resp.status_code == 404
+
+
+async def test_withdraw_409_after_finalized(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """Once both sides have signed and the match is completed there's no pending
+    result to withdraw — ``_enforce_withdrawable`` catches it on the status
+    gate."""
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "withdraw-final-opp") as (opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=3)
+        await _post_results(api_client, match["id"])
+        confirm = await opp_client.post(f"/v1/matches/{match['id']}/confirmation")
+        assert confirm.status_code == 201
+
+        resp = await api_client.post(f"/v1/matches/{match['id']}/withdrawal")
+        assert resp.status_code == 409
+        assert "no longer awaiting confirmation" in resp.json()["detail"]
+
+
 async def test_results_on_solo_finalizes_with_no_signature_row(
     api_client: AsyncClient, db_session: AsyncSession
 ):

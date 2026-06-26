@@ -208,6 +208,13 @@ class MatchDetails(BaseModel):
     # predicate gates both /confirmation and /dispute; the FE picks which
     # CTA to show. False for anonymous / non-participants.
     can_confirm: bool
+    # True when the current user is the *submitter* of a result that is still
+    # awaiting the other side's sign-off — i.e. they posted it and nobody has
+    # confirmed or disputed yet. They can't confirm or dispute their own result,
+    # so this gates a "Withdraw result" CTA that retracts the posting and
+    # reopens the match for re-scoring. False for anonymous / non-participants
+    # and for the side that owes the sign-off (they get ``can_confirm`` instead).
+    can_withdraw: bool
     # Always present (possibly empty). Default-factoried fields become
     # ``optional`` in the generated TS types; declared as required keeps the
     # FE from defending against ``undefined`` at every read.

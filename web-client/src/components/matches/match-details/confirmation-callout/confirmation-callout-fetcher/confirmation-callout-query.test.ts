@@ -31,6 +31,8 @@ const awaitingMatch = (overrides: Partial<MatchDetails> = {}): MatchDetails =>
     status: "in_progress",
     status_label: "Awaiting confirmation",
     can_confirm: false,
+    // The viewer posted this result, so they may retract it.
+    can_withdraw: true,
     signatures: [viewerSignature],
     data: buildMatchDetailsData({
       scoreboard: buildScoreboard({ status: "live" }),
@@ -73,6 +75,7 @@ describe("confirmationCalloutQuery", () => {
     expect(result.current.data).toEqual({
       kind: "awaiting",
       pendingSignerName: "leo.mertens",
+      canWithdraw: true,
     });
   });
 
@@ -88,6 +91,21 @@ describe("confirmationCalloutQuery", () => {
     expect(result.current.data).toEqual({
       kind: "awaiting",
       pendingSignerName: "your opponent",
+      canWithdraw: true,
+    });
+  });
+
+  it("passes the backend's can_withdraw through to the awaiting view", async () => {
+    confirmationCalloutQueryPage.mockEndpoint(() =>
+      HttpResponse.json(awaitingMatch({ can_withdraw: false })),
+    );
+
+    const result = await renderView();
+
+    expect(result.current.data).toEqual({
+      kind: "awaiting",
+      pendingSignerName: "leo.mertens",
+      canWithdraw: false,
     });
   });
 

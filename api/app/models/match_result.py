@@ -23,10 +23,11 @@ class ResultOutcome(enum.Enum):
     match is ``completed``.
     ``disputed`` — a participant rejected it; the match reopens for re-scoring
     and this row stays as the immutable record of what was rejected.
-    ``superseded`` — a still-``pending`` result was replaced by a re-post before
-    anyone acted on it. Unused by the current flow (a re-post only happens after
-    a terminal dispute) but reserved so re-posting over a pending result has a
-    home.
+    ``superseded`` — a still-``pending`` result was retracted before anyone
+    acted on it: the submitter withdrew it (``POST /withdrawal``), reopening the
+    match to a plain ``in_progress`` board. Like ``disputed`` it stays as history
+    and contributes no signatures, but carries no disputer — so the reopened
+    match reads as ordinary Live rather than surfacing a dispute.
     """
 
     pending = "pending"

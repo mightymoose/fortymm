@@ -31,6 +31,14 @@ const scoped = (container: Container) => ({
   queryDisputeButton() {
     return container.queryByRole("button", { name: /disput/i });
   },
+  /** The passive variant's "Withdraw result" CTA — "Withdrawing…" in flight.
+   * Only present on the submitter's own awaiting view (`canWithdraw`). */
+  getWithdrawButton() {
+    return container.getByRole("button", { name: /withdraw/i });
+  },
+  queryWithdrawButton() {
+    return container.queryByRole("button", { name: /withdraw/i });
+  },
   /** The inline API-failure line beneath the body copy; null when clean. */
   queryError() {
     return container.queryByRole("alert");
