@@ -1324,16 +1324,29 @@ async def consume_login_token(
     # token didn't record one (bare ``login``). ``skip_merge`` lets the owner
     # sign in without bringing the guest's matches over (the gate's "not now").
     recorded_guest_id = _guest_id_from_login_context(token_row.context)
-    # Single-use: delete the link the moment we accept it.
-    await db.delete(token_row)
-    if payload.skip_merge:
-        merged = None
-    elif recorded_guest_id is not None:
-        guest = await db.get(User, recorded_guest_id)
-        merged = await _merge_guest_into(db, guest=guest, target=user)
-    else:
-        merged = await _maybe_merge_prior_session(db, session_cookie, user)
-    return await _sign_in_after_merge(db, response, user, merged)
+    # The merge helpers run a query that autoflushes the staged rows before the
+    # explicit commit, so the users.email unique-constraint race (the merge
+    # re-points rows onto an address another account already confirmed) can
+    # surface anywhere in this block — not just at commit. Roll back and return
+    # the opaque "invalid or expired" so we don't leak who owns the address.
+    # Mirrors the guard on ``confirm_email``.
+    try:
+        # Single-use: delete the link the moment we accept it.
+        await db.delete(token_row)
+        if payload.skip_merge:
+            merged = None
+        elif recorded_guest_id is not None:
+            guest = await db.get(User, recorded_guest_id)
+            merged = await _merge_guest_into(db, guest=guest, target=user)
+        else:
+            merged = await _maybe_merge_prior_session(db, session_cookie, user)
+        return await _sign_in_after_merge(db, response, user, merged)
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="That sign-in link is invalid or expired.",
+        ) from None
 
 
 @router.post(
