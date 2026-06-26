@@ -5,8 +5,10 @@ from datetime import UTC, datetime, timedelta
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app import sessions
 from app.db import get_session
 from app.leagues import get_default_league
 from app.main import app
@@ -542,6 +544,30 @@ async def test_consume_merges_ephemeral_matches_into_verified_account(
     ).scalar_one_or_none()
     assert tombstoned is not None
     assert tombstoned.merged_into_user_id == rita.id
+
+
+async def test_consume_returns_400_when_merge_raises_integrity_error(
+    api_client: AsyncClient, db_session: AsyncSession, monkeypatch
+):
+    """If the email/merge race surfaces an IntegrityError mid-block (the merge
+    autoflushes the staged rows before commit), the endpoint must convert it
+    into the opaque 400 rather than letting a 500 leak out — mirroring the
+    guard on confirm_email."""
+    rita = await _make_confirmed_user(db_session, "rita@example.com")
+    raw = "raw-login-token-race"
+    await _issue_login_token(db_session, rita, raw)
+
+    # Arrive with an ephemeral guest so the merge path runs.
+    await start_session(api_client, db_session)
+
+    async def _boom(*args: object, **kwargs: object) -> None:
+        raise IntegrityError("merge", {}, Exception("duplicate key"))
+
+    monkeypatch.setattr(sessions, "_maybe_merge_prior_session", _boom)
+
+    response = await api_client.post("/v1/login/consume", json={"token": raw})
+    assert response.status_code == 400
+    assert response.json()["detail"] == "That sign-in link is invalid or expired."
 
 
 async def test_consume_omits_merge_when_no_prior_session(
