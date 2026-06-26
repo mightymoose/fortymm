@@ -40,7 +40,7 @@ export const EventCard = ({ event: ev, canEdit, onOpen }: EventCardProps) => {
         <div className="grid grid-cols-1 gap-4 p-[18px] sm:grid-cols-[minmax(0,2.4fr)_minmax(0,1fr)_minmax(0,1fr)_auto] sm:items-center sm:gap-6">
           <div className="min-w-0">
             <div className="mb-1.5 flex flex-wrap items-center gap-2.5">
-              <span className="text-[20px] font-bold text-[color:var(--fg-1)] sm:whitespace-nowrap">
+              <span className="min-w-0 text-[20px] font-bold text-[color:var(--fg-1)]">
                 {ev.name}
               </span>
               {ev.match.rated && (
