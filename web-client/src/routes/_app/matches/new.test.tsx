@@ -313,6 +313,76 @@ describe('NewMatchPage', () => {
   })
 })
 
+describe('NewMatchPage — match-length keyboard (#64)', () => {
+  // The match-length radiogroup must be operable from the keyboard per
+  // WCAG 2.1.1: it is a single Tab stop (roving tabindex) and arrows/Home/End
+  // move *and* select between options.
+  function recentEmpty() {
+    return http.get('*/v1/players/recent', () => HttpResponse.json([]))
+  }
+
+  function lengthRadios() {
+    return screen
+      .getByRole('radiogroup', { name: /match length/i })
+      .querySelectorAll<HTMLButtonElement>('[role="radio"]')
+  }
+
+  it('exposes the group as a single Tab stop via roving tabindex', async () => {
+    server.use(recentEmpty())
+    renderNewMatch()
+    await screen.findByRole('radiogroup', { name: /match length/i })
+
+    const radios = lengthRadios()
+    // Default is Best of 5 ("Std"), the third option — only it is tabbable.
+    expect(Array.from(radios).map((r) => r.tabIndex)).toEqual([-1, -1, 0, -1])
+  })
+
+  it('moves and selects with ArrowRight/ArrowLeft, wrapping at the ends', async () => {
+    const user = userEvent.setup()
+    server.use(recentEmpty())
+    renderNewMatch()
+    await screen.findByRole('radiogroup', { name: /match length/i })
+
+    const [single, , std, long] = Array.from(lengthRadios())
+    std.focus()
+    expect(std).toHaveFocus()
+
+    await user.keyboard('{ArrowRight}')
+    expect(long).toHaveAttribute('aria-checked', 'true')
+    expect(long).toHaveFocus()
+
+    // Wrap forward off the last option back to the first.
+    await user.keyboard('{ArrowRight}')
+    expect(single).toHaveAttribute('aria-checked', 'true')
+    expect(single).toHaveFocus()
+
+    // Wrap backward off the first option to the last.
+    await user.keyboard('{ArrowLeft}')
+    expect(long).toHaveAttribute('aria-checked', 'true')
+    expect(long).toHaveFocus()
+  })
+
+  it('jumps to the ends with Home and End', async () => {
+    const user = userEvent.setup()
+    server.use(recentEmpty())
+    renderNewMatch()
+    await screen.findByRole('radiogroup', { name: /match length/i })
+
+    const radios = Array.from(lengthRadios())
+    const first = radios[0]
+    const last = radios[radios.length - 1]
+    radios[2].focus()
+
+    await user.keyboard('{Home}')
+    expect(first).toHaveAttribute('aria-checked', 'true')
+    expect(first).toHaveFocus()
+
+    await user.keyboard('{End}')
+    expect(last).toHaveAttribute('aria-checked', 'true')
+    expect(last).toHaveFocus()
+  })
+})
+
 describe('NewMatchPage — recent opponents', () => {
   it('shows a skeleton while recent opponents load, then the chips', async () => {
     server.use(
