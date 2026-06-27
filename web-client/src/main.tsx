@@ -63,10 +63,14 @@ async function unregisterServiceWorkers() {
 
 async function enableMocking() {
   if (!import.meta.env.DEV) {
-    await unregisterServiceWorkers()
+    // Production never loads MSW, so there's nothing to clean up. Calling
+    // unregisterServiceWorkers() here would evict the PWA worker on every
+    // page load before React mounts, defeating the cache entirely.
     return
   }
   if (import.meta.env.VITE_ENABLE_MSW === 'false') {
+    // Dev with MSW disabled (e.g. docker compose real-API mode): clear any
+    // stale MSW worker left from a previous dev-server session.
     await unregisterServiceWorkers()
     return
   }

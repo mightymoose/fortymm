@@ -967,10 +967,12 @@ async def confirm_email(
     """
     token_row = (
         await db.execute(
-            select(UserToken).where(
+            select(UserToken)
+            .where(
                 UserToken.token == _hash_token(payload.token),
                 _pending_email_token_clause(),
             )
+            .with_for_update()
         )
     ).scalar_one_or_none()
     if token_row is None:
@@ -1277,10 +1279,12 @@ async def consume_login_token(
     """
     token_row = (
         await db.execute(
-            select(UserToken).where(
+            select(UserToken)
+            .where(
                 UserToken.token == _hash_token(payload.token),
                 _login_token_clause(),
             )
+            .with_for_update()
         )
     ).scalar_one_or_none()
     if token_row is None:

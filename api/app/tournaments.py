@@ -332,7 +332,7 @@ async def create_event(
         draw_type=payload.draw_type,
         max_players=payload.max_players,
         entry_fee=payload.entry_fee,
-        entered=payload.entered,
+        entered=0,
         slot=payload.slot.model_dump(),
         match_settings=payload.match_settings.model_dump(),
         predicates=[p.model_dump() for p in payload.predicates],

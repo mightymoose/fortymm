@@ -297,7 +297,7 @@ export function createEvent(
     draw_type: body.draw_type,
     max_players: body.max_players,
     entry_fee: body.entry_fee,
-    entered: body.entered ?? 0,
+    entered: 0,
     slot: body.slot,
     match_settings: body.match_settings,
     predicates: body.predicates ?? [],

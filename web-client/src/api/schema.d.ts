@@ -2408,11 +2408,6 @@ export interface components {
             max_players: number;
             /** Entry Fee */
             entry_fee: number;
-            /**
-             * Entered
-             * @default 0
-             */
-            entered: number;
             slot: components["schemas"]["Slot"];
             match_settings: components["schemas"]["MatchSettings"];
             /** Predicates */
