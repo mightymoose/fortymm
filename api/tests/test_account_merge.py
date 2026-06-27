@@ -72,6 +72,26 @@ async def _record_match(db: AsyncSession, creator: User, *players: User) -> Matc
     return match
 
 
+async def _record_solo_match(db: AsyncSession, creator: User) -> Match:
+    """An opponent-less match: side 1 holds the creator, side 2 is the
+    intentional player-less "sentinel" side (mirrors matches._add_side)."""
+    league = await get_default_league(db)
+    settings = MatchSettings(team_size=1, best_of=5, affects_rating=False)
+    match = Match(
+        match_settings=settings,
+        league=league,
+        created_by_user_id=creator.id,
+        status=MatchStatus.in_progress,
+    )
+    side_one = MatchSide(match=match, side_number=1)
+    side_one.players.append(MatchSidePlayer(match=match, user=creator))
+    MatchSide(match=match, side_number=2)  # sentinel: no players
+    db.add(match)
+    await db.commit()
+    await db.refresh(match)
+    return match
+
+
 async def _record_result(
     db: AsyncSession, match: Match, *, submitted_by: User, responders: list[User]
 ) -> MatchResult:
@@ -504,6 +524,12 @@ async def test_merge_self_play_drops_orphaned_match_side(db_session: AsyncSessio
     guest_b = await _make_ephemeral(db_session, "ghost-device-b")
     verified = await _make_verified(db_session, "rita@example.com")
 
+    # An unrelated user's solo match carries an intentional player-less
+    # "sentinel" side 2 (opponent-less matches still have two sides). The merge
+    # cleanup must NOT touch it — it belongs to neither merged user.
+    bystander = await _make_ephemeral(db_session, "uninvolved-newt")
+    solo_match = await _record_solo_match(db_session, bystander)
+
     # guest_b merges first — side 2 now belongs to verified.
     match = await _record_match(db_session, guest_a, guest_a, guest_b)
     await merge_user(db_session, from_user_id=guest_b.id, to_user_id=verified.id)
@@ -521,3 +547,18 @@ async def test_merge_self_play_drops_orphaned_match_side(db_session: AsyncSessio
     sides = result.scalars().all()
     # The orphaned side must be gone; only verified's side survives.
     assert len(sides) == 1, f"expected 1 side after self-play merge, got {len(sides)}"
+
+    # The bystander's solo match keeps both sides — its player-less sentinel
+    # side must survive a merge it had nothing to do with.
+    solo_sides = (
+        (
+            await db_session.execute(
+                select(MatchSide).where(MatchSide.match_id == solo_match.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(solo_sides) == 2, (
+        f"unrelated solo match lost a side after merge, got {len(solo_sides)}"
+    )

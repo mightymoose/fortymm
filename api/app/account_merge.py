@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, cast
 
-from sqlalchemy import CursorResult, delete, text, update
+from sqlalchemy import CursorResult, delete, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
@@ -164,6 +164,19 @@ async def merge_user(
     # match_side_players is RESTRICT, so any rows that didn't re-point would
     # block the final user delete. Re-point should always cover them; this is
     # a belt-and-braces drop in case the impossible collision ever fires.
+    # Capture the sides the ephemeral user sat on *before* dropping the rows,
+    # so we can prune any that the drop leaves playerless (see below).
+    ephemeral_side_ids = (
+        (
+            await db.execute(
+                select(MatchSidePlayer.match_side_id).where(
+                    MatchSidePlayer.user_id == from_user_id
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
     await db.execute(
         delete(MatchSidePlayer).where(MatchSidePlayer.user_id == from_user_id)
     )
@@ -171,9 +184,18 @@ async def merge_user(
     # the same match were the same real person). The NOT EXISTS guard skipped
     # re-pointing the ephemeral side because the verified user was already
     # there; the DELETE above then removed that MatchSidePlayer, leaving a
-    # playerless MatchSide. Clean up those empty sides so they don't surface
-    # as "No opponent" / "vs Guest" in match history.
-    await db.execute(delete(MatchSide).where(~MatchSide.players.any()))
+    # playerless MatchSide. Prune those now-empty sides so they don't surface
+    # as "No opponent" / "vs Guest" in match history. Scope the prune to the
+    # sides the ephemeral user actually sat on — a global ``no players`` filter
+    # would also wipe the intentional player-less "sentinel" side that every
+    # opponent-less (solo) match carries by design.
+    if ephemeral_side_ids:
+        await db.execute(
+            delete(MatchSide).where(
+                MatchSide.id.in_(ephemeral_side_ids),
+                ~MatchSide.players.any(),
+            )
+        )
     # Same RESTRICT story for match_result_responses — defensive drop after
     # repoint. (match_results.submitted_by has no uniqueness, so its repoint
     # above always covers every row — no defensive drop needed there.)
