@@ -4,6 +4,7 @@ import { healthCheck, player, sessionResponse } from '@/test/factories'
 import {
   confirmSeed,
   disputeSeed,
+  withdrawSeed,
   finalizeSeed,
   findMatch,
   MOCK_CURRENT_USER,
@@ -847,6 +848,18 @@ export const handlers = [
       const seed = findMatch(String(params.matchId))
       if (!seed) return detail('Match not found.', 404)
       const message = disputeSeed(seed, MOCK_CURRENT_USER.id)
+      if (message) return detail(message, 409)
+      return HttpResponse.json(projectMatchDetails(seed))
+    },
+  ),
+
+  http.post(
+    '*/v1/matches/:matchId/withdrawal',
+    async ({ params }) => {
+      await delay(250)
+      const seed = findMatch(String(params.matchId))
+      if (!seed) return detail('Match not found.', 404)
+      const message = withdrawSeed(seed, MOCK_CURRENT_USER.id)
       if (message) return detail(message, 409)
       return HttpResponse.json(projectMatchDetails(seed))
     },

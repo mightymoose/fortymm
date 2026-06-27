@@ -284,6 +284,16 @@ function canConfirmSeed(seed: SeedMatch): boolean {
   return !seed.signatures.some((sig) => sig.user_id === MOCK_CURRENT_USER.id)
 }
 
+/** Mirrors the API's ``_can_withdraw`` predicate: the current user posted the
+ * pending result (in the mock, having a signature on an awaiting-confirmation
+ * match means they posted it) and may retract it before the other side acts. */
+function canWithdrawSeed(seed: SeedMatch): boolean {
+  if (seed.status !== 'in_progress') return false
+  if (seed.signatures.length === 0) return false
+  if (seed.opponent === null) return false
+  return seed.signatures.some((sig) => sig.user_id === MOCK_CURRENT_USER.id)
+}
+
 export function projectMatchDetails(seed: SeedMatch): MatchDetails {
   const { mySide, opponentSide } = projectSides(seed)
 
@@ -323,6 +333,7 @@ export function projectMatchDetails(seed: SeedMatch): MatchDetails {
     can_score: scorableSeed(seed),
     can_finalize: canFinalizeSeed(seed),
     can_confirm: canConfirmSeed(seed),
+    can_withdraw: canWithdrawSeed(seed),
     signatures: seedSignatureViews(seed),
     disputed_by_user_id: seed.disputed_by_user_id,
     recent_form: projectRecentForm(seed, priors),
@@ -1051,6 +1062,32 @@ export function disputeSeed(seed: SeedMatch, userId: string): string | null {
   seed.signatures = []
   seed.status = 'disputed'
   seed.disputed_by_user_id = userId
+  return null
+}
+
+/** POST /v1/matches/{id}/withdrawal: the submitter retracts their own pending
+ * result. Clears every signature and keeps the match ``in_progress`` (a plain
+ * Live board — not ``disputed``, since nobody rejected it), so the submitter
+ * can re-score and re-post. Returns null on success, or a 409-suitable detail
+ * string. Mirrors the API's ``_enforce_withdrawable``. */
+export function withdrawSeed(seed: SeedMatch, userId: string): string | null {
+  if (seed.opponent === null) {
+    return "This match has no opponent and can't be signed."
+  }
+  if (seed.status !== 'in_progress') {
+    return 'This match is no longer awaiting confirmation.'
+  }
+  if (seed.signatures.length === 0) {
+    return 'No posted result to withdraw. Post the result first.'
+  }
+  // In the mock, the only way the current user holds a signature on an
+  // awaiting-confirmation match is by having posted it — so a signature is the
+  // proxy for "you are the submitter".
+  if (!seed.signatures.some((sig) => sig.user_id === userId)) {
+    return 'Only the player who posted this result can withdraw it.'
+  }
+  seed.signatures = []
+  seed.status = 'in_progress'
   return null
 }
 

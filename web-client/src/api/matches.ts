@@ -602,6 +602,28 @@ export function useDisputeMatch(matchId: string) {
   })
 }
 
+/**
+ * Withdraws a result the caller posted while it's still awaiting the other
+ * side's sign-off — the submitter's escape hatch for a typo they spotted after
+ * posting (they can't confirm or dispute their own result). Marks the pending
+ * result `superseded` and reopens the match to a plain `Live` state so the
+ * submitter can correct the wrong game and re-post. The BFF's `can_withdraw`
+ * flag is the source of truth for whether the CTA is shown.
+ */
+export function useWithdrawMatch(matchId: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (): Promise<MatchDetails> =>
+      unwrap(
+        'withdraw match result',
+        await api.POST('/v1/matches/{match_id}/withdrawal', {
+          params: { path: { match_id: matchId } },
+        }),
+      ),
+    onSuccess: (data) => applyScoreMutationCache(queryClient, matchId, data),
+  })
+}
+
 // `as const` on `to` preserves the literal so TanStack Router's typed
 // navigation can validate it against the route tree.
 

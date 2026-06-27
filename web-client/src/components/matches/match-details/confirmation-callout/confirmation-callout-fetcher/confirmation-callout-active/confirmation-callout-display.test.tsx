@@ -103,5 +103,55 @@ describe("ConfirmationCalloutDisplay", () => {
         confirmationCalloutDisplayPage.queryDisputeButton(),
       ).not.toBeInTheDocument();
     });
+
+    it("offers a Withdraw CTA to the submitter (#361)", () => {
+      confirmationCalloutDisplayPage.render({
+        view: buildAwaitingConfirmationView({ canWithdraw: true }),
+      });
+
+      expect(confirmationCalloutDisplayPage.getCallout()).toHaveTextContent(
+        "Withdraw it to re-score and post again",
+      );
+      expect(
+        confirmationCalloutDisplayPage.getWithdrawButton(),
+      ).toHaveTextContent("Withdraw result");
+      expect(confirmationCalloutDisplayPage.getWithdrawButton()).toBeEnabled();
+    });
+
+    it("hides the Withdraw CTA when the viewer can't withdraw", () => {
+      confirmationCalloutDisplayPage.render({
+        view: buildAwaitingConfirmationView({ canWithdraw: false }),
+      });
+
+      expect(
+        confirmationCalloutDisplayPage.queryWithdrawButton(),
+      ).not.toBeInTheDocument();
+    });
+
+    it("fires onWithdraw from the Withdraw CTA", async () => {
+      const onWithdraw = vi.fn();
+      confirmationCalloutDisplayPage.render({
+        view: buildAwaitingConfirmationView({ canWithdraw: true }),
+        onWithdraw,
+      });
+
+      await userEvent.click(confirmationCalloutDisplayPage.getWithdrawButton());
+
+      expect(onWithdraw).toHaveBeenCalledTimes(1);
+    });
+
+    it("disables the Withdraw CTA and shows the in-flight label while withdrawing", () => {
+      confirmationCalloutDisplayPage.render({
+        view: buildAwaitingConfirmationView({ canWithdraw: true }),
+        withdrawPending: true,
+      });
+
+      expect(
+        confirmationCalloutDisplayPage.getWithdrawButton(),
+      ).toHaveTextContent("Withdrawing…");
+      expect(
+        confirmationCalloutDisplayPage.getWithdrawButton(),
+      ).toBeDisabled();
+    });
   });
 });

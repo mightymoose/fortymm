@@ -6,6 +6,10 @@ import {
   mockMatchDisputeEndpoint,
   type MatchDisputeResolver,
 } from "@/mocks/endpoints/matches/match-dispute.endpoint";
+import {
+  mockMatchWithdrawalEndpoint,
+  type MatchWithdrawalResolver,
+} from "@/mocks/endpoints/matches/match-withdrawal.endpoint";
 import { server } from "@/mocks/server";
 import { render, screen, type Container } from "@/test/utilities";
 
@@ -14,7 +18,10 @@ import {
   type ConfirmationCalloutActiveProps,
 } from "./confirmation-callout-active";
 import { confirmationCalloutDisplayPage } from "./confirmation-callout-active/confirmation-callout-display.page";
-import { buildActionableConfirmationView } from "./confirmation-callout-active/confirmation-callout-display.factory";
+import {
+  buildActionableConfirmationView,
+  buildAwaitingConfirmationView,
+} from "./confirmation-callout-active/confirmation-callout-display.factory";
 
 const DEFAULT_MATCH_ID = "m-1";
 
@@ -40,6 +47,14 @@ export const confirmationCalloutActivePage = {
   mockDisputeEndpoint(resolver: MatchDisputeResolver) {
     mockMatchDisputeEndpoint(server, resolver);
   },
+
+  /** Stub `POST /v1/matches/:matchId/withdrawal`. */
+  mockWithdrawalEndpoint(resolver: MatchWithdrawalResolver) {
+    mockMatchWithdrawalEndpoint(server, resolver);
+  },
+
+  /** The submitter's passive awaiting view, where the Withdraw CTA lives. */
+  awaitingView: buildAwaitingConfirmationView,
 
   render(overrides: Partial<ConfirmationCalloutActiveProps> = {}) {
     const props: ConfirmationCalloutActiveProps = {

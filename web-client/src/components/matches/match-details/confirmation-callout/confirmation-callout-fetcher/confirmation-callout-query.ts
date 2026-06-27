@@ -18,6 +18,10 @@ export type ConfirmationCalloutView =
       /** The user whose signature we're waiting on, for the passive label —
        * "your opponent" when the unsigned player can't be resolved by name. */
       pendingSignerName: string;
+      /** True when the viewer posted this pending result and may retract it —
+       * drives the "Withdraw result" CTA on the passive notice (the submitter's
+       * escape hatch; they can't confirm/dispute their own result). */
+      canWithdraw: boolean;
     };
 
 const selectConfirmationCallout = (
@@ -59,6 +63,7 @@ const selectConfirmationCallout = (
   return {
     kind: "awaiting",
     pendingSignerName: missing?.username ?? "your opponent",
+    canWithdraw: details.can_withdraw,
   };
 };
 

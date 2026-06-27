@@ -10,20 +10,26 @@ export interface ConfirmationCalloutDisplayProps {
   /** True while the dispute request is in flight — swaps the Dispute label
    * to "Disputing…" and disables both CTAs. */
   disputePending: boolean;
+  /** True while the withdraw request is in flight — swaps the Withdraw label
+   * to "Withdrawing…" and disables the CTA. */
+  withdrawPending: boolean;
   /** Inline API failure to surface beneath the body copy; null when the last
    * attempt succeeded or none has been made. */
   errorMessage: string | null;
   onConfirm: () => void;
   onDispute: () => void;
+  onWithdraw: () => void;
 }
 
 export function ConfirmationCalloutDisplay({
   view,
   confirmPending,
   disputePending,
+  withdrawPending,
   errorMessage,
   onConfirm,
   onDispute,
+  onWithdraw,
 }: ConfirmationCalloutDisplayProps) {
   if (view.kind === "actionable") {
     const pending = confirmPending || disputePending;
@@ -81,11 +87,34 @@ export function ConfirmationCalloutDisplay({
       <div className="md-confirm-callout__copy">
         <Overline as="h3">Posted · awaiting confirmation</Overline>
         <p className="md-confirm-callout__body">
-          You've signed off on this result. Waiting on{" "}
+          You've posted this result. Waiting on{" "}
           <strong>{view.pendingSignerName}</strong> to confirm or dispute
           before the match is finalized.
+          {view.canWithdraw && (
+            <>
+              {" "}
+              Spotted a mistake? Withdraw it to re-score and post again.
+            </>
+          )}
         </p>
+        {errorMessage && (
+          <p role="alert" className="mt-1.5 text-xs text-[color:var(--loss)]">
+            {errorMessage}
+          </p>
+        )}
       </div>
+      {view.canWithdraw && (
+        <div className="md-confirm-callout__actions">
+          <button
+            type="button"
+            className="md-btn md-btn--ghost"
+            disabled={withdrawPending}
+            onClick={onWithdraw}
+          >
+            {withdrawPending ? "Withdrawing…" : "Withdraw result"}
+          </button>
+        </div>
+      )}
     </section>
   );
 }

@@ -522,6 +522,36 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/matches/{match_id}/withdrawal": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Withdraw Match Result
+         * @description Retract a result the caller posted that's still awaiting the other
+         *     side's sign-off — the submitter's escape hatch for a typo they spotted
+         *     after posting (they can't confirm or dispute their own result).
+         *
+         *     The pending result is marked ``superseded`` (it stays as history — its
+         *     ``games`` snapshot preserves the retracted board) and the match returns to a
+         *     plain ``in_progress`` / ``Live`` state with no pending result. The working
+         *     ``match_games`` stay in place, so scoring reopens (see ``_enforce_scorable``)
+         *     and the submitter can correct the wrong game and re-post via ``/results``.
+         *     Distinct from ``disputed``: nobody rejected the result, so the match reads
+         *     as ordinary Live rather than surfacing a disputer.
+         */
+        post: operations["withdraw_match_result_v1_matches__match_id__withdrawal_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/players/recent": {
         parameters: {
             query?: never;
@@ -2596,6 +2626,8 @@ export interface components {
             can_finalize: boolean;
             /** Can Confirm */
             can_confirm: boolean;
+            /** Can Withdraw */
+            can_withdraw: boolean;
             /** Signatures */
             signatures: components["schemas"]["MatchSignatureView"][];
             /** Disputed By User Id */
@@ -3760,6 +3792,39 @@ export interface operations {
         };
     };
     dispute_match_result_v1_matches__match_id__dispute_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                match_id: string;
+            };
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["app__schemas__match__MatchDetails"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    withdraw_match_result_v1_matches__match_id__withdrawal_post: {
         parameters: {
             query?: never;
             header?: never;
