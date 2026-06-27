@@ -1072,15 +1072,10 @@ function NotificationsSection() {
 function scrollToSection(id: string) {
   const el = document.getElementById(id)
   if (!el) return
-  // Clear the sticky AppShell topbar (--topbar-h) plus a small gap, otherwise
-  // the target heading lands behind the bar and the user has to scroll up (#162).
-  const topbar =
-    parseInt(
-      getComputedStyle(document.documentElement).getPropertyValue('--topbar-h'),
-      10,
-    ) || 64
-  const y = el.getBoundingClientRect().top + window.scrollY - topbar - 16
-  window.scrollTo({ top: y, behavior: 'smooth' })
+  // scrollIntoView honors the section's `scroll-margin-top` (set in settings.css
+  // to clear the sticky topbar), so the heading lands below the bar instead of
+  // behind it — same offset native hash navigation uses, one source of truth (#162).
+  el.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
 
 function focusEmailInput() {

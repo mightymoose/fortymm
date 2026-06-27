@@ -302,6 +302,15 @@
   overflow: hidden;
 }
 
+/* Anchor targets (#sec-username / #sec-email / #sec-notifications) must clear
+   the sticky AppShell topbar when jumped to — otherwise the heading lands
+   behind the bar (#162). scroll-margin-top is honored by native hash
+   navigation, scrollIntoView, and TanStack Router alike, so it fixes every
+   jump path at once. --topbar-h inherits down from .app-shell. */
+.fmm-settings section[id] {
+  scroll-margin-top: calc(var(--topbar-h, 64px) + 16px);
+}
+
 /* ---------- Section number badge ---------- */
 .fmm-settings .fmm-section-num {
   font-family: var(--font-mono);
