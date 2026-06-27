@@ -490,3 +490,34 @@ async def test_merge_with_match_response_collision_drops_ephemeral(
     )
     # Verified's pre-existing response survives; ephemeral's is dropped.
     assert [r.user_id for r in responses] == [verified.id]
+
+
+async def test_merge_self_play_drops_orphaned_match_side(db_session: AsyncSession):
+    """Self-play across two guest sessions (e.g. same person on two devices)
+    leaves both sides of a match pointing at the same real user after merge.
+    The NOT EXISTS guard skips re-pointing the ephemeral side; the belt-and-
+    braces DELETE then removes that MatchSidePlayer, which would previously
+    leave a playerless MatchSide rendering as 'No opponent' / 'vs Guest'.
+    The fix: the empty MatchSide is cleaned up in the same merge transaction."""
+    # guest_a played guest_b (same real person, two devices) before merging.
+    guest_a = await _make_ephemeral(db_session, "ghost-device-a")
+    guest_b = await _make_ephemeral(db_session, "ghost-device-b")
+    verified = await _make_verified(db_session, "rita@example.com")
+
+    # guest_b merges first — side 2 now belongs to verified.
+    match = await _record_match(db_session, guest_a, guest_a, guest_b)
+    await merge_user(db_session, from_user_id=guest_b.id, to_user_id=verified.id)
+    await db_session.commit()
+
+    # Now merge guest_a → verified. Side 1's player can't re-point (verified
+    # is already on the match); the belt-and-braces DELETE fires; without the
+    # fix, side 1 would be left playerless.
+    await merge_user(db_session, from_user_id=guest_a.id, to_user_id=verified.id)
+    await db_session.commit()
+
+    result = await db_session.execute(
+        select(MatchSide).where(MatchSide.match_id == match.id)
+    )
+    sides = result.scalars().all()
+    # The orphaned side must be gone; only verified's side survives.
+    assert len(sides) == 1, f"expected 1 side after self-play merge, got {len(sides)}"

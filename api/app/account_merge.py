@@ -29,6 +29,7 @@ from app.models import (
     Match,
     MatchResult,
     MatchResultResponse,
+    MatchSide,
     MatchSidePlayer,
     Notification,
     NotificationChannelSetting,
@@ -166,6 +167,13 @@ async def merge_user(
     await db.execute(
         delete(MatchSidePlayer).where(MatchSidePlayer.user_id == from_user_id)
     )
+    # The collision case is self-play across two guest sessions (both sides of
+    # the same match were the same real person). The NOT EXISTS guard skipped
+    # re-pointing the ephemeral side because the verified user was already
+    # there; the DELETE above then removed that MatchSidePlayer, leaving a
+    # playerless MatchSide. Clean up those empty sides so they don't surface
+    # as "No opponent" / "vs Guest" in match history.
+    await db.execute(delete(MatchSide).where(~MatchSide.players.any()))
     # Same RESTRICT story for match_result_responses — defensive drop after
     # repoint. (match_results.submitted_by has no uniqueness, so its repoint
     # above always covers every row — no defensive drop needed there.)
