@@ -3,7 +3,7 @@ import { Link, createFileRoute, useNavigate } from '@tanstack/react-router'
 import { ArrowRight } from 'lucide-react'
 import { z } from 'zod'
 
-import { ApiError } from '@/api/client'
+import { ApiError, isSessionMergedError } from '@/api/client'
 import { deriveEmailStatus, useSession } from '@/api/session'
 import {
   nextScoringDestination,
@@ -89,7 +89,13 @@ function MatchCard() {
   // the no-opponent match is unrated by definition.
   const [rated, setRated] = useState(false)
   const [apiError, setApiError] = useState<string | null>(null)
+  const [sessionExpired, setSessionExpired] = useState(false)
   const [submitted, setSubmitted] = useState(false)
+  // Synchronous submit guard. `'submitting'` blocks the double-click race before
+  // `isPending` flips on a batched re-render; `'done'` latches after a match is
+  // created so the same mounted form (e.g. restored from the bfcache on Back)
+  // can't fire a duplicate create (#81). A failed attempt resets to `'idle'`.
+  const submitState = useRef<'idle' | 'submitting' | 'done'>('idle')
 
   const me = session?.data.user ?? null
   // The hint nudges guests toward claiming an account so their rated history
@@ -116,7 +122,13 @@ function MatchCard() {
   async function handleSubmit() {
     setSubmitted(true)
     if (validationError) return
+    // Refuse a second create from this form: a rapid double-click (before
+    // `isPending` disables the button) or a re-submit after we already started
+    // a match would otherwise create a duplicate (#81).
+    if (submitState.current !== 'idle') return
+    submitState.current = 'submitting'
     setApiError(null)
+    setSessionExpired(false)
 
     try {
       const created = await createMatch.mutateAsync({
@@ -124,12 +136,27 @@ function MatchCard() {
         best_of: bestOf,
         rated: opponent !== null && rated,
       })
+      submitState.current = 'done'
       // Replace, don't push: the new-match form is a one-shot step, so the
       // history stack shouldn't keep it. Otherwise browser/mobile Back from
       // score entry re-opens the creation form for a match that already
       // exists, instead of returning to wherever the user came from (#441).
       navigate({ ...nextScoringDestination(created), replace: true })
     } catch (err) {
+      // Let the user try again — only a *successful* create latches the guard.
+      submitState.current = 'idle'
+      // A bare 401 (the session lapsed mid-form) renders an unstyled "Not
+      // authenticated" with no way forward; offer a sign-in path instead (#70).
+      // The `session_merged` 401 is handled globally by a redirect, so skip it.
+      if (
+        err instanceof ApiError &&
+        err.status === 401 &&
+        !isSessionMergedError(err)
+      ) {
+        setSessionExpired(true)
+        setApiError(err.detail ?? 'Your session has expired.')
+        return
+      }
       setApiError(
         err instanceof ApiError
           ? (err.detail ?? err.message)
@@ -192,8 +219,12 @@ function MatchCard() {
         bestOf={bestOf}
         rated={rated}
         error={error}
+        sessionExpired={sessionExpired}
         submitting={createMatch.isPending}
         onSubmit={handleSubmit}
+        onSignIn={() =>
+          navigate({ to: '/login', search: { email: undefined, error: undefined } })
+        }
         onCancel={() => navigate({ to: '/dashboard' })}
       />
     </div>
@@ -384,16 +415,20 @@ function SubmitRow({
   bestOf,
   rated,
   error,
+  sessionExpired,
   submitting,
   onSubmit,
+  onSignIn,
   onCancel,
 }: {
   opponent: Opponent | null
   bestOf: number
   rated: boolean
   error: string | null
+  sessionExpired: boolean
   submitting: boolean
   onSubmit: () => void
+  onSignIn: () => void
   onCancel: () => void
 }) {
   const effectivelyRated = rated && opponent !== null
@@ -426,11 +461,23 @@ function SubmitRow({
           <span className="dot">·</span>{' '}
           games to 11, win by 2
         </div>
-        {error && (
-          <p className="nm-error" role="alert">
-            {error}
-          </p>
-        )}
+        {error &&
+          (sessionExpired ? (
+            <div className="nm-recovery" role="alert">
+              <p className="nm-error">{error}</p>
+              <button
+                type="button"
+                className="nm-btn nm-btn-primary nm-recovery-btn"
+                onClick={onSignIn}
+              >
+                Sign in again
+              </button>
+            </div>
+          ) : (
+            <p className="nm-error" role="alert">
+              {error}
+            </p>
+          ))}
       </div>
       <div className="actions">
         <button
