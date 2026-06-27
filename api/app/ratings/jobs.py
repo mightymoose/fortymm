@@ -57,6 +57,8 @@ async def _recompute_after_merge(user_id: uuid.UUID) -> None:
         )
         if not league_ids:
             return
-        for league_id in league_ids:
+        # Consistent acquisition order prevents deadlocks when two concurrent
+        # jobs for different users share overlapping league sets.
+        for league_id in sorted(league_ids):
             await recompute_league_ratings(session, league_id, {user_id})
         await session.commit()
