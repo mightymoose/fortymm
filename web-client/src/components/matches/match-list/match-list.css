@@ -550,3 +550,85 @@
   font-size: 12px;
   color: var(--fg-3);
 }
+
+/* On a phone the six-column table forces awkward horizontal scrolling: a row's
+ * score, status, and action sit off-screen with no scroll cue, so a user can't
+ * tell a match is live or take any action (#157). Below 640px collapse the
+ * table into one stacked card per row, each field labeled from its column
+ * header (via `data-label`). This overrides the ≤960px `max-content` scroll
+ * width above, so cards never reintroduce horizontal scroll. The 640–960px
+ * band (tablets / narrow desktop) keeps the scrolling table. */
+@container (max-width: 640px) {
+  .match-list-page table.matches,
+  .match-list-page table.matches tbody {
+    display: block;
+    min-width: 0;
+  }
+  /* Column headers live inside each card now (see td::before). */
+  .match-list-page table.matches thead {
+    display: none;
+  }
+  .match-list-page table.matches tbody tr {
+    display: block;
+    margin: 12px;
+    padding: 14px 16px;
+    border: 1px solid var(--border-subtle);
+    border-radius: 12px;
+    background: var(--bg-card);
+  }
+  .match-list-page table.matches tbody tr:hover {
+    background: var(--bg-card);
+  }
+  /* The live rail moves from the first cell's inset shadow to the card edge. */
+  .match-list-page table.matches tbody tr.is-live {
+    border-left: 2px solid var(--serve-500);
+  }
+  .match-list-page table.matches tbody tr.is-live td:first-child {
+    box-shadow: none;
+  }
+  .match-list-page table.matches tbody td {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 6px 0;
+    border-bottom: none;
+    white-space: normal;
+  }
+  /* Labeled cells (Score / Status / Started) get the column name as a leading
+   * caption, matching the thead styling. */
+  .match-list-page table.matches tbody td[data-label]::before {
+    content: attr(data-label);
+    flex: none;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--fg-3);
+  }
+  /* Match id: a quiet caption at the top of the card, no value column. */
+  .match-list-page table.matches tbody td.id-cell {
+    padding-top: 0;
+    justify-content: flex-start;
+  }
+  /* Players: the card's headline — full width, left-aligned, no scrunching. */
+  .match-list-page table.matches tbody td:nth-child(2) {
+    padding-top: 2px;
+    padding-bottom: 10px;
+  }
+  .match-list-page table.matches tbody td:nth-child(2) .players-cell {
+    gap: 8px;
+  }
+  /* The action button is the card's primary CTA — give it the full width. */
+  .match-list-page table.matches tbody td.action-cell {
+    padding-top: 12px;
+  }
+  /* A passive row (no CTA) leaves an empty action cell — collapse it so the
+   * card doesn't carry dead trailing space. */
+  .match-list-page table.matches tbody td.action-cell:empty {
+    display: none;
+  }
+  .match-list-page table.matches tbody td.action-cell > * {
+    width: 100%;
+  }
+}
