@@ -144,7 +144,11 @@ export function extractDetail(value: unknown): string | null {
   if (Array.isArray(detail) && detail.length > 0) {
     const first = detail[0]
     if (first && typeof first === 'object' && 'msg' in first) {
-      return String((first as { msg: unknown }).msg)
+      // Pydantic v2 prefixes messages from a custom validator's `ValueError`
+      // with a literal "Value error, " — internal machinery, not user copy.
+      // Strip it so the rule message (e.g. the table-tennis score rules) reads
+      // cleanly inline (#151). FastAPI uses the same prefix for every 422.
+      return String((first as { msg: unknown }).msg).replace(/^Value error, /, '')
     }
   }
   return null

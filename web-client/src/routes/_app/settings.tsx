@@ -1072,7 +1072,14 @@ function NotificationsSection() {
 function scrollToSection(id: string) {
   const el = document.getElementById(id)
   if (!el) return
-  const y = el.getBoundingClientRect().top + window.scrollY - 24
+  // Clear the sticky AppShell topbar (--topbar-h) plus a small gap, otherwise
+  // the target heading lands behind the bar and the user has to scroll up (#162).
+  const topbar =
+    parseInt(
+      getComputedStyle(document.documentElement).getPropertyValue('--topbar-h'),
+      10,
+    ) || 64
+  const y = el.getBoundingClientRect().top + window.scrollY - topbar - 16
   window.scrollTo({ top: y, behavior: 'smooth' })
 }
 
