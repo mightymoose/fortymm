@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import {
   RouterProvider,
@@ -14,10 +14,11 @@ import {
 } from '@tanstack/react-query'
 import { Suspense } from 'react'
 import { delay, http, HttpResponse } from 'msw'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { server } from '@/mocks/server'
 import { matchDetails, sessionResponse } from '@/test/factories'
 import { matchDetailsQuery } from '@/components/matches/match-details/match-details-query'
+import { api } from '@/api/client'
 import { Route } from './new'
 
 // The page component isn't exported (route files should only export `Route`,
@@ -78,6 +79,11 @@ function renderNewMatch() {
       )
     },
   })
+  const loginRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/login',
+    component: () => <div>Login route</div>,
+  })
   const router = createRouter({
     routeTree: rootRoute.addChildren([
       newMatchRoute,
@@ -85,6 +91,7 @@ function renderNewMatch() {
       settingsRoute,
       scoringRoute,
       detailsRoute,
+      loginRoute,
     ]),
     history: createMemoryHistory({
       // Seed a prior entry (the dashboard) so a Back from score entry has
@@ -310,6 +317,84 @@ describe('NewMatchPage', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(
       /opponent not found/i,
     )
+  })
+
+  it('offers a "Sign in again" path instead of a dead error string on a 401 (#70)', async () => {
+    const user = userEvent.setup()
+    server.use(
+      http.get('*/v1/players/recent', () => HttpResponse.json([])),
+      http.post('*/v1/matches', () =>
+        HttpResponse.json({ detail: 'Not authenticated' }, { status: 401 }),
+      ),
+    )
+    renderNewMatch()
+
+    await user.click(
+      await screen.findByRole('button', { name: /start match/i }),
+    )
+
+    // The bare 401 surfaces with a recovery CTA, not just an unstyled string.
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent(/not authenticated/i)
+    await user.click(within(alert).getByRole('button', { name: /sign in again/i }))
+    await waitFor(() =>
+      expect(screen.getByText('Login route')).toBeInTheDocument(),
+    )
+  })
+
+  it('does not fire a duplicate create on a second click while one is in flight (#81)', async () => {
+    const user = userEvent.setup()
+    let posts = 0
+    server.use(
+      http.get('*/v1/players/recent', () => HttpResponse.json([])),
+      http.post('*/v1/matches', async () => {
+        posts += 1
+        await delay(20)
+        return HttpResponse.json(pendingMatch(), { status: 201 })
+      }),
+    )
+    renderNewMatch()
+
+    await user.click(
+      await screen.findByRole('button', { name: /start match/i }),
+    )
+    // The button is now in its disabled "Starting…" state; a second click must
+    // not start a second match.
+    await user.click(screen.getByRole('button', { name: /starting/i }))
+
+    await waitFor(() =>
+      expect(
+        screen.getByText('Scoring route m-test game 1'),
+      ).toBeInTheDocument(),
+    )
+    expect(posts).toBe(1)
+  })
+
+  it('surfaces a timeout error and re-enables the button when the create aborts (#76)', async () => {
+    const user = userEvent.setup()
+    server.use(http.get('*/v1/players/recent', () => HttpResponse.json([])))
+    // A hung POST is aborted by the hook's `AbortSignal.timeout`, which rejects
+    // the fetch with a `TimeoutError` DOMException rather than an HTTP error
+    // result. Stand in for that rejection directly — deterministic, no waiting
+    // out the real 15s timeout — and assert the hook translates it into the
+    // inline "timed out" message with the button no longer stuck on "Starting…".
+    const post = vi
+      .spyOn(api, 'POST')
+      .mockRejectedValue(new DOMException('The operation timed out.', 'TimeoutError'))
+    try {
+      renderNewMatch()
+
+      await user.click(
+        await screen.findByRole('button', { name: /start match/i }),
+      )
+
+      expect(await screen.findByRole('alert')).toHaveTextContent(/timed out/i)
+      expect(
+        screen.getByRole('button', { name: /start match/i }),
+      ).toBeEnabled()
+    } finally {
+      post.mockRestore()
+    }
   })
 })
 

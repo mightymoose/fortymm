@@ -139,14 +139,50 @@ export function usePlayerSearch(term: string) {
 }
 
 /**
+ * Abort a match-create POST that hasn't resolved within this window. Without it
+ * a server that accepts the connection but never responds leaves the form's
+ * "Starting…" button stuck forever with no way back (#76). Generous enough that
+ * a slow-but-healthy create still completes.
+ */
+const CREATE_MATCH_TIMEOUT_MS = 15_000
+
+/**
  * Creates a match. Callers await `mutateAsync` so they can surface the API's
  * 4xx `detail` inline on the form — no global error toast is attached here.
  */
 export function useCreateMatch() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: async (input: MatchCreate): Promise<MatchDetails> =>
-      unwrap('create match', await api.POST('/v1/matches', { body: input })),
+    mutationFn: async (input: MatchCreate): Promise<MatchDetails> => {
+      try {
+        return unwrap(
+          'create match',
+          await api.POST('/v1/matches', {
+            body: input,
+            signal: AbortSignal.timeout(CREATE_MATCH_TIMEOUT_MS),
+          }),
+        )
+      } catch (err) {
+        // A timed-out request aborts the underlying fetch, which *throws* a
+        // DOMException rather than surfacing as an openapi-fetch error result.
+        // Translate it into the ApiError the form already renders inline, so the
+        // user gets "try again" and a re-enabled button instead of a dead spinner.
+        // The abort surfaces as `TimeoutError` (the platform) or `AbortError`
+        // (some fetch layers) — this signal only ever aborts on the timeout, so
+        // either name means the same thing here.
+        if (
+          err instanceof DOMException &&
+          (err.name === 'TimeoutError' || err.name === 'AbortError')
+        ) {
+          throw new ApiError(
+            0,
+            'Request timed out — please try again.',
+            'create match',
+          )
+        }
+        throw err
+      }
+    },
     // The create response already *is* the match-details payload, so seed the
     // details query cache from it. The match-details page then renders from this
     // warm entry — whether reached by an immediate redirect or later from the
