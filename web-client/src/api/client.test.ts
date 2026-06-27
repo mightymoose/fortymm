@@ -3,7 +3,13 @@ import { http, HttpResponse } from 'msw'
 
 import { server } from '@/mocks/server'
 import { sessionResponse } from '@/test/factories'
-import { ApiError, api, isSessionMergedError, setSessionEndedHandler } from './client'
+import {
+  ApiError,
+  api,
+  extractDetail,
+  isSessionMergedError,
+  setSessionEndedHandler,
+} from './client'
 
 afterEach(() => {
   setSessionEndedHandler(null)
@@ -147,4 +153,28 @@ it('attaches no header when there is no csrf cookie', async () => {
   await api.DELETE('/v1/session')
 
   expect(seen).toBeNull()
+})
+
+it('strips the pydantic "Value error, " prefix from a 422 validation message', () => {
+  // FastAPI surfaces a custom validator's ValueError as a detail[] entry whose
+  // msg carries pydantic's "Value error, " prefix — internal, not user copy (#151).
+  expect(
+    extractDetail({
+      detail: [
+        {
+          type: 'value_error',
+          loc: ['body', 'side_1_points'],
+          msg: 'Value error, At 10–10 the game enters deuce; the winner must lead by 2. 11–10 is not a legal final score.',
+        },
+      ],
+    }),
+  ).toBe(
+    'At 10–10 the game enters deuce; the winner must lead by 2. 11–10 is not a legal final score.',
+  )
+})
+
+it('leaves a validation message without the prefix untouched', () => {
+  expect(
+    extractDetail({ detail: [{ msg: 'The winning side must reach at least 11 points.' }] }),
+  ).toBe('The winning side must reach at least 11 points.')
 })

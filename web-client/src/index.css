@@ -1889,8 +1889,12 @@ body.dark.fortymm-theme {
   flex-direction: column;
   align-items: center;
   gap: 6px;
-  padding: 10px 18px;
-  min-width: 78px;
+  padding: 10px 8px;
+  /* Fixed (not min-) width so every tile is identical regardless of its score
+     text — scored tiles ("22 – 20") no longer size wider than placeholders
+     ("— — —"), keeping the wrapped grid even instead of ragged (#166). Sized to
+     hold the widest legal score (two 2-digit points) with margin. */
+  width: 92px;
   background: var(--ink-800);
   border: 1px solid var(--ink-600);
   border-radius: 8px;
@@ -2265,6 +2269,9 @@ body.dark.fortymm-theme {
     gap: 6px;
   }
   .fortymm-theme .sl-cell {
+    /* Drop the desktop fixed width so the grid's 1fr tracks size the cells
+       (still uniform, but filling the best-of width edge-to-edge). */
+    width: auto;
     min-width: 0;
     padding: 8px 4px;
     gap: 3px;

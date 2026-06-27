@@ -1072,8 +1072,10 @@ function NotificationsSection() {
 function scrollToSection(id: string) {
   const el = document.getElementById(id)
   if (!el) return
-  const y = el.getBoundingClientRect().top + window.scrollY - 24
-  window.scrollTo({ top: y, behavior: 'smooth' })
+  // scrollIntoView honors the section's `scroll-margin-top` (set in settings.css
+  // to clear the sticky topbar), so the heading lands below the bar instead of
+  // behind it — same offset native hash navigation uses, one source of truth (#162).
+  el.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
 
 function focusEmailInput() {
