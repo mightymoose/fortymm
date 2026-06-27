@@ -91,6 +91,8 @@ export function ConfirmationCalloutActive({
       onWithdraw={() => {
         if (inFlightRef.current) return;
         inFlightRef.current = true;
+        confirmMutation.reset();
+        disputeMutation.reset();
         withdrawMutation.mutate(undefined, {
           onSuccess: () => {
             toast.success("Result withdrawn.", {

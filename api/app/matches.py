@@ -1771,13 +1771,21 @@ def _set_side_won(match: Match, decided_side: int) -> None:
         side.won = side.side_number == decided_side
 
 
-def _reset_sides_for_reopen(match: Match) -> None:
-    """Rewind the denormalized side outcome when a posted result is sent back to
-    a re-scorable board (a /dispute or /withdrawal). ``side.won`` is only stamped
-    at completion now, so it's still None on an awaiting-confirmation match —
-    nulling it is defensive. ``side.score`` is the games-won mirror — zero it so a
-    direct DB reader doesn't see won=None with score>0 (the games still imply
-    2-1 etc., but the BFF derives that from MatchGame, not from side.score)."""
+def _reopen_match(match: Match) -> None:
+    """Rewind a match's completion state when a posted result is sent back to a
+    re-scorable board (a /dispute or /withdrawal), so both reopen paths stay
+    symmetric on the completion invariants history windows depend on (#312).
+
+    ``completed_at`` is dropped so a reopened match never lingers in a history
+    window carrying a stale completion stamp (today it's already None on an
+    awaiting-confirmation match — the rated post path never stamps it — so this
+    is defensive, but it keeps the two reopen paths from diverging on a
+    load-bearing invariant). ``side.won`` is likewise only stamped at completion,
+    so nulling it is defensive too; ``side.score`` is the games-won mirror —
+    zero it so a direct DB reader doesn't see won=None with score>0 (the games
+    still imply 2-1 etc., but the BFF derives that from MatchGame, not
+    side.score)."""
+    match.completed_at = None
     for side in match.sides:
         side.won = None
         side.score = 0
@@ -2223,10 +2231,10 @@ async def dispute_match_result(
     # Scoring is reopened anyway (no pending result + ``disputed`` is
     # non-terminal), and re-posting via /results flips it back to ``in_progress``.
     match.status = MatchStatus.disputed
-    # Un-completed: drop the completion stamp so a re-post stamps a fresh one
-    # and this match doesn't linger in any history window while disputed.
-    match.completed_at = None
-    _reset_sides_for_reopen(match)
+    # Drop the completion stamp + rewind the side outcome so a re-post stamps a
+    # fresh one and this match doesn't linger in any history window while
+    # disputed (see ``_reopen_match``).
+    _reopen_match(match)
 
     await db.commit()
 
@@ -2270,7 +2278,7 @@ async def withdraw_match_result(
     # Already ``in_progress`` (a pending result implies it), but set explicitly
     # to mirror /dispute and stay correct if the lifecycle ever changes.
     match.status = MatchStatus.in_progress
-    _reset_sides_for_reopen(match)
+    _reopen_match(match)
 
     await db.commit()
 
