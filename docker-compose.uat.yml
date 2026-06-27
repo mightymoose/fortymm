@@ -61,7 +61,7 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/fortymm
       REDIS_URL: redis://redis:6379/0
-      SESSION_COOKIE_SECURE: "false"
+      SESSION_COOKIE_SECURE: "true"
     depends_on:
       postgres:
         condition: service_healthy

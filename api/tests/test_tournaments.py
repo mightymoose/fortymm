@@ -100,7 +100,6 @@ def _event_payload(**overrides: Any) -> dict[str, Any]:
         "draw_type": "rr-then-ko",
         "max_players": 64,
         "entry_fee": 45,
-        "entered": 52,
         "slot": {"date": "2026-06-13", "start": "09:00", "end": "18:00"},
         "match_settings": {"rated": True, "length_games": 5},
         "predicates": [{"id": "pr-1", "field": "rating", "op": "<", "value": 1500}],
@@ -319,7 +318,7 @@ async def test_create_event_round_trips_jsonb(
     assert body["max_players"] == 64
     # entry_fee is emitted as a JSON number, not a Decimal string.
     assert body["entry_fee"] == 45
-    assert body["entered"] == 52
+    assert body["entered"] == 0
     assert body["slot"] == {"date": "2026-06-13", "start": "09:00", "end": "18:00"}
     assert body["match_settings"] == {"rated": True, "length_games": 5}
     assert body["predicates"] == [

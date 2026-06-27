@@ -175,7 +175,6 @@ class TournamentEventCreate(BaseModel):
     draw_type: DrawType
     max_players: int = Field(gt=0)
     entry_fee: float = Field(ge=0)
-    entered: int = 0
     slot: Slot
     match_settings: MatchSettings
     predicates: list[Predicate] = Field(default_factory=list)

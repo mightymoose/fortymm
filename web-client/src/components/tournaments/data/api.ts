@@ -154,7 +154,7 @@ function eventToApiFields(ev: TournamentEvent) {
 
 /** Build the event *create* body (POST) from a prototype `TournamentEvent`. */
 export function eventToCreateBody(ev: TournamentEvent): TournamentEventCreate {
-  return { ...eventToApiFields(ev), entered: ev.entered }
+  return eventToApiFields(ev)
 }
 
 /** Build the event *update* body (PATCH) from a prototype `TournamentEvent`.

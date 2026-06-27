@@ -220,13 +220,12 @@ const event: TournamentEvent = {
 }
 
 describe('eventToCreateBody', () => {
-  it('maps the event to a snake_case create body, including entered', () => {
+  it('maps the event to a snake_case create body, excluding server-managed entered', () => {
     const body = eventToCreateBody(event)
 
     expect(body.draw_type).toBe('rr-then-ko')
     expect(body.max_players).toBe(48)
     expect(body.entry_fee).toBe(30)
-    expect(body.entered).toBe(41)
     expect(body.match_settings).toEqual({ rated: true, length_games: 3 })
     expect(body.pools).toEqual([
       {
@@ -248,6 +247,9 @@ describe('eventToCreateBody', () => {
       pools: wire.pools ?? [],
       id: event.id,
       tournament_id: 't-1',
+      // `entered` is server-managed and absent from the create body; supply the
+      // read-shape value directly so the round-trip assertion holds.
+      entered: event.entered,
       created_at: '2026-06-01T00:00:00Z',
       updated_at: '2026-06-01T00:00:00Z',
     })

@@ -93,15 +93,20 @@ class RedisRateLimiter:
             return
 
         rate_key = await self._identifier(request)
-        limiter = self._limiters.get(rate_key)
-        if limiter is None:
-            bucket = await RedisBucket.init(
-                self._rates, _redis, f"{self._bucket_key}:{rate_key}"
-            )
-            limiter = Limiter(bucket)
-            self._limiters[rate_key] = limiter
+        try:
+            limiter = self._limiters.get(rate_key)
+            if limiter is None:
+                bucket = await RedisBucket.init(
+                    self._rates, _redis, f"{self._bucket_key}:{rate_key}"
+                )
+                limiter = Limiter(bucket)
+                self._limiters[rate_key] = limiter
 
-        success = await limiter.try_acquire_async(rate_key, blocking=False)
+            success = await limiter.try_acquire_async(rate_key, blocking=False)
+        except redis_asyncio.RedisError:
+            # Redis unavailable mid-request: fall open rather than 500ing the
+            # protected route (matches the behaviour when _redis is None).
+            return
         if not success:
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
