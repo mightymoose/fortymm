@@ -710,6 +710,17 @@ async def test_confirm_email_handles_address_race(
     # Caller's row is untouched — the rollback preserved their prior state.
     assert me.email is None
     assert me.confirmed_at is None
+    # The pending-change token must be burned so the user isn't trapped in a
+    # resend loop where every click hits the same IntegrityError.
+    remaining = (
+        await db_session.execute(
+            select(UserToken).where(
+                UserToken.user_id == me.id,
+                _pending_email_token_clause(),
+            )
+        )
+    ).scalar_one_or_none()
+    assert remaining is None
 
 
 async def test_confirm_email_does_not_require_session(api_client: AsyncClient):

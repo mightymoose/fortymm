@@ -1020,6 +1020,11 @@ async def confirm_email(
     # address first) can surface anywhere in this block — not just at
     # commit. Return the opaque "invalid or expired" so we don't leak
     # who owns the address.
+    #
+    # Capture the token PK before entering the try block so we can
+    # issue a targeted DELETE in the except path without touching the
+    # expired ORM object after rollback.
+    token_id = token_row.id
     raw_session = secrets.token_urlsafe(32)
     try:
         user.email = token_row.sent_to
@@ -1036,6 +1041,11 @@ async def confirm_email(
         await db.commit()
     except IntegrityError:
         await db.rollback()
+        # Burn the pending-change token so the user isn't trapped in a
+        # resend loop: without this, the rollback restores the token and
+        # every subsequent resend+click hits the same IntegrityError.
+        await db.execute(delete(UserToken).where(UserToken.id == token_id))
+        await db.commit()
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="That confirmation link is invalid or expired.",
