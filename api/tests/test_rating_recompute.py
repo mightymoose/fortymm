@@ -5,7 +5,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select, text
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from app.leagues import get_default_league
 from app.models import (
@@ -22,7 +22,7 @@ from app.models import (
     RatingStrategy,
     UserLeagueRating,
 )
-from app.ratings.recompute import recompute_league_ratings
+from app.ratings.recompute import _league_lock_key, recompute_league_ratings
 from tests._helpers import make_user
 
 # ----- fixtures + helpers -------------------------------------------------
@@ -410,3 +410,36 @@ async def test_recompute_is_idempotent(
         .all()
     )
     assert len(rows) == 1
+
+
+# ----- advisory lock -------------------------------------------------------
+
+
+async def test_recompute_holds_advisory_lock_for_transaction(
+    db_session: AsyncSession,
+    engine: AsyncEngine,
+) -> None:
+    """``recompute_league_ratings`` must hold a per-league advisory lock for
+    the duration of the caller's transaction so a concurrent worker cannot
+    interleave its own DELETE/INSERT on the same league.
+
+    Proof: call recompute in session 1 (no commit), then try to grab the same
+    lock from session 2 — ``pg_try_advisory_xact_lock`` must return ``false``."""
+    league = await get_default_league(db_session)
+
+    # Session 1 acquires the lock (no seed users → early-exit after lock,
+    # before any match data is needed).
+    await recompute_league_ratings(db_session, league.id, set())
+
+    lock_key = _league_lock_key(league.id)
+    sm = async_sessionmaker(engine, expire_on_commit=False)
+    async with sm() as session2:
+        result = await session2.execute(
+            text("SELECT pg_try_advisory_xact_lock(:key)"),
+            {"key": lock_key},
+        )
+        acquired = result.scalar_one()
+
+    assert acquired is False, (
+        "advisory lock should be held by session 1's open transaction"
+    )

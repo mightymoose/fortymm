@@ -9,13 +9,22 @@ match, growing the affected-users set as we discover them.
 
 Idempotent: reads current state and rewrites it deterministically, so a
 retried call lands on the same result.
+
+Concurrent safety: two workers recomputing the same league would interleave
+DELETE/INSERT under READ COMMITTED and produce a corrupt final row.
+``recompute_league_ratings`` acquires a per-league ``pg_advisory_xact_lock``
+before touching any data; the lock is held for the life of the caller's
+transaction and released on commit or rollback.  The caller must not commit
+mid-loop across multiple leagues, or locks for earlier leagues are released
+before later ones are acquired (see ``app.ratings.jobs``).
 """
 
+import struct
 import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -34,6 +43,16 @@ from app.models import (
 from app.ratings.base import state_rating_value
 from app.ratings.registry import get_calculator
 from app.ratings.validation import validate_state
+
+
+def _league_lock_key(league_id: uuid.UUID) -> int:
+    """Fold the 128-bit league UUID into a signed 64-bit advisory-lock key.
+
+    XOR of the two 64-bit halves keeps the key stable and collision-free
+    enough for advisory locking (a collision only causes harmless extra
+    serialisation between two different leagues)."""
+    hi, lo = struct.unpack(">qq", league_id.bytes)
+    return int(hi) ^ int(lo)
 
 
 def _decided_sides(match: Match) -> tuple[MatchSide, MatchSide] | None:
@@ -78,6 +97,15 @@ async def recompute_league_ratings(
     calculator = get_calculator(strategy.key)
     if calculator is None:
         return
+
+    # Serialise concurrent recomputes for this league. Two workers racing on
+    # the same league would interleave DELETE/INSERT under READ COMMITTED and
+    # corrupt the final rating row. The lock is transaction-scoped and released
+    # automatically when the caller commits or rolls back.
+    await db.execute(
+        text("SELECT pg_advisory_xact_lock(:key)"),
+        {"key": _league_lock_key(league_id)},
+    )
 
     # updated_at is set when the match completes, which is the moment
     # ratings move — and what we order the replay by.
