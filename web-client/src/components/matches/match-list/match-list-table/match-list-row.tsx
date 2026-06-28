@@ -81,23 +81,23 @@ export const MatchListRow = ({ row, navigate }: MatchListRowProps) => {
       }}
     >
       <td className="id-cell">{row.shortLabel}</td>
-      <td>
+      <td data-cell="players">
         <div className="players-cell">
           <PlayerChip chip={row.side1} />
           <span className="players-vs">vs</span>
           <PlayerChip chip={row.side2} />
         </div>
       </td>
-      <td>
+      <td data-label="Score">
         <ScoreCell score={row.score} />
       </td>
-      <td>
+      <td data-label="Status">
         <StatusBadge status={row.status} />
       </td>
-      <td>
+      <td data-label="Started">
         <TimeCell time={row.time} />
       </td>
-      <td onClick={(e) => e.stopPropagation()}>
+      <td className="action-cell" onClick={(e) => e.stopPropagation()}>
         {row.action !== null ? (
           <Button
             asChild
