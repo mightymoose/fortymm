@@ -559,10 +559,14 @@
  * width above, so cards never reintroduce horizontal scroll. The 640–960px
  * band (tablets / narrow desktop) keeps the scrolling table. */
 @container (max-width: 640px) {
-  .match-list-page table.matches,
-  .match-list-page table.matches tbody {
+  /* `min-width: 0` lets the table (a flex item in `.table-wrap`) shrink below
+   * its content width, undoing the ≤960px `max-content` scroll rule. */
+  .match-list-page table.matches {
     display: block;
     min-width: 0;
+  }
+  .match-list-page table.matches tbody {
+    display: block;
   }
   /* Column headers live inside each card now (see td::before). */
   .match-list-page table.matches thead {
@@ -612,11 +616,11 @@
     justify-content: flex-start;
   }
   /* Players: the card's headline — full width, left-aligned, no scrunching. */
-  .match-list-page table.matches tbody td:nth-child(2) {
+  .match-list-page table.matches tbody td[data-cell='players'] {
     padding-top: 2px;
     padding-bottom: 10px;
   }
-  .match-list-page table.matches tbody td:nth-child(2) .players-cell {
+  .match-list-page table.matches tbody td[data-cell='players'] .players-cell {
     gap: 8px;
   }
   /* The action button is the card's primary CTA — give it the full width. */

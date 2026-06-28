@@ -81,7 +81,7 @@ export const MatchListRow = ({ row, navigate }: MatchListRowProps) => {
       }}
     >
       <td className="id-cell">{row.shortLabel}</td>
-      <td>
+      <td data-cell="players">
         <div className="players-cell">
           <PlayerChip chip={row.side1} />
           <span className="players-vs">vs</span>
