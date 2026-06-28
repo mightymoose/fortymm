@@ -50,13 +50,15 @@ test.describe('Opponent picker — recent opponents', () => {
     ])
   })
 
-  test('shows an empty state and hides search when nobody else exists', async ({
+  test('shows an empty state but keeps search when the caller has no opponents yet (#167)', async ({
     page,
   }) => {
     const nm = await NewMatchPage.open(page, { players: [] })
 
     await expect(nm.emptyPlayers).toBeVisible()
-    await expect(nm.searchAllButton).toBeHidden()
+    // An empty grid no longer means an empty roster — search is the way to
+    // find a first opponent, so it stays reachable.
+    await expect(nm.searchAllButton).toBeVisible()
   })
 
   test('surfaces a retry button when recent opponents fail to load', async ({

@@ -120,7 +120,7 @@ async def test_recent_opponents_dedupes_repeated_opponents(
     assert _usernames(response) == ["ana", "bo"]
 
 
-async def test_recent_opponents_backfills_with_other_players(
+async def test_recent_opponents_excludes_never_played_users(
     api_client: AsyncClient, db_session: AsyncSession
 ):
     me = await start_session(api_client, db_session)
@@ -132,11 +132,11 @@ async def test_recent_opponents_backfills_with_other_players(
 
     response = await api_client.get("/v1/players/recent")
     assert response.status_code == 200
-    # The played opponent leads; never-played users backfill alphabetically.
-    assert _usernames(response) == ["rival", "amy", "zoe"]
+    # Only the actual opponent — strangers are no longer backfilled (#167).
+    assert _usernames(response) == ["rival"]
 
 
-async def test_recent_opponents_for_a_new_player_is_a_non_empty_default(
+async def test_recent_opponents_for_a_new_player_is_empty(
     api_client: AsyncClient, db_session: AsyncSession
 ):
     await start_session(api_client, db_session)
@@ -147,8 +147,9 @@ async def test_recent_opponents_for_a_new_player_is_a_non_empty_default(
 
     response = await api_client.get("/v1/players/recent")
     assert response.status_code == 200
-    # No match history at all — fall back to the alphabetical roster.
-    assert _usernames(response) == ["alice", "bob", "charlie"]
+    # No match history at all → empty, not a roster of strangers (#167). The
+    # picker steers the new user to search/solo instead.
+    assert response.json() == []
 
 
 async def test_recent_opponents_excludes_the_current_user(
@@ -195,9 +196,12 @@ async def test_recent_opponents_is_empty_without_other_users(
 async def test_recent_opponents_respects_the_limit(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    await start_session(api_client, db_session)
-    for name in ("ana", "bo", "cy", "di"):
-        await make_user(db_session, name)
+    me = await start_session(api_client, db_session)
+    for offset, name in enumerate(("ana", "bo", "cy", "di")):
+        opponent = await make_user(db_session, name)
+        await _record_match(
+            db_session, me, opponent, created_at=BASE_TIME - timedelta(days=offset)
+        )
 
     response = await api_client.get("/v1/players/recent", params={"limit": 2})
     assert response.status_code == 200

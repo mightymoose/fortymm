@@ -31,9 +31,10 @@ function RecentSkeleton() {
 }
 
 /**
- * The default opponent-picker view: a grid of recently-played opponents
- * (backfilled with other registered players by the API), plus a "Search all
- * players" affordance that hands off to the typeahead. Errors throw to the
+ * The default opponent-picker view: a grid of the caller's actual recent
+ * opponents, plus a "Search all players" affordance that hands off to the
+ * typeahead. A caller with no match history sees an empty state pointing at
+ * search rather than a roster of strangers (#167). Errors throw to the
  * surrounding `OpponentPickerBoundary`.
  */
 export const RecentOpponents = ({
@@ -53,7 +54,9 @@ export const RecentOpponents = ({
     <div>
       <div className="nm-recent-label">
         <span>Recent opponents</span>
-        {!isLoading && players.length > 0 && (
+        {/* Search is always reachable once loaded — a caller with no history
+            now sees an empty grid, and search is their way forward (#167). */}
+        {!isLoading && (
           <button
             type="button"
             className="search-btn"
@@ -67,8 +70,8 @@ export const RecentOpponents = ({
         <RecentSkeleton />
       ) : players.length === 0 ? (
         <div className="nm-no-match">
-          No other players yet. Start the match without picking one for a
-          casual solo session.
+          No opponents yet — use Search to find a player, or start the match
+          without one for a casual solo session.
         </div>
       ) : (
         <div className="nm-recent-grid">

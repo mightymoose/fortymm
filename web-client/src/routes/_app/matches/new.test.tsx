@@ -547,17 +547,18 @@ describe('NewMatchPage — recent opponents', () => {
     expect(names).toEqual(['carol.recent', 'alice.older', 'bob.oldest'])
   })
 
-  it('shows an empty state when there are no other players', async () => {
+  it('shows an empty state but keeps search when the caller has no opponents yet (#167)', async () => {
     server.use(http.get('*/v1/players/recent', () => HttpResponse.json([])))
     renderNewMatch()
 
     expect(
-      await screen.findByText(/no other players yet/i),
+      await screen.findByText(/no opponents yet/i),
     ).toBeInTheDocument()
-    // With nobody to find, the search affordance is hidden.
+    // The empty grid no longer means an empty roster — search is the way to
+    // find a first opponent, so it stays available.
     expect(
-      screen.queryByRole('button', { name: /search all players/i }),
-    ).not.toBeInTheDocument()
+      screen.getByRole('button', { name: /search all players/i }),
+    ).toBeInTheDocument()
   })
 
   it('shows a retry button when recent opponents fail to load, and recovers', async () => {

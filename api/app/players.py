@@ -92,18 +92,19 @@ async def list_recent_opponents(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_session),
 ) -> list[PlayerRead]:
-    """Opponents to feature in the new-match picker.
+    """Opponents the caller has actually played, for the new-match picker.
 
-    Ranked by how recently the caller last played them (most recent first).
-    A player with little or no match history is backfilled with other
-    registered users, alphabetically, so the list is never short or empty.
+    Ranked by how recently the caller last played them (most recent first),
+    tie-broken alphabetically. Returns only real opponents — a caller with no
+    match history gets an empty list, so the picker never presents strangers as
+    "recent opponents" (#167).
     """
     # Join the caller's side and the opponent's side of each shared match so
     # the database returns hydrated User rows already ordered by recency —
     # one round trip, no Python re-sort.
     opp = aliased(MatchSidePlayer)
     mine = aliased(MatchSidePlayer)
-    opponents = list(
+    opponents = (
         (
             await db.execute(
                 select(User)
@@ -122,9 +123,7 @@ async def list_recent_opponents(
                 )
                 .group_by(User.id)
                 # Stable tiebreaker so ties on created_at (seed data, tests,
-                # concurrent creates) don't reorder across requests. Matches
-                # the alphabetical backfill below, so the list reads as one
-                # coherent order.
+                # concurrent creates) don't reorder across requests.
                 .order_by(func.max(Match.created_at).desc(), User.username)
                 .limit(limit)
             )
@@ -132,26 +131,6 @@ async def list_recent_opponents(
         .scalars()
         .all()
     )
-
-    if len(opponents) < limit:
-        played_ids = [user.id for user in opponents]
-        backfill = (
-            (
-                await db.execute(
-                    select(User)
-                    .where(
-                        User.id != current_user.id,
-                        User.merged_into_user_id.is_(None),
-                        User.id.notin_(played_ids),
-                    )
-                    .order_by(User.username)
-                    .limit(limit - len(opponents))
-                )
-            )
-            .scalars()
-            .all()
-        )
-        opponents.extend(backfill)
 
     league = await resolve_league(db, league_id)
     ratings = await _load_player_ratings(db, league.id, (user.id for user in opponents))

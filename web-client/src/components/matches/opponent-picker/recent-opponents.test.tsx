@@ -70,11 +70,13 @@ describe('RecentOpponents', () => {
     expect(searched).toBe(true)
   })
 
-  it('shows an empty state and hides search when nobody else exists', async () => {
+  it('shows an empty state but still offers search when the caller has no history (#167)', async () => {
     recentOpponentsPage.mockRecent(() => HttpResponse.json([]))
     recentOpponentsPage.render()
 
     await recentOpponentsPage.findEmpty()
-    expect(recentOpponentsPage.querySearchAll()).not.toBeInTheDocument()
+    // Search is the way forward for a player with no opponents yet, so it must
+    // stay reachable even when the grid is empty.
+    expect(recentOpponentsPage.querySearchAll()).toBeInTheDocument()
   })
 })

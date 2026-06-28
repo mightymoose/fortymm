@@ -15,7 +15,7 @@ const scoped = (container: Container) => ({
   queryChip(name: string | RegExp) {
     return container.queryByRole('button', { name })
   },
-  /** The "Search all players" affordance, hidden until chips exist. */
+  /** The "Search all players" affordance, available whenever loaded. */
   querySearchAll() {
     return container.queryByRole('button', { name: /search all players/i })
   },
@@ -23,12 +23,12 @@ const scoped = (container: Container) => ({
   queryLoading() {
     return container.queryByRole('status', { name: /loading players/i })
   },
-  /** The "no other players yet" empty state. */
+  /** The "no opponents yet" empty state. */
   queryEmpty() {
-    return container.queryByText(/no other players yet/i)
+    return container.queryByText(/no opponents yet/i)
   },
   findEmpty() {
-    return container.findByText(/no other players yet/i)
+    return container.findByText(/no opponents yet/i)
   },
 })
 

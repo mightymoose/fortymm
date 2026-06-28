@@ -561,11 +561,12 @@ export interface paths {
         };
         /**
          * List Recent Opponents
-         * @description Opponents to feature in the new-match picker.
+         * @description Opponents the caller has actually played, for the new-match picker.
          *
-         *     Ranked by how recently the caller last played them (most recent first).
-         *     A player with little or no match history is backfilled with other
-         *     registered users, alphabetically, so the list is never short or empty.
+         *     Ranked by how recently the caller last played them (most recent first),
+         *     tie-broken alphabetically. Returns only real opponents — a caller with no
+         *     match history gets an empty list, so the picker never presents strangers as
+         *     "recent opponents" (#167).
          */
         get: operations["list_recent_opponents_v1_players_recent_get"];
         put?: never;
