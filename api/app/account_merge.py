@@ -68,6 +68,12 @@ async def merge_user(
       * ``to_user_id`` already exists.
       * ``from_user_id != to_user_id``.
     """
+    if from_user_id == to_user_id:
+        # A self-merge would no-op every UPDATE and then the final tombstone
+        # DELETE would destroy the surviving account. Refuse loudly rather
+        # than silently lose the user.
+        raise ValueError("merge_user: from_user_id must not equal to_user_id")
+
     matches_moved = await _repoint_match_side_players(
         db, from_user_id=from_user_id, to_user_id=to_user_id
     )

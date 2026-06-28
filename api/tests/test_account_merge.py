@@ -3,6 +3,7 @@
 import hashlib
 from datetime import UTC, datetime
 
+import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -395,9 +396,18 @@ async def test_merge_summary_zero_when_ephemeral_played_nothing(
     assert summary.matches_moved == 0
 
 
+async def test_merge_self_merge_raises(db_session: AsyncSession):
+    # A self-merge would no-op every UPDATE and then tombstone-delete the only
+    # remaining account. merge_user refuses it rather than losing the user.
+    user = await _make_verified(db_session, "self@example.com")
+    with pytest.raises(ValueError, match="must not equal"):
+        await merge_user(db_session, from_user_id=user.id, to_user_id=user.id)
+
+
 # ----- skip cases handled by the endpoint guard ---------------------------
-# (`merge_user` itself doesn't check verified-ness or same-id — those are
-# the caller's responsibility, enforced in sessions._maybe_merge_prior_session.)
+# (`merge_user` itself doesn't check verified-ness — that's the caller's
+# responsibility, enforced in sessions._maybe_merge_prior_session. Same-id is
+# guarded inside merge_user; see test_merge_self_merge_raises.)
 
 
 async def test_merge_with_user_league_rating_collision_drops_ephemeral(
