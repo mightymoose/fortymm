@@ -438,7 +438,7 @@ function SuccessReceipt({
               marginTop: 4,
             }}
           >
-            @{username}
+            {username}
           </div>
         </div>
       </div>
@@ -1138,7 +1138,7 @@ export function ScreenSuccess({
         <HeroCol
           eyebrow="● You’re in"
           h1a="Welcome back"
-          h1b={username ? `@${username}.` : '.'}
+          h1b={username ? `${username}.` : '.'}
         />
       }
       right={

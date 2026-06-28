@@ -22,6 +22,10 @@ compose stack the web origin is also where nginx proxies the API.
 - Path alias: `@/*` → `src/*` (see `vite.config.ts`, `components.json`).
 - shadcn components go under `src/components/ui` (configured in
   `components.json`).
+- **Render usernames bare — no leading `@`.** Display a username as
+  `{username}`, never `@{username}`. This holds everywhere: the dashboard
+  greeting, the login confirmation/success screens, the merge gate, the user
+  menu, match details, and the topbar pill. (#289)
 
 ## Design system
 

@@ -22,7 +22,7 @@ export function MergeGate({
   onNotNow,
 }: MergeGateProps) {
   const matchLabel = matchesCount === 1 ? '1 match' : `${matchesCount} matches`
-  const from = guestUsername ? `@${guestUsername}` : 'your guest session'
+  const from = guestUsername || 'your guest session'
   return (
     <div
       style={{
@@ -42,7 +42,7 @@ export function MergeGate({
         Bring your matches over?
       </h1>
       <p style={{ color: 'var(--fg-2)' }}>
-        You're signing in as <strong>@{ownerUsername}</strong>. We can bring the{' '}
+        You're signing in as <strong>{ownerUsername}</strong>. We can bring the{' '}
         <strong>{matchLabel}</strong> you played in {from} into this account.
       </p>
       <div

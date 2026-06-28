@@ -8,5 +8,5 @@ import type { PageTitleProps } from './page-title'
 export function buildPageTitleProps(
   overrides: Partial<PageTitleProps> = {},
 ): PageTitleProps {
-  return { greeting: 'Hi, @rita.kovac', compact: false, ...overrides }
+  return { greeting: 'Hi, rita.kovac', compact: false, ...overrides }
 }
