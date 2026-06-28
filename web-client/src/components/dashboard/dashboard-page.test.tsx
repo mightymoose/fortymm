@@ -136,7 +136,7 @@ describe('DashboardPage', () => {
     renderDashboard()
 
     expect(
-      await screen.findByRole('heading', { name: /Hi, @rita\.kovac/ }),
+      await screen.findByRole('heading', { name: /Hi, rita\.kovac/ }),
     ).toBeInTheDocument()
   })
 
@@ -154,7 +154,7 @@ describe('DashboardPage', () => {
       await screen.findByRole('heading', { name: /^Hi\.?$/ }),
     ).toBeInTheDocument()
     expect(
-      screen.queryByRole('heading', { name: /Hi, @/ }),
+      screen.queryByRole('heading', { name: /Hi, \S/ }),
     ).not.toBeInTheDocument()
   })
 
@@ -319,7 +319,7 @@ describe('DashboardPage · guest persistence banner', () => {
 
     // Wait until something else from the dashboard has rendered, then
     // confirm the banner is absent.
-    await screen.findByRole('heading', { name: /Hi, @rita\.kovac/ })
+    await screen.findByRole('heading', { name: /Hi, rita\.kovac/ })
     expect(
       screen.queryByTestId('dashboard-guest-persist-banner'),
     ).not.toBeInTheDocument()
@@ -335,7 +335,7 @@ describe('DashboardPage · guest persistence banner', () => {
     )
     renderDashboard()
 
-    await screen.findByRole('heading', { name: /Hi, @rita\.kovac/ })
+    await screen.findByRole('heading', { name: /Hi, rita\.kovac/ })
     expect(
       screen.queryByTestId('dashboard-guest-persist-banner'),
     ).not.toBeInTheDocument()
@@ -364,7 +364,7 @@ describe('DashboardPage · guest persistence banner', () => {
     // Re-mount within the same "session" — the banner should remain hidden.
     unmount()
     renderDashboard()
-    await screen.findByRole('heading', { name: /Hi, @rita\.kovac/ })
+    await screen.findByRole('heading', { name: /Hi, rita\.kovac/ })
     expect(
       screen.queryByTestId('dashboard-guest-persist-banner'),
     ).not.toBeInTheDocument()

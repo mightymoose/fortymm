@@ -26,7 +26,7 @@ export function DashboardPage() {
   const user =
     !session.isError && session.data ? session.data.data.user : undefined
   const username = user?.username
-  const greeting = username ? `Hi, @${username}` : 'Hi'
+  const greeting = username ? `Hi, ${username}` : 'Hi'
   // Guest with at least one completed match — "you have things to lose now".
   // Zero-match guests and verified/pending-verification users never see this.
   const isGuest =
