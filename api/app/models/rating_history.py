@@ -46,6 +46,17 @@ class RatingHistory(Base):
             text("created_at DESC"),
         ),
         Index("ix_rating_history_match_id", "match_id"),
+        # Defense in depth against a concurrent double-completion writing two
+        # history rows (and double-applying the rating) for the same match.
+        # Partial on ``match_id IS NOT NULL`` so manual/import/initial rows —
+        # which legitimately share a (NULL match_id, user_id) — are unaffected.
+        Index(
+            "uq_rating_history_match_id_user_id",
+            "match_id",
+            "user_id",
+            unique=True,
+            postgresql_where=text("match_id IS NOT NULL"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(

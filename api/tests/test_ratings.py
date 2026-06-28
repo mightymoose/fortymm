@@ -7,6 +7,7 @@ import jsonschema
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
@@ -460,3 +461,74 @@ async def test_manual_history_row_with_null_match_round_trips(
     assert reloaded.source == RatingHistorySource.import_
     assert reloaded.note == "USATT 2026-04 batch"
     assert reloaded.created_by_user_id == admin.id
+
+
+async def test_rating_history_rejects_duplicate_match_user_row(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    default_league: League,
+):
+    """The partial ``UNIQUE(match_id, user_id)`` index makes a concurrent
+    double-completion fail loudly instead of writing a second history-row pair
+    (and double-applying the rating) for the same match + player."""
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "rival") as (opp_client, opp):
+        await _score_to_completion(api_client, opp_client, opp.id)
+
+    existing = (
+        await db_session.execute(
+            select(RatingHistory)
+            .where(RatingHistory.source == RatingHistorySource.match)
+            .limit(1)
+        )
+    ).scalar_one()
+
+    dup = RatingHistory(
+        league_id=existing.league_id,
+        user_id=existing.user_id,
+        match_id=existing.match_id,
+        rating_strategy_id=existing.rating_strategy_id,
+        rating_value=existing.rating_value,
+        rating_state=existing.rating_state,
+        previous_rating_value=existing.previous_rating_value,
+        source=RatingHistorySource.match,
+    )
+    db_session.add(dup)
+    with pytest.raises(IntegrityError):
+        await db_session.flush()
+
+
+async def test_rating_history_allows_many_null_match_rows_per_user(
+    db_session: AsyncSession,
+    default_league: League,
+    rating_strategies: dict[str, RatingStrategy],
+):
+    """The unique index is partial on ``match_id IS NOT NULL``, so a user can
+    hold multiple manual/import/initial rows (all with a NULL ``match_id``)
+    without tripping it."""
+    player = await make_user(db_session, "player")
+    for value in (1500.0, 1600.0):
+        db_session.add(
+            RatingHistory(
+                league_id=default_league.id,
+                user_id=player.id,
+                match_id=None,
+                rating_strategy_id=rating_strategies["manual"].id,
+                rating_value=value,
+                rating_state={"rating": value},
+                previous_rating_value=None,
+                source=RatingHistorySource.manual,
+            )
+        )
+    await db_session.commit()
+
+    rows = (
+        (
+            await db_session.execute(
+                select(RatingHistory).where(RatingHistory.user_id == player.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(rows) == 2

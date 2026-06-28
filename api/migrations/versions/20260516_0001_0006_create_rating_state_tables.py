@@ -142,9 +142,19 @@ def upgrade() -> None:
         ["league_id", "user_id", sa.text("created_at DESC")],
     )
     op.create_index("ix_rating_history_match_id", "rating_history", ["match_id"])
+    op.create_index(
+        "uq_rating_history_match_id_user_id",
+        "rating_history",
+        ["match_id", "user_id"],
+        unique=True,
+        postgresql_where=sa.text("match_id IS NOT NULL"),
+    )
 
 
 def downgrade() -> None:
+    op.drop_index(
+        "uq_rating_history_match_id_user_id", table_name="rating_history"
+    )
     op.drop_index("ix_rating_history_match_id", table_name="rating_history")
     op.drop_index(
         "ix_rating_history_league_id_user_id_created_at",
