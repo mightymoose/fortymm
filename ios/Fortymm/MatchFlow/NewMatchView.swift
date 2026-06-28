@@ -169,7 +169,7 @@ struct NewMatchView: View {
             } else if recentFailed {
                 pickerNote("Couldn't load players. Search to find an opponent.")
             } else if recent.isEmpty {
-                pickerNote("No other players yet — start a solo match or search.")
+                pickerNote("No opponents yet — use Search to find a player, or start a solo match.")
             } else {
                 LazyVGrid(columns: [GridItem(.flexible(), spacing: 9), GridItem(.flexible(), spacing: 9)], spacing: 9) {
                     ForEach(recent) { p in
