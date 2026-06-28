@@ -1,358 +1,411 @@
-# Design: first-class `MatchResult` (posted-result) model
+# Design: the two-verb match-result negotiation model
 
-**Status:** proposed · **Audience:** the engineer/agent implementing it · **Scope:** `api/` core, with a deliberately small `web-client/` footprint in phase 1.
+**Status:** accepted · **Audience:** the engineer/agent implementing the
+negotiation epic · **Scope:** `api/` core + the `web-client/` match surfaces.
+
+> This document is the spec for the **two-verb propose/accept** epic. It
+> **replaces** the earlier "first-class `MatchResult` + confirm/dispute
+> responses" design (the `MatchResultResponse` table and the
+> `signatures[]` / `disputed_by_user_id` BFF shim). The repo is **undeployed**,
+> so this is a hard replacement: no backward-compat shims, migrations flattened
+> in place. The closed dispute-cluster bugs #359 / #360 / #361 / #366 were fixed
+> under the old dispute model that this work removes; they do not survive.
 
 ## 1. Why
 
-Today "a result was posted" is **implicit** — it's smeared across `match.status`,
-the mutable `match_games` board, and the `match_signatures` rows that hang off the
-`Match`. Three consequences:
+A finished table-tennis match has exactly one social problem: the two players
+have to **agree on the score**. Everything the old model carried — post,
+confirm, dispute, withdraw, "who disputed", `match_signatures`, a denormalized
+`disputed_by_user_id` — was machinery around that one negotiation. It modelled
+the *mechanism* (sign-offs, dispute flags, reopen-and-rescore) instead of the
+*conversation* (one side claims a score, the other agrees or proposes a
+correction).
 
-- **Dispute discards history.** `POST /dispute` does `match.signatures.clear()` and
-  re-opens the same `match_games` for editing (`api/app/matches.py` ~1991–2040). The
-  exact board that was rejected is then mutated in place on re-score, so *what was
-  disputed* is gone. Issue **#366** (surface invariant violations / recover past the
-  decider) needs that history.
-- **"Who disputed" has no natural home.** We just bolted a denormalized
-  `matches.disputed_by_user_id` column on for the #360 banner. It works, but it can
-  drift (`status != disputed` yet column set) and it only remembers the *latest*
-  disputer.
-- **The whole dispute/sign-off cluster** (#359 disputer ack, #360 submitter notice,
-  #361 edit/withdraw during awaiting-confirmation, #366 recovery) keeps reaching for
-  data that isn't modeled: who submitted, who responded, when, and what the responded-to
-  board actually was.
+Collapse it to the conversation and the machinery disappears:
 
-Make the posted result a **first-class row** and all of that falls out. A
-`MatchSignature` stops being "an attestation floating on the match" and becomes "a
-response (confirm | dispute) to a specific posted result."
+- **There are only two things a participant ever does to a result:** *propose*
+  one (a claim about how the match went) or *accept* the one on the table.
+  "First post", "edit my own post", and "counter with a correction" are all the
+  same act — propose a result that supersedes the standing one.
+- **Disagreement isn't a special state.** It's just the other side proposing a
+  different result instead of accepting. There is nothing to "dispute" and
+  nothing to "reopen", because a still-negotiating match was never closed.
+- **A match can never get stuck**, so there is no *withdraw* or *void*. A result
+  is only ever minted from a **decided board** (a board with a victor). Before
+  that, the match is a live scratchpad that either participant can edit; there
+  is simply no result to be stuck on. After the first proposal the negotiation
+  is always advanceable by *someone* (accept, or counter), so it can't deadlock.
 
-This refactor is the **foundation for the dispute cluster**, not a fix for any single
-issue. #360 already shipped a stopgap (the `disputed_by_user_id` column + the
-`DisputeNotice` banner); this design **subsumes and removes** that column.
+The model that falls out is **one table and two verbs**. The supersede chain is
+the entire history; consent is two columns.
 
 ## 2. Goals / non-goals
 
 **Goals**
-- A `MatchResult` entity: one row per posting, carrying who submitted, when, the
-  immutable snapshot of the claimed board, and its outcome.
-- Confirm/dispute become **responses to a result**, with full per-result history.
-- Derive "who disputed / who submitted / awaiting-confirmation" from the model instead
-  of denormalized flags. Remove `matches.disputed_by_user_id`.
-- **Keep the `MatchDetails` / `MatchListRow` BFF contract stable in phase 1** so the
-  front-end (the confirmation callout, the new dispute notice, the finalize callout, the
-  matches list, the dashboard) is essentially untouched. The model changes *behind* the
-  serializer.
+- One `match_results` table: proposer, optional acceptor, an optional
+  `supersedes_result_id` self-link, and an immutable `games` snapshot. No
+  responses table, no `disputed_by_user_id`.
+- Two endpoints: `propose` (`POST /matches/{id}/results`, covers first-post =
+  self-edit = counter) and `accept`
+  (`POST /matches/{id}/results/{result_id}/acceptance`).
+- The BFF (`MatchDetails` / `MatchListRow`) speaks the negotiation natively: a
+  `negotiation` block with a **viewer-relative** state, turn flag, the standing
+  result, the viewer's own prior proposal, and a **server-computed, viewer-
+  relative diff**. The front-end renders it dumb.
+- Make illegal states unrepresentable (per `api/CLAUDE.md`): a result's role
+  (standing / accepted / superseded) is **derived from columns**, not stored in
+  a drift-prone status enum.
 
-**Non-goals (explicitly out of scope for the first PR)**
-- New FE surfaces for result history / recovery (#366, #359, #361). The model *enables*
-  them; building them is follow-up work.
-- Changing the optimistic-concurrency score-write endpoints (`.../games/{n}/scores`),
-  the rating pipeline, or the solver.
-- Cryptographic signatures (the existing `match_signatures.signature` blob is already an
-  unused placeholder; carry it forward unused or drop it — see §11).
+**Non-goals**
+- Cryptographic signatures (the old `match_signatures.signature` blob is gone;
+  resurrect via a new migration if real signing ever lands).
+- Changing the rating pipeline or the solver. `accept` reuses today's finalize
+  path verbatim.
+- A general result-history UI. The supersede chain *enables* one; building a
+  dedicated history view is out of scope (the `corrected` diff is the only
+  history surface this epic ships).
 
-## 3. Current state (read this first)
+## 3. Current state (what we are flattening)
 
-Precise inventory the implementer must work against. All `api/app/`.
+The phase-1 dispute model is **already in `main`** and is what this epic
+rewrites. Inventory (`api/app/`):
 
-- **Models:** `models/match.py` (`Match`, `MatchStatus`, the `signatures`/`games`/`sides`
-  relationships, and the `disputed_by_user_id` column added for #360);
-  `models/match_signature.py` (`match_signatures`: `id, match_id→matches CASCADE,
-  user_id→users RESTRICT, signature(bytes,null), signed_at`; `uq_match_signatures_match_id_user_id`);
-  `models/match_game.py` (`match_games`: `match_id→matches CASCADE, game_number`,
-  `uq_match_games_match_id_game_number`); `models/match_game_score.py`
-  (`match_game_scores`: `match_game_id→match_games CASCADE, side_1_points, side_2_points,
-  version` (optimistic token, starts 1), `uq_match_game_scores_match_game_id`).
-- **Endpoints (`matches.py`):** `post_match_result` /results (1858–1955),
-  `confirm_match_result` /confirmation (1958–1988), `dispute_match_result` /dispute
-  (1991–2040), score-write POST/PUT/DELETE `.../games/{n}/scores` (1714–1855).
-- **Helpers (`matches.py`):** `_commit_canonical_games` (1565–1599, replaces
-  `match.games` with the posted payload, updates denormalized `side.score`),
-  `_validate_finalize_games` (1489–1526), `_add_signature_or_409` (971–994),
-  `_requires_confirmation` (1611–1617, `affects_rating AND both sides have players`),
-  `_all_sides_signed` (194–199), `_can_confirm` (997–1013), `_enforce_confirmable`
-  (948–968), `_can_finalize` (1543–1562), `_is_scorable` (899–916, **gates on "no
-  signatures"**), `_enforce_scorable` (919–945), `_set_side_won` (1602–1608),
-  `_posted_decided_side` (1620–1631), `side_win_counts` (278–285), `current_game_number`
-  (288–316), `_status_label` (202–220, `in_progress + signatures → "Awaiting
-  confirmation"`), `_serialize_details` (319–399), `_apply_rating_update`,
-  `_notify_result_posted` (1080+).
-- **Domain/view:** `domain/match/models.py` `MatchModel.from_row` (id+status only);
-  `mappers/match_details_mapper.py` `serialize_match_details` → `schemas/view/match_details.py`
-  (`Scoreboard.status` only; `disputed/voided → final`).
-- **Consumers of `match.signatures` / `match.status`:** `attention.py`
-  `list_attention_kind` (46–73); the matches-list BFF + `MatchListFilter`
-  (`schemas/match.py` 13–28, splits `in_progress` into `live` vs `awaiting_confirmation`
-  on signature presence); `_status_label`; `dashboard.py`.
-- **Schemas (`schemas/match.py`):** `MatchSignatureView` (169–175), `MatchDetails`
-  (178–219: `signatures`, `disputed_by_user_id`, `can_confirm`, `can_finalize`,
-  `status_label`, `data`), `MatchListRow` (225–252: `attention`, `can_confirm`).
-- **Account merge:** `account_merge.py` `merge_user` re-points `match_signatures`
-  (`_repoint_match_signatures`) and the `matches.disputed_by_user_id` column.
-- **FE (`web-client/src`):** `mocks/match-store.ts` (`finalizeSeed`, `confirmSeed`,
-  `disputeSeed`, `projectMatchDetails`, `projectListRow`, `listAttentionKind`,
-  `canConfirmSeed`, `canFinalizeSeed`, `seedStatusLabel`); the match-details quartets
+- **Models:** `models/match_result.py` — `MatchResult` (`match_results`:
+  `id, match_id→matches CASCADE, submitted_by_user_id→users RESTRICT,
+  submitted_at, outcome (result_outcome enum: pending|confirmed|disputed|
+  superseded), games jsonb`); `models/match_result_response.py` —
+  `MatchResultResponse` (`match_result_responses`: `id, result_id→match_results
+  CASCADE, user_id→users RESTRICT, kind (result_response_kind: confirm|dispute),
+  created_at`, `uq_match_result_responses_result_id_user_id`).
+  `models/match.py` — `Match.results` relationship + the `disputed_by_user_id`
+  column.
+- **Endpoints (`matches.py`):** `post_match_result` (`POST /results`),
+  `confirm_match_result` (`POST /confirmation`), `dispute_match_result`
+  (`POST /dispute`), `withdraw_match_result` (`POST /withdrawal`), and the
+  score-write `POST/PUT/DELETE .../games/{n}/scores`.
+- **Helpers (`matches.py`):** the signature/response machinery —
+  `_add_signature_or_409` / response inserts, `_can_confirm`,
+  `_enforce_confirmable`, `_all_sides_responded_confirm`, `_is_scorable`
+  (gates on "no pending result"), `_can_finalize`, `_status_label`,
+  `_posted_decided_side`, `_set_side_won`, `_apply_rating_update`,
+  `disputer_of` / `submitter_of`, `_serialize_details`.
+- **Schemas (`schemas/match.py`):** `MatchSignatureView`, and `MatchDetails` /
+  `MatchListRow` carrying `signatures` + `disputed_by_user_id` + `can_confirm` /
+  `can_finalize` / `status_label`.
+- **Account merge (`account_merge.py`):** repoints `match_result_responses` and
+  `match_results.submitted_by_user_id`, and the `matches.disputed_by_user_id`
+  column.
+- **FE (`web-client/src`):** `mocks/match-store.ts` (results + responses seed,
+  `projectMatchDetails`, `projectListRow`); the match-details quartets
   (`confirmation-callout`, `dispute-notice`, `finalize-callout`, `score-cta`,
-  `scoreboard`); `src/api/schema.d.ts` (generated).
-- **Tests:** `api/tests/test_matches.py` is the big one — see the table in §10. Plus
-  `api/tests/test_account_merge.py` and the FE quartet tests.
+  `scoreboard`); the result hooks (`useFinalizeMatch`, `useConfirmMatch`,
+  `useDisputeMatch`, `useWithdrawMatch`); `src/api/schema.d.ts` (generated).
 
-## 4. Proposed model
+## 4. The model
+
+One table. No responses table, no `disputed_by_user_id`.
 
 ```
-MatchResult                       # one row per POST /results — the "claim"
-  id                  uuid pk
-  match_id            uuid  -> matches.id            ON DELETE CASCADE
-  submitted_by_user_id uuid -> users.id              ON DELETE RESTRICT   (re-pointed on merge)
-  submitted_at        timestamptz  not null  default now()
-  outcome             enum result_outcome  not null  default 'pending'
-                        # pending | confirmed | disputed | superseded
-  games               jsonb  not null        # immutable snapshot of the claimed board (see §5)
-  # exactly one row per match has outcome='pending' OR the latest is terminal — see invariants
-
-MatchResultResponse               # was: match_signatures. Confirm/dispute against a result.
-  id                  uuid pk
-  result_id           uuid  -> match_results.id      ON DELETE CASCADE
-  user_id             uuid  -> users.id              ON DELETE RESTRICT   (re-pointed on merge)
-  kind                enum result_response_kind  not null   # confirm | dispute
-  created_at          timestamptz  not null  default now()
-  UNIQUE (result_id, user_id)     # a participant responds to a given result at most once
+MatchResult                         # match_results — one row per proposal
+  id                   uuid pk
+  match_id             uuid -> matches.id           ON DELETE CASCADE
+  submitted_by_user_id uuid -> users.id             ON DELETE RESTRICT   (repointed on merge)
+  submitted_at         timestamptz not null default now()
+  supersedes_result_id uuid -> match_results.id     ON DELETE CASCADE, NULL   (self-link, the chain)
+  accepted_by_user_id  uuid -> users.id             ON DELETE RESTRICT, NULL  (repointed on merge)
+  accepted_at          timestamptz NULL
+  games                jsonb not null               # immutable snapshot of the claimed (decided) board
 ```
 
-Relationships: `Match.results: list[MatchResult]` (cascade `all, delete-orphan`);
-`MatchResult.responses: list[MatchResultResponse]` (cascade `all, delete-orphan`);
-`MatchResult.submitted_by` / `MatchResultResponse.user` → `User`.
+- **No `outcome` enum.** A row's role is derived, so it can't drift:
+  - **accepted** ⟺ `accepted_by_user_id IS NOT NULL` (⟹ the match is `completed`).
+  - **superseded** ⟺ some other row has `supersedes_result_id = this.id`.
+  - **standing** ⟺ neither accepted nor superseded — the live head of the chain,
+    the one thing a participant can accept or counter.
+- **`supersedes_result_id` is the version history.** First-post → `NULL`. Every
+  self-edit or counter → a new row pointing at the row it replaces. The chain is
+  linear (see invariants); walking `supersedes_result_id` back to `NULL` is the
+  full negotiation transcript.
+- **Consent is two columns, not a collection.** The proposing side consents by
+  the row's mere existence (`submitted_by_user_id`). The other side consents
+  with a single `accepted_by_user_id` — **per side, one acceptor suffices** (for
+  doubles, either opponent accepting binds the side). There is no "both must
+  sign" set to accumulate.
+- **`games` is immutable.** Frozen at propose time; a correction never mutates a
+  snapshot, it mints a new row. This is what preserves the "what changed"
+  history for the `corrected` diff.
 
-**Lifecycle**
+**Relationships:** `Match.results: list[MatchResult]` (cascade
+`all, delete-orphan`, ordered by `submitted_at`). `MatchResult.submitted_by` /
+`MatchResult.accepted_by` → `User`. `MatchResult.supersedes` /
+`MatchResult.superseded_by` self-relationship (optional; or just query the
+column).
 
-- `POST /results` → create a `MatchResult` (outcome `pending`), snapshot the validated
-  games into `MatchResult.games`, and insert the submitter's `confirm` response (mirrors
-  today's "poster's signature recorded on post"). Solo/unrated short-circuit: the result
-  is created already `confirmed` and the match completes immediately (no second party).
-- `POST /confirmation` → insert a `confirm` response on the current pending result. When
-  every side has a `confirm` response → result `confirmed`, match `completed`, stamp
-  `side.won`, run the rating update (exactly once, unchanged).
-- `POST /dispute` → insert a `dispute` response on the current pending result; set that
-  result `outcome = disputed`; match → `disputed`; re-open scoring. The disputed result
-  **stays as history** (its `games` snapshot is the board that was rejected).
-- `POST /results` again (re-score) → the prior result is already terminal
-  (`disputed`); create a **new** `MatchResult`. (If you ever allow re-posting over a
-  still-`pending` result, mark the old one `superseded` first.)
+**Invariants (and how they're enforced):**
+- **≤ 1 standing result per match.** Enforced procedurally by `propose`
+  (first-post requires zero results; a counter requires its
+  `supersedes_result_id` to be the current standing) under the existing NOWAIT
+  row-lock. Optionally hardened with a `UNIQUE` on `supersedes_result_id` (a
+  given row can be superseded by at most one successor ⟹ the chain stays
+  linear; two concurrent counters to the same parent ⟹ one 409s on the unique
+  violation rather than forking the chain).
+- **A `games` snapshot is always a decided board** (a victor under `best_of`).
+  Enforced at propose time (§6).
+- **Accepted ⟹ terminal.** Once `accepted_by_user_id` is set, the match is
+  `completed` and nothing supersedes it; `propose`/`accept` both reject against a
+  completed match.
 
-"Latest result" = the most recent `MatchResult` by `submitted_at` (or a
-`matches.current_result_id` pointer — see §8 open question). Everything the BFF needs
-derives from it + its responses.
+## 5. Where the scores live (scratchpad vs. snapshot)
 
-## 5. Where do the scores attach? (the load-bearing decision)
+Unchanged in spirit from the live board; the freeze rule is new.
 
-Games exist **before** any result is posted — the live board is a mutable scratchpad
-edited one game at a time via `.../games/{n}/scores` with the `version` token. So scores
-split into two genuinely different things that today share one table:
+1. **Working scores — the scratchpad.** Relational `match_games` +
+   `match_game_scores` on the `Match`, edited one game at a time via
+   `.../games/{n}/scores` with the optimistic-concurrency `version` token.
+   **This is the pre-result board.** Two changes (#715):
+   - **Either participant may edit it**, not just the creator. (Concurrent edits
+     still serialize via `MatchGameScoreConflict` → 409.)
+   - **It freezes the instant the first result is posted.** `_is_scorable` ⟺
+     "no result row exists yet". Once a proposal stands, the scratchpad is
+     read-only for the rest of the match; corrections seed from
+     `standing_result.games`, **not** from `match_games`.
+2. **A proposed result's scores — an immutable claim.** A JSONB snapshot on
+   `match_results.games`, frozen at propose time. Shape (decode into a typed
+   Pydantic model at read, per "parse, don't validate"):
 
-1. **Working scores** — the scratchpad. **Stays exactly where it is:** relational
-   `match_games` + `match_game_scores` on the `Match`. The score-write endpoints and
-   their optimistic concurrency are **unchanged**. Zero churn on the hot path.
-2. **A posted result's scores** — an immutable claim. Lives on `MatchResult` as a
-   **JSONB snapshot** (`MatchResult.games`), frozen at post time.
+   ```jsonc
+   [{ "game_number": 1, "side_1_points": 11, "side_2_points": 4 },
+    { "game_number": 2, "side_1_points": 11, "side_2_points": 5 }]
+   ```
 
-**Recommended representation of the snapshot:** JSONB, decoded into a typed Pydantic
-model at read (parse-don't-validate, exactly like `rating_state` does — see
-`api/CLAUDE.md` "Type the I/O boundaries"). Shape:
+Because the scratchpad freezes at first post, there is no "re-open and mutate
+the live board" path anymore — the negotiation happens entirely in the
+immutable supersede chain. That is what makes every proposal's `games`
+trustworthy as diff input.
+
+## 6. The two verbs
+
+Keep the existing row-lock + `nowait` semantics and the reason-specific 4xx
+status codes. On any 409, return the current `negotiation` state in the body
+(mirror `MatchGameScoreConflict`) so the client can re-render without a refetch.
+
+### `propose` — `POST /matches/{id}/results`
+
+Body: `{ games: [...], supersedes_result_id?: uuid }`. Covers **first-post**,
+**self-edit**, and **counter/correction** — one endpoint.
+
+1. **Decided-board hard gate.** Reject unless `games` constitute a victor under
+   the match's `best_of` (promote the old `_can_finalize` "decided match" check
+   to a strict precondition). An undecided/still-live board can never become a
+   result → **422**. (A result *means* "this is how the match ended"; there is
+   no such thing as a result for a live match.)
+2. **`supersedes_result_id` is `null` → first-post.** Require **zero** existing
+   results for the match; otherwise **409** with the current negotiation state.
+3. **`supersedes_result_id` is set → self-edit or counter.** Require the
+   referenced row to be the **standing** result (not accepted, not already
+   superseded); otherwise **409** with the negotiation state (the client's token
+   is stale — someone moved first).
+4. Mint a new `match_results` row: snapshot `games`, set `submitted_by_user_id =
+   current_user`, set `supersedes_result_id` from the body. **Do not** copy
+   `accepted_*` — a fresh proposal is unaccepted by construction.
+5. Solo/unrated short-circuit (`not _requires_confirmation`): there is no second
+   party to accept, so a first-post finalizes immediately — stamp the proposal
+   accepted (by the proposer, or leave `accepted_by` null and treat solo as
+   self-accepting; pick one and document), set match `completed`, `_set_side_won`,
+   `_apply_rating_update`. Same as today's solo finalize.
+
+"Self-edit" vs. "counter" is **not** a field the endpoint branches on — both set
+`supersedes_result_id` to the standing row. The only difference is *who* submits
+relative to the chain, which the BFF derives for the viewer (§8). The endpoint
+treats them identically.
+
+### `accept` — `POST /matches/{id}/results/{result_id}/acceptance`
+
+1. **`result_id` in the path is the concurrency token.** It must be the standing
+   result. If it was superseded (someone countered first) or doesn't exist →
+   **409 / 404** with the current negotiation state.
+2. Caller must be a participant on the **opposing** side — the proposing side
+   already consented by proposing. The proposer **cannot accept their own**
+   standing proposal → 4xx.
+3. On success: stamp `accepted_by_user_id = current_user` + `accepted_at = now()`
+   on the standing row, mark the match `completed`, stamp `side.won`, and apply
+   the rating update — **reuse today's confirmation finalize path verbatim**.
+
+There is no separate "confirm". Accept *is* the confirmation, and it's the only
+consent the opposing side ever gives.
+
+### Deleted
+
+`POST /confirmation`, `POST /dispute`, `POST /withdrawal` and every helper that
+served them (`_add_signature_or_409`, `_enforce_confirmable`,
+`_all_sides_responded_confirm`, `disputer_of`, the dispute/superseded `outcome`
+branches, `_signature_views`) are removed. Nothing in the FE calls them after
+the hook collapse (#716), so they delete cleanly.
+
+## 7. BFF — the `negotiation` block
+
+`MatchDetails` and `MatchListRow` **drop** `signatures[]` and
+`disputed_by_user_id` and **gain** one `negotiation` block. Everything in it is
+**viewer-relative** (computed for the current user) so the FE renders without
+any client-side derivation.
 
 ```jsonc
-// MatchResult.games
-[{ "game_number": 1, "side_1_points": 11, "side_2_points": 4 },
- { "game_number": 2, "side_1_points": 11, "side_2_points": 5 }]
+negotiation: {
+  viewer_state: "live" | "awaiting" | "review" | "corrected" | "final",
+  your_turn: boolean,                 // drives the list badge
+  standing_result:                    // the row the viewer can accept/counter; null when live
+    { id: uuid, games: [...], submitted_by: uuid, submitted_at: datetime } | null,
+  prior_result:                       // the viewer's OWN most recent proposal in the chain; the diff baseline
+    { id: uuid, games: [...], submitted_at: datetime } | null,
+  diff:                               // server-computed, viewer-relative; null when there's nothing to compare
+    { game_number: int, old: { side_1_points, side_2_points } | null,
+      new: { side_1_points, side_2_points } }[] | null
+}
 ```
 
-Write-once history is the textbook case for a blob; it avoids standing up a second set
-of game/score tables and keeps the snapshot trivially diffable for #366.
+**`viewer_state`** (the match-detail callout selector):
 
-`POST /results` therefore: validate the payload (`_validate_finalize_games`), write it
-to `MatchResult.games`, **and** keep the working `match_games` in sync with the payload
-so the displayed board equals the posted board (this is what `_commit_canonical_games`
-already does — keep that call; just also snapshot). On dispute, working `match_games`
-stay editable (reopened) while the disputed `MatchResult.games` snapshot preserves the
-rejected board.
+| state       | when                                                                                         |
+|-------------|----------------------------------------------------------------------------------------------|
+| `live`      | no result row exists yet — the shared scratchpad (scoring).                                   |
+| `awaiting`  | the **viewer's own side** submitted the standing result — waiting on the opponent.            |
+| `review`    | the **opponent** submitted the standing result and the viewer has **no** prior proposal in the chain. |
+| `corrected` | the **opponent** submitted the standing result and the viewer **has** a prior proposal in the chain (it's a counter to something the viewer proposed). |
+| `final`     | the standing result is accepted (`accepted_by` set) — the match is completed.                 |
 
-**Rejected alternative — `match_games.result_id`** (tag every game row with its result,
-draft = null): keeps things relational/queryable but pushes the change into the
-score-write path (every PUT must target "the current draft's games") and multiplies game
-rows per posting. More invasive for no benefit the JSONB snapshot doesn't give. Note it
-in the PR description as considered-and-rejected.
+**`your_turn`** → the `Your turn / Waiting / Live / Final` list badge:
+`live` → "Live", `awaiting` → "Waiting", `review` / `corrected` → "Your turn",
+`final` → "Final". (`your_turn = viewer_state ∈ {review, corrected}`.)
 
-**Rejected alternative — the scratchpad *is* a `draft` MatchResult** (games always
-belong to a result): most elegant on paper, most invasive in practice (the entire
-scoring flow now mutates a result and you manage "which result is current" on every
-keystroke). Not worth it.
+**The viewer-relative diff (the load-bearing rule).** The baseline is **the most
+recent proposal in the chain made by the viewer's own side** — *not* the row
+immediately superseded. Walk the chain back from `standing_result` to the
+newest row whose `submitted_by` is on the viewer's side; that's `prior_result`.
+The diff is `prior_result.games` → `standing_result.games`, emitting only
+changed game numbers with old→new points. This **collapses the opponent's
+intermediate self-edits**: the viewer sees "what changed since I last spoke",
+not the opponent's churn. `diff` is `null` when `prior_result` is `null`
+(the viewer has nothing of their own to compare — e.g. `review`).
 
-## 6. Behavior changes, endpoint by endpoint (`api/app/matches.py`)
+Worked cases (chain written oldest→newest; `A`/`B` = who proposed):
 
-Keep the row-lock + `nowait` semantics on `/results`, blocking locks on
-`/confirmation` + `/dispute`, and all the 409/422 reason-specific status codes.
+- **live** — no rows. `standing_result` null, `prior_result` null, `diff` null.
+- **first proposal, opponent's turn** — `[R1·A]`. Viewer **B**: `review`,
+  `prior_result` null, `diff` null (first thing B sees). Viewer **A**:
+  `awaiting`.
+- **self-edit before opponent saw it** — `[R1·A, R2·A]`. Viewer **B**: still
+  `review`, `prior_result` null, `diff` null — B never saw R1, so R2 is just
+  "the proposal". A's churn is collapsed away.
+- **counter** — `[R1·A, R2·B]`. Viewer **A**: `corrected`, `prior_result = R1`,
+  `diff = R1→R2`. Viewer **B**: `awaiting`.
+- **opponent flip-flop then the viewer reads** — `[R1·A, R2·B, R3·B]`. Viewer
+  **A**: `corrected`, `prior_result = R1`, `diff = R1→R3` — collapses B's R2/R3
+  self-edits to a single "since you proposed R1" diff.
+- **final** — standing row accepted. `viewer_state = final` for both;
+  `standing_result` is the accepted row; the FE shows "confirmed" or "agreed
+  after N corrections" (N = chain length − 1).
 
-- **`post_match_result` (/results):**
-  - After `_validate_finalize_games` + `_commit_canonical_games` (keep both), create a
-    `MatchResult(match, submitted_by=current_user, games=<snapshot>, outcome=pending)`.
-  - Replace `_add_signature_or_409(...)` with inserting a `confirm` response on that
-    result (reuse the same unique-violation → 409 mapping).
-  - Solo/unrated (`not _requires_confirmation`): create the result `confirmed`, set match
-    `completed`, `_set_side_won`, `_apply_rating_update` — as today.
-  - **Delete** the `match.disputed_by_user_id = None` line (column is gone).
-  - Notification (`_notify_result_posted`) unchanged.
-- **`confirm_match_result` (/confirmation):** `_enforce_confirmable` (see below) →
-  insert a `confirm` response on the current pending result → if `_all_sides_responded_confirm`
-  then result `confirmed`, match `completed`, `_set_side_won(_posted_decided_side)`,
-  `_apply_rating_update`.
-- **`dispute_match_result` (/dispute):** `_enforce_confirmable` → insert a `dispute`
-  response on the current pending result → result `outcome = disputed`, match `disputed`,
-  reset `side.won = None` + `side.score = 0` (keep). **Drop** `match.signatures.clear()`
-  and `match.disputed_by_user_id = ...`. The disputed result + its responses persist as
-  history.
-- **Score-write endpoints:** unchanged, but their gate changes (see `_is_scorable`).
+Regenerate `openapi.json` here; `schema.d.ts` regen lands in #716.
 
-## 7. Helper changes
+## 8. Migration (in-place flatten, undeployed)
 
-- `_is_scorable`: "no signatures" → **"no pending posted result"** (the latest result,
-  if any, is terminal — `confirmed`/`disputed`/`superseded`). After a dispute the latest
-  result is `disputed`, so the board is scorable again — same outcome as today, derived
-  differently.
-- `_can_confirm` / `_enforce_confirmable`: "signatures exist + caller hasn't signed" →
-  "there is a `pending` result + caller has no response on it." Same 409 reasons.
-- `_all_sides_signed` → `_all_sides_responded_confirm`: every side has ≥1 `confirm`
-  response on the current pending result.
-- `_can_finalize`: "no signatures" → "no pending result" (board not currently posted).
-- `_status_label`: `in_progress` + pending result → "Awaiting confirmation". Same string.
-- `_requires_confirmation`, `_validate_finalize_games`, `_set_side_won`,
-  `_posted_decided_side`, `side_win_counts`, `current_game_number`: unchanged logic; just
-  stop reading `match.signatures`.
-- New small helpers: `latest_result(match) -> MatchResult | None`,
-  `pending_result(match) -> MatchResult | None`, `disputer_of(match) -> uuid | None`
-  (the `dispute` response's user on the latest disputed result), `submitter_of(match)`.
+fortymm is undeployed — **edit the existing migrations in place**, keep revision
+ids + the `down_revision` chain frozen, and wipe + `alembic upgrade head` on a
+throwaway DB to test (the suite also builds via `Base.metadata.create_all`).
 
-## 8. Serialization — keep the BFF contract stable
+- **`match_results` migration:** add `supersedes_result_id` (self-FK,
+  `ON DELETE CASCADE`, nullable, optionally `UNIQUE`), `accepted_by_user_id`
+  (`→ users`, `RESTRICT`, nullable), `accepted_at` (`timestamptz`, nullable).
+  **Drop** the `outcome` column and the `result_outcome` enum type.
+- **Delete the `match_result_responses` migration** (table + `result_response_kind`
+  enum) entirely — the table is gone. Re-point the `down_revision` chain across
+  the removed revision so it stays linear.
+- **`matches` migration:** drop the `disputed_by_user_id` column + its FK.
+- Update `app/models/__init__.py` re-exports (drop `MatchResultResponse` /
+  `ResultResponseKind`; `match_results` discovery unchanged).
+- No data backfill — there is no production data.
 
-This is the phasing lever. `_serialize_details` and the list serializer keep emitting the
-**same `MatchDetails` / `MatchListRow` fields**, now derived from the new model:
+Every `DateTime` column stays `timezone=True` (model **and** migration), per
+`api/CLAUDE.md`.
 
-- `signatures: list[MatchSignatureView]` → derive from the current pending result's
-  `confirm` responses (`user_id`, `created_at`→`signed_at`). FE confirmation-callout
-  unchanged.
-- `disputed_by_user_id` → `disputer_of(match)` (latest disputed result's dispute
-  response). **The #360 `DisputeNotice` FE keeps working with no change**, because the
-  field is still present — it's just derived now instead of stored.
-- `can_confirm` / `can_finalize` / `status_label` / `status` / `can_score` → from the new
-  helpers. Same values.
-- `MatchListRow.attention` / `MatchListFilter` (`live` vs `awaiting_confirmation`) →
-  derive the "has a pending posted result" split from `pending_result(match)` instead of
-  `match.signatures`.
+## 9. Account merge (#714)
 
-Net: **front-end and the generated `schema.d.ts` are unchanged in phase 1** (the
-`MatchDetails` shape is identical). Run `mise run regen-api-types` anyway and confirm a
-**no-op diff** — that's the proof the contract held. New `data`-view fields exposing
-result history are a *follow-up* PR (#366), additive.
-
-> **Decision to make:** whether to add a `matches.current_result_id` FK pointer (fast
-> "the live result" lookup + a clean place to enforce "≤1 pending") or always compute
-> "latest" by ordering `results` by `submitted_at`. Recommendation: add the pointer — it
-> makes the common path a single load and the invariant explicit. If you do, re-point it
-> in `merge_user` is unnecessary (it points at a result, not a user), but eager-load it
-> in the match loaders.
-
-## 9. Migration (pre-deploy: edit in place, wipe, re-run)
-
-fortymm is **undeployed**; per `api/CLAUDE.md` and team convention, do **not** chain an
-"alter" migration — edit the originals in place and obliterate+recreate the DB to test
-(`alembic downgrade base && alembic upgrade head` against a throwaway Postgres; the test
-suite builds via `Base.metadata.create_all`, so also just running it exercises the
-models).
-
-- **Revision `0004` (`..._create_match_tables.py`):** **remove** the
-  `disputed_by_user_id` column + its FK (added for #360). Add the `match_results` table
-  and the `result_outcome` enum here (matches/results are the same domain). Keep revision
-  ids and the `down_revision` chain frozen.
-- **Revision `0007` (`..._create_match_signatures_table.py`):** rename
-  `match_signatures` → `match_result_responses`; swap `match_id→matches` for
-  `result_id→match_results` (CASCADE); add the `kind` column + `result_response_kind`
-  enum; change the unique constraint to `(result_id, user_id)`. Rename the file's
-  descriptive suffix (keep the `0007` prefix), its docstring, and constraint/index names
-  (`uq_match_result_responses_result_id_user_id`, `ix_match_result_responses_result_id`).
-- Update `app/models/__init__.py` re-exports (autogenerate/`create_all` discovery).
-- No data backfill — there's no production data. (If that ever changes: one `MatchResult`
-  per match that has games, `submitted_by` = the existing signer / `created_by`, existing
-  signatures → `confirm` responses, disputed matches → a synthesized `dispute` response.
-  Out of scope now.)
+`merge_user` tombstones the ephemeral user, so every owned FK is repointed by an
+explicit statement (no CASCADE fires). Update `account_merge.py`:
+- Replace the `match_result_responses` repoint with repointing
+  **`match_results.accepted_by_user_id`** from the ephemeral to the surviving
+  user.
+- Keep the existing `match_results.submitted_by_user_id` repoint.
+- **Remove** the `matches.disputed_by_user_id` repoint (column gone).
+Both ownership columns are `RESTRICT`, so missing either leaves a result pointing
+at a tombstoned ghost — the merge tests must cover both.
 
 ## 10. Test plan
 
-`api/tests/test_matches.py` is where most of the change lands. Rewrite these to assert
-the new model while preserving the **observable** behavior (status codes, `MatchDetails`
-fields):
+**Backend (`api/tests/test_matches.py` is the bulk).** Delete the
+confirm/dispute/withdraw tests outright; replace with the negotiation surface:
+- `propose`: first-post requires zero results; undecided board → 422; self-edit
+  chains; counter chains; stale `supersedes_result_id` → 409 carrying
+  negotiation state; concurrent-propose conflict (NOWAIT) → 409.
+- `accept`: accepting the standing result finalizes + applies ratings exactly
+  once; accepting a superseded `result_id` → 409 with negotiation state;
+  proposer can't accept their own standing proposal; wrong-side rejection.
+- `negotiation` BFF: assert `viewer_state` + the **viewer-relative** diff for
+  every §7 worked case (live, review-first, review-after-self-edit-no-diff,
+  corrected-counter, corrected-collapses-flip-flop, final). The
+  baseline-is-the-viewer's-own-last-proposal rule is the thing to pin.
+- scratchpad (#715): either participant edits pre-first-post; concurrent edits
+  409 cleanly; score endpoints reject once a result exists.
+- `test_account_merge.py`: repoint `submitted_by` **and** `accepted_by`; drop
+  the disputer-column test.
 
-- Keep asserting via the API surface where possible (the `MatchDetails` contract is
-  stable), so many assertions don't change at all.
-- Tests that poke `match.signatures` directly or assert `disputed_by_user_id` as a stored
-  column must move to the new model: `test_dispute_clears_signatures_and_moves_to_disputed`,
-  `test_dispute_records_disputer_and_repost_clears_it`,
-  `test_dispute_then_repost_finalizes_with_fresh_signatures`,
-  `test_results_post_commits_canon_and_records_first_signature`,
-  `test_confirmation_finalizes_and_lands_second_signature`,
-  `test_signature_unique_violation_returns_409_not_500`,
-  `test_signer_cannot_confirm_or_dispute_their_own_post`,
-  `test_concurrent_confirm_and_dispute_serialize`,
-  `test_score_endpoints_409_once_result_is_posted`,
-  `test_list_live_filter_excludes_awaiting_confirmation`,
-  `test_list_status_label_reflects_awaiting_confirmation`,
-  `test_results_on_solo_finalizes_with_no_signature_row`,
-  `test_unrated_result_*`, `test_dispute_zeros_side_score_to_match_won_reset`.
-- **New tests the model unlocks:** a re-posted match keeps its prior disputed result as
-  history (snapshot intact); a match accumulates N results across dispute→repost cycles;
-  `outcome` transitions are correct; the disputed result's `games` snapshot ≠ the
-  re-scored working board.
-- `api/tests/test_account_merge.py`: update `_repoint_match_signatures` →
-  responses + `MatchResult.submitted_by_user_id`. Replace
-  `test_merge_repoints_match_disputer` (the column is gone) with a test that re-points a
-  `submitted_by` / response `user_id`.
-- **FE:** the BFF contract is stable, so the quartet tests and the `dispute-notice`
-  quartet should pass **unchanged**. The MSW dev store (`match-store.ts`) must mirror the
-  new derivation: `SeedMatch` gains a `results` list (each with `submitted_by`, `outcome`,
-  `games` snapshot, `responses`), and `finalizeSeed`/`confirmSeed`/`disputeSeed` mutate
-  *results* instead of `signatures`/`disputed_by_user_id`; `projectMatchDetails` derives
-  the same `signatures`/`disputed_by_user_id`/`can_*` fields from them. Remove the
-  `disputed_by_user_id` seed plumbing added for #360. `seedScoreboardStatus`,
-  `listAttentionKind`, `seedStatusLabel` re-derive from results.
+**Frontend.** MSW `match-store.ts` mirrors the new model: a `results` list with
+the supersede chain + `accepted_by`, no signatures/responses; `projectMatchDetails`
+/ `projectListRow` compute the `negotiation` block (the viewer-relative diff
+included) the same way the server does. Hooks collapse to `useProposeResult` +
+`useAcceptResult` (#716); vitest green; `mise run regen-api-types` produces a
+**real** `schema.d.ts` diff and the `openapi-schema` CI job is green on the
+committed file.
 
-**Definition of done:** `cd api` → `ruff check`, `ruff format --check`, `mypy`, `pytest`
-all green; `cd web-client` → `npm run lint`, `npm run build`, `npm run test:run` green;
-`mise run regen-api-types` produces a **no-op** `schema.d.ts` diff (the contract held);
-`alembic upgrade head` clean on a fresh DB. Then verify in the real QA stack exactly like
-#360 was verified (two guest sessions, post→dispute→repost, see history preserved) — see
-`/tmp/dispute-flow.sh` and `docs/designs/` for the harness pattern, or
-`scripts/qa-up.sh`.
+**Definition of done (per landing unit):** `cd api` → `ruff check`,
+`ruff format --check`, `mypy`, `pytest` green; `cd web-client` → `npm run lint`,
+`npm run build`, `npm run test:run` green; `schema.d.ts` committed and matching
+`openapi.json`; `alembic upgrade head` clean on a fresh DB. Then verify in the
+real QA stack with two guest sessions: score a decided board → propose →
+counter → accept, and confirm the `corrected` diff renders the viewer-relative
+change.
 
-## 11. Open decisions for the implementer
+## 11. Decisions for the implementer
 
-1. **`current_result_id` pointer on `matches`** vs. compute-latest-by-`submitted_at`
-   (§8). Recommendation: add the pointer.
-2. **JSONB snapshot** (recommended) vs. relational `match_games.result_id` (§5).
-3. **Drop the unused `signature` blob** when renaming the table, or carry it forward.
-   Recommendation: drop it — it's never read; resurrect via a new migration if real
-   crypto signing ever lands.
-4. **Enum naming:** `result_outcome {pending,confirmed,disputed,superseded}` and
-   `result_response_kind {confirm,dispute}`. Confirm these read well in OpenAPI / the TS
-   client before committing.
-5. **Should `match.status` be derived from the latest result** rather than stored? Bigger
-   change; recommend keeping `match.status` stored and in sync for now (the list/dashboard
-   indexes depend on it).
+1. **No `outcome` enum** (recommended): derive standing/accepted/superseded from
+   the columns. The alternative — a stored status — re-introduces exactly the
+   drift `api/CLAUDE.md` warns against. If a denormalized "is there a standing
+   result" flag is needed for an index, derive it in the loader, don't store it.
+2. **`UNIQUE(supersedes_result_id)`** to make "the chain is linear / at most one
+   standing result" a DB invariant rather than only a procedural one
+   (recommended; mirrors the partial-unique hardening landed for #180).
+3. **Solo/unrated finalize:** stamp `accepted_by = submitter` on the first post,
+   or leave `accepted_by` null and special-case solo as self-accepting. Pick one
+   and document it where `_requires_confirmation` is read.
+4. **Diff shape:** emit `old`/`new` per changed game (this doc's shape) so the FE
+   renders strikethrough-old / emphasized-new with zero logic (#720). `old` is
+   `null` for a game that didn't exist in the baseline.
 
-## 12. Suggested PR sequence
+## 12. Landing units (PR sequence)
 
-1. **PR 1 (this design's core):** new tables/models + endpoint/helper rewrite + stable
-   BFF derivation + MSW store mirror + test migration. No new FE surfaces. `schema.d.ts`
-   no-op. This removes `matches.disputed_by_user_id` while the #360 banner keeps working.
-2. **PR 2+ (follow-ups, separate):** expose result history on the `data` view and build
-   #366 (recovery UI), #359 (disputer ack — now trivially "your dispute was recorded"),
-   #361 (edit/withdraw a pending result — now "withdraw" = void the pending result).
+This epic is a **hard replacement with no shims**, so most tickets are not
+independently green — deleting `MatchResultResponse` + `disputed_by_user_id`
+breaks every consumer until the new endpoints + BFF replace them, and the BFF
+shape change forces a `schema.d.ts` regen that drags the FE build into the same
+merge gate. The realistic green landing points are three:
 
-The #360 banner currently in flight is the stopgap; it stays shipped and unchanged
-through PR 1 (its `disputed_by_user_id` field survives as a *derived* value).
+1. **Docs (#708)** — this rewrite, alone.
+2. **Backend + minimum FE (#709–#715, #712, #714, #716, and the *rewire* slice
+   of #719)** — the flattened schema, both endpoints, the BFF negotiation block,
+   the scratchpad freeze, the merge repoint, the legacy-endpoint deletion, the
+   regenerated `schema.d.ts`, the collapsed hooks, and just enough FE to compile
+   green against the new contract (gut old-field consumers, update MSW). One
+   atomic green PR.
+3. **Rich FE (#717 ‖ #720 → #718 → #719)** — the shared score-entry component,
+   the diff component, the `matches.$matchId.correct` proposal-authoring route,
+   and the full `viewer_state` callouts + list badges. Additive, green throughout.
