@@ -9,8 +9,14 @@ from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.matches import _apply_rating_update, _load_match
 from app.models import (
     League,
+    Match,
+    MatchSettings,
+    MatchSide,
+    MatchSidePlayer,
+    MatchStatus,
     RatingHistory,
     RatingHistorySource,
     RatingStrategy,
@@ -113,6 +119,53 @@ def test_validate_state_rejects_extra_keys(
             {"rating": 1500.0, "rd": 350.0, "volatility": 0.06, "extra": 1},
             rating_strategies["glicko2"],
         )
+
+
+# ----- hook: doubles tripwire ----------------------------------------------
+
+
+async def test_doubles_match_rating_update_raises_not_implemented(
+    db_session: AsyncSession,
+    default_league: League,
+):
+    """A completed, rated, automatic-strategy match with ``team_size != 1``
+    must fail loud rather than silently skip its rating update — the calculator
+    only knows singles. Match creation hardcodes team_size=1 so this is
+    unreachable today; the guard trips the moment doubles support lands without
+    a doubles-aware calculator (issue #183)."""
+    winner = await make_user(db_session, "doubles-winner")
+    loser = await make_user(db_session, "doubles-loser")
+
+    settings = MatchSettings(team_size=2, best_of=1, affects_rating=True)
+    match = Match(
+        match_settings=settings,
+        league=default_league,
+        created_by_user_id=winner.id,
+        status=MatchStatus.completed,
+    )
+    side1 = MatchSide(match=match, side_number=1, won=True, score=1)
+    side1.players.append(MatchSidePlayer(match=match, user=winner))
+    side2 = MatchSide(match=match, side_number=2, won=False, score=0)
+    side2.players.append(MatchSidePlayer(match=match, user=loser))
+    db_session.add(match)
+    await db_session.commit()
+
+    loaded = await _load_match(db_session, match.id)
+    assert loaded is not None
+    with pytest.raises(NotImplementedError, match="doubles"):
+        await _apply_rating_update(db_session, loaded)
+
+    # Nothing was written — the guard fires before any history row.
+    rows = (
+        (
+            await db_session.execute(
+                select(RatingHistory).where(RatingHistory.match_id == match.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert rows == []
 
 
 # ----- hook: end-to-end through the score endpoint -------------------------

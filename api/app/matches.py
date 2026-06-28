@@ -1550,8 +1550,6 @@ async def _apply_rating_update(db: AsyncSession, match: Match) -> None:
         return
     if not match.match_settings.affects_rating:
         return
-    if match.match_settings.team_size != 1:
-        return
 
     league = match.league
     strategy = league.rating_strategy
@@ -1560,6 +1558,20 @@ async def _apply_rating_update(db: AsyncSession, match: Match) -> None:
     calculator = get_calculator(strategy.key)
     if calculator is None:
         return
+
+    # Doubles tripwire. This match would have received an automatic rating
+    # update (completed + rated + automatic strategy + calculator present) but
+    # the calculator only knows ``update_singles``. Fail loud rather than
+    # silently skip — a doubles match that completes without moving ratings is
+    # an easy bug to miss. Unreachable today (match creation hardcodes
+    # team_size=1), this trips the moment doubles support lands without a
+    # doubles-aware calculator. See https://github.com/mightymoose/fortymm/issues/183
+    if match.match_settings.team_size != 1:
+        raise NotImplementedError(
+            "Rating updates for doubles (team_size != 1) are not implemented; "
+            "add a doubles-aware calculator before enabling doubles matches "
+            "(see issue #183)."
+        )
 
     already_applied = (
         await db.execute(
