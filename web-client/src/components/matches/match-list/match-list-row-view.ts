@@ -171,7 +171,12 @@ export function projectMatchListRow(
     id: row.id,
     detailRoute: matchDetailRoute(row.id),
     shortLabel: `M-${shortId(row.id)}`,
-    ariaLabel: `Open match: ${sideLabel(side1)} vs ${sideLabel(side2)}`,
+    // A null or player-less sentinel side 2 both render as "No opponent"; read
+    // that to the screen reader as a clause rather than an awkward "vs No
+    // opponent" (#175).
+    ariaLabel: side2?.players.length
+      ? `Open match: ${sideLabel(side1)} vs ${sideLabel(side2)}`
+      : `Open match: ${sideLabel(side1)} (no opponent)`,
     isLive,
     side1: projectPlayerChip(side1),
     side2: projectPlayerChip(side2),
