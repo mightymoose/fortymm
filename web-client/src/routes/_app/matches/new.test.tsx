@@ -297,6 +297,46 @@ describe('NewMatchPage', () => {
     })
   })
 
+  it('shows the rating on the selected-opponent card for a rated player, matching the picker', async () => {
+    const user = userEvent.setup()
+    server.use(
+      http.get('*/v1/players/recent', () =>
+        HttpResponse.json([
+          { id: 'pl-1', username: 'ada.lovelace', rating: 1662 },
+        ]),
+      ),
+    )
+    renderNewMatch()
+
+    // The recent chip already reads its rating; picking it must carry that
+    // rating through to the selected-opponent card rather than falling back to
+    // the generic "REGISTERED PLAYER" label.
+    await user.click(
+      await screen.findByRole('button', { name: /ada\.lovelace/i }),
+    )
+    const selected = screen.getByRole('button', { name: /^change$/i })
+      .parentElement!
+    expect(selected).toHaveTextContent(/RATING 1662/)
+    expect(selected).not.toHaveTextContent(/REGISTERED PLAYER/)
+  })
+
+  it('falls back to the generic label on the selected card for an unrated player', async () => {
+    const user = userEvent.setup()
+    server.use(
+      http.get('*/v1/players/recent', () =>
+        HttpResponse.json([{ id: 'pl-1', username: 'ada.lovelace' }]),
+      ),
+    )
+    renderNewMatch()
+
+    await user.click(
+      await screen.findByRole('button', { name: /ada\.lovelace/i }),
+    )
+    expect(
+      screen.getByRole('button', { name: /^change$/i }).parentElement!,
+    ).toHaveTextContent(/REGISTERED PLAYER/)
+  })
+
   it('surfaces the API error detail when match creation fails', async () => {
     const user = userEvent.setup()
     server.use(

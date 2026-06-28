@@ -11,6 +11,7 @@ import {
   type Player,
 } from '@/api/matches'
 import { OpponentPicker } from '@/components/matches/opponent-picker'
+import { playerRoleLabel } from '@/components/matches/opponent-picker/player-identity'
 import { UserAvatar } from '@/components/ui/user-avatar'
 import { pageTitle } from '@/lib/page-title'
 import { cn } from '@/lib/utils'
@@ -30,10 +31,11 @@ export const Route = createFileRoute('/_app/matches/new')({
 interface Opponent {
   id: string
   name: string
+  rating?: number | null
 }
 
 function opponentFromPlayer(player: Player): Opponent {
-  return { id: player.id, name: player.username }
+  return { id: player.id, name: player.username, rating: player.rating }
 }
 
 /* ------------------------------------------------------------------ */
@@ -247,7 +249,9 @@ function SelectedOpponent({
       <UserAvatar name={opponent.name} size={48} />
       <div className="info">
         <div className="name">{opponent.name}</div>
-        <div className="rating">REGISTERED PLAYER</div>
+        {/* Same secondary label the picker chips and search rows use: the
+            rating when known, the generic label only for unrated players. */}
+        <div className="rating">{playerRoleLabel(opponent)}</div>
       </div>
       <button type="button" className="change" onClick={onChange}>
         Change
