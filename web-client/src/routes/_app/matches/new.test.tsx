@@ -120,7 +120,7 @@ function DetailsProbe({ matchId }: { matchId: string }) {
 }
 
 describe('NewMatchPage', () => {
-  it('creates a match against a picked opponent and navigates to the dashboard', async () => {
+  it('creates a match against a picked opponent and navigates to the scoring page', async () => {
     const user = userEvent.setup()
     let captured: unknown = null
     server.use(
