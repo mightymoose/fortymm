@@ -50,12 +50,15 @@ test.describe('New match — page', () => {
     }
   })
 
-  test('shows an empty state when there are no other players', async ({
+  test('shows an empty state but keeps search when the caller has no opponents yet (#167)', async ({
     page,
   }) => {
     const nm = await NewMatchPage.open(page, { players: [] })
 
     await expect(nm.emptyPlayers).toBeVisible()
+    // An empty grid no longer means an empty roster — search is the way to
+    // find a first opponent, so it stays reachable.
+    await expect(nm.searchAllButton).toBeVisible()
   })
 })
 

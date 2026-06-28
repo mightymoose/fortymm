@@ -91,9 +91,10 @@ export function matchScoreMutationPrefix(matchId: string) {
 }
 
 /**
- * Opponents to feature in the new-match picker, most-recently-played first
- * (backfilled with other registered players by the API). Errors are thrown so
- * the surrounding error boundary can render a retry affordance.
+ * Opponents the caller has actually played, most-recently-played first, for the
+ * new-match picker. Empty for a caller with no match history — the picker falls
+ * back to search/solo (#167). Errors are thrown so the surrounding error
+ * boundary can render a retry affordance.
  */
 export function useRecentOpponents(options: { enabled?: boolean } = {}) {
   return useQuery({

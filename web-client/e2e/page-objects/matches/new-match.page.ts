@@ -62,7 +62,7 @@ export class NewMatchPage {
     this.selectedOpponentName = page.locator('.nm-selected .name')
     this.summaryTop = page.locator('.nm-summary .top')
     this.summarySub = page.locator('.nm-summary .sub')
-    this.emptyPlayers = page.getByText(/no other players yet/i)
+    this.emptyPlayers = page.getByText(/no opponents yet/i)
     this.recentSkeleton = page.getByRole('status', { name: /loading players/i })
     this.pickerError = page.locator('.nm-picker-error')
     this.pickerRetry = page.getByRole('button', { name: /try again/i })
