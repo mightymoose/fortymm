@@ -5,7 +5,9 @@ class RatingCalculator(Protocol):
     """A strategy that knows how to update player ratings after a singles match.
 
     The hook in ``app.matches`` only calls singles for v1 — doubles is unwired
-    on the match-creation side (team_size hardcoded to 1). Add a doubles method
+    on the match-creation side (team_size hardcoded to 1). A runtime guard in
+    ``_apply_rating_update`` raises ``NotImplementedError`` if a doubles match
+    ever reaches the rating hook (see issue #183); add a doubles method here
     when that opens up.
     """
 
