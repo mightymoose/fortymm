@@ -8,10 +8,19 @@ import {
 } from '@tanstack/react-router'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { http, HttpResponse } from 'msw'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+import { toast } from 'sonner'
 import { server } from '@/mocks/server'
 import { mockSession } from '@/mocks/handlers'
 import { Route as ConfirmEmailRoute } from './confirm-email'
+
+vi.mock('sonner', async () => {
+  const actual = await vi.importActual<typeof import('sonner')>('sonner')
+  return {
+    ...actual,
+    toast: { ...actual.toast, success: vi.fn() },
+  }
+})
 
 interface TestRouterContext {
   queryClient: QueryClient
@@ -109,6 +118,31 @@ describe('/confirm-email token scrubbing (#521)', () => {
     // …with the token scrubbed.
     await waitFor(() => {
       expect(router.state.location.search).toEqual({ token: '' })
+    })
+  })
+})
+
+describe('/confirm-email merged-matches toast (#241)', () => {
+  it('uses singular copy when exactly one match is merged', async () => {
+    // Default `/v1/merge/preview` is a no-merge, so confirm-email auto-confirms;
+    // the confirm response carries the merge summary that drives the toast.
+    server.use(
+      http.post('*/v1/me/email/confirm', () =>
+        HttpResponse.json({
+          ...mockSession,
+          merged: { matches_moved: 1 },
+        }),
+      ),
+    )
+    renderAt('/confirm-email?token=good-token-with-one-merge')
+
+    // confirm-email branches on `moved === 1` for the singular copy, the same
+    // as login.verifying — lock the singular path in here too so a refactor
+    // can't regress it to "We brought your 1 matches with you." (#241).
+    await waitFor(() => {
+      expect(toast.success).toHaveBeenCalledWith(
+        'We brought your 1 match with you.',
+      )
     })
   })
 })

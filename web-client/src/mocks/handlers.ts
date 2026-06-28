@@ -547,13 +547,22 @@ export const handlers = [
     // handlers — anything else succeeds.
     if (body.token === 'expired')
       return detail('That sign-in link is invalid or expired.', 400)
-    mockSession.data.user = {
-      ...mockSession.data.user,
-      email: mockSession.data.user.email ?? 'rita@example.com',
-      confirmed_at:
-        mockSession.data.user.confirmed_at ?? new Date().toISOString(),
-    }
-    return HttpResponse.json(mockSession)
+    // Return a *fresh* confirmed session rather than mutating the shared
+    // `mockSession` singleton in place. The old in-place write leaked
+    // `email`/`confirmed_at` into whichever test ran next in file order, so a
+    // reorder or single-test run could flake (#229).
+    return HttpResponse.json({
+      ...mockSession,
+      data: {
+        ...mockSession.data,
+        user: {
+          ...mockSession.data.user,
+          email: mockSession.data.user.email ?? 'rita@example.com',
+          confirmed_at:
+            mockSession.data.user.confirmed_at ?? new Date().toISOString(),
+        },
+      },
+    })
   }),
   // Default: not a merge, so the verify/confirm screens finalize straight away.
   // Tests that exercise the gate override this with `server.use(...)`.

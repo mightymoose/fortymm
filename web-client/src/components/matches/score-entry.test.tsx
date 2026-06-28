@@ -163,6 +163,78 @@ function inProgressMatch(overrides: Parameters<typeof matchDetails>[0] = {}) {
   })
 }
 
+// Mirror of `participantSides` with the current user on side 2 — the opponent
+// holds side 1. Exercises the `mySideNumber === 1 ? … : …` flip for its side-2
+// branch, which every other fixture leaves untested (#210).
+function participantSidesMeSide2({
+  meWins,
+  oppWins,
+  meWon = null,
+}: {
+  meWins: number
+  oppWins: number
+  meWon?: boolean | null
+}): [MatchDetailsSide, MatchDetailsSide] {
+  return [
+    {
+      side_number: 1,
+      players: [
+        { user_id: 'u-opp', username: 'nguyen.t', is_current_user: false },
+      ],
+      games_won: oppWins,
+      won: meWon === null ? null : !meWon,
+      is_current_user_side: false,
+    },
+    {
+      side_number: 2,
+      players: [
+        { user_id: 'u-me', username: 'rita.kovac', is_current_user: true },
+      ],
+      games_won: meWins,
+      won: meWon,
+      is_current_user_side: true,
+    },
+  ]
+}
+
+// Raw game score from the side-2 perspective: `side_1_points` holds the
+// opponent's points and `side_2_points` holds mine (the inverse of `score`).
+function scoreSide2(
+  id: string,
+  myPoints: number,
+  oppPoints: number,
+): MatchDetailsScore {
+  return {
+    id,
+    side_1_points: oppPoints,
+    side_2_points: myPoints,
+    winner_side_number: myPoints > oppPoints ? 2 : 1,
+    version: 1,
+  }
+}
+
+function inProgressMatchMeSide2(
+  overrides: Parameters<typeof matchDetails>[0] = {},
+) {
+  return matchDetails({
+    id: 'm-1',
+    status: 'in_progress',
+    status_label: 'Live',
+    best_of: 5,
+    games_to_win: 3,
+    affects_rating: true,
+    sides: participantSidesMeSide2({ meWins: 1, oppWins: 1 }),
+    games: [
+      { id: 'g-1', game_number: 1, score: scoreSide2('s-1', 11, 8) },
+      { id: 'g-2', game_number: 2, score: scoreSide2('s-2', 9, 11) },
+    ],
+    current_game: { game_number: 3 },
+    can_score: true,
+    can_finalize: false,
+    ...overrides,
+  })
+}
+
 describe('ScoreEntry — create', () => {
   it('POSTs the score (fire-and-forget) and lands on the next un-scored game', async () => {
     const user = userEvent.setup()
@@ -1934,6 +2006,97 @@ describe('ScoreEntry — conflicts', () => {
       side_1_points: 12,
       side_2_points: 10,
       expected_version: 2,
+    })
+  })
+})
+
+describe('ScoreEntry — current user on side 2 (#210)', () => {
+  it('POSTs the create with my points flipped into side_2_points', async () => {
+    const user = userEvent.setup()
+    let captured: unknown = null
+    server.use(
+      http.get('*/v1/matches/m-1', () =>
+        HttpResponse.json(inProgressMatchMeSide2()),
+      ),
+      http.post(
+        '*/v1/matches/m-1/games/3/scores/new',
+        async ({ request }) => {
+          captured = await request.json()
+          return HttpResponse.json(
+            inProgressMatchMeSide2({
+              sides: participantSidesMeSide2({ meWins: 2, oppWins: 1 }),
+              games: [
+                { id: 'g-1', game_number: 1, score: scoreSide2('s-1', 11, 8) },
+                { id: 'g-2', game_number: 2, score: scoreSide2('s-2', 9, 11) },
+                { id: 'g-3', game_number: 3, score: scoreSide2('s-3', 11, 4) },
+              ],
+              current_game: { game_number: 4 },
+            }),
+          )
+        },
+      ),
+    )
+
+    renderScoreEntry({ kind: 'create', matchId: 'm-1', gameNumber: 3 })
+
+    await screen.findByRole('heading', { name: /enter game 3 score/i })
+    await user.type(
+      screen.getByRole('textbox', { name: 'rita.kovac score' }),
+      '11',
+    )
+    await user.type(
+      screen.getByRole('textbox', { name: 'nguyen.t score' }),
+      '4',
+    )
+    await user.click(screen.getByRole('button', { name: /save game & next/i }))
+
+    await waitFor(() =>
+      expect(screen.getByText('scoring-new m-1 4')).toBeInTheDocument(),
+    )
+    // I'm on side 2, so my 11 lands in `side_2_points` and the opponent's 4 in
+    // `side_1_points` — the inverse of the side-1 fixtures. A dropped flip would
+    // ship `{ side_1_points: 11, side_2_points: 4 }`, recording my win as a loss.
+    expect(captured).toEqual({ side_1_points: 4, side_2_points: 11 })
+  })
+
+  it('pre-populates the edit form with my side-2 score and PUTs it back flipped', async () => {
+    const user = userEvent.setup()
+    let captured: unknown = null
+    server.use(
+      http.get('*/v1/matches/m-1', () =>
+        HttpResponse.json(inProgressMatchMeSide2()),
+      ),
+      http.put('*/v1/matches/m-1/games/1/scores', async ({ request }) => {
+        captured = await request.json()
+        return HttpResponse.json(inProgressMatchMeSide2())
+      }),
+    )
+
+    renderScoreEntry({ kind: 'edit', matchId: 'm-1', gameNumber: 1 })
+
+    const meInput = await screen.findByRole('textbox', {
+      name: 'rita.kovac score',
+    })
+    const oppInput = screen.getByRole('textbox', { name: 'nguyen.t score' })
+    // Game 1 is stored raw as side_1=8 (opp), side_2=11 (me). The form must
+    // show the user-relative values — my 11, not the raw side-1 number.
+    await waitFor(() => expect(meInput).toHaveValue('11'))
+    expect(oppInput).toHaveValue('8')
+
+    await user.clear(meInput)
+    await user.type(meInput, '12')
+    await user.clear(oppInput)
+    await user.type(oppInput, '10')
+    await user.click(screen.getByRole('button', { name: /save changes/i }))
+
+    await waitFor(() =>
+      expect(screen.getByText('scoring-new m-1 3')).toBeInTheDocument(),
+    )
+    // Flipped back on the way out: my 12 → side_2_points, opp 10 → side_1_points.
+    expect(captured).toEqual({
+      side_1_points: 10,
+      side_2_points: 12,
+      expected_version: 1,
     })
   })
 })

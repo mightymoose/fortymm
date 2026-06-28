@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from app.leagues import get_default_league
 from app.models import (
     League,
+    LeagueVisibility,
     Match,
     MatchGame,
     MatchGameScore,
@@ -443,3 +444,101 @@ async def test_recompute_holds_advisory_lock_for_transaction(
     assert acquired is False, (
         "advisory lock should be held by session 1's open transaction"
     )
+
+
+# ----- multi-league cascade -----------------------------------------------
+
+
+async def test_recompute_after_merge_rebuilds_each_league_independently(
+    db_session: AsyncSession,
+    rating_strategies: dict[str, RatingStrategy],
+):
+    """The merged user holds rated matches in two leagues.
+    ``_recompute_after_merge`` loops over *every* league the user has a
+    completed rated match in and rebuilds each one's timeline; the rest of the
+    suite only exercises the single-league path. Drive that loop here — calling
+    ``recompute_league_ratings`` per league exactly as the job does (the job
+    itself opens its own engine via ``get_engine()`` and so can't run against
+    the test container) — and assert no cross-league leakage (#245).
+
+    Fortymm ships a single default league today, so this is forward-looking:
+    the loop already exists and would regress silently without coverage."""
+    strategy = rating_strategies["glicko2"]
+    league_a = await get_default_league(db_session)
+    league_b = League(
+        name="Second League",
+        description="A second glicko-2 league.",
+        visibility=LeagueVisibility.public,
+        is_default=False,
+        rating_strategy_id=strategy.id,
+    )
+    db_session.add(league_b)
+    await db_session.commit()
+    await db_session.refresh(league_b)
+
+    me = await make_user(db_session, "survivor")
+    opp_a = await make_user(db_session, "rival-a")
+    opp_b = await make_user(db_session, "rival-b")
+    await _seed_rating(db_session, league_a, me.id, strategy)
+    await _seed_rating(db_session, league_a, opp_a.id, strategy)
+    await _seed_rating(db_session, league_b, me.id, strategy)
+    await _seed_rating(db_session, league_b, opp_b.id, strategy)
+
+    base = datetime(2026, 5, 1, tzinfo=UTC)
+    # I win in league A and lose in league B — asymmetric, so any cross-league
+    # bleed would visibly corrupt one league's rating.
+    match_a = await _build_completed_match(db_session, league_a, me, opp_a, base)
+    match_b = await _build_completed_match(
+        db_session, league_b, opp_b, me, base + timedelta(hours=1)
+    )
+
+    # Mirror ``_recompute_after_merge``'s per-league loop over every league the
+    # merged user has a completed rated match in.
+    for league_id in (league_a.id, league_b.id):
+        await recompute_league_ratings(db_session, league_id, {me.id})
+    await db_session.commit()
+
+    # My rating moved up in the league I won and down in the one I lost — proof
+    # each league's recompute saw only its own match.
+    rating_a = (
+        await db_session.execute(
+            select(UserLeagueRating).where(
+                UserLeagueRating.user_id == me.id,
+                UserLeagueRating.league_id == league_a.id,
+            )
+        )
+    ).scalar_one()
+    rating_b = (
+        await db_session.execute(
+            select(UserLeagueRating).where(
+                UserLeagueRating.user_id == me.id,
+                UserLeagueRating.league_id == league_b.id,
+            )
+        )
+    ).scalar_one()
+    assert rating_a.rating_value is not None and rating_a.rating_value > 1500.0
+    assert rating_b.rating_value is not None and rating_b.rating_value < 1500.0
+
+    # My history rows stay partitioned by league: each league references only
+    # its own match, never the other's.
+    history = (
+        (
+            await db_session.execute(
+                select(RatingHistory).where(RatingHistory.user_id == me.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    a_match_ids = {
+        r.match_id
+        for r in history
+        if r.league_id == league_a.id and r.match_id is not None
+    }
+    b_match_ids = {
+        r.match_id
+        for r in history
+        if r.league_id == league_b.id and r.match_id is not None
+    }
+    assert a_match_ids == {match_a.id}
+    assert b_match_ids == {match_b.id}
