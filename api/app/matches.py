@@ -1366,8 +1366,9 @@ async def _load_pre_match_rating(
     )
     if not rows:
         return None, []
-    history = list(reversed(rows))
-    return history[-1], history
+    # ``rows`` is DESC, so ``rows[0]`` is already the most-recent value; the
+    # history list is the chronological (ASC) reversal.
+    return rows[0], list(reversed(rows))
 
 
 async def _load_career_before(
