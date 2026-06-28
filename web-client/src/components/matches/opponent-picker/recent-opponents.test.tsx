@@ -26,12 +26,23 @@ describe('RecentOpponents', () => {
     )
     recentOpponentsPage.render()
 
-    // Recent chips always read as "registered player", and the "GR" initials
-    // are not part of the accessible name.
-    const chip = await recentOpponentsPage.findChip(
-      'grace.hopper, REGISTERED PLAYER',
+    // A rated chip reads as its rating, and the "GR" initials are not part of
+    // the accessible name.
+    const chip = await recentOpponentsPage.findChip('grace.hopper, RATING 1500')
+    expect(chip).toHaveAccessibleName('grace.hopper, RATING 1500')
+  })
+
+  it('labels a rated chip by its rating, matching the search row', async () => {
+    recentOpponentsPage.mockRecent(() =>
+      HttpResponse.json([
+        buildPlayer({ id: 'pl-1', username: 'alan.turing', rating: 1662 }),
+      ]),
     )
-    expect(chip).toHaveAccessibleName('grace.hopper, REGISTERED PLAYER')
+    recentOpponentsPage.render()
+
+    expect(
+      await recentOpponentsPage.findChip('alan.turing, RATING 1662'),
+    ).toBeInTheDocument()
   })
 
   it('renders a readable fallback name for a blank username (#101)', async () => {

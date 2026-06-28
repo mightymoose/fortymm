@@ -3,8 +3,9 @@ import { useSession } from '@/api/session'
 import { UserAvatar } from '@/components/ui/user-avatar'
 
 import {
-  REGISTERED_PLAYER_LABEL,
   displayPlayerName,
+  playerAccessibleName,
+  playerRoleLabel,
 } from './player-identity'
 
 export interface RecentOpponentsProps {
@@ -81,14 +82,16 @@ export const RecentOpponents = ({
               key={p.id}
               className="nm-chip"
               // Explicit accessible name so the decorative avatar initials
-              // aren't read as part of the player's name (#99).
-              aria-label={`${displayPlayerName(p.username)}, ${REGISTERED_PLAYER_LABEL}`}
+              // aren't read as part of the player's name (#99). The role label
+              // shows the rating when known and falls back to the generic
+              // label only for unrated players, matching the search row.
+              aria-label={playerAccessibleName(p)}
               onClick={() => onPick(p)}
             >
               <UserAvatar name={p.username} size={32} decorative />
               <div className="body">
                 <div className="n">{displayPlayerName(p.username)}</div>
-                <div className="m">{REGISTERED_PLAYER_LABEL}</div>
+                <div className="m">{playerRoleLabel(p)}</div>
               </div>
             </button>
           ))}
