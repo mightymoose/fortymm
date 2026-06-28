@@ -16,6 +16,7 @@ from app.sessions import (
     CSRF_HEADER_NAME,
     SESSION_COOKIE_NAME,
     SESSION_TOKEN_CONTEXT,
+    _maybe_merge_prior_session,
 )
 from tests._helpers import CSRF_EVENT_HOOKS, make_client, make_raw_client, start_session
 
@@ -523,3 +524,35 @@ async def test_session_reissues_csrf_cookie_when_dropped(raw_client: AsyncClient
     assert any(h.startswith(f"{CSRF_COOKIE_NAME}=") for h in set_cookies)
     assert not any(h.startswith(f"{SESSION_COOKIE_NAME}=") for h in set_cookies)
     assert raw_client.cookies.get(CSRF_COOKIE_NAME)
+
+
+@pytest.mark.parametrize(
+    "cookie",
+    [
+        pytest.param(None, id="absent"),
+        pytest.param("", id="empty"),
+        pytest.param("dGhpcy10b2tlbi13YXMtbmV2ZXItaXNzdWVk", id="unknown"),
+        pytest.param("!!! not base64url $$$", id="malformed"),
+    ],
+)
+async def test_maybe_merge_prior_session_no_merge_on_unresolvable_cookie(
+    db_session: AsyncSession, cookie: str | None
+):
+    """Sign-in must proceed without a merge — and crucially without raising —
+    when the browser's session cookie doesn't resolve to a live guest: absent,
+    malformed, or a token that was never issued (`_find_session_user` returns
+    None). `_maybe_merge_prior_session` is otherwise only exercised indirectly
+    via the login integration tests; lock the contract in directly so a future
+    change to `_find_session_user` can't start surfacing 500s on sign-in (#242).
+    """
+    target = User(
+        username="rita.kovac",
+        email="rita@example.com",
+        confirmed_at=datetime.now(UTC),
+    )
+    db_session.add(target)
+    await db_session.commit()
+    await db_session.refresh(target)
+
+    merged = await _maybe_merge_prior_session(db_session, cookie, target)
+    assert merged is None

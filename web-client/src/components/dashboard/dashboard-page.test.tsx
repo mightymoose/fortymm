@@ -17,6 +17,7 @@ import {
   dashboardRating,
   dashboardRecentResult,
   dashboardResponse,
+  sessionResponse,
 } from '@/test/factories'
 import { GUEST_PERSIST_DISMISS_KEY } from './guest-persist-banner'
 import { DashboardPage } from './dashboard-page'
@@ -128,7 +129,16 @@ describe('DashboardPage', () => {
   })
 
   it('greets the signed-in user by their username', async () => {
+    // Stub the session explicitly rather than leaning on the shared mutable
+    // `mockSession` default — handlers like `PATCH /v1/me` mutate that
+    // singleton in place, so a sibling test's leak could otherwise flip the
+    // expected username under a reorder (#288).
     server.use(
+      http.get('*/v1/session', () =>
+        HttpResponse.json(
+          sessionResponse({ user: { username: 'rita.kovac' } }),
+        ),
+      ),
       http.get('*/v1/dashboard', () =>
         HttpResponse.json(dashboardResponse()),
       ),

@@ -302,8 +302,11 @@ describe('/login/verifying flow', () => {
     expect(
       await screen.findByRole('heading', { name: /welcome back/i }),
     ).toBeInTheDocument()
-    // The session query data should now reflect a confirmed account.
-    expect(mockSession.data.user.email).toBeTruthy()
+    // The consumed session (written into the query cache) reflects a confirmed
+    // account — the success receipt shows its email. Asserting on the rendered
+    // output instead of the shared `mockSession` singleton keeps this test from
+    // depending on a handler mutating module state (#229).
+    expect(await screen.findByText('rita@example.com')).toBeInTheDocument()
   })
 
   it('routes to ?error=expired when the API rejects the token', async () => {
@@ -359,6 +362,26 @@ describe('/login/verifying flow', () => {
     await waitFor(() => {
       expect(toast.success).toHaveBeenCalledWith(
         'We brought your 3 matches with you.',
+      )
+    })
+  })
+
+  it('uses singular copy when exactly one match is merged', async () => {
+    server.use(
+      http.post('*/v1/login/consume', () =>
+        HttpResponse.json({
+          ...mockSession,
+          merged: { matches_moved: 1 },
+        }),
+      ),
+    )
+    renderAt('/login/verifying?token=good-token-with-one-merge')
+
+    // Lock in the singular branch so a future refactor can't regress this to
+    // the ungrammatical "We brought your 1 matches with you." (#241).
+    await waitFor(() => {
+      expect(toast.success).toHaveBeenCalledWith(
+        'We brought your 1 match with you.',
       )
     })
   })

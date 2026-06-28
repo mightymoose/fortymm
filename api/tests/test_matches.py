@@ -1973,6 +1973,37 @@ async def test_details_recent_form_excludes_self_from_career_count(
     assert opp_form["rating_history"] == [1500.0]
 
 
+async def test_details_career_count_excludes_only_the_viewed_match(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """Viewing a *completed* match counts earlier matches as priors while
+    excluding the match being viewed. The single-match sibling test above
+    passes even if the ``Match.id != current_match_id`` self-exclusion guard
+    were dropped — with two matches between the same pair, only this one bites
+    (#198): the first counts, the current is excluded."""
+    me = await start_session(api_client, db_session)
+    async with opponent_session(db_session, "career-guard-opp") as (
+        opp_client,
+        opp,
+    ):
+        await _play_match_to_completion(
+            api_client, opp_client, opp.id, best_of=3, side_1_wins=True
+        )
+        second = await _play_match_to_completion(
+            api_client, opp_client, opp.id, best_of=3, side_1_wins=True
+        )
+
+    detail = (await api_client.get(f"/v1/matches/{second['id']}")).json()
+    forms = {f["user_id"]: f for f in detail["recent_form"]}
+    # Exactly one prior counts for each player — the first match — and the
+    # current (second) match excludes itself.
+    for f in forms.values():
+        assert f["career_matches_before"] == 1
+    # I won the first match (side 1); the opponent lost it.
+    assert forms[str(me.id)]["career_wins_before"] == 1
+    assert forms[str(opp.id)]["career_wins_before"] == 0
+
+
 async def test_list_matches_csv_export(
     api_client: AsyncClient, db_session: AsyncSession
 ):

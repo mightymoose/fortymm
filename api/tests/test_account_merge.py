@@ -202,6 +202,81 @@ async def test_merge_tombstones_ephemeral_user_keeping_session_token(
     assert [t.context for t in leftover] == [SESSION_TOKEN_CONTEXT]
 
 
+# ----- atomicity ----------------------------------------------------------
+
+
+async def test_merge_rolls_back_on_intra_transaction_failure(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+):
+    """``merge_user`` runs inside the caller's transaction and never commits, so
+    a failure partway through must leave *nothing* applied once the caller
+    unwinds: the ephemeral user stays live (not tombstoned) and its match stays
+    owned by it. The other merge tests only assert the committed happy path —
+    this locks in the atomicity guarantee (#240). It bites against any
+    regression that slips a commit into the middle of the merge."""
+    ephemeral = await _make_ephemeral(db_session, "drifting-grouse")
+    verified = await _make_verified(db_session, "rita@example.com")
+    opponent = await _make_ephemeral(db_session, "spinning-otter")
+    match = await _record_match(db_session, ephemeral, ephemeral, opponent)
+    # Capture ids up front: the rollback below expires every ORM instance, after
+    # which even reading `.id` would emit a lazy load outside the async loop.
+    ephemeral_id = ephemeral.id
+    verified_id = verified.id
+    opponent_id = opponent.id
+    match_id = match.id
+
+    class _MergeInterrupted(Exception):
+        pass
+
+    # Detonate at the final tombstone step — `datetime.now(UTC)` in the closing
+    # `update(User)` — *after* the match ownership has already been re-pointed
+    # earlier in the same transaction.
+    class _ExplodingDatetime:
+        @staticmethod
+        def now(tz: object = None) -> datetime:
+            raise _MergeInterrupted("merge interrupted mid-transaction")
+
+    monkeypatch.setattr("app.account_merge.datetime", _ExplodingDatetime)
+
+    with pytest.raises(_MergeInterrupted):
+        await merge_user(db_session, from_user_id=ephemeral_id, to_user_id=verified_id)
+    # The caller unwinds the failed request transaction.
+    await db_session.rollback()
+
+    # Ephemeral user is still live — not tombstoned. Select the columns directly
+    # rather than the ORM object: after the rollback the identity-map instance is
+    # expired, so attribute access would emit a lazy load outside the async loop.
+    tombstone = (
+        await db_session.execute(
+            select(User.merged_into_user_id, User.merged_at).where(
+                User.id == ephemeral_id
+            )
+        )
+    ).one()
+    assert tombstone.merged_into_user_id is None
+    assert tombstone.merged_at is None
+
+    # Match ownership and the side player are untouched.
+    creator_id = (
+        await db_session.execute(
+            select(Match.created_by_user_id).where(Match.id == match_id)
+        )
+    ).scalar_one()
+    assert creator_id == ephemeral_id
+    player_ids = set(
+        (
+            await db_session.execute(
+                select(MatchSidePlayer.user_id).where(
+                    MatchSidePlayer.match_id == match_id
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert player_ids == {ephemeral_id, opponent_id}
+
+
 async def test_merge_moves_league_membership_when_target_has_none(
     db_session: AsyncSession,
 ):
