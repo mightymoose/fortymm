@@ -11,6 +11,10 @@ const scoped = (container: Container) => ({
   queryTable() {
     return container.queryByRole('table')
   },
+  /** The results table resolved by its accessible name, or null if unnamed. */
+  queryTableByName(name: string | RegExp) {
+    return container.queryByRole('table', { name })
+  },
   /** The "No completed matches yet." empty state, or null when rows exist. */
   queryEmptyState() {
     return container.queryByText('No completed matches yet.')

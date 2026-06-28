@@ -10,6 +10,14 @@ describe('RecentResultsCard', () => {
     expect(recentResultsCardPage.queryTable()).toBeNull()
   })
 
+  it('names the table after its "Recent matches" label for screen readers (#127)', () => {
+    recentResultsCardPage.render()
+
+    expect(
+      recentResultsCardPage.queryTableByName('Recent matches'),
+    ).toBeInTheDocument()
+  })
+
   it('renders a row per result with the opponent and game score', () => {
     recentResultsCardPage.render()
 
