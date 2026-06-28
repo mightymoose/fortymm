@@ -46,7 +46,6 @@ type NavSection = {
 
 const NAV_SECTIONS: NavSection[] = [
   {
-    label: 'Play',
     items: [
       {
         label: 'Dashboard',
