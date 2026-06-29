@@ -31,6 +31,13 @@ const scoped = (container: Container) => ({
   queryAcceptButton() {
     return container.queryByRole("button", { name: /accept/i });
   },
+  /** The "Reload" CTA that replaces Accept after a stale-result 409 (#726). */
+  getReloadButton() {
+    return container.getByRole("button", { name: /reload/i });
+  },
+  queryReloadButton() {
+    return container.queryByRole("button", { name: /reload/i });
+  },
   /** The "Suggest correction" link on the review variant. */
   querySuggestCorrectionLink() {
     return container.queryByTestId("match-confirm-callout-correct");

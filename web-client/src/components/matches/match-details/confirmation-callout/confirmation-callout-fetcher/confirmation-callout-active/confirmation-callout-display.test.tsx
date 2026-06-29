@@ -85,6 +85,36 @@ describe("ConfirmationCalloutDisplay", () => {
         "Match already finalized",
       );
     });
+
+    it("swaps Accept for a reload prompt when the result moved on (#726)", async () => {
+      const onReload = vi.fn();
+      confirmationCalloutDisplayPage.render({ staleConflict: true, onReload });
+
+      await waitFor(() => confirmationCalloutDisplayPage.getCallout());
+      // The stale-result Accept is gone — finalizing an unseen result is the bug.
+      expect(
+        confirmationCalloutDisplayPage.queryAcceptButton(),
+      ).not.toBeInTheDocument();
+      expect(confirmationCalloutDisplayPage.queryError()).toHaveTextContent(
+        /this result changed — reload/i,
+      );
+      await userEvent.click(confirmationCalloutDisplayPage.getReloadButton());
+      expect(onReload).toHaveBeenCalledTimes(1);
+    });
+
+    it("hides the raw error message once a 409 is treated as a stale conflict", async () => {
+      // The active wrapper nulls `errorMessage` on a 409, but assert the display
+      // prefers the reload copy even if both were somehow set.
+      confirmationCalloutDisplayPage.render({
+        staleConflict: true,
+        errorMessage: "Conflict",
+      });
+
+      await waitFor(() => confirmationCalloutDisplayPage.getCallout());
+      expect(confirmationCalloutDisplayPage.queryError()).not.toHaveTextContent(
+        "Conflict",
+      );
+    });
   });
 
   describe("corrected variant", () => {
@@ -104,9 +134,34 @@ describe("ConfirmationCalloutDisplay", () => {
       expect(diff).toHaveTextContent("11–9");
       // Accept stays, plus a "Counter" link into the correction route.
       expect(confirmationCalloutDisplayPage.getAcceptButton()).toBeEnabled();
+      expect(confirmationCalloutDisplayPage.queryCounterLink()).toHaveAttribute(
+        "href",
+        correctHref("m-1"),
+      );
+    });
+
+    it("swaps Accept for a reload prompt on a stale conflict, keeping Counter (#726)", async () => {
+      confirmationCalloutDisplayPage.render({
+        view: buildCorrectedConfirmationView(),
+        staleConflict: true,
+      });
+
+      const callout = await waitFor(() =>
+        confirmationCalloutDisplayPage.getCallout(),
+      );
+      expect(
+        confirmationCalloutDisplayPage.queryAcceptButton(),
+      ).not.toBeInTheDocument();
+      expect(
+        confirmationCalloutDisplayPage.queryReloadButton(),
+      ).toBeInTheDocument();
+      // (The diff itself is a shadcn Alert, so assert the copy via the callout
+      // text rather than a role=alert query that would match both.)
+      expect(callout).toHaveTextContent(/this result changed — reload/i);
+      // Countering is still available — the diff just needs a fresh baseline.
       expect(
         confirmationCalloutDisplayPage.queryCounterLink(),
-      ).toHaveAttribute("href", correctHref("m-1"));
+      ).toBeInTheDocument();
     });
   });
 
@@ -124,9 +179,10 @@ describe("ConfirmationCalloutDisplay", () => {
       expect(
         confirmationCalloutDisplayPage.queryAcceptButton(),
       ).not.toBeInTheDocument();
-      expect(
-        confirmationCalloutDisplayPage.queryEditLink(),
-      ).toHaveAttribute("href", correctHref("m-1"));
+      expect(confirmationCalloutDisplayPage.queryEditLink()).toHaveAttribute(
+        "href",
+        correctHref("m-1"),
+      );
     });
   });
 

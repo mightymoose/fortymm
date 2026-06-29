@@ -1,8 +1,10 @@
 import { useRef } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 
 import { useAcceptResult } from "@/api/matches";
 import { ApiError } from "@/api/client";
 
+import { matchDetailsQueryKey } from "../../match-details-query";
 import { ConfirmationCalloutDisplay } from "./confirmation-callout-active/confirmation-callout-display";
 import type { ConfirmationCalloutView } from "./confirmation-callout-query";
 
@@ -27,9 +29,15 @@ export function ConfirmationCalloutActive({
   view,
   matchId,
 }: ConfirmationCalloutActiveProps) {
+  const queryClient = useQueryClient();
   const acceptMutation = useAcceptResult(matchId);
   const error =
     acceptMutation.error instanceof ApiError ? acceptMutation.error : null;
+  // A 409 means the standing result moved on between render and click — the
+  // opponent posted a correction the viewer never re-reviewed (#726). Don't
+  // silently retarget the live result; surface the correction-path "reload to
+  // re-review" prompt so accepting stays a conscious act on a seen score.
+  const staleConflict = error?.status === 409;
   // Synchronous double-submit guard. `disabled={pending}` only takes effect on
   // the next render, so a fast double-click lands a second tap before React
   // commits the disable and fires a duplicate POST that 409s. Cleared on
@@ -42,7 +50,19 @@ export function ConfirmationCalloutActive({
       view={view}
       matchId={matchId}
       acceptPending={acceptMutation.isPending}
-      errorMessage={error ? (error.detail ?? error.message) : null}
+      staleConflict={staleConflict}
+      // A 409 has dedicated reload copy + button; only surface other failures
+      // as the raw inline message.
+      errorMessage={
+        error && !staleConflict ? (error.detail ?? error.message) : null
+      }
+      onReload={() => {
+        acceptMutation.reset();
+        inFlightRef.current = false;
+        void queryClient.invalidateQueries({
+          queryKey: matchDetailsQueryKey(matchId),
+        });
+      }}
       onAccept={() => {
         if (!hasResultId(view)) return;
         if (inFlightRef.current) return;
