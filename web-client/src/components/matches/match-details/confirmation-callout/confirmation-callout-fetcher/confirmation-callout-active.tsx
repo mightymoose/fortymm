@@ -11,10 +11,18 @@ export interface ConfirmationCalloutActiveProps {
   matchId: string;
 }
 
+/** True for the viewer-must-act states that carry an acceptance token. */
+function hasResultId(
+  view: ConfirmationCalloutView,
+): view is Extract<ConfirmationCalloutView, { resultId: string }> {
+  return view.kind === "review" || view.kind === "corrected";
+}
+
 /** Wires the accept mutation onto the pure display. The standing result's id is
  * the concurrency token `POST .../acceptance` takes; API failures stay visible
  * inline (without throwOnError a 409 — the proposal moved on, double-click,
- * etc. — would otherwise vanish and the button would appear inert). */
+ * etc. — would otherwise vanish and the button would appear inert). The passive
+ * (`awaiting`/`final`) variants press nothing, so the mutation simply sits idle. */
 export function ConfirmationCalloutActive({
   view,
   matchId,
@@ -32,10 +40,11 @@ export function ConfirmationCalloutActive({
   return (
     <ConfirmationCalloutDisplay
       view={view}
+      matchId={matchId}
       acceptPending={acceptMutation.isPending}
       errorMessage={error ? (error.detail ?? error.message) : null}
       onAccept={() => {
-        if (view.kind !== "actionable") return;
+        if (!hasResultId(view)) return;
         if (inFlightRef.current) return;
         inFlightRef.current = true;
         acceptMutation.reset();

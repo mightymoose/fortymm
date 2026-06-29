@@ -1,45 +1,88 @@
+import type { components } from "@/api/schema";
+
 import {
   matchDetailsQuery,
   type MatchDetailsResult,
 } from "../../match-details-query";
 
-/** The accept state behind the confirmation callout. Null from the query means
- * nothing renders.
+type NegotiationDiffEntry = components["schemas"]["NegotiationDiffEntry"];
+
+/** The result-negotiation state behind the match-detail callout, keyed off
+ * `negotiation.viewer_state`. Null from the query means there's nothing to show
+ * for this viewer (a live match with no proposal in play).
  *
- * - `actionable`: the viewer must act on the opponent's standing proposal
- *   (negotiation states `review`/`corrected`) — surfaces the Accept CTA. Carries
- *   the standing result's id, the concurrency token `POST .../acceptance` needs.
- * - `awaiting`: the viewer's own side proposed and we're waiting on the other
- *   side to accept (negotiation state `awaiting`) — a passive notice. */
+ * - `review`: the opponent posted the first result; the viewer must Accept or
+ *   open the correction route ("Suggest correction"). Carries the standing
+ *   result id (the acceptance token) and the rated stakes.
+ * - `corrected`: the opponent countered the viewer's own prior proposal; the
+ *   viewer must Accept the correction or counter back. Adds the server-computed
+ *   `diff` so the callout can highlight what changed.
+ * - `awaiting`: the viewer's own side proposed; we wait on the opponent. A
+ *   passive notice plus an "Edit result" action (a self-edit that supersedes
+ *   the viewer's standing proposal).
+ * - `final`: the match is settled. `afterCorrections` is true when there was
+ *   back-and-forth (the viewer had a prior proposal before the agreed one). */
 export type ConfirmationCalloutView =
-  | { kind: "actionable"; resultId: string }
+  | { kind: "review"; resultId: string; rated: boolean }
+  | {
+      kind: "corrected";
+      resultId: string;
+      rated: boolean;
+      diff: NegotiationDiffEntry[];
+    }
   | {
       kind: "awaiting";
       /** Opponent we're waiting on, for the passive label. */
       pendingSignerName: string;
-    };
+    }
+  | { kind: "final"; afterCorrections: boolean };
 
 const selectConfirmationCallout = (
   match: MatchDetailsResult,
 ): ConfirmationCalloutView | null => {
   const { negotiation } = match.unmigrated;
+  const rated = match.unmigrated.affects_rating;
 
-  // The viewer must act on the opponent's standing proposal.
-  if (negotiation.your_turn && negotiation.standing_result) {
-    return { kind: "actionable", resultId: negotiation.standing_result.id };
+  switch (negotiation.viewer_state) {
+    case "review": {
+      // The opponent posted the first result; the viewer must act.
+      if (!negotiation.standing_result) return null;
+      return { kind: "review", resultId: negotiation.standing_result.id, rated };
+    }
+
+    case "corrected": {
+      // The opponent countered the viewer's own prior proposal; show the diff.
+      if (!negotiation.standing_result) return null;
+      return {
+        kind: "corrected",
+        resultId: negotiation.standing_result.id,
+        rated,
+        diff: negotiation.diff ?? [],
+      };
+    }
+
+    case "awaiting": {
+      // The viewer's own side proposed; surface a passive "awaiting" notice.
+      const otherSide = match.unmigrated.sides.find(
+        (s) => !s.is_current_user_side,
+      );
+      const pendingSignerName =
+        otherSide?.players[0]?.username ?? "your opponent";
+      return { kind: "awaiting", pendingSignerName };
+    }
+
+    case "final":
+      // A non-null `prior_result` means the viewer had proposed before the
+      // agreed result, i.e. the match went through at least one correction.
+      return {
+        kind: "final",
+        afterCorrections: negotiation.prior_result !== null,
+      };
+
+    default:
+      // `live` — no proposal in play, nothing to render.
+      return null;
   }
-
-  // The viewer's own side proposed; surface a passive "awaiting" notice.
-  if (negotiation.viewer_state === "awaiting") {
-    const otherSide = match.unmigrated.sides.find(
-      (s) => !s.is_current_user_side,
-    );
-    const pendingSignerName =
-      otherSide?.players[0]?.username ?? "your opponent";
-    return { kind: "awaiting", pendingSignerName };
-  }
-
-  return null;
 };
 
 export const confirmationCalloutQuery = (matchId: string) => ({

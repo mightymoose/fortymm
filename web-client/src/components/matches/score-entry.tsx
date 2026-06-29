@@ -6,13 +6,7 @@ import {
   useNavigate,
 } from '@tanstack/react-router'
 import { onlineManager, useQueryClient } from '@tanstack/react-query'
-import {
-  Check,
-  Loader2,
-  TriangleAlert,
-  User as UserIcon,
-  X as XIcon,
-} from 'lucide-react'
+import { Check, Loader2, TriangleAlert, X as XIcon } from 'lucide-react'
 import { ApiError } from '@/api/client'
 import {
   forgetScoreSaves,
@@ -42,9 +36,14 @@ import {
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { cn, initialsOf } from '@/lib/utils'
-import { decidedSide, illegalScoreReason } from '@/lib/scoring'
+import { decidedSide } from '@/lib/scoring'
 import { isScoreConflict, useGameSaveState } from './score-saves'
 import { SaveBanner } from './save-banner'
+import { ScorePad } from './score-pad'
+import {
+  isAcceptableScoreInput,
+  validateGameScore,
+} from './score-pad/validate-game-score'
 
 /** The non-null persisted score on a game. */
 type PersistedScore = NonNullable<MatchDetails['games'][number]['score']>
@@ -271,48 +270,33 @@ function ScoreEntryInner({
   const computeDirty = (nextMe: string, nextOpp: string) =>
     digitsOnly(nextMe) !== baselineMe || digitsOnly(nextOpp) !== baselineOpp
 
-  // Take the typed value verbatim — no stripping, no truncating. We only block
-  // characters that can't begin a score (letters, sign) so non-numeric input
-  // stays rejected as before; digits and a "." are kept. Earlier we stripped
-  // non-digits and capped at 3, but that quietly turned "11.5" into "115" and
-  // "999999" into "999" — plausible-looking scores the user never typed (#624).
-  // Keeping the raw text lets a malformed entry stay visible and get flagged
-  // inline (see `formatError`) instead of masquerading as a real score.
-  const isAcceptable = (value: string) => !/[^\d.]/.test(value)
+  // Take the typed value verbatim — no stripping, no truncating (#624); the
+  // shared `isAcceptableScoreInput` only blocks characters that can't begin a
+  // score (letters, sign). Keeping the raw text lets a malformed entry stay
+  // visible and get flagged inline instead of masquerading as a real score.
   const onMeChange = (value: string) => {
-    if (!isAcceptable(value)) return
+    if (!isAcceptableScoreInput(value)) return
     setMeTyped(value)
     setIsDirty(computeDirty(value, opp))
     if (finalizeMutation.error) finalizeMutation.reset()
   }
   const onOppChange = (value: string) => {
-    if (!isAcceptable(value)) return
+    if (!isAcceptableScoreInput(value)) return
     setOppTyped(value)
     setIsDirty(computeDirty(me, value))
     if (finalizeMutation.error) finalizeMutation.reset()
   }
 
-  const bothFilled = me !== '' && opp !== ''
-  // Exactly one side filled: the Save button is disabled, so without a word
-  // it's a dead end with no explanation (#387). Tell the user both scores are
-  // required and flag the still-empty field. Only after the user has started
-  // typing — a wholly-empty pair is the untouched initial state, not an error.
-  const oneSideFilled = (me !== '') !== (opp !== '')
-  // A filled side is well-formed only as 1–3 digits. Since the inputs are no
-  // longer coerced (#624), a decimal ("11.5") or an over-long run ("999999")
-  // reaches here verbatim — caught as a format error rather than silently
-  // becoming "115"/"999". Flagged on its own, before the both-filled scoring
-  // check, so it surfaces the moment the bad side is typed.
-  const meMalformed = me !== '' && !/^\d{1,3}$/.test(me)
-  const oppMalformed = opp !== '' && !/^\d{1,3}$/.test(opp)
-  const formatError =
-    meMalformed || oppMalformed
-      ? 'Enter each score as a whole number from 0 to 999.'
-      : null
-  const localScoreError =
-    formatError ??
-    (bothFilled ? illegalScoreReason(Number(me), Number(opp)) : null)
-  const inputsValid = bothFilled && localScoreError === null
+  // The shared single-game verdict: 1–3-digit well-formedness, the "exactly one
+  // side filled" hint (#387), and the `illegalScoreReason` table-tennis rule.
+  // Now shared with the propose-a-result correction surface via `score-pad`.
+  const validation = validateGameScore(me, opp)
+  const oneSideFilled = validation.oneSideFilled
+  const meMalformed = validation.meMalformed
+  const oppMalformed = validation.oppMalformed
+  const formatError = meMalformed || oppMalformed ? validation.error : null
+  const localScoreError = validation.error
+  const inputsValid = validation.valid
 
   // Build the hypothetical full-match games list including the current input,
   // so we can ask the scoring lib whether saving this entry would make the
@@ -618,86 +602,48 @@ function ScoreEntryInner({
           />
         )}
 
-        <div className="single-entry">
-          <ScoreSide
-            side="me"
-            name={meName}
-            initials={meInitials}
-            value={me}
-            inputRef={meRef}
-            autoFocus
-            disabled={inputsLocked}
-            invalid={meInvalid}
-            onChange={onMeChange}
-            onKeyDown={(e) => handleKey(e, 'me')}
-          />
-
-          <div className="se-mid">
-            <div className="se-vs">VS</div>
-            {/* Single-game matches: the games tally is always 0–0 until the one
-                game finalizes, so it's noise — drop it (#bridge-cse). */}
-            {bestOf > 1 && (
-              <div className="se-games">
-                {meWins} – {oppWins}
-              </div>
-            )}
-          </div>
-
-          <ScoreSide
-            side="opp"
-            name={oppName}
-            initials={oppHasPlayer ? initialsOf(oppName) : null}
-            value={opp}
-            inputRef={oppRef}
-            disabled={inputsLocked}
-            invalid={oppInvalid}
-            onChange={onOppChange}
-            onKeyDown={(e) => handleKey(e, 'opp')}
-          />
-        </div>
-
-        {showScoreError && (
-          <p role="alert" className="mt-1.5 text-xs text-[color:var(--loss)]">
-            {localScoreError ??
-              finalizeApiError?.detail ??
-              finalizeApiError?.message}
-          </p>
-        )}
-        {showBothRequired && (
-          <p role="alert" className="mt-1.5 text-xs text-[color:var(--loss)]">
-            Enter both scores to save this game.
-          </p>
-        )}
-
-        <div className="single-actions">
-          <div className="result-line subtle">{subtitle}</div>
-          <div className="action-btns">
-            {isEdit && (
-              <button
-                type="button"
-                className="btn ghost"
-                onClick={onClear}
-                disabled={inputsLocked || deleteMutation.isPending}
-              >
-                Clear
-              </button>
-            )}
-            <button
-              type="button"
-              className="btn primary"
-              disabled={!inputsValid || inputsLocked}
-              // Don't let tapping Save blur the active input: on mobile that
-              // dismisses the soft keyboard before the synchronous navigation
-              // can hand focus to the next game's input, closing the keyboard
-              // between games (#567). Preventing the mousedown default keeps
-              // focus on the input through the tap; the click still fires.
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={onSubmit}
-            >
-              {submitLabel}
-            </button>
-          </div>
-        </div>
+        <ScorePad
+          me={{
+            name: meName,
+            initials: meInitials,
+            value: me,
+            inputRef: meRef,
+            autoFocus: true,
+            invalid: meInvalid,
+            onChange: onMeChange,
+            onKeyDown: (e) => handleKey(e, 'me'),
+          }}
+          opp={{
+            name: oppName,
+            initials: oppHasPlayer ? initialsOf(oppName) : null,
+            value: opp,
+            inputRef: oppRef,
+            invalid: oppInvalid,
+            onChange: onOppChange,
+            onKeyDown: (e) => handleKey(e, 'opp'),
+          }}
+          gamesTally={bestOf > 1 ? `${meWins} – ${oppWins}` : null}
+          // The scratchpad surfaces both the local validation error and a
+          // finalize API rejection (409/500 too) here; `showScoreError` gates
+          // when any of them shows, with the finalize detail/message as the
+          // fallback copy when there's no local validation error.
+          scoreError={
+            showScoreError
+              ? (localScoreError ??
+                finalizeApiError?.detail ??
+                finalizeApiError?.message ??
+                null)
+              : null
+          }
+          showBothRequired={showBothRequired}
+          inputsLocked={inputsLocked}
+          subtitle={subtitle}
+          submitLabel={submitLabel}
+          canSubmit={inputsValid}
+          onSubmit={onSubmit}
+          onClear={isEdit ? onClear : undefined}
+          clearDisabled={deleteMutation.isPending}
+        />
 
         <Scoreline
           data={data}
@@ -861,69 +807,6 @@ function ScoreConflictNotice({
         </span>
       </AlertDescription>
     </Alert>
-  )
-}
-
-function ScoreSide({
-  side,
-  name,
-  initials,
-  value,
-  inputRef,
-  autoFocus,
-  disabled,
-  invalid,
-  onChange,
-  onKeyDown,
-}: {
-  side: 'me' | 'opp'
-  name: string
-  // `null` means there's no player on this side — render the ghost avatar
-  // (dashed circle + person icon) instead of a contrived monogram.
-  initials: string | null
-  value: string
-  inputRef: React.RefObject<HTMLInputElement | null>
-  autoFocus?: boolean
-  disabled: boolean
-  invalid: boolean
-  onChange: (value: string) => void
-  onKeyDown: (e: React.KeyboardEvent<HTMLInputElement>) => void
-}) {
-  const noPlayer = initials === null
-  const avatar = (
-    <div className="av" aria-hidden={noPlayer || undefined}>
-      {noPlayer ? <UserIcon size={20} strokeWidth={1.75} /> : initials}
-    </div>
-  )
-  const identity = (
-    <div className="id">
-      <div className="nm">{name}</div>
-    </div>
-  )
-
-  return (
-    <div className={cn('se-side', side, noPlayer && 'no-opponent')}>
-      <div className={cn('se-head', side === 'opp' && 'right')}>
-        {side === 'opp' && identity}
-        {avatar}
-        {side === 'me' && identity}
-      </div>
-      <input
-        ref={inputRef}
-        className="big-input"
-        type="text"
-        inputMode="numeric"
-        aria-label={`${name} score`}
-        aria-invalid={invalid || undefined}
-        placeholder="0"
-        value={value}
-        autoFocus={autoFocus}
-        disabled={disabled}
-        onFocus={(e) => e.target.select()}
-        onChange={(e) => onChange(e.target.value)}
-        onKeyDown={onKeyDown}
-      />
-    </div>
   )
 }
 
