@@ -158,7 +158,13 @@ export function CorrectionEntry({ matchId }: { matchId: string }) {
                 name: meName,
                 initials: meInitials,
                 value: d.me,
-                invalid: v.meMalformed || (!v.valid && v.error !== null),
+                // Red-flag this field when its own value is malformed, or when a
+                // pair-level rule violation (tie/deuce) makes neither side
+                // individually malformed — but NOT when only the *other* side is
+                // malformed (its error shouldn't bleed onto this clean input).
+                invalid:
+                  v.meMalformed ||
+                  (v.error !== null && !v.meMalformed && !v.oppMalformed),
                 onChange: (value) => {
                   if (!isAcceptableScoreInput(value)) return;
                   setGame(d.gameNumber, { me: value });
@@ -168,7 +174,9 @@ export function CorrectionEntry({ matchId }: { matchId: string }) {
                 name: oppName,
                 initials: oppHasPlayer ? initialsOf(oppName) : null,
                 value: d.opp,
-                invalid: v.oppMalformed || (!v.valid && v.error !== null),
+                invalid:
+                  v.oppMalformed ||
+                  (v.error !== null && !v.meMalformed && !v.oppMalformed),
                 onChange: (value) => {
                   if (!isAcceptableScoreInput(value)) return;
                   setGame(d.gameNumber, { opp: value });
