@@ -22,7 +22,7 @@ import {
   scoringNewRoute,
   useDeleteScore,
   useDeleteScoreForMatch,
-  useFinalizeMatch,
+  useProposeResult,
   useMatch,
   useSaveGameScore,
   type MatchDetails,
@@ -92,7 +92,7 @@ function ScoreEntryInner({
   const saveMutation = useSaveGameScore(matchId, gameNumber)
   const deleteMutation = useDeleteScore(matchId, gameNumber)
   const cellDeleteMutation = useDeleteScoreForMatch(matchId)
-  const finalizeMutation = useFinalizeMatch(matchId)
+  const finalizeMutation = useProposeResult(matchId)
   // This game's own latest save state, read from the shared mutation cache —
   // used only to pre-fill the inputs after a failed save (the scoreline cells
   // and banner each read their own state).
@@ -162,10 +162,9 @@ function ScoreEntryInner({
   }
 
   // Once a match is finalized every write path 409s — there's nothing to do
-  // here. Same goes once a result is posted and waiting on confirmation —
-  // scores are frozen until /confirmation or /dispute lands, and either
-  // option lives on the match-details page.
-  if (data.status === 'completed' || data.signatures.length > 0) {
+  // here. Same goes once a result is posted — scores are frozen the instant the
+  // first proposal lands; accepting it lives on the match-details page.
+  if (data.status === 'completed' || data.negotiation.standing_result !== null) {
     return <Navigate {...matchDetailRoute(matchId)} />
   }
   if (

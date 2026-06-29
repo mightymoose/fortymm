@@ -1,6 +1,5 @@
 import asyncio
 import uuid
-from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
 
 import pytest
@@ -12,9 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 
 from app.matches import (
-    confirm_match_result,
+    accept_match_result,
     create_game_score,
-    dispute_match_result,
     post_match_result,
 )
 from app.models import (
@@ -24,11 +22,9 @@ from app.models import (
     MatchGame,
     MatchGameScore,
     MatchResult,
-    MatchResultResponse,
     MatchSide,
     MatchStatus,
-    ResultOutcome,
-    ResultResponseKind,
+    RatingHistory,
     User,
 )
 from app.notifications.apns import MATCH_RESULT_CONFIRMATION_CATEGORY
@@ -40,6 +36,7 @@ from app.schemas.match import (
 )
 from tests._helpers import (
     FakeSender,
+    accept_standing_result,
     enqueued_notification_jobs,
     make_client,
     make_user,
@@ -541,8 +538,8 @@ async def test_list_filter_by_status(api_client: AsyncClient, db_session: AsyncS
     await start_session(api_client, db_session)
     async with opponent_session(db_session, "rival") as (opp_client, opp):
         in_progress = await _create_match(api_client, opp.id, best_of=1)
-        # Finalize a separate match to flip it to completed — post + confirm
-        # so the second signer's call lands the status transition.
+        # Finalize a separate match to flip it to completed — propose + accept
+        # so the opposing side's acceptance lands the status transition.
         completed_match = await _create_match(api_client, opp.id, best_of=1)
         post = await api_client.post(
             f"/v1/matches/{completed_match['id']}/results",
@@ -553,10 +550,7 @@ async def test_list_filter_by_status(api_client: AsyncClient, db_session: AsyncS
             },
         )
         assert post.status_code == 201
-        confirm = await opp_client.post(
-            f"/v1/matches/{completed_match['id']}/confirmation"
-        )
-        assert confirm.status_code == 201
+        await accept_standing_result(opp_client, completed_match["id"])
 
     listing = (
         await api_client.get("/v1/matches", params={"status": "in_progress"})
@@ -726,12 +720,10 @@ async def test_list_attention_excludes_finished_and_spectated_matches(
     await start_session(api_client, db_session)
     async with opponent_session(db_session, "rival") as (opp_client, opp):
         open_match = await _create_match(api_client, opp.id, best_of=1)
-        # A finished match (post + confirm) — no longer an attention row.
+        # A finished match (propose + accept) — no longer an attention row.
         done = await _create_match(api_client, opp.id, best_of=1)
         await _post_bo1_result(api_client, done["id"])
-        assert (
-            await opp_client.post(f"/v1/matches/{done['id']}/confirmation")
-        ).status_code == 201
+        await accept_standing_result(opp_client, done["id"])
     # A match between two strangers — visible when browsing, never in *my*
     # attention list.
     async with make_client() as other_client:
@@ -769,23 +761,19 @@ async def test_list_row_attention_kind_reflects_who_must_act(
 ):
     await start_session(api_client, db_session)
     async with opponent_session(db_session, "rival") as (opp_client, opp):
-        # I posted a result — it's waiting on the opponent's sign-off.
+        # I proposed a result — it's waiting on the opponent's acceptance.
         waiting = await _create_match(api_client, opp.id, best_of=1)
         await _post_bo1_result(api_client, waiting["id"])
-        # A result the opponent posted, then I disputed — reopened.
-        disputed = await _create_match(api_client, opp.id, best_of=1)
-        await _post_bo1_result(opp_client, disputed["id"])
-        assert (
-            await api_client.post(f"/v1/matches/{disputed['id']}/dispute")
-        ).status_code == 200
+        # The opponent proposed a result — it's my turn to review/accept it.
+        to_review = await _create_match(api_client, opp.id, best_of=1)
+        await _post_bo1_result(opp_client, to_review["id"])
 
     listing = (await api_client.get("/v1/matches")).json()
     by_id = {row["id"]: row["attention"] for row in listing["items"]}
+    # The side that proposed reads as passively waiting; the opposing side owes
+    # a review. Both still ride the attention set.
     assert by_id[waiting["id"]] == "waiting_opponent"
-    assert by_id[disputed["id"]] == "dispute"
-    # A disputed match is waiting on no one in particular — it's actionable for
-    # both sides — but the poster's awaiting-confirmation match reads as passive
-    # for them. Both still ride the attention set.
+    assert by_id[to_review["id"]] == "review"
     assert listing["attention_count"] == 2
 
 
@@ -1176,18 +1164,18 @@ async def test_can_score_match_without_opponent(
 # ----- finalize (POST /v1/matches/{id}/results) ---------------------------
 
 
-async def test_results_post_commits_canon_and_records_first_signature(
+async def test_propose_commits_canon_and_leaves_result_standing(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    """``POST /results`` on a rated match commits the canonical games
-    (obliterating the scratchpad) and inserts the caller's signature — but
-    leaves status at ``in_progress`` and ``side.won`` unset until the
-    opponent confirms."""
-    await start_session(api_client, db_session)
+    """``POST /results`` (propose) on a rated match commits the canonical games
+    (obliterating the scratchpad) and mints a standing result — but leaves
+    status at ``in_progress`` and ``side.won`` unset until the opposing side
+    accepts. The negotiation block reads ``awaiting`` for the proposer."""
+    me = await start_session(api_client, db_session)
     async with opponent_session(db_session, "rival") as (opp_client, opp):
         match = await _create_match(api_client, opp.id, best_of=3)
 
-        # Pre-post, the FE has scratched in a totally different game 1 score.
+        # Pre-propose, the FE has scratched in a totally different game 1 score.
         # The /results payload is canon — it should win.
         await api_client.post(
             f"/v1/matches/{match['id']}/games/1/scores/new",
@@ -1206,16 +1194,22 @@ async def test_results_post_commits_canon_and_records_first_signature(
         assert response.status_code == 201
         body = response.json()
         # Status holds at in_progress with the awaiting-confirmation label —
-        # the result is on the table, the other side hasn't signed.
+        # the proposal is on the table, the other side hasn't accepted.
         assert body["status"] == "in_progress"
         assert body["status_label"] == "Awaiting confirmation"
         assert body["can_score"] is False
         assert body["can_finalize"] is False
-        assert body["can_confirm"] is False  # poster has already signed
-        assert len(body["signatures"]) == 1
+        # The proposer's negotiation view: their own side proposed, so it's the
+        # opponent's move — ``awaiting``, never their turn, no diff.
+        neg = body["negotiation"]
+        assert neg["viewer_state"] == "awaiting"
+        assert neg["your_turn"] is False
+        assert neg["prior_result"] is None
+        assert neg["diff"] is None
+        assert neg["standing_result"]["submitted_by"] == str(me.id)
         sides = sorted(body["sides"], key=lambda s: s["side_number"])
-        # side.won is NOT set on /results for a rated match — the opponent
-        # hasn't ratified the claim yet; /confirmation stamps it (#485).
+        # side.won is NOT set on propose for a rated match — the opponent hasn't
+        # ratified the claim yet; acceptance stamps it (#485).
         assert [s["won"] for s in sides] == [None, None]
         # Games + scores reflect the payload, not the scratchpad.
         games = sorted(body["games"], key=lambda g: g["game_number"])
@@ -1229,23 +1223,20 @@ async def test_results_post_commits_canon_and_records_first_signature(
         assert len(game_rows) == 2
         assert len(score_rows) == 2
 
-        # The opponent confirms — match flips to completed.
-        confirm = await opp_client.post(f"/v1/matches/{match['id']}/confirmation")
-        assert confirm.status_code == 201
-        confirmed = confirm.json()
-        assert confirmed["status"] == "completed"
-        assert confirmed["status_label"] == "Final"
-        assert len(confirmed["signatures"]) == 2
-        # Confirmation is the moment the outcome becomes official.
-        confirmed_sides = sorted(confirmed["sides"], key=lambda s: s["side_number"])
-        assert [s["won"] for s in confirmed_sides] == [True, False]
+        # Exactly one result row exists, unaccepted (standing).
+        results = (await db_session.execute(select(MatchResult))).scalars().all()
+        assert len(results) == 1
+        assert results[0].accepted_by_user_id is None
+        assert results[0].supersedes_result_id is None
 
 
-async def test_results_409_when_already_posted(
+async def test_propose_first_post_requires_no_existing_result(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    """A second ``POST /results`` on the same match (still awaiting
-    confirmation) bounces — the user should be calling /confirmation instead."""
+    """A first proposal (``supersedes_result_id`` omitted) requires that no
+    result exists yet. A second first-post on the same match bounces 409 with
+    the moved-on negotiation state — the caller should counter (supersede) or
+    accept instead."""
     await start_session(api_client, db_session)
     async with opponent_session(db_session, "rival") as (_opp_client, opp):
         match = await _create_match(api_client, opp.id, best_of=3)
@@ -1265,6 +1256,320 @@ async def test_results_409_when_already_posted(
             f"/v1/matches/{match['id']}/results", json=payload
         )
         assert second.status_code == 409
+        # The 409 body carries the viewer-relative negotiation state.
+        detail = second.json()["detail"]
+        assert detail["viewer_state"] == "awaiting"
+        assert (
+            detail["standing_result"]["id"]
+            == first.json()["negotiation"]["standing_result"]["id"]
+        )
+
+
+async def test_propose_undecided_board_is_422(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """The decided-board hard gate: an undecided board can't be a proposal.
+    A 1-1 best-of-3 trips ``_validate_finalize_games`` → 422 before any result
+    row is minted."""
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "rival") as (_opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=3)
+        response = await api_client.post(
+            f"/v1/matches/{match['id']}/results",
+            json={
+                "games": [
+                    {"game_number": 1, "side_1_points": 11, "side_2_points": 4},
+                    {"game_number": 2, "side_1_points": 4, "side_2_points": 11},
+                ]
+            },
+        )
+        assert response.status_code == 422
+        assert "decided" in response.json()["detail"]
+        # No result row was minted.
+        results = (await db_session.execute(select(MatchResult))).scalars().all()
+        assert results == []
+
+
+async def _propose(
+    client: AsyncClient,
+    match_id: str,
+    *,
+    s1: int,
+    s2: int,
+    supersedes: str | None = None,
+) -> dict:
+    """Propose a best-of-1 result with the given game-1 score (optionally a
+    counter superseding ``supersedes``). Returns the response body."""
+    body: dict[str, object] = {
+        "games": [{"game_number": 1, "side_1_points": s1, "side_2_points": s2}]
+    }
+    if supersedes is not None:
+        body["supersedes_result_id"] = supersedes
+    response = await client.post(f"/v1/matches/{match_id}/results", json=body)
+    return {"status": response.status_code, "body": response.json()}
+
+
+async def test_propose_self_edit_chain_supersedes_own_proposal(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """A proposer may correct their own standing proposal by countering it
+    (``supersedes_result_id`` = their own standing result id). The chain stays
+    linear and the new row is the standing one; from the opponent's view it's a
+    plain ``review`` (no prior proposal of theirs to diff against)."""
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "rival") as (opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=1)
+        first = await _propose(api_client, match["id"], s1=11, s2=4)
+        assert first["status"] == 201
+        first_id = first["body"]["negotiation"]["standing_result"]["id"]
+
+        # Same proposer corrects their own board: 11-4 → 11-9.
+        second = await _propose(
+            api_client, match["id"], s1=11, s2=9, supersedes=first_id
+        )
+        assert second["status"] == 201, second
+        second_id = second["body"]["negotiation"]["standing_result"]["id"]
+        assert second_id != first_id
+
+        # The chain is linear: the new row supersedes the first.
+        results = (await db_session.execute(select(MatchResult))).scalars().all()
+        by_id = {r.id: r for r in results}
+        assert len(results) == 2
+        assert by_id[uuid.UUID(second_id)].supersedes_result_id == uuid.UUID(first_id)
+
+        # The opponent has never proposed → their view is ``review`` (no diff).
+        opp_view = (await opp_client.get(f"/v1/matches/{match['id']}")).json()
+        opp_neg = opp_view["negotiation"]
+        assert opp_neg["viewer_state"] == "review"
+        assert opp_neg["your_turn"] is True
+        assert opp_neg["prior_result"] is None
+        assert opp_neg["diff"] is None
+        assert opp_neg["standing_result"]["id"] == second_id
+
+
+async def test_propose_counter_chain_across_sides(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """Each side can counter the other's standing proposal. The chain grows
+    linearly; the standing result flips to whoever proposed last, and ``my_side``
+    relative ``your_turn`` flips with it."""
+    me = await start_session(api_client, db_session)
+    async with opponent_session(db_session, "rival") as (opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=1)
+        # I propose side-1 win.
+        first = await _propose(api_client, match["id"], s1=11, s2=4)
+        first_id = first["body"]["negotiation"]["standing_result"]["id"]
+
+        # The opponent counters: side-2 win, superseding my proposal.
+        counter = await _propose(
+            opp_client, match["id"], s1=4, s2=11, supersedes=first_id
+        )
+        assert counter["status"] == 201, counter
+        counter_id = counter["body"]["negotiation"]["standing_result"]["id"]
+
+        # From my view, the opponent now holds the standing proposal and it
+        # corrects my own prior one → ``corrected`` with a diff.
+        my_view = (await api_client.get(f"/v1/matches/{match['id']}")).json()
+        my_neg = my_view["negotiation"]
+        assert my_neg["viewer_state"] == "corrected"
+        assert my_neg["your_turn"] is True
+        assert my_neg["standing_result"]["id"] == counter_id
+        assert my_neg["standing_result"]["submitted_by"] == str(opp.id)
+        assert my_neg["prior_result"]["id"] == first_id
+        assert my_neg["prior_result"]["submitted_by"] == str(me.id)
+        # The diff is computed from my own prior proposal to the standing one.
+        assert my_neg["diff"] == [
+            {
+                "game_number": 1,
+                "old": {"game_number": 1, "side_1_points": 11, "side_2_points": 4},
+                "new": {"game_number": 1, "side_1_points": 4, "side_2_points": 11},
+            }
+        ]
+
+        # I counter back to my original claim, superseding the opponent's.
+        recounter = await _propose(
+            api_client, match["id"], s1=11, s2=4, supersedes=counter_id
+        )
+        assert recounter["status"] == 201, recounter
+        results = (await db_session.execute(select(MatchResult))).scalars().all()
+        assert len(results) == 3
+
+
+# ----- negotiation BFF oracle (SPEC §4 worked cases) ----------------------
+#
+# Each case below pins the EXPECTED viewer_state + diff from the SPEC, computed
+# by hand from the chain — NOT read off the implementation. A failure here means
+# the implementation drifted from the contract; fix app/, never the assertion.
+
+
+async def test_negotiation_review_after_opponent_self_edit_has_null_diff(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """SPEC §4 — review-after-opponent-self-edit→null diff.
+
+    Chain: the OPPONENT proposes (A), then the opponent corrects their OWN
+    proposal (B supersedes A). The viewer (me) has never proposed. The baseline
+    walk back from the standing result finds no proposal on the viewer's own
+    side, so the viewer's state collapses to ``review`` with ``prior_result``
+    and ``diff`` both null — the opponent's intermediate self-edit produces no
+    diff for the viewer."""
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "self-edit-opp") as (opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=1)
+        # Opponent proposes A (side-2 win), then self-edits to B (different
+        # side-2 win) by superseding their own A.
+        a = await _propose(opp_client, match["id"], s1=4, s2=11)
+        a_id = a["body"]["negotiation"]["standing_result"]["id"]
+        b = await _propose(opp_client, match["id"], s1=6, s2=11, supersedes=a_id)
+        assert b["status"] == 201, b
+        b_id = b["body"]["negotiation"]["standing_result"]["id"]
+
+        # The viewer (me) never proposed → EXPECTED review, null diff.
+        view = (await api_client.get(f"/v1/matches/{match['id']}")).json()
+        neg = view["negotiation"]
+        assert neg["viewer_state"] == "review"
+        assert neg["your_turn"] is True
+        assert neg["prior_result"] is None
+        assert neg["diff"] is None
+        assert neg["standing_result"]["id"] == b_id
+
+
+async def test_negotiation_corrected_collapses_flip_flop(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """SPEC §4 — corrected-collapses-flip-flop.
+
+    Chain A(me)→B(opp)→C(me)→D(opp), all best-of-1 corrections. From MY view the
+    standing result is D (the opponent's), and the baseline is my OWN last
+    proposal C (NOT the immediately-superseded B). EXPECTED viewer_state
+    ``corrected``; ``prior_result`` = C; ``diff`` = C vs D (collapsing the
+    opponent's B in between). C and D differ in their points, so the diff is the
+    single game with old=C, new=D."""
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "flip-flop-opp") as (opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=1)
+        # A (me): side-1 win 11-4.
+        a = await _propose(api_client, match["id"], s1=11, s2=4)
+        a_id = a["body"]["negotiation"]["standing_result"]["id"]
+        # B (opp): side-2 win 5-11, superseding A.
+        b = await _propose(opp_client, match["id"], s1=5, s2=11, supersedes=a_id)
+        b_id = b["body"]["negotiation"]["standing_result"]["id"]
+        # C (me): side-1 win 11-7, superseding B — my OWN last proposal.
+        c = await _propose(api_client, match["id"], s1=11, s2=7, supersedes=b_id)
+        c_id = c["body"]["negotiation"]["standing_result"]["id"]
+        # D (opp): side-2 win 9-11, superseding C — the standing result.
+        d = await _propose(opp_client, match["id"], s1=9, s2=11, supersedes=c_id)
+        d_id = d["body"]["negotiation"]["standing_result"]["id"]
+
+        view = (await api_client.get(f"/v1/matches/{match['id']}")).json()
+        neg = view["negotiation"]
+        # EXPECTED corrected, diff baseline = my own C (not the superseded B).
+        assert neg["viewer_state"] == "corrected"
+        assert neg["your_turn"] is True
+        assert neg["standing_result"]["id"] == d_id
+        assert neg["prior_result"]["id"] == c_id
+        assert neg["diff"] == [
+            {
+                "game_number": 1,
+                "old": {"game_number": 1, "side_1_points": 11, "side_2_points": 7},
+                "new": {"game_number": 1, "side_1_points": 9, "side_2_points": 11},
+            }
+        ]
+
+
+async def test_propose_stale_supersedes_id_is_409(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """A counter must target the *current* standing proposal. If the caller
+    supersedes a result that has since been superseded by another counter, the
+    id no longer matches the standing one → 409 with the moved-on state."""
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "rival") as (opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=1)
+        first = await _propose(api_client, match["id"], s1=11, s2=4)
+        first_id = first["body"]["negotiation"]["standing_result"]["id"]
+
+        # The opponent counters first, advancing the standing proposal.
+        counter = await _propose(
+            opp_client, match["id"], s1=4, s2=11, supersedes=first_id
+        )
+        assert counter["status"] == 201
+
+        # I try to counter the now-stale first proposal — it's been superseded.
+        stale = await _propose(
+            api_client, match["id"], s1=11, s2=6, supersedes=first_id
+        )
+        assert stale["status"] == 409, stale
+        # The moved-on standing result is the opponent's counter.
+        assert (
+            stale["body"]["detail"]["standing_result"]["id"]
+            == counter["body"]["negotiation"]["standing_result"]["id"]
+        )
+
+
+async def test_concurrent_propose_counters_nowait_409(
+    api_client: AsyncClient, db_session: AsyncSession, engine: AsyncEngine
+):
+    """Two counters racing to supersede the same parent: the
+    ``UNIQUE(supersedes_result_id)`` constraint keeps the chain linear, so one
+    commits and the other gets a clean 409 carrying the moved-on negotiation
+    state — never two successors on one parent.
+
+    The handler also takes the row lock with ``FOR UPDATE NOWAIT`` on propose,
+    so the racer that loses the lock fails fast; whichever guard fires, the
+    result is one winner + one 409 and a single linear chain."""
+    me = await start_session(api_client, db_session)
+    async with opponent_session(db_session, "race-opp") as (_opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=1)
+        match_id = uuid.UUID(match["id"])
+        me_id = me.id
+        # Seed a standing first proposal both racers will try to supersede.
+        first = await _propose(api_client, match["id"], s1=11, s2=4)
+        parent_id = uuid.UUID(first["body"]["negotiation"]["standing_result"]["id"])
+
+        make_session = async_sessionmaker(engine, expire_on_commit=False)
+
+        async def run(s2: int) -> object:
+            async with make_session() as session:
+                poster = (
+                    await session.execute(select(User).where(User.id == me_id))
+                ).scalar_one()
+                notifications = NotificationService(session, FakeSender())
+                payload = MatchResultsWrite(
+                    games=[
+                        MatchResultsGameWrite(
+                            game_number=1, side_1_points=11, side_2_points=s2
+                        )
+                    ],
+                    supersedes_result_id=parent_id,
+                )
+                try:
+                    await post_match_result(
+                        match_id, payload, poster, session, notifications
+                    )
+                    return "ok"
+                except HTTPException as exc:
+                    return exc.status_code
+
+        outcomes = await asyncio.gather(run(5), run(6))
+        # Exactly one counter wins; the other is cleanly rejected (409), never a
+        # second successor on the same parent.
+        assert sorted(str(o) for o in outcomes) == ["409", "ok"], outcomes
+
+        async with make_session() as verify:
+            final = (
+                await verify.execute(
+                    select(Match)
+                    .where(Match.id == match_id)
+                    .options(selectinload(Match.results))
+                )
+            ).scalar_one()
+            # The first proposal plus exactly one successor — the chain is linear.
+            assert len(final.results) == 2
+            successors = [
+                r for r in final.results if r.supersedes_result_id == parent_id
+            ]
+            assert len(successors) == 1
 
 
 async def test_concurrent_results_posts_do_not_pile_up(
@@ -1323,29 +1628,27 @@ async def test_concurrent_results_posts_do_not_pile_up(
         ], outcomes
 
         # The committed match holds its invariants: exactly one posted result
-        # carrying one confirm response, and the single canonical game, with no
-        # duplicate/orphan rows.
+        # and the single canonical game, with no duplicate/orphan rows.
         async with make_session() as verify:
             final = (
                 await verify.execute(
                     select(Match)
                     .where(Match.id == match_id)
                     .options(
-                        selectinload(Match.results).selectinload(MatchResult.responses),
+                        selectinload(Match.results),
                         selectinload(Match.games),
                     )
                 )
             ).scalar_one()
             assert len(final.results) == 1
-            assert len(final.results[0].responses) == 1
             assert len(final.games) == 1
 
 
 async def test_score_endpoints_409_once_result_is_posted(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    """While awaiting confirmation, every per-game write returns 409.
-    Disputing rewinds: signatures clear, scores become editable again."""
+    """Once a result is proposed the scratchpad freezes (#715): every per-game
+    write returns 409. The board now only changes through propose/accept."""
     await start_session(api_client, db_session)
     async with opponent_session(db_session, "rival") as (_opp_client, opp):
         match = await _create_match(api_client, opp.id, best_of=3)
@@ -1359,8 +1662,7 @@ async def test_score_endpoints_409_once_result_is_posted(
             },
         )
 
-        # Every write path returns 409 while the posted result is awaiting
-        # confirmation.
+        # Every write path returns 409 while the proposed result is standing.
         post = await api_client.post(
             f"/v1/matches/{match['id']}/games/1/scores/new",
             json={"side_1_points": 8, "side_2_points": 11},
@@ -1378,7 +1680,7 @@ async def test_score_endpoints_409_once_result_is_posted(
 async def test_score_endpoints_409_once_match_is_completed(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    """After /confirmation lands and the match is completed, every write
+    """After acceptance lands and the match is completed, every write
     path 409s — there's no edit affordance on a finalized match."""
     await start_session(api_client, db_session)
     async with opponent_session(db_session, "rival") as (opp_client, opp):
@@ -1392,7 +1694,7 @@ async def test_score_endpoints_409_once_match_is_completed(
                 ]
             },
         )
-        await opp_client.post(f"/v1/matches/{match['id']}/confirmation")
+        await accept_standing_result(opp_client, match["id"])
 
         post = await api_client.post(
             f"/v1/matches/{match['id']}/games/1/scores/new",
@@ -1641,9 +1943,9 @@ async def _play_match_to_completion(
     best_of: int,
     side_1_wins: bool,
 ) -> dict:
-    """Create a match, post the result, and have the opponent confirm it —
-    the full sign-off dance. The chosen side wins the minimum number of games
-    needed to clinch. Returns the post-confirmation MatchDetails body."""
+    """Create a match, propose the result, and have the opponent accept it —
+    the full propose/accept dance. The chosen side wins the minimum number of
+    games needed to clinch. Returns the post-acceptance MatchDetails body."""
     match = await _create_match(client, opp_id, best_of=best_of)
     needed = best_of // 2 + 1
     s1, s2 = (11, 5) if side_1_wins else (5, 11)
@@ -1657,9 +1959,7 @@ async def _play_match_to_completion(
         },
     )
     assert post.status_code == 201
-    confirm = await opp_client.post(f"/v1/matches/{match['id']}/confirmation")
-    assert confirm.status_code == 201
-    body = confirm.json()
+    body = await accept_standing_result(opp_client, match["id"])
     assert body["status"] == "completed"
     return body
 
@@ -2059,12 +2359,12 @@ async def test_list_matches_csv_honors_status_filter(
     ]
 
 
-# ----- signature flow (POST /confirmation + /dispute) ---------------------
+# ----- accept flow (POST /results/{id}/acceptance) + scratchpad freeze ----
 
 
 async def _post_results(client: AsyncClient, match_id: str, best_of: int = 3) -> dict:
     """Caller wins the minimum games needed to clinch a best-of-N. Returns
-    the response body."""
+    the propose response body."""
     needed = best_of // 2 + 1
     response = await client.post(
         f"/v1/matches/{match_id}/results",
@@ -2079,246 +2379,260 @@ async def _post_results(client: AsyncClient, match_id: str, best_of: int = 3) ->
     return response.json()
 
 
-async def test_confirmation_finalizes_and_lands_second_signature(
+async def test_accept_finalizes_and_applies_ratings_once(
     api_client: AsyncClient, db_session: AsyncSession
 ):
+    """Accepting a standing proposal completes the match, stamps ``side.won``
+    from the agreed board, marks the result accepted, and applies the rating
+    update — exactly once. A second acceptance on the now-completed match 409s
+    and never re-runs ratings."""
     me = await start_session(api_client, db_session)
-    async with opponent_session(db_session, "sig-opp") as (opp_client, opp):
+    async with opponent_session(db_session, "accept-opp") as (opp_client, opp):
         match = await _create_match(api_client, opp.id, best_of=3)
         await _post_results(api_client, match["id"])
 
-        confirm = await opp_client.post(f"/v1/matches/{match['id']}/confirmation")
-        assert confirm.status_code == 201
-        body = confirm.json()
+        body = await accept_standing_result(opp_client, match["id"])
         assert body["status"] == "completed"
         assert body["status_label"] == "Final"
-        signers = {sig["user_id"] for sig in body["signatures"]}
-        assert signers == {str(me.id), str(opp.id)}
-        assert body["can_confirm"] is False
-
-
-async def test_dispute_clears_signatures_and_moves_to_disputed(
-    api_client: AsyncClient, db_session: AsyncSession
-):
-    """``POST /dispute`` marks the pending result disputed (so the BFF surfaces
-    no signatures), moves the match to the ``disputed`` status, drops the
-    side.won flags back to None, and leaves the working games in place so the
-    disputer can navigate to the contested game and PUT a correction."""
-    await start_session(api_client, db_session)
-    async with opponent_session(db_session, "dispute-opp") as (opp_client, opp):
-        match = await _create_match(api_client, opp.id, best_of=3)
-        await _post_results(api_client, match["id"])
-
-        dispute = await opp_client.post(f"/v1/matches/{match['id']}/dispute")
-        assert dispute.status_code == 200
-        body = dispute.json()
-        assert body["status"] == "disputed"
-        assert body["status_label"] == "Disputed"
-        assert body["signatures"] == []
+        # The negotiation block reads ``final`` once a result is accepted.
+        neg = body["negotiation"]
+        assert neg["viewer_state"] == "final"
+        assert neg["your_turn"] is False
+        assert neg["prior_result"] is None
+        assert neg["diff"] is None
         sides = sorted(body["sides"], key=lambda s: s["side_number"])
-        assert [s["won"] for s in sides] == [None, None]
-        # games_won still reflects the working scores (they're preserved so
-        # the disputer can edit just the contested one); only the "this side
-        # won" claim is rescinded.
-        assert [s["games_won"] for s in sides] == [2, 0]
-        # current_game must NOT point at a never-played game number — bo3
-        # decided 2-0 has no "game 3" to score, even though one slot is
-        # un-scored in 1..best_of. Otherwise the dashboard / list / scoring
-        # page deep-links into a phantom game.
-        assert body["current_game"] is None
-        # ...but the match IS scorable again: a disputed (terminal) result is
-        # no longer pending, so the scratchpad reopens and can_score is True even
-        # though there's no next game to play (the disputer edits the contested
-        # game in place). Editability follows the pending result, not whether the
-        # board currently decides it.
-        assert body["can_score"] is True
-        # The saved scores are still valid + decided, so a mistaken dispute can
-        # be undone by re-posting them unchanged (back into the sign-off flow).
-        assert body["can_finalize"] is True
-        # Canonical games stay around so the contested score can be edited.
-        games = sorted(body["games"], key=lambda g: g["game_number"])
-        assert [g["game_number"] for g in games] == [1, 2]
-        for g in games:
-            assert g["score"] is not None
+        assert [s["won"] for s in sides] == [True, False]
 
-        # The disputer can now PUT a correction to flip the result.
-        put = await opp_client.put(
-            f"/v1/matches/{match['id']}/games/2/scores",
-            json={"side_1_points": 5, "side_2_points": 11, "expected_version": 1},
+        # The accepted result records the acceptor; ratings applied once.
+        result = (
+            await db_session.execute(
+                select(MatchResult).where(
+                    MatchResult.match_id == uuid.UUID(match["id"])
+                )
+            )
+        ).scalar_one()
+        assert result.accepted_by_user_id == opp.id
+        assert result.accepted_at is not None
+        rating_rows = (
+            (
+                await db_session.execute(
+                    select(RatingHistory).where(
+                        RatingHistory.match_id == uuid.UUID(match["id"])
+                    )
+                )
+            )
+            .scalars()
+            .all()
         )
-        assert put.status_code == 200
+        assert len(rating_rows) == 2
+        assert {r.user_id for r in rating_rows} == {me.id, opp.id}
 
-
-async def test_dispute_records_disputer_and_repost_clears_it(
-    api_client: AsyncClient, db_session: AsyncSession
-):
-    """``disputed_by_user_id`` identifies who rejected the result — the BFF uses
-    it to tell the submitter their result was disputed apart from the otherwise
-    symmetric disputed board. It's None until a dispute, set to the disputer on
-    dispute, and cleared again when a fresh result is posted."""
-    await start_session(api_client, db_session)
-    async with opponent_session(db_session, "disputer-opp") as (opp_client, opp):
-        match = await _create_match(api_client, opp.id, best_of=3)
-        posted = await _post_results(api_client, match["id"])
-        # No dispute yet — the field is absent (None).
-        assert posted["disputed_by_user_id"] is None
-
-        dispute = await opp_client.post(f"/v1/matches/{match['id']}/dispute")
-        assert dispute.status_code == 200
-        # The opponent (not the submitter) is recorded as the disputer.
-        assert dispute.json()["disputed_by_user_id"] == str(opp.id)
-
-        # The submitter sees the same attribution on their own fetch — that's
-        # what powers "your opponent disputed your result".
-        mine = await api_client.get(f"/v1/matches/{match['id']}")
-        assert mine.json()["disputed_by_user_id"] == str(opp.id)
-
-        # Re-posting a result supersedes the dispute and clears the attribution.
-        re_post = await _post_results(api_client, match["id"])
-        assert re_post["disputed_by_user_id"] is None
-
-
-async def test_can_withdraw_flag_is_submitter_only(
-    api_client: AsyncClient, db_session: AsyncSession
-):
-    """After a result is posted, the submitter (who can't confirm/dispute their
-    own result) gets ``can_withdraw=True`` and ``can_confirm=False``; the side
-    that owes a sign-off gets the mirror image."""
-    await start_session(api_client, db_session)
-    async with opponent_session(db_session, "withdraw-flag-opp") as (opp_client, opp):
-        match = await _create_match(api_client, opp.id, best_of=3)
-        posted = await _post_results(api_client, match["id"])
-        # Submitter: can withdraw, can't confirm.
-        assert posted["can_withdraw"] is True
-        assert posted["can_confirm"] is False
-
-        # Opponent: can confirm/dispute, can't withdraw someone else's post.
-        opp_view = (await opp_client.get(f"/v1/matches/{match['id']}")).json()
-        assert opp_view["can_withdraw"] is False
-        assert opp_view["can_confirm"] is True
-
-
-async def test_withdraw_supersedes_result_and_reopens_match(
-    api_client: AsyncClient, db_session: AsyncSession
-):
-    """``POST /withdrawal`` lets the submitter retract their own pending result:
-    it's marked ``superseded`` (no signatures, no disputer surfaced), the match
-    returns to a plain ``Live`` state (not ``disputed``), and scoring reopens so
-    the submitter can correct the wrong game and re-post."""
-    await start_session(api_client, db_session)
-    async with opponent_session(db_session, "withdraw-opp") as (opp_client, opp):
-        match = await _create_match(api_client, opp.id, best_of=3)
-        await _post_results(api_client, match["id"])
-
-        withdraw = await api_client.post(f"/v1/matches/{match['id']}/withdrawal")
-        assert withdraw.status_code == 200
-        body = withdraw.json()
-        # Plain Live — not Disputed: nobody rejected the result.
-        assert body["status"] == "in_progress"
-        assert body["status_label"] == "Live"
-        assert body["signatures"] == []
-        assert body["disputed_by_user_id"] is None
-        sides = sorted(body["sides"], key=lambda s: s["side_number"])
-        assert [s["won"] for s in sides] == [None, None]
-        # Working games preserved, board still decided → re-scorable + re-postable.
-        assert [s["games_won"] for s in sides] == [2, 0]
-        assert body["can_score"] is True
-        assert body["can_finalize"] is True
-        # Nothing pending now, so the submitter can't withdraw again.
-        assert body["can_withdraw"] is False
-
-        # The submitter can edit the contested game and re-post into sign-off.
-        put = await api_client.put(
-            f"/v1/matches/{match['id']}/games/2/scores",
-            json={"side_1_points": 11, "side_2_points": 9, "expected_version": 1},
+        # A second acceptance on the completed match is a clean 409. In the
+        # ``final`` state the negotiation's ``standing_result`` surfaces the
+        # accepted (agreed) board so the FE can render it — but it's no longer a
+        # live proposal, and ratings are not re-applied.
+        details = (await opp_client.get(f"/v1/matches/{match['id']}")).json()
+        assert details["negotiation"]["viewer_state"] == "final"
+        assert details["negotiation"]["standing_result"]["id"] == str(result.id)
+        again = await opp_client.post(
+            f"/v1/matches/{match['id']}/results/{result.id}/acceptance"
         )
-        assert put.status_code == 200
-        re_post = await _post_results(api_client, match["id"])
-        assert re_post["status_label"] == "Awaiting confirmation"
+        assert again.status_code == 409
+        rating_rows_after = (
+            (
+                await db_session.execute(
+                    select(RatingHistory).where(
+                        RatingHistory.match_id == uuid.UUID(match["id"])
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(rating_rows_after) == 2
 
 
-async def test_opponent_cannot_withdraw_submitters_result(
+async def test_accept_superseded_result_id_is_409(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    """Withdrawal is the *submitter's* escape hatch. The side that owes a
-    sign-off must confirm or dispute instead — withdrawing isn't theirs."""
+    """``result_id`` is the concurrency token: accepting a proposal that has
+    since been superseded by a counter 409s with the moved-on state — only the
+    live standing proposal can be accepted."""
     await start_session(api_client, db_session)
-    async with opponent_session(db_session, "withdraw-opp2") as (opp_client, opp):
-        match = await _create_match(api_client, opp.id, best_of=3)
-        await _post_results(api_client, match["id"])
+    async with opponent_session(db_session, "accept-stale-opp") as (opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=1)
+        first = await _propose(api_client, match["id"], s1=11, s2=4)
+        first_id = first["body"]["negotiation"]["standing_result"]["id"]
 
-        resp = await opp_client.post(f"/v1/matches/{match['id']}/withdrawal")
-        assert resp.status_code == 409
-        assert "posted this result" in resp.json()["detail"]
+        # The opponent counters, superseding the first proposal.
+        counter = await _propose(
+            opp_client, match["id"], s1=4, s2=11, supersedes=first_id
+        )
+        assert counter["status"] == 201
+        counter_id = counter["body"]["negotiation"]["standing_result"]["id"]
+
+        # The proposer tries to accept the now-superseded first proposal.
+        stale = await api_client.post(
+            f"/v1/matches/{match['id']}/results/{first_id}/acceptance"
+        )
+        assert stale.status_code == 409
+        # The 409 carries the moved-on negotiation state (the counter standing).
+        assert stale.json()["detail"]["standing_result"]["id"] == counter_id
 
 
-async def test_withdraw_409_when_no_result_posted(
+async def test_accept_unknown_result_id_is_404(
     api_client: AsyncClient, db_session: AsyncSession
 ):
+    """A ``result_id`` that doesn't exist on the match at all is a 404, distinct
+    from the superseded/already-accepted 409."""
     await start_session(api_client, db_session)
-    async with opponent_session(db_session, "withdraw-early-opp") as (_opp_client, opp):
-        match = await _create_match(api_client, opp.id, best_of=3)
-        resp = await api_client.post(f"/v1/matches/{match['id']}/withdrawal")
-        assert resp.status_code == 409
-        assert "No posted result" in resp.json()["detail"]
+    async with opponent_session(db_session, "accept-404-opp") as (opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=1)
+        await _post_results(api_client, match["id"], best_of=1)
+        ghost = uuid.uuid4()
+        resp = await opp_client.post(
+            f"/v1/matches/{match['id']}/results/{ghost}/acceptance"
+        )
+        assert resp.status_code == 404
 
 
-async def test_non_participant_cannot_withdraw(
+async def test_proposer_cannot_accept_own_proposal(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    """A non-participant gets 404, mirroring the other write paths — no way to
-    learn the match exists."""
+    """The proposing side already consented by proposing; only the opposing side
+    accepts. A participant on the submitter's side gets a 409 — they can't ratify
+    their own claim."""
     await start_session(api_client, db_session)
-    async with opponent_session(db_session, "withdraw-np-opp") as (_opp_client, opp):
-        match = await _create_match(api_client, opp.id, best_of=3)
-        await _post_results(api_client, match["id"])
+    async with opponent_session(db_session, "self-accept-opp") as (_opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=1)
+        posted = await _post_results(api_client, match["id"], best_of=1)
+        result_id = posted["negotiation"]["standing_result"]["id"]
+
+        self_accept = await api_client.post(
+            f"/v1/matches/{match['id']}/results/{result_id}/acceptance"
+        )
+        assert self_accept.status_code == 409
+        assert "your own proposal" in self_accept.json()["detail"]
+
+
+async def test_accept_404_for_non_participant(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """A non-participant can't accept — they get a 404, mirroring the other
+    write paths (no way to learn the match exists)."""
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "accept-np-opp") as (_opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=1)
+        posted = await _post_results(api_client, match["id"], best_of=1)
+        result_id = posted["negotiation"]["standing_result"]["id"]
         async with make_client() as bystander_client:
             await start_session(bystander_client, db_session)
-            resp = await bystander_client.post(f"/v1/matches/{match['id']}/withdrawal")
+            resp = await bystander_client.post(
+                f"/v1/matches/{match['id']}/results/{result_id}/acceptance"
+            )
             assert resp.status_code == 404
 
 
-async def test_withdraw_409_after_finalized(
+async def test_accept_409_when_no_result_posted(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    """Once both sides have signed and the match is completed there's no pending
-    result to withdraw — ``_enforce_withdrawable`` catches it on the status
-    gate."""
+    """With no proposal on the table there's nothing to accept — any
+    ``result_id`` is unknown (404)."""
     await start_session(api_client, db_session)
-    async with opponent_session(db_session, "withdraw-final-opp") as (opp_client, opp):
+    async with opponent_session(db_session, "accept-early-opp") as (opp_client, opp):
         match = await _create_match(api_client, opp.id, best_of=3)
+        resp = await opp_client.post(
+            f"/v1/matches/{match['id']}/results/{uuid.uuid4()}/acceptance"
+        )
+        assert resp.status_code == 404
+
+
+async def test_scratchpad_freezes_on_first_proposal(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """The scratchpad is editable until the first proposal, then frozen (#715):
+    once a result exists, every per-game write 409s with the frozen-scores
+    message, regardless of whether the result is later accepted."""
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "freeze-opp") as (_opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=3)
+        # Pre-proposal: scratchpad accepts a score.
+        first = await api_client.post(
+            f"/v1/matches/{match['id']}/games/1/scores/new",
+            json={"side_1_points": 11, "side_2_points": 4},
+        )
+        assert first.status_code == 201
+        assert first.json()["can_score"] is True
+
         await _post_results(api_client, match["id"])
-        confirm = await opp_client.post(f"/v1/matches/{match['id']}/confirmation")
-        assert confirm.status_code == 201
 
-        resp = await api_client.post(f"/v1/matches/{match['id']}/withdrawal")
-        assert resp.status_code == 409
-        assert "no longer awaiting confirmation" in resp.json()["detail"]
+        # Post-proposal: every write path 409s with the freeze message.
+        post = await api_client.post(
+            f"/v1/matches/{match['id']}/games/2/scores/new",
+            json={"side_1_points": 11, "side_2_points": 7},
+        )
+        assert post.status_code == 409
+        assert "frozen" in post.json()["detail"]
 
 
-async def test_results_on_solo_finalizes_with_no_signature_row(
+async def test_either_participant_can_edit_before_first_proposal(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """Pre-first-proposal the working board is a shared scratchpad: *either*
+    participant may edit it (the score endpoints gate on participation, not the
+    creator). Both the creator and the opponent can create + update scores."""
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "shared-scratchpad-opp") as (
+        opp_client,
+        opp,
+    ):
+        match = await _create_match(api_client, opp.id, best_of=3)
+
+        # The creator enters game 1.
+        created = await api_client.post(
+            f"/v1/matches/{match['id']}/games/1/scores/new",
+            json={"side_1_points": 11, "side_2_points": 4},
+        )
+        assert created.status_code == 201
+        assert created.json()["can_score"] is True
+
+        # The opponent enters game 2 on the same scratchpad.
+        opp_created = await opp_client.post(
+            f"/v1/matches/{match['id']}/games/2/scores/new",
+            json={"side_1_points": 7, "side_2_points": 11},
+        )
+        assert opp_created.status_code == 201
+        # ...and the opponent can also overwrite the creator's game 1.
+        opp_edit = await opp_client.put(
+            f"/v1/matches/{match['id']}/games/1/scores",
+            json={"side_1_points": 9, "side_2_points": 11, "expected_version": 1},
+        )
+        assert opp_edit.status_code == 200
+
+
+async def test_results_on_solo_finalizes_with_no_acceptor_round_trip(
     api_client: AsyncClient, db_session: AsyncSession
 ):
     """Solo matches (no opponent picked) keep today's auto-finalize behavior
-    on /results — there's no second party to attest, so the match flips
-    straight to completed and no signature row is inserted."""
+    on propose — there's no second party to accept, so the proposer self-accepts
+    and the match flips straight to completed."""
     await start_session(api_client, db_session)
     match = (
         await api_client.post("/v1/matches", json={"best_of": 1, "rated": False})
     ).json()
     body = await _post_results(api_client, match["id"], best_of=1)
     assert body["status"] == "completed"
-    assert body["signatures"] == []
+    assert body["negotiation"]["viewer_state"] == "final"
 
 
 async def test_results_on_unrated_match_finalizes_immediately(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    """An unrated match with a real opponent skips the confirmation
-    round-trip (#485): confirmation exists to protect ratings from one-sided
-    claims, and an unrated match has no stakes worth a second sign-off. The
-    /results call flips straight to completed, stamps ``side.won``, and
-    inserts no signature row — same as the solo path."""
+    """An unrated match with a real opponent skips the accept round-trip (#485):
+    acceptance exists to protect ratings from one-sided claims, and an unrated
+    match has no stakes worth a second sign-off. The propose call flips straight
+    to completed, stamps ``side.won``, and self-accepts — same as the solo
+    path."""
     await start_session(api_client, db_session)
     async with opponent_session(db_session, "casual-opp") as (opp_client, opp):
         create = await api_client.post(
@@ -2331,313 +2645,34 @@ async def test_results_on_unrated_match_finalizes_immediately(
         body = await _post_results(api_client, match["id"])
         assert body["status"] == "completed"
         assert body["status_label"] == "Final"
-        assert body["signatures"] == []
+        assert body["negotiation"]["viewer_state"] == "final"
         sides = sorted(body["sides"], key=lambda s: s["side_number"])
         assert [s["won"] for s in sides] == [True, False]
         assert [s["rating_change"] for s in sides] == [None, None]
 
-        # Nothing left to confirm — the opponent's /confirmation is a 409.
-        confirm = await opp_client.post(f"/v1/matches/{match['id']}/confirmation")
-        assert confirm.status_code == 409
+        # Nothing left to accept — the match is final from the opponent's view
+        # too (the negotiation surfaces the agreed board, not a live proposal).
+        details = (await opp_client.get(f"/v1/matches/{match['id']}")).json()
+        assert details["negotiation"]["viewer_state"] == "final"
+        assert details["negotiation"]["your_turn"] is False
 
 
-async def test_confirmation_409_when_no_result_posted(
+async def test_standing_proposal_keeps_scores_public_but_not_won(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    await start_session(api_client, db_session)
-    async with opponent_session(db_session, "early-confirm-opp") as (opp_client, opp):
-        match = await _create_match(api_client, opp.id, best_of=3)
-        response = await opp_client.post(f"/v1/matches/{match['id']}/confirmation")
-        assert response.status_code == 409
-        assert "No posted result" in response.json()["detail"]
-
-
-async def test_dispute_409_when_no_signatures(
-    api_client: AsyncClient, db_session: AsyncSession
-):
-    await start_session(api_client, db_session)
-    async with opponent_session(db_session, "early-dispute-opp") as (opp_client, opp):
-        match = await _create_match(api_client, opp.id, best_of=3)
-        response = await opp_client.post(f"/v1/matches/{match['id']}/dispute")
-        assert response.status_code == 409
-
-
-async def test_signer_cannot_confirm_or_dispute_their_own_post(
-    api_client: AsyncClient, db_session: AsyncSession
-):
-    """``/confirmation`` and ``/dispute`` both require the caller to be a
-    participant who *hasn't* yet signed. The first poster has already signed,
-    so they get 409 on both."""
-    await start_session(api_client, db_session)
-    async with opponent_session(db_session, "self-sign-opp") as (_opp_client, opp):
-        match = await _create_match(api_client, opp.id, best_of=3)
-        await _post_results(api_client, match["id"])
-
-        self_confirm = await api_client.post(f"/v1/matches/{match['id']}/confirmation")
-        assert self_confirm.status_code == 409
-        self_dispute = await api_client.post(f"/v1/matches/{match['id']}/dispute")
-        assert self_dispute.status_code == 409
-
-
-async def test_non_participant_cannot_confirm_or_dispute(
-    api_client: AsyncClient, db_session: AsyncSession
-):
-    """A non-participant gets 404, mirroring the per-game write endpoints —
-    no way to learn the match exists from a write path."""
-    await start_session(api_client, db_session)
-    async with opponent_session(db_session, "non-part-opp") as (opp_client, opp):
-        match = await _create_match(api_client, opp.id, best_of=3)
-        await _post_results(api_client, match["id"])
-
-        # A third party — not the poster, not the opponent — can't sign.
-        async with make_client() as bystander_client:
-            await start_session(bystander_client, db_session)
-            confirm = await bystander_client.post(
-                f"/v1/matches/{match['id']}/confirmation"
-            )
-            assert confirm.status_code == 404
-            dispute = await bystander_client.post(f"/v1/matches/{match['id']}/dispute")
-            assert dispute.status_code == 404
-
-        # Sanity: the legit opponent can still confirm.
-        confirm = await opp_client.post(f"/v1/matches/{match['id']}/confirmation")
-        assert confirm.status_code == 201
-
-
-async def test_confirmation_409_after_already_finalized(
-    api_client: AsyncClient, db_session: AsyncSession
-):
-    """Once both sides have signed and the match is completed, further
-    /confirmation calls 409. ``_enforce_confirmable`` catches it on the
-    ``status != in_progress`` gate."""
-    await start_session(api_client, db_session)
-    async with opponent_session(db_session, "post-final-opp") as (opp_client, opp):
-        match = await _create_match(api_client, opp.id, best_of=3)
-        await _post_results(api_client, match["id"])
-        first = await opp_client.post(f"/v1/matches/{match['id']}/confirmation")
-        assert first.status_code == 201
-
-        again = await opp_client.post(f"/v1/matches/{match['id']}/confirmation")
-        assert again.status_code == 409
-
-
-async def test_response_unique_violation_returns_409_not_500(
-    api_client: AsyncClient, db_session: AsyncSession
-):
-    """The ``_enforce_*`` predicates catch a same-user double-sign before
-    the insert, but a racing in-flight transaction can still slip past
-    them and trip ``uq_match_result_responses_result_id_user_id`` at commit.
-    Map that to a 409 instead of a 500 so the user sees a coherent error on a
-    rapid double-click / retry / browser-back refire.
-
-    Simulated here by stuffing a pre-existing response into the DB *after* the
-    in-process handler's predicate read; commit then fails on the unique
-    constraint and the helper should translate to 409."""
-    await start_session(api_client, db_session)
-    async with opponent_session(db_session, "race-opp") as (opp_client, opp):
-        match = await _create_match(api_client, opp.id, best_of=3)
-        await _post_results(api_client, match["id"])
-
-        # Race surrogate: insert a duplicate opponent response on the pending
-        # result directly so the next /confirmation appends a second response
-        # and 409s on the unique constraint at commit.
-        result = (
-            await db_session.execute(
-                select(MatchResult).where(
-                    MatchResult.match_id == uuid.UUID(match["id"])
-                )
-            )
-        ).scalar_one()
-        db_session.add(
-            MatchResultResponse(
-                result_id=result.id,
-                user_id=opp.id,
-                kind=ResultResponseKind.confirm,
-            )
-        )
-        await db_session.commit()
-
-        response = await opp_client.post(f"/v1/matches/{match['id']}/confirmation")
-        assert response.status_code == 409
-        assert "already" in response.json()["detail"].lower()
-
-
-async def test_dispute_then_repost_finalizes_with_fresh_signatures(
-    api_client: AsyncClient, db_session: AsyncSession
-):
-    """End-to-end: poster posts, opp disputes, poster re-posts, opp confirms.
-    The signature set after re-post contains exactly the new poster's row;
-    after confirm, both sides are present."""
-    me = await start_session(api_client, db_session)
-    async with opponent_session(db_session, "dispute-flow-opp") as (opp_client, opp):
-        match = await _create_match(api_client, opp.id, best_of=3)
-        await _post_results(api_client, match["id"])
-
-        dispute = await opp_client.post(f"/v1/matches/{match['id']}/dispute")
-        assert dispute.status_code == 200
-        assert dispute.json()["signatures"] == []
-
-        # Re-post (same payload — doesn't matter what changed for this test).
-        re_post = await _post_results(api_client, match["id"])
-        assert re_post["status"] == "in_progress"
-        assert [sig["user_id"] for sig in re_post["signatures"]] == [str(me.id)]
-
-        confirm = await opp_client.post(f"/v1/matches/{match['id']}/confirmation")
-        assert confirm.status_code == 201
-        body = confirm.json()
-        assert body["status"] == "completed"
-        assert {sig["user_id"] for sig in body["signatures"]} == {
-            str(me.id),
-            str(opp.id),
-        }
-
-
-async def _load_results(db_session: AsyncSession, match_id: str) -> list[MatchResult]:
-    """Every posted result on the match, oldest first, with responses loaded —
-    the per-result history the new model preserves."""
-    return list(
-        (
-            await db_session.execute(
-                select(MatchResult)
-                .where(MatchResult.match_id == uuid.UUID(match_id))
-                .options(selectinload(MatchResult.responses))
-                .order_by(MatchResult.submitted_at)
-            )
-        )
-        .scalars()
-        .all()
-    )
-
-
-async def test_disputed_result_snapshot_survives_rescore(
-    api_client: AsyncClient, db_session: AsyncSession
-):
-    """A disputed result stays as immutable history: its ``games`` snapshot
-    preserves the rejected board even after the working scratchpad is re-scored
-    to a different game — the model now records *what was disputed* (#366)."""
-    await start_session(api_client, db_session)
-    async with opponent_session(db_session, "history-opp") as (opp_client, opp):
-        opp_id = opp.id  # capture before expire_all() below detaches ``opp``
-        match = await _create_match(api_client, opp.id, best_of=3)
-        # Claim a 2-0 board (game 2 is 11-7), then have the opponent reject it.
-        await api_client.post(
-            f"/v1/matches/{match['id']}/results",
-            json={
-                "games": [
-                    {"game_number": 1, "side_1_points": 11, "side_2_points": 4},
-                    {"game_number": 2, "side_1_points": 11, "side_2_points": 7},
-                ]
-            },
-        )
-        await opp_client.post(f"/v1/matches/{match['id']}/dispute")
-
-        # Re-score the working board's game 2 to a different (losing) score.
-        put = await opp_client.put(
-            f"/v1/matches/{match['id']}/games/2/scores",
-            json={"side_1_points": 5, "side_2_points": 11, "expected_version": 1},
-        )
-        assert put.status_code == 200
-
-        db_session.expire_all()
-        results = await _load_results(db_session, match["id"])
-        assert len(results) == 1
-        disputed = results[0]
-        assert disputed.outcome == ResultOutcome.disputed
-        # The snapshot is the originally-claimed board, NOT the re-scored one:
-        # game 2 is still 11-7, even though the working board now reads 5-11.
-        by_number = {g["game_number"]: g for g in disputed.games}
-        assert by_number[2]["side_1_points"] == 11
-        assert by_number[2]["side_2_points"] == 7
-        # The disputed result carries both the submitter's confirm and the
-        # opponent's dispute response as history.
-        kinds = {(r.user_id, r.kind) for r in disputed.responses}
-        assert (opp_id, ResultResponseKind.dispute) in kinds
-
-
-async def test_match_accumulates_results_across_dispute_repost_cycles(
-    api_client: AsyncClient, db_session: AsyncSession
-):
-    """Each ``POST /results`` is its own first-class row, so a match that
-    bounces through dispute→repost cycles accumulates one ``MatchResult`` per
-    posting with the right terminal ``outcome`` — the prior ones survive as
-    history rather than being mutated away."""
-    await start_session(api_client, db_session)
-    async with opponent_session(db_session, "cycles-opp") as (opp_client, opp):
-        match = await _create_match(api_client, opp.id, best_of=3)
-
-        # Post → dispute, post → dispute, post → confirm: three results.
-        await _post_results(api_client, match["id"])
-        await opp_client.post(f"/v1/matches/{match['id']}/dispute")
-        await _post_results(api_client, match["id"])
-        await opp_client.post(f"/v1/matches/{match['id']}/dispute")
-        await _post_results(api_client, match["id"])
-        confirm = await opp_client.post(f"/v1/matches/{match['id']}/confirmation")
-        assert confirm.status_code == 201
-
-        db_session.expire_all()
-        results = await _load_results(db_session, match["id"])
-        assert [r.outcome for r in results] == [
-            ResultOutcome.disputed,
-            ResultOutcome.disputed,
-            ResultOutcome.confirmed,
-        ]
-
-
-async def test_dispute_zeros_side_score_to_match_won_reset(
-    api_client: AsyncClient, db_session: AsyncSession
-):
-    """The denormalized ``side.score`` column has to stay consistent with
-    ``side.won`` after a dispute. The BFF derives ``games_won`` from
-    ``match.games`` (so the API response keeps the canonical counts), but
-    any direct DB reader of ``side.score`` (analytics, future BFFs, the
-    rating recompute job) would otherwise see won=None alongside score>0
-    — a contradictory row state ``api/CLAUDE.md`` flags as a smell."""
-    await start_session(api_client, db_session)
-    async with opponent_session(db_session, "side-score-opp") as (opp_client, opp):
-        match = await _create_match(api_client, opp.id, best_of=3)
-        await _post_results(api_client, match["id"])
-        # After /results: side.score should reflect the win counts.
-        row = (
-            await db_session.execute(
-                select(Match)
-                .where(Match.id == uuid.UUID(match["id"]))
-                .options(selectinload(Match.sides))
-            )
-        ).scalar_one()
-        sides_by_number = {s.side_number: s for s in row.sides}
-        assert sides_by_number[1].score == 2
-        assert sides_by_number[2].score == 0
-
-        await opp_client.post(f"/v1/matches/{match['id']}/dispute")
-        db_session.expire_all()
-        row = (
-            await db_session.execute(
-                select(Match)
-                .where(Match.id == uuid.UUID(match["id"]))
-                .options(selectinload(Match.sides))
-            )
-        ).scalar_one()
-        sides_by_number = {s.side_number: s for s in row.sides}
-        # Both won AND score reset on dispute.
-        assert [sides_by_number[n].won for n in (1, 2)] == [None, None]
-        assert [sides_by_number[n].score for n in (1, 2)] == [0, 0]
-
-
-async def test_awaiting_confirmation_response_keeps_scores_public_but_not_won(
-    api_client: AsyncClient, db_session: AsyncSession
-):
-    """Locks the awaiting-confirmation read contract for both the authed
-    detail endpoint AND the anonymous public read path. From the moment
-    ``POST /results`` lands, ``games[].score`` and the games-won counts are
-    visible — the opponent (and any third party) needs to see what's being
-    attested to. But ``side.won`` stays null until /confirmation ratifies
-    the result (#485): no official W/L before the opponent signs."""
+    """Locks the awaiting-confirmation read contract for both the authed detail
+    endpoint AND the anonymous public read path. From the moment the proposal
+    lands, ``games[].score`` and the games-won counts are visible — the opponent
+    (and any third party) needs to see what's being claimed. But ``side.won``
+    stays null until acceptance ratifies the result (#485): no official W/L
+    before the opposing side accepts. The spectator's neutral negotiation view
+    reads ``review`` with no actions."""
     await start_session(api_client, db_session)
     async with opponent_session(db_session, "shape-opp") as (_opp_client, opp):
         match = await _create_match(api_client, opp.id, best_of=3)
         await _post_results(api_client, match["id"])
 
-        # Authed read (poster's perspective).
+        # Authed read (proposer's perspective).
         authed = (await api_client.get(f"/v1/matches/{match['id']}")).json()
         assert authed["status"] == "in_progress"
         assert authed["status_label"] == "Awaiting confirmation"
@@ -2645,11 +2680,12 @@ async def test_awaiting_confirmation_response_keeps_scores_public_but_not_won(
         assert [s["won"] for s in sides] == [None, None]
         assert [s["games_won"] for s in sides] == [2, 0]
         # Per-game scores stay visible — the opponent (and any third party)
-        # needs to see what's being attested to.
+        # needs to see what's being claimed.
         for g in sorted(authed["games"], key=lambda g: g["game_number"]):
             assert g["score"] is not None
             assert g["score"]["side_1_points"] > 0
-        assert len(authed["signatures"]) == 1
+        # The proposer is awaiting the opponent.
+        assert authed["negotiation"]["viewer_state"] == "awaiting"
 
         # Anonymous read (public share route via the same endpoint).
         async with make_client() as anon:
@@ -2660,19 +2696,23 @@ async def test_awaiting_confirmation_response_keeps_scores_public_but_not_won(
         assert [s["won"] for s in anon_sides] == [None, None]
         for g in sorted(anon_view["games"], key=lambda g: g["game_number"]):
             assert g["score"] is not None
-        # Anonymous viewers see signatures (just user_id + signed_at — no PII).
-        assert len(anon_view["signatures"]) == 1
+        # Spectator's neutral negotiation view: there is a standing proposal but
+        # they have no side, so it's a read-only ``review`` with no actions.
+        anon_neg = anon_view["negotiation"]
+        assert anon_neg["viewer_state"] == "review"
+        assert anon_neg["your_turn"] is False
+        assert anon_neg["diff"] is None
+        assert anon_neg["prior_result"] is None
         # No write affordances for the spectator.
         assert anon_view["can_score"] is False
         assert anon_view["can_finalize"] is False
-        assert anon_view["can_confirm"] is False
 
 
 async def test_list_status_label_reflects_awaiting_confirmation(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    """A list row for a match with a posted-but-unconfirmed result shows
-    the ``Awaiting confirmation`` label, even though ``status`` remains
+    """A list row for a match with a standing (unaccepted) result shows the
+    ``Awaiting confirmation`` label, even though ``status`` remains
     ``in_progress`` — the FE renders the label directly."""
     await start_session(api_client, db_session)
     async with opponent_session(db_session, "list-label-opp") as (_opp_client, opp):
@@ -2685,116 +2725,116 @@ async def test_list_status_label_reflects_awaiting_confirmation(
     assert row["status_label"] == "Awaiting confirmation"
 
 
-async def test_list_row_can_confirm_flag_for_pending_signer(
+async def test_list_row_negotiation_reflects_whose_turn(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    """The matches list surfaces ``can_confirm`` so the FE can flag rows the
-    caller owes a signature on. The poster sees False (they signed); the
-    opponent sees True."""
+    """The matches list carries the same viewer-relative ``negotiation`` block
+    as the details endpoint, so the FE can pick the row CTA without re-deriving
+    sign-off state. The proposer's row reads ``awaiting`` (not their turn); the
+    opposing side's row reads ``review`` (their turn)."""
     await start_session(api_client, db_session)
-    async with opponent_session(db_session, "list-can-confirm-opp") as (
-        opp_client,
-        opp,
-    ):
+    async with opponent_session(db_session, "list-neg-opp") as (opp_client, opp):
         match = await _create_match(api_client, opp.id, best_of=3)
         await _post_results(api_client, match["id"])
 
         my_list = (await api_client.get("/v1/matches")).json()
         my_row = next(r for r in my_list["items"] if r["id"] == match["id"])
-        assert my_row["can_confirm"] is False
+        assert my_row["negotiation"]["viewer_state"] == "awaiting"
+        assert my_row["negotiation"]["your_turn"] is False
 
         opp_list = (await opp_client.get("/v1/matches")).json()
         opp_row = next(r for r in opp_list["items"] if r["id"] == match["id"])
-        assert opp_row["can_confirm"] is True
+        assert opp_row["negotiation"]["viewer_state"] == "review"
+        assert opp_row["negotiation"]["your_turn"] is True
 
 
-async def test_concurrent_confirm_and_dispute_serialize(
+async def test_concurrent_accept_and_counter_serialize(
     api_client: AsyncClient, db_session: AsyncSession, engine: AsyncEngine
 ):
-    """Regression for #365. The opponent firing ``POST /confirmation`` and
-    ``POST /dispute`` at the same instant must not corrupt the match.
+    """The opposing side firing an acceptance while the proposing side fires a
+    counter at the same instant must not corrupt the match. The row lock in
+    ``_load_match_for_scoring(..., lock=True)`` serializes them: exactly one
+    transition wins on the standing result, the other re-reads the committed
+    post-image and 409s, and the match invariants always hold.
 
-    Before the row lock in ``_load_match_for_scoring(..., lock=True)`` both
-    transactions read the same pre-image, both passed ``_enforce_confirmable``,
-    and both committed — leaving a ``completed`` match with ``won=None`` on
-    both sides, a single signature, and a rating change applied. The lock
-    serializes them: exactly one transition wins, the other re-reads the
-    committed post-image and 409s, and the match invariants always hold.
-
-    This drives the two route handlers on *separate* DB sessions (real
-    distinct Postgres connections) via ``asyncio.gather`` so the ``FOR UPDATE``
-    actually blocks — the shared ``db_session`` override can't surface the race.
+    Drives the two handlers on *separate* DB sessions via ``asyncio.gather`` so
+    the ``FOR UPDATE`` actually blocks — the shared ``db_session`` override can't
+    surface the race.
     """
-    await start_session(api_client, db_session)
-    async with opponent_session(db_session, "race-opp") as (_opp_client, opp):
-        # Set up a rated best-of-1 in "Awaiting confirmation": creator posts a
-        # decided result, leaving the opponent owing a signature. These HTTP
-        # calls commit, so fresh sessions on the same engine see the rows.
+    me = await start_session(api_client, db_session)
+    async with opponent_session(db_session, "race-opp") as (opp_client, opp):
+        # Rated best-of-1: the OPPONENT proposes (via their own committed HTTP
+        # call), leaving ME owing a review. Capture the standing result id.
         match = await _create_match(api_client, opp.id, best_of=1)
-        await _post_results(api_client, match["id"], best_of=1)
         match_id = uuid.UUID(match["id"])
-        opp_id = opp.id
+        me_id, opp_id = me.id, opp.id
+        posted = await _post_results(opp_client, match["id"], best_of=1)
+        standing_id = uuid.UUID(posted["negotiation"]["standing_result"]["id"])
 
         make_session = async_sessionmaker(engine, expire_on_commit=False)
 
-        async def run(
-            handler: Callable[[uuid.UUID, User, AsyncSession], Awaitable[object]],
-        ) -> object:
-            # Each racer gets its own session/connection, mirroring two
-            # concurrent requests. Return the HTTP status on rejection so the
-            # assertions can tell winner from loser.
+        async def accept() -> object:
             async with make_session() as session:
-                opp_user = (
-                    await session.execute(select(User).where(User.id == opp_id))
+                actor = (
+                    await session.execute(select(User).where(User.id == me_id))
                 ).scalar_one()
                 try:
-                    await handler(match_id, opp_user, session)
-                    return "ok"
+                    await accept_match_result(match_id, standing_id, actor, session)
+                    return "ok-accept"
                 except HTTPException as exc:
                     return exc.status_code
 
-        outcomes = await asyncio.gather(
-            run(confirm_match_result), run(dispute_match_result)
-        )
+        async def counter() -> object:
+            async with make_session() as session:
+                actor = (
+                    await session.execute(select(User).where(User.id == opp_id))
+                ).scalar_one()
+                notifications = NotificationService(session, FakeSender())
+                payload = MatchResultsWrite(
+                    games=[
+                        MatchResultsGameWrite(
+                            game_number=1, side_1_points=4, side_2_points=11
+                        )
+                    ],
+                    supersedes_result_id=standing_id,
+                )
+                try:
+                    await post_match_result(
+                        match_id, payload, actor, session, notifications
+                    )
+                    return "ok-counter"
+                except HTTPException as exc:
+                    return exc.status_code
 
-        # Exactly one transition wins; the other is cleanly rejected (409),
-        # never a second silent success.
-        assert sorted(str(o) for o in outcomes) == ["409", "ok"], outcomes
+        outcomes = await asyncio.gather(accept(), counter())
+        # Exactly one transition wins on the standing result; the other is a
+        # clean 409. (Either the accept lands first — the counter then 409s
+        # because the standing result is accepted — or the counter lands first
+        # and the accept 409s because its target was superseded.)
+        oks = [o for o in outcomes if isinstance(o, str)]
+        rejects = [o for o in outcomes if o == 409]
+        assert len(oks) == 1 and len(rejects) == 1, outcomes
 
-        # The committed match holds its invariants no matter which won.
         async with make_session() as verify:
             final = (
                 await verify.execute(
                     select(Match)
                     .where(Match.id == match_id)
-                    .options(
-                        selectinload(Match.sides),
-                        selectinload(Match.results).selectinload(MatchResult.responses),
-                    )
+                    .options(selectinload(Match.sides), selectinload(Match.results))
                 )
             ).scalar_one()
             sides = sorted(final.sides, key=lambda s: s.side_number)
-            # Exactly one result was posted, whichever transition won.
-            assert len(final.results) == 1
-            result = final.results[0]
-            confirms = [
-                r for r in result.responses if r.kind == ResultResponseKind.confirm
-            ]
+            accepted = [r for r in final.results if r.accepted_by_user_id is not None]
             if final.status == MatchStatus.completed:
-                # Confirm won: the result is confirmed, both confirms present,
-                # and a real outcome stamped.
-                assert {s.won for s in sides} == {True, False}, [s.won for s in sides]
-                assert result.outcome == ResultOutcome.confirmed
-                assert len(confirms) == 2
+                # Accept won: exactly one result accepted, real outcome stamped.
+                assert len(accepted) == 1
+                assert {s.won for s in sides} == {True, False}
             else:
-                # Dispute won: the result is terminally disputed (its dispute
-                # response recorded), the match disputed, no recorded winner.
-                assert final.status == MatchStatus.disputed
-                assert result.outcome == ResultOutcome.disputed
-                assert any(
-                    r.kind == ResultResponseKind.dispute for r in result.responses
-                )
-                assert [s.won for s in sides] == [None, None]
+                # Counter won: the match is still in_progress with a new standing
+                # proposal and no accepted result yet.
+                assert final.status == MatchStatus.in_progress
+                assert accepted == []
+                assert len(final.results) == 2
 
 
 # ----- result-confirmation delivery (enqueued to the worker) --------------

@@ -17,7 +17,6 @@ import {
 } from "@/components/matches/match-details";
 
 import { confirmationCalloutPage } from "./match-details/confirmation-callout.page";
-import { disputeNoticeFetcherPage } from "./match-details/dispute-notice/dispute-notice-fetcher.page";
 import { finalizeCalloutPage } from "./match-details/finalize-callout.page";
 import { scoreboardPage } from "./match-details/scoreboard.page";
 
@@ -102,15 +101,8 @@ export const matchDetailsPage = {
   finalizeCallout: finalizeCalloutPage.within(screen),
 
   /**
-   * The Confirm/Dispute sign-off callout is rendered through the self-fetching
+   * The Accept sign-off callout is rendered through the self-fetching
    * `ConfirmationCallout` wrapper — reuse its page object's callout queries.
    */
   confirmationCallout: confirmationCalloutPage.within(screen),
-
-  /**
-   * The "your opponent disputed your result" notice, rendered through the
-   * self-fetching `DisputeNotice` wrapper — reuse the fetcher page object's
-   * notice queries.
-   */
-  disputeNotice: disputeNoticeFetcherPage.within(screen),
 };

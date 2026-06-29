@@ -1,15 +1,7 @@
 import {
-  mockMatchConfirmationEndpoint,
-  type MatchConfirmationResolver,
-} from "@/mocks/endpoints/matches/match-confirmation.endpoint";
-import {
-  mockMatchDisputeEndpoint,
-  type MatchDisputeResolver,
-} from "@/mocks/endpoints/matches/match-dispute.endpoint";
-import {
-  mockMatchWithdrawalEndpoint,
-  type MatchWithdrawalResolver,
-} from "@/mocks/endpoints/matches/match-withdrawal.endpoint";
+  mockMatchAcceptanceEndpoint,
+  type MatchAcceptanceResolver,
+} from "@/mocks/endpoints/matches/match-acceptance.endpoint";
 import { server } from "@/mocks/server";
 import { render, screen, type Container } from "@/test/utilities";
 
@@ -32,28 +24,18 @@ const scoped = (container: Container) => ({
 
 /**
  * Test page-object for `ConfirmationCalloutActive` — the layer that owns the
- * confirm/dispute mutations. Tests stub `POST /v1/matches/:matchId/confirmation`
- * and `.../dispute` and drive the CTAs; no GET stub is needed because the
- * mutations' cache invalidation only refetches *mounted* queries, and this
- * harness mounts none.
+ * accept mutation. Tests stub
+ * `POST /v1/matches/:matchId/results/:resultId/acceptance` and drive the CTA;
+ * no GET stub is needed because the mutation's cache invalidation only
+ * refetches *mounted* queries, and this harness mounts none.
  */
 export const confirmationCalloutActivePage = {
-  /** Stub `POST /v1/matches/:matchId/confirmation`. */
-  mockConfirmationEndpoint(resolver: MatchConfirmationResolver) {
-    mockMatchConfirmationEndpoint(server, resolver);
+  /** Stub `POST /v1/matches/:matchId/results/:resultId/acceptance`. */
+  mockAcceptanceEndpoint(resolver: MatchAcceptanceResolver) {
+    mockMatchAcceptanceEndpoint(server, resolver);
   },
 
-  /** Stub `POST /v1/matches/:matchId/dispute`. */
-  mockDisputeEndpoint(resolver: MatchDisputeResolver) {
-    mockMatchDisputeEndpoint(server, resolver);
-  },
-
-  /** Stub `POST /v1/matches/:matchId/withdrawal`. */
-  mockWithdrawalEndpoint(resolver: MatchWithdrawalResolver) {
-    mockMatchWithdrawalEndpoint(server, resolver);
-  },
-
-  /** The submitter's passive awaiting view, where the Withdraw CTA lives. */
+  /** The submitter's passive awaiting view. */
   awaitingView: buildAwaitingConfirmationView,
 
   render(overrides: Partial<ConfirmationCalloutActiveProps> = {}) {

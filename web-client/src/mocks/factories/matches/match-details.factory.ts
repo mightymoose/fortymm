@@ -1,5 +1,7 @@
 import type { components } from '@/api/schema'
 
+import { LIVE_NEGOTIATION } from '@/mocks/match-store'
+
 import { buildMatchDetailsData } from './scoreboard.factory'
 
 type MatchDetails = components['schemas']['app__schemas__match__MatchDetails']
@@ -8,7 +10,6 @@ type MatchDetailsPlayer = components['schemas']['MatchDetailsPlayer']
 type MatchDetailsGame = components['schemas']['MatchDetailsGame']
 type MatchDetailsScore = components['schemas']['MatchDetailsScore']
 type MatchDetailsCurrentGame = components['schemas']['MatchDetailsCurrentGame']
-type MatchSignatureView = components['schemas']['MatchSignatureView']
 type MatchDetailsPlayerForm = components['schemas']['MatchDetailsPlayerForm']
 type MatchDetailsFormResult = components['schemas']['MatchDetailsFormResult']
 type MatchDetailsH2H = components['schemas']['MatchDetailsH2H']
@@ -181,10 +182,7 @@ export function buildMatchDetails(
     current_game: currentGame,
     can_score: false,
     can_finalize: false,
-    can_confirm: false,
-    can_withdraw: false,
-    signatures: [],
-    disputed_by_user_id: null,
+    negotiation: LIVE_NEGOTIATION,
     recent_form: [],
     head_to_head: null,
     data: buildMatchDetailsData(),
@@ -199,7 +197,6 @@ export type {
   MatchDetailsGame,
   MatchDetailsScore,
   MatchDetailsCurrentGame,
-  MatchSignatureView,
   MatchDetailsPlayerForm,
   MatchDetailsH2H,
   MatchDetailsH2HMeeting,

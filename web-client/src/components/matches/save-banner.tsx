@@ -7,7 +7,7 @@ import {
   fireScoreSave,
   matchDetailRoute,
   scoringEditRoute,
-  useFinalizeMatch,
+  useProposeResult,
   useMatch,
 } from '@/api/matches'
 import { decidedSide, type GamePoints } from '@/lib/scoring'
@@ -61,7 +61,7 @@ function FailedSaveBanner({ matchId, activeGameNumber }: SaveBannerProps) {
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const { data } = useMatch(matchId)
-  const finalizeMutation = useFinalizeMatch(matchId)
+  const finalizeMutation = useProposeResult(matchId)
   // Conflicts are handled by ConflictReviewBanner — exclude them here so the
   // retry/finalize path never re-fires a stale write over the committed score.
   const allFailed = useFailedGameSaves(matchId).filter((entry) => !entry.conflict)
@@ -141,7 +141,7 @@ function FailedSaveBanner({ matchId, activeGameNumber }: SaveBannerProps) {
   // The finalize POST is in flight — lock the button and swap its label.
   const posting = wouldFinalize && finalizeMutation.isPending
   // A finalize that reached the server and failed (409 a result was already
-  // posted, 422 validation drift, 500). `useFinalizeMatch`'s contract says its
+  // posted, 422 validation drift, 500). `useProposeResult`'s contract says its
   // errors matter — unlike the swallowed per-game saves — so the banner
   // surfaces it (the entry screen does the same). Offline we never call
   // finalize (see `retry`), so an error here is always a real server response.

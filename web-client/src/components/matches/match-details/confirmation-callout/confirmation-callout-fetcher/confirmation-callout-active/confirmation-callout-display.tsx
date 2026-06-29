@@ -4,35 +4,22 @@ import type { ConfirmationCalloutView } from "../confirmation-callout-query";
 
 export interface ConfirmationCalloutDisplayProps {
   view: ConfirmationCalloutView;
-  /** True while the confirm request is in flight — swaps the Confirm label
-   * to "Confirming…" and disables both CTAs. */
-  confirmPending: boolean;
-  /** True while the dispute request is in flight — swaps the Dispute label
-   * to "Disputing…" and disables both CTAs. */
-  disputePending: boolean;
-  /** True while the withdraw request is in flight — swaps the Withdraw label
-   * to "Withdrawing…" and disables the CTA. */
-  withdrawPending: boolean;
+  /** True while the accept request is in flight — swaps the Accept label to
+   * "Accepting…" and disables the CTA. */
+  acceptPending: boolean;
   /** Inline API failure to surface beneath the body copy; null when the last
    * attempt succeeded or none has been made. */
   errorMessage: string | null;
-  onConfirm: () => void;
-  onDispute: () => void;
-  onWithdraw: () => void;
+  onAccept: () => void;
 }
 
 export function ConfirmationCalloutDisplay({
   view,
-  confirmPending,
-  disputePending,
-  withdrawPending,
+  acceptPending,
   errorMessage,
-  onConfirm,
-  onDispute,
-  onWithdraw,
+  onAccept,
 }: ConfirmationCalloutDisplayProps) {
   if (view.kind === "actionable") {
-    const pending = confirmPending || disputePending;
     return (
       <section
         className="md-confirm-callout md-confirm-callout--featured"
@@ -44,12 +31,11 @@ export function ConfirmationCalloutDisplay({
             awaiting your sign-off
           </div>
           <h3 className="md-confirm-callout__headline">
-            Confirm the result to finalize this match.
+            Accept the result to finalize this match.
           </h3>
           <p className="md-confirm-callout__body">
-            Your opponent has posted the result below. Confirm if the scores
-            are right, or dispute to send the match back to in-progress so the
-            wrong game can be re-scored.
+            Your opponent has posted the result below. Accept it to finalize the
+            match.
           </p>
           {errorMessage && (
             <p role="alert" className="mt-1.5 text-xs text-[color:var(--loss)]">
@@ -60,19 +46,11 @@ export function ConfirmationCalloutDisplay({
         <div className="md-confirm-callout__actions">
           <button
             type="button"
-            className="md-btn md-btn--ghost"
-            disabled={pending}
-            onClick={onDispute}
-          >
-            {disputePending ? "Disputing…" : "Dispute"}
-          </button>
-          <button
-            type="button"
             className="md-btn md-btn--primary"
-            disabled={pending}
-            onClick={onConfirm}
+            disabled={acceptPending}
+            onClick={onAccept}
           >
-            {confirmPending ? "Confirming…" : "Confirm result"}
+            {acceptPending ? "Accepting…" : "Accept result"}
           </button>
         </div>
       </section>
@@ -85,17 +63,11 @@ export function ConfirmationCalloutDisplay({
       data-testid="match-confirm-callout"
     >
       <div className="md-confirm-callout__copy">
-        <Overline as="h3">Posted · awaiting confirmation</Overline>
+        <Overline as="h3">Posted · awaiting acceptance</Overline>
         <p className="md-confirm-callout__body">
           You've posted this result. Waiting on{" "}
-          <strong>{view.pendingSignerName}</strong> to confirm or dispute
-          before the match is finalized.
-          {view.canWithdraw && (
-            <>
-              {" "}
-              Spotted a mistake? Withdraw it to re-score and post again.
-            </>
-          )}
+          <strong>{view.pendingSignerName}</strong> to accept before the match
+          is finalized.
         </p>
         {errorMessage && (
           <p role="alert" className="mt-1.5 text-xs text-[color:var(--loss)]">
@@ -103,18 +75,6 @@ export function ConfirmationCalloutDisplay({
           </p>
         )}
       </div>
-      {view.canWithdraw && (
-        <div className="md-confirm-callout__actions">
-          <button
-            type="button"
-            className="md-btn md-btn--ghost"
-            disabled={withdrawPending}
-            onClick={onWithdraw}
-          >
-            {withdrawPending ? "Withdrawing…" : "Withdraw result"}
-          </button>
-        </div>
-      )}
     </section>
   );
 }

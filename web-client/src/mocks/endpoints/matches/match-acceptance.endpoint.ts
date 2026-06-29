@@ -7,13 +7,16 @@ import type { ErrorBody } from "../error-body";
 type Backend = typeof server | typeof worker;
 type MatchDetails = components["schemas"]["app__schemas__match__MatchDetails"];
 
-export type MatchDisputeResolver = HttpResponseResolver<
-  { matchId: string },
+export type MatchAcceptanceResolver = HttpResponseResolver<
+  { matchId: string; resultId: string },
   never,
   MatchDetails | ErrorBody
 >;
 
-export const mockMatchDisputeEndpoint = (
+export const mockMatchAcceptanceEndpoint = (
   backend: Backend,
-  resolver: MatchDisputeResolver,
-) => backend.use(http.post("*/v1/matches/:matchId/dispute", resolver));
+  resolver: MatchAcceptanceResolver,
+) =>
+  backend.use(
+    http.post("*/v1/matches/:matchId/results/:resultId/acceptance", resolver),
+  );

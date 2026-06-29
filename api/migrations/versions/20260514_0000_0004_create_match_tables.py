@@ -39,23 +39,12 @@ match_status_enum = postgresql.ENUM(
     name="match_status",
     create_type=False,
 )
-# Lifecycle of one posted result (``match_results.outcome``). See
-# app/models/match_result.py:ResultOutcome.
-result_outcome_enum = postgresql.ENUM(
-    "pending",
-    "confirmed",
-    "disputed",
-    "superseded",
-    name="result_outcome",
-    create_type=False,
-)
 
 
 def upgrade() -> None:
     bind = op.get_bind()
     verification_policy_enum.create(bind, checkfirst=True)
     match_status_enum.create(bind, checkfirst=True)
-    result_outcome_enum.create(bind, checkfirst=True)
 
     op.create_table(
         "match_settings",
@@ -174,10 +163,11 @@ def upgrade() -> None:
         ["status", sa.text("completed_at DESC")],
     )
 
-    # A posted result — one row per ``POST /results``. The claimed board is an
+    # A proposed result — one row per ``POST /results``. The claimed board is an
     # immutable JSONB snapshot (``games``); the working ``match_games``
-    # scratchpad stays the live, editable board. Confirm/dispute attach as
-    # ``match_result_responses`` rows (created in revision 0007).
+    # scratchpad stays the live, editable board. A counter-proposal is a new row
+    # pointing at the one it supersedes (linear chain); acceptance stamps
+    # ``accepted_by_user_id``/``accepted_at``.
     op.create_table(
         "match_results",
         sa.Column(
@@ -207,13 +197,35 @@ def upgrade() -> None:
             server_default=sa.func.now(),
             nullable=False,
         ),
+        # The proposal this row counters. NULL for the first proposal. The UNIQUE
+        # constraint bounds each proposal to at most one successor, so the chain
+        # stays linear and two concurrent counters to the same parent collide
+        # (one 409s on the violation).
         sa.Column(
-            "outcome",
-            result_outcome_enum,
-            nullable=False,
-            server_default="pending",
+            "supersedes_result_id",
+            postgresql.UUID(as_uuid=True),
+            sa.ForeignKey("match_results.id", ondelete="CASCADE"),
+            nullable=True,
+        ),
+        # The opposing-side participant who accepted this proposal; NULL while it
+        # is still standing. RESTRICT mirrors submitted_by_user_id so a merge
+        # repoints rather than drops. See app/account_merge.py.
+        sa.Column(
+            "accepted_by_user_id",
+            postgresql.UUID(as_uuid=True),
+            sa.ForeignKey("users.id", ondelete="RESTRICT"),
+            nullable=True,
+        ),
+        sa.Column(
+            "accepted_at",
+            sa.DateTime(timezone=True),
+            nullable=True,
         ),
         sa.Column("games", postgresql.JSONB(), nullable=False),
+        sa.UniqueConstraint(
+            "supersedes_result_id",
+            name="uq_match_results_supersedes_result_id",
+        ),
     )
     op.create_index("ix_match_results_match_id", "match_results", ["match_id"])
 
@@ -380,6 +392,5 @@ def downgrade() -> None:
     op.drop_table("match_settings")
 
     bind = op.get_bind()
-    result_outcome_enum.drop(bind, checkfirst=True)
     match_status_enum.drop(bind, checkfirst=True)
     verification_policy_enum.drop(bind, checkfirst=True)

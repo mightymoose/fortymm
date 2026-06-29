@@ -1,22 +1,21 @@
 import type { ConfirmationCalloutDisplayProps } from "./confirmation-callout-display";
 import type { ConfirmationCalloutView } from "../confirmation-callout-query";
 
-/** The featured variant: a posted result awaiting the viewer's sign-off. */
+/** The featured variant: the opponent's standing proposal awaits the viewer's
+ * acceptance. Carries the standing result's id (the acceptance token). */
 export function buildActionableConfirmationView(
   overrides: Partial<Extract<ConfirmationCalloutView, { kind: "actionable" }>> = {},
 ): ConfirmationCalloutView {
-  return { kind: "actionable", ...overrides };
+  return { kind: "actionable", resultId: "r-1", ...overrides };
 }
 
-/** The passive variant: the viewer has posted, leo.mertens hasn't signed.
- * Defaults to the submitter's own view (``canWithdraw`` true). */
+/** The passive variant: the viewer has posted, leo.mertens hasn't accepted. */
 export function buildAwaitingConfirmationView(
   overrides: Partial<Extract<ConfirmationCalloutView, { kind: "awaiting" }>> = {},
 ): ConfirmationCalloutView {
   return {
     kind: "awaiting",
     pendingSignerName: "leo.mertens",
-    canWithdraw: true,
     ...overrides,
   };
 }
@@ -28,13 +27,9 @@ export function buildConfirmationCalloutDisplayProps(
 ): ConfirmationCalloutDisplayProps {
   return {
     view: buildActionableConfirmationView(),
-    confirmPending: false,
-    disputePending: false,
-    withdrawPending: false,
+    acceptPending: false,
     errorMessage: null,
-    onConfirm: () => {},
-    onDispute: () => {},
-    onWithdraw: () => {},
+    onAccept: () => {},
     ...overrides,
   };
 }

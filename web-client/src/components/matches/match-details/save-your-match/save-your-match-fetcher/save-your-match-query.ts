@@ -21,8 +21,8 @@ export type SaveYourMatchView = {
   rightUsername: string;
   /** When the match was created — stamped onto the anchor. */
   createdAt: string;
-  /** When the viewer can still confirm/dispute, soften the card so it doesn't
-   * compete with the confirmation callout above it. */
+  /** When the viewer still has a result to accept, soften the card so it
+   * doesn't compete with the confirmation callout above it. */
   canConfirm: boolean;
 };
 
@@ -53,7 +53,7 @@ const selectSaveYourMatch = (
     rightInitials: initialsOf(rightName),
     rightUsername: rightName,
     createdAt: details.created_at,
-    canConfirm: details.can_confirm,
+    canConfirm: details.negotiation.your_turn,
   };
 };
 

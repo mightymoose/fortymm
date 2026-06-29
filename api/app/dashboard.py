@@ -6,7 +6,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import aliased, selectinload
 
 from app.attention import attention_priority, list_attention_kind
 from app.db import get_session
@@ -24,13 +24,10 @@ from app.models import (
     League,
     Match,
     MatchResult,
-    MatchResultResponse,
     MatchSide,
     MatchSidePlayer,
     MatchStatus,
     RatingHistory,
-    ResultOutcome,
-    ResultResponseKind,
     User,
     UserLeagueRating,
 )
@@ -75,38 +72,40 @@ async def get_dashboard(
     db: AsyncSession = Depends(get_session),
 ) -> DashboardResponse:
     # Actionable open matches the user participates in are pulled in full
-    # (signatures + sides are needed to classify each into an attention bucket
+    # (results + sides are needed to classify each into an attention bucket
     # and to deep-link a "score" row); completed matches feed the recent-results
     # table. The eager-loaded set is capped at ATTENTION_BANNERS_LIMIT — the
     # panel only renders a few rows, and the exact total/waiting counts come from
     # the cheap aggregates below — so an active tournament player doesn't pay to
     # load every open match (#216).
     #
-    # An in_progress match the current user has *already confirmed* is "waiting
-    # on the opponent": it's never an attention row, only a waiting count, so we
-    # exclude it from the eager load entirely rather than load-then-discard it.
-    # "Confirmed" = a ``confirm`` response by this user on the pending result.
-    my_signature_exists = (
-        select(MatchResultResponse.id)
-        .join(MatchResult, MatchResult.id == MatchResultResponse.result_id)
+    # An in_progress match where the current user proposed the *standing* result
+    # is "waiting on the opponent" to accept: it's never an attention row, only a
+    # waiting count, so we exclude it from the eager load entirely rather than
+    # load-then-discard it. The standing result is the unaccepted head of the
+    # supersede chain (nothing supersedes it); the current user owes a move on
+    # every other in_progress match — either no result yet ("score") or a
+    # standing result the *other* side proposed ("review"). The Python classifier
+    # (``list_attention_kind``) refines which per row.
+    _superseding = aliased(MatchResult)
+    my_standing_proposal_exists = (
+        select(MatchResult.id)
         .where(
             MatchResult.match_id == Match.id,
-            MatchResult.outcome == ResultOutcome.pending,
-            MatchResultResponse.user_id == current_user.id,
-            MatchResultResponse.kind == ResultResponseKind.confirm,
+            MatchResult.accepted_by_user_id.is_(None),
+            MatchResult.submitted_by_user_id == current_user.id,
+            ~select(_superseding.id)
+            .where(_superseding.supersedes_result_id == MatchResult.id)
+            .exists(),
         )
         .exists()
     )
     in_progress_q = (
         participant_filter(select(Match), current_user.id)
-        .where(Match.status == MatchStatus.in_progress, ~my_signature_exists)
-        .options(*match_eager_options())
-        .order_by(Match.updated_at.asc())
-        .limit(ATTENTION_BANNERS_LIMIT)
-    )
-    disputed_q = (
-        participant_filter(select(Match), current_user.id)
-        .where(Match.status == MatchStatus.disputed)
+        .where(
+            Match.status == MatchStatus.in_progress,
+            ~my_standing_proposal_exists,
+        )
         .options(*match_eager_options())
         .order_by(Match.updated_at.asc())
         .limit(ATTENTION_BANNERS_LIMIT)
@@ -124,22 +123,20 @@ async def get_dashboard(
     # Exact attention totals, independent of the eager-load cap above so the
     # footer's "+N more" / "waiting on others" stay accurate past it. This split
     # mirrors ``app.attention.list_attention_kind`` in SQL (COUNT can't run the
-    # Python classifier): actionable rows are every ``dispute`` plus every
-    # ``score``/``review`` (in_progress the user hasn't signed); the passive
-    # ``waiting_opponent`` (in_progress the user *has* signed) and
-    # ``waiting_others`` (pending/scheduled) fold into waiting. If that
-    # classifier's status routing ever changes, these filters must follow. Both
-    # counts ride one open-status scan (a handful of rows even for an active
-    # player) via FILTER, so the dashboard pays a single extra round-trip.
+    # Python classifier): actionable rows are every ``score``/``review``
+    # (in_progress where the user hasn't proposed the standing result); the
+    # passive ``waiting_opponent`` (in_progress where the user *has* a standing
+    # proposal awaiting acceptance) and ``waiting_others`` (pending/scheduled)
+    # fold into waiting. If that classifier's status routing ever changes, these
+    # filters must follow. Both counts ride one open-status scan (a handful of
+    # rows even for an active player) via FILTER, so the dashboard pays a single
+    # extra round-trip.
     attention_counts_q = participant_filter(
         select(
             func.count(Match.id).filter(
-                or_(
-                    Match.status == MatchStatus.disputed,
-                    and_(
-                        Match.status == MatchStatus.in_progress,
-                        ~my_signature_exists,
-                    ),
+                and_(
+                    Match.status == MatchStatus.in_progress,
+                    ~my_standing_proposal_exists,
                 )
             ),
             func.count(Match.id).filter(
@@ -147,7 +144,7 @@ async def get_dashboard(
                     Match.status == MatchStatus.pending,
                     and_(
                         Match.status == MatchStatus.in_progress,
-                        my_signature_exists,
+                        my_standing_proposal_exists,
                     ),
                 )
             ),
@@ -156,7 +153,6 @@ async def get_dashboard(
     ).where(Match.status.in_(_OPEN_STATUSES))
 
     in_progress = (await db.execute(in_progress_q)).scalars().all()
-    disputed = (await db.execute(disputed_q)).scalars().all()
     completed = (await db.execute(completed_q)).scalars().all()
     attention_total, waiting = (await db.execute(attention_counts_q)).one()
     attention_total_count = int(attention_total)
@@ -177,7 +173,7 @@ async def get_dashboard(
         db, current_user.id, [m.id for m in completed]
     )
 
-    attention = _build_attention(in_progress, disputed, current_user.id)
+    attention = _build_attention(in_progress, current_user.id)
     recent_results = [
         _build_recent_result(match, current_user.id, rating_changes.get(match.id))
         for match in completed
@@ -222,24 +218,24 @@ async def _load_my_rating_changes(
 
 def _build_attention(
     in_progress: Sequence[Match],
-    disputed: Sequence[Match],
     current_user_id: uuid.UUID,
 ) -> list[DashboardAttentionItem]:
     """Rank the user's actionable open matches into priority-ordered attention
     rows.
 
-    The caller pre-filters to actionable matches — disputed, plus in_progress
-    matches the user hasn't signed — and bounds the count, so passive "waiting"
-    matches (our posted-and-awaiting results, pending/scheduled) never reach
-    here; they feed ``waiting_count`` via a separate aggregate. Classification +
-    ranking come from the shared ``app.attention`` module so this panel and the
-    matches-list Attention filter never disagree about who owes a move.
+    The caller pre-filters to actionable matches — in_progress matches where the
+    user hasn't proposed the standing result — and bounds the count, so passive
+    "waiting" matches (our standing proposal awaiting acceptance,
+    pending/scheduled) never reach here; they feed ``waiting_count`` via a
+    separate aggregate. Classification + ranking come from the shared
+    ``app.attention`` module so this panel and the matches-list Attention filter
+    never disagree about who owes a move.
     """
     # (priority, sort_ts, item) — sorted by priority then oldest-first so a
     # long-stalled match floats to the top of its bucket.
     ranked: list[tuple[int, datetime, DashboardAttentionItem]] = []
 
-    for match in (*disputed, *in_progress):
+    for match in in_progress:
         kind = list_attention_kind(match, current_user_id)
         # Only actionable kinds become rows. The caller filters out the passive
         # "waiting" buckets, but we skip them (and the non-participant ``None``)

@@ -38,7 +38,6 @@ from app.models import (
     MatchGame,
     MatchGameScore,
     MatchResult,
-    MatchResultResponse,
     MatchSettings,
     MatchSide,
     MatchSidePlayer,
@@ -46,8 +45,6 @@ from app.models import (
     RatingHistory,
     RatingHistorySource,
     RatingStrategy,
-    ResultOutcome,
-    ResultResponseKind,
     User,
     UserLeagueRating,
 )
@@ -58,6 +55,7 @@ from app.notifications.taxonomy import NotificationCategory
 from app.players import escape_like
 from app.rate_limiting import RedisRateLimiter
 from app.ratings import get_calculator, state_rating_value, validate_state
+from app.result_chain import accepted_result, standing_result
 from app.schemas.match import (
     MatchCreate,
     MatchDetails,
@@ -77,9 +75,12 @@ from app.schemas.match import (
     MatchListFilter,
     MatchListResponse,
     MatchListRow,
+    MatchNegotiation,
     MatchResultsGameWrite,
     MatchResultsWrite,
-    MatchSignatureView,
+    NegotiationDiffEntry,
+    NegotiationGame,
+    NegotiationResult,
 )
 from app.schemas.notification import NotificationJob
 from app.schemas.rating import RatingChange
@@ -133,15 +134,14 @@ def _side_schema(
 
 # Shared eager-load chain. Used by every read path that returns a hierarchical
 # match — async SQLAlchemy can't lazy-load mid-request, so all collections are
-# pulled up front. The posted results (and their confirm/dispute responses) are
-# needed wherever ``can_finalize`` / ``can_confirm`` / the awaiting-confirmation
-# status label / the derived ``signatures`` + ``disputed_by_user_id`` are
-# computed.
+# pulled up front. The posted results (the propose/accept chain) are needed
+# wherever ``can_finalize`` / the awaiting-confirmation status label / the
+# derived ``negotiation`` block are computed.
 def match_eager_options() -> tuple[ExecutableOption, ...]:
     return (
         selectinload(Match.match_settings),
         selectinload(Match.league).selectinload(League.rating_strategy),
-        selectinload(Match.results).selectinload(MatchResult.responses),
+        selectinload(Match.results),
         *_match_history_options(),
     )
 
@@ -196,96 +196,12 @@ def _all_sides_have_players(match: Match) -> bool:
     return len(match.sides) >= 2 and all(side.players for side in match.sides)
 
 
-def latest_result(match: Match) -> MatchResult | None:
-    """The most recently posted result, or ``None`` if none was ever posted.
-
-    "Latest" by ``submitted_at`` — the lifecycle posts results strictly
-    sequentially (a re-post only happens after the prior one is terminally
-    disputed), so the newest row is the one the BFF derives everything from.
-    """
-    if not match.results:
-        return None
-    return max(match.results, key=lambda r: r.submitted_at)
-
-
-def pending_result(match: Match) -> MatchResult | None:
-    """The result currently awaiting confirmation, or ``None``.
-
-    At most one result is ``pending`` at a time (posting moves the match to
-    ``in_progress``; confirm/dispute make the result terminal), so this is the
-    "is a result posted right now" marker — the successor to "``match`` has
-    signatures"."""
-    return next((r for r in match.results if r.outcome == ResultOutcome.pending), None)
-
-
-def _signed_result(match: Match) -> MatchResult | None:
-    """The result whose confirm responses the BFF surfaces as ``signatures``.
-
-    A ``pending`` result (awaiting confirmation) or a ``confirmed`` one (a
-    completed match) carries the sign-offs to display; a ``disputed`` /
-    ``superseded`` result was rejected, so it contributes no signatures —
-    mirroring the old "dispute clears signatures" behavior."""
-    result = latest_result(match)
-    if result is None or result.outcome in (
-        ResultOutcome.disputed,
-        ResultOutcome.superseded,
-    ):
-        return None
-    return result
-
-
-def _confirm_responses(result: MatchResult) -> list[MatchResultResponse]:
-    return [r for r in result.responses if r.kind == ResultResponseKind.confirm]
-
-
-def _signature_views(match: Match) -> list["MatchSignatureView"]:
-    """The BFF ``signatures`` list — confirm responses on the current
-    pending/confirmed result, oldest first. A ``response.created_at`` maps onto
-    the historical ``signed_at`` field so the FE confirmation callout is
-    unchanged."""
-    result = _signed_result(match)
-    if result is None:
-        return []
-    return [
-        MatchSignatureView(user_id=r.user_id, signed_at=r.created_at)
-        for r in sorted(_confirm_responses(result), key=lambda r: r.created_at)
-    ]
-
-
-def disputer_of(match: Match) -> uuid.UUID | None:
-    """Who rejected the most recently posted result, or ``None`` on a
-    non-disputed match. Derives the old ``matches.disputed_by_user_id`` column:
-    the ``dispute`` response on the latest result when that result is
-    ``disputed`` (cleared naturally once a re-post makes a new pending result
-    the latest)."""
-    result = latest_result(match)
-    if result is None or result.outcome != ResultOutcome.disputed:
-        return None
-    dispute = next(
-        (r for r in result.responses if r.kind == ResultResponseKind.dispute), None
-    )
-    return dispute.user_id if dispute else None
-
-
-def _all_sides_responded_confirm(match: Match) -> bool:
-    """True when every side has at least one of its players carrying a
-    ``confirm`` response on the current pending result. Used to gate the
-    in_progress → completed status flip in ``POST /confirmation``."""
-    result = pending_result(match)
-    if result is None:
-        return False
-    confirmers = {r.user_id for r in _confirm_responses(result)}
-    return all(
-        any(p.user_id in confirmers for p in side.players) for side in match.sides
-    )
-
-
 def _status_label(match: Match) -> str:
     """User-facing label for a match's lifecycle position. An ``in_progress``
-    match with a pending posted result is waiting on the other side — surface
+    match with a standing posted result is waiting on the other side — surface
     that distinctly so the FE doesn't need to know about the result model to
     render it."""
-    if match.status == MatchStatus.in_progress and pending_result(match) is not None:
+    if match.status == MatchStatus.in_progress and standing_result(match) is not None:
         return "Awaiting confirmation"
     # Exhaustive — adding an enum member is a type error until handled.
     match match.status:
@@ -383,7 +299,7 @@ def current_game_number(match: Match) -> int | None:
     the number rather than an object so deeplinks work either way."""
     if match.status not in (MatchStatus.in_progress, MatchStatus.disputed):
         return None
-    if pending_result(match) is not None:
+    if match.results:
         return None
     target = _games_to_win(match.match_settings.best_of)
     wins = side_win_counts(match)
@@ -395,6 +311,156 @@ def current_game_number(match: Match) -> int | None:
         if n not in scored:
             return n
     return None
+
+
+def _negotiation_game(snapshot: dict[str, int]) -> NegotiationGame:
+    return NegotiationGame(
+        game_number=snapshot["game_number"],
+        side_1_points=snapshot["side_1_points"],
+        side_2_points=snapshot["side_2_points"],
+    )
+
+
+def _negotiation_result(result: MatchResult) -> NegotiationResult:
+    return NegotiationResult(
+        id=result.id,
+        games=[
+            _negotiation_game(g)
+            for g in sorted(result.games, key=lambda g: g["game_number"])
+        ],
+        submitted_by=result.submitted_by_user_id,
+        submitted_at=result.submitted_at,
+    )
+
+
+def _negotiation_diff(
+    baseline_games: list[dict[str, int]],
+    standing_games: list[dict[str, int]],
+) -> list[NegotiationDiffEntry]:
+    """Viewer-relative diff between the viewer's own last proposal (baseline)
+    and the standing proposal. Emits an entry only for games whose points
+    differ (or that the baseline lacks → ``old=None``), ordered by game number.
+    Computed purely from the two snapshots; the chain walk to pick the baseline
+    is what collapses the opponent's intermediate self-edits."""
+    by_number = {g["game_number"]: g for g in baseline_games}
+    entries: list[NegotiationDiffEntry] = []
+    for game in sorted(standing_games, key=lambda g: g["game_number"]):
+        old = by_number.get(game["game_number"])
+        if old is None:
+            entries.append(
+                NegotiationDiffEntry(
+                    game_number=game["game_number"],
+                    old=None,
+                    new=_negotiation_game(game),
+                )
+            )
+        elif (
+            old["side_1_points"] != game["side_1_points"]
+            or old["side_2_points"] != game["side_2_points"]
+        ):
+            entries.append(
+                NegotiationDiffEntry(
+                    game_number=game["game_number"],
+                    old=_negotiation_game(old),
+                    new=_negotiation_game(game),
+                )
+            )
+    return entries
+
+
+def _submitted_on_side(match: Match, result: MatchResult, side: MatchSide) -> bool:
+    """True iff the result's submitter is a player on ``side``."""
+    return any(p.user_id == result.submitted_by_user_id for p in side.players)
+
+
+def _negotiation(match: Match, current_user_id: uuid.UUID | None) -> MatchNegotiation:
+    """Viewer-relative negotiation state for the BFF (#713).
+
+    The viewer's "side" is the side the current user is on; the opponent side is
+    the other. A standing proposal submitted by the viewer's own side is
+    ``awaiting`` (they consented; it's the opponent's move); one submitted by the
+    opponent makes it the viewer's turn — ``review`` if the viewer never
+    proposed, ``corrected`` (with a diff vs the viewer's own last proposal) if
+    they did. ``final`` once a result is accepted; ``live`` before any result.
+
+    Non-participants / anonymous callers get a neutral spectator mapping
+    (``your_turn=False``, no diff/prior)."""
+    accepted = accepted_result(match)
+    if accepted is not None:
+        return MatchNegotiation(
+            viewer_state="final",
+            your_turn=False,
+            standing_result=_negotiation_result(accepted),
+            prior_result=None,
+            diff=None,
+        )
+
+    standing = standing_result(match)
+    if standing is None:
+        return MatchNegotiation(
+            viewer_state="live",
+            your_turn=False,
+            standing_result=None,
+            prior_result=None,
+            diff=None,
+        )
+
+    standing_view = _negotiation_result(standing)
+    viewer_side = (
+        my_side(match, current_user_id) if current_user_id is not None else None
+    )
+    # Spectators / anonymous: neutral mapping — there is a standing proposal but
+    # the viewer has no side, so treat as a read-only "review" view.
+    if viewer_side is None:
+        return MatchNegotiation(
+            viewer_state="review",
+            your_turn=False,
+            standing_result=standing_view,
+            prior_result=None,
+            diff=None,
+        )
+
+    if _submitted_on_side(match, standing, viewer_side):
+        # The viewer's own side proposed the standing result; await the opponent.
+        return MatchNegotiation(
+            viewer_state="awaiting",
+            your_turn=False,
+            standing_result=standing_view,
+            prior_result=None,
+            diff=None,
+        )
+
+    # The opponent submitted the standing result → the viewer must act. Walk the
+    # supersede chain back from the standing result to the viewer's own last
+    # proposal (the baseline that collapses the opponent's intermediate edits).
+    by_id = {r.id: r for r in match.results}
+    prior: MatchResult | None = None
+    cursor = standing.supersedes_result_id
+    while cursor is not None:
+        candidate = by_id.get(cursor)
+        if candidate is None:
+            break
+        if _submitted_on_side(match, candidate, viewer_side):
+            prior = candidate
+            break
+        cursor = candidate.supersedes_result_id
+
+    if prior is None:
+        return MatchNegotiation(
+            viewer_state="review",
+            your_turn=True,
+            standing_result=standing_view,
+            prior_result=None,
+            diff=None,
+        )
+
+    return MatchNegotiation(
+        viewer_state="corrected",
+        your_turn=True,
+        standing_result=standing_view,
+        prior_result=_negotiation_result(prior),
+        diff=_negotiation_diff(prior.games, standing.games),
+    )
 
 
 def _serialize_details(
@@ -463,20 +529,10 @@ def _serialize_details(
         can_finalize=(
             is_participant and len(match.sides) >= 2 and _can_finalize(match)
         ),
-        # True iff the current user can act on a posted result (Confirm or
-        # Dispute). Same predicate gates both endpoints; the FE picks which
-        # CTA to show based on whether the user has already signed.
-        can_confirm=(
-            current_user_id is not None and _can_confirm(match, current_user_id)
-        ),
-        # True iff the current user posted the pending result and can retract it
-        # (the submitter's escape hatch — they can't confirm/dispute their own
-        # result). Drives the "Withdraw result" CTA.
-        can_withdraw=(
-            current_user_id is not None and _can_withdraw(match, current_user_id)
-        ),
-        signatures=_signature_views(match),
-        disputed_by_user_id=disputer_of(match),
+        # Viewer-relative negotiation state — the standing proposal, whose turn
+        # it is, and (when the opponent corrected the viewer's own proposal) the
+        # diff. Drives the accept CTA + the negotiation callouts (#713).
+        negotiation=_negotiation(match, current_user_id),
         recent_form=extras.recent_form,
         head_to_head=extras.head_to_head,
         data=serialize_match_details(domain_match),
@@ -516,21 +572,14 @@ def participant_filter[SelectT: Select[Any]](
     return query.where(me_in_match)
 
 
-def _has_pending_result_exists() -> Any:
-    """``EXISTS`` correlated subquery: this match has a result awaiting
-    confirmation. The "posted result" marker — an ``in_progress`` match with
-    this true is the derived "Awaiting confirmation" bucket (see
-    ``_status_label``). Pulled into a helper so the list filter and the
-    status-count aggregate split the Live vs awaiting buckets identically
-    (issue #381)."""
-    return (
-        select(MatchResult.id)
-        .where(
-            MatchResult.match_id == Match.id,
-            MatchResult.outcome == ResultOutcome.pending,
-        )
-        .exists()
-    )
+def _has_result_exists() -> Any:
+    """``EXISTS`` correlated subquery: this match has any result row. For an
+    ``in_progress`` match, any result is the standing one — acceptance moves the
+    match to ``completed`` — so "has a result" is the derived "Awaiting
+    confirmation" bucket (see ``_status_label``). Pulled into a helper so the
+    list filter and the status-count aggregate split the Live vs awaiting
+    buckets identically (issue #381)."""
+    return select(MatchResult.id).where(MatchResult.match_id == Match.id).exists()
 
 
 def _player_username_filter[SelectT: Select[Any]](query: SelectT, q: str) -> SelectT:
@@ -629,11 +678,11 @@ def _apply_list_filter[SelectT: Select[Any]](
     match."""
     if filter_ is MatchListFilter.live:
         return query.where(
-            Match.status == MatchStatus.in_progress, ~_has_pending_result_exists()
+            Match.status == MatchStatus.in_progress, ~_has_result_exists()
         )
     if filter_ is MatchListFilter.awaiting_confirmation:
         return query.where(
-            Match.status == MatchStatus.in_progress, _has_pending_result_exists()
+            Match.status == MatchStatus.in_progress, _has_result_exists()
         )
     return query.where(Match.status == MatchStatus(filter_.value))
 
@@ -743,7 +792,7 @@ async def list_matches(
     # two buckets disjoint (issue #381).
     counts_query = select(Match.status, func.count(Match.id))
     awaiting_query = select(func.count(Match.id)).where(
-        Match.status == MatchStatus.in_progress, _has_pending_result_exists()
+        Match.status == MatchStatus.in_progress, _has_result_exists()
     )
     if q:
         counts_query = _player_username_filter(counts_query, q)
@@ -856,7 +905,7 @@ def _list_row(match: Match, current_user_id: uuid.UUID) -> MatchListRow:
         created_at=match.created_at,
         current_game_number=next_number if is_participant else None,
         can_score=can_score,
-        can_confirm=_can_confirm(match, current_user_id),
+        negotiation=_negotiation(match, current_user_id),
         attention=list_attention_kind(match, current_user_id),
     )
 
@@ -992,11 +1041,11 @@ def _is_scorable(match: Match) -> bool:
     """Whether a match accepts score writes right now (ignoring who's asking).
 
     The saved games are a provisional *scratchpad* until somebody posts the
-    result: editable regardless of whether they already decide the match. So
-    the only gates are structural — two sides, a non-terminal status, and **no
-    pending posted result**. A posted result locks the scores until it's
-    confirmed or disputed; a dispute makes that result terminal and the match
-    is scorable again with its games intact.
+    first result: editable regardless of whether they already decide the match.
+    So the only gates are structural — two sides, a non-terminal status, and
+    **no result row at all**. The scratchpad freezes the instant the first
+    result is proposed (#715); from there the board only changes via the
+    propose/accept negotiation, not the score endpoints.
 
     Single source of truth shared by the write-path guard
     (``_enforce_scorable``) and the BFF ``can_score`` flag, so the flag the
@@ -1004,7 +1053,7 @@ def _is_scorable(match: Match) -> bool:
     return (
         len(match.sides) >= 2
         and match.status not in _TERMINAL_STATUSES
-        and pending_result(match) is None
+        and not match.results
     )
 
 
@@ -1021,138 +1070,16 @@ def _enforce_scorable(match: Match) -> None:
             status_code=422,
             detail="This match has no opponent and can't be scored.",
         )
-    # A posted result locks the scores until somebody calls /confirmation
-    # (finalize) or /dispute (rewind). Both per-game writes and a second
-    # /results call hit this branch.
-    if pending_result(match) is not None:
+    # Any posted result freezes the scratchpad (#715); the board now only
+    # changes through propose/accept, not the score endpoints.
+    if match.results:
         raise HTTPException(
             status_code=409,
-            detail=(
-                "This match has a posted result awaiting confirmation. "
-                "Confirm or dispute it before editing scores."
-            ),
+            detail="This match has a posted result; scores are frozen.",
         )
-    # Terminal status (``completed``/``disputed``/``voided``) — or any future
+    # Terminal status (``completed``/``voided``) — or any future
     # ``_is_scorable`` gate without a message of its own.
     raise HTTPException(status_code=409, detail="This match is no longer scorable.")
-
-
-def _enforce_confirmable(match: Match, user_id: uuid.UUID) -> MatchResult:
-    """Shared preconditions for ``POST /confirmation`` and ``POST /dispute``.
-    Caller is already known to be a participant (``_load_match_for_scoring``
-    handles the 404). Returns the pending result the caller will respond to, so
-    the handler doesn't have to re-load (and re-None-check) it."""
-    if not _all_sides_have_players(match):
-        raise HTTPException(
-            status_code=409,
-            detail="This match has no opponent and can't be signed.",
-        )
-    if match.status != MatchStatus.in_progress:
-        raise HTTPException(
-            status_code=409,
-            detail="This match is no longer awaiting confirmation.",
-        )
-    result = pending_result(match)
-    if result is None:
-        raise HTTPException(
-            status_code=409,
-            detail="No posted result to act on. Post the result first.",
-        )
-    if any(r.user_id == user_id for r in result.responses):
-        raise HTTPException(status_code=409, detail="You've already signed this match.")
-    return result
-
-
-async def _add_response_or_409(
-    db: AsyncSession,
-    result: MatchResult,
-    user_id: uuid.UUID,
-    kind: ResultResponseKind,
-    detail: str,
-) -> None:
-    """Append a ``MatchResultResponse(user_id, kind)`` to ``result`` and flush
-    it immediately. Maps the ``uq_match_result_responses_result_id_user_id``
-    violation (same user racing themselves: rapid double-click, retry, browser
-    back-button refire) to a clean 409 instead of bubbling a 500.
-
-    Flushing here, not at commit, is load-bearing: it forces the
-    IntegrityError to surface inside this helper's try/except no matter
-    what the caller does next, so it can't escape from a context the
-    handler isn't guarding. The sharpest case is ``confirm_match_result``,
-    which calls ``_apply_rating_update`` right after — that helper's
-    ``rating_history`` SELECT would otherwise autoflush the pending
-    insert mid-read and raise IntegrityError from outside the try/except.
-    ``post_match_result`` doesn't have an intervening SELECT, but the
-    same flush-first contract still makes the error surface consistently
-    across both call sites."""
-    result.responses.append(MatchResultResponse(user_id=user_id, kind=kind))
-    try:
-        await db.flush()
-    except IntegrityError as exc:
-        await db.rollback()
-        raise HTTPException(status_code=409, detail=detail) from exc
-
-
-def _can_confirm(match: Match, user_id: uuid.UUID | None) -> bool:
-    """Mirrors ``_enforce_confirmable`` as a boolean for the BFF surface.
-    True iff a ``POST /confirmation`` or ``POST /dispute`` from ``user_id``
-    would currently succeed (ignoring transport-layer auth)."""
-    if user_id is None:
-        return False
-    if match.status != MatchStatus.in_progress:
-        return False
-    result = pending_result(match)
-    if result is None:
-        return False
-    if not _all_sides_have_players(match):
-        return False
-    if not _is_participant(match, user_id):
-        return False
-    if any(r.user_id == user_id for r in result.responses):
-        return False
-    return True
-
-
-def _enforce_withdrawable(match: Match, user_id: uuid.UUID) -> MatchResult:
-    """Preconditions for ``POST /withdrawal`` — the submitter retracting their
-    own still-pending result. Caller is already known to be a participant
-    (``_load_match_for_scoring`` handles the 404). Returns the pending result so
-    the handler doesn't re-load it. Symmetric to ``_enforce_confirmable`` but
-    for the *opposite* party: confirm/dispute are for the side that owes a
-    sign-off, withdrawal is for the side that posted."""
-    if match.status != MatchStatus.in_progress:
-        raise HTTPException(
-            status_code=409,
-            detail="This match is no longer awaiting confirmation.",
-        )
-    result = pending_result(match)
-    if result is None:
-        raise HTTPException(
-            status_code=409,
-            detail="No posted result to withdraw. Post the result first.",
-        )
-    if result.submitted_by_user_id != user_id:
-        raise HTTPException(
-            status_code=409,
-            detail="Only the player who posted this result can withdraw it.",
-        )
-    return result
-
-
-def _can_withdraw(match: Match, user_id: uuid.UUID | None) -> bool:
-    """Mirrors ``_enforce_withdrawable`` as a boolean for the BFF surface.
-    True iff a ``POST /withdrawal`` from ``user_id`` would currently succeed
-    (ignoring transport-layer auth)."""
-    if user_id is None:
-        return False
-    if match.status != MatchStatus.in_progress:
-        return False
-    if not _is_participant(match, user_id):
-        return False
-    result = pending_result(match)
-    if result is None:
-        return False
-    return result.submitted_by_user_id == user_id
 
 
 # ----- result-confirmation push -------------------------------------------
@@ -1706,14 +1633,12 @@ def _can_finalize(match: Match) -> bool:
     currently-saved scores (ignoring authorization). Drives the FE's
     ``can_finalize`` flag and the submit button's adaptive label.
 
-    Returns False once anyone has posted a result — the next action on a match
-    with a pending result is /confirmation or /dispute, not another /results. A
-    ``disputed`` match has no pending result and stays finalizable so the
-    disputer can re-post a corrected (or unchanged) board back into the sign-off
-    flow."""
+    Returns False once any result exists — the FE drives this flag only for the
+    FIRST proposal; subsequent counters/acceptances flow through the negotiation
+    surface, not /results-as-finalize."""
     if match.status not in (MatchStatus.in_progress, MatchStatus.disputed):
         return False
-    if pending_result(match) is not None:
+    if match.results:
         return False
     try:
         _validate_finalize_games(
@@ -1784,26 +1709,6 @@ def _set_side_won(match: Match, decided_side: int) -> None:
         side.won = side.side_number == decided_side
 
 
-def _reopen_match(match: Match) -> None:
-    """Rewind a match's completion state when a posted result is sent back to a
-    re-scorable board (a /dispute or /withdrawal), so both reopen paths stay
-    symmetric on the completion invariants history windows depend on (#312).
-
-    ``completed_at`` is dropped so a reopened match never lingers in a history
-    window carrying a stale completion stamp (today it's already None on an
-    awaiting-confirmation match — the rated post path never stamps it — so this
-    is defensive, but it keeps the two reopen paths from diverging on a
-    load-bearing invariant). ``side.won`` is likewise only stamped at completion,
-    so nulling it is defensive too; ``side.score`` is the games-won mirror —
-    zero it so a direct DB reader doesn't see won=None with score>0 (the games
-    still imply 2-1 etc., but the BFF derives that from MatchGame, not
-    side.score)."""
-    match.completed_at = None
-    for side in match.sides:
-        side.won = None
-        side.score = 0
-
-
 def _requires_confirmation(match: Match) -> bool:
     """Only rated matches go through the sign-off round-trip. Confirmation
     exists to protect ratings from one-sided claims; an unrated match has no
@@ -1845,15 +1750,15 @@ async def _lock_match_row(
     db: AsyncSession, match_id: uuid.UUID, *, nowait: bool = False
 ) -> None:
     """Take a transaction-scoped row lock on the ``matches`` row so the
-    sign-off transitions (``/results``, ``/confirmation``, ``/dispute``)
+    negotiation transitions (``/results`` propose, ``/results/{id}/acceptance``)
     serialize against each other.
 
-    Without this, a participant firing ``/confirmation`` and ``/dispute``
-    concurrently lets both transactions pass ``_enforce_confirmable`` on the
-    same pre-image and both commit — finalizing the match with ``won=None``,
-    a single signature, and a rating change applied (issue #365). The lock
-    forces the second transaction to wait for the first to commit and then
-    re-read the post-image, so its guard returns a clean 409.
+    Without this, a participant firing two acceptances (or a propose racing an
+    acceptance) concurrently lets both transactions pass their standing-result
+    guard on the same pre-image and both commit — finalizing the match twice and
+    applying a rating change more than once (issue #365). The lock forces the
+    second transaction to wait for the first to commit and then re-read the
+    post-image, so its guard returns a clean 409.
 
     It's a thin ``SELECT matches.id ... FOR UPDATE`` rather than adding
     ``.with_for_update()`` to the eager ``_load_match`` query: a narrow
@@ -1870,8 +1775,8 @@ async def _lock_match_row(
     finalize doesn't park a request (and its pooled DB connection) on the lock
     for the full duration of the in-flight post — the pile-up that wedged the
     whole instance under a stray double-click (issue #641). The blocking form
-    is kept for /confirmation and /dispute, where a second concurrent caller is
-    a *legitimate* signer that must wait, re-read, and proceed."""
+    is kept for /results/{id}/acceptance, where a second concurrent caller is a
+    *legitimate* acceptor that must wait, re-read, and proceed."""
     stmt = select(Match.id).where(Match.id == match_id).with_for_update(nowait=nowait)
     try:
         await db.execute(stmt)
@@ -2051,6 +1956,18 @@ async def delete_game_score(
     return _serialize_details(reloaded, current_user.id, extras)
 
 
+def _negotiation_conflict(match: Match, current_user_id: uuid.UUID) -> HTTPException:
+    """A 409 whose body carries the viewer-relative negotiation state, so a
+    client that lost a propose/accept race can re-render from the conflict
+    response without an extra round-trip. The standing proposal has moved on
+    (a concurrent counter superseded the one the caller targeted, or a first
+    result already exists); the FE reconciles against this snapshot."""
+    return HTTPException(
+        status_code=409,
+        detail=_negotiation(match, current_user_id).model_dump(mode="json"),
+    )
+
+
 @router.post(
     "/matches/{match_id}/results",
     response_model=MatchDetails,
@@ -2063,28 +1980,29 @@ async def post_match_result(
     db: AsyncSession = Depends(get_session),
     notifications: NotificationService = Depends(get_notification_service),
 ) -> MatchDetails:
-    """Post the result of a match. Any previously-saved per-game scores are
-    discarded; the payload's games (validated as a complete, decided match)
-    become canon.
+    """Propose a result for a match — the first verb of the propose/accept
+    negotiation.
 
-    A new ``MatchResult`` row is created carrying an immutable snapshot of the
-    claimed board; a prior disputed result stays as history. For a rated match
-    the caller's ``confirm`` response is recorded on it and status stays
-    ``in_progress`` until every side confirms — the other side acts on the
-    posted result via ``POST /confirmation`` or ``POST /dispute``, and
-    ``side.won`` plus the rating update fire inside /confirmation when the final
-    confirm lands. Unrated matches (nothing at stake worth a second sign-off)
-    and solo matches (no second party to attest) finalize immediately here, with
-    the result created already ``confirmed``."""
+    A first proposal (``supersedes_result_id`` omitted) requires that no result
+    exists yet. A counter (``supersedes_result_id`` set) must target the current
+    standing proposal — it mints a superseding ``MatchResult`` carrying an
+    immutable snapshot of the claimed board, keeping the chain linear. Either way
+    the proposed board (validated as complete + decided) becomes the canonical
+    ``match_games`` snapshot.
+
+    Solo / unrated matches (no second party whose sign-off is worth waiting on)
+    self-accept and finalize immediately — ``side.won`` and the rating update
+    fire here. Rated two-human matches leave the result *standing* (unaccepted)
+    for the opposing side to accept via
+    ``POST /results/{result_id}/acceptance``."""
     try:
         match = await _load_match_for_scoring(
             db, match_id, current_user.id, lock=True, nowait=True
         )
     except MatchLockUnavailable as exc:
-        # A concurrent /results is mid-flight (a double-tapped finalize). Only
-        # one result can be posted, so the loser of the race has no work to do —
-        # bail out fast with a 409 rather than blocking on the lock and tying up
-        # a connection for the duration of the in-flight post (issue #641). The
+        # A concurrent propose is mid-flight (a double-tapped submit). Bail out
+        # fast with a 409 rather than blocking on the lock and tying up a
+        # connection for the duration of the in-flight post (issue #641). The
         # winner's 201 carries the canonical result; the client refetches it.
         await db.rollback()
         raise HTTPException(
@@ -2092,8 +2010,14 @@ async def post_match_result(
             detail="A result is already being posted for this match. "
             "Refresh to see the latest.",
         ) from exc
-    _enforce_scorable(match)
 
+    # NOTE: no ``_enforce_scorable`` here. The scratchpad-scorable guard is now
+    # false the instant any result exists (#715), so a counter — which by design
+    # supersedes an existing result — would 409 before it could supersede.
+    # Propose has its OWN gates below (first-post vs counter) instead.
+
+    # Decided-board hard gate — the strict precondition: an undecided board can't
+    # be a result.
     try:
         decided_side = _validate_finalize_games(
             payload.games, match.match_settings.best_of
@@ -2101,52 +2025,68 @@ async def post_match_result(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    if payload.supersedes_result_id is None:
+        # First proposal: only valid when no result exists yet. A concurrent
+        # first-post (or any existing chain) loses here with the current state.
+        if match.results:
+            raise _negotiation_conflict(match, current_user.id)
+    else:
+        # Counter: must target the live standing proposal. If it was already
+        # accepted or superseded by a concurrent counter, the id won't match —
+        # 409 with the moved-on state.
+        standing = standing_result(match)
+        if standing is None or payload.supersedes_result_id != standing.id:
+            raise _negotiation_conflict(match, current_user.id)
+
+    # Sync the canonical ``match_games`` to the proposed board so the scoreboard
+    # ``games``/``can_score`` rendering stays correct. After the first post the
+    # scratchpad is frozen, so ``match_games`` stays == the standing snapshot.
     await _commit_canonical_games(db, match, payload)
 
-    # The new posting is its own first-class row. A prior disputed result stays
-    # as history alongside it; "latest result" derivation makes this the current
-    # one. The board is snapshotted immutably here even though the working
-    # ``match_games`` were just synced to the same payload — the two diverge once
-    # a dispute reopens the scratchpad for editing.
     result = MatchResult(
         submitted_by_user_id=current_user.id,
         games=_result_games_snapshot(payload),
+        supersedes_result_id=payload.supersedes_result_id,
     )
     match.results.append(result)
 
-    # Drives the post-commit push: only a rated match leaves the other side
-    # owing a confirm/dispute. Computed before commit; the recipient gets
-    # pinged once the result is durably saved.
+    # Drives the post-commit push: only a rated two-human match leaves the other
+    # side owing an acceptance. Computed before commit; the recipient gets pinged
+    # once the result is durably saved.
     awaiting_confirmation = _requires_confirmation(match)
     if not awaiting_confirmation:
-        # Solo / unrated path: no second sign-off needed — the result is born
-        # ``confirmed`` and the match finalizes immediately (stamping
-        # ``completed_at``), no response row inserted.
-        result.outcome = ResultOutcome.confirmed
+        # Solo / unrated path: no second sign-off needed — the proposer
+        # self-accepts and the match finalizes immediately (stamping
+        # ``completed_at``). A solo match has no second human to accept, so the
+        # proposer's own id is recorded as the acceptor.
+        result.accepted_by_user_id = current_user.id
+        result.accepted_at = datetime.now(UTC)
         match.mark_completed()
         _set_side_won(match, decided_side)
         await _apply_rating_update(db, match)
     else:
-        # Rated path: the result is ``pending`` and the caller is its first
-        # confirmer. Status is (re)set to in_progress — load-bearing when
-        # re-posting a ``disputed`` match, a no-op otherwise — and side.won
-        # stays unset until /confirmation lands the last needed confirm.
+        # Rated path: the result stays standing (unaccepted) and ``side.won``
+        # stays unset until the opposing side accepts. Status is (re)set to
+        # in_progress.
         match.status = MatchStatus.in_progress
-        await _add_response_or_409(
-            db,
-            result,
-            current_user.id,
-            ResultResponseKind.confirm,
-            "Result already posted; use /confirmation.",
-        )
 
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        # ``uq_match_results_supersedes_result_id``: two concurrent counters
+        # raced to supersede the same parent and the other one won. Reload and
+        # surface the moved-on negotiation state.
+        await db.rollback()
+        reloaded = await _load_match(db, match_id)
+        if reloaded is None:
+            raise HTTPException(status_code=404, detail="Match not found.") from exc
+        raise _negotiation_conflict(reloaded, current_user.id) from exc
 
     reloaded = await _load_match(db, match.id)
     assert reloaded is not None
     extras = await _load_view_extras(db, reloaded)
     details = _serialize_details(reloaded, current_user.id, extras)
-    # Record + notify the side that now owes a sign-off. Built after the
+    # Record + notify the side that now owes an acceptance. Built after the
     # response and best-effort: the result is already committed, so *nothing*
     # here may turn the 201 into a 500 — not a DB error, and not a delivery-side
     # failure (e.g. a malformed APNs key making jwt.encode raise). Hence the
@@ -2166,132 +2106,52 @@ async def post_match_result(
 
 
 @router.post(
-    "/matches/{match_id}/confirmation",
+    "/matches/{match_id}/results/{result_id}/acceptance",
     response_model=MatchDetails,
     status_code=status.HTTP_201_CREATED,
 )
-async def confirm_match_result(
+async def accept_match_result(
     match_id: uuid.UUID,
+    result_id: uuid.UUID,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_session),
 ) -> MatchDetails:
-    """Sign off on a posted result. When this is the last confirm needed
-    (every side has at least one confirming player) the result flips to
-    ``confirmed``, the match to ``completed``, ``side.won`` is stamped from the
-    posted games, and the rating update runs — exactly once."""
+    """Accept a standing proposal — the second verb of the negotiation. The
+    opposing side ratifies the proposing side's board; the match completes,
+    ``side.won`` is stamped from the agreed games, and the rating update runs.
+
+    ``result_id`` is the concurrency token: it must equal the current standing
+    proposal's id. If the proposal was superseded by a counter, already accepted,
+    or there's no standing proposal, the caller gets a 409 carrying the moved-on
+    negotiation state (or a 404 if no result with that id exists on the match).
+    The proposing side already consented by proposing, so only a participant on
+    the *opposing* side may accept."""
     match = await _load_match_for_scoring(db, match_id, current_user.id, lock=True)
-    result = _enforce_confirmable(match, current_user.id)
 
-    await _add_response_or_409(
-        db,
-        result,
-        current_user.id,
-        ResultResponseKind.confirm,
-        "You've already signed this match.",
-    )
-    if _all_sides_responded_confirm(match):
-        result.outcome = ResultOutcome.confirmed
-        match.mark_completed()
-        _set_side_won(match, _posted_decided_side(match))
-        await _apply_rating_update(db, match)
+    # The path ``result_id`` must exist on this match at all (404), then it must
+    # be the live standing proposal (409 with the moved-on state otherwise).
+    if not any(r.id == result_id for r in match.results):
+        raise HTTPException(status_code=404, detail="Result not found.")
+    standing = standing_result(match)
+    if standing is None or standing.id != result_id:
+        raise _negotiation_conflict(match, current_user.id)
 
-    await db.commit()
+    # The proposing side already consented by proposing; only the opposing side
+    # accepts. A participant on the submitter's side (in singles, the submitter
+    # themselves) can't accept their own proposal.
+    submitter_side = my_side(match, standing.submitted_by_user_id)
+    if submitter_side is not None and any(
+        p.user_id == current_user.id for p in submitter_side.players
+    ):
+        raise HTTPException(
+            status_code=409, detail="You can't accept your own proposal."
+        )
 
-    reloaded = await _load_match(db, match.id)
-    assert reloaded is not None
-    extras = await _load_view_extras(db, reloaded)
-    return _serialize_details(reloaded, current_user.id, extras)
-
-
-@router.post(
-    "/matches/{match_id}/dispute",
-    response_model=MatchDetails,
-    # 200 (not 201): dispute is response-like but terminal for the result — it
-    # rejects the pending result and rewinds side win flags rather than creating
-    # a confirmable resource. Declared explicitly so the contrast with /results
-    # and /confirmation (both 201) is intentional in the source, not a default.
-    status_code=status.HTTP_200_OK,
-)
-async def dispute_match_result(
-    match_id: uuid.UUID,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_session),
-) -> MatchDetails:
-    """Reject a posted result. A ``dispute`` response is recorded on the pending
-    result, marking it ``disputed`` (it stays as history — its ``games``
-    snapshot preserves the rejected board), and the side win flags reset to
-    ``None``. The working ``match_games`` themselves stay in place so the
-    disputer can navigate to the contested game and PUT a corrected score; the
-    per-game endpoints unblock automatically once the result is no longer
-    pending (see ``_enforce_scorable``)."""
-    match = await _load_match_for_scoring(db, match_id, current_user.id, lock=True)
-    result = _enforce_confirmable(match, current_user.id)
-
-    # Record who rejected the result, then mark it terminally disputed. The
-    # ``dispute`` response (and the submitter's ``confirm``) persist as history;
-    # the BFF derives ``disputed_by_user_id`` from this response.
-    await _add_response_or_409(
-        db,
-        result,
-        current_user.id,
-        ResultResponseKind.dispute,
-        "You've already signed this match.",
-    )
-    result.outcome = ResultOutcome.disputed
-    # Move out of ``in_progress`` into the dedicated ``disputed`` state so a
-    # reopened match is unambiguous to the dashboard classifier and the matches
-    # list, instead of being indistinguishable from a never-posted live match.
-    # Scoring is reopened anyway (no pending result + ``disputed`` is
-    # non-terminal), and re-posting via /results flips it back to ``in_progress``.
-    match.status = MatchStatus.disputed
-    # Drop the completion stamp + rewind the side outcome so a re-post stamps a
-    # fresh one and this match doesn't linger in any history window while
-    # disputed (see ``_reopen_match``).
-    _reopen_match(match)
-
-    await db.commit()
-
-    reloaded = await _load_match(db, match.id)
-    assert reloaded is not None
-    extras = await _load_view_extras(db, reloaded)
-    return _serialize_details(reloaded, current_user.id, extras)
-
-
-@router.post(
-    "/matches/{match_id}/withdrawal",
-    response_model=MatchDetails,
-    # 200 (not 201): like /dispute, withdrawal is terminal for the pending
-    # result rather than creating a confirmable resource — it rewinds the match
-    # to a live, re-scorable board.
-    status_code=status.HTTP_200_OK,
-)
-async def withdraw_match_result(
-    match_id: uuid.UUID,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_session),
-) -> MatchDetails:
-    """Retract a result the caller posted that's still awaiting the other
-    side's sign-off — the submitter's escape hatch for a typo they spotted
-    after posting (they can't confirm or dispute their own result).
-
-    The pending result is marked ``superseded`` (it stays as history — its
-    ``games`` snapshot preserves the retracted board) and the match returns to a
-    plain ``in_progress`` / ``Live`` state with no pending result. The working
-    ``match_games`` stay in place, so scoring reopens (see ``_enforce_scorable``)
-    and the submitter can correct the wrong game and re-post via ``/results``.
-    Distinct from ``disputed``: nobody rejected the result, so the match reads
-    as ordinary Live rather than surfacing a disputer."""
-    match = await _load_match_for_scoring(db, match_id, current_user.id, lock=True)
-    result = _enforce_withdrawable(match, current_user.id)
-
-    # ``superseded`` (the reserved "a pending result was retracted/replaced"
-    # outcome) keeps the row as history while contributing no signatures and no
-    # disputer to the BFF — so the match reads as a clean reopened board.
-    result.outcome = ResultOutcome.superseded
-    # Already ``in_progress`` (a pending result implies it), but set explicitly
-    # to mirror /dispute and stay correct if the lifecycle ever changes.
-    match.status = MatchStatus.in_progress
-    _reopen_match(match)
+    standing.accepted_by_user_id = current_user.id
+    standing.accepted_at = datetime.now(UTC)
+    match.mark_completed()
+    _set_side_won(match, _posted_decided_side(match))
+    await _apply_rating_update(db, match)
 
     await db.commit()
 
