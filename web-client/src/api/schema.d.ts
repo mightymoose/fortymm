@@ -1578,6 +1578,8 @@ export interface components {
             prior_result: components["schemas"]["NegotiationResult"] | null;
             /** Diff */
             diff: components["schemas"]["NegotiationDiffEntry"][] | null;
+            /** Had Corrections */
+            had_corrections: boolean;
         };
         /**
          * MatchResultsGameWrite

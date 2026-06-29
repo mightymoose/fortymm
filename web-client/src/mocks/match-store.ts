@@ -224,11 +224,16 @@ export const LIVE_NEGOTIATION: MatchNegotiation = {
   standing_result: null,
   prior_result: null,
   diff: null,
+  had_corrections: false,
 }
 
 /** The viewer-relative negotiation block — mirrors `_negotiation` in the API.
  * The mock current user always sits on side 1 (the viewer's side). */
 export function negotiationOf(seed: SeedMatch): MatchNegotiation {
+  // Match-level (viewer-independent): the chain holds a correction iff more than
+  // one proposal was ever posted. Mirrors `_negotiation` in the API.
+  const had_corrections = seed.results.length > 1
+
   const accepted = acceptedResult(seed)
   if (accepted !== null) {
     return {
@@ -237,6 +242,7 @@ export function negotiationOf(seed: SeedMatch): MatchNegotiation {
       standing_result: negotiationResultView(accepted),
       prior_result: null,
       diff: null,
+      had_corrections,
     }
   }
 
@@ -255,6 +261,7 @@ export function negotiationOf(seed: SeedMatch): MatchNegotiation {
       standing_result: standingView,
       prior_result: null,
       diff: null,
+      had_corrections,
     }
   }
 
@@ -281,6 +288,7 @@ export function negotiationOf(seed: SeedMatch): MatchNegotiation {
       standing_result: standingView,
       prior_result: null,
       diff: null,
+      had_corrections,
     }
   }
 
@@ -290,6 +298,7 @@ export function negotiationOf(seed: SeedMatch): MatchNegotiation {
     standing_result: standingView,
     prior_result: negotiationResultView(prior),
     diff: negotiationDiff(prior.games, standing.games),
+    had_corrections,
   }
 }
 
