@@ -9,12 +9,12 @@ import {
   buildMatchDetailsData,
   buildScoreboard,
 } from "@/mocks/factories/matches/scoreboard.factory";
-import { waitFor, waitForElementToBeRemoved } from "@/test/utilities";
+import { waitFor } from "@/test/utilities";
 
 import { confirmationCalloutPage } from "./confirmation-callout.page";
 
 /** A live match with a standing proposal the opponent posted — the viewer must
- * act, so the callout renders its actionable (Accept) variant. */
+ * act, so the callout renders its review (Accept) variant. */
 const reviewMatch = (): MatchDetails =>
   buildMatchDetails({
     status: "in_progress",
@@ -36,28 +36,41 @@ const finalMatch = (): MatchDetails =>
   buildMatchDetails({
     status: "completed",
     status_label: "Final",
+    negotiation: {
+      viewer_state: "final",
+      your_turn: false,
+      standing_result: {
+        id: "r-1",
+        games: [{ game_number: 1, side_1_points: 11, side_2_points: 7 }],
+        submitted_by: "u-opponent",
+        submitted_at: "2026-06-10T12:00:00Z",
+      },
+      prior_result: null,
+      diff: null,
+    },
     data: buildMatchDetailsData({
       scoreboard: buildScoreboard({ status: "final" }),
     }),
   });
 
 describe("ConfirmationCallout", () => {
-  it("shows its Suspense fallback, then the callout when it's the viewer's turn", async () => {
+  it("resolves to the callout when it's the viewer's turn", async () => {
     confirmationCalloutPage.mockEndpoint(() =>
       HttpResponse.json(reviewMatch()),
     );
 
     confirmationCalloutPage.render();
 
-    expect(confirmationCalloutPage.queryLoading()).toBeInTheDocument();
-    await waitForElementToBeRemoved(confirmationCalloutPage.queryLoading());
     // Wiring only: callout content is pinned by the display tests.
-    expect(confirmationCalloutPage.getCallout()).toBeInTheDocument();
+    await waitFor(() =>
+      expect(confirmationCalloutPage.getCallout()).toBeInTheDocument(),
+    );
+    expect(confirmationCalloutPage.getAcceptButton()).toBeInTheDocument();
   });
 
-  it("gives way once the viewer accepts and the match finalizes", async () => {
-    // Accepting flips the refetched payload to final — neither callout state
-    // applies any more, so the section must disappear in place.
+  it("settles into the confirmed notice once the viewer accepts and the match finalizes", async () => {
+    // Accepting flips the refetched payload to final — the callout transitions
+    // from the Accept CTA to a quiet "Confirmed" notice (no action to press).
     let accepted = false;
     confirmationCalloutPage.mockEndpoint(() =>
       HttpResponse.json(accepted ? finalMatch() : reviewMatch()),
@@ -69,12 +82,15 @@ describe("ConfirmationCallout", () => {
 
     confirmationCalloutPage.render();
 
-    await waitForElementToBeRemoved(confirmationCalloutPage.queryLoading());
+    await waitFor(() => confirmationCalloutPage.getAcceptButton());
     await userEvent.click(confirmationCalloutPage.getAcceptButton());
 
     await waitFor(() =>
-      expect(confirmationCalloutPage.queryCallout()).not.toBeInTheDocument(),
+      expect(
+        confirmationCalloutPage.queryAcceptButton(),
+      ).not.toBeInTheDocument(),
     );
+    expect(confirmationCalloutPage.getCallout()).toHaveTextContent("Confirmed");
   });
 
   it("propagates a query failure to the ancestor error boundary", async () => {
@@ -84,7 +100,10 @@ describe("ConfirmationCallout", () => {
 
     confirmationCalloutPage.render();
 
-    await waitForElementToBeRemoved(confirmationCalloutPage.queryLoading());
-    expect(confirmationCalloutPage.queryBoundaryError()).toBeInTheDocument();
+    await waitFor(() =>
+      expect(
+        confirmationCalloutPage.queryBoundaryError(),
+      ).toBeInTheDocument(),
+    );
   });
 });

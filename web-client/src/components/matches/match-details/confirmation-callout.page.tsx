@@ -1,4 +1,11 @@
 import { ErrorBoundary } from "react-error-boundary";
+import {
+  RouterProvider,
+  createMemoryHistory,
+  createRootRoute,
+  createRoute,
+  createRouter,
+} from "@tanstack/react-router";
 
 import {
   mockMatchAcceptanceEndpoint,
@@ -72,15 +79,34 @@ export const confirmationCalloutPage = {
       ...overrides,
     };
 
-    render(
+    // The display renders correction `<Link>`s, so mount the wrapper under a
+    // memory router that registers the correction route.
+    const tree = (
       <ErrorBoundary
         fallbackRender={() => (
           <div role="alert">Couldn’t load the confirmation callout</div>
         )}
       >
         <ConfirmationCallout {...props} />
-      </ErrorBoundary>,
+      </ErrorBoundary>
     );
+    const rootRoute = createRootRoute();
+    const indexRoute = createRoute({
+      getParentRoute: () => rootRoute,
+      path: "/",
+      component: () => tree,
+    });
+    const correctRoute = createRoute({
+      getParentRoute: () => rootRoute,
+      path: "/matches/$matchId/correct",
+      component: () => <div>correction-route</div>,
+    });
+    const router = createRouter({
+      routeTree: rootRoute.addChildren([indexRoute, correctRoute]),
+      history: createMemoryHistory({ initialEntries: ["/"] }),
+    });
+
+    render(<RouterProvider router={router} />);
   },
 
   /**

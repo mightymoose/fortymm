@@ -649,6 +649,16 @@ export function scoringEditRoute(matchId: string, gameNumber: number) {
   }
 }
 
+/** The "Suggest a correction" proposal-authoring route (#718). Reached from the
+ * match-detail callouts: a self-edit while awaiting, "Suggest correction" on
+ * review, or "Counter" on a standing correction. */
+export function correctionRoute(matchId: string) {
+  return {
+    to: '/matches/$matchId/correct' as const,
+    params: { matchId },
+  }
+}
+
 /** Where to land after writing a per-game score — the next un-scored slot, or
  * the match detail page when there's no next game (match finalized, or every
  * game has a saved score). */

@@ -1,3 +1,11 @@
+import {
+  RouterProvider,
+  createMemoryHistory,
+  createRootRoute,
+  createRoute,
+  createRouter,
+} from "@tanstack/react-router";
+
 import { render, screen, type Container } from "@/test/utilities";
 
 import {
@@ -7,7 +15,7 @@ import {
 import { buildConfirmationCalloutDisplayProps } from "./confirmation-callout-display.factory";
 
 const scoped = (container: Container) => ({
-  /** The callout `<section>` (either variant); absent when the view projected
+  /** The callout `<section>` (any variant); absent when the view projected
    * to null upstream. */
   queryCallout() {
     return container.queryByTestId("match-confirm-callout");
@@ -15,13 +23,29 @@ const scoped = (container: Container) => ({
   getCallout() {
     return container.getByTestId("match-confirm-callout");
   },
-  /** The featured variant's primary CTA — "Accept result" idle, "Accepting…"
-   * in flight. Absent on the passive variant. */
+  /** The featured variants' primary CTA — "Accept result" idle, "Accepting…"
+   * in flight. Absent on the passive variants. */
   getAcceptButton() {
     return container.getByRole("button", { name: /accept/i });
   },
   queryAcceptButton() {
     return container.queryByRole("button", { name: /accept/i });
+  },
+  /** The "Suggest correction" link on the review variant. */
+  querySuggestCorrectionLink() {
+    return container.queryByTestId("match-confirm-callout-correct");
+  },
+  /** The "Counter" link on the corrected variant. */
+  queryCounterLink() {
+    return container.queryByTestId("match-confirm-callout-counter");
+  },
+  /** The "Edit result" link on the awaiting variant. */
+  queryEditLink() {
+    return container.queryByTestId("match-confirm-callout-edit");
+  },
+  /** The correction diff block, present only on the corrected variant. */
+  queryDiff() {
+    return container.queryByTestId("score-diff");
   },
   /** The inline API-failure line beneath the body copy; null when clean. */
   queryError() {
@@ -29,13 +53,32 @@ const scoped = (container: Container) => ({
   },
 });
 
-/** Test page-object for the pure `ConfirmationCalloutDisplay` — props in,
- * DOM out, no MSW. Embedding page objects (active/fetcher/wrapper) spread
- * `within` to expose the same callout queries as their own. */
+/** Test page-object for the pure `ConfirmationCalloutDisplay`. The callout's
+ * correction affordances are typed `<Link>`s, so `render` mounts it under a
+ * minimal router that registers the correction route they target. The router
+ * resolves asynchronously, so tests that read a link start with a `findBy*`
+ * (e.g. `await page.getCallout()` via `waitFor`). */
 export const confirmationCalloutDisplayPage = {
   render(overrides: Partial<ConfirmationCalloutDisplayProps> = {}) {
     const props = buildConfirmationCalloutDisplayProps(overrides);
-    render(<ConfirmationCalloutDisplay {...props} />);
+    const rootRoute = createRootRoute();
+    const indexRoute = createRoute({
+      getParentRoute: () => rootRoute,
+      path: "/",
+      component: () => <ConfirmationCalloutDisplay {...props} />,
+    });
+    // The correction route the "Suggest correction" / "Counter" / "Edit result"
+    // links navigate to — registered so the typed <Link>s resolve at render.
+    const correctRoute = createRoute({
+      getParentRoute: () => rootRoute,
+      path: "/matches/$matchId/correct",
+      component: () => <div>correction-route</div>,
+    });
+    const router = createRouter({
+      routeTree: rootRoute.addChildren([indexRoute, correctRoute]),
+      history: createMemoryHistory({ initialEntries: ["/"] }),
+    });
+    render(<RouterProvider router={router} />);
   },
 
   /**

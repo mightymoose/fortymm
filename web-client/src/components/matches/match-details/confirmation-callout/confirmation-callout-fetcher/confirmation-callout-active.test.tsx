@@ -18,7 +18,9 @@ describe("ConfirmationCalloutActive", () => {
     });
     confirmationCalloutActivePage.render();
 
-    const button = confirmationCalloutActivePage.getAcceptButton();
+    const button = await waitFor(() =>
+      confirmationCalloutActivePage.getAcceptButton(),
+    );
     fireEvent.click(button);
     fireEvent.click(button);
 
@@ -38,7 +40,9 @@ describe("ConfirmationCalloutActive", () => {
     });
     confirmationCalloutActivePage.render();
 
-    const button = confirmationCalloutActivePage.getAcceptButton();
+    const button = await waitFor(() =>
+      confirmationCalloutActivePage.getAcceptButton(),
+    );
     await userEvent.click(button);
     await waitFor(() => expect(acceptHits).toBe(1));
     await userEvent.click(button);
@@ -52,6 +56,7 @@ describe("ConfirmationCalloutActive", () => {
     );
     confirmationCalloutActivePage.render();
 
+    await waitFor(() => confirmationCalloutActivePage.getAcceptButton());
     await userEvent.click(confirmationCalloutActivePage.getAcceptButton());
 
     await waitFor(() =>
@@ -70,6 +75,7 @@ describe("ConfirmationCalloutActive", () => {
     );
     confirmationCalloutActivePage.render();
 
+    await waitFor(() => confirmationCalloutActivePage.getAcceptButton());
     await userEvent.click(confirmationCalloutActivePage.getAcceptButton());
 
     await waitFor(() =>

@@ -1,12 +1,12 @@
 import { HttpResponse } from "msw";
 
 import { buildMatchDetails } from "@/mocks/factories/matches/match-details.factory";
-import { waitForElementToBeRemoved } from "@/test/utilities";
+import { waitFor } from "@/test/utilities";
 
 import { confirmationCalloutFetcherPage } from "./confirmation-callout-fetcher.page";
 
 /** A live match with a standing proposal the opponent posted — the viewer must
- * act, so the callout renders its actionable variant. */
+ * act, so the callout renders its review variant. */
 const reviewMatch = () =>
   buildMatchDetails({
     status: "in_progress",
@@ -25,24 +25,17 @@ const reviewMatch = () =>
   });
 
 describe("ConfirmationCalloutFetcher", () => {
-  it("suspends until the query resolves, then hands the view to the display", async () => {
+  it("resolves the query, then hands the view to the display", async () => {
     confirmationCalloutFetcherPage.mockEndpoint(() =>
       HttpResponse.json(reviewMatch()),
     );
 
     confirmationCalloutFetcherPage.render();
 
-    // Pending: only the Suspense fallback, no callout yet.
-    expect(confirmationCalloutFetcherPage.queryLoading()).toBeInTheDocument();
-    expect(
-      confirmationCalloutFetcherPage.queryCallout(),
-    ).not.toBeInTheDocument();
-
-    await waitForElementToBeRemoved(
-      confirmationCalloutFetcherPage.queryLoading(),
-    );
     // Wiring only: callout content is pinned by the query and display tests.
-    expect(confirmationCalloutFetcherPage.getCallout()).toBeInTheDocument();
+    await waitFor(() =>
+      expect(confirmationCalloutFetcherPage.getCallout()).toBeInTheDocument(),
+    );
   });
 
   it("renders nothing when the projection is null (no sign-off in play)", async () => {
@@ -52,8 +45,11 @@ describe("ConfirmationCalloutFetcher", () => {
 
     confirmationCalloutFetcherPage.render();
 
-    await waitForElementToBeRemoved(
-      confirmationCalloutFetcherPage.queryLoading(),
+    // The loading fallback clears and no callout ever appears.
+    await waitFor(() =>
+      expect(
+        confirmationCalloutFetcherPage.queryLoading(),
+      ).not.toBeInTheDocument(),
     );
     expect(
       confirmationCalloutFetcherPage.queryCallout(),
@@ -67,9 +63,8 @@ describe("ConfirmationCalloutFetcher", () => {
 
     confirmationCalloutFetcherPage.render();
 
-    await waitForElementToBeRemoved(
-      confirmationCalloutFetcherPage.queryLoading(),
+    await waitFor(() =>
+      expect(confirmationCalloutFetcherPage.queryError()).toBeInTheDocument(),
     );
-    expect(confirmationCalloutFetcherPage.queryError()).toBeInTheDocument();
   });
 });

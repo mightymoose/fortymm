@@ -69,6 +69,13 @@ export const matchDetailsPage = {
       path: "/matches/$matchId",
       component: () => <div>match-page</div>,
     });
+    // The correction-route target for the confirmation callout's
+    // "Suggest correction" / "Counter" / "Edit result" links.
+    const correctRoute = createRoute({
+      getParentRoute: () => rootRoute,
+      path: "/matches/$matchId/correct",
+      component: () => <div>correction-route</div>,
+    });
     const router = createRouter({
       routeTree: rootRoute.addChildren([
         detailsRoute,
@@ -76,6 +83,7 @@ export const matchDetailsPage = {
         scoringEdit,
         matchesList,
         matchPage,
+        correctRoute,
       ]),
       history: createMemoryHistory({ initialEntries: ["/details"] }),
     });

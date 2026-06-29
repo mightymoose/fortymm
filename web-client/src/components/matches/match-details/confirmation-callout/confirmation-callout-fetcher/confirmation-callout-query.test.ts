@@ -12,6 +12,7 @@ import { confirmationCalloutQueryPage } from "./confirmation-callout-query.page"
 
 type MatchNegotiation = components["schemas"]["MatchNegotiation"];
 type NegotiationResult = components["schemas"]["NegotiationResult"];
+type NegotiationDiffEntry = components["schemas"]["NegotiationDiffEntry"];
 
 const standingResult = (id = "r-1"): NegotiationResult => ({
   id,
@@ -20,9 +21,18 @@ const standingResult = (id = "r-1"): NegotiationResult => ({
   submitted_at: "2026-06-10T12:00:00Z",
 });
 
+const diffEntry: NegotiationDiffEntry = {
+  game_number: 1,
+  old: { game_number: 1, side_1_points: 11, side_2_points: 7 },
+  new: { game_number: 1, side_1_points: 11, side_2_points: 9 },
+};
+
 /** A live match with a standing proposal the opponent posted — the viewer must
  * act (negotiation `review`). */
-const reviewMatch = (negotiation: Partial<MatchNegotiation> = {}): MatchDetails =>
+const reviewMatch = (
+  negotiation: Partial<MatchNegotiation> = {},
+  overrides: Partial<MatchDetails> = {},
+): MatchDetails =>
   buildMatchDetails({
     status: "in_progress",
     status_label: "Awaiting confirmation",
@@ -34,6 +44,7 @@ const reviewMatch = (negotiation: Partial<MatchNegotiation> = {}): MatchDetails 
       diff: null,
       ...negotiation,
     },
+    ...overrides,
   });
 
 const renderView = async () => {
@@ -49,14 +60,71 @@ describe("confirmationCalloutQuery", () => {
     ]);
   });
 
-  it("projects the actionable state with the standing result id when it's the viewer's turn", async () => {
+  it("projects the review state with the standing result id + rated stakes", async () => {
     confirmationCalloutQueryPage.mockEndpoint(() =>
       HttpResponse.json(reviewMatch()),
     );
 
     const result = await renderView();
 
-    expect(result.current.data).toEqual({ kind: "actionable", resultId: "r-1" });
+    expect(result.current.data).toEqual({
+      kind: "review",
+      resultId: "r-1",
+      rated: true,
+    });
+  });
+
+  it("carries the unrated stakes through from affects_rating", async () => {
+    confirmationCalloutQueryPage.mockEndpoint(() =>
+      HttpResponse.json(reviewMatch({}, { affects_rating: false })),
+    );
+
+    const result = await renderView();
+
+    expect(result.current.data).toEqual({
+      kind: "review",
+      resultId: "r-1",
+      rated: false,
+    });
+  });
+
+  it("projects the corrected state with the standing id and the server diff", async () => {
+    confirmationCalloutQueryPage.mockEndpoint(() =>
+      HttpResponse.json(
+        reviewMatch({
+          viewer_state: "corrected",
+          standing_result: standingResult("r-2"),
+          prior_result: standingResult("r-0"),
+          diff: [diffEntry],
+        }),
+      ),
+    );
+
+    const result = await renderView();
+
+    expect(result.current.data).toEqual({
+      kind: "corrected",
+      resultId: "r-2",
+      rated: true,
+      diff: [diffEntry],
+    });
+  });
+
+  it("defaults a corrected state's diff to an empty array when the server sends null", async () => {
+    confirmationCalloutQueryPage.mockEndpoint(() =>
+      HttpResponse.json(
+        reviewMatch({
+          viewer_state: "corrected",
+          standing_result: standingResult("r-2"),
+          prior_result: standingResult("r-0"),
+          diff: null,
+        }),
+      ),
+    );
+
+    const result = await renderView();
+
+    expect(result.current.data).toMatchObject({ kind: "corrected", diff: [] });
   });
 
   it("projects the awaiting state, naming the opponent, when the viewer's own side proposed", async () => {
@@ -78,23 +146,47 @@ describe("confirmationCalloutQuery", () => {
     });
   });
 
-  it("projects null once the match is final", async () => {
+  it("projects the final state as plain 'confirmed' when there was no prior proposal", async () => {
     confirmationCalloutQueryPage.mockEndpoint(() =>
       HttpResponse.json(
         reviewMatch({
           viewer_state: "final",
           your_turn: false,
           standing_result: standingResult(),
+          prior_result: null,
         }),
       ),
     );
 
     const result = await renderView();
 
-    expect(result.current.data).toBeNull();
+    expect(result.current.data).toEqual({
+      kind: "final",
+      afterCorrections: false,
+    });
   });
 
-  it("projects null when there is no standing result (live)", async () => {
+  it("projects the final state as 'after corrections' when a prior proposal preceded the agreement", async () => {
+    confirmationCalloutQueryPage.mockEndpoint(() =>
+      HttpResponse.json(
+        reviewMatch({
+          viewer_state: "final",
+          your_turn: false,
+          standing_result: standingResult(),
+          prior_result: standingResult("r-0"),
+        }),
+      ),
+    );
+
+    const result = await renderView();
+
+    expect(result.current.data).toEqual({
+      kind: "final",
+      afterCorrections: true,
+    });
+  });
+
+  it("projects null when there is no proposal in play (live)", async () => {
     confirmationCalloutQueryPage.mockEndpoint(() =>
       HttpResponse.json(
         reviewMatch({
