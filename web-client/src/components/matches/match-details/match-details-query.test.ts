@@ -2,6 +2,7 @@ import { HttpResponse } from "msw";
 
 import { ApiError } from "@/api/client";
 import { buildMatchDetails } from "@/mocks/factories/matches/match-details.factory";
+import { LIVE_NEGOTIATION } from "@/mocks/match-store";
 import { waitFor } from "@/test/utilities";
 
 import type { Query } from "@tanstack/react-query";
@@ -16,9 +17,12 @@ import { matchDetailsQueryPage } from "./match-details-query.page";
 
 const queryWithStatusLabel = (
   status_label: string,
+  overrides: Parameters<typeof buildMatchDetails>[0] = {},
 ): Pick<Query<MatchDetailsResult>, "state"> => ({
   state: {
-    data: matchDetailsResultFromPayload(buildMatchDetails({ status_label })),
+    data: matchDetailsResultFromPayload(
+      buildMatchDetails({ status_label, ...overrides }),
+    ),
   } as Query<MatchDetailsResult>["state"],
 });
 
@@ -49,6 +53,40 @@ describe("matchDetailsQuery", () => {
       ).toBe(false);
     },
   );
+
+  it("does not poll while it's the viewer's turn to act, so a correction can't swap the result out from under them (#726)", () => {
+    // A standing result is still in play (label "Awaiting confirmation"), but
+    // `your_turn` means the viewer is reviewing it. Polling here would silently
+    // replace the reviewed result with a freshly-posted correction, and the
+    // still-rendered Accept would finalize a result the viewer never saw.
+    expect(
+      refetchWhileAwaitingConfirmation(
+        queryWithStatusLabel("Awaiting confirmation", {
+          negotiation: {
+            ...LIVE_NEGOTIATION,
+            viewer_state: "review",
+            your_turn: true,
+          },
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it("keeps polling for a spectator on an awaiting match (your_turn=false)", () => {
+    // Spectators share this query for the scoreboard and get `your_turn=false`,
+    // so suppressing the viewer's poll must not freeze theirs.
+    expect(
+      refetchWhileAwaitingConfirmation(
+        queryWithStatusLabel("Awaiting confirmation", {
+          negotiation: {
+            ...LIVE_NEGOTIATION,
+            viewer_state: "review",
+            your_turn: false,
+          },
+        }),
+      ),
+    ).toBeGreaterThan(0);
+  });
 
   it("does not poll before any data has loaded", () => {
     expect(

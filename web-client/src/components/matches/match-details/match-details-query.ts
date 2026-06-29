@@ -49,7 +49,9 @@ export function matchDetailsResultFromPayload(payload: MatchDetails) {
 }
 
 /** The resolved shape `matchDetailsQuery`'s `queryFn` returns. */
-export type MatchDetailsResult = ReturnType<typeof matchDetailsResultFromPayload>;
+export type MatchDetailsResult = ReturnType<
+  typeof matchDetailsResultFromPayload
+>;
 
 /** The server's lifecycle label for a posted-but-unconfirmed result (mirrors
  * `_status_label` in api/app/matches.py). While a match sits here it is waiting
@@ -69,12 +71,22 @@ const AWAITING_CONFIRMATION_POLL_MS = 5_000;
  * the global client disables `refetchOnWindowFocus` with a 30s `staleTime`, so
  * without this the page is stuck on "Awaiting confirmation" until a manual
  * reload (#493). Returning `false` outside that state means a settled match
- * isn't polled, so the open page goes quiet again once it resolves. */
+ * isn't polled, so the open page goes quiet again once it resolves.
+ *
+ * Exception: never poll while it's the viewer's *own* turn to act
+ * (`negotiation.your_turn` — the `review`/`corrected` states). A silent poll
+ * there swaps the standing result out from under the reviewer, so their
+ * still-rendered Accept finalizes a correction they never re-reviewed (#726).
+ * Freezing the rendered result means accepting a now-superseded one 409s, and
+ * the callout surfaces that as a "reload to re-review" prompt. Spectators and
+ * the waiting proposer have `your_turn=false`, so they keep polling. */
 export function refetchWhileAwaitingConfirmation(
   query: Pick<Query<MatchDetailsResult>, "state">,
 ): number | false {
-  const label = query.state.data?.unmigrated.status_label;
-  return label === AWAITING_CONFIRMATION ? AWAITING_CONFIRMATION_POLL_MS : false;
+  const data = query.state.data?.unmigrated;
+  if (data?.status_label !== AWAITING_CONFIRMATION) return false;
+  if (data.negotiation.your_turn) return false;
+  return AWAITING_CONFIRMATION_POLL_MS;
 }
 
 export const matchDetailsQuery = (matchId: string) => ({

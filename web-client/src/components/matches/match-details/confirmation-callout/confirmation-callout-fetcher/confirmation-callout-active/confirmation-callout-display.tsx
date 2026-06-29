@@ -13,10 +13,18 @@ export interface ConfirmationCalloutDisplayProps {
   /** True while the accept request is in flight — swaps the Accept label to
    * "Accepting…" and disables the CTA. */
   acceptPending: boolean;
+  /** True when the last accept 409'd because the standing result moved on. The
+   * actionable callouts then swap Accept for a "reload to re-review" prompt so
+   * the viewer can't blindly finalize a correction they never saw (#726). */
+  staleConflict: boolean;
   /** Inline API failure to surface beneath the body copy; null when the last
-   * attempt succeeded or none has been made. */
+   * attempt succeeded, none has been made, or it was a `staleConflict` (which
+   * has its own dedicated copy + reload button). */
   errorMessage: string | null;
   onAccept: () => void;
+  /** Refetch the match so the viewer sees (and can re-review) the latest
+   * standing result. Wired to the `staleConflict` reload button. */
+  onReload: () => void;
 }
 
 /** The rated/unrated stakes line, shared by the review + corrected callouts. */
@@ -58,12 +66,74 @@ function ErrorLine({ message }: { message: string | null }) {
   );
 }
 
+/** Shown when an accept 409'd: the standing result moved on, so we prompt a
+ * re-review instead of silently retargeting the live result (#726). Mirrors the
+ * correction-entry "this proposal has moved on" copy. */
+function StaleConflictNotice() {
+  return (
+    <p
+      role="alert"
+      className="md-confirm-callout__stakes mt-1.5 text-xs text-[color:var(--warn)]"
+    >
+      This result changed — reload to review the latest score before accepting.
+    </p>
+  );
+}
+
+function ReloadButton({ onReload }: { onReload: () => void }) {
+  return (
+    <button type="button" className="md-btn md-btn--primary" onClick={onReload}>
+      Reload
+    </button>
+  );
+}
+
+/** The copy beneath the body of an actionable callout: the stale-result reload
+ * notice when the standing result moved on, otherwise the stakes line plus any
+ * inline API error. Shared verbatim by the review + corrected variants. */
+function CalloutBody({
+  staleConflict,
+  rated,
+  errorMessage,
+}: {
+  staleConflict: boolean;
+  rated: boolean;
+  errorMessage: string | null;
+}) {
+  if (staleConflict) return <StaleConflictNotice />;
+  return (
+    <>
+      <StakesLine rated={rated} />
+      <ErrorLine message={errorMessage} />
+    </>
+  );
+}
+
+/** The primary CTA of an actionable callout: Reload after a stale-result 409,
+ * otherwise Accept. Shared verbatim by the review + corrected variants. */
+function PrimaryAction({
+  staleConflict,
+  acceptPending,
+  onAccept,
+  onReload,
+}: {
+  staleConflict: boolean;
+  acceptPending: boolean;
+  onAccept: () => void;
+  onReload: () => void;
+}) {
+  if (staleConflict) return <ReloadButton onReload={onReload} />;
+  return <AcceptButton acceptPending={acceptPending} onAccept={onAccept} />;
+}
+
 export function ConfirmationCalloutDisplay({
   view,
   matchId,
   acceptPending,
+  staleConflict,
   errorMessage,
   onAccept,
+  onReload,
 }: ConfirmationCalloutDisplayProps) {
   // The opponent posted the first result — accept it or suggest a correction.
   if (view.kind === "review") {
@@ -84,11 +154,19 @@ export function ConfirmationCalloutDisplay({
             Your opponent has posted the result below. Accept it to finalize the
             match, or suggest a correction if the score looks off.
           </p>
-          <StakesLine rated={view.rated} />
-          <ErrorLine message={errorMessage} />
+          <CalloutBody
+            staleConflict={staleConflict}
+            rated={view.rated}
+            errorMessage={errorMessage}
+          />
         </div>
         <div className="md-confirm-callout__actions">
-          <AcceptButton acceptPending={acceptPending} onAccept={onAccept} />
+          <PrimaryAction
+            staleConflict={staleConflict}
+            acceptPending={acceptPending}
+            onAccept={onAccept}
+            onReload={onReload}
+          />
           <Link
             {...correctionRoute(matchId)}
             className="md-btn md-btn--ghost"
@@ -122,11 +200,19 @@ export function ConfirmationCalloutDisplay({
             with your own.
           </p>
           {view.diff.length > 0 && <ScoreDiff diff={view.diff} />}
-          <StakesLine rated={view.rated} />
-          <ErrorLine message={errorMessage} />
+          <CalloutBody
+            staleConflict={staleConflict}
+            rated={view.rated}
+            errorMessage={errorMessage}
+          />
         </div>
         <div className="md-confirm-callout__actions">
-          <AcceptButton acceptPending={acceptPending} onAccept={onAccept} />
+          <PrimaryAction
+            staleConflict={staleConflict}
+            acceptPending={acceptPending}
+            onAccept={onAccept}
+            onReload={onReload}
+          />
           <Link
             {...correctionRoute(matchId)}
             className="md-btn md-btn--ghost"

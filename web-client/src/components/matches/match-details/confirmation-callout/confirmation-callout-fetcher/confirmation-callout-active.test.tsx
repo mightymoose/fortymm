@@ -67,11 +67,10 @@ describe("ConfirmationCalloutActive", () => {
     );
   });
 
-  it("surfaces the API error detail inline when the acceptance is rejected", async () => {
-    // e.g. a 409 race: the proposal moved on, or a double click — without
-    // inline surfacing the button would appear inert.
+  it("surfaces a non-conflict API error inline so the button doesn't appear inert", async () => {
+    // A 500 (or any non-409): without inline surfacing the button looks inert.
     confirmationCalloutActivePage.mockAcceptanceEndpoint(() =>
-      HttpResponse.json({ detail: "Match already finalized" }, { status: 409 }),
+      HttpResponse.json({ detail: "Something went wrong" }, { status: 500 }),
     );
     confirmationCalloutActivePage.render();
 
@@ -80,8 +79,39 @@ describe("ConfirmationCalloutActive", () => {
 
     await waitFor(() =>
       expect(confirmationCalloutActivePage.queryError()).toHaveTextContent(
-        "Match already finalized",
+        "Something went wrong",
       ),
+    );
+  });
+
+  it("turns a 409 into a reload-to-re-review prompt, not a silent retarget (#726)", async () => {
+    // The standing result moved on between render and click. Accepting the
+    // stale token 409s; rather than show the raw detail (or worse, retarget the
+    // live result), swap Accept for a reload prompt so finalizing stays a
+    // conscious act on a seen score.
+    confirmationCalloutActivePage.mockAcceptanceEndpoint(() =>
+      HttpResponse.json({ detail: "Result superseded" }, { status: 409 }),
+    );
+    confirmationCalloutActivePage.render();
+
+    await waitFor(() => confirmationCalloutActivePage.getAcceptButton());
+    await userEvent.click(confirmationCalloutActivePage.getAcceptButton());
+
+    await waitFor(() =>
+      expect(confirmationCalloutActivePage.queryError()).toHaveTextContent(
+        /this result changed — reload/i,
+      ),
+    );
+    // The stale-result Accept is gone; the reload CTA stands in its place.
+    expect(
+      confirmationCalloutActivePage.queryAcceptButton(),
+    ).not.toBeInTheDocument();
+    expect(
+      confirmationCalloutActivePage.queryReloadButton(),
+    ).toBeInTheDocument();
+    // The raw server detail is not shown — the dedicated reload copy replaces it.
+    expect(confirmationCalloutActivePage.queryError()).not.toHaveTextContent(
+      "Result superseded",
     );
   });
 });

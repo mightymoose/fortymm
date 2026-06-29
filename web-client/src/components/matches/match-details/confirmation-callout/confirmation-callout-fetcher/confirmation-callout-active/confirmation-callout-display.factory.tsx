@@ -78,8 +78,10 @@ export function buildConfirmationCalloutDisplayProps(
     view: buildReviewConfirmationView(),
     matchId: "m-1",
     acceptPending: false,
+    staleConflict: false,
     errorMessage: null,
     onAccept: () => {},
+    onReload: () => {},
     ...overrides,
   };
 }
