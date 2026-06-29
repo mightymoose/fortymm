@@ -42,6 +42,7 @@ const reviewMatch = (
       standing_result: standingResult(),
       prior_result: null,
       diff: null,
+      had_corrections: false,
       ...negotiation,
     },
     ...overrides,
@@ -146,14 +147,14 @@ describe("confirmationCalloutQuery", () => {
     });
   });
 
-  it("projects the final state as plain 'confirmed' when there was no prior proposal", async () => {
+  it("projects the final state as plain 'confirmed' when the chain wasn't corrected", async () => {
     confirmationCalloutQueryPage.mockEndpoint(() =>
       HttpResponse.json(
         reviewMatch({
           viewer_state: "final",
           your_turn: false,
           standing_result: standingResult(),
-          prior_result: null,
+          had_corrections: false,
         }),
       ),
     );
@@ -166,14 +167,17 @@ describe("confirmationCalloutQuery", () => {
     });
   });
 
-  it("projects the final state as 'after corrections' when a prior proposal preceded the agreement", async () => {
+  it("projects the final state as 'after corrections' when the chain was corrected", async () => {
     confirmationCalloutQueryPage.mockEndpoint(() =>
       HttpResponse.json(
+        // `had_corrections` is the match-level signal; the final state carries
+        // no `prior_result`, so the derivation must read `had_corrections`.
         reviewMatch({
           viewer_state: "final",
           your_turn: false,
           standing_result: standingResult(),
-          prior_result: standingResult("r-0"),
+          prior_result: null,
+          had_corrections: true,
         }),
       ),
     );

@@ -162,6 +162,7 @@ function projectMatchDetails(seed: Seed) {
       standing_result: null,
       prior_result: null,
       diff: null,
+      had_corrections: false,
     },
   }
 }

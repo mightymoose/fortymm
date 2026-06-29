@@ -385,6 +385,12 @@ def _negotiation(match: Match, current_user_id: uuid.UUID | None) -> MatchNegoti
 
     Non-participants / anonymous callers get a neutral spectator mapping
     (``your_turn=False``, no diff/prior)."""
+    # Match-level, viewer-independent: the chain holds a correction iff more than
+    # one proposal was ever posted (a counter or self-edit superseded the first).
+    # The FE reads this on the ``final`` state to pick "Confirmed" vs "Agreed
+    # after corrections" (#719).
+    had_corrections = len(match.results) > 1
+
     accepted = accepted_result(match)
     if accepted is not None:
         return MatchNegotiation(
@@ -393,6 +399,7 @@ def _negotiation(match: Match, current_user_id: uuid.UUID | None) -> MatchNegoti
             standing_result=_negotiation_result(accepted),
             prior_result=None,
             diff=None,
+            had_corrections=had_corrections,
         )
 
     standing = standing_result(match)
@@ -403,6 +410,7 @@ def _negotiation(match: Match, current_user_id: uuid.UUID | None) -> MatchNegoti
             standing_result=None,
             prior_result=None,
             diff=None,
+            had_corrections=had_corrections,
         )
 
     standing_view = _negotiation_result(standing)
@@ -418,6 +426,7 @@ def _negotiation(match: Match, current_user_id: uuid.UUID | None) -> MatchNegoti
             standing_result=standing_view,
             prior_result=None,
             diff=None,
+            had_corrections=had_corrections,
         )
 
     if _submitted_on_side(match, standing, viewer_side):
@@ -428,6 +437,7 @@ def _negotiation(match: Match, current_user_id: uuid.UUID | None) -> MatchNegoti
             standing_result=standing_view,
             prior_result=None,
             diff=None,
+            had_corrections=had_corrections,
         )
 
     # The opponent submitted the standing result → the viewer must act. Walk the
@@ -452,6 +462,7 @@ def _negotiation(match: Match, current_user_id: uuid.UUID | None) -> MatchNegoti
             standing_result=standing_view,
             prior_result=None,
             diff=None,
+            had_corrections=had_corrections,
         )
 
     return MatchNegotiation(
@@ -460,6 +471,7 @@ def _negotiation(match: Match, current_user_id: uuid.UUID | None) -> MatchNegoti
         standing_result=standing_view,
         prior_result=_negotiation_result(prior),
         diff=_negotiation_diff(prior.games, standing.games),
+        had_corrections=had_corrections,
     )
 
 

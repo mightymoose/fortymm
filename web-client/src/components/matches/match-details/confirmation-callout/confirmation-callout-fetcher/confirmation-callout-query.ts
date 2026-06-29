@@ -20,8 +20,8 @@ type NegotiationDiffEntry = components["schemas"]["NegotiationDiffEntry"];
  * - `awaiting`: the viewer's own side proposed; we wait on the opponent. A
  *   passive notice plus an "Edit result" action (a self-edit that supersedes
  *   the viewer's standing proposal).
- * - `final`: the match is settled. `afterCorrections` is true when there was
- *   back-and-forth (the viewer had a prior proposal before the agreed one). */
+ * - `final`: the match is settled. `afterCorrections` is true when the result
+ *   chain held more than one proposal (a correction preceded the agreement). */
 export type ConfirmationCalloutView =
   | { kind: "review"; resultId: string; rated: boolean }
   | {
@@ -72,11 +72,12 @@ const selectConfirmationCallout = (
     }
 
     case "final":
-      // A non-null `prior_result` means the viewer had proposed before the
-      // agreed result, i.e. the match went through at least one correction.
+      // `had_corrections` is the match-level signal that the chain held more
+      // than one proposal — a counter or self-edit landed before the agreed
+      // result. (Distinct from the viewer-relative `viewer_state === "corrected"`.)
       return {
         kind: "final",
-        afterCorrections: negotiation.prior_result !== null,
+        afterCorrections: negotiation.had_corrections,
       };
 
     default:
