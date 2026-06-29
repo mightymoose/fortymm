@@ -1,9 +1,8 @@
-import enum
 import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Index, func, text
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, func, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -11,43 +10,36 @@ from app.db import Base
 
 if TYPE_CHECKING:
     from app.models.match import Match
-    from app.models.match_result_response import MatchResultResponse
     from app.models.user import User
 
 
-class ResultOutcome(enum.Enum):
-    """Lifecycle of a single posted result.
-
-    ``pending`` — posted, awaiting the other side's confirm/dispute.
-    ``confirmed`` — every side confirmed (or a solo/unrated short-circuit); the
-    match is ``completed``.
-    ``disputed`` — a participant rejected it; the match reopens for re-scoring
-    and this row stays as the immutable record of what was rejected.
-    ``superseded`` — a still-``pending`` result was retracted before anyone
-    acted on it: the submitter withdrew it (``POST /withdrawal``), reopening the
-    match to a plain ``in_progress`` board. Like ``disputed`` it stays as history
-    and contributes no signatures, but carries no disputer — so the reopened
-    match reads as ordinary Live rather than surfacing a dispute.
-    """
-
-    pending = "pending"
-    confirmed = "confirmed"
-    disputed = "disputed"
-    superseded = "superseded"
-
-
 class MatchResult(Base):
-    """A posted result — the "claim" created by ``POST /v1/matches/{id}/results``.
+    """A proposed result — the "claim" created by ``POST /v1/matches/{id}/results``.
 
-    One row per posting, carrying who submitted it, when, an **immutable JSONB
-    snapshot of the claimed board**, and its outcome. Confirm/dispute become
-    ``MatchResultResponse`` rows hanging off this result, so the full per-result
-    history survives a dispute (the rejected board is preserved in ``games``)
-    instead of being mutated away on the working ``match_games`` scratchpad.
+    One row per proposal, carrying who submitted it, when, an **immutable JSONB
+    snapshot of the claimed board**, and (once agreed) who accepted it and when.
+    A counter-proposal is a new row whose ``supersedes_result_id`` points at the
+    proposal it replaces, so the full negotiation history survives as a linear
+    chain instead of being mutated away on the working ``match_games`` scratchpad.
+
+    Derived roles (never stored): a result is *accepted* iff
+    ``accepted_by_user_id IS NOT NULL``; *superseded* iff some other row's
+    ``supersedes_result_id`` equals its id; the *head* of the chain is the one
+    result nothing supersedes; the *standing* proposal is the head when it is not
+    yet accepted.
     """
 
     __tablename__ = "match_results"
-    __table_args__ = (Index("ix_match_results_match_id", "match_id"),)
+    __table_args__ = (
+        Index("ix_match_results_match_id", "match_id"),
+        # The acceptance columns are written together (propose's self-accept,
+        # accept's stamp), so a row with exactly one of them set is an illegal
+        # state — forbid it at the DB rather than trusting every write path.
+        CheckConstraint(
+            "(accepted_by_user_id IS NULL) = (accepted_at IS NULL)",
+            name="ck_match_results_accepted_pair",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
@@ -70,24 +62,40 @@ class MatchResult(Base):
     submitted_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
-    outcome: Mapped[ResultOutcome] = mapped_column(
-        Enum(ResultOutcome, name="result_outcome"),
-        nullable=False,
-        default=ResultOutcome.pending,
-        server_default=ResultOutcome.pending.value,
+    # The proposal this row counters, forming a linear negotiation chain. NULL
+    # for the first proposal on a match. A UNIQUE constraint (migration) bounds
+    # each proposal to at most one successor, so two concurrent counters to the
+    # same parent collide and one 409s.
+    supersedes_result_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("match_results.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    # The opposing-side participant who accepted this proposal. NULL while the
+    # proposal is still standing. RESTRICT mirrors ``submitted_by_user_id`` so an
+    # account merge repoints rather than drops. See app/account_merge.py.
+    accepted_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    accepted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
     # Immutable snapshot of the claimed board, frozen at post time. A list of
     # ``{"game_number", "side_1_points", "side_2_points"}`` objects (decode into
-    # a typed model at read time, per "parse, don't validate", when #366 first
-    # reads it). The working ``match_games`` scratchpad stays the live, editable
-    # board; this is the write-once record of what this posting claimed.
+    # a typed model at read time, per "parse, don't validate"). The working
+    # ``match_games`` scratchpad stays the live, editable board; this is the
+    # write-once record of what this proposal claimed.
     games: Mapped[list[dict[str, int]]] = mapped_column(JSONB, nullable=False)
 
     match: Mapped["Match"] = relationship(back_populates="results")
-    submitted_by: Mapped["User"] = relationship("User")
-    responses: Mapped[list["MatchResultResponse"]] = relationship(
-        back_populates="result",
-        cascade="all, delete-orphan",
-        passive_deletes=True,
-        order_by="MatchResultResponse.created_at",
+    # Two FKs point at ``users`` (submitted_by_user_id, accepted_by_user_id), so
+    # both relationships MUST pin foreign_keys explicitly or SQLAlchemy raises
+    # AmbiguousForeignKeysError.
+    submitted_by: Mapped["User"] = relationship(
+        "User", foreign_keys=[submitted_by_user_id]
+    )
+    accepted_by: Mapped["User | None"] = relationship(
+        "User", foreign_keys=[accepted_by_user_id]
     )

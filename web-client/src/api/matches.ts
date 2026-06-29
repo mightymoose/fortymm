@@ -564,19 +564,21 @@ export function useDeleteScoreForMatch(matchId: string) {
 }
 
 /**
- * Posts the result of a match. The payload is canon — the server obliterates
- * any scratchpad-saved games + scores, inserts these, validates the match as
- * a decided whole, and records the caller's signature. For a non-solo match
- * the status stays `in_progress` until the other side confirms via
- * `POST /confirmation`; ratings apply on that final signature, not here.
- * Solo matches finalize immediately (no second party to attest).
+ * Proposes a result — the first verb of the two-verb negotiation. The payload
+ * is canon: the server obliterates any scratchpad-saved games + scores, inserts
+ * these, and validates the board as a decided whole.
  *
- * Unlike the per-game writes, this one's errors matter: pass
- * `throwOnError`-style handling at the call site so the user can see what
- * went wrong (most often a 422 if local validation drifted out of sync, or a
- * 409 if a result has already been posted).
+ * A first proposal omits `supersedes_result_id` (and requires no result exists
+ * yet); a counter-proposal sets it to the current standing result's id. For a
+ * rated two-human match the status stays `in_progress` until the opposing side
+ * accepts via `POST .../results/{result_id}/acceptance`; solo/unrated matches
+ * finalize immediately (the proposer self-accepts).
+ *
+ * Unlike the per-game writes, this one's errors matter: surface the API's 4xx
+ * `detail` at the call site (a 422 if local validation drifted, or a 409 if a
+ * result has already been posted / the standing result moved on).
  */
-export function useFinalizeMatch(matchId: string) {
+export function useProposeResult(matchId: string) {
   const queryClient = useQueryClient()
   return useMutation({
     // Run offline so a paused mutation never freezes the submit button in its
@@ -598,64 +600,26 @@ export function useFinalizeMatch(matchId: string) {
 }
 
 /**
- * Confirms a posted result. Inserts the caller's signature; when every side
- * has at least one signing player the server flips status to `completed` and
- * applies the rating update — exactly once. Caller must be a participant who
- * hasn't already signed (the BFF's `can_confirm` flag is the source of truth
- * for whether the CTA is shown).
+ * Accepts a standing proposal — the second verb of the negotiation. The
+ * opposing side ratifies the proposing side's board; the match completes and
+ * the rating update runs. `resultId` is the concurrency token: it must equal
+ * the current standing result's id, or the server 409s with the moved-on
+ * negotiation state. The BFF's `negotiation.your_turn` is the source of truth
+ * for whether the Accept CTA is shown, and `negotiation.standing_result.id`
+ * supplies the id to accept.
  */
-export function useConfirmMatch(matchId: string) {
+export function useAcceptResult(matchId: string) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: async (): Promise<MatchDetails> =>
+    mutationFn: async (resultId: string): Promise<MatchDetails> =>
       unwrap(
-        'confirm match result',
-        await api.POST('/v1/matches/{match_id}/confirmation', {
-          params: { path: { match_id: matchId } },
-        }),
-      ),
-    onSuccess: (data) => applyScoreMutationCache(queryClient, matchId, data),
-  })
-}
-
-/**
- * Disputes a posted result. Clears every signature on the match and resets
- * `side.won` to `null`; the canonical games stay in place so the disputer
- * can navigate to the contested game and PUT a corrected score. Status
- * stays `in_progress`. Same `can_confirm` predicate gates this as
- * `useConfirmMatch`.
- */
-export function useDisputeMatch(matchId: string) {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: async (): Promise<MatchDetails> =>
-      unwrap(
-        'dispute match result',
-        await api.POST('/v1/matches/{match_id}/dispute', {
-          params: { path: { match_id: matchId } },
-        }),
-      ),
-    onSuccess: (data) => applyScoreMutationCache(queryClient, matchId, data),
-  })
-}
-
-/**
- * Withdraws a result the caller posted while it's still awaiting the other
- * side's sign-off — the submitter's escape hatch for a typo they spotted after
- * posting (they can't confirm or dispute their own result). Marks the pending
- * result `superseded` and reopens the match to a plain `Live` state so the
- * submitter can correct the wrong game and re-post. The BFF's `can_withdraw`
- * flag is the source of truth for whether the CTA is shown.
- */
-export function useWithdrawMatch(matchId: string) {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: async (): Promise<MatchDetails> =>
-      unwrap(
-        'withdraw match result',
-        await api.POST('/v1/matches/{match_id}/withdrawal', {
-          params: { path: { match_id: matchId } },
-        }),
+        'accept match result',
+        await api.POST(
+          '/v1/matches/{match_id}/results/{result_id}/acceptance',
+          {
+            params: { path: { match_id: matchId, result_id: resultId } },
+          },
+        ),
       ),
     onSuccess: (data) => applyScoreMutationCache(queryClient, matchId, data),
   })

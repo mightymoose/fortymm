@@ -1,6 +1,7 @@
 import enum
 import uuid
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -171,13 +172,54 @@ class MatchDetailsH2H(BaseModel):
     recent_meetings: list[MatchDetailsH2HMeeting]
 
 
-class MatchSignatureView(BaseModel):
-    """One participant's sign-off on the posted result. Surfaced on
-    ``MatchDetails`` so the FE can render "Awaiting <opponent>'s confirmation"
-    without joining client-side."""
+class NegotiationGame(BaseModel):
+    """One game in a result snapshot."""
 
-    user_id: uuid.UUID
-    signed_at: datetime
+    game_number: int
+    side_1_points: int
+    side_2_points: int
+
+
+class NegotiationResult(BaseModel):
+    """A posted result in the negotiation chain — the ``standing_result`` (the
+    most recent posting, awaiting the other side) or the ``prior_result`` it
+    supersedes."""
+
+    id: uuid.UUID
+    games: list[NegotiationGame]
+    submitted_by: uuid.UUID
+    submitted_at: datetime
+
+
+class NegotiationDiffEntry(BaseModel):
+    """One game's difference between the prior and standing result, so the FE
+    can highlight what changed in a correction."""
+
+    game_number: int
+    # ``None`` if the game didn't exist in the baseline (prior) result.
+    old: NegotiationGame | None
+    new: NegotiationGame
+
+
+# The viewer-relative phase of the result negotiation. ``live`` = no result
+# posted yet; ``awaiting`` = the viewer's side posted and owes nothing;
+# ``review`` = the opponent posted the standing result and the viewer has no
+# prior proposal in the chain; ``corrected`` = the opponent posted the standing
+# result and the viewer has their own prior proposal (the diff shows what
+# changed vs the viewer's last proposal); ``final`` = a result has been accepted.
+ViewerState = Literal["live", "awaiting", "review", "corrected", "final"]
+
+
+class MatchNegotiation(BaseModel):
+    """Viewer-relative result-negotiation block. Always present on
+    ``MatchDetails`` / ``MatchListRow``; the FE reads ``viewer_state`` and
+    ``your_turn`` to pick the CTA, and ``diff`` to highlight a correction."""
+
+    viewer_state: ViewerState
+    your_turn: bool
+    standing_result: NegotiationResult | None
+    prior_result: NegotiationResult | None
+    diff: list[NegotiationDiffEntry] | None
 
 
 class MatchDetails(BaseModel):
@@ -202,28 +244,10 @@ class MatchDetails(BaseModel):
     # the scoring page's submit button between "save game" and "post result"
     # (the latter calls ``POST /v1/matches/{id}/results``).
     can_finalize: bool
-    # True when the current user can confirm or dispute a posted result —
-    # i.e., the match is in_progress, at least one signature exists, the
-    # caller is a participant, and the caller hasn't signed yet. Same
-    # predicate gates both /confirmation and /dispute; the FE picks which
-    # CTA to show. False for anonymous / non-participants.
-    can_confirm: bool
-    # True when the current user is the *submitter* of a result that is still
-    # awaiting the other side's sign-off — i.e. they posted it and nobody has
-    # confirmed or disputed yet. They can't confirm or dispute their own result,
-    # so this gates a "Withdraw result" CTA that retracts the posting and
-    # reopens the match for re-scoring. False for anonymous / non-participants
-    # and for the side that owes the sign-off (they get ``can_confirm`` instead).
-    can_withdraw: bool
-    # Always present (possibly empty). Default-factoried fields become
-    # ``optional`` in the generated TS types; declared as required keeps the
-    # FE from defending against ``undefined`` at every read.
-    signatures: list[MatchSignatureView]
-    # The participant who disputed the most recently posted result, or None on
-    # any non-disputed match. Perspective-neutral (like ``sides``): the FE
-    # resolves the username from the sides and shows the submitter — the
-    # participant who is *not* this user — that their result was disputed.
-    disputed_by_user_id: uuid.UUID | None
+    # Viewer-relative result-negotiation state (the posting/correction/accept
+    # chain). Always populated; the FE reads it instead of the old
+    # signature/dispute fields.
+    negotiation: MatchNegotiation
     recent_form: list[MatchDetailsPlayerForm] = Field(default_factory=list)
     head_to_head: MatchDetailsH2H | None = None
     # In-progress replacement view model, exposed alongside the current fields
@@ -251,10 +275,10 @@ class MatchListRow(BaseModel):
     # builds the route from (match_id, current_game_number).
     current_game_number: int | None
     can_score: bool
-    # Same semantic as ``MatchDetails.can_confirm`` — lets the matches list
-    # surface an "Awaiting your confirmation" CTA on rows the caller owes a
-    # signature on.
-    can_confirm: bool
+    # Viewer-relative result-negotiation state (same block as
+    # ``MatchDetails.negotiation``) so the list can surface the right CTA
+    # without re-deriving signature/dispute state. Always populated.
+    negotiation: MatchNegotiation
     # The current-user-aware attention bucket this row falls in (see
     # ``app.attention``), or ``None`` when the row isn't an attention item for
     # the caller — a completed/voided match, or a match the caller only
@@ -386,3 +410,7 @@ class MatchResultsWrite(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     games: list[MatchResultsGameWrite] = Field(min_length=1)
+    # The result this posting supersedes (a correction). ``None`` on the first
+    # posting; otherwise must equal the current standing result's id (the
+    # handler 409s on a stale or mismatched value).
+    supersedes_result_id: uuid.UUID | None = None

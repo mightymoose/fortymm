@@ -1,6 +1,10 @@
 import { faker } from '@faker-js/faker'
 import type { components } from '@/api/schema'
-import { MOCK_DEFAULT_LEAGUE, seedScoreboardStatus } from '@/mocks/match-store'
+import {
+  LIVE_NEGOTIATION,
+  MOCK_DEFAULT_LEAGUE,
+  seedScoreboardStatus,
+} from '@/mocks/match-store'
 
 type ComponentHealth = components['schemas']['ComponentHealth']
 type HealthResponse = components['schemas']['HealthResponse']
@@ -206,10 +210,7 @@ export function matchDetails(
     current_game: { game_number: 1 },
     can_score: true,
     can_finalize: false,
-    can_confirm: false,
-    can_withdraw: false,
-    signatures: [],
-    disputed_by_user_id: null,
+    negotiation: LIVE_NEGOTIATION,
     recent_form: [mySide, opponentSide]
       .filter((s) => s.players.length > 0)
       .map((s) => ({
@@ -255,7 +256,7 @@ export function matchListRow(
     created_at: ISO,
     current_game_number: 1,
     can_score: true,
-    can_confirm: false,
+    negotiation: LIVE_NEGOTIATION,
     attention: null,
     ...rest,
   }

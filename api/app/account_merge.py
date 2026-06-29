@@ -28,7 +28,6 @@ from app.models import (
     LeagueMembership,
     Match,
     MatchResult,
-    MatchResultResponse,
     MatchSide,
     MatchSidePlayer,
     Notification,
@@ -77,9 +76,6 @@ async def merge_user(
     matches_moved = await _repoint_match_side_players(
         db, from_user_id=from_user_id, to_user_id=to_user_id
     )
-    await _repoint_match_result_responses(
-        db, from_user_id=from_user_id, to_user_id=to_user_id
-    )
 
     await db.execute(
         update(Match)
@@ -94,6 +90,15 @@ async def merge_user(
         update(MatchResult)
         .where(MatchResult.submitted_by_user_id == from_user_id)
         .values(submitted_by_user_id=to_user_id)
+    )
+
+    # Re-point result acceptance: ``match_results.accepted_by_user_id`` is
+    # nullable RESTRICT with no uniqueness — move it to the survivor like the
+    # submitter above so the FK doesn't block the final tombstone delete.
+    await db.execute(
+        update(MatchResult)
+        .where(MatchResult.accepted_by_user_id == from_user_id)
+        .values(accepted_by_user_id=to_user_id)
     )
 
     # Preserve tournament ownership across a guest→verified merge — re-point
@@ -202,13 +207,6 @@ async def merge_user(
                 ~MatchSide.players.any(),
             )
         )
-    # Same RESTRICT story for match_result_responses — defensive drop after
-    # repoint. (match_results.submitted_by has no uniqueness, so its repoint
-    # above always covers every row — no defensive drop needed there.)
-    await db.execute(
-        delete(MatchResultResponse).where(MatchResultResponse.user_id == from_user_id)
-    )
-
     # We tombstone rather than DELETE the user, so the rows that used to ride
     # ``ON DELETE CASCADE`` must be dropped explicitly. Order doesn't matter —
     # none of these reference each other. Keep the guest's *session* tokens so
@@ -280,30 +278,3 @@ async def _repoint_match_side_players(
         {"from_id": from_user_id, "to_id": to_user_id},
     )
     return cast(CursorResult[Any], result).rowcount or 0
-
-
-async def _repoint_match_result_responses(
-    db: AsyncSession,
-    *,
-    from_user_id: uuid.UUID,
-    to_user_id: uuid.UUID,
-) -> None:
-    """Re-point match_result_responses from ephemeral → verified.
-    UNIQUE(result_id, user_id) collides only if both users somehow already
-    responded to the same result — left out by NOT EXISTS; the ephemeral row
-    will then be dropped by the defensive ``DELETE`` in ``merge_user``."""
-    await db.execute(
-        text(
-            """
-            UPDATE match_result_responses AS mrr
-            SET user_id = :to_id
-            WHERE mrr.user_id = :from_id
-              AND NOT EXISTS (
-                SELECT 1 FROM match_result_responses other
-                WHERE other.user_id = :to_id
-                  AND other.result_id = mrr.result_id
-              )
-            """
-        ),
-        {"from_id": from_user_id, "to_id": to_user_id},
-    )

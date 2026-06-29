@@ -154,8 +154,15 @@ function projectMatchDetails(seed: Seed) {
     current_game: nextNumber !== null ? { game_number: nextNumber } : null,
     can_score: nextNumber !== null,
     can_finalize: canFinalizeSeed(seed),
-    can_confirm: false,
-    signatures: [],
+    // Score entry is always the pre-result scratchpad, so the negotiation is
+    // ``live`` (no result posted yet) for every seed these specs build.
+    negotiation: {
+      viewer_state: 'live',
+      your_turn: false,
+      standing_result: null,
+      prior_result: null,
+      diff: null,
+    },
   }
 }
 

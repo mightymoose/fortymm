@@ -21,7 +21,7 @@ const scoped = (container: Container) => ({
 
 /**
  * Test page-object for `FinalizeCalloutActive` — the layer that owns the
- * `useFinalizeMatch` mutation. Tests stub `POST /v1/matches/:matchId/results`
+ * `useProposeResult` mutation. Tests stub `POST /v1/matches/:matchId/results`
  * and drive the Post button; no GET stub is needed because the mutation's
  * cache invalidation only refetches *mounted* queries, and this harness
  * mounts none.

@@ -15,29 +15,13 @@ const scoped = (container: Container) => ({
   getCallout() {
     return container.getByTestId("match-confirm-callout");
   },
-  /** The featured variant's primary CTA — "Confirm result" idle,
-   * "Confirming…" in flight. Absent on the passive variant. */
-  getConfirmButton() {
-    return container.getByRole("button", { name: /confirm/i });
+  /** The featured variant's primary CTA — "Accept result" idle, "Accepting…"
+   * in flight. Absent on the passive variant. */
+  getAcceptButton() {
+    return container.getByRole("button", { name: /accept/i });
   },
-  queryConfirmButton() {
-    return container.queryByRole("button", { name: /confirm/i });
-  },
-  /** The featured variant's secondary CTA — "Dispute" idle, "Disputing…" in
-   * flight. Absent on the passive variant. */
-  getDisputeButton() {
-    return container.getByRole("button", { name: /disput/i });
-  },
-  queryDisputeButton() {
-    return container.queryByRole("button", { name: /disput/i });
-  },
-  /** The passive variant's "Withdraw result" CTA — "Withdrawing…" in flight.
-   * Only present on the submitter's own awaiting view (`canWithdraw`). */
-  getWithdrawButton() {
-    return container.getByRole("button", { name: /withdraw/i });
-  },
-  queryWithdrawButton() {
-    return container.queryByRole("button", { name: /withdraw/i });
+  queryAcceptButton() {
+    return container.queryByRole("button", { name: /accept/i });
   },
   /** The inline API-failure line beneath the body copy; null when clean. */
   queryError() {

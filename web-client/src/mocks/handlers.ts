@@ -2,10 +2,8 @@ import { delay, http, HttpResponse } from 'msw'
 import type { components } from '@/api/schema'
 import { healthCheck, player, sessionResponse } from '@/test/factories'
 import {
-  confirmSeed,
-  disputeSeed,
-  withdrawSeed,
-  finalizeSeed,
+  acceptSeed,
+  proposeSeed,
   findMatch,
   MOCK_CURRENT_USER,
   awaitingCountOf,
@@ -351,14 +349,10 @@ function enforceScorable(seed: SeedMatch): Response | null {
   ) {
     return detail('This match is no longer scorable.', 409)
   }
-  // Posted-but-unconfirmed results lock the scratchpad; the next action is
-  // /confirmation or /dispute, not another score write.
-  if (seed.signatures.length > 0) {
-    return detail(
-      'This match has a posted result awaiting confirmation. ' +
-        'Confirm or dispute it before editing scores.',
-      409,
-    )
+  // The first posted result freezes the scratchpad — scores are immutable
+  // once a proposal exists (mirrors the server's `_enforce_scorable`).
+  if (seed.results.length > 0) {
+    return detail('This match has a posted result; scores are frozen.', 409)
   }
   return null
 }
@@ -823,54 +817,42 @@ export const handlers = [
     },
   ),
 
+  // propose — the first verb. A first proposal omits `supersedes_result_id`;
+  // a counter targets the standing result. propose has its own gates and does
+  // NOT pass through the scratchpad-scorable guard (a counter supersedes an
+  // existing result, which would otherwise 409 here).
   http.post(
     '*/v1/matches/:matchId/results',
     async ({ params, request }) => {
       await delay(250)
       const seed = findMatch(String(params.matchId))
       if (!seed) return detail('Match not found.', 404)
-      const gateError = enforceScorable(seed)
-      if (gateError) return gateError
       const body = (await readJson(request)) as MatchResultsBody
-      const message = finalizeSeed(seed, body.games)
-      if (message) return detail(message, 422)
+      const error = proposeSeed(
+        seed,
+        body.games,
+        body.supersedes_result_id ?? null,
+      )
+      if (error) return detail(error.message, error.status)
       return HttpResponse.json(projectMatchDetails(seed), { status: 201 })
     },
   ),
 
+  // accept — the second verb. The `resultId` path param is the concurrency
+  // token; the mock current user is the accepting (opposing-side) participant.
   http.post(
-    '*/v1/matches/:matchId/confirmation',
+    '*/v1/matches/:matchId/results/:resultId/acceptance',
     async ({ params }) => {
       await delay(250)
       const seed = findMatch(String(params.matchId))
       if (!seed) return detail('Match not found.', 404)
-      const message = confirmSeed(seed, MOCK_CURRENT_USER.id)
-      if (message) return detail(message, 409)
+      const error = acceptSeed(
+        seed,
+        String(params.resultId),
+        MOCK_CURRENT_USER.id,
+      )
+      if (error) return detail(error.message, error.status)
       return HttpResponse.json(projectMatchDetails(seed), { status: 201 })
-    },
-  ),
-
-  http.post(
-    '*/v1/matches/:matchId/dispute',
-    async ({ params }) => {
-      await delay(250)
-      const seed = findMatch(String(params.matchId))
-      if (!seed) return detail('Match not found.', 404)
-      const message = disputeSeed(seed, MOCK_CURRENT_USER.id)
-      if (message) return detail(message, 409)
-      return HttpResponse.json(projectMatchDetails(seed))
-    },
-  ),
-
-  http.post(
-    '*/v1/matches/:matchId/withdrawal',
-    async ({ params }) => {
-      await delay(250)
-      const seed = findMatch(String(params.matchId))
-      if (!seed) return detail('Match not found.', 404)
-      const message = withdrawSeed(seed, MOCK_CURRENT_USER.id)
-      if (message) return detail(message, 409)
-      return HttpResponse.json(projectMatchDetails(seed))
     },
   ),
 

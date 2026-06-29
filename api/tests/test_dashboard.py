@@ -16,7 +16,13 @@ from app.models import (
     RatingStrategy,
     UserLeagueRating,
 )
-from tests._helpers import make_client, make_user, opponent_session, start_session
+from tests._helpers import (
+    accept_standing_result,
+    make_client,
+    make_user,
+    opponent_session,
+    start_session,
+)
 
 
 async def _create_match(client: AsyncClient, opponent_id, best_of: int = 5) -> dict:
@@ -157,8 +163,7 @@ async def test_dashboard_returns_recent_results_for_completed_matches(
             },
         )
         assert post.status_code == 201
-        confirm = await opp_client.post(f"/v1/matches/{match['id']}/confirmation")
-        assert confirm.status_code == 201
+        await accept_standing_result(opp_client, match["id"])
 
     body = (await api_client.get("/v1/dashboard")).json()
     assert len(body["recent_results"]) == 1
@@ -201,9 +206,9 @@ async def test_dashboard_scoped_to_current_user(
 
 
 async def _post_result(client: AsyncClient, match_id: str, *, best_of: int = 1) -> None:
-    """Post a decided result for ``match_id`` (no confirmation). For a rated
-    match this leaves it ``in_progress`` with the poster's lone signature —
-    awaiting the other side's review."""
+    """Propose a decided result for ``match_id`` (no acceptance). For a rated
+    match this leaves it ``in_progress`` with the proposer's standing result —
+    awaiting the other side's review/accept."""
     games_to_win = best_of // 2 + 1
     post = await client.post(
         f"/v1/matches/{match_id}/results",
@@ -279,8 +284,10 @@ async def test_dashboard_caps_attention_rows_but_counts_them_all(
 async def test_dashboard_attention_priority_ranking(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    """P0-4: a dispute ranks above a review, which ranks above a rated score,
-    which ranks above an unrated score."""
+    """P0-4: a review ranks above a rated score, which ranks above an unrated
+    score. (The legacy ``dispute`` bucket is unreachable in the two-verb model —
+    no transition leaves a match in the ``disputed`` status — so it drops out of
+    the ranking entirely.)"""
     await start_session(api_client, db_session)
     # Unrated + rated score matches: nobody has posted, so they sit in the
     # score bucket; the current user is the one who'd score them.
@@ -299,30 +306,19 @@ async def test_dashboard_attention_priority_ranking(
         review_match = await _create_match(api_client, rev_opp.id, best_of=1)
         await _post_result(rev_client, review_match["id"], best_of=1)
 
-        async with opponent_session(db_session, "dispute_opp") as (dis_client, dis_opp):
-            # Dispute row: current user posts, opponent disputes → disputed.
-            dispute_match = await _create_match(api_client, dis_opp.id, best_of=1)
-            await _post_result(api_client, dispute_match["id"], best_of=1)
-            dispute = await dis_client.post(
-                f"/v1/matches/{dispute_match['id']}/dispute"
-            )
-            assert dispute.status_code == 200
-
-            body = (await api_client.get("/v1/dashboard")).json()
+        body = (await api_client.get("/v1/dashboard")).json()
 
     assert [(i["kind"], i["affects_rating"]) for i in body["attention"]] == [
-        ("dispute", True),
         ("review", True),
         ("score", True),
         ("score", False),
     ]
     assert [i["match_id"] for i in body["attention"]] == [
-        dispute_match["id"],
         review_match["id"],
         rated_score["id"],
         unrated_score["id"],
     ]
-    assert body["attention_total_count"] == 4
+    assert body["attention_total_count"] == 3
     assert body["waiting_count"] == 0
 
 
@@ -334,9 +330,9 @@ async def _play_match(
     i_win: bool,
     best_of: int = 1,
 ) -> dict:
-    """Create a match, post the result, and have the opponent confirm — the
-    full sign-off dance. Returns the create response (the test usually only
-    wants the match id)."""
+    """Create a match, propose the result, and have the opponent accept — the
+    full propose/accept dance. Returns the create response (the test usually
+    only wants the match id)."""
     match = await _create_match(client, opp_id, best_of=best_of)
     s1, s2 = (11, 4) if i_win else (4, 11)
     games_to_win = best_of // 2 + 1
@@ -350,8 +346,7 @@ async def _play_match(
         },
     )
     assert post.status_code == 201
-    confirm = await opp_client.post(f"/v1/matches/{match['id']}/confirmation")
-    assert confirm.status_code == 201
+    await accept_standing_result(opp_client, match["id"])
     return match
 
 
@@ -465,8 +460,7 @@ async def test_dashboard_percentile_shown_once_user_has_played(
             },
         )
         assert post.status_code == 201
-        confirm = await opp_client.post(f"/v1/matches/{match['id']}/confirmation")
-        assert confirm.status_code == 201
+        await accept_standing_result(opp_client, match["id"])
 
     body = (await api_client.get("/v1/dashboard")).json()
     assert body["completed_match_count"] == 1

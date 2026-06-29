@@ -4,8 +4,7 @@ from app.models.league_membership import LeagueMembership
 from app.models.match import Match, MatchStatus
 from app.models.match_game import MatchGame
 from app.models.match_game_score import MatchGameScore
-from app.models.match_result import MatchResult, ResultOutcome
-from app.models.match_result_response import MatchResultResponse, ResultResponseKind
+from app.models.match_result import MatchResult
 from app.models.match_settings import MatchSettings, VerificationPolicy
 from app.models.match_side import MatchSide
 from app.models.match_side_player import MatchSidePlayer
@@ -44,13 +43,10 @@ __all__ = [
     "MatchGame",
     "MatchGameScore",
     "MatchResult",
-    "MatchResultResponse",
     "MatchSettings",
     "MatchSide",
     "MatchSidePlayer",
     "MatchStatus",
-    "ResultOutcome",
-    "ResultResponseKind",
     "Notification",
     "NotificationChannel",
     "NotificationChannelSetting",

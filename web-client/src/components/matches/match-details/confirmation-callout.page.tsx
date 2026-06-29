@@ -1,17 +1,13 @@
 import { ErrorBoundary } from "react-error-boundary";
 
 import {
-  mockMatchConfirmationEndpoint,
-  type MatchConfirmationResolver,
-} from "@/mocks/endpoints/matches/match-confirmation.endpoint";
+  mockMatchAcceptanceEndpoint,
+  type MatchAcceptanceResolver,
+} from "@/mocks/endpoints/matches/match-acceptance.endpoint";
 import {
   mockMatchDetailsEndpoint,
   type MatchDetailsResolver,
 } from "@/mocks/endpoints/matches/match-details.endpoint";
-import {
-  mockMatchDisputeEndpoint,
-  type MatchDisputeResolver,
-} from "@/mocks/endpoints/matches/match-dispute.endpoint";
 import { server } from "@/mocks/server";
 import { render, screen, type Container } from "@/test/utilities";
 
@@ -53,7 +49,7 @@ const scoped = (container: Container) => ({
  * deliberately has *no* error boundary, delegating failures upward. This
  * renders it beneath an `ErrorBoundary` standing in for that ancestor, and
  * stubs the `GET /v1/matches/:matchId` endpoint the query reads (plus, on
- * demand, the confirmation/dispute POST endpoints the embedded mutations hit).
+ * demand, the acceptance POST endpoint the embedded mutation hits).
  */
 export const confirmationCalloutPage = {
   /**
@@ -64,14 +60,10 @@ export const confirmationCalloutPage = {
     mockMatchDetailsEndpoint(server, resolver);
   },
 
-  /** Stub `POST /v1/matches/:matchId/confirmation` for tests that confirm. */
-  mockConfirmationEndpoint(resolver: MatchConfirmationResolver) {
-    mockMatchConfirmationEndpoint(server, resolver);
-  },
-
-  /** Stub `POST /v1/matches/:matchId/dispute` for tests that dispute. */
-  mockDisputeEndpoint(resolver: MatchDisputeResolver) {
-    mockMatchDisputeEndpoint(server, resolver);
+  /** Stub `POST /v1/matches/:matchId/results/:resultId/acceptance` for tests
+   * that accept. */
+  mockAcceptanceEndpoint(resolver: MatchAcceptanceResolver) {
+    mockMatchAcceptanceEndpoint(server, resolver);
   },
 
   render(overrides: Partial<ConfirmationCalloutProps> = {}) {

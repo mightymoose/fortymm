@@ -110,6 +110,25 @@ def make_raw_client() -> AsyncClient:
     )
 
 
+async def accept_standing_result(
+    client: AsyncClient, match_id: str, *, expected_status: int = 201
+) -> dict:
+    """Accept the match's current standing proposal as ``client`` — the second
+    verb of the propose/accept negotiation. Reads the standing result id from
+    the match-details negotiation block, then POSTs the acceptance.
+
+    Replaces the old ``POST /confirmation`` for the common "opponent ratifies
+    the posted result" path in collateral tests."""
+    details = (await client.get(f"/v1/matches/{match_id}")).json()
+    standing = details["negotiation"]["standing_result"]
+    assert standing is not None, "no standing result to accept"
+    response = await client.post(
+        f"/v1/matches/{match_id}/results/{standing['id']}/acceptance"
+    )
+    assert response.status_code == expected_status, response.text
+    return response.json()
+
+
 @asynccontextmanager
 async def opponent_session(
     db_session: AsyncSession, username: str

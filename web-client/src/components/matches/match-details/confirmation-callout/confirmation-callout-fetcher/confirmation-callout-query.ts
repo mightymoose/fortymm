@@ -2,69 +2,44 @@ import {
   matchDetailsQuery,
   type MatchDetailsResult,
 } from "../../match-details-query";
-import { orderedSides } from "../../ordered-sides";
 
-/** The sign-off state behind the confirmation callout. Null from the query
- * means neither state applies and nothing renders.
+/** The accept state behind the confirmation callout. Null from the query means
+ * nothing renders.
  *
- * - `actionable`: the viewer can hit ``POST /confirmation`` or
- *   ``POST /dispute`` — surfaces the featured Confirm / Dispute CTAs.
- * - `awaiting`: the viewer has already signed and we're waiting on the other
- *   side — surfaces the passive "Awaiting <opponent>" notice. */
+ * - `actionable`: the viewer must act on the opponent's standing proposal
+ *   (negotiation states `review`/`corrected`) — surfaces the Accept CTA. Carries
+ *   the standing result's id, the concurrency token `POST .../acceptance` needs.
+ * - `awaiting`: the viewer's own side proposed and we're waiting on the other
+ *   side to accept (negotiation state `awaiting`) — a passive notice. */
 export type ConfirmationCalloutView =
-  | { kind: "actionable" }
+  | { kind: "actionable"; resultId: string }
   | {
       kind: "awaiting";
-      /** The user whose signature we're waiting on, for the passive label —
-       * "your opponent" when the unsigned player can't be resolved by name. */
+      /** Opponent we're waiting on, for the passive label. */
       pendingSignerName: string;
-      /** True when the viewer posted this pending result and may retract it —
-       * drives the "Withdraw result" CTA on the passive notice (the submitter's
-       * escape hatch; they can't confirm/dispute their own result). */
-      canWithdraw: boolean;
     };
 
 const selectConfirmationCallout = (
   match: MatchDetailsResult,
 ): ConfirmationCalloutView | null => {
-  const details = match.unmigrated;
-  // `can_confirm` is the backend's word that the viewer is a participant
-  // facing a posted result they haven't signed — it wins over the passive
-  // state (you can't be awaiting someone else while it's your turn).
-  if (details.can_confirm) return { kind: "actionable" };
+  const { negotiation } = match.unmigrated;
 
-  // The passive notice is gated on the live (``in_progress``) state: a posted
-  // result keeps the match in_progress until the other side signs, at which
-  // point /confirmation flips it to ``completed``. Once finalized (or
-  // disputed/voided) the signatures still exist, so without this status check
-  // the notice would linger above a Final match — even across a reload. See
-  // #358.
-  if (match.data.scoreboard.status !== "live") return null;
-
-  // The viewer must be a signed participant with at least one signature on
-  // record; spectators and anonymous viewers never see this state.
-  const [viewerSide, otherSide] = orderedSides(details);
-  if (!viewerSide?.is_current_user_side || !otherSide) return null;
-  const signers = new Set(details.signatures.map((sig) => sig.user_id));
-  const viewerUserId = viewerSide.players[0]?.user_id ?? null;
-  if (
-    details.signatures.length === 0 ||
-    viewerUserId === null ||
-    !signers.has(viewerUserId)
-  ) {
-    return null;
+  // The viewer must act on the opponent's standing proposal.
+  if (negotiation.your_turn && negotiation.standing_result) {
+    return { kind: "actionable", resultId: negotiation.standing_result.id };
   }
 
-  // Find the participant who's missing from the signature set. With "at
-  // least one player per side" semantics, this picks the first un-signed
-  // player on the other side. Falls back to "your opponent" if we can't
-  // resolve a name.
-  const missing = otherSide.players.find((p) => !signers.has(p.user_id));
-  return {
-    kind: "awaiting",
-    pendingSignerName: missing?.username ?? "your opponent",
-    canWithdraw: details.can_withdraw,
-  };
+  // The viewer's own side proposed; surface a passive "awaiting" notice.
+  if (negotiation.viewer_state === "awaiting") {
+    const otherSide = match.unmigrated.sides.find(
+      (s) => !s.is_current_user_side,
+    );
+    const pendingSignerName =
+      otherSide?.players[0]?.username ?? "your opponent";
+    return { kind: "awaiting", pendingSignerName };
+  }
+
+  return null;
 };
 
 export const confirmationCalloutQuery = (matchId: string) => ({

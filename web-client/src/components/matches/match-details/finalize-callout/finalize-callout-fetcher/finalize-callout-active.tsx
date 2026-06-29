@@ -1,6 +1,6 @@
 import { useRef } from "react";
 
-import { useFinalizeMatch } from "@/api/matches";
+import { useProposeResult } from "@/api/matches";
 import { ApiError } from "@/api/client";
 
 import { FinalizeCalloutDisplay } from "./finalize-callout-active/finalize-callout-display";
@@ -19,7 +19,7 @@ export function FinalizeCalloutActive({
   view,
   matchId,
 }: FinalizeCalloutActiveProps) {
-  const finalizeMutation = useFinalizeMatch(matchId);
+  const finalizeMutation = useProposeResult(matchId);
   const error =
     finalizeMutation.error instanceof ApiError ? finalizeMutation.error : null;
   // Synchronous double-submit guard. `disabled={pending}` only takes effect on

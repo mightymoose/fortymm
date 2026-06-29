@@ -1,7 +1,10 @@
 import { HttpResponse } from "msw";
 import userEvent from "@testing-library/user-event";
 
-import { buildMatchDetails } from "@/mocks/factories/matches/match-details.factory";
+import {
+  buildMatchDetails,
+  type MatchDetails,
+} from "@/mocks/factories/matches/match-details.factory";
 import {
   buildMatchDetailsData,
   buildScoreboard,
@@ -10,10 +13,38 @@ import { waitFor, waitForElementToBeRemoved } from "@/test/utilities";
 
 import { confirmationCalloutPage } from "./confirmation-callout.page";
 
+/** A live match with a standing proposal the opponent posted — the viewer must
+ * act, so the callout renders its actionable (Accept) variant. */
+const reviewMatch = (): MatchDetails =>
+  buildMatchDetails({
+    status: "in_progress",
+    negotiation: {
+      viewer_state: "review",
+      your_turn: true,
+      standing_result: {
+        id: "r-1",
+        games: [{ game_number: 1, side_1_points: 11, side_2_points: 7 }],
+        submitted_by: "u-opponent",
+        submitted_at: "2026-06-10T12:00:00Z",
+      },
+      prior_result: null,
+      diff: null,
+    },
+  });
+
+const finalMatch = (): MatchDetails =>
+  buildMatchDetails({
+    status: "completed",
+    status_label: "Final",
+    data: buildMatchDetailsData({
+      scoreboard: buildScoreboard({ status: "final" }),
+    }),
+  });
+
 describe("ConfirmationCallout", () => {
-  it("shows its Suspense fallback, then the callout when the viewer can confirm", async () => {
+  it("shows its Suspense fallback, then the callout when it's the viewer's turn", async () => {
     confirmationCalloutPage.mockEndpoint(() =>
-      HttpResponse.json(buildMatchDetails({ can_confirm: true })),
+      HttpResponse.json(reviewMatch()),
     );
 
     confirmationCalloutPage.render();
@@ -24,36 +55,22 @@ describe("ConfirmationCallout", () => {
     expect(confirmationCalloutPage.getCallout()).toBeInTheDocument();
   });
 
-  it("gives way once the viewer confirms and the match finalizes", async () => {
-    // Confirming flips the refetched payload to final-with-signatures —
-    // neither callout state applies any more, so the section must disappear
-    // in place (the in-page continuation of #358).
-    let confirmed = false;
+  it("gives way once the viewer accepts and the match finalizes", async () => {
+    // Accepting flips the refetched payload to final — neither callout state
+    // applies any more, so the section must disappear in place.
+    let accepted = false;
     confirmationCalloutPage.mockEndpoint(() =>
-      HttpResponse.json(
-        confirmed
-          ? buildMatchDetails({
-              can_confirm: false,
-              status: "completed",
-              status_label: "Final",
-              data: buildMatchDetailsData({
-                scoreboard: buildScoreboard({ status: "final" }),
-              }),
-            })
-          : buildMatchDetails({ can_confirm: true }),
-      ),
+      HttpResponse.json(accepted ? finalMatch() : reviewMatch()),
     );
-    confirmationCalloutPage.mockConfirmationEndpoint(() => {
-      confirmed = true;
-      return HttpResponse.json(buildMatchDetails({ can_confirm: false }), {
-        status: 201,
-      });
+    confirmationCalloutPage.mockAcceptanceEndpoint(() => {
+      accepted = true;
+      return HttpResponse.json(finalMatch(), { status: 201 });
     });
 
     confirmationCalloutPage.render();
 
     await waitForElementToBeRemoved(confirmationCalloutPage.queryLoading());
-    await userEvent.click(confirmationCalloutPage.getConfirmButton());
+    await userEvent.click(confirmationCalloutPage.getAcceptButton());
 
     await waitFor(() =>
       expect(confirmationCalloutPage.queryCallout()).not.toBeInTheDocument(),

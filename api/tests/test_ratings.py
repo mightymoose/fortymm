@@ -30,7 +30,12 @@ from app.ratings import (
     validate_state,
 )
 from app.ratings.glicko2 import CALCULATOR as GLICKO2
-from tests._helpers import make_user, opponent_session, start_session
+from tests._helpers import (
+    accept_standing_result,
+    make_user,
+    opponent_session,
+    start_session,
+)
 
 # ----- strategy seeding ----------------------------------------------------
 
@@ -204,8 +209,7 @@ async def _score_to_completion(
         },
     )
     assert post.status_code == 201
-    confirm = await opp_client.post(f"/v1/matches/{match['id']}/confirmation")
-    assert confirm.status_code == 201
+    await accept_standing_result(opp_client, match["id"])
     final = await client.get(f"/v1/matches/{match['id']}")
     assert final.status_code == 200
     body = final.json()
@@ -257,9 +261,9 @@ async def test_ratings_only_apply_on_confirmation_not_results(
     api_client: AsyncClient,
     db_session: AsyncSession,
 ):
-    """The post-#345 finalize moved ratings out of /results. With signatures
-    on top, ratings must hold off until the SECOND signature lands — the
-    /results call itself just records the first signer."""
+    """The post-#345 finalize moved ratings out of /results. In the propose/
+    accept model, ratings hold off until the opposing side accepts — the
+    /results (propose) call itself leaves the result standing, unrated."""
     await start_session(api_client, db_session)
     async with opponent_session(db_session, "delay-opp") as (opp_client, opp):
         create = await api_client.post(
@@ -294,8 +298,7 @@ async def test_ratings_only_apply_on_confirmation_not_results(
         )
         assert rows_after_post == []
 
-        confirm = await opp_client.post(f"/v1/matches/{match['id']}/confirmation")
-        assert confirm.status_code == 201
+        await accept_standing_result(opp_client, match["id"])
         rows_after_confirm = (
             (
                 await db_session.execute(

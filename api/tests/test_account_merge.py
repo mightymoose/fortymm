@@ -15,15 +15,12 @@ from app.models import (
     LeagueMembership,
     Match,
     MatchResult,
-    MatchResultResponse,
     MatchSettings,
     MatchSide,
     MatchSidePlayer,
     MatchStatus,
     RatingHistory,
     RatingHistorySource,
-    ResultOutcome,
-    ResultResponseKind,
     Tournament,
     TournamentEvent,
     User,
@@ -94,21 +91,23 @@ async def _record_solo_match(db: AsyncSession, creator: User) -> Match:
 
 
 async def _record_result(
-    db: AsyncSession, match: Match, *, submitted_by: User, responders: list[User]
+    db: AsyncSession,
+    match: Match,
+    *,
+    submitted_by: User,
+    accepted_by: User | None = None,
 ) -> MatchResult:
-    """Attach a pending ``MatchResult`` to ``match`` with a ``confirm`` response
-    from each ``responders`` user — the new home for what used to be
-    ``match_signatures``."""
+    """Attach a ``MatchResult`` to ``match``. ``accepted_by`` stamps the
+    acceptor (the opposing-side participant who ratified the proposal) so the
+    merge's ``accepted_by_user_id`` re-point can be exercised; left ``None`` the
+    result is still standing (unaccepted)."""
     result = MatchResult(
         match_id=match.id,
         submitted_by_user_id=submitted_by.id,
         games=[],
-        outcome=ResultOutcome.pending,
+        accepted_by_user_id=accepted_by.id if accepted_by is not None else None,
+        accepted_at=datetime.now(UTC) if accepted_by is not None else None,
     )
-    for user in responders:
-        result.responses.append(
-            MatchResultResponse(user_id=user.id, kind=ResultResponseKind.confirm)
-        )
     db.add(result)
     await db.commit()
     await db.refresh(result)
@@ -427,9 +426,7 @@ async def test_merge_repoints_match_result_submitted_by(db_session: AsyncSession
     opponent = await _make_verified(db_session, "opponent@example.com")
 
     match = await _record_match(db_session, ephemeral, ephemeral, opponent)
-    result = await _record_result(
-        db_session, match, submitted_by=ephemeral, responders=[ephemeral]
-    )
+    result = await _record_result(db_session, match, submitted_by=ephemeral)
 
     await merge_user(db_session, from_user_id=ephemeral.id, to_user_id=verified.id)
     await db_session.commit()
@@ -524,77 +521,32 @@ async def test_merge_with_user_league_rating_collision_drops_ephemeral(
     assert [r.user_id for r in rows] == [verified.id]
 
 
-async def test_merge_repoints_match_result_responses(db_session: AsyncSession):
-    """``match_result_responses`` is RESTRICT on user_id, so the merge must
-    re-point every response row from the ephemeral user onto the verified user —
-    same contract as ``match_side_players``. Otherwise the final ephemeral-user
-    delete would either fail (RESTRICT block) or orphan the audit row."""
+async def test_merge_repoints_match_result_accepted_by(db_session: AsyncSession):
+    """``match_results.accepted_by_user_id`` is a nullable RESTRICT FK to users,
+    so the merge must re-point an accepted result from the ephemeral acceptor
+    onto the verified survivor — otherwise the final ephemeral-user delete would
+    be blocked by the RESTRICT FK (or orphan history pointing at a ghost)."""
+    submitter = await _make_ephemeral(db_session, "spinning-otter")
     ephemeral = await _make_ephemeral(db_session, "drifting-grouse")
     verified = await _make_verified(db_session, "rita@example.com")
-    opponent = await _make_ephemeral(db_session, "spinning-otter")
-    match = await _record_match(db_session, ephemeral, ephemeral, opponent)
+    match = await _record_match(db_session, submitter, submitter, ephemeral)
+    # The ephemeral user is the acceptor; submitter proposed.
     result = await _record_result(
-        db_session, match, submitted_by=ephemeral, responders=[ephemeral, opponent]
+        db_session, match, submitted_by=submitter, accepted_by=ephemeral
     )
 
     await merge_user(db_session, from_user_id=ephemeral.id, to_user_id=verified.id)
     await db_session.commit()
 
-    responses = (
-        (
-            await db_session.execute(
-                select(MatchResultResponse).where(
-                    MatchResultResponse.result_id == result.id
-                )
-            )
-        )
-        .scalars()
-        .all()
-    )
-    user_ids = {r.user_id for r in responses}
-    assert user_ids == {verified.id, opponent.id}
-    # And the ephemeral user is tombstoned, not dropped — the RESTRICT FK on
-    # match_result_responses.user_id was satisfied by the re-point above.
+    await db_session.refresh(result)
+    assert result.accepted_by_user_id == verified.id
+    # The ephemeral user is tombstoned, not dropped — the RESTRICT FK on
+    # accepted_by_user_id was satisfied by the re-point above.
     ephemeral_row = (
         await db_session.execute(select(User).where(User.id == ephemeral.id))
     ).scalar_one_or_none()
     assert ephemeral_row is not None
     assert ephemeral_row.merged_into_user_id == verified.id
-
-
-async def test_merge_with_match_response_collision_drops_ephemeral(
-    db_session: AsyncSession,
-):
-    """If both users somehow already responded to the same result, the NOT
-    EXISTS guard skips the re-point and the defensive DELETE in ``merge_user``
-    drops the leftover ephemeral row so the user delete still succeeds."""
-    ephemeral = await _make_ephemeral(db_session, "drifting-grouse")
-    verified = await _make_verified(db_session, "rita@example.com")
-    opponent = await _make_ephemeral(db_session, "spinning-otter")
-    match = await _record_match(db_session, ephemeral, ephemeral, opponent)
-
-    # Both users carry a response on the same result — impossible in normal
-    # flow but defended against here.
-    result = await _record_result(
-        db_session, match, submitted_by=ephemeral, responders=[ephemeral, verified]
-    )
-
-    await merge_user(db_session, from_user_id=ephemeral.id, to_user_id=verified.id)
-    await db_session.commit()
-
-    responses = (
-        (
-            await db_session.execute(
-                select(MatchResultResponse).where(
-                    MatchResultResponse.result_id == result.id
-                )
-            )
-        )
-        .scalars()
-        .all()
-    )
-    # Verified's pre-existing response survives; ephemeral's is dropped.
-    assert [r.user_id for r in responses] == [verified.id]
 
 
 async def test_merge_self_play_drops_orphaned_match_side(db_session: AsyncSession):

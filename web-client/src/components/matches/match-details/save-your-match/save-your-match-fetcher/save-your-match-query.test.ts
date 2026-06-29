@@ -121,7 +121,22 @@ describe("saveYourMatchQuery", () => {
 
   it("surfaces canConfirm so the card can soften under the confirmation callout", async () => {
     saveYourMatchQueryPage.mockEndpoint(() =>
-      HttpResponse.json(liveMatch({ can_confirm: true })),
+      HttpResponse.json(
+        liveMatch({
+          negotiation: {
+            viewer_state: "review",
+            your_turn: true,
+            standing_result: {
+              id: "r-1",
+              games: [{ game_number: 1, side_1_points: 11, side_2_points: 7 }],
+              submitted_by: "u-opponent",
+              submitted_at: "2026-06-10T12:00:00Z",
+            },
+            prior_result: null,
+            diff: null,
+          },
+        }),
+      ),
     );
 
     const result = await renderView();

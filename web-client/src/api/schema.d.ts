@@ -452,19 +452,21 @@ export interface paths {
         put?: never;
         /**
          * Post Match Result
-         * @description Post the result of a match. Any previously-saved per-game scores are
-         *     discarded; the payload's games (validated as a complete, decided match)
-         *     become canon.
+         * @description Propose a result for a match — the first verb of the propose/accept
+         *     negotiation.
          *
-         *     A new ``MatchResult`` row is created carrying an immutable snapshot of the
-         *     claimed board; a prior disputed result stays as history. For a rated match
-         *     the caller's ``confirm`` response is recorded on it and status stays
-         *     ``in_progress`` until every side confirms — the other side acts on the
-         *     posted result via ``POST /confirmation`` or ``POST /dispute``, and
-         *     ``side.won`` plus the rating update fire inside /confirmation when the final
-         *     confirm lands. Unrated matches (nothing at stake worth a second sign-off)
-         *     and solo matches (no second party to attest) finalize immediately here, with
-         *     the result created already ``confirmed``.
+         *     A first proposal (``supersedes_result_id`` omitted) requires that no result
+         *     exists yet. A counter (``supersedes_result_id`` set) must target the current
+         *     standing proposal — it mints a superseding ``MatchResult`` carrying an
+         *     immutable snapshot of the claimed board, keeping the chain linear. Either way
+         *     the proposed board (validated as complete + decided) becomes the canonical
+         *     ``match_games`` snapshot.
+         *
+         *     Solo / unrated matches (no second party whose sign-off is worth waiting on)
+         *     self-accept and finalize immediately — ``side.won`` and the rating update
+         *     fire here. Rated two-human matches leave the result *standing* (unaccepted)
+         *     for the opposing side to accept via
+         *     ``POST /results/{result_id}/acceptance``.
          */
         post: operations["post_match_result_v1_matches__match_id__results_post"];
         delete?: never;
@@ -473,7 +475,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/matches/{match_id}/confirmation": {
+    "/v1/matches/{match_id}/results/{result_id}/acceptance": {
         parameters: {
             query?: never;
             header?: never;
@@ -483,69 +485,19 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Confirm Match Result
-         * @description Sign off on a posted result. When this is the last confirm needed
-         *     (every side has at least one confirming player) the result flips to
-         *     ``confirmed``, the match to ``completed``, ``side.won`` is stamped from the
-         *     posted games, and the rating update runs — exactly once.
-         */
-        post: operations["confirm_match_result_v1_matches__match_id__confirmation_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/matches/{match_id}/dispute": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Dispute Match Result
-         * @description Reject a posted result. A ``dispute`` response is recorded on the pending
-         *     result, marking it ``disputed`` (it stays as history — its ``games``
-         *     snapshot preserves the rejected board), and the side win flags reset to
-         *     ``None``. The working ``match_games`` themselves stay in place so the
-         *     disputer can navigate to the contested game and PUT a corrected score; the
-         *     per-game endpoints unblock automatically once the result is no longer
-         *     pending (see ``_enforce_scorable``).
-         */
-        post: operations["dispute_match_result_v1_matches__match_id__dispute_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/matches/{match_id}/withdrawal": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Withdraw Match Result
-         * @description Retract a result the caller posted that's still awaiting the other
-         *     side's sign-off — the submitter's escape hatch for a typo they spotted
-         *     after posting (they can't confirm or dispute their own result).
+         * Accept Match Result
+         * @description Accept a standing proposal — the second verb of the negotiation. The
+         *     opposing side ratifies the proposing side's board; the match completes,
+         *     ``side.won`` is stamped from the agreed games, and the rating update runs.
          *
-         *     The pending result is marked ``superseded`` (it stays as history — its
-         *     ``games`` snapshot preserves the retracted board) and the match returns to a
-         *     plain ``in_progress`` / ``Live`` state with no pending result. The working
-         *     ``match_games`` stay in place, so scoring reopens (see ``_enforce_scorable``)
-         *     and the submitter can correct the wrong game and re-post via ``/results``.
-         *     Distinct from ``disputed``: nobody rejected the result, so the match reads
-         *     as ordinary Live rather than surfacing a disputer.
+         *     ``result_id`` is the concurrency token: it must equal the current standing
+         *     proposal's id. If the proposal was superseded by a counter, already accepted,
+         *     or there's no standing proposal, the caller gets a 409 carrying the moved-on
+         *     negotiation state (or a 404 if no result with that id exists on the match).
+         *     The proposing side already consented by proposing, so only a participant on
+         *     the *opposing* side may accept.
          */
-        post: operations["withdraw_match_result_v1_matches__match_id__withdrawal_post"];
+        post: operations["accept_match_result_v1_matches__match_id__results__result_id__acceptance_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1604,10 +1556,28 @@ export interface components {
             current_game_number: number | null;
             /** Can Score */
             can_score: boolean;
-            /** Can Confirm */
-            can_confirm: boolean;
+            negotiation: components["schemas"]["MatchNegotiation"];
             /** Attention */
             attention: ("dispute" | "review" | "score" | "waiting_opponent" | "waiting_others") | null;
+        };
+        /**
+         * MatchNegotiation
+         * @description Viewer-relative result-negotiation block. Always present on
+         *     ``MatchDetails`` / ``MatchListRow``; the FE reads ``viewer_state`` and
+         *     ``your_turn`` to pick the CTA, and ``diff`` to highlight a correction.
+         */
+        MatchNegotiation: {
+            /**
+             * Viewer State
+             * @enum {string}
+             */
+            viewer_state: "live" | "awaiting" | "review" | "corrected" | "final";
+            /** Your Turn */
+            your_turn: boolean;
+            standing_result: components["schemas"]["NegotiationResult"] | null;
+            prior_result: components["schemas"]["NegotiationResult"] | null;
+            /** Diff */
+            diff: components["schemas"]["NegotiationDiffEntry"][] | null;
         };
         /**
          * MatchResultsGameWrite
@@ -1632,6 +1602,8 @@ export interface components {
         MatchResultsWrite: {
             /** Games */
             games: components["schemas"]["MatchResultsGameWrite"][];
+            /** Supersedes Result Id */
+            supersedes_result_id?: string | null;
         };
         /**
          * MatchSettings
@@ -1645,24 +1617,6 @@ export interface components {
              * @enum {integer}
              */
             length_games: 1 | 3 | 5 | 7;
-        };
-        /**
-         * MatchSignatureView
-         * @description One participant's sign-off on the posted result. Surfaced on
-         *     ``MatchDetails`` so the FE can render "Awaiting <opponent>'s confirmation"
-         *     without joining client-side.
-         */
-        MatchSignatureView: {
-            /**
-             * User Id
-             * Format: uuid
-             */
-            user_id: string;
-            /**
-             * Signed At
-             * Format: date-time
-             */
-            signed_at: string;
         };
         /**
          * MatchStatus
@@ -1706,6 +1660,54 @@ export interface components {
         MergeSummary: {
             /** Matches Moved */
             matches_moved: number;
+        };
+        /**
+         * NegotiationDiffEntry
+         * @description One game's difference between the prior and standing result, so the FE
+         *     can highlight what changed in a correction.
+         */
+        NegotiationDiffEntry: {
+            /** Game Number */
+            game_number: number;
+            old: components["schemas"]["NegotiationGame"] | null;
+            new: components["schemas"]["NegotiationGame"];
+        };
+        /**
+         * NegotiationGame
+         * @description One game in a result snapshot.
+         */
+        NegotiationGame: {
+            /** Game Number */
+            game_number: number;
+            /** Side 1 Points */
+            side_1_points: number;
+            /** Side 2 Points */
+            side_2_points: number;
+        };
+        /**
+         * NegotiationResult
+         * @description A posted result in the negotiation chain — the ``standing_result`` (the
+         *     most recent posting, awaiting the other side) or the ``prior_result`` it
+         *     supersedes.
+         */
+        NegotiationResult: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Games */
+            games: components["schemas"]["NegotiationGame"][];
+            /**
+             * Submitted By
+             * Format: uuid
+             */
+            submitted_by: string;
+            /**
+             * Submitted At
+             * Format: date-time
+             */
+            submitted_at: string;
         };
         /**
          * NotificationCategory
@@ -2620,14 +2622,7 @@ export interface components {
             can_score: boolean;
             /** Can Finalize */
             can_finalize: boolean;
-            /** Can Confirm */
-            can_confirm: boolean;
-            /** Can Withdraw */
-            can_withdraw: boolean;
-            /** Signatures */
-            signatures: components["schemas"]["MatchSignatureView"][];
-            /** Disputed By User Id */
-            disputed_by_user_id: string | null;
+            negotiation: components["schemas"]["MatchNegotiation"];
             /** Recent Form */
             recent_form?: components["schemas"]["MatchDetailsPlayerForm"][];
             head_to_head?: components["schemas"]["MatchDetailsH2H"] | null;
@@ -3754,12 +3749,13 @@ export interface operations {
             };
         };
     };
-    confirm_match_result_v1_matches__match_id__confirmation_post: {
+    accept_match_result_v1_matches__match_id__results__result_id__acceptance_post: {
         parameters: {
             query?: never;
             header?: never;
             path: {
                 match_id: string;
+                result_id: string;
             };
             cookie?: {
                 session?: string | null;
@@ -3769,72 +3765,6 @@ export interface operations {
         responses: {
             /** @description Successful Response */
             201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["app__schemas__match__MatchDetails"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    dispute_match_result_v1_matches__match_id__dispute_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                match_id: string;
-            };
-            cookie?: {
-                session?: string | null;
-            };
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["app__schemas__match__MatchDetails"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    withdraw_match_result_v1_matches__match_id__withdrawal_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                match_id: string;
-            };
-            cookie?: {
-                session?: string | null;
-            };
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -62,8 +62,13 @@ function liveMatchDetails() {
     current_game: { game_number: 3 },
     can_score: true,
     can_finalize: false,
-    can_confirm: false,
-    signatures: [],
+    negotiation: {
+      viewer_state: 'live',
+      your_turn: false,
+      standing_result: null,
+      prior_result: null,
+      diff: null,
+    },
   }
 }
 
