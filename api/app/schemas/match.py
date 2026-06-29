@@ -202,10 +202,11 @@ class NegotiationDiffEntry(BaseModel):
 
 
 # The viewer-relative phase of the result negotiation. ``live`` = no result
-# posted yet; ``awaiting`` = the viewer posted and owes nothing; ``review`` =
-# the other side posted and the viewer must accept/correct; ``corrected`` = the
-# standing result supersedes a prior one (a correction is in flight); ``final``
-# = a result has been accepted.
+# posted yet; ``awaiting`` = the viewer's side posted and owes nothing;
+# ``review`` = the opponent posted the standing result and the viewer has no
+# prior proposal in the chain; ``corrected`` = the opponent posted the standing
+# result and the viewer has their own prior proposal (the diff shows what
+# changed vs the viewer's last proposal); ``final`` = a result has been accepted.
 ViewerState = Literal["live", "awaiting", "review", "corrected", "final"]
 
 

@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, ForeignKey, Index, func, text
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, func, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -30,7 +30,16 @@ class MatchResult(Base):
     """
 
     __tablename__ = "match_results"
-    __table_args__ = (Index("ix_match_results_match_id", "match_id"),)
+    __table_args__ = (
+        Index("ix_match_results_match_id", "match_id"),
+        # The acceptance columns are written together (propose's self-accept,
+        # accept's stamp), so a row with exactly one of them set is an illegal
+        # state — forbid it at the DB rather than trusting every write path.
+        CheckConstraint(
+            "(accepted_by_user_id IS NULL) = (accepted_at IS NULL)",
+            name="ck_match_results_accepted_pair",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),

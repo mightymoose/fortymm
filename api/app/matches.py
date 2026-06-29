@@ -286,8 +286,8 @@ def current_game_number(match: Match) -> int | None:
     """The next un-scored game number for an open match. ``None`` when:
 
     - the match is finalized / voided / pending (not in progress or disputed);
-    - a result is posted and awaiting confirmation (a pending result exists —
-      score writes are locked);
+    - any result has been posted (the board is frozen — score writes are locked
+      once a result exists);
     - the currently-saved games already decide the match — even if some game
       numbers in ``1..best_of`` were never played, there's no meaningful
       "next game to play" (a bo3 won 2-0 has no game 3). Returning a
@@ -573,11 +573,12 @@ def participant_filter[SelectT: Select[Any]](
 
 
 def _has_result_exists() -> Any:
-    """``EXISTS`` correlated subquery: this match has any result row. For an
-    ``in_progress`` match, any result is the standing one — acceptance moves the
-    match to ``completed`` — so "has a result" is the derived "Awaiting
-    confirmation" bucket (see ``_status_label``). Pulled into a helper so the
-    list filter and the status-count aggregate split the Live vs awaiting
+    """``EXISTS`` correlated subquery: this match has any result row. On an
+    ``in_progress`` match the presence of any result means a standing proposal
+    exists (acceptance moves the match to ``completed``, so the head of the
+    chain is necessarily unaccepted) — making "has a result" the derived
+    "Awaiting confirmation" bucket (see ``_status_label``). Pulled into a helper
+    so the list filter and the status-count aggregate split the Live vs awaiting
     buckets identically (issue #381)."""
     return select(MatchResult.id).where(MatchResult.match_id == Match.id).exists()
 
@@ -673,9 +674,8 @@ def _apply_list_filter[SelectT: Select[Any]](
 ) -> SelectT:
     """Narrow ``query`` to one filter bucket. ``live`` and
     ``awaiting_confirmation`` both sit on the ``in_progress`` status but split
-    on whether a result has been posted (a pending result), so neither bucket
-    leaks into the other (issue #381). Every other bucket is a plain status
-    match."""
+    on whether any result has been posted, so neither bucket leaks into the
+    other (issue #381). Every other bucket is a plain status match."""
     if filter_ is MatchListFilter.live:
         return query.where(
             Match.status == MatchStatus.in_progress, ~_has_result_exists()
@@ -2010,6 +2010,16 @@ async def post_match_result(
             detail="A result is already being posted for this match. "
             "Refresh to see the latest.",
         ) from exc
+
+    # A terminal match (completed/voided) is closed to new proposals. A completed
+    # match has an accepted head, so the result-existence gates below would 409 a
+    # first-post against it anyway; but a match voided *before* any result was
+    # posted has no results to gate on — so guard the status explicitly here, or a
+    # first-post would silently un-void it.
+    if match.status in _TERMINAL_STATUSES:
+        raise HTTPException(
+            status_code=409, detail="This match is no longer open to results."
+        )
 
     # NOTE: no ``_enforce_scorable`` here. The scratchpad-scorable guard is now
     # false the instant any result exists (#715), so a counter — which by design

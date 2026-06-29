@@ -1309,6 +1309,35 @@ async def _propose(
     return {"status": response.status_code, "body": response.json()}
 
 
+async def test_propose_on_voided_match_is_409(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """A terminal (voided) match is closed to new proposals. A match voided
+    before any result was posted has no result rows to gate on, so the propose
+    handler guards the status explicitly — otherwise a first-post would silently
+    un-void it back to ``in_progress``."""
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "voided-rival") as (_opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=1)
+        await db_session.execute(
+            update(Match)
+            .where(Match.id == uuid.UUID(match["id"]))
+            .values(status=MatchStatus.voided)
+        )
+        await db_session.commit()
+
+        result = await _propose(api_client, match["id"], s1=11, s2=4)
+        assert result["status"] == 409, result
+
+        # The rejected propose left the match voided — it didn't un-void it.
+        reloaded = (
+            await db_session.execute(
+                select(Match).where(Match.id == uuid.UUID(match["id"]))
+            )
+        ).scalar_one()
+        assert reloaded.status == MatchStatus.voided
+
+
 async def test_propose_self_edit_chain_supersedes_own_proposal(
     api_client: AsyncClient, db_session: AsyncSession
 ):

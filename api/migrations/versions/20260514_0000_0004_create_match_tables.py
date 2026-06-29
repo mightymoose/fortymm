@@ -226,6 +226,10 @@ def upgrade() -> None:
             "supersedes_result_id",
             name="uq_match_results_supersedes_result_id",
         ),
+        sa.CheckConstraint(
+            "(accepted_by_user_id IS NULL) = (accepted_at IS NULL)",
+            name="ck_match_results_accepted_pair",
+        ),
     )
     op.create_index("ix_match_results_match_id", "match_results", ["match_id"])
 
