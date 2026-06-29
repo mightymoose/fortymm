@@ -69,6 +69,35 @@ describe("CorrectionEntry", () => {
     );
   });
 
+  it("warns inline and disables submit when a correction leaves the match undecided (#734)", async () => {
+    correctionEntryPage.mockMatch(() =>
+      HttpResponse.json(buildCorrectableMatch()),
+    );
+    correctionEntryPage.render();
+
+    // Seed is a decided 3–0 (best-of-5). Flip game 3 so the viewer loses it:
+    // the board becomes 2–1, and no side has reached 3 wins — undecided.
+    const me3 = await waitFor(() =>
+      correctionEntryPage.getInput(3, "rita.kovac"),
+    );
+    await userEvent.clear(me3);
+    await userEvent.type(me3, "9");
+    const opp3 = correctionEntryPage.getInput(3, "leo.mertens");
+    await userEvent.clear(opp3);
+    await userEvent.type(opp3, "11");
+
+    await waitFor(() =>
+      expect(
+        correctionEntryPage
+          .queryAlerts()
+          .some((a: HTMLElement) =>
+            /no side has won 3 games/i.test(a.textContent ?? ""),
+          ),
+      ).toBe(true),
+    );
+    expect(correctionEntryPage.getSubmit()).toBeDisabled();
+  });
+
   it("surfaces a 409 (the proposal moved on) inline without navigating away", async () => {
     correctionEntryPage.mockMatch(() =>
       HttpResponse.json(buildCorrectableMatch()),

@@ -10,7 +10,7 @@ import {
   useProposeResult,
   useMatch,
 } from '@/api/matches'
-import { decidedSide, type GamePoints } from '@/lib/scoring'
+import { isDecidedMatch, type GamePoints } from '@/lib/scoring'
 import { cn } from '@/lib/utils'
 import {
   Alert,
@@ -107,7 +107,7 @@ function FailedSaveBanner({ matchId, activeGameNumber }: SaveBannerProps) {
     (a, b) => a.game_number - b.game_number,
   )
   const wouldFinalize =
-    data != null && decidedSide(mergedGames, data.best_of) !== null
+    data != null && isDecidedMatch(mergedGames, data.best_of)
 
   // Normally the active game is omitted — its pre-filled inputs are the retry
   // surface, so the banner needn't also shout about it. The exception is when

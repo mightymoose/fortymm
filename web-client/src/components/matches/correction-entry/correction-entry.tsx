@@ -9,6 +9,7 @@ import {
   type MatchResultsGameWrite,
 } from "@/api/matches";
 import { initialsOf } from "@/lib/utils";
+import { firstMatchScoreError } from "@/lib/scoring";
 import { ScorePad } from "../score-pad";
 import {
   isAcceptableScoreInput,
@@ -99,6 +100,34 @@ export function CorrectionEntry({ matchId }: { matchId: string }) {
   const validations = current.map((d) => validateGameScore(d.me, d.opp));
   const allValid = validations.every((v) => v.valid);
 
+  // The orientation-restored board — kept as the single source for both the
+  // completeness check and the submit payload, so what we validate is exactly
+  // what we post.
+  const correctedGames: MatchResultsGameWrite[] = current.map((d) =>
+    mySideNumber === 1
+      ? {
+          game_number: d.gameNumber,
+          side_1_points: Number(d.me),
+          side_2_points: Number(d.opp),
+        }
+      : {
+          game_number: d.gameNumber,
+          side_1_points: Number(d.opp),
+          side_2_points: Number(d.me),
+        },
+  );
+
+  // Once every game is individually legal, validate the board as a *whole* the
+  // same way the score-entry page does live and the server does on submit: a
+  // correction that leaves the match undecided (e.g. a BO5 board edited to 2–1)
+  // must warn inline and block submit, not only fail on the server (#734). The
+  // numbers aren't trustworthy until per-game valid (`Number('')` is 0), so we
+  // only parse the board once `allValid`.
+  const boardError = allValid
+    ? firstMatchScoreError(correctedGames, data.best_of)
+    : null;
+  const canSubmit = allValid && boardError === null;
+
   // A 409 means the standing result moved on (someone else proposed/accepted
   // since this screen loaded); a 422 means the board itself was rejected. Both
   // surface inline; everything else falls back to the API message.
@@ -108,22 +137,9 @@ export function CorrectionEntry({ matchId }: { matchId: string }) {
   const inputsLocked = proposeMutation.isPending;
 
   function onSubmit() {
-    if (!allValid || proposeMutation.isPending) return;
-    const games: MatchResultsGameWrite[] = current.map((d) =>
-      mySideNumber === 1
-        ? {
-            game_number: d.gameNumber,
-            side_1_points: Number(d.me),
-            side_2_points: Number(d.opp),
-          }
-        : {
-            game_number: d.gameNumber,
-            side_1_points: Number(d.opp),
-            side_2_points: Number(d.me),
-          },
-    );
+    if (!canSubmit || proposeMutation.isPending) return;
     proposeMutation.mutate(
-      { games, supersedes_result_id: standingId },
+      { games: correctedGames, supersedes_result_id: standingId },
       { onSuccess: () => navigate(matchDetailRoute(matchId)) },
     );
   }
@@ -194,6 +210,12 @@ export function CorrectionEntry({ matchId }: { matchId: string }) {
         );
       })}
 
+      {boardError !== null && (
+        <p role="alert" className="mt-1.5 text-xs text-[color:var(--loss)]">
+          {boardError}
+        </p>
+      )}
+
       <div className="single-actions">
         <div className="result-line subtle">
           {data.affects_rating
@@ -204,7 +226,7 @@ export function CorrectionEntry({ matchId }: { matchId: string }) {
           <button
             type="button"
             className="btn primary"
-            disabled={!allValid || inputsLocked}
+            disabled={!canSubmit || inputsLocked}
             onClick={onSubmit}
           >
             {proposeMutation.isPending ? "Sending…" : "Send corrected score"}
