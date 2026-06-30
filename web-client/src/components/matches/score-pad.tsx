@@ -120,6 +120,12 @@ export const ScorePad = ({
             <button
               type="button"
               className="btn ghost"
+              // Same #567 guard as the submit button: a Clear that refocuses an
+              // input (the correction board's onClearSelected) would otherwise
+              // blur on mousedown and flash the mobile soft keyboard before the
+              // click's focus() lands. Preventing the mousedown default keeps
+              // focus through the tap; the click still fires.
+              onMouseDown={(e) => e.preventDefault()}
               onClick={onClear}
               disabled={inputsLocked || clearDisabled}
             >
