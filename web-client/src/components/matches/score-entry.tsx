@@ -36,7 +36,7 @@ import {
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { cn, initialsOf } from '@/lib/utils'
-import { decidedSide } from '@/lib/scoring'
+import { isDecidedMatch } from '@/lib/scoring'
 import { isScoreConflict, useGameSaveState } from './score-saves'
 import { SaveBanner } from './save-banner'
 import { ScorePad } from './score-pad'
@@ -325,7 +325,7 @@ function ScoreEntryInner({
       ]
     : []
   const wouldFinalize =
-    inputsValid && decidedSide(hypotheticalGames, bestOf) !== null
+    inputsValid && isDecidedMatch(hypotheticalGames, bestOf)
 
   // Per the fire-and-forget posture: only finalize errors are surfaced. The
   // per-game mutations (save / delete) self-heal at finalize, so their errors

@@ -1,3 +1,5 @@
+import { z } from 'zod'
+
 // Mirrors the server-side table-tennis rule in api/app/schemas/match.py
 // (MatchGameScoreWrite._table_tennis_rules) so the client doesn't submit a
 // final score the server will reject with a 422. Returns the reason a score is
@@ -18,38 +20,39 @@ export function illegalScoreReason(a: number, b: number): string | null {
   return null
 }
 
-export type GamePoints = {
-  game_number: number
-  side_1_points: number
-  side_2_points: number
+// A single legal, completed game score. The `illegalScoreReason` refinement is
+// the same per-game table-tennis rule `validateGameScore` applies live to the
+// raw inputs — shared here so the composed match schema (below) is built from
+// already-legal games. Its message is unreachable in practice (every caller
+// pre-gates per-game legality before parsing the match), so a static message
+// is fine.
+const gameScoreSchema = z
+  .object({
+    game_number: z.number(),
+    side_1_points: z.number(),
+    side_2_points: z.number(),
+  })
+  .refine(
+    (g) => illegalScoreReason(g.side_1_points, g.side_2_points) === null,
+    { message: 'Each game must be a legal, completed score.' },
+  )
+
+export type GamePoints = z.infer<typeof gameScoreSchema>
+
+interface MatchDecision {
+  ordered: GamePoints[]
+  decidedBy: 1 | 2 | null
+  decidedAt: number | null
 }
 
-// Mirrors the server-side finalize-payload cross-game validator in
-// api/app/matches.py (_validate_finalize_games). Returns the decided side
-// number (1 or 2) when the given games form a complete, validly-ordered,
-// decided match for the given best_of — and null otherwise. Used by the
-// scoring page to decide whether the submit button should save-this-game or
-// finalize-the-match.
-export function decidedSide(
-  games: GamePoints[],
-  bestOf: number,
-): 1 | 2 | null {
-  if (games.length === 0) return null
-
-  const numbers = games.map((g) => g.game_number).sort((a, b) => a - b)
-  // No duplicates / gaps / numbers past best_of.
-  if (numbers[numbers.length - 1] > bestOf) return null
-  for (let i = 0; i < numbers.length; i += 1) {
-    if (numbers[i] !== i + 1) return null
-  }
-
-  const target = Math.ceil(bestOf / 2)
+// Walk the games in order and find who (if anyone) first reached `target` game
+// wins, and on which game. Pure helper shared by the match-schema refinements.
+function matchDecision(games: GamePoints[], target: number): MatchDecision {
   const ordered = [...games].sort((a, b) => a.game_number - b.game_number)
   const wins: Record<1 | 2, number> = { 1: 0, 2: 0 }
-  let decidedAt: number | null = null
   let decidedBy: 1 | 2 | null = null
+  let decidedAt: number | null = null
   for (const g of ordered) {
-    if (illegalScoreReason(g.side_1_points, g.side_2_points)) return null
     const winner: 1 | 2 = g.side_1_points > g.side_2_points ? 1 : 2
     wins[winner] += 1
     if (decidedBy === null && wins[winner] >= target) {
@@ -57,8 +60,74 @@ export function decidedSide(
       decidedAt = g.game_number
     }
   }
-  if (decidedBy === null) return null
-  // No scored games past the decider.
-  if (decidedAt !== ordered[ordered.length - 1].game_number) return null
-  return decidedBy
+  return { ordered, decidedBy, decidedAt }
+}
+
+/**
+ * The schema for a complete, decided match board — a `z.array` of legal games
+ * composed with the cross-game completeness rules in
+ * api/app/matches.py (`_validate_finalize_games`): numbered 1..N with no
+ * gaps/dupes, no game past `best_of`, some side reaches `ceil(best_of/2)` wins,
+ * and the decider is the last game (nothing scored past it).
+ *
+ * One schema, two uses: as a *predicate* (`isDecidedMatch`) the score-entry
+ * page and save banner ask "would saving this game finish the match?" to route
+ * finalize-vs-save; as straight *validation* (`firstMatchScoreError`) the
+ * correction surface surfaces the first failing message inline (#734). Factory
+ * because the rules depend on `bestOf`.
+ */
+function matchScoreSchema(bestOf: number) {
+  const target = Math.ceil(bestOf / 2)
+  return z
+    .array(gameScoreSchema)
+    .refine((games) => games.length > 0, {
+      message: 'Enter at least one game to finish the match.',
+    })
+    .refine((games) => games.every((g) => g.game_number <= bestOf), {
+      message: `A best-of-${bestOf} match has at most ${bestOf} games.`,
+    })
+    .refine(
+      (games) => {
+        const numbers = games.map((g) => g.game_number).sort((a, b) => a - b)
+        return numbers.every((n, i) => n === i + 1)
+      },
+      { message: 'Games must be numbered 1…N with no gaps or duplicates.' },
+    )
+    .refine((games) => matchDecision(games, target).decidedBy !== null, {
+      message: `No side has won ${target} games yet — adjust the scores so the match has a winner.`,
+    })
+    .refine(
+      (games) => {
+        const d = matchDecision(games, target)
+        return (
+          d.decidedBy === null ||
+          d.decidedAt === d.ordered[d.ordered.length - 1]?.game_number
+        )
+      },
+      {
+        message: `One side reaches ${target} game wins before the last game — adjust the scores so the deciding game is the last one.`,
+      },
+    )
+}
+
+// Whether the given games form a complete, validly-ordered, decided match for
+// `best_of` — the boolean predicate over `matchScoreSchema`. Replaces the old
+// `decidedSide` (no client consumer needed the winning side number, only
+// decided-or-not). Returns false for an empty, non-contiguous, illegal, or
+// undecided board — matching every null branch of the prior implementation.
+export function isDecidedMatch(games: GamePoints[], bestOf: number): boolean {
+  return matchScoreSchema(bestOf).safeParse(games).success
+}
+
+// The first cross-game completeness rule the board violates, as a human-readable
+// message — or null when the board forms a complete, decided match. The
+// validation half of `matchScoreSchema` (mirror of the boolean `isDecidedMatch`),
+// shown inline by the correction surface (#734). Callers pre-gate per-game
+// legality, so the surfaced message is always a board-level one.
+export function firstMatchScoreError(
+  games: GamePoints[],
+  bestOf: number,
+): string | null {
+  const result = matchScoreSchema(bestOf).safeParse(games)
+  return result.success ? null : (result.error.issues[0]?.message ?? null)
 }
