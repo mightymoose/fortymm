@@ -220,13 +220,6 @@ class MatchNegotiation(BaseModel):
     standing_result: NegotiationResult | None
     prior_result: NegotiationResult | None
     diff: list[NegotiationDiffEntry] | None
-    # Match-level (NOT viewer-relative, unlike the fields above — distinct from
-    # the ``viewer_state == "corrected"`` case): true when the result chain holds
-    # more than one proposal, i.e. at least one correction was posted before the
-    # chain settled. The FE reads this on the ``final`` state to label a completed
-    # match "Confirmed" (clean first-post→accept) vs "Agreed after corrections"
-    # (a counter/self-edit preceded the agreement).
-    had_corrections: bool
 
 
 class MatchDetails(BaseModel):

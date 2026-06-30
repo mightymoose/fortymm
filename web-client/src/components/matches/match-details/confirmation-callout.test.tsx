@@ -29,7 +29,6 @@ const reviewMatch = (): MatchDetails =>
       },
       prior_result: null,
       diff: null,
-      had_corrections: false,
     },
   });
 
@@ -48,7 +47,6 @@ const finalMatch = (): MatchDetails =>
       },
       prior_result: null,
       diff: null,
-      had_corrections: false,
     },
     data: buildMatchDetailsData({
       scoreboard: buildScoreboard({ status: "final" }),

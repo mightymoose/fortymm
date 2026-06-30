@@ -95,7 +95,6 @@ export function buildCorrectableMatch(
       standing_result: standing,
       prior_result: null,
       diff: null,
-      had_corrections: false,
     },
     ...overrides,
   });

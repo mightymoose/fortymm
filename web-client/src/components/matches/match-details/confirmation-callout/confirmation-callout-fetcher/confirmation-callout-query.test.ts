@@ -42,7 +42,6 @@ const reviewMatch = (
       standing_result: standingResult(),
       prior_result: null,
       diff: null,
-      had_corrections: false,
       ...negotiation,
     },
     ...overrides,

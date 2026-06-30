@@ -134,7 +134,6 @@ describe("saveYourMatchQuery", () => {
             },
             prior_result: null,
             diff: null,
-            had_corrections: false,
           },
         }),
       ),
