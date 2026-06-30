@@ -976,6 +976,152 @@ async def test_score_create_accepts_gaps(
     assert body["can_finalize"] is False
 
 
+async def _sweep_games(
+    api_client: AsyncClient, match_id: str, game_numbers: list[int]
+) -> None:
+    """Save a side-1 win (11-2) for each given game number, asserting 201."""
+    for n in game_numbers:
+        response = await api_client.post(
+            f"/v1/matches/{match_id}/games/{n}/scores/new",
+            json={"side_1_points": 11, "side_2_points": 2},
+        )
+        assert response.status_code == 201, response.json()
+
+
+async def test_score_create_422_when_board_already_decided(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    # First-to-4 (best of 7): once side 1 sweeps games 1-4 the match is decided,
+    # so game 5 can never be played. The scratchpad must reject the write — even
+    # though games 1-4 alone (decider == last == 4) are a perfectly valid board.
+    await start_session(api_client, db_session)
+    opp = await make_user(db_session, "rival")
+    match = await _create_match(api_client, opp.id, best_of=7)
+
+    await _sweep_games(api_client, match["id"], [1, 2, 3, 4])
+
+    response = await api_client.post(
+        f"/v1/matches/{match['id']}/games/5/scores/new",
+        json={"side_1_points": 11, "side_2_points": 2},
+    )
+    assert response.status_code == 422
+    assert "already decided at game 4" in response.json()["detail"]
+
+
+async def test_score_create_422_on_full_sweep_out_of_order(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    # The literal bug report: building a 7-0 board by entering games out of
+    # order. With games 1-4 swept, a direct write to game 7 is rejected — you
+    # can't play a game after the match was already won.
+    await start_session(api_client, db_session)
+    opp = await make_user(db_session, "rival")
+    match = await _create_match(api_client, opp.id, best_of=7)
+
+    await _sweep_games(api_client, match["id"], [1, 2, 3, 4])
+
+    response = await api_client.post(
+        f"/v1/matches/{match['id']}/games/7/scores/new",
+        json={"side_1_points": 11, "side_2_points": 2},
+    )
+    assert response.status_code == 422
+    assert "already decided at game 4" in response.json()["detail"]
+
+
+async def test_4_3_board_to_game_7_is_valid_and_finalizes(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    # A best-of-7 that goes the distance: 3-3 after six games, side 1 clinches
+    # game 7. The decider is the last game, so every save lands and the full
+    # seven-game board finalizes — proving the guard doesn't kill a legitimate
+    # 4-3 result.
+    await start_session(api_client, db_session)
+    opp = await make_user(db_session, "rival")
+    match = await _create_match(api_client, opp.id, best_of=7)
+
+    # side 1 wins odd games, side 2 wins even games → 3-3 after game 6.
+    for n in range(1, 7):
+        side1, side2 = (11, 2) if n % 2 == 1 else (2, 11)
+        response = await api_client.post(
+            f"/v1/matches/{match['id']}/games/{n}/scores/new",
+            json={"side_1_points": side1, "side_2_points": side2},
+        )
+        assert response.status_code == 201, response.json()
+
+    after_g7 = await api_client.post(
+        f"/v1/matches/{match['id']}/games/7/scores/new",
+        json={"side_1_points": 11, "side_2_points": 2},
+    )
+    assert after_g7.status_code == 201
+    assert after_g7.json()["can_finalize"] is True
+
+    finalize = await api_client.post(
+        f"/v1/matches/{match['id']}/results",
+        json={
+            "games": [
+                {
+                    "game_number": n,
+                    "side_1_points": 11 if (n % 2 == 1 or n == 7) else 2,
+                    "side_2_points": 2 if (n % 2 == 1 or n == 7) else 11,
+                }
+                for n in range(1, 8)
+            ]
+        },
+    )
+    assert finalize.status_code == 201, finalize.json()
+
+
+async def test_legit_4_1_board_still_finalizes(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    # A 4-1 best-of-7 (decider at game 5) — guards against over-rejecting a
+    # normal short board where the decider is the highest scored game.
+    await start_session(api_client, db_session)
+    opp = await make_user(db_session, "rival")
+    match = await _create_match(api_client, opp.id, best_of=7)
+
+    # side 2 takes game 4; side 1 wins 1,2,3,5 → clinches at game 5.
+    for n, (side1, side2) in enumerate(
+        [(11, 2), (11, 2), (11, 2), (2, 11), (11, 2)], start=1
+    ):
+        response = await api_client.post(
+            f"/v1/matches/{match['id']}/games/{n}/scores/new",
+            json={"side_1_points": side1, "side_2_points": side2},
+        )
+        assert response.status_code == 201, response.json()
+
+    body = (await api_client.get(f"/v1/matches/{match['id']}")).json()
+    assert body["can_finalize"] is True
+
+
+async def test_score_update_422_when_edit_creates_overrun(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    # Editing an existing game's winner can move the decider earlier. Start from
+    # a valid board where side 2 took game 4 (so side 1 clinches at game 5);
+    # flipping game 4 to a side-1 win makes side 1 reach 4 wins at game 4 while
+    # game 5 is still scored → overrun → 422.
+    await start_session(api_client, db_session)
+    opp = await make_user(db_session, "rival")
+    match = await _create_match(api_client, opp.id, best_of=7)
+
+    for n, (side1, side2) in enumerate(
+        [(11, 2), (11, 2), (11, 2), (2, 11), (11, 2)], start=1
+    ):
+        response = await api_client.post(
+            f"/v1/matches/{match['id']}/games/{n}/scores/new",
+            json={"side_1_points": side1, "side_2_points": side2},
+        )
+        assert response.status_code == 201, response.json()
+
+    edit = await api_client.put(
+        f"/v1/matches/{match['id']}/games/4/scores",
+        json={"side_1_points": 11, "side_2_points": 2, "expected_version": 1},
+    )
+    assert edit.status_code == 422
+    assert "already decided at game 4" in edit.json()["detail"]
+
+
 async def test_score_update_overwrites_in_place(
     api_client: AsyncClient, db_session: AsyncSession
 ):

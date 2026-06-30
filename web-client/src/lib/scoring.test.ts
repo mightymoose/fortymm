@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import {
+  deciderGameNumber,
   firstMatchScoreError,
   illegalScoreReason,
   isDecidedMatch,
+  overrunDecider,
   type GamePoints,
 } from './scoring'
 
@@ -99,5 +101,93 @@ describe('firstMatchScoreError', () => {
         3,
       ),
     ).toMatch(/before the last game/i)
+  })
+})
+
+describe('deciderGameNumber', () => {
+  it('is null for an empty board', () => {
+    expect(deciderGameNumber([], 7)).toBeNull()
+  })
+
+  it('is null while no side has clinched', () => {
+    expect(deciderGameNumber([game(1, 11, 2), game(2, 2, 11)], 7)).toBeNull()
+  })
+
+  it('returns the clinching game for a 4-0 sweep (best of 7)', () => {
+    expect(
+      deciderGameNumber(
+        [game(1, 11, 2), game(2, 11, 2), game(3, 11, 2), game(4, 11, 2)],
+        7,
+      ),
+    ).toBe(4)
+  })
+
+  it('returns the last game for a 4-3 that goes the distance', () => {
+    const games = [
+      game(1, 11, 2),
+      game(2, 2, 11),
+      game(3, 11, 2),
+      game(4, 2, 11),
+      game(5, 11, 2),
+      game(6, 2, 11),
+      game(7, 11, 2),
+    ]
+    expect(deciderGameNumber(games, 7)).toBe(7)
+  })
+
+  it('is gap-tolerant — a single non-clinching game returns null', () => {
+    expect(deciderGameNumber([game(3, 11, 9)], 5)).toBeNull()
+  })
+
+  it('reports the early decider even when trailing games are present', () => {
+    // The overrun board: 4-0 by game 4 with games 5-7 also scored. The decider
+    // is unaffected by the (impossible) trailing games.
+    const games = [
+      game(1, 11, 2),
+      game(2, 11, 2),
+      game(3, 11, 2),
+      game(4, 11, 2),
+      game(5, 11, 2),
+    ]
+    expect(deciderGameNumber(games, 7)).toBe(4)
+  })
+})
+
+describe('overrunDecider', () => {
+  it('is null when the decider is the last scored game (4-0 in four games)', () => {
+    const games = [game(1, 11, 2), game(2, 11, 2), game(3, 11, 2), game(4, 11, 2)]
+    expect(overrunDecider(games, 7)).toBeNull()
+  })
+
+  it('reports the decider when later games are also scored (overrun)', () => {
+    const games = [
+      game(1, 11, 2),
+      game(2, 11, 2),
+      game(3, 11, 2),
+      game(4, 11, 2),
+      game(5, 11, 2),
+    ]
+    expect(overrunDecider(games, 7)).toBe(4)
+  })
+
+  it('is null for an undecided board', () => {
+    expect(overrunDecider([game(1, 11, 2), game(2, 2, 11)], 7)).toBeNull()
+  })
+
+  it('is null for an empty board', () => {
+    expect(overrunDecider([], 7)).toBeNull()
+  })
+
+  it('is null for a 4-3 that goes the distance', () => {
+    const games = [
+      game(1, 11, 2),
+      game(2, 2, 11),
+      game(3, 11, 2),
+      game(4, 2, 11),
+      game(5, 11, 2),
+      game(6, 2, 11),
+      game(7, 11, 2),
+    ]
+    expect(overrunDecider(games, 7)).toBeNull()
   })
 })

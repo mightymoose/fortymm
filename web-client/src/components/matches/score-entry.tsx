@@ -36,7 +36,12 @@ import {
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { cn, initialsOf } from '@/lib/utils'
-import { isDecidedMatch } from '@/lib/scoring'
+import {
+  deciderGameNumber,
+  isDecidedMatch,
+  overrunDecider,
+  type GamePoints,
+} from '@/lib/scoring'
 import { isScoreConflict, useGameSaveState } from './score-saves'
 import { SaveBanner } from './save-banner'
 import { ScorePad } from './score-pad'
@@ -47,6 +52,19 @@ import {
 
 /** The non-null persisted score on a game. */
 type PersistedScore = NonNullable<MatchDetails['games'][number]['score']>
+
+/** The persisted games as `GamePoints` for the scoring lib — drops un-scored
+ * games and the side orientation, the shape `deciderGameNumber`/`overrunDecider`
+ * expect. */
+function scoredGamePoints(games: MatchDetails['games']): GamePoints[] {
+  return games
+    .filter((g) => g.score)
+    .map((g) => ({
+      game_number: g.game_number,
+      side_1_points: g.score!.side_1_points,
+      side_2_points: g.score!.side_2_points,
+    }))
+}
 
 // Placeholder for the opponent label on solo matches — mirrors the match
 // details hero. Distinct from `initialsOf('Opponent')` so users can tell
@@ -166,10 +184,23 @@ function ScoreEntryInner({
   if (data.status === 'completed' || data.negotiation.standing_result !== null) {
     return <Navigate {...matchDetailRoute(matchId)} />
   }
+  // The game number past which no more games can be played: once a side has
+  // clinched (gap-tolerant), the trailing games are unplayable. Drives the nav
+  // bounce below and (passed down) the scoreline cell gating, mirroring the
+  // server's "no games past the decider" guard on the score-write endpoints.
+  const scoredGames = scoredGamePoints(data.games)
+  const decider = deciderGameNumber(scoredGames, data.best_of)
+  const isScored = (n: number) =>
+    data.games.some((g) => g.game_number === n && g.score)
+
+  // Bounce out-of-range games, and any *unscored* game past the decider — those
+  // can never be played. An already-scored game at/under the decider stays
+  // editable (you can still fix the deciding game itself).
   if (
     !Number.isInteger(gameNumber) ||
     gameNumber < 1 ||
-    gameNumber > data.best_of
+    gameNumber > data.best_of ||
+    (decider !== null && gameNumber > decider && !isScored(gameNumber))
   ) {
     return <Navigate {...matchDetailRoute(matchId)} />
   }
@@ -304,13 +335,7 @@ function ScoreEntryInner({
   // match" and posts /results instead of /scores/new.
   const hypotheticalGames: MatchResultsGameWrite[] = inputsValid
     ? [
-        ...data.games
-          .filter((g) => g.game_number !== gameNumber && g.score)
-          .map((g) => ({
-            game_number: g.game_number,
-            side_1_points: g.score!.side_1_points,
-            side_2_points: g.score!.side_2_points,
-          })),
+        ...scoredGames.filter((g) => g.game_number !== gameNumber),
         mySideNumber === 1
           ? {
               game_number: gameNumber,
@@ -327,6 +352,15 @@ function ScoreEntryInner({
   const wouldFinalize =
     inputsValid && isDecidedMatch(hypotheticalGames, bestOf)
 
+  // Mirror the server's "no games past the decider" guard inline. The scoreline
+  // already mutes/bounces the games numbered after a known decider, but one path
+  // slips through: scoring a later game *clinches* the match while an earlier
+  // game is still blank, then the user goes back to fill that gap — which would
+  // leave the match decided before its last scored game (impossible). Catch it
+  // here so the user sees an actionable message and stays on the screen, instead
+  // of firing a write the server 422s and getting navigated away with no reason.
+  const overrunAt = inputsValid ? overrunDecider(hypotheticalGames, bestOf) : null
+
   // Per the fire-and-forget posture: only finalize errors are surfaced. The
   // per-game mutations (save / delete) self-heal at finalize, so their errors
   // are intentionally hidden here (surfaced in the scoreline instead). All
@@ -340,8 +374,14 @@ function ScoreEntryInner({
   // entered score is fine, so don't paint the fields red for those.
   const inputsInvalid =
     localScoreError !== null || finalizeApiError?.status === 422
-  // The message line, though, surfaces every finalize error (409/500 included).
-  const showScoreError = inputsInvalid || finalizeApiError !== null
+  // The message line, though, surfaces every finalize error (409/500 included)
+  // and the cross-game overrun block (a legal score that the board can't take).
+  const overrunError =
+    overrunAt !== null
+      ? `The match is already decided at game ${overrunAt} — clear the games after it before saving this score.`
+      : null
+  const showScoreError =
+    inputsInvalid || overrunError !== null || finalizeApiError !== null
   // The "both scores required" hint is its own, lower-severity line — shown only
   // when exactly one field is filled and there's no harder error to surface.
   const showBothRequired = oneSideFilled && !showScoreError
@@ -384,6 +424,10 @@ function ScoreEntryInner({
 
   function onSubmit() {
     if (!inputsValid) return
+    // The score is legal on its own but the board can't take it (it would leave
+    // the match decided before its last game). Block the write — the inline
+    // `overrunError` tells the user to clear the trailing games first.
+    if (overrunAt !== null) return
     // Ignore a second Save while the per-game save is still in flight (#538):
     // a double-tap would otherwise fire a duplicate create that 409s. This
     // synchronous guard is the only protection now — the mutationFn no longer
@@ -623,13 +667,13 @@ function ScoreEntryInner({
             onKeyDown: (e) => handleKey(e, 'opp'),
           }}
           gamesTally={bestOf > 1 ? `${meWins} – ${oppWins}` : null}
-          // The scratchpad surfaces both the local validation error and a
-          // finalize API rejection (409/500 too) here; `showScoreError` gates
-          // when any of them shows, with the finalize detail/message as the
-          // fallback copy when there's no local validation error.
+          // The scratchpad surfaces the local validation error, the cross-game
+          // overrun block, and a finalize API rejection (409/500 too) here;
+          // `showScoreError` gates when any of them shows, in that precedence.
           scoreError={
             showScoreError
               ? (localScoreError ??
+                overrunError ??
                 finalizeApiError?.detail ??
                 finalizeApiError?.message ??
                 null)
@@ -639,7 +683,7 @@ function ScoreEntryInner({
           inputsLocked={inputsLocked}
           subtitle={subtitle}
           submitLabel={submitLabel}
-          canSubmit={inputsValid}
+          canSubmit={inputsValid && overrunAt === null}
           onSubmit={onSubmit}
           onClear={isEdit ? onClear : undefined}
           clearDisabled={deleteMutation.isPending}
@@ -648,6 +692,7 @@ function ScoreEntryInner({
         <Scoreline
           data={data}
           activeGameNumber={gameNumber}
+          decider={decider}
           matchId={matchId}
           mySideNumber={mySideNumber}
           onClearCell={onClearCell}
@@ -813,6 +858,7 @@ function ScoreConflictNotice({
 function Scoreline({
   data,
   activeGameNumber,
+  decider,
   matchId,
   mySideNumber,
   onClearCell,
@@ -820,6 +866,13 @@ function Scoreline({
 }: {
   data: MatchDetails
   activeGameNumber: number
+  /** The gap-tolerant decider game number (computed by the parent). Once a side
+   * has clinched, the games numbered after it can never be played — those
+   * unscored trailing cells render muted and non-navigable, so the user can't
+   * enter an impossible "games past the decider" board. (An already-scored
+   * trailing cell stays navigable so a pre-existing overrun board can be
+   * cleared.) Mirrors the server guard. */
+  decider: number | null
   matchId: string
   mySideNumber: 1 | 2
   onClearCell: (gameNumber: number) => void
@@ -839,6 +892,8 @@ function Scoreline({
       >
         {Array.from({ length: data.best_of }, (_, i) => i + 1).map((n) => {
           const game = data.games.find((x) => x.game_number === n) ?? null
+          const playable =
+            decider === null || n <= decider || game?.score != null
           return (
             <ScorelineCell
               key={n}
@@ -846,6 +901,7 @@ function Scoreline({
               matchId={matchId}
               score={game?.score ?? null}
               isActive={n === activeGameNumber}
+              playable={playable}
               mySideNumber={mySideNumber}
               clearDisabled={clearDisabled}
               onClear={onClearCell}
@@ -862,6 +918,7 @@ function ScorelineCell({
   matchId,
   score,
   isActive,
+  playable,
   mySideNumber,
   clearDisabled,
   onClear,
@@ -870,6 +927,7 @@ function ScorelineCell({
   matchId: string
   score: PersistedScore | null
   isActive: boolean
+  playable: boolean
   mySideNumber: 1 | 2
   clearDisabled: boolean
   onClear: (gameNumber: number) => void
@@ -1017,6 +1075,21 @@ function ScorelineCell({
       <div
         className={cls}
         aria-label={`Game ${n}, saving, ${myPoints} to ${oppPoints}`}
+      >
+        {inner}
+      </div>
+    )
+  }
+
+  // Past the decider: the match was already won, so this game can't be played.
+  // Render muted and non-navigable (only ever reached for an unscored cell —
+  // a scored cell stays playable so a stray board can be cleared).
+  if (!playable) {
+    return (
+      <div
+        className={cn(cls, 'unplayable')}
+        aria-disabled="true"
+        aria-label={`Game ${n}, not playable`}
       >
         {inner}
       </div>

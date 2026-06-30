@@ -1918,6 +1918,16 @@ body.dark.fortymm-theme {
   opacity: 0.5;
   border-style: dashed;
 }
+/* Past the decider — the match is already won, so this game can't be played.
+   Muted and non-interactive (rendered as a plain div, no hover/cursor). */
+.fortymm-theme .sl-cell.unplayable {
+  opacity: 0.3;
+  cursor: default;
+  border-style: dashed;
+}
+.fortymm-theme .sl-cell.unplayable:hover {
+  border-color: var(--ink-600);
+}
 .fortymm-theme .sl-cell .sl-n {
   font: 600 10px var(--font-mono);
   letter-spacing: 0.14em;

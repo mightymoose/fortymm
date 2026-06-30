@@ -119,6 +119,39 @@ export function isDecidedMatch(games: GamePoints[], bestOf: number): boolean {
   return matchScoreSchema(bestOf).safeParse(games).success
 }
 
+// The game number at which the match is first decided, walking scored games in
+// game-number order — gap-tolerant, so it answers "past which game can no more
+// games be played?" even for a board that still has gaps or trailing scratch
+// games. Null when no side has clinched yet. Mirrors the backend `_first_decider`
+// in api/app/matches.py.
+//
+// Distinct from `isDecidedMatch`, which additionally requires a complete,
+// contiguous, decider-at-the-last-game board (it drives the Finalize button).
+// This one drives score-entry cell gating.
+export function deciderGameNumber(
+  games: GamePoints[],
+  bestOf: number,
+): number | null {
+  return matchDecision(games, Math.ceil(bestOf / 2)).decidedAt
+}
+
+// The game number a board was decided at when later games are *also* scored
+// ("overrun") — i.e. a side clinched strictly before the highest-numbered
+// scored game, which is impossible (you can't play on after the match is won).
+// Null for empty, undecided, or exactly-decided-at-the-last-game boards. The
+// FE mirror of the backend `_overrun_decider`; drives the score-entry inline
+// block that stops the user saving such a score.
+export function overrunDecider(
+  games: GamePoints[],
+  bestOf: number,
+): number | null {
+  if (games.length === 0) return null
+  const decidedAt = deciderGameNumber(games, bestOf)
+  if (decidedAt === null) return null
+  const lastScored = Math.max(...games.map((g) => g.game_number))
+  return decidedAt < lastScored ? decidedAt : null
+}
+
 // The first cross-game completeness rule the board violates, as a human-readable
 // message — or null when the board forms a complete, decided match. The
 // validation half of `matchScoreSchema` (mirror of the boolean `isDecidedMatch`),
