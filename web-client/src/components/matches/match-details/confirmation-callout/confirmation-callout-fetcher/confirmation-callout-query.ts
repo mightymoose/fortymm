@@ -9,7 +9,8 @@ type NegotiationDiffEntry = components["schemas"]["NegotiationDiffEntry"];
 
 /** The result-negotiation state behind the match-detail callout, keyed off
  * `negotiation.viewer_state`. Null from the query means there's nothing to show
- * for this viewer (a live match with no proposal in play).
+ * for this viewer — a live match with no proposal in play, or a settled match
+ * (see the note below the per-state list).
  *
  * - `review`: the opponent posted the first result; the viewer must Accept or
  *   open the correction route ("Suggest correction"). Carries the standing
