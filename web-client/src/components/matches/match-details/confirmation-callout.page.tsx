@@ -98,7 +98,7 @@ export const confirmationCalloutPage = {
     });
     const correctRoute = createRoute({
       getParentRoute: () => rootRoute,
-      path: "/matches/$matchId/correct",
+      path: "/matches/$matchId/results/new",
       component: () => <div>correction-route</div>,
     });
     const router = createRouter({

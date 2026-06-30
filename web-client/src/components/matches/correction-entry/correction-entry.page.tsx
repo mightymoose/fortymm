@@ -15,7 +15,8 @@ import {
   type MatchResultsResolver,
 } from "@/mocks/endpoints/matches/match-results.endpoint";
 import { server } from "@/mocks/server";
-import { render, screen, within, type Container } from "@/test/utilities";
+import userEvent from "@testing-library/user-event";
+import { render, screen, type Container } from "@/test/utilities";
 
 import { CorrectionEntry } from "./correction-entry";
 
@@ -26,23 +27,48 @@ const scoped = (container: Container) => ({
   queryLoading() {
     return container.queryByTestId("correction-entry-loading");
   },
-  /** A side's numeric input within game `gameNumber`, by the participant's name
-   * (the field label is `"<name> score"`). Games stack in document order, so we
-   * scope to the matching `Game N` section. */
-  getInput(gameNumber: number, name: string) {
-    const heading = container.getByRole("heading", {
-      name: `Game ${gameNumber}`,
-    });
-    const section = heading.closest("section") as HTMLElement;
-    return within(section).getByLabelText(`${name} score`) as HTMLInputElement;
+  /** A side's numeric input in the single open pad, by the participant's name
+   * (the field label is `"<name> score"`). The board shows one game at a time,
+   * switched via the scoreline, so there's never more than one such field. */
+  getInput(name: string) {
+    return container.getByLabelText(`${name} score`) as HTMLInputElement;
   },
-  /** The single shared "Send corrected score" submit (or its pending label). */
+  /** The single "Send corrected score" submit (or its pending label). */
   getSubmit() {
     return container.getByRole("button", {
       name: /send corrected score|sending/i,
     });
   },
-  /** Any visible `role="alert"` line (per-game score error or the API error). */
+  /** The in-pad "Clear" action that empties the open game. */
+  getClear() {
+    return container.getByRole("button", { name: "Clear" });
+  },
+  /** A scoreline cell — clicking it opens that game in the pad. */
+  getCell(gameNumber: number) {
+    return container.getByRole("button", {
+      name: new RegExp(`^go to game ${gameNumber}\\b`, "i"),
+    });
+  },
+  /** The active (open) scoreline cell. */
+  getActiveCell() {
+    return container.getByRole("button", { current: "step" });
+  },
+  /** A scoreline cell's hover-✕ clear (absent on empty slots). */
+  getCellClear(gameNumber: number) {
+    return container.getByRole("button", { name: `Clear game ${gameNumber}` });
+  },
+  /** A scoreline cell's hover-✕ clear, or null when the slot is empty. */
+  queryCellClear(gameNumber: number) {
+    return container.queryByRole("button", {
+      name: `Clear game ${gameNumber}`,
+    });
+  },
+  /** Open a game in the pad via its scoreline cell. */
+  async selectGame(gameNumber: number) {
+    await userEvent.click(this.getCell(gameNumber));
+  },
+  /** Any visible `role="alert"` line (per-game score error, board hint, or the
+   * API error). */
   queryAlerts() {
     return container.queryAllByRole("alert");
   },
@@ -75,7 +101,7 @@ export const correctionEntryPage = {
     const rootRoute = createRootRoute();
     const correctRoute = createRoute({
       getParentRoute: () => rootRoute,
-      path: "/matches/$matchId/correct",
+      path: "/matches/$matchId/results/new",
       component: () => <CorrectionEntry matchId={matchId} />,
     });
     const matchRoute = createRoute({
@@ -86,7 +112,7 @@ export const correctionEntryPage = {
     const router = createRouter({
       routeTree: rootRoute.addChildren([correctRoute, matchRoute]),
       history: createMemoryHistory({
-        initialEntries: [`/matches/${matchId}/correct`],
+        initialEntries: [`/matches/${matchId}/results/new`],
       }),
     });
     render(<RouterProvider router={router} />);

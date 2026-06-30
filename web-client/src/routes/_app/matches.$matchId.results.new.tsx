@@ -5,7 +5,7 @@ import { ApiError } from "@/api/client";
 import { pageTitle } from "@/lib/page-title";
 import { isMatchId } from "@/lib/match-id";
 
-export const Route = createFileRoute("/_app/matches/$matchId/correct")({
+export const Route = createFileRoute("/_app/matches/$matchId/results/new")({
   head: () => ({
     meta: [{ title: pageTitle("Suggest a correction") }],
   }),

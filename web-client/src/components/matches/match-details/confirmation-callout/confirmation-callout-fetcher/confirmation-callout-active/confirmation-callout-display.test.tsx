@@ -1,6 +1,6 @@
 import userEvent from "@testing-library/user-event";
 
-import { correctionRoute } from "@/api/matches";
+import { newResultRoute } from "@/api/matches";
 import { waitFor } from "@/test/utilities";
 
 import {
@@ -13,7 +13,7 @@ import { confirmationCalloutDisplayPage } from "./confirmation-callout-display.p
 // The callout mounts behind a memory router (the correction links are typed
 // `<Link>`s), so the section resolves a tick after render.
 const correctHref = (matchId: string) =>
-  `/matches/${correctionRoute(matchId).params.matchId}/correct`;
+  `/matches/${newResultRoute(matchId).params.matchId}/results/new`;
 
 describe("ConfirmationCalloutDisplay", () => {
   describe("review variant", () => {

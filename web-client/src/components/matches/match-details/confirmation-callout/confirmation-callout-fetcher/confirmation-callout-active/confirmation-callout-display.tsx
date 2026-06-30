@@ -1,6 +1,6 @@
 import { Link } from "@tanstack/react-router";
 
-import { correctionRoute } from "@/api/matches";
+import { newResultRoute } from "@/api/matches";
 import { Overline } from "@/components/overline";
 
 import { ScoreDiff } from "../../../score-diff/score-diff";
@@ -168,7 +168,7 @@ export function ConfirmationCalloutDisplay({
             onReload={onReload}
           />
           <Link
-            {...correctionRoute(matchId)}
+            {...newResultRoute(matchId)}
             className="md-btn md-btn--ghost"
             data-testid="match-confirm-callout-correct"
           >
@@ -214,7 +214,7 @@ export function ConfirmationCalloutDisplay({
             onReload={onReload}
           />
           <Link
-            {...correctionRoute(matchId)}
+            {...newResultRoute(matchId)}
             className="md-btn md-btn--ghost"
             data-testid="match-confirm-callout-counter"
           >
@@ -264,7 +264,7 @@ export function ConfirmationCalloutDisplay({
       </div>
       <div className="md-confirm-callout__actions">
         <Link
-          {...correctionRoute(matchId)}
+          {...newResultRoute(matchId)}
           className="md-btn md-btn--ghost"
           data-testid="match-confirm-callout-edit"
         >

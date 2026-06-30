@@ -78,7 +78,7 @@ export const confirmationCalloutDisplayPage = {
     // links navigate to — registered so the typed <Link>s resolve at render.
     const correctRoute = createRoute({
       getParentRoute: () => rootRoute,
-      path: "/matches/$matchId/correct",
+      path: "/matches/$matchId/results/new",
       component: () => <div>correction-route</div>,
     });
     const router = createRouter({

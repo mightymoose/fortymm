@@ -31,20 +31,14 @@ export interface ScorePadProps {
   showBothRequired: boolean;
   /** Disable the inputs and actions while a submit is in flight. */
   inputsLocked: boolean;
-  /** Hide the subtitle + submit/clear action row entirely, rendering just the
-   * two-side inputs + inline errors. The multi-game correction board uses this
-   * to stack several input-only pads under one shared submit. Defaults to
-   * showing the action row, so the scratchpad surface is unchanged. */
-  hideActions?: boolean;
-  // ----- action-row props: only read when `hideActions` is false, so the
-  // input-only callers (the correction board) omit them entirely. -----
+  // ----- action-row props -----
   /** The supporting copy under the action row. */
-  subtitle?: string;
+  subtitle: string;
   /** The primary submit button label. */
-  submitLabel?: string;
+  submitLabel: string;
   /** Whether the primary submit is enabled. */
-  canSubmit?: boolean;
-  onSubmit?: () => void;
+  canSubmit: boolean;
+  onSubmit: () => void;
   /** Optional secondary "Clear" action (the scratchpad edit surface). */
   onClear?: () => void;
   clearDisabled?: boolean;
@@ -71,7 +65,6 @@ export const ScorePad = ({
   onSubmit,
   onClear,
   clearDisabled,
-  hideActions = false,
 }: ScorePadProps) => {
   return (
     <>
@@ -120,37 +113,35 @@ export const ScorePad = ({
         </p>
       )}
 
-      {!hideActions && (
-        <div className="single-actions">
-          <div className="result-line subtle">{subtitle}</div>
-          <div className="action-btns">
-            {onClear && (
-              <button
-                type="button"
-                className="btn ghost"
-                onClick={onClear}
-                disabled={inputsLocked || clearDisabled}
-              >
-                Clear
-              </button>
-            )}
+      <div className="single-actions">
+        <div className="result-line subtle">{subtitle}</div>
+        <div className="action-btns">
+          {onClear && (
             <button
               type="button"
-              className="btn primary"
-              disabled={!canSubmit || inputsLocked}
-              // Don't let tapping Save blur the active input: on mobile that
-              // dismisses the soft keyboard before the synchronous navigation
-              // can hand focus to the next game's input, closing the keyboard
-              // between games (#567). Preventing the mousedown default keeps
-              // focus on the input through the tap; the click still fires.
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={onSubmit}
+              className="btn ghost"
+              onClick={onClear}
+              disabled={inputsLocked || clearDisabled}
             >
-              {submitLabel}
+              Clear
             </button>
-          </div>
+          )}
+          <button
+            type="button"
+            className="btn primary"
+            disabled={!canSubmit || inputsLocked}
+            // Don't let tapping Save blur the active input: on mobile that
+            // dismisses the soft keyboard before the synchronous navigation
+            // can hand focus to the next game's input, closing the keyboard
+            // between games (#567). Preventing the mousedown default keeps
+            // focus on the input through the tap; the click still fires.
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={onSubmit}
+          >
+            {submitLabel}
+          </button>
         </div>
-      )}
+      </div>
     </>
   );
 };

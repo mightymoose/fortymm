@@ -73,7 +73,7 @@ export const matchDetailsPage = {
     // "Suggest correction" / "Counter" / "Edit result" links.
     const correctRoute = createRoute({
       getParentRoute: () => rootRoute,
-      path: "/matches/$matchId/correct",
+      path: "/matches/$matchId/results/new",
       component: () => <div>correction-route</div>,
     });
     const router = createRouter({

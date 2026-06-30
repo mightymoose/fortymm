@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Navigate, useNavigate } from "@tanstack/react-router";
 import { ApiError } from "@/api/client";
 import {
@@ -15,6 +15,7 @@ import {
   isAcceptableScoreInput,
   validateGameScore,
 } from "../score-pad/validate-game-score";
+import { CorrectionScoreline } from "./correction-scoreline";
 
 // Placeholder identity for a player-less (solo) opponent side, mirroring the
 // scratchpad entry screen so the correction board reads the same.
@@ -33,26 +34,39 @@ interface GameDraft {
 }
 
 /**
- * Seed the editable drafts from the immutable standing-result snapshot (NOT the
- * live scratchpad). The viewer's side reads left; the orientation is restored on
- * submit from `mySideNumber`.
+ * Seed one editable draft per `best_of` slot from the immutable standing-result
+ * snapshot (NOT the live scratchpad): played games pre-fill, the remaining
+ * slots start empty so the corrector can add games to reach a decided board
+ * (a 3–0 flipped to 2–1 needs a game 4/5 to finish). The viewer's side reads
+ * left; the orientation is restored on submit from `mySideNumber`.
  */
-function seedDrafts(games: StandingGame[], mySideNumber: 1 | 2): GameDraft[] {
-  return [...games]
-    .sort((a, b) => a.game_number - b.game_number)
-    .map((g) => ({
-      gameNumber: g.game_number,
+function seedDrafts(
+  games: StandingGame[],
+  mySideNumber: 1 | 2,
+  bestOf: number,
+): GameDraft[] {
+  const byNumber = new Map(games.map((g) => [g.game_number, g]));
+  return Array.from({ length: bestOf }, (_, i) => {
+    const gameNumber = i + 1;
+    const g = byNumber.get(gameNumber);
+    if (!g) return { gameNumber, me: "", opp: "" };
+    return {
+      gameNumber,
       me: String(mySideNumber === 1 ? g.side_1_points : g.side_2_points),
       opp: String(mySideNumber === 1 ? g.side_2_points : g.side_1_points),
-    }));
+    };
+  });
 }
 
 /**
- * "Suggest a correction" screen. Pre-fills the score inputs from
- * `negotiation.standing_result.games` (the immutable proposal snapshot) and, on
- * submit, posts a counter-proposal that supersedes that standing result. A 409
- * (the proposal moved on) is surfaced inline; success navigates back to the
- * match-details page.
+ * "Suggest a correction" screen — a full board re-score, seeded from the
+ * standing result. Unlike a per-game scratchpad edit, correcting a winner can
+ * leave the match undecided (3–0 → 2–1), so the corrector edits one game at a
+ * time in a single `ScorePad` and navigates the board via the SCORELINE strip,
+ * adding/removing games until the buffered board is a decided match. On submit
+ * it posts a counter-proposal that supersedes the standing result; a 409 (the
+ * proposal moved on) or 422 (board rejected) surfaces inline, success navigates
+ * back to the match-details page.
  */
 export function CorrectionEntry({ matchId }: { matchId: string }) {
   const navigate = useNavigate();
@@ -62,6 +76,9 @@ export function CorrectionEntry({ matchId }: { matchId: string }) {
   // `null` means "not seeded yet" — seeded once `data` arrives (below), so we
   // avoid a state-syncing effect on first render.
   const [drafts, setDrafts] = useState<GameDraft[] | null>(null);
+  const [selectedGameNumber, setSelectedGameNumber] = useState(1);
+  const meRef = useRef<HTMLInputElement>(null);
+  const oppRef = useRef<HTMLInputElement>(null);
 
   if (isLoading || !data) {
     return <div aria-busy="true" data-testid="correction-entry-loading" />;
@@ -80,6 +97,8 @@ export function CorrectionEntry({ matchId }: { matchId: string }) {
   // Captured here (rather than read inside `onSubmit`) so the standing-result
   // narrowing from the guard above survives into the submit closure.
   const standingId = standing.id;
+  const bestOf = data.best_of;
+  const gamesToWin = data.games_to_win;
   const mySideNumber: 1 | 2 = mySide.side_number === 2 ? 2 : 1;
   const meName = mySide.players[0]?.username ?? "You";
   const meInitials = initialsOf(meName);
@@ -87,7 +106,9 @@ export function CorrectionEntry({ matchId }: { matchId: string }) {
   const oppName = oppUsername ?? NO_OPPONENT_LABEL;
   const oppHasPlayer = oppUsername !== null;
 
-  const current = drafts ?? seedDrafts(standing.games, mySideNumber);
+  const current = drafts ?? seedDrafts(standing.games, mySideNumber, bestOf);
+  const selected =
+    current.find((d) => d.gameNumber === selectedGameNumber) ?? current[0];
 
   const setGame = (gameNumber: number, next: Partial<GameDraft>) => {
     setDrafts(
@@ -96,37 +117,77 @@ export function CorrectionEntry({ matchId }: { matchId: string }) {
     if (proposeMutation.error) proposeMutation.reset();
   };
 
-  // Per-game validation verdicts, indexed alongside `current`.
-  const validations = current.map((d) => validateGameScore(d.me, d.opp));
-  const allValid = validations.every((v) => v.valid);
-
-  // The orientation-restored board — kept as the single source for both the
-  // completeness check and the submit payload, so what we validate is exactly
-  // what we post.
-  const correctedGames: MatchResultsGameWrite[] = current.map((d) =>
-    mySideNumber === 1
-      ? {
-          game_number: d.gameNumber,
-          side_1_points: Number(d.me),
-          side_2_points: Number(d.opp),
-        }
-      : {
-          game_number: d.gameNumber,
-          side_1_points: Number(d.opp),
-          side_2_points: Number(d.me),
-        },
+  // Per-game verdicts across the whole buffer: a game with any input must be a
+  // legal, completed score for the board to be submittable; wholly-empty slots
+  // are just "not played yet".
+  const draftStates = current.map((d) => ({
+    draft: d,
+    validation: validateGameScore(d.me, d.opp),
+    hasInput: d.me !== "" || d.opp !== "",
+  }));
+  const allEnteredValid = draftStates.every(
+    (s) => !s.hasInput || s.validation.valid,
   );
+  const validDrafts = draftStates
+    .filter((s) => s.validation.valid)
+    .map((s) => s.draft);
 
-  // Once every game is individually legal, validate the board as a *whole* the
-  // same way the score-entry page does live and the server does on submit: a
-  // correction that leaves the match undecided (e.g. a BO5 board edited to 2–1)
-  // must warn inline and block submit, not only fail on the server (#734). The
-  // numbers aren't trustworthy until per-game valid (`Number('')` is 0), so we
-  // only parse the board once `allValid`.
-  const boardError = allValid
-    ? firstMatchScoreError(correctedGames, data.best_of)
+  // The orientation-restored board — the single source for both the
+  // completeness check and the submit payload, so what we validate is exactly
+  // what we post. Only legal, completed games make the board; ordered by game
+  // number so the contiguity/decider rules read it correctly.
+  const correctedGames: MatchResultsGameWrite[] = validDrafts
+    .map((d) =>
+      mySideNumber === 1
+        ? {
+            game_number: d.gameNumber,
+            side_1_points: Number(d.me),
+            side_2_points: Number(d.opp),
+          }
+        : {
+            game_number: d.gameNumber,
+            side_1_points: Number(d.opp),
+            side_2_points: Number(d.me),
+          },
+    )
+    .sort((a, b) => a.game_number - b.game_number);
+
+  // Validate the board as a *whole* the same way the score-entry page does live
+  // and the server does on submit: a correction that leaves the match undecided
+  // (a BO5 board edited to 2–1) must block submit, not only fail on the server
+  // (#734). Only meaningful once every entered game is individually legal.
+  const boardError = allEnteredValid
+    ? firstMatchScoreError(correctedGames, bestOf)
     : null;
-  const canSubmit = allValid && boardError === null;
+  const canSubmit = allEnteredValid && boardError === null;
+
+  // The running games tally (viewer-left), shown under the VS divider on
+  // multi-game matches so the corrector can see how close the board is to
+  // decided.
+  const myWins = validDrafts.filter((d) => Number(d.me) > Number(d.opp)).length;
+  const oppWins = validDrafts.filter(
+    (d) => Number(d.opp) > Number(d.me),
+  ).length;
+  const gamesTally = bestOf > 1 ? `${myWins} – ${oppWins}` : null;
+
+  // The board-level hint that explains a disabled Send. Three cases: an entered
+  // game is incomplete/illegal (a half-filled non-selected game leaves Send
+  // dead with nothing on the open pad to explain it); the board is a clean but
+  // undecided prefix (just needs more games — the friendly add-games copy); or
+  // a structural error (gap, too many games, a game after the decider) for
+  // which the lib's message is the clearest thing to say.
+  const contiguous = correctedGames.every((g, i) => g.game_number === i + 1);
+  const someoneWon = myWins >= gamesToWin || oppWins >= gamesToWin;
+  let boardHint: string | null = null;
+  if (!allEnteredValid) {
+    boardHint =
+      "Finish entering each game — one or more games have only one score or an illegal score.";
+  } else if (boardError !== null) {
+    boardHint =
+      contiguous && !someoneWon
+        ? "This isn't a finished match yet — add the remaining game(s) until someone wins."
+        : boardError;
+  }
 
   // A 409 means the standing result moved on (someone else proposed/accepted
   // since this screen loaded); a 422 means the board itself was rejected. Both
@@ -136,6 +197,22 @@ export function CorrectionEntry({ matchId }: { matchId: string }) {
 
   const inputsLocked = proposeMutation.isPending;
 
+  // The per-game verdicts and the scoreline view-model both derive from the
+  // single `draftStates` pass above, so the validation is computed once per
+  // game and the two derivations can't drift.
+  const selectedValidation = (
+    draftStates.find((s) => s.draft.gameNumber === selected.gameNumber) ??
+    draftStates[0]
+  ).validation;
+
+  const scorelineCells = draftStates.map(({ draft: d, validation: v, hasInput }) => ({
+    gameNumber: d.gameNumber,
+    myPoints: d.me === "" ? null : d.me,
+    oppPoints: d.opp === "" ? null : d.opp,
+    myWin: v.valid ? Number(d.me) > Number(d.opp) : null,
+    invalid: hasInput && !v.valid,
+  }));
+
   function onSubmit() {
     if (!canSubmit || proposeMutation.isPending) return;
     proposeMutation.mutate(
@@ -144,13 +221,50 @@ export function CorrectionEntry({ matchId }: { matchId: string }) {
     );
   }
 
+  function onClearSelected() {
+    setGame(selectedGameNumber, { me: "", opp: "" });
+    // Same page (no remount), so re-grab the me-input for the next entry.
+    meRef.current?.focus();
+  }
+
+  function handleKey(
+    e: React.KeyboardEvent<HTMLInputElement>,
+    side: "me" | "opp",
+  ) {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      if (side === "me" && selected.me !== "") {
+        oppRef.current?.focus();
+        oppRef.current?.select();
+      } else if (side === "opp") {
+        // Enter on the opponent field advances to the next game (the pad
+        // remounts on the new game number and auto-focuses its me-input); on
+        // the last slot it submits the board instead of dead-ending.
+        if (selectedGameNumber < bestOf) {
+          setSelectedGameNumber(selectedGameNumber + 1);
+        } else {
+          onSubmit();
+        }
+      }
+    } else if (e.key === "ArrowRight" && side === "me") {
+      e.preventDefault();
+      oppRef.current?.focus();
+      oppRef.current?.select();
+    } else if (e.key === "ArrowLeft" && side === "opp") {
+      e.preventDefault();
+      meRef.current?.focus();
+      meRef.current?.select();
+    }
+  }
+
   return (
     <div className="entry-wrap">
       <div className="entry-head">
         <h2>Suggest a correction.</h2>
         <div className="hint">
-          Adjust the game(s) that look off, then send the corrected score to{" "}
-          {oppName} to confirm.
+          Fix the game(s) that look off — switch games on the SCORELINE, add or
+          remove games until the board has a winner, then send the corrected
+          score to {oppName} to confirm.
         </div>
       </div>
 
@@ -162,77 +276,74 @@ export function CorrectionEntry({ matchId }: { matchId: string }) {
         </p>
       )}
 
-      {current.map((d, i) => {
-        const v = validations[i];
-        return (
-          <section key={d.gameNumber} className="correction-game">
-            <h3 className="text-sm font-medium text-[color:var(--muted)]">
-              Game {d.gameNumber}
-            </h3>
-            <ScorePad
-              me={{
-                name: meName,
-                initials: meInitials,
-                value: d.me,
-                // Red-flag this field when its own value is malformed, or when a
-                // pair-level rule violation (tie/deuce) makes neither side
-                // individually malformed — but NOT when only the *other* side is
-                // malformed (its error shouldn't bleed onto this clean input).
-                invalid:
-                  v.meMalformed ||
-                  (v.error !== null && !v.meMalformed && !v.oppMalformed),
-                onChange: (value) => {
-                  if (!isAcceptableScoreInput(value)) return;
-                  setGame(d.gameNumber, { me: value });
-                },
-              }}
-              opp={{
-                name: oppName,
-                initials: oppHasPlayer ? initialsOf(oppName) : null,
-                value: d.opp,
-                invalid:
-                  v.oppMalformed ||
-                  (v.error !== null && !v.meMalformed && !v.oppMalformed),
-                onChange: (value) => {
-                  if (!isAcceptableScoreInput(value)) return;
-                  setGame(d.gameNumber, { opp: value });
-                },
-              }}
-              gamesTally={null}
-              scoreError={v.error}
-              showBothRequired={v.oneSideFilled && v.error === null}
-              inputsLocked={inputsLocked}
-              // The per-game pads are inputs-only (hideActions); a single shared
-              // action row below the whole board owns the one submit.
-              hideActions
-            />
-          </section>
-        );
-      })}
-
-      {boardError !== null && (
+      {boardHint !== null && (
         <p role="alert" className="mt-1.5 text-xs text-[color:var(--loss)]">
-          {boardError}
+          {boardHint}
         </p>
       )}
 
-      <div className="single-actions">
-        <div className="result-line subtle">
-          {data.affects_rating
-            ? "Sending the corrected score posts it for your opponent to confirm."
-            : "Sending the corrected score finalizes the match immediately."}
-        </div>
-        <div className="action-btns">
-          <button
-            type="button"
-            className="btn primary"
-            disabled={!canSubmit || inputsLocked}
-            onClick={onSubmit}
-          >
-            {proposeMutation.isPending ? "Sending…" : "Send corrected score"}
-          </button>
-        </div>
-      </div>
+      <ScorePad
+        // Remount on game switch so the inputs re-seed and the me-field
+        // auto-focuses for the newly-opened game.
+        key={selected.gameNumber}
+        me={{
+          name: meName,
+          initials: meInitials,
+          value: selected.me,
+          inputRef: meRef,
+          autoFocus: true,
+          // Red-flag this field when its own value is malformed, or when a
+          // pair-level rule violation (tie/deuce) makes neither side
+          // individually malformed — but NOT when only the *other* side is.
+          invalid:
+            selectedValidation.meMalformed ||
+            (selectedValidation.error !== null &&
+              !selectedValidation.meMalformed &&
+              !selectedValidation.oppMalformed),
+          onChange: (value) => {
+            if (!isAcceptableScoreInput(value)) return;
+            setGame(selected.gameNumber, { me: value });
+          },
+          onKeyDown: (e) => handleKey(e, "me"),
+        }}
+        opp={{
+          name: oppName,
+          initials: oppHasPlayer ? initialsOf(oppName) : null,
+          value: selected.opp,
+          inputRef: oppRef,
+          invalid:
+            selectedValidation.oppMalformed ||
+            (selectedValidation.error !== null &&
+              !selectedValidation.meMalformed &&
+              !selectedValidation.oppMalformed),
+          onChange: (value) => {
+            if (!isAcceptableScoreInput(value)) return;
+            setGame(selected.gameNumber, { opp: value });
+          },
+          onKeyDown: (e) => handleKey(e, "opp"),
+        }}
+        gamesTally={gamesTally}
+        scoreError={selectedValidation.error}
+        showBothRequired={
+          selectedValidation.oneSideFilled && selectedValidation.error === null
+        }
+        inputsLocked={inputsLocked}
+        subtitle={`Sending the corrected score posts the result for ${oppName} to confirm.`}
+        submitLabel={
+          proposeMutation.isPending ? "Sending…" : "Send corrected score"
+        }
+        canSubmit={canSubmit}
+        onSubmit={onSubmit}
+        onClear={onClearSelected}
+        clearDisabled={selected.me === "" && selected.opp === ""}
+      />
+
+      <CorrectionScoreline
+        cells={scorelineCells}
+        activeGameNumber={selected.gameNumber}
+        onSelect={setSelectedGameNumber}
+        onClear={(n) => setGame(n, { me: "", opp: "" })}
+      />
     </div>
   );
 }
