@@ -651,10 +651,11 @@ export function scoringEditRoute(matchId: string, gameNumber: number) {
 
 /** The "Suggest a correction" proposal-authoring route (#718). Reached from the
  * match-detail callouts: a self-edit while awaiting, "Suggest correction" on
- * review, or "Counter" on a standing correction. */
-export function correctionRoute(matchId: string) {
+ * review, or "Counter" on a standing correction. The page is a full board
+ * re-score that posts a new (counter-)result, hence `/results/new`. */
+export function newResultRoute(matchId: string) {
   return {
-    to: '/matches/$matchId/correct' as const,
+    to: '/matches/$matchId/results/new' as const,
     params: { matchId },
   }
 }

@@ -11,8 +11,14 @@ import {
 } from "./correction-entry.factory";
 import { correctionEntryPage } from "./correction-entry.page";
 
+/** Re-type a side's score in the open pad. */
+async function retype(input: HTMLInputElement, value: string) {
+  await userEvent.clear(input);
+  if (value !== "") await userEvent.type(input, value);
+}
+
 describe("CorrectionEntry", () => {
-  it("pre-fills the inputs from the standing-result snapshot (not the scratchpad)", async () => {
+  it("opens game 1 pre-filled from the standing-result snapshot, viewer-left", async () => {
     // The seed's standing result is the opponent's 3–0 board (11–8, 11–6,
     // 11–9). The viewer is side 1 (rita.kovac), so the left field reads
     // side_1_points and the right reads side_2_points.
@@ -22,11 +28,15 @@ describe("CorrectionEntry", () => {
     correctionEntryPage.render();
 
     await waitFor(() =>
-      expect(correctionEntryPage.getInput(1, "rita.kovac")).toHaveValue("11"),
+      expect(correctionEntryPage.getInput("rita.kovac")).toHaveValue("11"),
     );
-    expect(correctionEntryPage.getInput(1, "leo.mertens")).toHaveValue("8");
-    expect(correctionEntryPage.getInput(2, "leo.mertens")).toHaveValue("6");
-    expect(correctionEntryPage.getInput(3, "leo.mertens")).toHaveValue("9");
+    expect(correctionEntryPage.getInput("leo.mertens")).toHaveValue("8");
+
+    // Switch games via the scoreline — the pad re-seeds for the chosen game.
+    await correctionEntryPage.selectGame(2);
+    expect(correctionEntryPage.getInput("leo.mertens")).toHaveValue("6");
+    await correctionEntryPage.selectGame(3);
+    expect(correctionEntryPage.getInput("leo.mertens")).toHaveValue("9");
   });
 
   it("posts the corrected board with supersedes_result_id and navigates home on success", async () => {
@@ -40,16 +50,10 @@ describe("CorrectionEntry", () => {
     });
     correctionEntryPage.render();
 
-    // Correct game 3: the viewer says they actually won it 11–9 (flip the
-    // opponent's 11–9). Edit the viewer's side from a blank.
-    const me3 = await waitFor(() =>
-      correctionEntryPage.getInput(3, "rita.kovac"),
-    );
-    await userEvent.clear(me3);
-    await userEvent.type(me3, "11");
-    const opp3 = correctionEntryPage.getInput(3, "leo.mertens");
-    await userEvent.clear(opp3);
-    await userEvent.type(opp3, "9");
+    // Correct game 1: the opponent scored it 11–8; the viewer says 11–7. The
+    // board stays a decided 3–0, so Send is enabled.
+    const opp1 = await waitFor(() => correctionEntryPage.getInput("leo.mertens"));
+    await retype(opp1, "7");
 
     await userEvent.click(correctionEntryPage.getSubmit());
 
@@ -57,45 +61,89 @@ describe("CorrectionEntry", () => {
       expect(postedBody).toEqual({
         supersedes_result_id: STANDING_RESULT_ID,
         games: [
-          { game_number: 1, side_1_points: 11, side_2_points: 8 },
+          { game_number: 1, side_1_points: 11, side_2_points: 7 },
           { game_number: 2, side_1_points: 11, side_2_points: 6 },
           { game_number: 3, side_1_points: 11, side_2_points: 9 },
         ],
       }),
     );
-    // On success the route navigates back to the match-details landing.
     await waitFor(() =>
       expect(correctionEntryPage.queryMatchLanding()).toBeInTheDocument(),
     );
   });
 
-  it("warns inline and disables submit when a correction leaves the match undecided (#734)", async () => {
+  it("blocks submit when flipping a winner leaves the match undecided, then re-enables once a game is added (#734)", async () => {
     correctionEntryPage.mockMatch(() =>
       HttpResponse.json(buildCorrectableMatch()),
     );
     correctionEntryPage.render();
+    await waitFor(() => correctionEntryPage.getInput("rita.kovac"));
 
-    // Seed is a decided 3–0 (best-of-5). Flip game 3 so the viewer loses it:
-    // the board becomes 2–1, and no side has reached 3 wins — undecided.
-    const me3 = await waitFor(() =>
-      correctionEntryPage.getInput(3, "rita.kovac"),
-    );
-    await userEvent.clear(me3);
-    await userEvent.type(me3, "9");
-    const opp3 = correctionEntryPage.getInput(3, "leo.mertens");
-    await userEvent.clear(opp3);
-    await userEvent.type(opp3, "11");
+    // Flip game 3 so the viewer loses it 9–11: the board drops to 2–1, no side
+    // has 3 wins — undecided.
+    await correctionEntryPage.selectGame(3);
+    await retype(correctionEntryPage.getInput("rita.kovac"), "9");
+    await retype(correctionEntryPage.getInput("leo.mertens"), "11");
 
     await waitFor(() =>
       expect(
         correctionEntryPage
           .queryAlerts()
           .some((a: HTMLElement) =>
-            /no side has won 3 games/i.test(a.textContent ?? ""),
+            /isn't a finished match yet/i.test(a.textContent ?? ""),
           ),
       ).toBe(true),
     );
     expect(correctionEntryPage.getSubmit()).toBeDisabled();
+
+    // Add game 4 as a viewer win (11–7): the board becomes 3–1, decided — Send
+    // lights back up.
+    await correctionEntryPage.selectGame(4);
+    await retype(correctionEntryPage.getInput("rita.kovac"), "11");
+    await retype(correctionEntryPage.getInput("leo.mertens"), "7");
+
+    await waitFor(() =>
+      expect(correctionEntryPage.getSubmit()).toBeEnabled(),
+    );
+  });
+
+  it("clears a game from the scoreline ✕ and from the in-pad Clear button", async () => {
+    correctionEntryPage.mockMatch(() =>
+      HttpResponse.json(buildCorrectableMatch()),
+    );
+    correctionEntryPage.render();
+
+    await waitFor(() => correctionEntryPage.getInput("rita.kovac"));
+
+    // Scoreline ✕ on game 3 empties it (board → 2–0, undecided).
+    await userEvent.click(correctionEntryPage.getCellClear(3));
+    expect(correctionEntryPage.getCell(3)).toHaveTextContent("—");
+    // Its ✕ is gone now that the slot is empty.
+    expect(correctionEntryPage.queryCellClear(3)).toBeNull();
+
+    // In-pad Clear empties the open game (game 1).
+    await userEvent.click(correctionEntryPage.getClear());
+    expect(correctionEntryPage.getInput("rita.kovac")).toHaveValue("");
+    expect(correctionEntryPage.getCell(1)).toHaveTextContent("—");
+  });
+
+  it("advances to the next game when Enter is pressed on the opponent field", async () => {
+    correctionEntryPage.mockMatch(() =>
+      HttpResponse.json(buildCorrectableMatch()),
+    );
+    correctionEntryPage.render();
+
+    const opp1 = await waitFor(() => correctionEntryPage.getInput("leo.mertens"));
+    opp1.focus();
+    await userEvent.keyboard("{Enter}");
+
+    // Game 2 is now the open, active cell — the pad shows its 11–6 score.
+    await waitFor(() =>
+      expect(correctionEntryPage.getActiveCell()).toBe(
+        correctionEntryPage.getCell(2),
+      ),
+    );
+    expect(correctionEntryPage.getInput("leo.mertens")).toHaveValue("6");
   });
 
   it("surfaces a 409 (the proposal moved on) inline without navigating away", async () => {
@@ -110,7 +158,7 @@ describe("CorrectionEntry", () => {
     );
     correctionEntryPage.render();
 
-    await waitFor(() => correctionEntryPage.getInput(1, "rita.kovac"));
+    await waitFor(() => correctionEntryPage.getInput("rita.kovac"));
     await userEvent.click(correctionEntryPage.getSubmit());
 
     await waitFor(() =>
@@ -120,7 +168,6 @@ describe("CorrectionEntry", () => {
           .some((a: HTMLElement) => /moved on/i.test(a.textContent ?? "")),
       ).toBe(true),
     );
-    // Still on the correction screen — no navigation on a rejected propose.
     expect(correctionEntryPage.queryMatchLanding()).not.toBeInTheDocument();
   });
 });
