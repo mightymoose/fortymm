@@ -225,27 +225,6 @@ export function ConfirmationCalloutDisplay({
     );
   }
 
-  // The match is settled — a quiet confirmation, no action to press.
-  if (view.kind === "final") {
-    return (
-      <section
-        className="md-confirm-callout md-confirm-callout--passive"
-        data-testid="match-confirm-callout"
-      >
-        <div className="md-confirm-callout__copy">
-          <Overline as="h3">
-            {view.afterCorrections ? "Agreed after corrections" : "Confirmed"}
-          </Overline>
-          <p className="md-confirm-callout__body">
-            {view.afterCorrections
-              ? "Both sides agreed on the final score after corrections. This match is settled."
-              : "Both sides confirmed this result. This match is settled."}
-          </p>
-        </div>
-      </section>
-    );
-  }
-
   // `awaiting`: the viewer posted; we wait on the opponent. Passive notice with
   // an "Edit result" self-edit that supersedes the viewer's standing proposal.
   return (

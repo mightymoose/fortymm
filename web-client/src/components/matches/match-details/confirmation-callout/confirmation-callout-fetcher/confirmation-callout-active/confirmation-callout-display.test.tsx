@@ -6,7 +6,6 @@ import { waitFor } from "@/test/utilities";
 import {
   buildAwaitingConfirmationView,
   buildCorrectedConfirmationView,
-  buildFinalConfirmationView,
 } from "./confirmation-callout-display.factory";
 import { confirmationCalloutDisplayPage } from "./confirmation-callout-display.page";
 
@@ -183,34 +182,6 @@ describe("ConfirmationCalloutDisplay", () => {
         "href",
         correctHref("m-1"),
       );
-    });
-  });
-
-  describe("final variant", () => {
-    it("reads 'Confirmed' when there was no back-and-forth", async () => {
-      confirmationCalloutDisplayPage.render({
-        view: buildFinalConfirmationView({ afterCorrections: false }),
-      });
-
-      const callout = await waitFor(() =>
-        confirmationCalloutDisplayPage.getCallout(),
-      );
-      expect(callout).toHaveTextContent("Confirmed");
-      expect(callout).not.toHaveTextContent("after corrections");
-      expect(
-        confirmationCalloutDisplayPage.queryAcceptButton(),
-      ).not.toBeInTheDocument();
-    });
-
-    it("reads 'Agreed after corrections' when a prior proposal preceded the agreement", async () => {
-      confirmationCalloutDisplayPage.render({
-        view: buildFinalConfirmationView({ afterCorrections: true }),
-      });
-
-      const callout = await waitFor(() =>
-        confirmationCalloutDisplayPage.getCallout(),
-      );
-      expect(callout).toHaveTextContent("Agreed after corrections");
     });
   });
 });

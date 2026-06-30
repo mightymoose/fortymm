@@ -70,9 +70,9 @@ describe("ConfirmationCallout", () => {
     expect(confirmationCalloutPage.getAcceptButton()).toBeInTheDocument();
   });
 
-  it("settles into the confirmed notice once the viewer accepts and the match finalizes", async () => {
-    // Accepting flips the refetched payload to final — the callout transitions
-    // from the Accept CTA to a quiet "Confirmed" notice (no action to press).
+  it("disappears once the viewer accepts and the match finalizes", async () => {
+    // Accepting flips the refetched payload to final — a settled match projects
+    // to null, so the callout unmounts entirely (no quiet confirmation notice).
     let accepted = false;
     confirmationCalloutPage.mockEndpoint(() =>
       HttpResponse.json(accepted ? finalMatch() : reviewMatch()),
@@ -88,11 +88,8 @@ describe("ConfirmationCallout", () => {
     await userEvent.click(confirmationCalloutPage.getAcceptButton());
 
     await waitFor(() =>
-      expect(
-        confirmationCalloutPage.queryAcceptButton(),
-      ).not.toBeInTheDocument(),
+      expect(confirmationCalloutPage.queryCallout()).not.toBeInTheDocument(),
     );
-    expect(confirmationCalloutPage.getCallout()).toHaveTextContent("Confirmed");
   });
 
   it("propagates a query failure to the ancestor error boundary", async () => {

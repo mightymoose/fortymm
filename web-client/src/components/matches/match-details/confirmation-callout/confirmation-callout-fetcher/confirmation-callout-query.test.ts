@@ -147,47 +147,20 @@ describe("confirmationCalloutQuery", () => {
     });
   });
 
-  it("projects the final state as plain 'confirmed' when the chain wasn't corrected", async () => {
+  it("projects null once the match is settled (final) — the callout is gone", async () => {
     confirmationCalloutQueryPage.mockEndpoint(() =>
       HttpResponse.json(
         reviewMatch({
           viewer_state: "final",
           your_turn: false,
-          standing_result: standingResult(),
-          had_corrections: false,
+          standing_result: null,
         }),
       ),
     );
 
     const result = await renderView();
 
-    expect(result.current.data).toEqual({
-      kind: "final",
-      afterCorrections: false,
-    });
-  });
-
-  it("projects the final state as 'after corrections' when the chain was corrected", async () => {
-    confirmationCalloutQueryPage.mockEndpoint(() =>
-      HttpResponse.json(
-        // `had_corrections` is the match-level signal; the final state carries
-        // no `prior_result`, so the derivation must read `had_corrections`.
-        reviewMatch({
-          viewer_state: "final",
-          your_turn: false,
-          standing_result: standingResult(),
-          prior_result: null,
-          had_corrections: true,
-        }),
-      ),
-    );
-
-    const result = await renderView();
-
-    expect(result.current.data).toEqual({
-      kind: "final",
-      afterCorrections: true,
-    });
+    expect(result.current.data).toBeNull();
   });
 
   it("projects null when there is no proposal in play (live)", async () => {

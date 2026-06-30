@@ -24,7 +24,7 @@ function hasResultId(
  * the concurrency token `POST .../acceptance` takes; API failures stay visible
  * inline (without throwOnError a 409 — the proposal moved on, double-click,
  * etc. — would otherwise vanish and the button would appear inert). The passive
- * (`awaiting`/`final`) variants press nothing, so the mutation simply sits idle. */
+ * `awaiting` variant presses nothing, so the mutation simply sits idle. */
 export function ConfirmationCalloutActive({
   view,
   matchId,

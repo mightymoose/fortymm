@@ -20,8 +20,9 @@ type NegotiationDiffEntry = components["schemas"]["NegotiationDiffEntry"];
  * - `awaiting`: the viewer's own side proposed; we wait on the opponent. A
  *   passive notice plus an "Edit result" action (a self-edit that supersedes
  *   the viewer's standing proposal).
- * - `final`: the match is settled. `afterCorrections` is true when the result
- *   chain held more than one proposal (a correction preceded the agreement). */
+ *
+ * A settled match (`final`) projects to null — once the negotiation is over the
+ * callout has nothing left to say, so it doesn't render. */
 export type ConfirmationCalloutView =
   | { kind: "review"; resultId: string; rated: boolean }
   | {
@@ -34,8 +35,7 @@ export type ConfirmationCalloutView =
       kind: "awaiting";
       /** Opponent we're waiting on, for the passive label. */
       pendingSignerName: string;
-    }
-  | { kind: "final"; afterCorrections: boolean };
+    };
 
 const selectConfirmationCallout = (
   match: MatchDetailsResult,
@@ -71,17 +71,9 @@ const selectConfirmationCallout = (
       return { kind: "awaiting", pendingSignerName };
     }
 
-    case "final":
-      // `had_corrections` is the match-level signal that the chain held more
-      // than one proposal — a counter or self-edit landed before the agreed
-      // result. (Distinct from the viewer-relative `viewer_state === "corrected"`.)
-      return {
-        kind: "final",
-        afterCorrections: negotiation.had_corrections,
-      };
-
     default:
-      // `live` — no proposal in play, nothing to render.
+      // `live` (no proposal in play) or `final` (the match is settled) — there's
+      // no sign-off to surface, so nothing renders.
       return null;
   }
 };
