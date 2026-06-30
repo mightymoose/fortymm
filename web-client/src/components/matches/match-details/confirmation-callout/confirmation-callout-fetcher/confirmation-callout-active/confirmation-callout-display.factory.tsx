@@ -61,14 +61,6 @@ export function buildAwaitingConfirmationView(
   };
 }
 
-/** The final variant: the match is settled. Defaults to a plain "confirmed"
- * (no back-and-forth). */
-export function buildFinalConfirmationView(
-  overrides: Partial<Extract<ConfirmationCalloutView, { kind: "final" }>> = {},
-): ConfirmationCalloutView {
-  return { kind: "final", afterCorrections: false, ...overrides };
-}
-
 /** Props for `ConfirmationCalloutDisplay` — the review variant, idle (nothing
  * pending, no error). */
 export function buildConfirmationCalloutDisplayProps(

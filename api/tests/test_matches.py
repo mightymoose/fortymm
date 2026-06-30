@@ -2429,8 +2429,6 @@ async def test_accept_finalizes_and_applies_ratings_once(
         assert neg["your_turn"] is False
         assert neg["prior_result"] is None
         assert neg["diff"] is None
-        # A single posted result accepted as-is — no correction in the chain.
-        assert neg["had_corrections"] is False
         sides = sorted(body["sides"], key=lambda s: s["side_number"])
         assert [s["won"] for s in sides] == [True, False]
 
@@ -2481,39 +2479,6 @@ async def test_accept_finalizes_and_applies_ratings_once(
             .all()
         )
         assert len(rating_rows_after) == 2
-
-
-async def test_final_had_corrections_flag_tracks_chain_length(
-    api_client: AsyncClient, db_session: AsyncSession
-):
-    """The ``final`` negotiation block's match-level ``had_corrections`` flag is
-    true iff the agreed result was *not* the first one posted — i.e. a counter
-    (or self-edit) preceded the agreement. It drives the completed-match
-    callout's "Confirmed" vs "Agreed after corrections" copy (#719).
-
-    Two matches contrast the cases: a clean first-post→accept has
-    ``had_corrections`` false; a counter→accept has it true."""
-    await start_session(api_client, db_session)
-    async with opponent_session(db_session, "corrected-opp") as (opp_client, opp):
-        # Clean: I post once, the opponent accepts it unchanged → not corrected.
-        clean = await _create_match(api_client, opp.id, best_of=1)
-        await _propose(api_client, clean["id"], s1=11, s2=4)
-        clean_final = await accept_standing_result(opp_client, clean["id"])
-        assert clean_final["negotiation"]["viewer_state"] == "final"
-        assert clean_final["negotiation"]["had_corrections"] is False
-
-        # Corrected: I post, the opponent counters, I accept the counter → the
-        # agreed result is the second in the chain, so the flag is true.
-        disputed = await _create_match(api_client, opp.id, best_of=1)
-        first = await _propose(api_client, disputed["id"], s1=11, s2=4)
-        first_id = first["body"]["negotiation"]["standing_result"]["id"]
-        counter = await _propose(
-            opp_client, disputed["id"], s1=4, s2=11, supersedes=first_id
-        )
-        assert counter["status"] == 201, counter
-        disputed_final = await accept_standing_result(api_client, disputed["id"])
-        assert disputed_final["negotiation"]["viewer_state"] == "final"
-        assert disputed_final["negotiation"]["had_corrections"] is True
 
 
 async def test_accept_superseded_result_id_is_409(
