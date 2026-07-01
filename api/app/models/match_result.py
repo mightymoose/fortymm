@@ -2,7 +2,15 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, func, text
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    UniqueConstraint,
+    func,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -38,6 +46,13 @@ class MatchResult(Base):
         CheckConstraint(
             "(accepted_by_user_id IS NULL) = (accepted_at IS NULL)",
             name="ck_match_results_accepted_pair",
+        ),
+        # Bounds each proposal to at most one successor so the negotiation chain
+        # stays linear: two concurrent counters to the same parent collide and
+        # one 409s on the IntegrityError. Mirrors the production migration.
+        UniqueConstraint(
+            "supersedes_result_id",
+            name="uq_match_results_supersedes_result_id",
         ),
     )
 
