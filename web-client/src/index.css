@@ -1596,8 +1596,8 @@ body.dark.fortymm-theme {
    ========================================================================= */
 /* ---------- Entry layout ---------- */
 .fortymm-theme .entry-wrap {
-  /* Motion/shadow tokens the design defines at :root — kept local so the
-     port stays faithful without expanding the shared token set. */
+  /* Motion/shadow tokens used by this section — kept scoped to avoid
+     leaking score-entry-only values into the shared token set. */
   --dur-fast: 120ms;
   --dur-base: 200ms;
   --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
