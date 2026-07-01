@@ -187,6 +187,23 @@ describe('projectMatchListRow', () => {
     expect(projectMatchListRow(row).ariaLabel).toBe('Open match: alpha vs beta')
   })
 
+  it('reads an opponent-less row as "{s1} (no opponent)" (#175)', () => {
+    const s1 = side(['alpha'], { side_number: 1 })
+    const row = matchListRow({ sides: [s1] })
+    expect(projectMatchListRow(row).ariaLabel).toBe(
+      'Open match: alpha (no opponent)',
+    )
+  })
+
+  it('treats a player-less sentinel side 2 as no opponent (#175)', () => {
+    const s1 = side(['alpha'], { side_number: 1 })
+    const s2 = side([], { side_number: 2 })
+    const row = matchListRow({ sides: [s1, s2] })
+    expect(projectMatchListRow(row).ariaLabel).toBe(
+      'Open match: alpha (no opponent)',
+    )
+  })
+
   it('builds the short label as "M-" + shortId', () => {
     const row = matchListRow({ id: 'match-abc123' })
     expect(projectMatchListRow(row).shortLabel).toBe('M-ABC123')
