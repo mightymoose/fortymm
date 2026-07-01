@@ -37,6 +37,7 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { cn, initialsOf } from '@/lib/utils'
 import {
+  compactGames,
   deciderGameNumber,
   isDecidedMatch,
   overrunDecider,
@@ -349,8 +350,14 @@ function ScoreEntryInner({
             },
       ]
     : []
-  const wouldFinalize =
-    inputsValid && isDecidedMatch(hypotheticalGames, bestOf)
+  // The canonical board this entry would post — an out-of-order clinch's gap
+  // closed (see `compactGames`), so the predicate and the posted payload below
+  // are always the same board and can't diverge.
+  const compactedGames = compactGames(hypotheticalGames)
+  // Compact before asking "is this a decided board?" so an out-of-order clinch
+  // takes the finalize branch instead of funnelling into the empty gap game (the
+  // #742 dead-end). A real overrun compacts to itself and stays non-final.
+  const wouldFinalize = inputsValid && isDecidedMatch(compactedGames, bestOf)
 
   // Mirror the server's "no games past the decider" guard inline. The scoreline
   // already mutes/bounces the games numbered after a known decider, but one path
@@ -454,7 +461,7 @@ function ScoreEntryInner({
     if (wouldFinalize && onlineManager.isOnline()) {
       finalizingRef.current = true
       finalizeMutation.mutate(
-        { games: hypotheticalGames },
+        { games: compactedGames },
         {
           onSuccess: () => navigate(matchDetailRoute(matchId)),
           onError: () => {

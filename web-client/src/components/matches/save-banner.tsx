@@ -10,7 +10,7 @@ import {
   useProposeResult,
   useMatch,
 } from '@/api/matches'
-import { isDecidedMatch, type GamePoints } from '@/lib/scoring'
+import { compactGames, isDecidedMatch, type GamePoints } from '@/lib/scoring'
 import { cn } from '@/lib/utils'
 import {
   Alert,
@@ -103,9 +103,9 @@ function FailedSaveBanner({ matchId, activeGameNumber }: SaveBannerProps) {
       side_2_points: entry.variables.side_2_points,
     })
   }
-  const mergedGames = [...mergedByNumber.values()].sort(
-    (a, b) => a.game_number - b.game_number,
-  )
+  // Compact so a gappy offline clinch posts a contiguous board (see
+  // `compactGames`). `compactGames` sorts internally, so no pre-sort here.
+  const mergedGames = compactGames([...mergedByNumber.values()])
   const wouldFinalize =
     data != null && isDecidedMatch(mergedGames, data.best_of)
 

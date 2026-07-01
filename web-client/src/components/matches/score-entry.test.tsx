@@ -449,6 +449,85 @@ describe('ScoreEntry — create', () => {
     })
   })
 
+  it('finalizes an out-of-order clinch (game 4 blank) and posts the compacted board (#742)', async () => {
+    // The repro: Bo7, games 1-3 to side 1, then the user jumps to game 5 (game 4
+    // still blank) and scores the clinching 4th win there. That leaves a gappy
+    // decided board [1,2,3,5]. Pre-fix the button stayed "save & next" and the
+    // save funnelled into the empty game 4 (dead-end). Now the board compacts to
+    // [1,2,3,4]: the button flips to "Post result" and posts the contiguous board.
+    const user = userEvent.setup()
+    let finalizedBody: unknown = null
+    server.use(
+      http.get('*/v1/matches/m-1', () =>
+        HttpResponse.json(
+          inProgressMatch({
+            best_of: 7,
+            games_to_win: 4,
+            sides: participantSides({ meWins: 3, oppWins: 0 }),
+            games: [
+              { id: 'g-1', game_number: 1, score: score('s-1', 11, 4) },
+              { id: 'g-2', game_number: 2, score: score('s-2', 11, 6) },
+              { id: 'g-3', game_number: 3, score: score('s-3', 11, 5) },
+            ],
+            current_game: { game_number: 4 },
+          }),
+        ),
+      ),
+      http.post('*/v1/matches/m-1/results', async ({ request }) => {
+        finalizedBody = await request.json()
+        return HttpResponse.json(
+          matchDetails({
+            id: 'm-1',
+            status: 'completed',
+            status_label: 'Final',
+            best_of: 7,
+            games_to_win: 4,
+            sides: participantSides({ meWins: 4, oppWins: 0, meWon: true }),
+            games: [
+              { id: 'g-1', game_number: 1, score: score('s-1', 11, 4) },
+              { id: 'g-2', game_number: 2, score: score('s-2', 11, 6) },
+              { id: 'g-3', game_number: 3, score: score('s-3', 11, 5) },
+              { id: 'g-4', game_number: 4, score: score('s-4', 11, 3) },
+            ],
+            current_game: null,
+            can_score: false,
+            can_finalize: false,
+          }),
+          { status: 201 },
+        )
+      }),
+    )
+
+    // Land on game 5 — the out-of-order slot the scoreline let the user tap.
+    renderScoreEntry({ kind: 'create', matchId: 'm-1', gameNumber: 5 })
+    const meInput = await screen.findByRole('textbox', {
+      name: 'rita.kovac score',
+    })
+    const oppInput = screen.getByRole('textbox', { name: 'nguyen.t score' })
+
+    await user.type(meInput, '11')
+    await user.type(oppInput, '3')
+
+    // The clinch is recognised through compaction, so the button offers to post
+    // the result rather than funnelling into the empty game 4.
+    const postBtn = screen.getByRole('button', { name: /post result/i })
+    expect(postBtn).toBeInTheDocument()
+    await user.click(postBtn)
+
+    await waitFor(() =>
+      expect(screen.getByText('match-page m-1')).toBeInTheDocument(),
+    )
+    // The posted board is contiguous: the stray "game 5" was renumbered to 4.
+    expect(finalizedBody).toEqual({
+      games: [
+        { game_number: 1, side_1_points: 11, side_2_points: 4 },
+        { game_number: 2, side_1_points: 11, side_2_points: 6 },
+        { game_number: 3, side_1_points: 11, side_2_points: 5 },
+        { game_number: 4, side_1_points: 11, side_2_points: 3 },
+      ],
+    })
+  })
+
   it('fires a single POST /results when "Post result" is double-clicked in one frame (#641)', async () => {
     // A fast double-tap lands a second click before React commits the button's
     // `disabled` re-render. That fired two concurrent POST /results that piled
