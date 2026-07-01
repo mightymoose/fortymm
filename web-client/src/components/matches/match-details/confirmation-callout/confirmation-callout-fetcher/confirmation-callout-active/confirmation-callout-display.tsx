@@ -30,7 +30,7 @@ export interface ConfirmationCalloutDisplayProps {
 /** The rated/unrated stakes line, shared by the review + corrected callouts. */
 function StakesLine({ rated }: { rated: boolean }) {
   return (
-    <p className="md-confirm-callout__stakes text-xs text-[color:var(--muted)]">
+    <p className="md-confirm-callout__stakes text-xs text-[color:var(--muted-foreground)]">
       {rated
         ? "Accepting finalizes this rated match and updates both ratings."
         : "Accepting finalizes this match. It doesn't affect ratings."}
