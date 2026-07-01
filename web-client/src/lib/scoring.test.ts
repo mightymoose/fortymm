@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  compactGames,
   deciderGameNumber,
   firstMatchScoreError,
   illegalScoreReason,
@@ -13,6 +14,50 @@ const game = (
   side_1_points: number,
   side_2_points: number,
 ): GamePoints => ({ game_number, side_1_points, side_2_points })
+
+describe('compactGames', () => {
+  it('closes a gap left by an out-of-order clinch', () => {
+    // #742: games 1-3 scored, deciding win on game 5, game 4 blank.
+    const compacted = compactGames([
+      game(1, 11, 2),
+      game(2, 11, 2),
+      game(3, 11, 2),
+      game(5, 11, 2),
+    ])
+    expect(compacted.map((g) => g.game_number)).toEqual([1, 2, 3, 4])
+  })
+
+  it('is identity on an already-contiguous board', () => {
+    const compacted = compactGames([game(1, 11, 2), game(2, 11, 2)])
+    expect(compacted.map((g) => g.game_number)).toEqual([1, 2])
+  })
+
+  it('leaves a fully-scored overrun untouched', () => {
+    const games = [
+      game(1, 11, 2),
+      game(2, 11, 2),
+      game(3, 11, 2),
+      game(4, 11, 2),
+      game(5, 11, 2),
+    ]
+    expect(compactGames(games).map((g) => g.game_number)).toEqual([
+      1, 2, 3, 4, 5,
+    ])
+  })
+
+  it('renumbers a gappy decided board into a finalize-able one', () => {
+    // The predicate score-entry uses: gappy [1,2,3,5] is not decided raw…
+    const gappy = [game(1, 11, 2), game(2, 11, 2), game(3, 11, 2), game(5, 11, 2)]
+    expect(isDecidedMatch(gappy, 7)).toBe(false)
+    // …but its compaction is.
+    expect(isDecidedMatch(compactGames(gappy), 7)).toBe(true)
+  })
+
+  it('preserves each game score under renumbering', () => {
+    const compacted = compactGames([game(3, 11, 7), game(1, 11, 4)])
+    expect(compacted).toEqual([game(1, 11, 4), game(2, 11, 7)])
+  })
+})
 
 describe('illegalScoreReason', () => {
   it.each([

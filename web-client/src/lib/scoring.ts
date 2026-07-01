@@ -110,6 +110,30 @@ function matchScoreSchema(bestOf: number) {
     )
 }
 
+// Normalize a (possibly gappy) scratchpad board into a canonical one: sort by
+// game number and renumber the survivors 1..N with no holes. The FE mirror of
+// the backend `_compact_games` in api/app/matches.py.
+//
+// Outcome-invariant: an empty slot is 0 wins for either side, so dropping it and
+// renumbering can never change the winner or game score — only cosmetic slot
+// numbers. Heals the out-of-order clinch (`[1,2,3,5]` → `[1,2,3,4]`, which then
+// `isDecidedMatch`) without touching a real overrun (a fully-scored
+// `[1,2,3,4,5]` compacts to itself and stays rejected).
+export function compactGames(games: GamePoints[]): GamePoints[] {
+  // Renumber by the *rank of each distinct* game number (not list position), so
+  // a genuine duplicate game_number stays a duplicate — compaction closes gaps,
+  // it doesn't launder malformed input (matches `_compact_games`).
+  const rank = new Map<number, number>()
+  for (const n of [...new Set(games.map((g) => g.game_number))].sort(
+    (a, b) => a - b,
+  )) {
+    rank.set(n, rank.size + 1)
+  }
+  return [...games]
+    .sort((a, b) => a.game_number - b.game_number)
+    .map((g) => ({ ...g, game_number: rank.get(g.game_number)! }))
+}
+
 // Whether the given games form a complete, validly-ordered, decided match for
 // `best_of` — the boolean predicate over `matchScoreSchema`. Replaces the old
 // `decidedSide` (no client consumer needed the winning side number, only

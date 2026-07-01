@@ -1,5 +1,6 @@
 import type { components } from "@/api/schema";
 
+import { compactGames } from "@/lib/scoring";
 import {
   matchDetailsQuery,
   type MatchDetailsResult,
@@ -28,14 +29,19 @@ const selectFinalizeCallout = (
   // sign-off flow.
   if (!details.can_finalize) return null;
   return {
-    games: details.games
-      .filter((g) => g.score)
-      .sort((a, b) => a.game_number - b.game_number)
-      .map((g) => ({
-        game_number: g.game_number,
-        side_1_points: g.score!.side_1_points,
-        side_2_points: g.score!.side_2_points,
-      })),
+    // The recovery surface for an already-stuck gappy-decided match: the
+    // server's `_can_finalize` now compacts, so `can_finalize` is true here;
+    // post the compacted board to match what the server mints (see
+    // `compactGames`). #742
+    games: compactGames(
+      details.games
+        .filter((g) => g.score)
+        .map((g) => ({
+          game_number: g.game_number,
+          side_1_points: g.score!.side_1_points,
+          side_2_points: g.score!.side_2_points,
+        })),
+    ),
   };
 };
 

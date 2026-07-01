@@ -31,10 +31,16 @@ Collapse it to the conversation and the machinery disappears:
   different result instead of accepting. There is nothing to "dispute" and
   nothing to "reopen", because a still-negotiating match was never closed.
 - **A match can never get stuck**, so there is no *withdraw* or *void*. A result
-  is only ever minted from a **decided board** (a board with a victor). Before
-  that, the match is a live scratchpad that either participant can edit; there
-  is simply no result to be stuck on. After the first proposal the negotiation
-  is always advanceable by *someone* (accept, or counter), so it can't deadlock.
+  is only ever minted from a **decided board** — a board with a victor, which is
+  always **normalizable to a canonical, mintable board** by dropping any empty
+  slots and renumbering the scored games `1..N` (*compaction*; see
+  `docs/adr/0002-decided-board-is-compacted-at-propose.md`). The invariant is
+  **a victor ⟹ a normalizable canonical board ⟹ a mintable result**: the moment
+  some side has clinched, a legal result exists to post, so the scratchpad can
+  never present a victor with no way forward. Before a victor, the match is a
+  live scratchpad that either participant can edit; there is simply no result to
+  be stuck on. After the first proposal the negotiation is always advanceable by
+  *someone* (accept, or counter), so it can't deadlock.
 
 The model that falls out is **one table and two verbs**. The supersede chain is
 the entire history; consent is two columns.

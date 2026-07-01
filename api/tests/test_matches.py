@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 
 from app.matches import (
+    _compact_games,
     accept_match_result,
     create_game_score,
     post_match_result,
@@ -43,6 +44,41 @@ from tests._helpers import (
     opponent_session,
     start_session,
 )
+
+# ----- decided-board compaction (#742) ------------------------------------
+
+
+def _game(n: int, s1: int = 11, s2: int = 2) -> MatchResultsGameWrite:
+    return MatchResultsGameWrite(game_number=n, side_1_points=s1, side_2_points=s2)
+
+
+def test_compact_games_closes_a_gap():
+    # The #742 out-of-order clinch: game 4 blank, deciding win scored on game 5.
+    compacted = _compact_games([_game(1), _game(2), _game(3), _game(5)])
+    assert [g.game_number for g in compacted] == [1, 2, 3, 4]
+
+
+def test_compact_games_is_identity_on_a_contiguous_board():
+    compacted = _compact_games([_game(1), _game(2), _game(3)])
+    assert [g.game_number for g in compacted] == [1, 2, 3]
+
+
+def test_compact_games_leaves_an_overrun_untouched():
+    # A fully-scored board with no holes has nothing to compact — a real overrun
+    # ([1..5] where the match was already won at game 4) stays [1..5] so the
+    # strict validator still rejects it.
+    compacted = _compact_games([_game(n) for n in range(1, 6)])
+    assert [g.game_number for g in compacted] == [1, 2, 3, 4, 5]
+
+
+def test_compact_games_preserves_duplicates_and_scores():
+    # Compaction ranks by distinct game number, so a duplicate stays a duplicate
+    # (the strict validator still catches it) and each game keeps its own score.
+    compacted = _compact_games([_game(3, 11, 7), _game(1, 11, 4), _game(1, 5, 11)])
+    assert [g.game_number for g in compacted] == [1, 1, 2]
+    # Sorted-stable: game 1's two scores keep their order; game 3 → game 2.
+    assert (compacted[2].side_1_points, compacted[2].side_2_points) == (11, 7)
+
 
 # ----- create -------------------------------------------------------------
 
@@ -1122,6 +1158,41 @@ async def test_score_update_422_when_edit_creates_overrun(
     assert "already decided at game 4" in edit.json()["detail"]
 
 
+async def test_score_update_422_on_overrun_when_board_has_a_gap(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    # The overrun guard must operate on the RAW (gappy) board, not a compacted
+    # one — otherwise the edited game's raw ``game_number`` no longer aligns with
+    # the renumbered slots and the substitution lands on the wrong game, silently
+    # bypassing the guard. Board: side 1 takes games 1-3, side 2 takes games 5-6,
+    # game 4 left blank (a legal, undecided gappy scratchpad). Flipping game 5 to
+    # a side-1 win clinches side 1 at game 5 while game 6 is still scored →
+    # overrun → 422.
+    await start_session(api_client, db_session)
+    opp = await make_user(db_session, "rival")
+    match = await _create_match(api_client, opp.id, best_of=7)
+
+    for n, (side1, side2) in [
+        (1, (11, 2)),
+        (2, (11, 2)),
+        (3, (11, 2)),
+        (5, (2, 11)),
+        (6, (2, 11)),
+    ]:
+        response = await api_client.post(
+            f"/v1/matches/{match['id']}/games/{n}/scores/new",
+            json={"side_1_points": side1, "side_2_points": side2},
+        )
+        assert response.status_code == 201, response.json()
+
+    edit = await api_client.put(
+        f"/v1/matches/{match['id']}/games/5/scores",
+        json={"side_1_points": 11, "side_2_points": 2, "expected_version": 1},
+    )
+    assert edit.status_code == 422, edit.json()
+    assert "already decided at game 5" in edit.json()["detail"]
+
+
 async def test_score_update_overwrites_in_place(
     api_client: AsyncClient, db_session: AsyncSession
 ):
@@ -1888,14 +1959,10 @@ async def test_score_endpoints_409_once_match_is_completed(
 @pytest.mark.parametrize(
     "games,reason_contains",
     [
-        # Gap — games 1 and 3 with no game 2.
-        (
-            [
-                {"game_number": 1, "side_1_points": 11, "side_2_points": 4},
-                {"game_number": 3, "side_1_points": 11, "side_2_points": 7},
-            ],
-            "consecutively",
-        ),
+        # NB: a *gap* is no longer a 422 — a gappy but decided board (e.g. games
+        # 1 and 3, side 1 winning both) is compacted to a contiguous board and
+        # finalizes. See ``test_finalize_compacts_gappy_decided_board``. Only a
+        # real overrun (games genuinely scored past the clinch, below) still 422s.
         # Duplicate game numbers.
         (
             [
@@ -2005,6 +2072,71 @@ async def test_can_finalize_flag_tracks_saved_scores(
         )
     ).json()
     assert edited["can_finalize"] is False
+
+
+async def test_finalize_compacts_gappy_decided_board(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """#742: an out-of-order clinch posts a gappy-but-decided board (games 1 and
+    3, side 1 winning both, no game 2). It used to 422 ("consecutively"); now it
+    is *compacted* to a contiguous ``[1, 2]`` board and finalizes 2-0. The
+    committed games and the immutable result snapshot are both contiguous."""
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "rival") as (_opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=3)
+
+        response = await api_client.post(
+            f"/v1/matches/{match['id']}/results",
+            json={
+                "games": [
+                    {"game_number": 1, "side_1_points": 11, "side_2_points": 4},
+                    {"game_number": 3, "side_1_points": 11, "side_2_points": 7},
+                ]
+            },
+        )
+        assert response.status_code == 201, response.json()
+        body = response.json()
+
+        # The gap is closed: the stored board is contiguous 1..2, not 1,3.
+        games = sorted(body["games"], key=lambda g: g["game_number"])
+        assert [g["game_number"] for g in games] == [1, 2]
+        # Renumbering preserves each game's score — game 3's 11-7 becomes game 2.
+        assert games[1]["score"]["side_1_points"] == 11
+        assert games[1]["score"]["side_2_points"] == 7
+        # Side 1 swept both games → 2-0.
+        sides = sorted(body["sides"], key=lambda s: s["side_number"])
+        assert [s["games_won"] for s in sides] == [2, 0]
+
+        # The immutable result snapshot is contiguous too.
+        results = (await db_session.execute(select(MatchResult))).scalars().all()
+        assert len(results) == 1
+        assert [g["game_number"] for g in results[0].games] == [1, 2]
+
+        # No orphan scratchpad rows survive under the old game numbers.
+        game_rows = (await db_session.execute(select(MatchGame))).scalars().all()
+        assert sorted(g.game_number for g in game_rows) == [1, 2]
+
+
+async def test_can_finalize_true_for_gappy_decided_saved_board(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """#742 self-heal: a saved scratchpad where the deciding game landed out of
+    order (games 1-3 then game 5, leaving game 4 blank) is decided once
+    compacted, so ``can_finalize`` reports true — the SaveBanner then offers
+    "Post result" and the user recovers from the previously-stuck state."""
+    await start_session(api_client, db_session)
+    opp = await make_user(db_session, "rival")
+    match = await _create_match(api_client, opp.id, best_of=7)
+
+    # Side 1 wins games 1-3, then clinches the 4th win on game 5 (game 4 blank).
+    await _sweep_games(api_client, match["id"], [1, 2, 3])
+    after_g5 = await api_client.post(
+        f"/v1/matches/{match['id']}/games/5/scores/new",
+        json={"side_1_points": 11, "side_2_points": 2},
+    )
+    assert after_g5.status_code == 201, after_g5.json()
+    # The gappy board [1,2,3,5] compacts to [1,2,3,4] — decided, so finalizable.
+    assert after_g5.json()["can_finalize"] is True
 
 
 # ----- league binding -----------------------------------------------------

@@ -68,6 +68,42 @@ describe("finalizeCalloutQuery", () => {
     });
   });
 
+  it("compacts a gappy-but-decided saved board into a contiguous payload (#742 self-heal)", async () => {
+    // An already-stuck match: side 1 clinched the 4th win on game 5 with game 4
+    // left blank → saved board [1,2,3,5]. The server's `_can_finalize` now
+    // compacts, so `can_finalize` is true; this recovery surface must post the
+    // compacted [1,2,3,4], not the gappy board.
+    finalizeCalloutQueryPage.mockEndpoint(() =>
+      HttpResponse.json(
+        buildMatchDetails({
+          can_finalize: true,
+          games: [1, 2, 3, 5].map((n) =>
+            buildMatchDetailsGame({
+              id: `g${n}`,
+              game_number: n,
+              score: buildMatchDetailsScore({
+                id: `s${n}`,
+                side_1_points: 11,
+                side_2_points: n,
+              }),
+            }),
+          ),
+        }),
+      ),
+    );
+
+    const result = await renderView();
+
+    expect(result.current.data).toEqual({
+      games: [
+        { game_number: 1, side_1_points: 11, side_2_points: 1 },
+        { game_number: 2, side_1_points: 11, side_2_points: 2 },
+        { game_number: 3, side_1_points: 11, side_2_points: 3 },
+        { game_number: 4, side_1_points: 11, side_2_points: 5 },
+      ],
+    });
+  });
+
   it("projects null when the board isn't finalizable, even with saved scores", async () => {
     finalizeCalloutQueryPage.mockEndpoint(() =>
       HttpResponse.json(finalizableMatch({ can_finalize: false })),
