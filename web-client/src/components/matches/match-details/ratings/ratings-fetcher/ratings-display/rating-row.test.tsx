@@ -55,6 +55,22 @@ describe("RatingRow", () => {
     expect(delta).not.toHaveClass("md-delta-down");
   });
 
+  it("labels the delta chip for screen readers so the sign isn't voiced as punctuation", () => {
+    ratingRowPage.render({
+      row: buildRatingRowView({
+        change: buildRatingRowChangeView({
+          deltaLabel: "+12",
+          deltaAriaLabel: "Gained 12 rating",
+        }),
+      }),
+    });
+
+    expect(ratingRowPage.queryDelta("rita.kovac")).toHaveAttribute(
+      "aria-label",
+      "Gained 12 rating",
+    );
+  });
+
   it("tones a negative delta down", () => {
     ratingRowPage.render({
       row: buildRatingRowView({

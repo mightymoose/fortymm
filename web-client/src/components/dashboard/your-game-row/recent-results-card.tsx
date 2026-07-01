@@ -2,7 +2,7 @@ import type { DashboardRecentResult } from '@/api/dashboard'
 import { UserAvatar } from '@/components/ui/user-avatar'
 import { Overline } from '@/components/overline'
 import { fmtDateShort } from '@/lib/dates'
-import { formatRatingDelta } from '@/lib/rating'
+import { formatRatingDelta, formatRatingDeltaAria } from '@/lib/rating'
 import { C, UI } from '@/components/dashboard/dashboard-tokens'
 
 import { Card } from './card'
@@ -76,7 +76,10 @@ export const RecentResultsCard = ({ rows }: RecentResultsCardProps) => {
               <th style={{ textAlign: 'right', padding: '10px 8px 8px', fontWeight: 600 }}>
                 Score
               </th>
-              <th style={{ textAlign: 'right', padding: '10px 8px 8px', fontWeight: 600 }}>
+              <th
+                aria-label="Rating change"
+                style={{ textAlign: 'right', padding: '10px 8px 8px', fontWeight: 600 }}
+              >
                 Δ
               </th>
               <th style={{ textAlign: 'right', padding: '10px 18px 8px', fontWeight: 600 }}>
@@ -128,6 +131,7 @@ export const RecentResultsCard = ({ rows }: RecentResultsCardProps) => {
                       <Mono
                         size={12}
                         weight={500}
+                        ariaLabel={formatRatingDeltaAria(r.my_rating_change.delta)}
                         color={
                           r.my_rating_change.delta >= 0
                             ? C.serve500
