@@ -1647,8 +1647,13 @@ def _compact_games(
     Renumbers by the *rank of each distinct* ``game_number`` (not by list
     position), so a genuine duplicate game_number is preserved as a duplicate
     (two games at original ``1`` both map to new ``1``) and the strict
-    ``_validate_finalize_games`` duplicate check downstream still rejects it —
-    compaction closes gaps, it doesn't launder malformed input.
+    ``_validate_finalize_games`` duplicate check downstream still rejects it.
+    (Renumbering *does* absorb an out-of-``best_of``-range game_number — e.g.
+    ``[1,2,5]`` on best-of-3 → ``[1,2,3]`` — but the real scratchpad never
+    produces one: the score endpoints reject ``game_number > best_of`` before a
+    score is ever saved, and a finalize payload's out-of-range numbers only
+    reach here via a hand-crafted API call, where relabeling three legal scored
+    games into a legal 3-game board is harmless.)
 
     Provably outcome-invariant: an empty (unscored) slot contributes 0 wins to
     either side, so dropping it and relabeling can never change the winner or
@@ -1708,21 +1713,21 @@ def _games_payload_from_match(match: Match) -> list[MatchResultsGameWrite]:
     """Recast currently-saved scores as a finalize payload, so ``_can_finalize``
     can reuse ``_validate_finalize_games`` instead of duplicating its rules.
 
-    Compacted so a gappy-but-decided saved board (an out-of-order clinch that
-    left a hole) reports ``can_finalize = true`` — the SaveBanner then offers
-    "Post result" and the user self-heals with one tap (also heals already-
-    stuck matches with no migration)."""
-    return _compact_games(
-        [
-            MatchResultsGameWrite(
-                game_number=g.game_number,
-                side_1_points=g.score.side_1_points,
-                side_2_points=g.score.side_2_points,
-            )
-            for g in match.games
-            if g.score is not None
-        ]
-    )
+    Returns the board **raw** (scored games at their real ``game_number``, gaps
+    and all). The two scratchpad overrun guards depend on this: ``create_game_score``
+    reports the tapped game in its 422 detail, and ``update_game_score`` substitutes
+    the edited game by matching the raw ``game_number`` — both would break on a
+    renumbered board. Compaction is applied by ``_can_finalize`` alone, at its own
+    call site, since only the finalize predicate wants a canonical board."""
+    return [
+        MatchResultsGameWrite(
+            game_number=g.game_number,
+            side_1_points=g.score.side_1_points,
+            side_2_points=g.score.side_2_points,
+        )
+        for g in match.games
+        if g.score is not None
+    ]
 
 
 def _can_finalize(match: Match) -> bool:
@@ -1732,14 +1737,21 @@ def _can_finalize(match: Match) -> bool:
 
     Returns False once any result exists — the FE drives this flag only for the
     FIRST proposal; subsequent counters/acceptances flow through the negotiation
-    surface, not /results-as-finalize."""
+    surface, not /results-as-finalize.
+
+    Compacts the saved board before validating, mirroring the write path: a
+    gappy-but-decided board (an out-of-order clinch that left a hole) reports
+    ``can_finalize = true`` so the finalize-callout / SaveBanner offers "Post
+    result" and the user self-heals with one tap — this also heals already-stuck
+    matches with no migration."""
     if match.status not in (MatchStatus.in_progress, MatchStatus.disputed):
         return False
     if match.results:
         return False
     try:
         _validate_finalize_games(
-            _games_payload_from_match(match), match.match_settings.best_of
+            _compact_games(_games_payload_from_match(match)),
+            match.match_settings.best_of,
         )
     except ValueError:
         return False

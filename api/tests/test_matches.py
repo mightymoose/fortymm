@@ -1158,6 +1158,41 @@ async def test_score_update_422_when_edit_creates_overrun(
     assert "already decided at game 4" in edit.json()["detail"]
 
 
+async def test_score_update_422_on_overrun_when_board_has_a_gap(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    # The overrun guard must operate on the RAW (gappy) board, not a compacted
+    # one — otherwise the edited game's raw ``game_number`` no longer aligns with
+    # the renumbered slots and the substitution lands on the wrong game, silently
+    # bypassing the guard. Board: side 1 takes games 1-3, side 2 takes games 5-6,
+    # game 4 left blank (a legal, undecided gappy scratchpad). Flipping game 5 to
+    # a side-1 win clinches side 1 at game 5 while game 6 is still scored →
+    # overrun → 422.
+    await start_session(api_client, db_session)
+    opp = await make_user(db_session, "rival")
+    match = await _create_match(api_client, opp.id, best_of=7)
+
+    for n, (side1, side2) in [
+        (1, (11, 2)),
+        (2, (11, 2)),
+        (3, (11, 2)),
+        (5, (2, 11)),
+        (6, (2, 11)),
+    ]:
+        response = await api_client.post(
+            f"/v1/matches/{match['id']}/games/{n}/scores/new",
+            json={"side_1_points": side1, "side_2_points": side2},
+        )
+        assert response.status_code == 201, response.json()
+
+    edit = await api_client.put(
+        f"/v1/matches/{match['id']}/games/5/scores",
+        json={"side_1_points": 11, "side_2_points": 2, "expected_version": 1},
+    )
+    assert edit.status_code == 422, edit.json()
+    assert "already decided at game 5" in edit.json()["detail"]
+
+
 async def test_score_update_overwrites_in_place(
     api_client: AsyncClient, db_session: AsyncSession
 ):
