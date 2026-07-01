@@ -716,6 +716,10 @@
   font: 600 16px var(--font-ui);
   letter-spacing: 0.01em;
   color: var(--fg-1);
+  /* A long opponent username is a single unbreakable token that, at 375px,
+     overflowed the flex column and clipped mid-word (#74). Let it wrap at any
+     point so the summary flows onto multiple lines instead of being cut off. */
+  overflow-wrap: anywhere;
 }
 .nm-summary .read .top .opp-tbd {
   font-weight: 500;

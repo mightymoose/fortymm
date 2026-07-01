@@ -188,6 +188,26 @@
    * tell when the table is actually too narrow. */
   container-type: inline-size;
 }
+/* On a phone the page opts out of the viewport-fixed inner-scroll layout: each
+ * card is ~5× taller than a table row, so squeezing the list through the
+ * ~283px `.table-wrap` window showed only ~1 card at a time (#702). Below 640px
+ * let the whole page scroll instead — drop the fixed height + inner overflow so
+ * the card list flows into the document scroll (the app-shell topbar is
+ * `position: sticky`, so it stays pinned as the page scrolls). The card layout
+ * itself is a container query on `.table-wrap`, which keeps firing without the
+ * overflow, and the pagination footer simply flows to the end of the list.
+ * Above 640px the scrolling table (and its 640–960px horizontal scroll) is
+ * untouched. */
+@media (max-width: 640px) {
+  .match-list-page {
+    height: auto;
+    overflow: visible;
+  }
+  .match-list-page .table-wrap {
+    flex: none;
+    overflow: visible;
+  }
+}
 .match-list-page table.matches {
   width: 100%;
   border-collapse: separate;

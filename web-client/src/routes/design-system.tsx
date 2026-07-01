@@ -29,7 +29,7 @@ import {
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog'
 import { AspectRatio } from '@/components/ui/aspect-ratio'
-import { Avatar, AvatarFallback } from '@/components/ui/avatar'
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import {
   Breadcrumb,
@@ -202,6 +202,12 @@ export const Route = createFileRoute('/design-system')({
   }),
   component: DesignSystemPage,
 })
+
+/** Inline SVG avatar for the Avatar IMAGE-variant demo (#263). A data URI keeps
+ * the showcase self-contained — no network fetch, so it renders identically
+ * offline and in the e2e run instead of falling back to initials. */
+const DEMO_AVATAR_SRC =
+  "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' fill='%233a4a6e'/%3E%3Ccircle cx='32' cy='25' r='13' fill='%23e9edf5'/%3E%3Crect x='11' y='42' width='42' height='24' rx='12' fill='%23e9edf5'/%3E%3C/svg%3E"
 
 function Section({
   id,
@@ -699,8 +705,14 @@ function DataDisplaySection() {
         </div>
       </Showcase>
 
-      <Showcase title="Avatar" tag="initials · stack">
+      <Showcase title="Avatar" tag="image · initials · stack">
         <div className="flex flex-wrap items-center gap-6">
+          <div className="flex items-center gap-3">
+            <Avatar className="size-14 text-base">
+              <AvatarImage src={DEMO_AVATAR_SRC} alt="" />
+              <AvatarFallback>IMG</AvatarFallback>
+            </Avatar>
+          </div>
           <div className="flex items-center gap-3">
             <Avatar className="size-7 text-xs">
               <AvatarFallback>TN</AvatarFallback>
