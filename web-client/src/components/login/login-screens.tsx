@@ -991,8 +991,12 @@ export function ScreenEmail({
             <br />
             <span style={{ color: 'var(--fg-muted)' }}>
               By signing in you agree to play fair. That’s it.{' '}
-              <LinkButton>House rules</LinkButton> ·{' '}
-              <LinkButton>Privacy</LinkButton>
+              {/* House rules / Privacy pages don't exist yet — render as plain
+                  text (not focusable LinkButtons) so we don't advertise
+                  interactive controls that fire nothing. Convert back to
+                  <a href="…"> once the pages land (#227). */}
+              <span style={linkInline}>House rules</span> ·{' '}
+              <span style={linkInline}>Privacy</span>
             </span>
           </div>
         </FormCol>
