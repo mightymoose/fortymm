@@ -5,7 +5,12 @@ metadata:
   labels:
     {{- include "fortymm-uat.labels" . | nindent 4 }}
 spec:
-  replicas: 1
+  replicas: {{ .Values.web.replicas }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: {{ .Values.web.rollingUpdate.maxUnavailable }}
+      maxSurge: {{ .Values.web.rollingUpdate.maxSurge }}
   selector:
     matchLabels:
       {{- include "fortymm-uat.selector" (dict "component" "web") | nindent 6 }}
