@@ -15,6 +15,20 @@ images:
 
 pullPolicy: IfNotPresent
 
+# Stateless request-serving tiers scale horizontally with a zero-downtime
+# RollingUpdate. maxUnavailable: 0 keeps full capacity during a rollout (new
+# pods must go Ready before old ones are torn down); maxSurge adds headroom.
+api:
+  replicas: 5
+  rollingUpdate:
+    maxUnavailable: 0
+    maxSurge: 2
+web:
+  replicas: 2
+  rollingUpdate:
+    maxUnavailable: 0
+    maxSurge: 1
+
 # Non-secret runtime config (mirrors the `environment:` blocks in compose).
 config:
   DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/fortymm
