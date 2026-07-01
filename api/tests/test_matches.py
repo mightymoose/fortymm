@@ -3188,6 +3188,37 @@ async def test_posting_result_enqueues_confirmation_for_opponent(
     assert "11–8" in job.body
 
 
+async def test_posting_losing_result_enqueues_confirmation_for_opponent(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    fake_notifications_queue: Queue,
+):
+    """When the poster reports that they lost, the recipient-framed copy
+    reads grammatically ("losing to you"), not "reported losing you"."""
+    me = await start_session(api_client, db_session)
+    me.username = "poster"
+    await db_session.commit()
+
+    async with opponent_session(db_session, "rival") as (_opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=3)
+        response = await api_client.post(
+            f"/v1/matches/{match['id']}/results",
+            json={
+                "games": [
+                    {"game_number": 1, "side_1_points": 7, "side_2_points": 11},
+                    {"game_number": 2, "side_1_points": 9, "side_2_points": 11},
+                ]
+            },
+        )
+        assert response.status_code == 201
+
+    jobs = enqueued_notification_jobs(fake_notifications_queue)
+    assert [job.user_id for job in jobs] == [opp.id]
+    job = jobs[0]
+    # Recipient-framed games-won (poster lost 0–2), phrased grammatically.
+    assert "poster reported losing to you 2–0" in job.body
+
+
 async def test_solo_result_enqueues_no_confirmation(
     api_client: AsyncClient,
     db_session: AsyncSession,
