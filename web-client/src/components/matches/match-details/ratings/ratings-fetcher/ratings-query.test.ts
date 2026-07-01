@@ -88,6 +88,7 @@ describe("ratingsQuery", () => {
             from: 1612,
             to: 1624,
             deltaLabel: "+12",
+            deltaAriaLabel: "Gained 12 rating",
             deltaUp: true,
             // History anchored before the match, post-match value appended.
             sparkline: [1580, 1601, 1612, 1624.4],
@@ -101,6 +102,7 @@ describe("ratingsQuery", () => {
             from: 1540,
             to: 1528,
             deltaLabel: "-12",
+            deltaAriaLabel: "Lost 12 rating",
             deltaUp: false,
             // No history — the line is anchored at the pre-match rating.
             sparkline: [1540, 1527.6],
@@ -188,6 +190,7 @@ describe("ratingsQuery", () => {
       from: null,
       to: 1500,
       deltaLabel: "0",
+      deltaAriaLabel: "No rating change",
       deltaUp: true,
       sparkline: null,
     });

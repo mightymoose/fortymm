@@ -8,6 +8,9 @@ export interface MonoProps {
   weight?: number
   color?: string
   style?: CSSProperties
+  /** Optional spoken label — e.g. spelling out a "+8"/"Δ" delta chip so a
+   * screen reader doesn't voice the glyph as literal punctuation. */
+  ariaLabel?: string
 }
 
 /** Tabular-nums monospace text — ratings, scores, and deltas across the
@@ -18,9 +21,11 @@ export const Mono = ({
   weight = 500,
   color = C.chalk50,
   style,
+  ariaLabel,
 }: MonoProps) => {
   return (
     <span
+      aria-label={ariaLabel}
       style={{
         font: `${weight} ${size}px ${MONO}`,
         fontVariantNumeric: 'tabular-nums',

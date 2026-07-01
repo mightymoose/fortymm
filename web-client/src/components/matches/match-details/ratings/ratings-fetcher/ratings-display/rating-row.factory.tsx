@@ -9,6 +9,7 @@ export function buildRatingRowChangeView(
     from: 1612,
     to: 1624,
     deltaLabel: "+12",
+    deltaAriaLabel: "Gained 12 rating",
     deltaUp: true,
     sparkline: [1580, 1601, 1612, 1624],
     ...overrides,

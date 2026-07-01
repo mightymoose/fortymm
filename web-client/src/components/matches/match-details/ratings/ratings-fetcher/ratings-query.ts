@@ -1,4 +1,4 @@
-import { formatRatingDelta } from "@/lib/rating";
+import { formatRatingDelta, formatRatingDeltaAria } from "@/lib/rating";
 import { initialsOf } from "@/lib/utils";
 
 import {
@@ -16,6 +16,9 @@ export type RatingRowChangeView = {
   to: number;
   /** Signed, rounded delta, e.g. "+12" / "-8". */
   deltaLabel: string;
+  /** Spoken form of `deltaLabel` for the delta chip's `aria-label`, e.g.
+   * "Gained 12 rating" — so a reader doesn't voice the "+" as punctuation. */
+  deltaAriaLabel: string;
   /** True for a non-negative delta — picks the delta figure's up/down tone. */
   deltaUp: boolean;
   /** Series for the trend sparkline: the pre-match rating history with the
@@ -61,6 +64,7 @@ const selectChange = (
     from: change.before === null ? null : Math.round(change.before),
     to: Math.round(change.after),
     deltaLabel: formatRatingDelta(change.delta),
+    deltaAriaLabel: formatRatingDeltaAria(change.delta),
     deltaUp: change.delta >= 0,
     sparkline: series.length >= 2 ? series : null,
   };

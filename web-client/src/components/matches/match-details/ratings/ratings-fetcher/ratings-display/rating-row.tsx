@@ -43,6 +43,7 @@ export const RatingRow = ({ row }: RatingRowProps) => (
           />
         )}
         <span
+          aria-label={row.change.deltaAriaLabel}
           className={cn(
             "md-rating-row__delta-num",
             row.change.deltaUp ? "md-delta-up" : "md-delta-down",
