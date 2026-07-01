@@ -32,7 +32,7 @@ export const RecentResultsCard = ({ rows }: RecentResultsCardProps) => {
           borderBottom: `1px solid ${C.ink700}`,
         }}
       >
-        <Overline>Recent matches</Overline>
+        <Overline id="dashboard-recent-results-label">Recent matches</Overline>
         <div style={{ flex: 1 }} />
         <span style={{ font: `500 11px ${UI}`, color: C.chalk500 }}>
           <Mono size={11} color={C.chalk100}>
@@ -53,6 +53,7 @@ export const RecentResultsCard = ({ rows }: RecentResultsCardProps) => {
         </div>
       ) : (
         <table
+          aria-labelledby="dashboard-recent-results-label"
           style={{
             width: '100%',
             borderCollapse: 'collapse',
