@@ -1574,6 +1574,69 @@ async def _apply_rating_update(db: AsyncSession, match: Match) -> None:
 # ----- finalize-payload validation + apply --------------------------------
 
 
+def _first_decider(
+    games: list[MatchResultsGameWrite], target: int
+) -> tuple[int, int] | None:
+    """Walk ``games`` in game-number order tallying wins; return
+    ``(decided_side, decided_game_number)`` for the first game at which a side
+    reaches ``target`` wins, else ``None``.
+
+    Gap-tolerant: it does not care whether the numbers are contiguous — callers
+    that require ``1..N`` numbering check that separately. The single source of
+    truth for "who clinched, and when" shared by the finalize validator and the
+    scratchpad overrun guard, so the two can never drift."""
+    wins: dict[int, int] = {1: 0, 2: 0}
+    for g in sorted(games, key=lambda g: g.game_number):
+        winner = 1 if g.side_1_points > g.side_2_points else 2
+        wins[winner] += 1
+        if wins[winner] >= target:
+            return winner, g.game_number
+    return None
+
+
+def _overrun_decider(games: list[MatchResultsGameWrite], best_of: int) -> int | None:
+    """The game number at which the match was already decided when there are
+    scored games numbered *after* it ("overrun"). Returns ``None`` for empty,
+    still-undecided, or exactly-decided-at-the-last-game boards — all legal
+    scratchpad states.
+
+    Gap-tolerant on purpose: it shares the decider core with the finalize
+    validator but does **not** require ``1..N`` contiguity, so legitimate
+    out-of-order / gappy entry (e.g. scoring game 3 first) is allowed right up
+    until a side actually clinches *before* the highest-numbered scored game.
+    That is the impossible state — games can't have been played after the match
+    was already won — so the scratchpad write path rejects it."""
+    if not games:
+        return None
+    decider = _first_decider(games, _games_to_win(best_of))
+    if decider is None:
+        return None
+    _, decided_at = decider
+    if decided_at < max(g.game_number for g in games):
+        return decided_at
+    return None
+
+
+def _enforce_no_overrun(
+    games: list[MatchResultsGameWrite], best_of: int, game_number: int
+) -> None:
+    """Reject a scratchpad write (422) when the prospective board ``games`` would
+    leave the match decided before its last scored game. Shared by both
+    score-write paths so the check, status, and message can't drift; each caller
+    builds its own prospective board (the create path mutates the ORM then reads
+    it back, the update path substitutes the payload because its write is raw
+    SQL), then hands it here."""
+    decided_at = _overrun_decider(games, best_of)
+    if decided_at is not None:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"The match was already decided at game {decided_at}; "
+                f"game {game_number} can't be played."
+            ),
+        )
+
+
 def _validate_finalize_games(games: list[MatchResultsGameWrite], best_of: int) -> int:
     """Cross-game invariants for a finalize payload. Per-game point legality
     is already enforced by ``MatchResultsGameWrite``. Returns the decided side
@@ -1591,22 +1654,13 @@ def _validate_finalize_games(games: list[MatchResultsGameWrite], best_of: int) -
         raise ValueError("Games must be numbered 1..N consecutively with no gaps.")
 
     target = _games_to_win(best_of)
-    games_in_order = sorted(games, key=lambda g: g.game_number)
-    wins: dict[int, int] = {1: 0, 2: 0}
-    decided_at: int | None = None
-    decided_side: int | None = None
-    for g in games_in_order:
-        winner = 1 if g.side_1_points > g.side_2_points else 2
-        wins[winner] += 1
-        if decided_side is None and wins[winner] >= target:
-            decided_side = winner
-            decided_at = g.game_number
-
-    if decided_side is None or decided_at is None:
+    decider = _first_decider(games, target)
+    if decider is None:
         raise ValueError(
             f"No side reached {target} game wins — the match isn't decided."
         )
-    if decided_at != games_in_order[-1].game_number:
+    decided_side, decided_at = decider
+    if decided_at != max(numbers):
         raise ValueError(
             "Scored games extend past the deciding game; "
             "drop any games after the decider."
@@ -1852,6 +1906,14 @@ async def create_game_score(
         side_2_points=payload.side_2_points,
     )
 
+    # The board can't have games after the match was already decided. The ORM
+    # is mutated above, so ``_games_payload_from_match`` already reflects this
+    # write; reject before commit (request teardown rolls back the uncommitted
+    # session). Gap-tolerant — only a clinch *before* the last scored game trips.
+    _enforce_no_overrun(
+        _games_payload_from_match(match), match.match_settings.best_of, game_number
+    )
+
     try:
         await db.commit()
     except IntegrityError as exc:
@@ -1890,6 +1952,23 @@ async def update_game_score(
     game = next((g for g in match.games if g.game_number == game_number), None)
     if game is None or game.score is None:
         raise HTTPException(status_code=404, detail="Score not found.")
+
+    # Editing a game's winner can move the decider earlier, so the same
+    # "no games past the decider" guard the create path enforces applies here.
+    # The UPDATE below runs in raw SQL, so in-memory ``match.games`` still holds
+    # the OLD score — build the prospective board by substituting the payload
+    # points for this game before checking.
+    prospective = [
+        g
+        if g.game_number != game_number
+        else MatchResultsGameWrite(
+            game_number=game_number,
+            side_1_points=payload.side_1_points,
+            side_2_points=payload.side_2_points,
+        )
+        for g in _games_payload_from_match(match)
+    ]
+    _enforce_no_overrun(prospective, match.match_settings.best_of, game_number)
 
     # Optimistic concurrency: replace the points only while the committed row is
     # still at the version the caller last read. The ``WHERE version =`` clause

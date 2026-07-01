@@ -2101,6 +2101,132 @@ describe('ScoreEntry — current user on side 2 (#210)', () => {
   })
 })
 
+describe('ScoreEntry — games past the decider', () => {
+  // Best-of-7 swept 4-0: the match is decided at game 4, so games 5-7 can
+  // never be played. Mirrors the server's "no games past the decider" guard.
+  function decidedBoard(
+    overrides: Parameters<typeof matchDetails>[0] = {},
+  ) {
+    return inProgressMatch({
+      best_of: 7,
+      games_to_win: 4,
+      sides: participantSides({ meWins: 4, oppWins: 0 }),
+      games: [
+        { id: 'g-1', game_number: 1, score: score('s-1', 11, 2) },
+        { id: 'g-2', game_number: 2, score: score('s-2', 11, 2) },
+        { id: 'g-3', game_number: 3, score: score('s-3', 11, 2) },
+        { id: 'g-4', game_number: 4, score: score('s-4', 11, 2) },
+      ],
+      current_game: null,
+      ...overrides,
+    })
+  }
+
+  it('mutes the games after the decider in the scoreline', async () => {
+    server.use(
+      http.get('*/v1/matches/m-1', () => HttpResponse.json(decidedBoard())),
+    )
+    renderScoreEntry({ kind: 'edit', matchId: 'm-1', gameNumber: 1 })
+
+    // Games 5-7 render as muted, non-navigable cells…
+    expect(
+      await screen.findByLabelText('Game 5, not playable'),
+    ).toBeInTheDocument()
+    expect(screen.getByLabelText('Game 7, not playable')).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: /game 5/i })).toBeNull()
+    // …while the played games stay navigable for editing.
+    expect(
+      screen.getByRole('link', { name: /game 2, saved/i }),
+    ).toBeInTheDocument()
+  })
+
+  it('bounces a direct URL to an unscored game past the decider', async () => {
+    server.use(
+      http.get('*/v1/matches/m-1', () => HttpResponse.json(decidedBoard())),
+    )
+    renderScoreEntry({ kind: 'create', matchId: 'm-1', gameNumber: 5 })
+
+    expect(await screen.findByText('match-page m-1')).toBeInTheDocument()
+  })
+
+  it('keeps the deciding game itself editable', async () => {
+    server.use(
+      http.get('*/v1/matches/m-1', () => HttpResponse.json(decidedBoard())),
+    )
+    renderScoreEntry({ kind: 'edit', matchId: 'm-1', gameNumber: 4 })
+
+    expect(await screen.findByText(/edit game 4 score/i)).toBeInTheDocument()
+  })
+
+  it('blocks filling a gap that would decide the match before its last game', async () => {
+    const user = userEvent.setup()
+    let posted = false
+    server.use(
+      http.get('*/v1/matches/m-1', () =>
+        HttpResponse.json(
+          inProgressMatch({
+            best_of: 7,
+            games_to_win: 4,
+            // Side 1 already clinched at game 5 with game 4 left blank — a gappy
+            // decided board. Filling game 4 with a side-1 win would move the
+            // decider to game 4 while game 5 is scored: impossible.
+            sides: participantSides({ meWins: 4, oppWins: 0 }),
+            games: [
+              { id: 'g-1', game_number: 1, score: score('s-1', 11, 2) },
+              { id: 'g-2', game_number: 2, score: score('s-2', 11, 2) },
+              { id: 'g-3', game_number: 3, score: score('s-3', 11, 2) },
+              { id: 'g-5', game_number: 5, score: score('s-5', 11, 2) },
+            ],
+            current_game: { game_number: 4 },
+          }),
+        ),
+      ),
+      http.post('*/v1/matches/m-1/games/4/scores/new', () => {
+        posted = true
+        return HttpResponse.json(inProgressMatch())
+      }),
+    )
+    renderScoreEntry({ kind: 'create', matchId: 'm-1', gameNumber: 4 })
+
+    await user.type(
+      await screen.findByRole('textbox', { name: 'rita.kovac score' }),
+      '11',
+    )
+    await user.type(
+      screen.getByRole('textbox', { name: 'nguyen.t score' }),
+      '2',
+    )
+
+    // The actionable message is shown and the write is never fired (the score
+    // 11-2 is legal, but it would decide the match at game 4 with game 5 scored).
+    expect(
+      screen.getByText(/already decided at game 4/i),
+    ).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /save/i }))
+    expect(posted).toBe(false)
+  })
+
+  it('keeps the next game navigable while the match is undecided', async () => {
+    server.use(
+      http.get('*/v1/matches/m-1', () =>
+        HttpResponse.json(
+          inProgressMatch({
+            best_of: 5,
+            sides: participantSides({ meWins: 1, oppWins: 0 }),
+            games: [{ id: 'g-1', game_number: 1, score: score('s-1', 11, 2) }],
+            current_game: { game_number: 2 },
+          }),
+        ),
+      ),
+    )
+    renderScoreEntry({ kind: 'edit', matchId: 'm-1', gameNumber: 1 })
+
+    expect(
+      await screen.findByRole('link', { name: /game 2, not yet played/i }),
+    ).toBeInTheDocument()
+  })
+})
+
 afterEach(() => {
   // Restore connectivity so the offline test doesn't leak into others.
   onlineManager.setOnline(true)
