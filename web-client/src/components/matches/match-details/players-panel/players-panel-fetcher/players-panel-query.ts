@@ -87,10 +87,15 @@ type MatchDetailsPlayerForm = NonNullable<
 >[number];
 type MatchDetailsFormResult = MatchDetailsPlayerForm["recent_results"][number];
 
+// The projection only ever reads a form's *facts*, never its `user_id` (that's
+// only used up front to match a form to its side). Dropping the id here lets
+// the no-history fallback be a real empty struct rather than carrying an
+// empty-string sentinel that could compare-equal to a real "" id elsewhere.
+type PlayerFormFacts = Omit<MatchDetailsPlayerForm, "user_id">;
+
 // A player the API returned no form entry for has no history at all — the
 // projection below then lands on the empty/Unrated/em-dash branches.
-const EMPTY_FORM: MatchDetailsPlayerForm = {
-  user_id: "",
+const EMPTY_FORM: PlayerFormFacts = {
   recent_results: [],
   rating_before: null,
   rating_history: [],
@@ -98,7 +103,7 @@ const EMPTY_FORM: MatchDetailsPlayerForm = {
   career_wins_before: 0,
 };
 
-const careerWinRate = (form: MatchDetailsPlayerForm): number | null =>
+const careerWinRate = (form: PlayerFormFacts): number | null =>
   form.career_matches_before > 0
     ? Math.round((form.career_wins_before / form.career_matches_before) * 100)
     : null;
@@ -112,7 +117,7 @@ const selectFormRow = (result: MatchDetailsFormResult): FormRowView => ({
 });
 
 const selectRecentForm = (
-  form: MatchDetailsPlayerForm,
+  form: PlayerFormFacts,
   isCurrentUser: boolean,
 ): RecentFormView => {
   const results = form.recent_results;
