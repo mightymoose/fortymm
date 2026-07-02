@@ -176,6 +176,12 @@ describe('DashboardPage', () => {
             attention: [],
             waiting_count: 0,
             recent_results: [],
+            // At least one completed match keeps this on the normal
+            // dashboard path rather than the zero-match first-match layout
+            // (see the "first-match" describe block below), which is what
+            // this test is actually pinning: an empty *recent-results* card
+            // with the attention panel hidden.
+            completed_match_count: 1,
           }),
         ),
       ),
@@ -204,7 +210,9 @@ describe('DashboardPage', () => {
   it('Full history links to /matches filtered by the current user', async () => {
     server.use(
       http.get('*/v1/dashboard', () =>
-        HttpResponse.json(dashboardResponse()),
+        // "Full history" lives in YourGameRow's header, which only renders on
+        // the normal (not first-match) dashboard path.
+        HttpResponse.json(dashboardResponse({ completed_match_count: 1 })),
       ),
     )
     renderDashboard()
@@ -223,6 +231,11 @@ describe('DashboardPage', () => {
       http.get('*/v1/dashboard', () =>
         HttpResponse.json(
           dashboardResponse({
+            // Escapes the zero-match first-match layout without also
+            // tripping the guest-persistence banner (>=1 completed match),
+            // which would render its own "1612" and make the rating text
+            // ambiguous below.
+            attention_total_count: 1,
             rating: dashboardRating({
               league_name: 'FortyMM',
               current: 1612,
@@ -253,7 +266,11 @@ describe('DashboardPage', () => {
   it('hides the rating card when the user has no rated league', async () => {
     server.use(
       http.get('*/v1/dashboard', () =>
-        HttpResponse.json(dashboardResponse({ rating: null })),
+        // At least one completed match keeps this on the normal dashboard
+        // path (see the "first-match" describe block below).
+        HttpResponse.json(
+          dashboardResponse({ rating: null, completed_match_count: 1 }),
+        ),
       ),
     )
     renderDashboard()
@@ -264,6 +281,90 @@ describe('DashboardPage', () => {
     expect(screen.queryByText('RD')).not.toBeInTheDocument()
   })
 
+})
+
+describe('DashboardPage · first-match (zero completed matches, nothing pending)', () => {
+  it('renders the hero, provisional-rating, and empty-matches cards instead of the normal layout', async () => {
+    server.use(
+      http.get('*/v1/dashboard', () =>
+        HttpResponse.json(
+          dashboardResponse({
+            completed_match_count: 0,
+            rating: null,
+            recent_results: [],
+            attention: [],
+            attention_total_count: 0,
+          }),
+        ),
+      ),
+    )
+    renderDashboard()
+
+    expect(
+      await screen.findByRole('heading', { name: /log your first match/i }),
+    ).toBeInTheDocument()
+    expect(screen.getByText('1500')).toBeInTheDocument()
+    expect(screen.getByText('No matches yet. Go play.')).toBeInTheDocument()
+    expect(
+      screen.queryByRole('region', { name: /needs your attention/i }),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByText('Not in a rated league yet.'),
+    ).not.toBeInTheDocument()
+  })
+
+  it('stays on the normal dashboard when an attention item exists despite zero completed matches', async () => {
+    server.use(
+      http.get('*/v1/dashboard', () =>
+        HttpResponse.json(
+          dashboardResponse({
+            completed_match_count: 0,
+            rating: null,
+            recent_results: [],
+            attention: [
+              dashboardAttentionItem({
+                match_id: 'm-live',
+                kind: 'score',
+                current_game_number: 2,
+                opponent_username: 'nguyen.t',
+              }),
+            ],
+          }),
+        ),
+      ),
+    )
+    renderDashboard()
+
+    const panel = await screen.findByRole('region', {
+      name: /needs your attention/i,
+    })
+    expect(panel).toHaveTextContent('vs nguyen.t')
+    expect(
+      screen.queryByRole('heading', { name: /log your first match/i }),
+    ).not.toBeInTheDocument()
+  })
+
+  it('shows no guest-persistence banner in the first-match layout', async () => {
+    server.use(
+      http.get('*/v1/dashboard', () =>
+        HttpResponse.json(
+          dashboardResponse({
+            completed_match_count: 0,
+            rating: null,
+            recent_results: [],
+            attention: [],
+            attention_total_count: 0,
+          }),
+        ),
+      ),
+    )
+    renderDashboard()
+
+    await screen.findByRole('heading', { name: /log your first match/i })
+    expect(
+      screen.queryByTestId('dashboard-guest-persist-banner'),
+    ).not.toBeInTheDocument()
+  })
 })
 
 describe('DashboardPage · guest persistence banner', () => {

@@ -2580,6 +2580,20 @@ body.dark.fortymm-theme {
   }
 }
 
+/* Zero-match dashboard hero grid — same container-query approach as
+   .your-game-grid above, but the wider hero card leads (1.4fr) with the
+   rating/recent stack trailing (1fr). */
+.fortymm-theme .first-match-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 14px;
+}
+@container (min-width: 640px) {
+  .fortymm-theme .first-match-grid {
+    grid-template-columns: 1.4fr 1fr;
+  }
+}
+
 /* ---------- Overline ---------- */
 .fortymm-theme .fortymm-overline {
   font: 600 10px var(--font-ui);
