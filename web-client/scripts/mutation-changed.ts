@@ -9,8 +9,11 @@
  * like `*.factory.{ts,tsx}` at the brace-internal comma.
  *
  * When no source file changed we exit 0 (not an error), which keeps this
- * usable as a non-blocking PR check. (A run whose changed files are all
- * excluded still starts, finds zero mutants, and exits cleanly.)
+ * usable as a non-blocking PR check. A run whose changed files are all
+ * excluded (e.g. a diff confined to `src/mocks/**`) still starts, but Stryker
+ * finds zero mutants and treats that as a `ConfigError` ("No tests were
+ * executed") rather than a clean no-op — we catch that specific message below
+ * and exit 0 too, since "nothing to mutate" isn't a mutation-testing failure.
  *
  * Run from the web-client/ directory (the npm script and CI both do).
  * Usage: node scripts/mutation-changed.ts [base-ref]   (defaults to origin/main)
@@ -47,6 +50,13 @@ console.log(changed.map((p) => `  ${p}`).join("\n"));
 try {
   await new Stryker({ mutate: [...changed, ...excludes] }).runMutationTest();
 } catch (error) {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.includes("No tests were executed")) {
+    console.log(
+      "All changed files fell under the config's exclusions — nothing to mutate.",
+    );
+    process.exit(0);
+  }
   console.error(error);
   process.exit(1);
 }
