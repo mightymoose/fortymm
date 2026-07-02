@@ -82,6 +82,13 @@ function readCookie(name: string): string | null {
   return null
 }
 
+/** True once the double-submit CSRF cookie is readable — i.e. some request has
+ * already completed the session bootstrap and the browser has a cookie jar to
+ * show for it. */
+export function hasCsrfCookie(): boolean {
+  return readCookie(CSRF_COOKIE_NAME) !== null
+}
+
 api.use({
   // Double-submit CSRF: echo the server-set `csrf_token` cookie back in a
   // header on every mutating request. The backend (app/main.py:csrf_protect)
