@@ -94,10 +94,11 @@ export const FirstMatchCard = () => {
       {opponent ? (
         <SelectedOpponent
           opponent={opponent}
-          onChange={() => {
-            setOpponent(null)
-            setRated(true)
-          }}
+          // `rated` is unobservable while opponent is null (RatedField,
+          // the summary line, and the submit button are all gated on
+          // opponent !== null), and the next pick's handlePick always
+          // resets it to true anyway — no need to touch it here too.
+          onChange={() => setOpponent(null)}
         />
       ) : (
         <OpponentPicker defaultToSearch onPick={handlePick} />

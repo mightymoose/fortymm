@@ -140,7 +140,10 @@ describe('DashboardPage', () => {
         ),
       ),
       http.get('*/v1/dashboard', () =>
-        HttpResponse.json(dashboardResponse()),
+        // The greeting renders unconditionally above the isFirstMatch branch,
+        // but keep this on the normal dashboard path anyway so the test
+        // exercises the AttentionPanel/YourGameRow wiring it was written for.
+        HttpResponse.json(dashboardResponse({ completed_match_count: 1 })),
       ),
     )
     renderDashboard()
@@ -198,7 +201,11 @@ describe('DashboardPage', () => {
   it('Log a match navigates to /matches/new', async () => {
     server.use(
       http.get('*/v1/dashboard', () =>
-        HttpResponse.json(dashboardResponse()),
+        // The PageTitle action renders unconditionally above the isFirstMatch
+        // branch, but keep this on the normal dashboard path anyway so the
+        // test exercises the AttentionPanel/YourGameRow wiring it was
+        // written for.
+        HttpResponse.json(dashboardResponse({ completed_match_count: 1 })),
       ),
     )
     renderDashboard()
@@ -339,6 +346,34 @@ describe('DashboardPage · first-match (zero completed matches, nothing pending)
       name: /needs your attention/i,
     })
     expect(panel).toHaveTextContent('vs nguyen.t')
+    expect(
+      screen.queryByRole('heading', { name: /log your first match/i }),
+    ).not.toBeInTheDocument()
+  })
+
+  it('stays on the normal dashboard when a match is passively waiting despite zero completed matches', async () => {
+    server.use(
+      http.get('*/v1/dashboard', () =>
+        HttpResponse.json(
+          dashboardResponse({
+            completed_match_count: 0,
+            rating: null,
+            recent_results: [],
+            attention: [],
+            attention_total_count: 0,
+            waiting_count: 1,
+          }),
+        ),
+      ),
+    )
+    renderDashboard()
+
+    // AttentionPanel itself stays hidden (it renders nothing for an empty
+    // `attention` list regardless of `waitingCount`), so pin the normal
+    // dashboard path via YourGameRow's own "Your game" section instead.
+    expect(
+      await screen.findByRole('heading', { name: /your game/i }),
+    ).toBeInTheDocument()
     expect(
       screen.queryByRole('heading', { name: /log your first match/i }),
     ).not.toBeInTheDocument()

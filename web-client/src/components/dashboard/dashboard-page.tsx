@@ -39,7 +39,9 @@ export function DashboardPage() {
     }) === 'guest'
   const showGuestPersistBanner = isGuest && (data?.completed_match_count ?? 0) >= 1
   // Truly-empty only: an attention item (e.g. a not-yet-completed match
-  // waiting to be scored) can exist alongside zero *completed* matches, and
+  // waiting to be scored) or a passively-waiting match (e.g. a proposed
+  // result awaiting the opponent's acceptance — waiting_count, disjoint from
+  // attention_total_count) can exist alongside zero *completed* matches, and
   // the first-match hero must not hide that live match or invite starting a
   // duplicate. Gated on `!isLoading` so the pending skeleton renders as
   // before — we don't know the layout until the query resolves.
@@ -47,7 +49,8 @@ export function DashboardPage() {
     !isLoading &&
     data !== undefined &&
     data.completed_match_count === 0 &&
-    data.attention_total_count === 0
+    data.attention_total_count === 0 &&
+    data.waiting_count === 0
   const attentionView = useMemo(
     () =>
       projectAttentionPanelView(
