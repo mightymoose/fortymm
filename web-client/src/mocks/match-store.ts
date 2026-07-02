@@ -1,4 +1,5 @@
 import type { components } from '@/api/schema'
+import { compactGames, isDecidedMatch } from '@/lib/scoring'
 
 type MatchStatus = components['schemas']['MatchStatus']
 type MatchDetails = components['schemas']['app__schemas__match__MatchDetails']
@@ -330,7 +331,10 @@ function scorableSeed(seed: SeedMatch): boolean {
 
 /** Whether the currently-saved scores form a complete, validly-ordered,
  * decided match — i.e. the FIRST ``POST /results`` would succeed against the
- * current scratchpad state. Mirrors the server's ``_can_finalize`` predicate. */
+ * current scratchpad state. Mirrors the server's ``_can_finalize`` predicate,
+ * including its compaction of a gappy-but-decided board (ADR 0002): an
+ * out-of-order clinch that left a hole (e.g. ``[1,2,3,5]``) is closed up
+ * before validating, so it reports finalizable just like the API. */
 function canFinalizeSeed(seed: SeedMatch): boolean {
   if (seed.status !== 'in_progress' && seed.status !== 'disputed') return false
   // Once any result is posted, accept/counter is the next action, not a first
@@ -344,27 +348,7 @@ function canFinalizeSeed(seed: SeedMatch): boolean {
       side_2_points: g.score!.side_2_points,
     }))
   if (scored.length === 0) return false
-  const numbers = scored.map((g) => g.game_number).sort((a, b) => a - b)
-  if (numbers[numbers.length - 1] > seed.best_of) return false
-  for (let i = 0; i < numbers.length; i += 1) {
-    if (numbers[i] !== i + 1) return false
-  }
-  const target = gamesToWin(seed.best_of)
-  const ordered = scored
-    .slice()
-    .sort((a, b) => a.game_number - b.game_number)
-  let wins1 = 0
-  let wins2 = 0
-  let decidedAt: number | null = null
-  for (const g of ordered) {
-    if (g.side_1_points > g.side_2_points) wins1 += 1
-    else if (g.side_2_points > g.side_1_points) wins2 += 1
-    if (decidedAt === null && (wins1 >= target || wins2 >= target)) {
-      decidedAt = g.game_number
-    }
-  }
-  if (decidedAt === null) return false
-  return decidedAt === ordered[ordered.length - 1].game_number
+  return isDecidedMatch(compactGames(scored), seed.best_of)
 }
 
 function projectSides(seed: SeedMatch): {
