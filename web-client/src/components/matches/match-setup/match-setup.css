@@ -429,6 +429,23 @@
   outline-offset: 2px;
 }
 
+/* --- Dashboard first-match hero: settings grid --- */
+/* Unlike /matches/new's full-width .nm-settings (grid-template-columns: 1fr
+   1fr, stacking under 760px), this card sits inside the narrower half of the
+   dashboard's two-column layout, so its own two columns need to stack well
+   before the page-level breakpoint or "Rated match" clips at mobile widths
+   (found in QA — #773). */
+.nm-fm-settings {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+@media (max-width: 900px) {
+  .nm-fm-settings {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* --- Field label --- */
 .nm-field-label {
   display: flex;

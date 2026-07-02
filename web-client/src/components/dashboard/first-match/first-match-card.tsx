@@ -105,14 +105,7 @@ export const FirstMatchCard = () => {
       )}
 
       {opponent && (
-        <div
-          style={{
-            marginTop: 18,
-            display: 'grid',
-            gridTemplateColumns: '1fr 1fr',
-            gap: 16,
-          }}
-        >
+        <div className="nm-fm-settings" style={{ marginTop: 18 }}>
           <BestOfField bestOf={bestOf} setBestOf={setBestOf} />
           <RatedField
             rated={rated}
