@@ -232,7 +232,12 @@ export function useConfirmEmail() {
           body: { token, skip_merge: skipMerge },
         }),
       ),
+    // This can sign the caller into a *different* existing account
+    // (skip_merge). Drop the prior identity's cached per-user data first — the
+    // same leak useLogout guards against (#754) — then reseed the session so
+    // it doesn't need a refetch.
     onSuccess: (session) => {
+      qc.clear()
       qc.setQueryData(SESSION_QUERY_KEY, session)
     },
   })
@@ -293,7 +298,10 @@ export function useConsumeLoginToken() {
           body: { token, skip_merge: skipMerge },
         }),
       ),
+    // Same identity-leak guard as useConfirmEmail (#754): this can sign a
+    // browsing guest into a different existing account.
     onSuccess: (session) => {
+      qc.clear()
       qc.setQueryData(SESSION_QUERY_KEY, session)
     },
   })

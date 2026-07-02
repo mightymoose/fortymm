@@ -1,6 +1,8 @@
-import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { http, HttpResponse } from 'msw'
-import { QueryClient } from '@tanstack/react-query'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { renderHook, waitFor } from '@testing-library/react'
+import { createElement, type ReactNode } from 'react'
 
 import { server } from '@/mocks/server'
 import { matchDetails } from '@/test/factories'
@@ -10,6 +12,7 @@ import {
   matchQueryKey,
   matchQueryOptions,
   scoreMutationKey,
+  useCreateMatch,
 } from './matches'
 
 let queryClient: QueryClient
@@ -192,4 +195,33 @@ it('marks the match detail query stale on a rejected save (#564)', async () => {
   spy.mockRestore()
   // The error path invalidated the canonical match query key.
   expect(invalidations).toContainEqual(matchQueryKey(matchId))
+})
+
+describe('useCreateMatch', () => {
+  it('invalidates the matches-list and dashboard caches on success (#761)', async () => {
+    const created = matchDetails({ id: 'm-new' })
+    server.use(
+      http.post('*/v1/matches', () => HttpResponse.json(created, { status: 201 })),
+    )
+
+    const wrapper = ({ children }: { children: ReactNode }) =>
+      createElement(QueryClientProvider, { client: queryClient }, children)
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries')
+
+    const { result } = renderHook(() => useCreateMatch(), { wrapper })
+    result.current.mutate({
+      opponent_user_id: 'u-op',
+      best_of: 5,
+      rated: false,
+    })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: ['matches', 'list'],
+    })
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: ['dashboard'],
+    })
+  })
 })

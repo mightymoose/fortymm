@@ -15,26 +15,27 @@ export interface GameScoreValidation {
   /** A hard error to surface (malformed digits, or an illegal final score), or
    * null when there's nothing to say yet. */
   error: string | null
-  /** The `me` field holds malformed text (not 1–3 digits). */
+  /** The `me` field holds malformed text (not 1–2 digits). */
   meMalformed: boolean
-  /** The `opp` field holds malformed text (not 1–3 digits). */
+  /** The `opp` field holds malformed text (not 1–2 digits). */
   oppMalformed: boolean
 }
 
 /**
  * Validate one game's two raw input strings (taken verbatim — see the #624
- * no-coercion note in the scratchpad entry). A side is well-formed only as 1–3
- * digits; both filled and well-formed are then run through the shared
- * `illegalScoreReason` table-tennis rule.
+ * no-coercion note in the scratchpad entry). A side is well-formed only as 1–2
+ * digits (server caps each side at 99, `api/app/schemas/match.py`); both
+ * filled and well-formed are then run through the shared `illegalScoreReason`
+ * table-tennis rule.
  */
 export function validateGameScore(me: string, opp: string): GameScoreValidation {
   const bothFilled = me !== '' && opp !== ''
   const oneSideFilled = (me !== '') !== (opp !== '')
-  const meMalformed = me !== '' && !/^\d{1,3}$/.test(me)
-  const oppMalformed = opp !== '' && !/^\d{1,3}$/.test(opp)
+  const meMalformed = me !== '' && !/^\d{1,2}$/.test(me)
+  const oppMalformed = opp !== '' && !/^\d{1,2}$/.test(opp)
   const formatError =
     meMalformed || oppMalformed
-      ? 'Enter each score as a whole number from 0 to 999.'
+      ? 'Enter each score as a whole number from 0 to 99.'
       : null
   const error =
     formatError ??

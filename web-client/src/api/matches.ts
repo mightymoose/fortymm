@@ -195,6 +195,8 @@ export function useCreateMatch() {
         matchDetailsQueryKey(created.id),
         matchDetailsResultFromPayload(created),
       )
+      queryClient.invalidateQueries({ queryKey: ['matches', 'list'] })
+      queryClient.invalidateQueries({ queryKey: DASHBOARD_QUERY_KEY })
     },
   })
 }

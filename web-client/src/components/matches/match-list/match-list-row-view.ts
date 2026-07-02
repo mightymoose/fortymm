@@ -1,6 +1,9 @@
+import { differenceInCalendarDays } from 'date-fns'
+
 import type { MatchListFilter, MatchListRow } from '@/api/matches'
 import type { components } from '@/api/schema'
 import { matchDetailRoute, scoringNewRoute } from '@/api/matches'
+import { parseApiDate } from '@/lib/dates'
 import { API_TO_TONE, STATUS_TONE, type StatusKey } from './match-list-status'
 import type {
   MatchListRowView,
@@ -97,8 +100,8 @@ export function shortId(id: string): string {
 /** Relative/absolute 'when' string for the Started column (was TimeCell's
  * body). Pure given a `now` it can default to new Date(). */
 export function formatCreatedAt(iso: string, now: Date = new Date()): string {
-  const created = new Date(iso)
-  const days = Math.floor((now.getTime() - created.getTime()) / 86400000)
+  const created = parseApiDate(iso)
+  const days = differenceInCalendarDays(now, created)
   if (days === 0) {
     const hh = String(created.getHours()).padStart(2, '0')
     const mm = String(created.getMinutes()).padStart(2, '0')
