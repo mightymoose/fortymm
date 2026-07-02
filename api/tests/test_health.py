@@ -47,6 +47,38 @@ def test_health_reports_redis_and_solver_unhealthy_when_queue_unavailable(monkey
     assert body["database"]["healthy"] is True
 
 
+def test_health_awaits_solver_check_via_to_thread(monkeypatch):
+    """The solver probe is blocking (RQ polling with time.sleep), so `health()`
+    must hand it to `asyncio.to_thread` rather than calling it inline."""
+    import asyncio
+
+    async def fake_db_check():
+        return ComponentHealth(healthy=True, latency_ms=1.0)
+
+    monkeypatch.setattr(main_module, "_check_database", fake_db_check)
+
+    def fake_solver_check():
+        return ComponentHealth(healthy=True, latency_ms=5.0)
+
+    monkeypatch.setattr(main_module, "_check_solver_sync", fake_solver_check)
+
+    to_thread_calls = []
+    real_to_thread = asyncio.to_thread
+
+    async def spying_to_thread(func, /, *args, **kwargs):
+        to_thread_calls.append(func)
+        return await real_to_thread(func, *args, **kwargs)
+
+    monkeypatch.setattr(main_module.asyncio, "to_thread", spying_to_thread)
+
+    response = client.get("/v1/health")
+    assert response.status_code == 200
+    body = response.json()
+
+    assert body["solver"] == {"healthy": True, "latency_ms": 5.0, "error": None}
+    assert to_thread_calls == [fake_solver_check]
+
+
 def test_health_reports_database_unhealthy_when_engine_broken(monkeypatch):
     class BrokenEngine:
         def connect(self):
