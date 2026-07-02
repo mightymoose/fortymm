@@ -99,6 +99,13 @@ describe('OpponentPicker', () => {
     expect(opponentPickerPage.getCombobox()).not.toHaveFocus()
   })
 
+  it('opens straight into search when defaultToSearch is set', async () => {
+    opponentPickerPage.mockSearch(() => HttpResponse.json([]))
+    opponentPickerPage.render({ defaultToSearch: true })
+
+    expect(opponentPickerPage.queryCombobox()).toBeInTheDocument()
+  })
+
   it('surfaces a failed recent-opponents load in the error boundary (#96)', async () => {
     let calls = 0
     opponentPickerPage.mockRecent(() => {
