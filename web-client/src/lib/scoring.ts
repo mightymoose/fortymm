@@ -7,6 +7,7 @@ import { z } from 'zod'
 export function illegalScoreReason(a: number, b: number): string | null {
   const winner = Math.max(a, b)
   const loser = Math.min(a, b)
+  if (winner > 99) return 'Each side can score at most 99 points.'
   if (winner < 11) return 'The winning side must reach at least 11 points.'
   if (a === b) return 'A game cannot end in a tie.'
   if (winner === 11 && loser > 9)

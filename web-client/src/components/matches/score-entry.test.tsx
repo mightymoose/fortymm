@@ -641,11 +641,11 @@ describe('ScoreEntry — create', () => {
     expect(oppInput).not.toHaveAttribute('aria-invalid', 'true')
   })
 
-  it('keeps a 3-digit entry intact instead of silently truncating to 2 digits', async () => {
-    // Regression for #442: typing "100" used to be cut to "10", then the
-    // win-by-2 check fired against a value the user never entered. The input
-    // now keeps up to 3 digits, so the score the user sees is the score the
-    // validation reasons about.
+  it('keeps a 2-digit entry intact instead of silently truncating to 1 digit', async () => {
+    // Regression for #442: typing a two-digit score used to be cut short,
+    // then the win-by-2 check fired against a value the user never entered.
+    // The input keeps the digits the user typed, so the score the user sees
+    // is the score the validation reasons about.
     const user = userEvent.setup()
     server.use(
       http.get('*/v1/matches/m-1', () => HttpResponse.json(inProgressMatch())),
@@ -657,20 +657,21 @@ describe('ScoreEntry — create', () => {
     })
     const oppInput = screen.getByRole('textbox', { name: 'nguyen.t score' })
 
-    await user.type(meInput, '100')
-    expect(meInput).toHaveValue('100')
+    await user.type(meInput, '15')
+    expect(meInput).toHaveValue('15')
 
     // The illegal-score hint references the typed value, not a mutated one:
-    // 100–97 is a deuce game that doesn't lead by exactly 2.
-    await user.type(oppInput, '97')
-    expect(oppInput).toHaveValue('97')
+    // 15–12 is a deuce game that doesn't lead by exactly 2.
+    await user.type(oppInput, '12')
+    expect(oppInput).toHaveValue('12')
     expect(screen.getByRole('alert')).toHaveTextContent(/leads by exactly 2/i)
 
-    // A 4th digit is no longer truncated to a plausible 3-digit score (#624):
+    // A 3rd digit is no longer truncated to a plausible 2-digit score (#624,
+    // #771 — the FE input caps at 99, matching the server's per-side cap):
     // the over-long value is kept verbatim and flagged as malformed instead.
     await user.clear(meInput)
-    await user.type(meInput, '1005')
-    expect(meInput).toHaveValue('1005')
+    await user.type(meInput, '100')
+    expect(meInput).toHaveValue('100')
     expect(meInput).toHaveAttribute('aria-invalid', 'true')
   })
 

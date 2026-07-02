@@ -34,14 +34,20 @@ describe('validateGameScore', () => {
     const v = validateGameScore('11.5', '7')
     expect(v.meMalformed).toBe(true)
     expect(v.oppMalformed).toBe(false)
-    expect(v.error).toBe('Enter each score as a whole number from 0 to 999.')
+    expect(v.error).toBe('Enter each score as a whole number from 0 to 99.')
     expect(v.valid).toBe(false)
   })
 
   it('reports a format error for an over-long run of digits', () => {
-    const v = validateGameScore('11', '9999')
+    const v = validateGameScore('11', '999')
     expect(v.oppMalformed).toBe(true)
-    expect(v.error).toBe('Enter each score as a whole number from 0 to 999.')
+    expect(v.error).toBe('Enter each score as a whole number from 0 to 99.')
+  })
+
+  it('surfaces the illegal-score reason for a score above the 99 cap', () => {
+    const v = validateGameScore('101', '99')
+    expect(v.meMalformed).toBe(true)
+    expect(v.error).toBe('Enter each score as a whole number from 0 to 99.')
   })
 
   it('surfaces the illegal-score reason for a tie', () => {

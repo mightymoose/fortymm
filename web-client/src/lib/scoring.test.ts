@@ -82,6 +82,7 @@ describe('illegalScoreReason', () => {
     [12, 9, /both sides reach 10/i], // past 11 without a deuce
     [15, 10, /exactly 2/i], // deuce, but won by more than 2
     [13, 10, /exactly 2/i],
+    [101, 99, /at most 99/i], // above the server's per-side cap
   ])('rejects the illegal score %i–%i', (a, b, pattern) => {
     expect(illegalScoreReason(a, b)).toMatch(pattern)
   })

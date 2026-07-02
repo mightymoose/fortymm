@@ -93,6 +93,28 @@ describe('formatCreatedAt', () => {
       created.toLocaleDateString(),
     )
   })
+
+  it('treats a zone-less UTC timestamp as UTC, like every other date helper (#760)', () => {
+    const now = new Date('2026-06-14T20:00:00Z')
+    expect(formatCreatedAt('2026-06-14T04:05:00', now)).toBe(
+      formatCreatedAt('2026-06-14T04:05:00Z', now),
+    )
+  })
+
+  it('buckets by calendar day, not a rolling 24h window (#760)', () => {
+    // Created just before midnight, viewed just after — a different calendar
+    // day only 90 minutes later, not "same day".
+    const created = new Date('2026-06-14T23:30:00')
+    const now = new Date('2026-06-15T01:00:00')
+    expect(formatCreatedAt(created.toISOString(), now)).toBe('yesterday')
+  })
+
+  it('counts calendar days elapsed, not full 24h periods (#760)', () => {
+    // ~28h apart but spans two midnights — 2 calendar days ago, not "yesterday".
+    const created = new Date('2026-06-13T23:00:00')
+    const now = new Date('2026-06-15T03:00:00')
+    expect(formatCreatedAt(created.toISOString(), now)).toBe('2d ago')
+  })
 })
 
 describe('projectMatchListRow', () => {
