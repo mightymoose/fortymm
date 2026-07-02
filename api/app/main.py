@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import secrets
@@ -114,7 +115,7 @@ async def health() -> HealthResponse:
     return HealthResponse(
         redis=_check_redis(),
         database=await _check_database(),
-        solver=_check_solver(),
+        solver=await asyncio.to_thread(_check_solver_sync),
     )
 
 
@@ -140,7 +141,9 @@ async def _check_database() -> ComponentHealth:
     return ComponentHealth(healthy=True, latency_ms=_elapsed_ms(started))
 
 
-def _check_solver() -> ComponentHealth:
+def _check_solver_sync() -> ComponentHealth:
+    """Blocking solver probe — polls RQ with ``time.sleep``, so callers must
+    run it off the event loop (e.g. ``await asyncio.to_thread(...)``)."""
     started = time.monotonic()
     try:
         job = queue.get_queue().enqueue("app.solver.solve_hello_world", job_timeout=10)
