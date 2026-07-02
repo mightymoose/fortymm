@@ -4,7 +4,7 @@ import {
   useQuery,
   useQueryClient,
 } from '@tanstack/react-query'
-import { ApiError, api, unwrap } from './client'
+import { ApiError, api, hasCsrfCookie, unwrap } from './client'
 import { clearAppEntered } from '@/lib/landing-redirect'
 import type { components } from './schema'
 
@@ -13,11 +13,86 @@ export type SessionUser = components['schemas']['SessionUser']
 
 export const SESSION_QUERY_KEY = ['session'] as const
 
+// TanStack Query only single-flights `/v1/session` within one tab's
+// QueryClient. Several cold tabs opened at once each have their own
+// QueryClient, so each fires its own request before the browser has a
+// `session` cookie, and each mints its own guest — the last `Set-Cookie` wins
+// and the other tabs are left holding a stale identity (#824). This lock
+// widens the singleflight to the whole origin for the one race that matters:
+// the cold bootstrap. Once a `csrf_token` cookie is readable, a session
+// already exists, so later calls skip the lock entirely.
+const SESSION_LOCK_NAME = 'fortymm:session-bootstrap'
+const SESSION_LOCK_STORAGE_KEY = 'fortymm:session-bootstrap:lock'
+const SESSION_LOCK_TTL_MS = 10_000
+const SESSION_LOCK_POLL_MS = 50
+
+interface StorageLockRecord {
+  owner: string
+  expires: number
+}
+
+function readStorageLock(): StorageLockRecord | null {
+  const raw = localStorage.getItem(SESSION_LOCK_STORAGE_KEY)
+  if (!raw) return null
+  try {
+    return JSON.parse(raw) as StorageLockRecord
+  } catch {
+    return null
+  }
+}
+
+// Fallback single-flight for browsers without the Web Locks API. localStorage
+// writes aren't atomic across tabs, so this can't guarantee mutual exclusion
+// the way `navigator.locks` does — but it narrows the race window to
+// milliseconds, and the TTL means a tab that crashes mid-bootstrap can never
+// wedge the others (they just wait out the TTL and proceed).
+async function withStorageLock<T>(fn: () => Promise<T>): Promise<T> {
+  const owner = `${Date.now()}-${Math.random()}`
+  const deadline = Date.now() + SESSION_LOCK_TTL_MS
+  for (;;) {
+    const held = readStorageLock()
+    if (!held || held.expires < Date.now()) {
+      localStorage.setItem(
+        SESSION_LOCK_STORAGE_KEY,
+        JSON.stringify({ owner, expires: Date.now() + SESSION_LOCK_TTL_MS }),
+      )
+      // Yield a tick, then re-read: narrows (but can't eliminate) the window
+      // where two tabs both saw no lock and both wrote.
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      if (readStorageLock()?.owner === owner) break
+    }
+    if (Date.now() > deadline) break
+    if (hasCsrfCookie()) return fn()
+    await new Promise((resolve) => setTimeout(resolve, SESSION_LOCK_POLL_MS))
+  }
+  try {
+    return await fn()
+  } finally {
+    if (readStorageLock()?.owner === owner) {
+      localStorage.removeItem(SESSION_LOCK_STORAGE_KEY)
+    }
+  }
+}
+
+/** Single-flights the `/v1/session` cold-bootstrap request across every tab
+ * on the origin, not just within one TanStack QueryClient. */
+async function withSessionBootstrapLock<T>(fn: () => Promise<T>): Promise<T> {
+  // A session already exists — no mint race to guard against.
+  if (hasCsrfCookie()) return fn()
+  if (typeof navigator !== 'undefined' && navigator.locks?.request) {
+    return navigator.locks.request(SESSION_LOCK_NAME, () => fn())
+  }
+  if (typeof localStorage === 'undefined') return fn()
+  return withStorageLock(fn)
+}
+
 export function sessionQueryOptions() {
   return queryOptions({
     queryKey: SESSION_QUERY_KEY,
-    queryFn: async (): Promise<Session> =>
-      unwrap('load session', await api.GET('/v1/session')),
+    queryFn: (): Promise<Session> =>
+      withSessionBootstrapLock(async () =>
+        unwrap('load session', await api.GET('/v1/session')),
+      ),
     staleTime: 1000 * 60 * 5,
     // Don't retry a 401 (session merged away): the 401 already cleared the
     // cookie, so a retry would silently mint a *new* guest and race the

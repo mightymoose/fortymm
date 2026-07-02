@@ -7,10 +7,14 @@ import { sessionQueryOptions } from '@/api/session'
 /**
  * Pathless layout for every in-app surface. Its loader establishes the session
  * once — `ensureQueryData` mints (or loads) the guest and is single-flighted by
- * TanStack Query — and the route does not render its children until that
- * resolves. So the session cookie is set before any child loader or BFF query
- * fires, which keeps the displayed identity in sync with the cookie and stops
- * concurrent cold-load requests from each minting a different guest (#487).
+ * TanStack Query within this tab — and the route does not render its children
+ * until that resolves. So the session cookie is set before any child loader or
+ * BFF query fires, which keeps the displayed identity in sync with the cookie
+ * and stops concurrent cold-load requests *within one tab* from each minting a
+ * different guest (#487). Across tabs, the `queryFn` in `sessionQueryOptions`
+ * (api/session.ts) additionally single-flights the cold bootstrap
+ * origin-wide, so several tabs opened at once still converge on one guest
+ * (#824).
  *
  * Pathless (`_app`) → adds no URL segment, so child paths (`/dashboard`,
  * `/matches`, …) are unchanged. The chrome lives here so children render only
