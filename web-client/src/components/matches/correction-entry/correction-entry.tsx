@@ -79,6 +79,12 @@ export function CorrectionEntry({ matchId }: { matchId: string }) {
   const [selectedGameNumber, setSelectedGameNumber] = useState(1);
   const meRef = useRef<HTMLInputElement>(null);
   const oppRef = useRef<HTMLInputElement>(null);
+  // Synchronous double-submit guard, mirroring score-entry's `finalizingRef`
+  // (#641): `proposeMutation.isPending` is a render snapshot that only takes
+  // effect on the next commit, so a same-frame double-tap can land a second
+  // submit before React re-renders. This ref flips synchronously inside the
+  // submit gesture, so it catches the second tap even within the same frame.
+  const submittingRef = useRef(false);
 
   if (isLoading || !data) {
     return <div aria-busy="true" data-testid="correction-entry-loading" />;
@@ -214,10 +220,17 @@ export function CorrectionEntry({ matchId }: { matchId: string }) {
   }));
 
   function onSubmit() {
-    if (!canSubmit || proposeMutation.isPending) return;
+    if (!canSubmit) return;
+    if (proposeMutation.isPending || submittingRef.current) return;
+    submittingRef.current = true;
     proposeMutation.mutate(
       { games: correctedGames, supersedes_result_id: standingId },
-      { onSuccess: () => navigate(matchDetailRoute(matchId)) },
+      {
+        onSuccess: () => navigate(matchDetailRoute(matchId)),
+        onError: () => {
+          submittingRef.current = false;
+        },
+      },
     );
   }
 

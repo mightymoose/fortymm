@@ -1,5 +1,6 @@
 import { HttpResponse } from "msw";
 import userEvent from "@testing-library/user-event";
+import { fireEvent } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { buildMatchDetails } from "@/mocks/factories/matches/match-details.factory";
@@ -144,6 +145,35 @@ describe("CorrectionEntry", () => {
       ),
     );
     expect(correctionEntryPage.getInput("leo.mertens")).toHaveValue("6");
+  });
+
+  it('fires a single POST /results when "Send corrected score" is double-clicked in one frame (#737)', async () => {
+    // Mirrors score-entry's #641 regression test: a fast double-tap lands a
+    // second click before React commits the button's `disabled` re-render, so
+    // only the synchronous in-flight ref (not `proposeMutation.isPending`
+    // alone) can swallow the second tap. Two *synchronous* fireEvent clicks
+    // reproduce the same-frame race (awaited user-event clicks would let the
+    // `disabled` attr alone block the second, hiding the regression).
+    let requests = 0;
+    correctionEntryPage.mockMatch(() =>
+      HttpResponse.json(buildCorrectableMatch()),
+    );
+    correctionEntryPage.mockPropose(() => {
+      requests += 1;
+      // Never resolves — keeps the propose in flight so the test can count
+      // the POSTs the double-click produced.
+      return new Promise<never>(() => {});
+    });
+    correctionEntryPage.render();
+
+    await waitFor(() => correctionEntryPage.getInput("rita.kovac"));
+
+    const submit = correctionEntryPage.getSubmit();
+    fireEvent.click(submit);
+    fireEvent.click(submit);
+
+    await waitFor(() => expect(submit).toBeDisabled());
+    expect(requests).toBe(1);
   });
 
   it("surfaces a 409 (the proposal moved on) inline without navigating away", async () => {
