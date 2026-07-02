@@ -4,6 +4,7 @@ import { deriveEmailStatus, useSession } from '@/api/session'
 import { AttentionPanel } from '@/components/dashboard/attention-panel'
 import { AttentionPanelSkeleton } from '@/components/dashboard/attention-panel-skeleton'
 import { projectAttentionPanelView } from '@/components/dashboard/attention-panel-view'
+import { FirstMatchDashboard } from '@/components/dashboard/first-match/first-match-dashboard'
 import { GuestPersistBanner } from '@/components/dashboard/guest-persist-banner'
 import { PageTitle } from '@/components/dashboard/page-title'
 import { YourGameRow } from '@/components/dashboard/your-game-row'
@@ -37,6 +38,19 @@ export function DashboardPage() {
       pendingEmail: user.pending_email ?? null,
     }) === 'guest'
   const showGuestPersistBanner = isGuest && (data?.completed_match_count ?? 0) >= 1
+  // Truly-empty only: an attention item (e.g. a not-yet-completed match
+  // waiting to be scored) or a passively-waiting match (e.g. a proposed
+  // result awaiting the opponent's acceptance — waiting_count, disjoint from
+  // attention_total_count) can exist alongside zero *completed* matches, and
+  // the first-match hero must not hide that live match or invite starting a
+  // duplicate. Gated on `!isLoading` so the pending skeleton renders as
+  // before — we don't know the layout until the query resolves.
+  const isFirstMatch =
+    !isLoading &&
+    data !== undefined &&
+    data.completed_match_count === 0 &&
+    data.attention_total_count === 0 &&
+    data.waiting_count === 0
   const attentionView = useMemo(
     () =>
       projectAttentionPanelView(
@@ -67,19 +81,25 @@ export function DashboardPage() {
         compact={compact}
         loading={session.isLoading}
       />
-      {isLoading ? (
-        <AttentionPanelSkeleton />
+      {isFirstMatch ? (
+        <FirstMatchDashboard />
       ) : (
-        <AttentionPanel
-          view={attentionView}
-        />
+        <>
+          {isLoading ? (
+            <AttentionPanelSkeleton />
+          ) : (
+            <AttentionPanel
+              view={attentionView}
+            />
+          )}
+          <YourGameRow
+            rating={data?.rating ?? null}
+            recent={data?.recent_results ?? []}
+            isLoading={isLoading}
+            username={username}
+          />
+        </>
       )}
-      <YourGameRow
-        rating={data?.rating ?? null}
-        recent={data?.recent_results ?? []}
-        isLoading={isLoading}
-        username={username}
-      />
     </div>
   )
 }

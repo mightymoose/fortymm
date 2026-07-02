@@ -46,3 +46,13 @@ A proposed result that supersedes the standing one — a full re-score of the
 decided board, not an edit of individual game cells. The corrector may add,
 remove, or change games, so long as the outcome is again a decided board.
 _Avoid_: dispute, edit, amendment.
+
+## Dashboard
+
+**First-match**:
+The dashboard state for a player with no completed matches and nothing in
+play — no match currently needs scoring, reviewing, or a result accepted. A
+player with an unfinished match is not first-match, even at zero completed
+matches: that match's own dashboard treatment takes priority so it is never
+hidden behind a "log your first match" prompt.
+_Avoid_: zero state, empty dashboard, new user.

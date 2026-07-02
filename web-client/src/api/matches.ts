@@ -196,6 +196,10 @@ export function useCreateMatch() {
         matchDetailsResultFromPayload(created),
       )
       queryClient.invalidateQueries({ queryKey: ['matches', 'list'] })
+      // The dashboard's first-match layout is chosen from this exact query
+      // (completed_match_count/attention_total_count/waiting_count) — without
+      // this, creating a match from the dashboard's own hero card leaves the
+      // "log your first match" prompt stale until staleTime expires.
       queryClient.invalidateQueries({ queryKey: DASHBOARD_QUERY_KEY })
     },
   })
