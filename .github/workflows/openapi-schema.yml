@@ -31,25 +31,12 @@ jobs:
 
       - name: Regenerate OpenAPI types
         run: |
-          uvicorn app.main:app --host 127.0.0.1 --port 8000 > /tmp/uvicorn.log 2>&1 &
-          UV_PID=$!
-          trap 'kill $UV_PID 2>/dev/null || true' EXIT
+          API_STATUS="$(scripts/ensure-api-up.sh | tail -n1)"
+          eval "$API_STATUS"
+          trap '[ -n "$API_STARTED_PID" ] && kill "$API_STARTED_PID" 2>/dev/null || true' EXIT
 
-          for _ in $(seq 1 60); do
-            if curl -fs http://127.0.0.1:8000/openapi.json -o /dev/null; then
-              break
-            fi
-            sleep 0.5
-          done
-          if ! curl -fs http://127.0.0.1:8000/openapi.json -o /dev/null; then
-            echo "API failed to start" >&2
-            cat /tmp/uvicorn.log >&2
-            exit 1
-          fi
-
-          cd ../web-client
-          API_URL=http://127.0.0.1:8000 npm run gen:api
-        working-directory: api
+          cd web-client
+          API_URL="$API_URL" npm run gen:api
 
       - name: Verify committed schema is up to date
         run: |
@@ -99,30 +86,19 @@ jobs:
 
       - name: Regenerate iOS OpenAPI types
         run: |
-          uvicorn app.main:app --host 127.0.0.1 --port 8000 > /tmp/uvicorn.log 2>&1 &
-          UV_PID=$!
-          trap 'kill $UV_PID 2>/dev/null || true' EXIT
+          API_STATUS="$(scripts/ensure-api-up.sh | tail -n1)"
+          eval "$API_STATUS"
+          TMP_SPEC=""
+          trap 'rm -f "$TMP_SPEC"; [ -n "$API_STARTED_PID" ] && kill "$API_STARTED_PID" 2>/dev/null || true' EXIT
 
-          for _ in $(seq 1 60); do
-            if curl -fs http://127.0.0.1:8000/openapi.json -o /tmp/openapi.json; then
-              break
-            fi
-            sleep 0.5
-          done
-          if [ ! -s /tmp/openapi.json ]; then
-            echo "API failed to start" >&2
-            cat /tmp/uvicorn.log >&2
-            exit 1
-          fi
-
-          cd ..
-          python3 ios/openapi/fix_openapi_nullable.py /tmp/openapi.json /tmp/openapi_fixed.json
+          TMP_SPEC="$(mktemp)"
+          curl -fs "$API_URL/openapi.json" -o "$TMP_SPEC"
+          python3 ios/openapi/fix_openapi_nullable.py "$TMP_SPEC" "$TMP_SPEC"
 
           cd ios/Tools/OpenAPIGeneratorCLI
-          swift run swift-openapi-generator generate /tmp/openapi_fixed.json \
+          swift run swift-openapi-generator generate "$TMP_SPEC" \
             --config ../../openapi/openapi-generator-config.yaml \
             --output-directory ../../Fortymm/Generated
-        working-directory: api
 
       - name: Verify committed Types.swift is up to date
         run: |

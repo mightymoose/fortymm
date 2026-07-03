@@ -62,7 +62,15 @@ run = """
 set -euo pipefail
 
 ROOT="$(pwd)"
-eval "$("$ROOT/scripts/ensure-api-up.sh")"
+# Assign-then-eval, piped through `tail -n1` (mirrors qa-up.sh's own
+# documented convention for this exact hazard): `eval "$(cmd)"` directly
+# would (a) hide a failure from `set -e` -- a failing command substituted
+# as another command's argument, rather than a bare assignment, doesn't
+# trip errexit, since eval of an empty string still exits 0 -- and (b) eval
+# whatever incidental stdout a future edit to the script emits before its
+# final line, not just the intended KEY=value handoff.
+API_STATUS="$("$ROOT/scripts/ensure-api-up.sh" | tail -n1)"
+eval "$API_STATUS"
 trap '[ -n "$API_STARTED_PID" ] && kill "$API_STARTED_PID" 2>/dev/null || true' EXIT
 
 cd "$ROOT/web-client"
@@ -78,22 +86,26 @@ run = """
 set -euo pipefail
 
 ROOT="$(pwd)"
-eval "$("$ROOT/scripts/ensure-api-up.sh")"
+API_STATUS="$("$ROOT/scripts/ensure-api-up.sh" | tail -n1)"
+eval "$API_STATUS"
+# Registered before `mktemp` (not after) so a started-but-not-yet-cleaned-up
+# server can't leak if `mktemp` itself fails.
+TMP_SPEC=""
+trap 'rm -f "$TMP_SPEC"; [ -n "$API_STARTED_PID" ] && kill "$API_STARTED_PID" 2>/dev/null || true' EXIT
 
-TMP_RAW="$(mktemp)"
-TMP_FIXED="$(mktemp)"
-trap 'rm -f "$TMP_RAW" "$TMP_FIXED"; [ -n "$API_STARTED_PID" ] && kill "$API_STARTED_PID" 2>/dev/null || true' EXIT
-curl -fs "$API_URL/openapi.json" -o "$TMP_RAW"
+TMP_SPEC="$(mktemp)"
+curl -fs "$API_URL/openapi.json" -o "$TMP_SPEC"
 
 # swift-openapi-generator silently drops any `Optional[T]` field encoded the
 # way Pydantic/FastAPI encode it in OpenAPI 3.1 (`anyOf: [T, {type: null}]`)
 # -- it only understands the older `nullable: true` sibling form. Rewrite
 # before generating, or fields like PlayerRead.rating vanish with just a
-# warning, no build error.
-python3 "$ROOT/ios/openapi/fix_openapi_nullable.py" "$TMP_RAW" "$TMP_FIXED"
+# warning, no build error. Reads the whole document into memory before
+# writing, so in-place (same path in and out) is safe.
+python3 "$ROOT/ios/openapi/fix_openapi_nullable.py" "$TMP_SPEC" "$TMP_SPEC"
 
 cd "$ROOT/ios/Tools/OpenAPIGeneratorCLI"
-swift run swift-openapi-generator generate "$TMP_FIXED" \\
+swift run swift-openapi-generator generate "$TMP_SPEC" \\
   --config "$ROOT/ios/openapi/openapi-generator-config.yaml" \\
   --output-directory "$ROOT/ios/Fortymm/Generated"
 echo "Wrote ios/Fortymm/Generated/Types.swift"

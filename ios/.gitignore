@@ -35,3 +35,6 @@ AuthKey_*.p8
 # Bundler (gems installed locally via `bundle install --path vendor/bundle`)
 .bundle/
 vendor/bundle/
+
+# openapi/fix_openapi_nullable.py bytecode cache
+__pycache__/

@@ -15,7 +15,8 @@ import sys
 
 
 def _is_null_schema(schema: object) -> bool:
-    return isinstance(schema, dict) and schema.get("type") == "null" and len(schema) == 1
+    is_type_null = isinstance(schema, dict) and schema.get("type") == "null"
+    return is_type_null and len(schema) == 1
 
 
 def _fix(node: object) -> object:
@@ -32,7 +33,7 @@ def _fix(node: object) -> object:
                     # `allOf` (the one construct OpenAPI reserves exactly
                     # for this).
                     if "$ref" in other:
-                        merged = {"allOf": [other], "nullable": True, **sibling_keys}
+                        merged = {"allOf": [other], **sibling_keys, "nullable": True}
                     else:
                         merged = {**other, **sibling_keys, "nullable": True}
                 else:
