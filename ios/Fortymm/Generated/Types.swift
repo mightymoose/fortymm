@@ -4500,25 +4500,102 @@ internal enum Components {
             internal var field: Components.Schemas.Predicate.FieldPayload
             /// - Remark: Generated from `#/components/schemas/Predicate/op`.
             internal var op: Swift.String
+            /// - Remark: Generated from `#/components/schemas/Predicate/value`.
+            internal struct ValuePayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/Predicate/value/value1`.
+                internal var value1: Swift.Int?
+                /// - Remark: Generated from `#/components/schemas/Predicate/value/value2`.
+                internal var value2: Swift.String?
+                /// - Remark: Generated from `#/components/schemas/Predicate/value/value3`.
+                internal var value3: Swift.Bool?
+                /// - Remark: Generated from `#/components/schemas/Predicate/value/value4`.
+                internal var value4: [Swift.Int?]?
+                /// Creates a new `ValuePayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                ///   - value2:
+                ///   - value3:
+                ///   - value4:
+                internal init(
+                    value1: Swift.Int? = nil,
+                    value2: Swift.String? = nil,
+                    value3: Swift.Bool? = nil,
+                    value4: [Swift.Int?]? = nil
+                ) {
+                    self.value1 = value1
+                    self.value2 = value2
+                    self.value3 = value3
+                    self.value4 = value4
+                }
+                internal init(from decoder: any Swift.Decoder) throws {
+                    var errors: [any Swift.Error] = []
+                    do {
+                        self.value1 = try decoder.decodeFromSingleValueContainer()
+                    } catch {
+                        errors.append(error)
+                    }
+                    do {
+                        self.value2 = try decoder.decodeFromSingleValueContainer()
+                    } catch {
+                        errors.append(error)
+                    }
+                    do {
+                        self.value3 = try decoder.decodeFromSingleValueContainer()
+                    } catch {
+                        errors.append(error)
+                    }
+                    do {
+                        self.value4 = try decoder.decodeFromSingleValueContainer()
+                    } catch {
+                        errors.append(error)
+                    }
+                    try Swift.DecodingError.verifyAtLeastOneSchemaIsNotNil(
+                        [
+                            self.value1,
+                            self.value2,
+                            self.value3,
+                            self.value4
+                        ],
+                        type: Self.self,
+                        codingPath: decoder.codingPath,
+                        errors: errors
+                    )
+                }
+                internal func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeFirstNonNilValueToSingleValueContainer([
+                        self.value1,
+                        self.value2,
+                        self.value3,
+                        self.value4
+                    ])
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/Predicate/value`.
+            internal var value: Components.Schemas.Predicate.ValuePayload?
             /// Creates a new `Predicate`.
             ///
             /// - Parameters:
             ///   - id:
             ///   - field:
             ///   - op:
+            ///   - value:
             internal init(
                 id: Swift.String,
                 field: Components.Schemas.Predicate.FieldPayload,
-                op: Swift.String
+                op: Swift.String,
+                value: Components.Schemas.Predicate.ValuePayload? = nil
             ) {
                 self.id = id
                 self.field = field
                 self.op = op
+                self.value = value
             }
             internal enum CodingKeys: String, CodingKey {
                 case id
                 case field
                 case op
+                case value
             }
             internal init(from decoder: any Swift.Decoder) throws {
                 let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -4534,10 +4611,15 @@ internal enum Components {
                     Swift.String.self,
                     forKey: .op
                 )
+                self.value = try container.decodeIfPresent(
+                    Components.Schemas.Predicate.ValuePayload.self,
+                    forKey: .value
+                )
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "id",
                     "field",
-                    "op"
+                    "op",
+                    "value"
                 ])
             }
         }

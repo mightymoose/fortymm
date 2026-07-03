@@ -69,7 +69,15 @@ jobs:
           cache: pip
           cache-dependency-path: api/pyproject.toml
 
+      - name: Cache Swift toolchain
+        id: swift-cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/swift-6.1-RELEASE-ubuntu24.04
+          key: ${{ runner.os }}-swift-6.1-RELEASE-ubuntu24.04
+
       - name: Install Swift toolchain
+        if: steps.swift-cache.outputs.cache-hit != 'true'
         run: |
           # Not swift-actions/setup-swift: its Swiftly installer verifies a
           # GPG signature against a key the runner's keyring doesn't have,
@@ -77,7 +85,8 @@ jobs:
           # sidesteps that entirely.
           curl -sS -o /tmp/swift.tar.gz "https://download.swift.org/swift-6.1-release/ubuntu2404/swift-6.1-RELEASE/swift-6.1-RELEASE-ubuntu24.04.tar.gz"
           tar xzf /tmp/swift.tar.gz -C /tmp
-          echo "/tmp/swift-6.1-RELEASE-ubuntu24.04/usr/bin" >> "$GITHUB_PATH"
+
+      - run: echo "/tmp/swift-6.1-RELEASE-ubuntu24.04/usr/bin" >> "$GITHUB_PATH"
 
       - run: pip install -e '.[dev]'
         working-directory: api
@@ -110,7 +119,7 @@ jobs:
           python3 ios/openapi/fix_openapi_nullable.py /tmp/openapi.json /tmp/openapi_fixed.json
 
           cd ios/Tools/OpenAPIGeneratorCLI
-          swift run -c release swift-openapi-generator generate /tmp/openapi_fixed.json \
+          swift run swift-openapi-generator generate /tmp/openapi_fixed.json \
             --config ../../openapi/openapi-generator-config.yaml \
             --output-directory ../../Fortymm/Generated
         working-directory: api

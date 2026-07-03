@@ -24,15 +24,26 @@ def _fix(node: object) -> object:
         if isinstance(any_of, list):
             null_members = [m for m in any_of if _is_null_schema(m)]
             other_members = [m for m in any_of if not _is_null_schema(m)]
-            if null_members and len(other_members) == 1:
-                other = copy.deepcopy(other_members[0])
+            if null_members and other_members:
                 sibling_keys = {k: v for k, v in node.items() if k != "anyOf"}
-                # `$ref` can't take sibling keywords, so wrap it in `allOf`
-                # (the one construct OpenAPI reserves exactly for this).
-                if "$ref" in other:
-                    merged = {"allOf": [other], "nullable": True, **sibling_keys}
+                if len(other_members) == 1:
+                    other = copy.deepcopy(other_members[0])
+                    # `$ref` can't take sibling keywords, so wrap it in
+                    # `allOf` (the one construct OpenAPI reserves exactly
+                    # for this).
+                    if "$ref" in other:
+                        merged = {"allOf": [other], "nullable": True, **sibling_keys}
+                    else:
+                        merged = {**other, **sibling_keys, "nullable": True}
                 else:
-                    merged = {**other, **sibling_keys, "nullable": True}
+                    # A real union (e.g. `int | str | bool | None`): keep it
+                    # as an `anyOf`, just drop the `null` branch and mark the
+                    # whole thing nullable instead.
+                    merged = {
+                        "anyOf": [copy.deepcopy(m) for m in other_members],
+                        "nullable": True,
+                        **sibling_keys,
+                    }
                 return _fix(merged)
         return {key: _fix(value) for key, value in node.items()}
     if isinstance(node, list):
