@@ -6,12 +6,20 @@ import type {
 import { cn } from '@/lib/utils'
 import type { NotificationCategory } from '../notification-meta'
 import { NotificationRow } from '../notification-row'
+import { useStickyUnread } from '../use-sticky-unread'
 
 export type NotificationFilter = 'all' | 'unread' | NotificationCategory
 
-function matchesFilter(item: NotificationItem, filter: NotificationFilter) {
+function matchesFilter(
+  item: NotificationItem,
+  filter: NotificationFilter,
+  stickyUnread: ReadonlySet<string>,
+) {
   if (filter === 'all') return true
-  if (filter === 'unread') return item.read_at == null
+  // Keep rows that were unread when the filter opened even after they
+  // auto-mark-read, so viewing them doesn't make them vanish mid-read (#762).
+  if (filter === 'unread')
+    return item.read_at == null || stickyUnread.has(item.id)
   return item.category === filter
 }
 
@@ -29,7 +37,8 @@ export interface NotificationsViewProps {
 }
 
 /** The full notifications page: a Bebas header, category filter pills, and the
- * filtered list (or an empty state). Pure — data + handlers come in as props. */
+ * filtered list (or an empty state). Data + handlers come in as props; the only
+ * local state is the Unread filter's sticky snapshot (see `useStickyUnread`). */
 export function NotificationsView({
   items,
   categoryTypes,
@@ -40,7 +49,10 @@ export function NotificationsView({
   onMarkAllRead,
   onSeen,
 }: NotificationsViewProps) {
-  const shown = items.filter((item) => matchesFilter(item, filter))
+  const stickyUnread = useStickyUnread(items, filter === 'unread')
+  const shown = items.filter((item) =>
+    matchesFilter(item, filter, stickyUnread),
+  )
   const filters: { key: NotificationFilter; label: string }[] = [
     { key: 'all', label: 'All' },
     { key: 'unread', label: 'Unread' },

@@ -29,6 +29,24 @@ describe('NotificationsView', () => {
     expect(notificationsViewPage.queryTitle('Rating +12')).not.toBeInTheDocument()
   })
 
+  it('keeps an unread row visible after it auto-marks-read (#762)', () => {
+    const items = buildNotificationsItems()
+    const { rerenderWith } = notificationsViewPage.render({
+      items,
+      filter: 'unread',
+    })
+    expect(notificationsViewPage.queryTitle('Confirm your score')).toBeInTheDocument()
+
+    // The row is seen and auto-marked-read: the feed cache flips its read_at.
+    const readNow = items.map((item) =>
+      item.id === 'n-1' ? { ...item, read_at: '2026-07-03T00:00:00.000Z' } : item,
+    )
+    rerenderWith({ items: readNow, filter: 'unread' })
+
+    // It stays on screen (just loses the unread emphasis) instead of vanishing.
+    expect(notificationsViewPage.queryTitle('Confirm your score')).toBeInTheDocument()
+  })
+
   it('filters by category', () => {
     notificationsViewPage.render({ filter: 'rating_change' })
     expect(notificationsViewPage.queryTitle('Rating +12')).toBeInTheDocument()
