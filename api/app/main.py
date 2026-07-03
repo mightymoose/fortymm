@@ -110,6 +110,11 @@ class HealthResponse(BaseModel):
     solver: ComponentHealth
 
 
+class ReadyzResponse(BaseModel):
+    redis: ComponentHealth
+    database: ComponentHealth
+
+
 @app.get("/v1/health")
 async def health() -> HealthResponse:
     return HealthResponse(
@@ -117,6 +122,24 @@ async def health() -> HealthResponse:
         database=await _check_database(),
         solver=await asyncio.to_thread(_check_solver_sync),
     )
+
+
+@app.get("/v1/readyz", include_in_schema=False)
+async def readyz(response: Response) -> ReadyzResponse:
+    """Machine-readable readiness gate for the k8s probe and deploy smoke
+    check. Unlike ``/v1/health`` (a diagnostic dashboard endpoint that always
+    returns 200), this returns 503 when a component the request path
+    actually depends on — redis, the database — is unhealthy. The solver is
+    deliberately excluded: it's an async RQ worker off the request path, and
+    gating readiness on it would pull the API pod out of rotation for every
+    endpoint whenever just the worker restarts.
+    """
+    redis_health, database_health = await asyncio.gather(
+        asyncio.to_thread(_check_redis), _check_database()
+    )
+    if not redis_health.healthy or not database_health.healthy:
+        response.status_code = 503
+    return ReadyzResponse(redis=redis_health, database=database_health)
 
 
 def _check_redis() -> ComponentHealth:

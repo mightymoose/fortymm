@@ -161,11 +161,11 @@ echo "==> Waiting for the api rollout"
 kubectl rollout status deploy/api -n "$NAMESPACE" --timeout=120s
 
 echo
-echo "==> Waiting for api to report healthy at $UAT_URL"
+echo "==> Waiting for api to report ready at $UAT_URL"
 deadline=$(( $(date +%s) + 90 ))
-until curl -fsS --max-time 3 "$UAT_URL/api/v1/health" >/dev/null 2>&1; do
+until curl -fsS --max-time 3 "$UAT_URL/api/v1/readyz" >/dev/null 2>&1; do
   if [ "$(date +%s)" -ge "$deadline" ]; then
-    echo "ERROR: $UAT_URL/api/v1/health did not respond within 90s" >&2
+    echo "ERROR: $UAT_URL/api/v1/readyz did not respond within 90s" >&2
     echo "--- recent api logs ---" >&2
     kubectl logs -n "$NAMESPACE" deploy/api --tail=40 >&2 || true
     exit 1
@@ -218,6 +218,9 @@ echo
 echo "==> Pod status"
 kubectl get pods -n "$NAMESPACE"
 
+echo
+echo "==> Readiness"
+curl -fsS "$UAT_URL/api/v1/readyz"
 echo
 echo "==> Health"
 curl -fsS "$UAT_URL/api/v1/health"
