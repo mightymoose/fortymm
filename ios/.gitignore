@@ -10,10 +10,10 @@ DerivedData/
 *.dSYM.zip
 *.dSYM
 
-# Swift Package Manager
+# Swift Package Manager — Package.resolved is committed (pins dependency
+# versions for reproducible builds), only the local build cache is ignored.
 .build/
 .swiftpm/
-Package.resolved
 
 # CocoaPods / Carthage (not used yet, but pre-empt)
 Pods/

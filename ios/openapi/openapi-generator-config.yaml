@@ -1,0 +1,6 @@
+generate:
+  - types
+accessModifier: internal
+# Match the field-naming already used in the hand-written DTOs it's meant to
+# replace over time (e.g. `side1Points`, not `side_1_points`).
+namingStrategy: idiomatic
