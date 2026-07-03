@@ -50,8 +50,9 @@ struct MatchDetailView: View {
                 .padding(.bottom, 120)
             }
             // Pull-to-refresh: the one in-foreground way to pick up a cross-device
-            // change (the opponent confirmed/disputed) while staring at this screen,
-            // since there's no live poll. Mirrors the dashboard/matches-list pulls.
+            // change (the opponent accepted or corrected) while staring at this
+            // screen, since there's no live poll. Mirrors the dashboard/matches-list
+            // pulls.
             .refreshable { await refresh(force: true) }
             footer
             if actioning { FMBlockingSpinner() }
@@ -61,8 +62,8 @@ struct MatchDetailView: View {
             else { withAnimation(.spring(response: 0.42, dampingFraction: 0.5).delay(0.06)) { reveal = true } }
         }
         .task { await refresh() }
-        // Foregrounding may reveal a cross-device change (the opponent confirmed
-        // or disputed the posted result) — refetch so the status isn't stale.
+        // Foregrounding may reveal a cross-device change (the opponent accepted
+        // or corrected the posted result) — refetch so the status isn't stale.
         .refetchOnForeground { Task { await refresh(force: true) } }
         .alert(
             "Something went wrong",
@@ -505,12 +506,12 @@ struct MatchDetailView: View {
         footerButton("Back to matches", showArrow: false, action: onBack)
     }
 
-    /// Finalize footer: a decided, unsigned board. The primary action re-posts
-    /// the saved games into the sign-off flow — both the recovery path for a
-    /// match stranded *past* the decider (issue #445) and the one-tap fix for a
-    /// mistaken dispute (resubmit the scores unchanged). Because the scores are
-    /// a scratchpad until someone signs, the board is also still editable, so we
-    /// also offer "Edit scores" to correct a game before posting.
+    /// Finalize footer: a decided board with no result proposed yet. The
+    /// primary action posts the saved games as the first proposal — the
+    /// recovery path for a match stranded *past* the decider (issue #445).
+    /// Because the scores are a scratchpad until a result is proposed, the
+    /// board is also still editable, so we also offer "Edit scores" to correct
+    /// a game before posting.
     @ViewBuilder
     private var finalizeFooter: some View {
         VStack(spacing: 10) {

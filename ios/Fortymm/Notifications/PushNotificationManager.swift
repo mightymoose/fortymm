@@ -3,9 +3,10 @@ import UserNotifications
 
 /// Identifiers shared with the backend push payload (`api/app/notifications`).
 /// A push whose `aps.category` is `MATCH_RESULT_CONFIRMATION` renders the
-/// Approve / Dispute buttons registered below; the `match_id` userInfo key tells
-/// the app which match the buttons (and a tap) act on. Kept in one place so the
-/// device-side registration can't drift from what the server sends.
+/// Approve / Suggest-correction buttons registered below; the `match_id`
+/// userInfo key tells the app which match the buttons (and a tap) act on. Kept
+/// in one place so the device-side registration can't drift from what the
+/// server sends.
 enum MatchNotification {
     /// Must equal `MATCH_RESULT_CONFIRMATION_CATEGORY` in `app/notifications/apns.py`.
     static let category = "MATCH_RESULT_CONFIRMATION"
@@ -23,13 +24,13 @@ enum MatchNotification {
 /// 2. receives the APNs device token (via the app delegate, see
 ///    `FortymmApp.swift`), hex-encodes it, and POSTs it to the backend so the
 ///    server can push to this device,
-/// 3. registers the "match result" notification category so a confirm/dispute
-///    push carries Approve / Dispute action buttons,
+/// 3. registers the "match result" notification category so a result-awaiting
+///    push carries Approve / Suggest-correction action buttons,
 /// 4. presents pushes as a banner even while the app is foregrounded (otherwise
 ///    a self-test looks like nothing happened),
-/// 5. handles a tapped action: Approve/Dispute call the match endpoints
-///    directly (no need to open the app); tapping the body deep-links to the
-///    match via `onOpenMatch`.
+/// 5. handles a tapped action: Approve accepts the standing proposal in the
+///    background (no need to open the app); Suggest correction and a body tap
+///    both deep-link to the match via `onOpenMatch`.
 ///
 /// A singleton because the `UIApplicationDelegate` token callbacks and the
 /// SwiftUI view that triggers registration must talk to the same instance, and
