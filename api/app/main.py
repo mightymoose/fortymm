@@ -134,8 +134,9 @@ async def readyz(response: Response) -> ReadyzResponse:
     gating readiness on it would pull the API pod out of rotation for every
     endpoint whenever just the worker restarts.
     """
-    redis_health = _check_redis()
-    database_health = await _check_database()
+    redis_health, database_health = await asyncio.gather(
+        asyncio.to_thread(_check_redis), _check_database()
+    )
     if not redis_health.healthy or not database_health.healthy:
         response.status_code = 503
     return ReadyzResponse(redis=redis_health, database=database_health)
