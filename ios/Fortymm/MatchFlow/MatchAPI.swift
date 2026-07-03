@@ -72,8 +72,66 @@ struct MatchGameDTO: Decodable {
     let score: MatchScoreDTO?
 }
 
-struct MatchSignatureDTO: Decodable {
-    let userId: UUID
+// MARK: - Result negotiation (propose/accept)
+
+/// Mirror of `app.schemas.match.ViewerState` — the viewer-relative phase of the
+/// propose/accept negotiation. Lenient like `APIMatchStatus`: an unrecognised
+/// value decodes to `.unknown` so a server-side addition doesn't brick the app.
+enum ViewerStateDTO: String, Decodable {
+    /// No result posted yet — the match is still being scored.
+    case live
+    /// The viewer's side posted the standing result and owes nothing.
+    case awaiting
+    /// The opponent posted and the viewer has no prior proposal — the viewer
+    /// should accept or suggest a correction.
+    case review
+    /// The opponent posted a correction over the viewer's own prior proposal.
+    case corrected
+    /// A result has been accepted; the match is settled.
+    case `final`
+    case unknown
+
+    init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = ViewerStateDTO(rawValue: raw) ?? .unknown
+    }
+}
+
+/// One game of a proposed result (`NegotiationGame`), on the canonical
+/// side-1/side-2 axis.
+struct NegotiationGameDTO: Decodable {
+    let gameNumber: Int
+    let side1Points: Int
+    let side2Points: Int
+}
+
+/// A proposed result (`NegotiationResult`) — an immutable snapshot of the board
+/// as claimed by whoever submitted it. `id` doubles as the concurrency token
+/// for `POST .../results/{id}/acceptance` and `supersedes_result_id`.
+struct NegotiationResultDTO: Decodable {
+    let id: UUID
+    let games: [NegotiationGameDTO]
+    let submittedBy: UUID
+    let submittedAt: Date
+}
+
+/// One changed game between the viewer's prior proposal and the standing
+/// correction (`NegotiationDiffEntry`). `old == nil` means the correction added
+/// this game.
+struct NegotiationDiffEntryDTO: Decodable {
+    let gameNumber: Int
+    let old: NegotiationGameDTO?
+    let new: NegotiationGameDTO
+}
+
+/// Mirror of `MatchNegotiation` — always present on both the detail and list
+/// shapes. `diff` is only populated for the `corrected` state.
+struct MatchNegotiationDTO: Decodable {
+    let viewerState: ViewerStateDTO
+    let yourTurn: Bool
+    let standingResult: NegotiationResultDTO?
+    let priorResult: NegotiationResultDTO?
+    let diff: [NegotiationDiffEntryDTO]?
 }
 
 struct H2HMeetingDTO: Decodable {
@@ -105,8 +163,7 @@ struct MatchDetailsDTO: Decodable {
     let games: [MatchGameDTO]
     let canScore: Bool
     let canFinalize: Bool
-    let canConfirm: Bool
-    let signatures: [MatchSignatureDTO]
+    let negotiation: MatchNegotiationDTO
     let headToHead: H2HDTO?
 }
 
@@ -130,7 +187,10 @@ struct MatchListRowDTO: Decodable {
     /// The viewer can enter scores for this (live) match — drives the row's
     /// "Score" affordance.
     let canScore: Bool
-    let canConfirm: Bool
+    /// Viewer-relative negotiation state — populated on list rows too (unlike
+    /// the old `signatures` field), so the row-level "your turn" affordances
+    /// are authoritative without a detail fetch.
+    let negotiation: MatchNegotiationDTO
 }
 
 struct MatchListResponseDTO: Decodable {
@@ -163,6 +223,11 @@ struct CreateMatchBody: Encodable {
 
 struct PostResultsBody: Encodable {
     let games: [GameWrite]
+    /// The standing result this posting supersedes (a correction/counter).
+    /// `nil` on the first proposal; otherwise must equal the current standing
+    /// result's id or the server 409s with the moved-on negotiation state.
+    /// supersedesResultId → supersedes_result_id via convertToSnakeCase.
+    var supersedesResultId: UUID? = nil
 
     struct GameWrite: Encodable {
         let gameNumber: Int

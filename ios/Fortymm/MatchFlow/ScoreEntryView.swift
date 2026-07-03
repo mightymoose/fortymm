@@ -13,6 +13,10 @@ struct ScoreEntryView: View {
     /// Hand the completed games (in order, game 1…N) up to the coordinator,
     /// which posts them to the API and renders the server's result.
     var onPost: ([Game]) -> Void
+    /// True when this board is a *correction* of a posted result (seeded from
+    /// the standing proposal; posting supersedes it). Only changes copy — the
+    /// entry/edit mechanics are identical to live scoring.
+    var correction: Bool = false
     /// The signed-in player's username, so the "you" panel labels your side with
     /// the same handle the posted result, list, and detail views show (and that
     /// the web scoreboard shows) — rather than a generic "You". Falls back to the
@@ -201,7 +205,9 @@ struct ScoreEntryView: View {
                 if editing {
                     clearButton
                 } else {
-                    Text("This finishes the match — post the result.")
+                    Text(correction
+                         ? "Sending posts the corrected score for \(opp.handle) to confirm."
+                         : "This finishes the match — post the result.")
                         .font(FMFont.ui(12, weight: .medium))
                         .foregroundStyle(FMColor.fg3)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -246,7 +252,8 @@ struct ScoreEntryView: View {
     private func postButton(expand: Bool) -> some View {
         Button(action: post) {
             HStack(spacing: 8) {
-                Text("Post result").font(FMFont.ui(16, weight: .bold))
+                Text(correction ? "Send corrected score" : "Post result")
+                    .font(FMFont.ui(16, weight: .bold))
                 if expand { Image(systemName: "arrow.right").font(.system(size: 15, weight: .bold)) }
             }
             .foregroundStyle(FMColor.fgInverse)

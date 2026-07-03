@@ -37,6 +37,10 @@ struct MatchDetailView: View {
                 VStack(alignment: .leading, spacing: 0) {
                     breadcrumb
                     hero
+                    if negotiationState == .corrected,
+                       let diff = match.negotiation?.diff, !diff.isEmpty {
+                        whatChangedSection(diff)
+                    }
                     if !match.games.isEmpty { gamesSection }
                     if match.rated, let delta = match.ratingDelta { ratingSection(delta) }
                     infoSection
@@ -75,11 +79,32 @@ struct MatchDetailView: View {
         .resumeScoringCover($resuming) { Task { await refresh(force: true) } }
     }
 
-    /// Sign off on (or dispute) the posted result, then refresh from the server
-    /// so the screen reflects the new status (decided → celebration; disputed →
-    /// back to live). Surfaces an alert on failure and leaves the screen as-is.
-    private func confirm() async { await act { try await service.confirmMatch($0) } }
-    private func dispute() async { await act { try await service.disputeMatch($0) } }
+    /// The viewer-relative negotiation phase (`.unknown` for seed/preview data).
+    private var negotiationState: NegotiationViewerState {
+        match.negotiation?.viewerState ?? .unknown
+    }
+
+    /// Accept the standing proposal, making the result official. The standing
+    /// result's id is the concurrency token: a 409 means the proposal moved on
+    /// (the opponent posted a correction the viewer hasn't seen) — mirror the
+    /// web's behavior by refetching and prompting a re-review rather than
+    /// silently retargeting the new result (#726).
+    private func accept() async {
+        guard !actioning,
+              let id = UUID(uuidString: match.id),
+              let resultId = match.negotiation?.standingResultId else { return }
+        actioning = true
+        defer { actioning = false }
+        do {
+            let updated = try await service.acceptResult(matchId: id, resultId: resultId)
+            withAnimation { live = updated }
+        } catch APIError.http(409, _) {
+            actionError = "This result changed — review the latest score before accepting."
+            await refresh(force: true)
+        } catch {
+            actionError = error.fmMessage
+        }
+    }
 
     /// Post the result of a match that's been scored to a decision but never
     /// posted (the `can_finalize` recovery path) — sends the already-saved games
@@ -93,18 +118,6 @@ struct MatchDetailView: View {
             let updated = try await service.postResult(
                 matchId: id, games: match.games, yourSideNumber: match.yourSideNumber
             )
-            withAnimation { live = updated }
-        } catch {
-            actionError = error.fmMessage
-        }
-    }
-
-    private func act(_ run: (UUID) async throws -> FinalMatch) async {
-        guard !actioning, let id = UUID(uuidString: match.id) else { return }
-        actioning = true
-        defer { actioning = false }
-        do {
-            let updated = try await run(id)
             withAnimation { live = updated }
         } catch {
             actionError = error.fmMessage
@@ -191,13 +204,21 @@ struct MatchDetailView: View {
             }
 
             if match.awaitingConfirmation {
-                Text(match.canConfirm
-                     ? "\(match.opponent.handle) posted this result. Confirm it to make it official, or dispute it."
-                     : "Result posted — awaiting \(match.opponent.handle)'s confirmation.")
-                    .font(FMFont.ui(12, weight: .medium))
-                    .foregroundStyle(FMColor.fg3)
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: .infinity, alignment: .center)
+                VStack(spacing: 5) {
+                    Text(negotiationCopy)
+                        .font(FMFont.ui(12, weight: .medium))
+                        .foregroundStyle(FMColor.fg3)
+                    if match.canConfirm {
+                        // The stakes line, mirroring the web callout.
+                        Text(match.rated
+                             ? "Accepting finalizes this rated match and updates both ratings."
+                             : "Accepting finalizes this match. It doesn't affect ratings.")
+                            .font(FMFont.ui(11, weight: .medium))
+                            .foregroundStyle(FMColor.fgMuted)
+                    }
+                }
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity, alignment: .center)
             }
         }
         .padding(.horizontal, 18)
@@ -209,6 +230,19 @@ struct MatchDetailView: View {
         .overlay { if reveal && youWon && !reduceMotion { BurstView().allowsHitTesting(false) } }
         .padding(.horizontal, 16)
         .padding(.top, 8)
+    }
+
+    /// The one-line negotiation status under the hero score, keyed off the
+    /// viewer phase — mirrors the web's confirmation callout copy.
+    private var negotiationCopy: String {
+        switch negotiationState {
+        case .review:
+            return "\(match.opponent.handle) posted this result. Accept it to make it official, or suggest a correction."
+        case .corrected:
+            return "\(match.opponent.handle) corrected the score. Review what changed, then accept the correction or counter."
+        default:
+            return "Result posted — awaiting \(match.opponent.handle)'s acceptance."
+        }
     }
 
     /// Orange once the result is official; amber while it's still provisional.
@@ -226,6 +260,50 @@ struct MatchDetailView: View {
                 .multilineTextAlignment(.center)
         }
         .frame(width: 96)
+    }
+
+    // MARK: What changed (corrected-phase diff)
+
+    /// The server-computed per-game diff between the viewer's prior proposal
+    /// and the standing correction: old score struck through → new score, with
+    /// newly-added games flagged. Scores are canonical side-1–side-2, matching
+    /// the web's ScoreDiff.
+    private func whatChangedSection(_ diff: [ScoreDiffEntry]) -> some View {
+        Section_("What changed") {
+            VStack(spacing: 0) {
+                ForEach(Array(diff.enumerated()), id: \.element.id) { i, entry in
+                    HStack(spacing: 10) {
+                        Text("GAME \(entry.gameNumber)")
+                            .font(FMFont.ui(10, weight: .semibold))
+                            .tracking(1.2)
+                            .foregroundStyle(FMColor.fgMuted)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        if let old = entry.old {
+                            Text(old)
+                                .font(FMFont.mono(15, weight: .semibold))
+                                .strikethrough()
+                                .foregroundStyle(FMColor.loss)
+                            Image(systemName: "arrow.right")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(FMColor.fgMuted)
+                        } else {
+                            Text("NEW GAME")
+                                .font(FMFont.ui(9, weight: .semibold))
+                                .tracking(1.0)
+                                .foregroundStyle(FMColor.fgMuted)
+                        }
+                        Text(entry.new)
+                            .font(FMFont.mono(15, weight: .bold))
+                            .foregroundStyle(FMColor.serve500)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                    if i < diff.count - 1 { Divider().overlay(FMColor.ink700) }
+                }
+            }
+            .background(FMColor.ink900)
+            .fmRoundedBorder(radius: FMRadius.lg, color: FMColor.borderSubtle)
+        }
     }
 
     // MARK: Games
@@ -370,7 +448,9 @@ struct MatchDetailView: View {
     private var footer: some View {
         Group {
             if match.canConfirm {
-                confirmFooter
+                acceptFooter
+            } else if negotiationState == .awaiting, let ctx = match.correctionContext {
+                awaitingFooter(ctx)
             } else if match.canFinalize {
                 finalizeFooter
             } else if let ctx = match.resumeContext {
@@ -434,16 +514,7 @@ struct MatchDetailView: View {
         VStack(spacing: 10) {
             footerButton("Post result", disabled: actioning) { Task { await finalize() } }
             if let ctx = match.resumeContext {
-                Button { resuming = ctx } label: {
-                    Text("Edit scores")
-                        .font(FMFont.ui(15, weight: .semibold))
-                        .foregroundStyle(FMColor.fg2)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 48)
-                        .fmRoundedBorder(radius: 13, color: FMColor.borderDefault)
-                }
-                .buttonStyle(.plain)
-                .disabled(actioning)
+                secondaryFooterButton("Edit scores") { resuming = ctx }
             }
         }
     }
@@ -455,23 +526,47 @@ struct MatchDetailView: View {
         footerButton(match.games.isEmpty ? "Enter scores" : "Resume scoring") { resuming = ctx }
     }
 
-    /// Sign-off footer: shown when the current user owes a confirm/dispute on a
-    /// posted result. Dispute rewinds it; confirm makes the result official.
-    private var confirmFooter: some View {
-        HStack(spacing: 10) {
-            Button { Task { await dispute() } } label: {
-                Text("Dispute")
-                    .font(FMFont.ui(15, weight: .semibold))
-                    .foregroundStyle(FMColor.loss)
-                    .padding(.horizontal, 22)
-                    .frame(height: 50)
-                    .fmRoundedBorder(radius: 13, color: FMColor.loss.opacity(0.5))
+    /// A bordered, secondary footer action (the non-primary verb in a pair).
+    private func secondaryFooterButton(
+        _ title: String, action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(FMFont.ui(15, weight: .semibold))
+                .foregroundStyle(FMColor.fg2)
+                .frame(maxWidth: .infinity)
+                .frame(height: 48)
+                .fmRoundedBorder(radius: 13, color: FMColor.borderDefault)
+        }
+        .buttonStyle(.plain)
+        .disabled(actioning)
+    }
+
+    /// Sign-off footer: the current user owes an accept-or-correct on the
+    /// standing proposal. Accept makes the result official; the secondary verb
+    /// opens the correction board — "Suggest correction" against a first
+    /// posting (`review`), "Counter" against a correction of the viewer's own
+    /// prior proposal (`corrected`). Mirrors the web's confirmation callout.
+    private var acceptFooter: some View {
+        VStack(spacing: 10) {
+            footerButton("Accept result", showArrow: false, disabled: actioning) {
+                Task { await accept() }
             }
-            .buttonStyle(.plain)
-            .disabled(actioning)
-            footerButton("Confirm result", showArrow: false, disabled: actioning) {
-                Task { await confirm() }
+            if let ctx = match.correctionContext {
+                secondaryFooterButton(
+                    negotiationState == .corrected ? "Counter" : "Suggest correction"
+                ) { resuming = ctx }
             }
+        }
+    }
+
+    /// Awaiting footer: the viewer's own side posted the standing proposal —
+    /// nothing is owed, but the viewer can still self-edit their posting (a
+    /// correction that supersedes it), mirroring the web's "Edit result".
+    private func awaitingFooter(_ ctx: ResumeScoring) -> some View {
+        VStack(spacing: 10) {
+            footerButton("Back to matches", showArrow: false, action: onBack)
+            secondaryFooterButton("Edit result") { resuming = ctx }
         }
     }
 }

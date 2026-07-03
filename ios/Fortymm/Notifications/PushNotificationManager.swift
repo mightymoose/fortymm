@@ -73,10 +73,10 @@ final class PushNotificationManager: NSObject {
         center.setNotificationCategories([Self.matchConfirmationCategory()])
     }
 
-    /// The "a result is waiting on you" category: Approve confirms the posted
-    /// result, Dispute rejects it. Both run without `.foreground` so a quick
-    /// tap acts in the background; Dispute is `.destructive` (red) since it
-    /// rewinds the opponent's posted result.
+    /// The "a result is waiting on you" category: Approve accepts the standing
+    /// proposal in the background (no `.foreground` — a quick tap acts without
+    /// opening the app). Suggesting a correction needs the full board editor,
+    /// so that action opens the app on the match instead of acting inline.
     private static func matchConfirmationCategory() -> UNNotificationCategory {
         let approve = UNNotificationAction(
             identifier: MatchNotification.approveAction,
@@ -85,8 +85,8 @@ final class PushNotificationManager: NSObject {
         )
         let dispute = UNNotificationAction(
             identifier: MatchNotification.disputeAction,
-            title: "Dispute",
-            options: [.destructive]
+            title: "Suggest correction",
+            options: [.foreground]
         )
         return UNNotificationCategory(
             identifier: MatchNotification.category,
@@ -161,9 +161,10 @@ extension PushNotificationManager: UNUserNotificationCenterDelegate {
     }
 
     /// The user acted on a notification. For a match-confirmation push:
-    /// Approve / Dispute hit the corresponding endpoint in the background;
-    /// tapping the body (the default action) routes to the match. Anything we
-    /// don't recognise — or a payload missing its `match_id` — just dismisses.
+    /// Approve accepts the standing proposal in the background; "Suggest
+    /// correction" and a body tap both open the app on the match (a correction
+    /// needs the full board editor). Anything we don't recognise — or a payload
+    /// missing its `match_id` — just dismisses.
     func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         didReceive response: UNNotificationResponse,
@@ -180,10 +181,14 @@ extension PushNotificationManager: UNUserNotificationCenterDelegate {
 
         switch response.actionIdentifier {
         case MatchNotification.approveAction:
-            act(completionHandler) { try await self.matchService.confirmMatch(matchId) }
-        case MatchNotification.disputeAction:
-            act(completionHandler) { try await self.matchService.disputeMatch(matchId) }
-        case UNNotificationDefaultActionIdentifier:
+            // The push payload carries only the match id; the service fetches
+            // the match to resolve the standing proposal (the acceptance
+            // token) and accepts it.
+            act(completionHandler) { try await self.matchService.acceptStandingResult(matchId) }
+        case MatchNotification.disputeAction, UNNotificationDefaultActionIdentifier:
+            // A correction needs the full board editor — open the app on the
+            // match (the action is registered `.foreground`), same as a body
+            // tap.
             // Body tap → open the match. Hop to the main actor: `onOpenMatch`
             // drives SwiftUI state.
             DispatchQueue.main.async {
@@ -195,11 +200,11 @@ extension PushNotificationManager: UNUserNotificationCenterDelegate {
         }
     }
 
-    /// Run a confirm/dispute call, then signal completion regardless of outcome.
-    /// Best-effort: a failed sign-off (e.g. the opponent already confirmed)
-    /// shouldn't hang the notification — the match screen reconciles state on
-    /// next open. iOS gives this background action a short window; the single
-    /// round-trip fits comfortably.
+    /// Run the accept call, then signal completion regardless of outcome.
+    /// Best-effort: a failed sign-off (e.g. the proposal moved on, or was
+    /// already accepted) shouldn't hang the notification — the match screen
+    /// reconciles state on next open. iOS gives this background action a short
+    /// window; the fetch + accept pair fits comfortably.
     private func act(
         _ completionHandler: @escaping () -> Void,
         _ work: @escaping () async throws -> FinalMatch

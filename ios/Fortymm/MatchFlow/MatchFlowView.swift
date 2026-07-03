@@ -75,6 +75,7 @@ struct MatchFlowView: View {
                     config: config,
                     initialGames: resume?.games ?? [],
                     onPost: post,
+                    correction: resume?.isCorrection ?? false,
                     meName: session.username,
                     // Resuming has no setup step to fall back to — exiting closes
                     // the flow (back to wherever it was launched from).
@@ -128,6 +129,9 @@ struct MatchFlowView: View {
     }
 
     /// Post the completed games for the match and show the server's result.
+    /// A correction board (resume carries `supersedesResultId`) posts as a
+    /// counter-proposal superseding the standing result; the server 409s if
+    /// that proposal has since moved on (accepted or re-corrected).
     private func post(_ games: [Game]) {
         guard let matchId, !busy else { return }
         busy = true
@@ -135,9 +139,12 @@ struct MatchFlowView: View {
             do {
                 final = try await service.postResult(
                     matchId: matchId, games: games,
-                    yourSideNumber: resume?.yourSideNumber ?? 1
+                    yourSideNumber: resume?.yourSideNumber ?? 1,
+                    supersedes: resume?.supersedesResultId
                 )
                 withAnimation { step = .detail }
+            } catch APIError.http(409, _) where resume?.isCorrection == true {
+                errorMessage = "This result changed while you were editing — reopen the match to review the latest score."
             } catch {
                 errorMessage = error.fmMessage
             }

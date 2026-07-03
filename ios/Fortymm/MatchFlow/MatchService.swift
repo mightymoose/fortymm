@@ -48,48 +48,65 @@ struct MatchService {
         return details.id
     }
 
-    /// Post the canonical result (`POST /v1/matches/{id}/results`) and return
-    /// the resulting match. For a solo match this comes back `completed`; for a
-    /// two-player match it stays awaiting the opponent's confirmation.
+    /// Propose a result (`POST /v1/matches/{id}/results`) — the first verb of
+    /// the propose/accept negotiation — and return the resulting match. A solo
+    /// or unrated match self-accepts and comes back `completed`; a rated
+    /// two-player match leaves the proposal standing for the opponent to accept.
     /// `yourSideNumber` orients the entered scores (`a` = you, `b` = them) back
     /// to the canonical side-1/side-2 axis the API expects. A freshly created
     /// match puts the creator on side 1; resuming a match the viewer didn't
     /// create may put them on side 2, in which case the points are swapped.
-    func postResult(matchId: UUID, games: [Game], yourSideNumber: Int = 1) async throws -> FinalMatch {
+    /// `supersedes` marks this posting as a correction of the standing proposal
+    /// with that id (a counter, or a self-edit of the viewer's own posting);
+    /// the server 409s if the proposal has moved on.
+    func postResult(
+        matchId: UUID, games: [Game], yourSideNumber: Int = 1,
+        supersedes: UUID? = nil
+    ) async throws -> FinalMatch {
         let youAreSide1 = yourSideNumber != 2
-        let payload = PostResultsBody(games: games.enumerated().compactMap { i, g in
-            guard let a = g.a, let b = g.b else { return nil }
-            return PostResultsBody.GameWrite(
-                gameNumber: i + 1,
-                side1Points: youAreSide1 ? a : b,
-                side2Points: youAreSide1 ? b : a
-            )
-        })
+        let payload = PostResultsBody(
+            games: games.enumerated().compactMap { i, g in
+                guard let a = g.a, let b = g.b else { return nil }
+                return PostResultsBody.GameWrite(
+                    gameNumber: i + 1,
+                    side1Points: youAreSide1 ? a : b,
+                    side2Points: youAreSide1 ? b : a
+                )
+            },
+            supersedesResultId: supersedes
+        )
         let details: MatchDetailsDTO = try await client.post(
             "/v1/matches/\(matchId.uuidString)/results", body: payload
         )
         return Self.finalMatch(from: details)
     }
 
-    // MARK: Confirm / dispute
+    // MARK: Accept
 
-    /// Sign off on a posted result (`POST /v1/matches/{id}/confirmation`). Once
-    /// every side has signed the match comes back `completed`; until then it
-    /// stays awaiting the remaining sign-off.
-    func confirmMatch(_ id: UUID) async throws -> FinalMatch {
+    /// Accept the standing proposal (`POST /v1/matches/{id}/results/{resultId}/
+    /// acceptance`) — the second verb of the negotiation. `resultId` is the
+    /// concurrency token: it must be the current standing proposal's id, or the
+    /// server 409s (the proposal moved on — superseded or already accepted).
+    /// On success the match comes back `completed`.
+    func acceptResult(matchId: UUID, resultId: UUID) async throws -> FinalMatch {
         let details: MatchDetailsDTO = try await client.post(
-            "/v1/matches/\(id.uuidString)/confirmation"
+            "/v1/matches/\(matchId.uuidString)/results/\(resultId.uuidString)/acceptance"
         )
         return Self.finalMatch(from: details)
     }
 
-    /// Reject a posted result (`POST /v1/matches/{id}/dispute`). Clears the
-    /// signatures and rewinds the result, returning the match to `in_progress`.
-    func disputeMatch(_ id: UUID) async throws -> FinalMatch {
-        let details: MatchDetailsDTO = try await client.post(
-            "/v1/matches/\(id.uuidString)/dispute"
-        )
-        return Self.finalMatch(from: details)
+    /// Fetch the match and accept its standing proposal, if the viewer owes one
+    /// (negotiation `review`/`corrected`). Used by the push-notification
+    /// "Approve" action, whose payload carries only the match id — the fetch
+    /// resolves the current standing result id (the acceptance token). Throws
+    /// if nothing is awaiting the viewer's sign-off (e.g. already accepted).
+    func acceptStandingResult(_ matchId: UUID) async throws -> FinalMatch {
+        let details: MatchDetailsDTO = try await client.get("/v1/matches/\(matchId.uuidString)")
+        guard details.negotiation.yourTurn,
+              let standing = details.negotiation.standingResult else {
+            throw APIError.http(status: 409, detail: "No result is awaiting your sign-off.")
+        }
+        return try await acceptResult(matchId: matchId, resultId: standing.id)
     }
 
     // MARK: Read
@@ -134,14 +151,10 @@ struct MatchService {
         common(
             id: d.id, status: d.status, statusLabel: d.statusLabel,
             league: d.league, sides: d.sides, bestOf: d.bestOf,
-            createdAt: d.createdAt, canConfirm: d.canConfirm, canScore: d.canScore,
+            createdAt: d.createdAt, canScore: d.canScore,
             canFinalize: d.canFinalize,
             ratedHint: d.affectsRating, games: d.games, h2h: d.headToHead,
-            // The detail DTO carries the authoritative sign-off signal: a result
-            // is awaiting confirmation iff someone has signed. (A dispute clears
-            // signatures but keeps the game rows, so a games-won count alone
-            // would wrongly read as "result posted" afterwards.)
-            signaturesPosted: !d.signatures.isEmpty
+            negotiation: d.negotiation
         )
     }
 
@@ -149,7 +162,7 @@ struct MatchService {
         common(
             id: r.id, status: r.status, statusLabel: r.statusLabel,
             league: r.league, sides: r.sides, bestOf: r.bestOf,
-            createdAt: r.createdAt, canConfirm: r.canConfirm, canScore: r.canScore,
+            createdAt: r.createdAt, canScore: r.canScore,
             // The list row omits can_finalize; the detail refetch (on open) fills
             // in the authoritative value and surfaces the "Post result" path.
             canFinalize: false,
@@ -157,10 +170,51 @@ struct MatchService {
             // omitted on list rows), so don't infer rated from a missing delta —
             // that mislabels finalized rated matches as "Friendly" (#453).
             ratedHint: r.affectsRating, games: nil, h2h: nil,
-            // The list row omits signatures; fall back to the games-won heuristic.
-            // This row is transient anyway — the detail view refetches on open and
-            // replaces it with the signature-accurate copy.
-            signaturesPosted: nil
+            negotiation: r.negotiation
+        )
+    }
+
+    // MARK: Negotiation DTO → view model
+
+    private static func viewerState(_ s: ViewerStateDTO) -> NegotiationViewerState {
+        switch s {
+        case .live: return .live
+        case .awaiting: return .awaiting
+        case .review: return .review
+        case .corrected: return .corrected
+        case .final: return .settled
+        case .unknown: return .unknown
+        }
+    }
+
+    /// Map the wire negotiation onto the view model: resolve the viewer phase,
+    /// re-orient the standing board so `a` = you, and pre-format the
+    /// `corrected`-phase diff (canonical side-1–side-2, like the web's
+    /// ScoreDiff).
+    private static func negotiation(
+        _ n: MatchNegotiationDTO, mineIsSide1: Bool
+    ) -> MatchNegotiation {
+        let standingGames: [Game] = (n.standingResult?.games ?? [])
+            .sorted { $0.gameNumber < $1.gameNumber }
+            .map { g in
+                mineIsSide1
+                    ? Game(a: g.side1Points, b: g.side2Points)
+                    : Game(a: g.side2Points, b: g.side1Points)
+            }
+        func fmt(_ g: NegotiationGameDTO) -> String { "\(g.side1Points)–\(g.side2Points)" }
+        let diff: [ScoreDiffEntry] = (n.diff ?? []).map { entry in
+            ScoreDiffEntry(
+                gameNumber: entry.gameNumber,
+                old: entry.old.map(fmt),
+                new: fmt(entry.new)
+            )
+        }
+        return MatchNegotiation(
+            viewerState: viewerState(n.viewerState),
+            yourTurn: n.yourTurn,
+            standingResultId: n.standingResult?.id,
+            standingGames: standingGames,
+            diff: diff
         )
     }
 
@@ -170,8 +224,9 @@ struct MatchService {
     private static func common(
         id: UUID, status: APIMatchStatus, statusLabel: String,
         league: MatchLeagueDTO, sides: [MatchSideDTO], bestOf: Int,
-        createdAt: Date, canConfirm: Bool, canScore: Bool, canFinalize: Bool,
-        ratedHint: Bool?, games: [MatchGameDTO]?, h2h: H2HDTO?, signaturesPosted: Bool?
+        createdAt: Date, canScore: Bool, canFinalize: Bool,
+        ratedHint: Bool?, games: [MatchGameDTO]?, h2h: H2HDTO?,
+        negotiation negotiationDTO: MatchNegotiationDTO
     ) -> FinalMatch {
         let viewerIsParticipant = sides.contains(where: \.isCurrentUserSide)
         let mine = sides.first(where: \.isCurrentUserSide) ?? sides.first
@@ -230,10 +285,19 @@ struct MatchService {
         let decided = status == .completed
         let rated = ratedHint ?? (mine?.ratingChange != nil)
         let delta = mine?.ratingChange.map { Int($0.delta.rounded()) }
-        // Prefer the authoritative signatures signal (detail path); fall back to
-        // the games-won heuristic only when signatures aren't available (list row).
-        let resultPosted = signaturesPosted ?? ((mine?.gamesWon ?? 0) + (theirs?.gamesWon ?? 0) > 0)
+        // The negotiation block is populated on both the detail and list shapes,
+        // so "a result has been posted" is authoritative everywhere — no more
+        // games-won heuristic (which mis-read a rewound board as posted).
+        let negotiation = Self.negotiation(negotiationDTO, mineIsSide1: mineIsSide1)
+        let resultPosted = [.awaiting, .review, .corrected]
+            .contains(negotiation.viewerState)
         let awaitingConfirmation = status == .inProgress && resultPosted
+        // The viewer owes an accept-or-correct: the opponent posted the standing
+        // proposal (first posting → `review`; a correction over the viewer's own
+        // prior proposal → `corrected`). Matches `your_turn`, which the server
+        // sets exactly for these two states.
+        let canConfirm = viewerIsParticipant && negotiation.yourTurn
+            && [.review, .corrected].contains(negotiation.viewerState)
 
         return FinalMatch(
             id: id.uuidString,
@@ -254,6 +318,7 @@ struct MatchService {
             decided: decided,
             awaitingConfirmation: awaitingConfirmation,
             canConfirm: canConfirm,
+            negotiation: negotiation,
             h2h: h2h.map { mapH2H($0, mineIsSide1: mineIsSide1) },
             sideA: sidePlayer(side1),
             sideB: (side2?.players.isEmpty ?? true) ? .guest : sidePlayer(side2),
