@@ -204,7 +204,7 @@ describe("CorrectionEntry", () => {
 
   it("redirects to match details instead of rendering when the match is already settled (#730)", async () => {
     // A finalized match still carries a `standing_result` (the settled score),
-    // so the redirect must key off `viewer_state`, not just the presence of a
+    // so the redirect must key off `your_turn`, not just the presence of a
     // standing result. Direct-nav to /results/new on such a match must bounce
     // back to the (locked) match-detail page instead of rendering a live,
     // submittable correction editor.
