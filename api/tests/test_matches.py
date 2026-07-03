@@ -830,10 +830,63 @@ async def test_list_row_attention_kind_reflects_who_must_act(
     listing = (await api_client.get("/v1/matches")).json()
     by_id = {row["id"]: row["attention"] for row in listing["items"]}
     # The side that proposed reads as passively waiting; the opposing side owes
-    # a review. Both still ride the attention set.
+    # a review. Both still carry their per-row attention kind on the browsing
+    # list…
     assert by_id[waiting["id"]] == "waiting_opponent"
     assert by_id[to_review["id"]] == "review"
-    assert listing["attention_count"] == 2
+    # …but only the actionable one counts toward *my* Attention badge — the
+    # match I merely posted and am waiting on is not my problem (issue #729).
+    assert listing["attention_count"] == 1
+
+
+async def test_attention_tab_is_viewer_relative_for_a_posted_result(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    # The exact issue #729 scenario: on an in-progress match with a posted
+    # result, the poster is merely waiting while the opponent must review. The
+    # Attention tab (membership *and* badge) has to reflect whose turn it is,
+    # not read identically for both participants.
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "rival") as (opp_client, opp):
+        posted = await _create_match(api_client, opp.id, best_of=1)
+        await _post_bo1_result(api_client, posted["id"])
+
+        # Poster: they've signed and owe nothing — the match is neither in their
+        # Attention list nor counted in their badge.
+        poster_view = (
+            await api_client.get("/v1/matches", params={"attention": "true"})
+        ).json()
+        assert [row["id"] for row in poster_view["items"]] == []
+        assert poster_view["attention_count"] == 0
+
+        # Opponent: it's their turn to review — the match *is* their attention.
+        opp_view = (
+            await opp_client.get("/v1/matches", params={"attention": "true"})
+        ).json()
+        assert [row["id"] for row in opp_view["items"]] == [posted["id"]]
+        assert opp_view["attention_count"] == 1
+
+
+async def test_attention_tab_excludes_pending_scheduled_matches(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    # A pending/scheduled match ("Up next") is nobody's turn yet — it's a
+    # ``waiting_others`` row, so it must not inflate the Attention badge (#729).
+    await start_session(api_client, db_session)
+    opp = await make_user(db_session, "rival")
+    scheduled = await _create_match(api_client, opp.id, best_of=1)
+    # Matches are created ``in_progress``; drop this one to ``pending`` to model
+    # a scheduled ("Up next") match with no scoring started.
+    await db_session.execute(
+        update(Match)
+        .where(Match.id == uuid.UUID(scheduled["id"]))
+        .values(status=MatchStatus.pending)
+    )
+    await db_session.commit()
+
+    listing = (await api_client.get("/v1/matches", params={"attention": "true"})).json()
+    assert scheduled["id"] not in {row["id"] for row in listing["items"]}
+    assert listing["attention_count"] == 0
 
 
 # ----- TT scoring rules ---------------------------------------------------

@@ -635,13 +635,22 @@ function listAttentionRank(seed: SeedMatch, kind: ListAttentionKind): number {
   return LIST_ATTENTION_PRIORITY[kind]
 }
 
-/** The Attention tab's row set: the current user's open matches, ranked by
- * urgency then oldest-first — mirrors the BFF's attention path. */
+/** The Attention tab's row set: the current user's *actionable* open matches,
+ * ranked by urgency then oldest-first — mirrors the BFF's attention path. Only
+ * the actionable buckets are members; the passive waiting rows (`waiting_opponent`
+ * — my posted result awaiting the opponent — and `waiting_others` — a pending
+ * match) are excluded so the tab is viewer-relative (issue #729). */
 export function rankAttentionSeeds(seeds: SeedMatch[]): SeedMatch[] {
   return seeds
     .flatMap((seed) => {
       const kind = listAttentionKind(seed)
-      return kind ? [{ seed, rank: listAttentionRank(seed, kind) }] : []
+      if (
+        kind === null ||
+        kind === 'waiting_opponent' ||
+        kind === 'waiting_others'
+      )
+        return []
+      return [{ seed, rank: listAttentionRank(seed, kind) }]
     })
     .sort(
       (a, b) =>
