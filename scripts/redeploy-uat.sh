@@ -26,8 +26,8 @@ RELEASE="fortymm-uat"
 CHART="deploy/uat"
 HOST_PORT=8084
 NODE_PORT=30084
-API_IMAGE="fortymm/api:uat"
-WEB_IMAGE="fortymm/web:uat"
+API_REPO="fortymm/api"
+WEB_REPO="fortymm/web"
 APNS_KEY="secrets/AuthKey_68VYRLMWWR.p8"
 UAT_URL="${UAT_URL:-https://uat.fortymm.com}"
 
@@ -65,6 +65,23 @@ if [ "$before" = "$after" ]; then
 else
   echo "(advanced $branch: $before -> $after)"
 fi
+
+# Tag every build with a unique id (post-merge commit + build epoch) instead of
+# a static `:uat`. The tag is the image string in the pod template, so a unique
+# tag makes `helm upgrade` see a changed template and roll both deployments
+# atomically (honoring the zero-downtime RollingUpdate). With the old mutable
+# `:uat` tag the template never changed, so a redeploy re-imported new content
+# under the same tag but never rolled — and when only one web replica later
+# restarted on its own it drifted onto the new build while its sibling stayed on
+# the old one. The two content-hashed SPA bundles then sat behind the
+# round-robin routing nginx, so ~half of loads fetched index.html from one pod
+# but got its `assets/index-*.js` chunk routed to the other → 404 → blank page.
+# The epoch suffix forces a fresh roll even on a same-commit rebuild. (Old
+# unique tags accumulate in the k3d image store; prune with `k3d image` /
+# `docker image prune` if it grows.)
+IMAGE_TAG="$(git rev-parse --short HEAD)-$(date +%s)"
+API_IMAGE="${API_REPO}:${IMAGE_TAG}"
+WEB_IMAGE="${WEB_REPO}:${IMAGE_TAG}"
 
 # --- cluster ----------------------------------------------------------------
 echo
@@ -153,12 +170,15 @@ echo
 echo "==> helm upgrade --install $RELEASE"
 helm upgrade --install "$RELEASE" "$CHART" \
   --namespace "$NAMESPACE" \
+  --set images.api.tag="$IMAGE_TAG" \
+  --set images.web.tag="$IMAGE_TAG" \
   --wait --timeout 5m
 
 # The migrate Job is a post-* Helm hook; --wait above already blocks on it.
 echo
-echo "==> Waiting for the api rollout"
+echo "==> Waiting for the api and web-client rollouts"
 kubectl rollout status deploy/api -n "$NAMESPACE" --timeout=120s
+kubectl rollout status deploy/web-client -n "$NAMESPACE" --timeout=120s
 
 echo
 echo "==> Waiting for api to report ready at $UAT_URL"
