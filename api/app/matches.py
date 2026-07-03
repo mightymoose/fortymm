@@ -624,7 +624,12 @@ async def create_match(
                 detail="You cannot start a match against yourself.",
             )
         opponent = (
-            await db.execute(select(User).where(User.id == payload.opponent_user_id))
+            await db.execute(
+                select(User).where(
+                    User.id == payload.opponent_user_id,
+                    User.merged_into_user_id.is_(None),
+                )
+            )
         ).scalar_one_or_none()
         if opponent is None:
             raise HTTPException(status_code=404, detail="Opponent not found.")

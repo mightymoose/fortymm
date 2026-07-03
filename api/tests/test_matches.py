@@ -270,6 +270,29 @@ async def test_unknown_opponent_is_rejected(
     assert "opponent" in response.json()["detail"].lower()
 
 
+async def test_merged_away_opponent_is_rejected(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """A tombstoned (merged-away) opponent must be treated like an unknown
+    one — a rated match must never be minted against a dead account."""
+    await start_session(api_client, db_session)
+    ghost = await make_user(db_session, "ghost")
+    survivor = await make_user(db_session, "survivor")
+    ghost.merged_into_user_id = survivor.id
+    await db_session.commit()
+
+    response = await api_client.post(
+        "/v1/matches",
+        json={
+            "opponent_user_id": str(ghost.id),
+            "best_of": 5,
+            "rated": True,
+        },
+    )
+    assert response.status_code == 404
+    assert "opponent" in response.json()["detail"].lower()
+
+
 async def test_even_best_of_is_rejected(
     api_client: AsyncClient, db_session: AsyncSession
 ):
