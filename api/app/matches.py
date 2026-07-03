@@ -1181,14 +1181,17 @@ async def _notify_result_posted(
 
 
 async def _load_rating_changes(
-    db: AsyncSession, match_id: uuid.UUID
+    db: AsyncSession, match: Match
 ) -> dict[uuid.UUID, RatingChange]:
     """Returns ``user_id -> RatingChange`` for every rating row this match
-    produced. Empty for matches that didn't move ratings."""
+    produced. Empty for matches that didn't move ratings — including, always,
+    a non-completed match, since no rating rows can exist before completion."""
+    if match.status != MatchStatus.completed:
+        return {}
     rows = (
         (
             await db.execute(
-                select(RatingHistory).where(RatingHistory.match_id == match_id)
+                select(RatingHistory).where(RatingHistory.match_id == match.id)
             )
         )
         .scalars()
@@ -1441,7 +1444,7 @@ _EMPTY_EXTRAS = ViewExtras(rating_changes={}, recent_form=[], head_to_head=None)
 async def _load_view_extras(db: AsyncSession, match: Match) -> ViewExtras:
     user_ids = _singles_user_ids(match)
     return ViewExtras(
-        rating_changes=await _load_rating_changes(db, match.id),
+        rating_changes=await _load_rating_changes(db, match),
         recent_form=await _load_recent_form(db, user_ids, match),
         head_to_head=await _load_head_to_head(
             db, user_ids if len(user_ids) == 2 else [], match
