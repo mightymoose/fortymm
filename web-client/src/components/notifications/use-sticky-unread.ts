@@ -31,7 +31,7 @@ export function useStickyUnread(
   } else {
     let grown: Set<string> | null = null
     for (const item of items) {
-      if (item.read_at == null && !(grown ?? pinned).has(item.id)) {
+      if (item.read_at == null && !pinned.has(item.id)) {
         grown ??= new Set(pinned)
         grown.add(item.id)
       }
