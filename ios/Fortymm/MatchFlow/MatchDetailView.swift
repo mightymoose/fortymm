@@ -1,8 +1,7 @@
 import SwiftUI
 
-/// Screen 3 — posted match detail / Final summary. Plays a brief win
-/// celebration (score scales in with a ball-bounce, plus a ball-dot burst),
-/// suppressed under Reduce Motion.
+/// Screen 3 — posted match detail / Final summary. The score scales in with
+/// a ball-bounce on appear, suppressed under Reduce Motion.
 struct MatchDetailView: View {
     /// The match as first handed in — from a freshly posted result (already
     /// full) or a list row (sparse: no games/H2H yet). `live` replaces it once
@@ -24,11 +23,6 @@ struct MatchDetailView: View {
     /// What the screen renders: the freshest copy we have.
     private var match: FinalMatch { live ?? initial }
     private var need: Int { MatchRules.gamesToWin(bestOf: match.bestOf) }
-
-    /// Highlight a winner only once the result is official; an unconfirmed
-    /// posted result shows a neutral, provisional scoreboard.
-    private var youWon: Bool { match.decided && match.win }
-    private var oppWon: Bool { match.decided && !match.win && !match.solo }
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -184,14 +178,12 @@ struct MatchDetailView: View {
             }
 
             HStack(spacing: 8) {
-                playerColumn(match.you, name: match.you.handle, winnerSide: youWon)
+                playerColumn(match.you, name: match.you.handle)
                 VStack(spacing: 6) {
                     HStack(spacing: 10) {
-                        Text("\(match.setsWon.a)")
-                            .foregroundStyle(youWon ? FMColor.serve500 : FMColor.fg2)
+                        Text("\(match.setsWon.a)").foregroundStyle(FMColor.fg2)
                         Text("-").font(FMFont.mono(30)).foregroundStyle(FMColor.fgMuted)
-                        Text("\(match.setsWon.b)")
-                            .foregroundStyle(oppWon ? FMColor.serve500 : FMColor.fg2)
+                        Text("\(match.setsWon.b)").foregroundStyle(FMColor.fg2)
                     }
                     .font(FMFont.mono(60, weight: .bold))
                     .scaleEffect(reveal ? 1 : 0.7)
@@ -202,7 +194,7 @@ struct MatchDetailView: View {
                         .foregroundStyle(FMColor.fgMuted)
                 }
                 .frame(maxWidth: .infinity)
-                playerColumn(match.opponent, name: match.opponent.handle, winnerSide: oppWon)
+                playerColumn(match.opponent, name: match.opponent.handle)
             }
 
             if match.awaitingConfirmation {
@@ -228,8 +220,6 @@ struct MatchDetailView: View {
         .padding(.bottom, 22)
         .background(FMColor.ink900)
         .fmRoundedBorder(radius: 18, color: FMColor.borderSubtle)
-        // Celebrate only an official win.
-        .overlay { if reveal && youWon && !reduceMotion { BurstView().allowsHitTesting(false) } }
         .padding(.horizontal, 16)
         .padding(.top, 8)
     }
@@ -253,12 +243,12 @@ struct MatchDetailView: View {
     /// First segment of the match UUID — enough to identify it in the crumb.
     private var shortID: String { String(match.id.prefix(8)).uppercased() }
 
-    private func playerColumn(_ player: MatchPlayer, name: String, winnerSide: Bool) -> some View {
+    private func playerColumn(_ player: MatchPlayer, name: String) -> some View {
         VStack(spacing: 8) {
-            MatchAvatar(player: player, size: 52, glow: winnerSide)
+            MatchAvatar(player: player, size: 52)
             Text(name)
                 .font(FMFont.ui(13, weight: .semibold))
-                .foregroundStyle(winnerSide ? FMColor.serve500 : FMColor.fg1)
+                .foregroundStyle(FMColor.fg1)
                 .multilineTextAlignment(.center)
         }
         .frame(width: 96)
@@ -635,36 +625,3 @@ private struct Sparkline: View {
     }
 }
 
-/// One-shot celebratory ball-dot burst behind the hero score.
-private struct BurstView: View {
-    @State private var go = false
-    // Deterministic pseudo-random offsets (no Date/random at view-build time).
-    private let dots: [(x: CGFloat, dx: CGFloat, size: CGFloat, serve: Bool, dur: Double)] = (0..<12).map { i in
-        let f = Double(i) / 12
-        return (
-            x: CGFloat(0.5 + sin(Double(i) * 1.7) * 0.32),
-            dx: CGFloat(cos(Double(i) * 2.3) * 60),
-            size: CGFloat(5 + (Double(i % 4)) * 1.6),
-            serve: i % 2 == 0,
-            dur: 0.9 + f * 0.7
-        )
-    }
-    var body: some View {
-        GeometryReader { geo in
-            ZStack {
-                ForEach(0..<dots.count, id: \.self) { i in
-                    let d = dots[i]
-                    Circle()
-                        .fill(d.serve ? FMColor.serve500 : FMColor.ball500)
-                        .frame(width: d.size, height: d.size)
-                        .shadow(color: (d.serve ? FMColor.serve500 : FMColor.ball500).opacity(0.7), radius: 4)
-                        .position(x: geo.size.width * d.x, y: geo.size.height * 0.62)
-                        .offset(x: go ? d.dx : 0, y: go ? -90 : 0)
-                        .opacity(go ? 0 : 1)
-                        .animation(.easeOut(duration: d.dur), value: go)
-                }
-            }
-        }
-        .onAppear { go = true }
-    }
-}
