@@ -367,6 +367,65 @@ async def test_recompute_skips_matches_without_a_decided_outcome(
     assert {row.match_id for row in rows} == {decided.id}
 
 
+async def test_recompute_skips_decided_match_with_a_player_less_side(
+    db_session: AsyncSession,
+    rating_strategies: dict[str, RatingStrategy],
+):
+    """A completed, rated match with a decided (``won`` set) side that has no
+    players — the solo-match sentinel side, or a forfeit that stamped ``won``
+    on a player-less side — produced no rating delta (the live path guards it,
+    ``app/matches.py``). The cascade must skip it rather than ``IndexError`` on
+    ``players[0]``, which would otherwise roll back the whole league recompute."""
+    league = await get_default_league(db_session)
+    strategy = rating_strategies["glicko2"]
+    me = await make_user(db_session, "me")
+    opp = await make_user(db_session, "opp")
+    for user in (me, opp):
+        await _seed_rating(db_session, league, user.id, strategy)
+
+    base = datetime(2026, 5, 1, tzinfo=UTC)
+    # A normal decided match the cascade should still process...
+    decided = await _build_completed_match(db_session, league, me, opp, base)
+    # ...and a decided match whose losing side has no players.
+    settings = MatchSettings(team_size=1, best_of=1, affects_rating=True)
+    player_less = Match(
+        match_settings=settings,
+        league=league,
+        created_by_user_id=me.id,
+        status=MatchStatus.completed,
+    )
+    side1 = MatchSide(match=player_less, side_number=1, won=True, score=1)
+    side1.players.append(MatchSidePlayer(match=player_less, user=me))
+    # The losing side is decided (won=False) but carries no players.
+    MatchSide(match=player_less, side_number=2, won=False, score=0)
+    db_session.add(player_less)
+    await db_session.commit()
+    await db_session.refresh(player_less)
+    await db_session.execute(
+        text("UPDATE matches SET created_at = :ts, updated_at = :ts WHERE id = :id"),
+        {"ts": base + timedelta(hours=1), "id": player_less.id},
+    )
+    await db_session.commit()
+
+    # Must not raise.
+    await recompute_league_ratings(db_session, league.id, {me.id})
+    await db_session.commit()
+
+    # The decided match still produced its history; the player-less one produced none.
+    rows = (
+        (
+            await db_session.execute(
+                select(RatingHistory).where(
+                    RatingHistory.match_id.in_([decided.id, player_less.id])
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert {row.match_id for row in rows} == {decided.id}
+
+
 # ----- idempotency --------------------------------------------------------
 
 
