@@ -9,6 +9,7 @@ import { waitFor } from "@/test/utilities";
 import {
   STANDING_RESULT_ID,
   buildCorrectableMatch,
+  buildStandingResult,
 } from "./correction-entry.factory";
 import { correctionEntryPage } from "./correction-entry.page";
 
@@ -199,5 +200,31 @@ describe("CorrectionEntry", () => {
       ).toBe(true),
     );
     expect(correctionEntryPage.queryMatchLanding()).not.toBeInTheDocument();
+  });
+
+  it("redirects to match details instead of rendering when the match is already settled (#730)", async () => {
+    // A finalized match still carries a `standing_result` (the settled score),
+    // so the redirect must key off `viewer_state`, not just the presence of a
+    // standing result. Direct-nav to /results/new on such a match must bounce
+    // back to the (locked) match-detail page instead of rendering a live,
+    // submittable correction editor.
+    correctionEntryPage.mockMatch(() =>
+      HttpResponse.json(
+        buildCorrectableMatch({
+          negotiation: {
+            viewer_state: "final",
+            your_turn: false,
+            standing_result: buildStandingResult(),
+            prior_result: null,
+            diff: null,
+          },
+        }),
+      ),
+    );
+    correctionEntryPage.render();
+
+    await waitFor(() =>
+      expect(correctionEntryPage.queryMatchLanding()).toBeInTheDocument(),
+    );
   });
 });

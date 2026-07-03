@@ -93,10 +93,19 @@ export function CorrectionEntry({ matchId }: { matchId: string }) {
   const standing = data.negotiation.standing_result;
   const mySide = data.sides.find((s) => s.is_current_user_side) ?? null;
   const oppSide = data.sides.find((s) => !s.is_current_user_side) ?? null;
+  // Only `review` (opponent's first proposal) and `corrected` (opponent's
+  // counter to the viewer's own proposal) leave room for a correction. `final`
+  // keeps a `standing_result` (the settled score) but the match is locked, so
+  // direct-navigating to `/results/new` on it must still bounce back (#730)
+  // instead of rendering a live, submittable editor.
+  const correctable =
+    data.negotiation.viewer_state === "review" ||
+    data.negotiation.viewer_state === "corrected";
 
   // The correction flow only applies to participants with a standing result to
-  // correct. Spectators, or a match with no proposal in play, bounce back.
-  if (!standing || !mySide || !oppSide) {
+  // correct on a match still open for negotiation. Spectators, a match with no
+  // proposal in play, or an already-settled match bounce back.
+  if (!standing || !mySide || !oppSide || !correctable) {
     return <Navigate {...matchDetailRoute(matchId)} />;
   }
 
