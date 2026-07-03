@@ -59,10 +59,18 @@ def _decided_sides(match: Match) -> tuple[MatchSide, MatchSide] | None:
     """Return ``(winning_side, losing_side)`` for a decided binary result, or
     ``None`` when the match has no clear winner/loser — a forfeit/void/partial
     write leaves ``MatchSide.won`` as ``None``. Such a match never produced a
-    rating delta, so the cascade skips it rather than crashing on the lookup."""
+    rating delta, so the cascade skips it rather than crashing on the lookup.
+
+    Also returns ``None`` when a decided side has no players — the solo-match
+    sentinel side, or a forfeit that stamped ``won`` on a player-less side. The
+    live rating path guards this explicitly (``app/matches.py``) and writes no
+    ``RatingHistory``, so the callers' ``players[0]`` lookups below would
+    otherwise ``IndexError`` on a match that never contributed a delta."""
     winning_side = next((s for s in match.sides if s.won is True), None)
     losing_side = next((s for s in match.sides if s.won is False), None)
     if winning_side is None or losing_side is None:
+        return None
+    if not winning_side.players or not losing_side.players:
         return None
     return winning_side, losing_side
 
