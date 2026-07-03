@@ -94,3 +94,71 @@ def test_health_reports_database_unhealthy_when_engine_broken(monkeypatch):
 
     assert body["database"]["healthy"] is False
     assert "postgres unreachable" in body["database"]["error"]
+
+
+def test_readyz_returns_200_when_redis_and_database_healthy(monkeypatch):
+    async def fake_db_check():
+        return ComponentHealth(healthy=True, latency_ms=1.0)
+
+    monkeypatch.setattr(main_module, "_check_database", fake_db_check)
+
+    response = client.get("/v1/readyz")
+    assert response.status_code == 200
+    body = response.json()
+
+    assert set(body.keys()) == {"redis", "database"}
+    assert body["redis"]["healthy"] is True
+    assert body["database"]["healthy"] is True
+
+
+def test_readyz_returns_503_when_database_unhealthy(monkeypatch):
+    class BrokenEngine:
+        def connect(self):
+            raise RuntimeError("postgres unreachable")
+
+    from app import db as db_module
+
+    monkeypatch.setattr(db_module, "get_engine", BrokenEngine)
+
+    response = client.get("/v1/readyz")
+    assert response.status_code == 503
+    body = response.json()
+
+    assert body["database"]["healthy"] is False
+    assert "postgres unreachable" in body["database"]["error"]
+
+
+def test_readyz_returns_503_when_redis_unhealthy(monkeypatch):
+    async def fake_db_check():
+        return ComponentHealth(healthy=True, latency_ms=1.0)
+
+    monkeypatch.setattr(main_module, "_check_database", fake_db_check)
+
+    def boom():
+        raise RuntimeError("redis unreachable")
+
+    monkeypatch.setattr(queue_module, "get_queue", boom)
+
+    response = client.get("/v1/readyz")
+    assert response.status_code == 503
+    body = response.json()
+
+    assert body["redis"]["healthy"] is False
+
+
+def test_readyz_does_not_check_solver(monkeypatch):
+    """A down solver worker must not fail readiness — it's an async RQ worker
+    off the request path, not something the API needs to serve traffic."""
+
+    async def fake_db_check():
+        return ComponentHealth(healthy=True, latency_ms=1.0)
+
+    monkeypatch.setattr(main_module, "_check_database", fake_db_check)
+
+    def fail_if_called():
+        raise AssertionError("readyz must not invoke the solver check")
+
+    monkeypatch.setattr(main_module, "_check_solver_sync", fail_if_called)
+
+    response = client.get("/v1/readyz")
+    assert response.status_code == 200

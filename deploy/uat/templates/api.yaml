@@ -34,13 +34,15 @@ spec:
               mountPath: {{ .Values.apnsKeyPath }}
               subPath: {{ .Values.apnsKeyFile }}
               readOnly: true
-          # /v1/health depends on the DB being migrated and the worker reachable
-          # via redis, so it can be red for a while on first boot — keep the
-          # readiness window generous. Liveness is a plain TCP check so a not-yet
-          # -migrated DB doesn't trigger a restart loop.
+          # /v1/readyz depends on the DB being migrated and redis being
+          # reachable, so it can be red for a while on first boot — keep the
+          # readiness window generous. It returns a non-2xx status when
+          # unhealthy (unlike /v1/health, a diagnostic endpoint that always
+          # returns 200), so this actually gates traffic. Liveness is a plain
+          # TCP check so a not-yet-migrated DB doesn't trigger a restart loop.
           readinessProbe:
             httpGet:
-              path: /v1/health
+              path: /v1/readyz
               port: 8000
             initialDelaySeconds: 10
             periodSeconds: 5
