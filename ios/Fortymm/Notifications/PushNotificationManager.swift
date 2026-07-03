@@ -3,14 +3,17 @@ import UserNotifications
 
 /// Identifiers shared with the backend push payload (`api/app/notifications`).
 /// A push whose `aps.category` is `MATCH_RESULT_CONFIRMATION` renders the
-/// Approve / Dispute buttons registered below; the `match_id` userInfo key tells
-/// the app which match the buttons (and a tap) act on. Kept in one place so the
-/// device-side registration can't drift from what the server sends.
+/// Approve / Suggest-correction buttons registered below; the `match_id`
+/// userInfo key tells the app which match the buttons (and a tap) act on. Kept
+/// in one place so the device-side registration can't drift from what the
+/// server sends.
 enum MatchNotification {
     /// Must equal `MATCH_RESULT_CONFIRMATION_CATEGORY` in `app/notifications/apns.py`.
     static let category = "MATCH_RESULT_CONFIRMATION"
     static let approveAction = "CONFIRM_MATCH_ACTION"
-    static let disputeAction = "DISPUTE_MATCH_ACTION"
+    /// Surface verb is "Suggest correction" (the dispute verb was replaced by
+    /// the propose/accept negotiation); the wire identifier stays stable.
+    static let suggestCorrectionAction = "DISPUTE_MATCH_ACTION"
     /// Must equal the `data` key the server sends (`{"match_id": "<uuid>"}`).
     static let matchIdKey = "match_id"
 }
@@ -21,13 +24,13 @@ enum MatchNotification {
 /// 2. receives the APNs device token (via the app delegate, see
 ///    `FortymmApp.swift`), hex-encodes it, and POSTs it to the backend so the
 ///    server can push to this device,
-/// 3. registers the "match result" notification category so a confirm/dispute
-///    push carries Approve / Dispute action buttons,
+/// 3. registers the "match result" notification category so a result-awaiting
+///    push carries Approve / Suggest-correction action buttons,
 /// 4. presents pushes as a banner even while the app is foregrounded (otherwise
 ///    a self-test looks like nothing happened),
-/// 5. handles a tapped action: Approve/Dispute call the match endpoints
-///    directly (no need to open the app); tapping the body deep-links to the
-///    match via `onOpenMatch`.
+/// 5. handles a tapped action: Approve accepts the standing proposal in the
+///    background (no need to open the app); Suggest correction and a body tap
+///    both deep-link to the match via `onOpenMatch`.
 ///
 /// A singleton because the `UIApplicationDelegate` token callbacks and the
 /// SwiftUI view that triggers registration must talk to the same instance, and
@@ -73,24 +76,24 @@ final class PushNotificationManager: NSObject {
         center.setNotificationCategories([Self.matchConfirmationCategory()])
     }
 
-    /// The "a result is waiting on you" category: Approve confirms the posted
-    /// result, Dispute rejects it. Both run without `.foreground` so a quick
-    /// tap acts in the background; Dispute is `.destructive` (red) since it
-    /// rewinds the opponent's posted result.
+    /// The "a result is waiting on you" category: Approve accepts the standing
+    /// proposal in the background (no `.foreground` — a quick tap acts without
+    /// opening the app). Suggesting a correction needs the full board editor,
+    /// so that action opens the app on the match instead of acting inline.
     private static func matchConfirmationCategory() -> UNNotificationCategory {
         let approve = UNNotificationAction(
             identifier: MatchNotification.approveAction,
             title: "Approve",
             options: []
         )
-        let dispute = UNNotificationAction(
-            identifier: MatchNotification.disputeAction,
-            title: "Dispute",
-            options: [.destructive]
+        let suggestCorrection = UNNotificationAction(
+            identifier: MatchNotification.suggestCorrectionAction,
+            title: "Suggest correction",
+            options: [.foreground]
         )
         return UNNotificationCategory(
             identifier: MatchNotification.category,
-            actions: [approve, dispute],
+            actions: [approve, suggestCorrection],
             intentIdentifiers: [],
             options: []
         )
@@ -161,9 +164,10 @@ extension PushNotificationManager: UNUserNotificationCenterDelegate {
     }
 
     /// The user acted on a notification. For a match-confirmation push:
-    /// Approve / Dispute hit the corresponding endpoint in the background;
-    /// tapping the body (the default action) routes to the match. Anything we
-    /// don't recognise — or a payload missing its `match_id` — just dismisses.
+    /// Approve accepts the standing proposal in the background; "Suggest
+    /// correction" and a body tap both open the app on the match (a correction
+    /// needs the full board editor). Anything we don't recognise — or a payload
+    /// missing its `match_id` — just dismisses.
     func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         didReceive response: UNNotificationResponse,
@@ -180,10 +184,25 @@ extension PushNotificationManager: UNUserNotificationCenterDelegate {
 
         switch response.actionIdentifier {
         case MatchNotification.approveAction:
-            act(completionHandler) { try await self.matchService.confirmMatch(matchId) }
-        case MatchNotification.disputeAction:
-            act(completionHandler) { try await self.matchService.disputeMatch(matchId) }
-        case UNNotificationDefaultActionIdentifier:
+            // The push payload carries only the match id; the service fetches
+            // the match to resolve the standing proposal (the acceptance
+            // token) and accepts it. Best-effort: a failed sign-off (the
+            // proposal moved on, or was already accepted) shouldn't hang the
+            // notification — the match screen reconciles state on next open.
+            // iOS gives this background action a short window; the fetch +
+            // accept pair fits comfortably.
+            Task {
+                do {
+                    _ = try await self.matchService.acceptStandingResult(matchId)
+                } catch {
+                    print("[push] match accept failed: \(error.fmMessage)")
+                }
+                completionHandler()
+            }
+        case MatchNotification.suggestCorrectionAction, UNNotificationDefaultActionIdentifier:
+            // A correction needs the full board editor — open the app on the
+            // match (the action is registered `.foreground`), same as a body
+            // tap.
             // Body tap → open the match. Hop to the main actor: `onOpenMatch`
             // drives SwiftUI state.
             DispatchQueue.main.async {
@@ -191,25 +210,6 @@ extension PushNotificationManager: UNUserNotificationCenterDelegate {
                 completionHandler()
             }
         default:
-            completionHandler()
-        }
-    }
-
-    /// Run a confirm/dispute call, then signal completion regardless of outcome.
-    /// Best-effort: a failed sign-off (e.g. the opponent already confirmed)
-    /// shouldn't hang the notification — the match screen reconciles state on
-    /// next open. iOS gives this background action a short window; the single
-    /// round-trip fits comfortably.
-    private func act(
-        _ completionHandler: @escaping () -> Void,
-        _ work: @escaping () async throws -> FinalMatch
-    ) {
-        Task {
-            do {
-                _ = try await work()
-            } catch {
-                print("[push] match action failed: \(error.fmMessage)")
-            }
             completionHandler()
         }
     }

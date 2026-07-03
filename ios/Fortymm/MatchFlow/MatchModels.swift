@@ -84,6 +84,35 @@ struct Game: Hashable {
     var b: Int?
 }
 
+// MARK: - Result negotiation (view model)
+
+/// One changed game between the viewer's prior proposal and the standing
+/// correction, pre-formatted for display. Scores are canonical side-1–side-2,
+/// matching the web's `ScoreDiff` rendering.
+struct ScoreDiffEntry: Identifiable {
+    let gameNumber: Int
+    /// "11–7" as previously proposed; nil when the correction added this game.
+    let old: String?
+    let new: String
+    var id: Int { gameNumber }
+}
+
+/// The negotiation state the detail/list screens act on: which phase the
+/// viewer is in (the lenient DTO enum, used directly like `APIMatchStatus`),
+/// the standing proposal's id (the acceptance / supersedes token), its board
+/// (viewer-oriented, for seeding a correction), and the server-computed diff
+/// shown in the `corrected` phase.
+struct MatchNegotiation {
+    let viewerState: ViewerStateDTO
+    let standingResultId: UUID?
+    /// The standing proposal's games with `a` = you, `b` = them — the immutable
+    /// snapshot a correction board is seeded from (mirroring the web's
+    /// correction entry, which seeds from `standing_result`, not the live
+    /// scratchpad).
+    let standingGames: [Game]
+    let diff: [ScoreDiffEntry]
+}
+
 /// A finished, posted match — the shape the detail screen and matches list read.
 struct FinalMatch: Identifiable {
     let id: String
@@ -106,12 +135,25 @@ struct FinalMatch: Identifiable {
     /// posted result is still awaiting the opponent's confirmation, so the
     /// W/L celebration and rating change are not yet real.
     var decided: Bool = true
+    /// The viewer-relative negotiation state, when the match came from the API
+    /// (nil only for seed/preview builders). Carries the acceptance token, the
+    /// standing board for corrections, and the `corrected`-phase diff — and is
+    /// the single source the derived flags below read, so they can't drift
+    /// from it.
+    var negotiation: MatchNegotiation? = nil
+
     /// True when a result has been posted but the match isn't decided yet — i.e.
     /// it's genuinely awaiting a sign-off. Distinct from `!decided`, which is
     /// also true for a freshly-created *live* match that has no posted result.
-    var awaitingConfirmation: Bool = false
-    /// The current user owes a confirm/dispute on this posted result.
-    var canConfirm: Bool = false
+    var awaitingConfirmation: Bool {
+        inProgress && negotiation?.viewerState.hasStandingProposal == true
+    }
+    /// The current user owes an accept-or-correct on the standing proposal
+    /// (negotiation `review` or `corrected` — the states where the opponent
+    /// posted and it's the viewer's turn).
+    var canConfirm: Bool {
+        viewerIsParticipant && negotiation?.viewerState.viewerOwesResponse == true
+    }
     /// Server head-to-head, when the detail BFF provided it.
     var h2h: MatchH2H? = nil
     // --- neutral, side-ordered view (for the matches list, which is a global
@@ -136,10 +178,9 @@ struct FinalMatch: Identifiable {
     var canScore: Bool = false
     /// The saved games already form a decided, valid match and the viewer can
     /// post the result. True for a match scored to a decision but never posted
-    /// (e.g. a web user entered the games then left, or a dispute that cleared
-    /// the signatures). `canScore` is *also* true here — the board stays
-    /// editable until signed — so the detail screen offers both "Post result"
-    /// (resubmit) and "Edit scores".
+    /// (e.g. a web user entered the games then left). `canScore` is *also*
+    /// true here — the board stays a scratchpad until a result is proposed —
+    /// so the detail screen offers both "Post result" and "Edit scores".
     var canFinalize: Bool = false
     /// The viewer's side number (1 or 2). Used to orient entered scores back to
     /// the canonical side-1/side-2 axis when resuming a match the viewer didn't
@@ -147,10 +188,9 @@ struct FinalMatch: Identifiable {
     var yourSideNumber: Int = 1
 
     /// The viewer can resume entering / editing scores. Relies solely on the
-    /// server's `canScore`, which is false once a result is signed (awaiting
-    /// confirmation) — so this stays correct on the *list* surface too, where
-    /// `awaitingConfirmation` is only a games-won guess (the list row carries no
-    /// signatures). Single source of truth for the "Score" affordances on the
+    /// server's `canScore`, which is false once a result has been proposed (the
+    /// scratchpad closes; changes then flow through the propose/accept
+    /// negotiation). Single source of truth for the "Score" affordances on the
     /// list, detail, and dashboard.
     var canResume: Bool { canScore && inProgress }
 
@@ -167,6 +207,27 @@ struct FinalMatch: Identifiable {
             yourSideNumber: yourSideNumber
         )
     }
+
+    /// Context for the correction board — the score-entry flow seeded from the
+    /// standing proposal and posting with `supersedes_result_id`. Serves all
+    /// three correction verbs the web offers: "Suggest correction" (review),
+    /// "Counter" (corrected), and "Edit result" (a self-edit while awaiting).
+    /// Nil when there's no standing proposal to correct or the viewer isn't a
+    /// participant.
+    var correctionContext: ResumeScoring? {
+        guard viewerIsParticipant,
+              let negotiation,
+              let standingId = negotiation.standingResultId,
+              negotiation.viewerState.hasStandingProposal,
+              let uuid = UUID(uuidString: id) else { return nil }
+        return ResumeScoring(
+            matchId: uuid,
+            config: MatchConfig(opponent: solo ? nil : opponent, bestOf: bestOf, rated: rated),
+            games: negotiation.standingGames,
+            yourSideNumber: yourSideNumber,
+            supersedesResultId: standingId
+        )
+    }
 }
 
 /// Everything the scoring flow needs to resume an existing in-progress match:
@@ -178,7 +239,14 @@ struct ResumeScoring: Identifiable {
     let config: MatchConfig
     let games: [Game]
     var yourSideNumber: Int = 1
+    /// When set, this board is a *correction*: it was seeded from the standing
+    /// proposal with this id, and posting supersedes that proposal (a counter,
+    /// or a self-edit of the viewer's own posting). Nil for plain live scoring.
+    var supersedesResultId: UUID? = nil
     var id: UUID { matchId }
+
+    /// Correction boards tweak the score-entry copy ("Send corrected score").
+    var isCorrection: Bool { supersedesResultId != nil }
 }
 
 /// A page of the match list plus the per-status counts that drive the filter
