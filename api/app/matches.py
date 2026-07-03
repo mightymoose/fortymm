@@ -18,7 +18,7 @@ from fastapi import (
     status,
 )
 from pyrate_limiter import Duration, Rate
-from sqlalchemy import CursorResult, Select, func, select, update
+from sqlalchemy import CursorResult, Select, and_, func, or_, select, update
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased, selectinload
@@ -583,6 +583,38 @@ def _has_result_exists() -> Any:
     return select(MatchResult.id).where(MatchResult.match_id == Match.id).exists()
 
 
+def my_standing_proposal_exists(current_user_id: uuid.UUID) -> Any:
+    """``EXISTS`` correlated subquery: ``current_user`` submitted the *standing*
+    proposal on this match — the unaccepted result nothing else supersedes.
+
+    On an ``in_progress`` match that means the match is parked *waiting on the
+    opponent* to accept: the current user has already signed and owes no move.
+    It's the SQL twin of ``list_attention_kind``'s ``waiting_opponent`` bucket.
+    Shared by the dashboard's waiting/actionable split and the matches-list
+    Attention filter so the two can never disagree about who owes a move.
+
+    Singles-only assumption: this keys on ``submitted_by_user_id ==
+    current_user``, whereas ``list_attention_kind`` treats a proposal from *any*
+    player on the viewer's side as theirs (``_submitted_on_side``). For
+    ``team_size == 1`` (the only topology today — see ``create_match``) the two
+    coincide. When doubles lands, a partner's proposal would make this ``False``
+    while the classifier says ``waiting_opponent``, so this must move to a
+    side-based match to keep the SQL and Python twins aligned."""
+    superseding = aliased(MatchResult)
+    return (
+        select(MatchResult.id)
+        .where(
+            MatchResult.match_id == Match.id,
+            MatchResult.accepted_by_user_id.is_(None),
+            MatchResult.submitted_by_user_id == current_user_id,
+            ~select(superseding.id)
+            .where(superseding.supersedes_result_id == MatchResult.id)
+            .exists(),
+        )
+        .exists()
+    )
+
+
 def _player_username_filter[SelectT: Select[Any]](query: SelectT, q: str) -> SelectT:
     """Restrict to matches that have *any* player whose username matches ``q``.
 
@@ -702,23 +734,48 @@ def _filtered_matches_query(
     return base if filter_ is None else _apply_list_filter(base, filter_)
 
 
-# Open statuses the Attention filter ranges over — the only ones where the
-# current user can still owe (or be owed) a move. Completed/voided drop out.
-_ATTENTION_STATUSES = (
-    MatchStatus.pending,
-    MatchStatus.in_progress,
-    MatchStatus.disputed,
-)
+# Sort rank for a match that ``list_attention_kind`` can't classify — sits above
+# every real ``attention_priority`` (0–5) so a surprise row sinks to the bottom
+# rather than crashing the page. Only reachable defensively: the actionable
+# filter already excludes everything that would classify as ``None``.
+_UNCLASSIFIED_SORT_RANK = 99
+
+
+def _actionable_attention_filter[SelectT: Select[Any]](
+    query: SelectT, current_user_id: uuid.UUID
+) -> SelectT:
+    """Narrow ``query`` to the caller's matches that need *their own* action —
+    the Attention tab's membership, computed per viewer (issue #729).
+
+    Mirrors the actionable half of ``app.attention.list_attention_kind``
+    (``dispute`` / ``review`` / ``score``): a disputed match (either side may
+    re-score) or an in-progress match where the caller has *not* submitted the
+    standing proposal. This deliberately excludes the passive waiting buckets —
+    ``waiting_others`` (a pending/scheduled match) and ``waiting_opponent`` (the
+    caller's own posted result awaiting the opponent's sign-off) — so the tab
+    never flags a match the caller is merely waiting on. The poster and the
+    reviewer of the same posted result therefore see *different* Attention
+    counts, unlike before."""
+    return query.where(
+        or_(
+            Match.status == MatchStatus.disputed,
+            and_(
+                Match.status == MatchStatus.in_progress,
+                ~my_standing_proposal_exists(current_user_id),
+            ),
+        )
+    )
 
 
 def _attention_matches_query(
     q: str | None, current_user_id: uuid.UUID
 ) -> Select[tuple[Match]]:
-    """The caller's own open matches (optionally search-narrowed) — the row set
-    behind the Attention tab and its tab-badge count. Restricted to
-    participation, unlike the perspective-neutral browsing query."""
-    base = participant_filter(select(Match), current_user_id).where(
-        Match.status.in_(_ATTENTION_STATUSES)
+    """The caller's own matches that need their action (optionally
+    search-narrowed) — the row set behind the Attention tab and its tab-badge
+    count. Restricted to participation, unlike the perspective-neutral browsing
+    query, and to the *actionable* buckets, unlike a plain open-status scan."""
+    base = _actionable_attention_filter(
+        participant_filter(select(Match), current_user_id), current_user_id
     )
     if q:
         base = _player_username_filter(base, q)
@@ -735,7 +792,7 @@ def _attention_sort_key(
     if kind is None:
         # Defensive: an open participant match always classifies. Sink any
         # surprise to the bottom rather than crash the page.
-        return (len(_ATTENTION_STATUSES) + 99, match.updated_at)
+        return (_UNCLASSIFIED_SORT_RANK, match.updated_at)
     return (
         attention_priority(kind, match.match_settings.affects_rating),
         match.updated_at,
@@ -814,12 +871,12 @@ async def list_matches(
     # The list is open to every signed-in user. Writes still gate on
     # `_is_participant` downstream.
     if attention:
-        # The Attention set is bounded by the caller's *open* matches — a handful
-        # even for an active player — so we load them all, rank by attention
-        # priority in Python (no SQL ordering captures the per-user bucketing),
-        # and paginate the sorted list. Its length *is* the tab-badge count, so
-        # no separate aggregate is needed on this path.
-        open_matches = (
+        # The Attention set is bounded by the caller's *actionable* open matches
+        # (issue #729) — a handful even for an active player — so we load them
+        # all, rank by attention priority in Python (no SQL ordering captures the
+        # per-user bucketing), and paginate the sorted list. Its length *is* the
+        # tab-badge count, so no separate aggregate is needed on this path.
+        actionable_matches = (
             (
                 await db.execute(
                     _attention_matches_query(q, current_user.id).options(
@@ -831,7 +888,7 @@ async def list_matches(
             .all()
         )
         ranked = sorted(
-            open_matches, key=lambda m: _attention_sort_key(m, current_user.id)
+            actionable_matches, key=lambda m: _attention_sort_key(m, current_user.id)
         )
         total = attention_count = len(ranked)
         start = (page - 1) * page_size
@@ -878,10 +935,12 @@ async def list_matches(
 async def _attention_count(
     db: AsyncSession, q: str | None, current_user_id: uuid.UUID
 ) -> int:
-    """Count of the caller's open matches under the active search — the Attention
-    tab's badge when a different tab is showing."""
-    query = participant_filter(select(func.count(Match.id)), current_user_id).where(
-        Match.status.in_(_ATTENTION_STATUSES)
+    """Count of the caller's matches that need their action under the active
+    search — the Attention tab's badge when a different tab is showing. Uses the
+    same actionable filter as the tab's row set so badge and list agree."""
+    query = _actionable_attention_filter(
+        participant_filter(select(func.count(Match.id)), current_user_id),
+        current_user_id,
     )
     if q:
         query = _player_username_filter(query, q)

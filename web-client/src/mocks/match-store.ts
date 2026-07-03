@@ -635,13 +635,26 @@ function listAttentionRank(seed: SeedMatch, kind: ListAttentionKind): number {
   return LIST_ATTENTION_PRIORITY[kind]
 }
 
-/** The Attention tab's row set: the current user's open matches, ranked by
- * urgency then oldest-first — mirrors the BFF's attention path. */
+// The actionable buckets — the Attention tab's membership. An allow-list rather
+// than a deny-list of the passive kinds, so a future `ListAttentionKind` added
+// to the union stays out of the tab until it's explicitly opted in here (a new
+// *waiting* kind can't silently leak in). Mirrors the server's
+// `_actionable_attention_filter` (issue #729).
+const ACTIONABLE_LIST_KINDS: ReadonlySet<ListAttentionKind> =
+  new Set<ListAttentionKind>(['dispute', 'review', 'score'])
+
+/** The Attention tab's row set: the current user's *actionable* open matches,
+ * ranked by urgency then oldest-first — mirrors the BFF's attention path. Only
+ * the actionable buckets are members; the passive waiting rows (`waiting_opponent`
+ * — my posted result awaiting the opponent — and `waiting_others` — a pending
+ * match) are excluded so the tab is viewer-relative (issue #729). */
 export function rankAttentionSeeds(seeds: SeedMatch[]): SeedMatch[] {
   return seeds
     .flatMap((seed) => {
       const kind = listAttentionKind(seed)
-      return kind ? [{ seed, rank: listAttentionRank(seed, kind) }] : []
+      return kind !== null && ACTIONABLE_LIST_KINDS.has(kind)
+        ? [{ seed, rank: listAttentionRank(seed, kind) }]
+        : []
     })
     .sort(
       (a, b) =>

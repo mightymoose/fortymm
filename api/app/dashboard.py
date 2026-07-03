@@ -6,13 +6,14 @@ from typing import Literal
 from fastapi import APIRouter, Depends
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import aliased, selectinload
+from sqlalchemy.orm import selectinload
 
 from app.attention import attention_priority, list_attention_kind
 from app.db import get_session
 from app.matches import (
     current_game_number,
     match_eager_options,
+    my_standing_proposal_exists,
     opponent_username,
     participant_filter,
     side_win_counts,
@@ -23,7 +24,6 @@ from app.matches import (
 from app.models import (
     League,
     Match,
-    MatchResult,
     MatchSide,
     MatchSidePlayer,
     MatchStatus,
@@ -87,24 +87,12 @@ async def get_dashboard(
     # every other in_progress match — either no result yet ("score") or a
     # standing result the *other* side proposed ("review"). The Python classifier
     # (``list_attention_kind``) refines which per row.
-    _superseding = aliased(MatchResult)
-    my_standing_proposal_exists = (
-        select(MatchResult.id)
-        .where(
-            MatchResult.match_id == Match.id,
-            MatchResult.accepted_by_user_id.is_(None),
-            MatchResult.submitted_by_user_id == current_user.id,
-            ~select(_superseding.id)
-            .where(_superseding.supersedes_result_id == MatchResult.id)
-            .exists(),
-        )
-        .exists()
-    )
+    my_standing_proposal = my_standing_proposal_exists(current_user.id)
     in_progress_q = (
         participant_filter(select(Match), current_user.id)
         .where(
             Match.status == MatchStatus.in_progress,
-            ~my_standing_proposal_exists,
+            ~my_standing_proposal,
         )
         .options(*match_eager_options())
         .order_by(Match.updated_at.asc())
@@ -136,7 +124,7 @@ async def get_dashboard(
             func.count(Match.id).filter(
                 and_(
                     Match.status == MatchStatus.in_progress,
-                    ~my_standing_proposal_exists,
+                    ~my_standing_proposal,
                 )
             ),
             func.count(Match.id).filter(
@@ -144,7 +132,7 @@ async def get_dashboard(
                     Match.status == MatchStatus.pending,
                     and_(
                         Match.status == MatchStatus.in_progress,
-                        my_standing_proposal_exists,
+                        my_standing_proposal,
                     ),
                 )
             ),
