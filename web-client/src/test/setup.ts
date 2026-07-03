@@ -51,5 +51,12 @@ beforeAll(() => server.listen({ onUnhandledRequest: 'error' }))
 afterEach(() => {
   server.resetHandlers()
   resetMockMatches()
+  // The session-bootstrap storage lock (api/session.ts) survives in
+  // localStorage across tests within a file. A test that tears down with a
+  // `/v1/session` request still in flight strands the lock, and the next
+  // tests' session fetches poll it until its 10s TTL lapses — flaky 5s
+  // timeouts two tests downstream. No test owns cross-test storage, so wipe
+  // it wholesale.
+  window.localStorage.clear()
 })
 afterAll(() => server.close())
