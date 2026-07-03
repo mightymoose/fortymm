@@ -10,10 +10,10 @@ DerivedData/
 *.dSYM.zip
 *.dSYM
 
-# Swift Package Manager
+# Swift Package Manager — Package.resolved is committed (pins dependency
+# versions for reproducible builds), only the local build cache is ignored.
 .build/
 .swiftpm/
-Package.resolved
 
 # CocoaPods / Carthage (not used yet, but pre-empt)
 Pods/
@@ -35,3 +35,6 @@ AuthKey_*.p8
 # Bundler (gems installed locally via `bundle install --path vendor/bundle`)
 .bundle/
 vendor/bundle/
+
+# openapi/fix_openapi_nullable.py bytecode cache
+__pycache__/

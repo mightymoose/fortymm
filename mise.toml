@@ -62,43 +62,51 @@ run = """
 set -euo pipefail
 
 ROOT="$(pwd)"
-API_HOST="${API_HOST:-127.0.0.1}"
-API_PORT="${API_PORT:-8000}"
-API_URL="http://${API_HOST}:${API_PORT}"
-
-probe() { curl -fs -o /dev/null --max-time 1 "$API_URL/openapi.json"; }
-
-API_PID=""
-cleanup() { [ -n "$API_PID" ] && kill "$API_PID" 2>/dev/null || true; }
-trap cleanup EXIT
-
-if probe; then
-  echo "Using API already running at $API_URL"
-else
-  echo "Starting API server at $API_URL..."
-  cd "$ROOT/api"
-  if [ ! -x ".venv/bin/uvicorn" ]; then
-    python -m venv .venv
-    .venv/bin/pip install -q -e '.[dev]'
-  fi
-  .venv/bin/uvicorn app.main:app --host "$API_HOST" --port "$API_PORT" \\
-    >/tmp/fortymm-api.log 2>&1 &
-  API_PID=$!
-  cd "$ROOT"
-
-  for _ in $(seq 1 60); do
-    if probe; then break; fi
-    sleep 0.5
-  done
-  if ! probe; then
-    echo "API failed to start. Last log:" >&2
-    tail -n 40 /tmp/fortymm-api.log >&2 || true
-    exit 1
-  fi
-fi
+# Assign-then-eval, piped through `tail -n1` (mirrors qa-up.sh's own
+# documented convention for this exact hazard): `eval "$(cmd)"` directly
+# would (a) hide a failure from `set -e` -- a failing command substituted
+# as another command's argument, rather than a bare assignment, doesn't
+# trip errexit, since eval of an empty string still exits 0 -- and (b) eval
+# whatever incidental stdout a future edit to the script emits before its
+# final line, not just the intended KEY=value handoff.
+API_STATUS="$("$ROOT/scripts/ensure-api-up.sh" | tail -n1)"
+eval "$API_STATUS"
+trap '[ -n "$API_STARTED_PID" ] && kill "$API_STARTED_PID" 2>/dev/null || true' EXIT
 
 cd "$ROOT/web-client"
 [ -d node_modules ] || npm ci
 API_URL="$API_URL" npm run gen:api
 echo "Wrote web-client/src/api/schema.d.ts"
+"""
+
+[tasks.regen-ios-api-types]
+description = "Start API (if not running) and regenerate OpenAPI types for the iOS app"
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(pwd)"
+API_STATUS="$("$ROOT/scripts/ensure-api-up.sh" | tail -n1)"
+eval "$API_STATUS"
+# Registered before `mktemp` (not after) so a started-but-not-yet-cleaned-up
+# server can't leak if `mktemp` itself fails.
+TMP_SPEC=""
+trap 'rm -f "$TMP_SPEC"; [ -n "$API_STARTED_PID" ] && kill "$API_STARTED_PID" 2>/dev/null || true' EXIT
+
+TMP_SPEC="$(mktemp)"
+curl -fs "$API_URL/openapi.json" -o "$TMP_SPEC"
+
+# swift-openapi-generator silently drops any `Optional[T]` field encoded the
+# way Pydantic/FastAPI encode it in OpenAPI 3.1 (`anyOf: [T, {type: null}]`)
+# -- it only understands the older `nullable: true` sibling form. Rewrite
+# before generating, or fields like PlayerRead.rating vanish with just a
+# warning, no build error. Reads the whole document into memory before
+# writing, so in-place (same path in and out) is safe.
+python3 "$ROOT/ios/openapi/fix_openapi_nullable.py" "$TMP_SPEC" "$TMP_SPEC"
+
+cd "$ROOT/ios/Tools/OpenAPIGeneratorCLI"
+swift run swift-openapi-generator generate "$TMP_SPEC" \\
+  --config "$ROOT/ios/openapi/openapi-generator-config.yaml" \\
+  --output-directory "$ROOT/ios/Fortymm/Generated"
+echo "Wrote ios/Fortymm/Generated/Types.swift"
 """

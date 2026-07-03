@@ -65,6 +65,7 @@
 			);
 			name = Fortymm;
 			packageProductDependencies = (
+				B65B76828ABCF8698E211D56 /* OpenAPIRuntime */,
 			);
 			productName = Fortymm;
 			productReference = 9433A8502FBC9443009F0F63 /* Fortymm.app */;
@@ -94,6 +95,9 @@
 			);
 			mainGroup = 9433A8472FBC9443009F0F63;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				79896626F7AE61D082F026DC /* XCRemoteSwiftPackageReference "swift-openapi-runtime" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 9433A8512FBC9443009F0F63 /* Products */;
 			projectDirPath = "";
@@ -338,6 +342,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		79896626F7AE61D082F026DC /* XCRemoteSwiftPackageReference "swift-openapi-runtime" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/apple/swift-openapi-runtime";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.12.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		B65B76828ABCF8698E211D56 /* OpenAPIRuntime */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 79896626F7AE61D082F026DC /* XCRemoteSwiftPackageReference "swift-openapi-runtime" */;
+			productName = OpenAPIRuntime;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 9433A8482FBC9443009F0F63 /* Project object */;
 }

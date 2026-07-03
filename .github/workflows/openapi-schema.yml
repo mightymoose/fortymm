@@ -31,29 +31,78 @@ jobs:
 
       - name: Regenerate OpenAPI types
         run: |
-          uvicorn app.main:app --host 127.0.0.1 --port 8000 > /tmp/uvicorn.log 2>&1 &
-          UV_PID=$!
-          trap 'kill $UV_PID 2>/dev/null || true' EXIT
+          API_STATUS="$(scripts/ensure-api-up.sh | tail -n1)"
+          eval "$API_STATUS"
+          trap '[ -n "$API_STARTED_PID" ] && kill "$API_STARTED_PID" 2>/dev/null || true' EXIT
 
-          for _ in $(seq 1 60); do
-            if curl -fs http://127.0.0.1:8000/openapi.json -o /dev/null; then
-              break
-            fi
-            sleep 0.5
-          done
-          if ! curl -fs http://127.0.0.1:8000/openapi.json -o /dev/null; then
-            echo "API failed to start" >&2
-            cat /tmp/uvicorn.log >&2
-            exit 1
-          fi
-
-          cd ../web-client
-          API_URL=http://127.0.0.1:8000 npm run gen:api
-        working-directory: api
+          cd web-client
+          API_URL="$API_URL" npm run gen:api
 
       - name: Verify committed schema is up to date
         run: |
           if ! git diff --exit-code web-client/src/api/schema.d.ts; then
             echo "::error::web-client/src/api/schema.d.ts is out of date. Run 'mise run regen-api-types' locally and commit the result."
+            exit 1
+          fi
+
+  verify-ios:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+          cache: pip
+          cache-dependency-path: api/pyproject.toml
+
+      - name: Cache Swift toolchain
+        id: swift-cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/swift-6.1-RELEASE-ubuntu24.04
+          key: ${{ runner.os }}-swift-6.1-RELEASE-ubuntu24.04
+
+      - name: Install Swift toolchain
+        if: steps.swift-cache.outputs.cache-hit != 'true'
+        run: |
+          # Not swift-actions/setup-swift: its Swiftly installer verifies a
+          # GPG signature against a key the runner's keyring doesn't have,
+          # which fails outside our control. The official swift.org tarball
+          # sidesteps that entirely.
+          curl -sS -o /tmp/swift.tar.gz "https://download.swift.org/swift-6.1-release/ubuntu2404/swift-6.1-RELEASE/swift-6.1-RELEASE-ubuntu24.04.tar.gz"
+          tar xzf /tmp/swift.tar.gz -C /tmp
+
+      - run: echo "/tmp/swift-6.1-RELEASE-ubuntu24.04/usr/bin" >> "$GITHUB_PATH"
+
+      - run: pip install -e '.[dev]'
+        working-directory: api
+
+      - name: Cache swift-openapi-generator build
+        uses: actions/cache@v4
+        with:
+          path: ios/Tools/OpenAPIGeneratorCLI/.build
+          key: ${{ runner.os }}-openapi-generator-cli-${{ hashFiles('ios/Tools/OpenAPIGeneratorCLI/Package.resolved') }}
+
+      - name: Regenerate iOS OpenAPI types
+        run: |
+          API_STATUS="$(scripts/ensure-api-up.sh | tail -n1)"
+          eval "$API_STATUS"
+          TMP_SPEC=""
+          trap 'rm -f "$TMP_SPEC"; [ -n "$API_STARTED_PID" ] && kill "$API_STARTED_PID" 2>/dev/null || true' EXIT
+
+          TMP_SPEC="$(mktemp)"
+          curl -fs "$API_URL/openapi.json" -o "$TMP_SPEC"
+          python3 ios/openapi/fix_openapi_nullable.py "$TMP_SPEC" "$TMP_SPEC"
+
+          cd ios/Tools/OpenAPIGeneratorCLI
+          swift run swift-openapi-generator generate "$TMP_SPEC" \
+            --config ../../openapi/openapi-generator-config.yaml \
+            --output-directory ../../Fortymm/Generated
+
+      - name: Verify committed Types.swift is up to date
+        run: |
+          if ! git diff --exit-code ios/Fortymm/Generated/Types.swift; then
+            echo "::error::ios/Fortymm/Generated/Types.swift is out of date. Run 'mise run regen-ios-api-types' locally and commit the result."
             exit 1
           fi
