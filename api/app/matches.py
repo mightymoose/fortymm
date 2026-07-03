@@ -1441,7 +1441,11 @@ _EMPTY_EXTRAS = ViewExtras(rating_changes={}, recent_form=[], head_to_head=None)
 async def _load_view_extras(db: AsyncSession, match: Match) -> ViewExtras:
     user_ids = _singles_user_ids(match)
     return ViewExtras(
-        rating_changes=await _load_rating_changes(db, match.id),
+        rating_changes=(
+            await _load_rating_changes(db, match.id)
+            if match.status == MatchStatus.completed
+            else {}
+        ),
         recent_form=await _load_recent_form(db, user_ids, match),
         head_to_head=await _load_head_to_head(
             db, user_ids if len(user_ids) == 2 else [], match
