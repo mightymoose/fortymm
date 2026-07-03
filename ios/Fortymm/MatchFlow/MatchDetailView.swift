@@ -15,7 +15,7 @@ struct MatchDetailView: View {
     @State private var reveal = false
     @State private var live: FinalMatch?
 
-    /// A confirm/dispute request is in flight (blocks the footer + dims the UI).
+    /// An accept (or post) request is in flight (blocks the footer + dims the UI).
     @State private var actioning = false
     @State private var actionError: String?
     /// Non-nil while the resume-scoring flow is presented over this screen.
@@ -37,8 +37,9 @@ struct MatchDetailView: View {
                 VStack(alignment: .leading, spacing: 0) {
                     breadcrumb
                     hero
-                    if negotiationState == .corrected,
-                       let diff = match.negotiation?.diff, !diff.isEmpty {
+                    // `diff` is only populated for the `corrected` phase, so
+                    // non-emptiness alone gates the section.
+                    if let diff = match.negotiation?.diff, !diff.isEmpty {
                         whatChangedSection(diff)
                     }
                     if !match.games.isEmpty { gamesSection }
@@ -80,7 +81,7 @@ struct MatchDetailView: View {
     }
 
     /// The viewer-relative negotiation phase (`.unknown` for seed/preview data).
-    private var negotiationState: NegotiationViewerState {
+    private var negotiationState: ViewerStateDTO {
         match.negotiation?.viewerState ?? .unknown
     }
 
@@ -271,7 +272,8 @@ struct MatchDetailView: View {
     private func whatChangedSection(_ diff: [ScoreDiffEntry]) -> some View {
         Section_("What changed") {
             VStack(spacing: 0) {
-                ForEach(Array(diff.enumerated()), id: \.element.id) { i, entry in
+                ForEach(diff.indices, id: \.self) { i in
+                    let entry = diff[i]
                     HStack(spacing: 10) {
                         Text("GAME \(entry.gameNumber)")
                             .font(FMFont.ui(10, weight: .semibold))
@@ -477,7 +479,7 @@ struct MatchDetailView: View {
     }
 
     /// The footer's full-width ball-gradient pill — shared by every primary
-    /// footer action (back, post, resume, confirm) so the shape/shadow live once.
+    /// footer action (back, post, resume, accept) so the shape/shadow live once.
     private func footerButton(
         _ title: String, showArrow: Bool = true, disabled: Bool = false,
         action: @escaping () -> Void

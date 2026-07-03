@@ -10,7 +10,9 @@ enum MatchNotification {
     /// Must equal `MATCH_RESULT_CONFIRMATION_CATEGORY` in `app/notifications/apns.py`.
     static let category = "MATCH_RESULT_CONFIRMATION"
     static let approveAction = "CONFIRM_MATCH_ACTION"
-    static let disputeAction = "DISPUTE_MATCH_ACTION"
+    /// Surface verb is "Suggest correction" (the dispute verb was replaced by
+    /// the propose/accept negotiation); the wire identifier stays stable.
+    static let suggestCorrectionAction = "DISPUTE_MATCH_ACTION"
     /// Must equal the `data` key the server sends (`{"match_id": "<uuid>"}`).
     static let matchIdKey = "match_id"
 }
@@ -83,14 +85,14 @@ final class PushNotificationManager: NSObject {
             title: "Approve",
             options: []
         )
-        let dispute = UNNotificationAction(
-            identifier: MatchNotification.disputeAction,
+        let suggestCorrection = UNNotificationAction(
+            identifier: MatchNotification.suggestCorrectionAction,
             title: "Suggest correction",
             options: [.foreground]
         )
         return UNNotificationCategory(
             identifier: MatchNotification.category,
-            actions: [approve, dispute],
+            actions: [approve, suggestCorrection],
             intentIdentifiers: [],
             options: []
         )
@@ -183,9 +185,20 @@ extension PushNotificationManager: UNUserNotificationCenterDelegate {
         case MatchNotification.approveAction:
             // The push payload carries only the match id; the service fetches
             // the match to resolve the standing proposal (the acceptance
-            // token) and accepts it.
-            act(completionHandler) { try await self.matchService.acceptStandingResult(matchId) }
-        case MatchNotification.disputeAction, UNNotificationDefaultActionIdentifier:
+            // token) and accepts it. Best-effort: a failed sign-off (the
+            // proposal moved on, or was already accepted) shouldn't hang the
+            // notification — the match screen reconciles state on next open.
+            // iOS gives this background action a short window; the fetch +
+            // accept pair fits comfortably.
+            Task {
+                do {
+                    _ = try await self.matchService.acceptStandingResult(matchId)
+                } catch {
+                    print("[push] match accept failed: \(error.fmMessage)")
+                }
+                completionHandler()
+            }
+        case MatchNotification.suggestCorrectionAction, UNNotificationDefaultActionIdentifier:
             // A correction needs the full board editor — open the app on the
             // match (the action is registered `.foreground`), same as a body
             // tap.
@@ -196,25 +209,6 @@ extension PushNotificationManager: UNUserNotificationCenterDelegate {
                 completionHandler()
             }
         default:
-            completionHandler()
-        }
-    }
-
-    /// Run the accept call, then signal completion regardless of outcome.
-    /// Best-effort: a failed sign-off (e.g. the proposal moved on, or was
-    /// already accepted) shouldn't hang the notification — the match screen
-    /// reconciles state on next open. iOS gives this background action a short
-    /// window; the fetch + accept pair fits comfortably.
-    private func act(
-        _ completionHandler: @escaping () -> Void,
-        _ work: @escaping () async throws -> FinalMatch
-    ) {
-        Task {
-            do {
-                _ = try await work()
-            } catch {
-                print("[push] match action failed: \(error.fmMessage)")
-            }
             completionHandler()
         }
     }

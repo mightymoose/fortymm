@@ -86,13 +86,6 @@ struct Game: Hashable {
 
 // MARK: - Result negotiation (view model)
 
-/// Viewer-relative phase of the propose/accept negotiation. Mirrors the web
-/// client's use of `negotiation.viewer_state`; `.unknown` covers a
-/// forward-compatible server addition (treated as "nothing actionable").
-enum NegotiationViewerState {
-    case live, awaiting, review, corrected, settled, unknown
-}
-
 /// One changed game between the viewer's prior proposal and the standing
 /// correction, pre-formatted for display. Scores are canonical side-1–side-2,
 /// matching the web's `ScoreDiff` rendering.
@@ -105,12 +98,12 @@ struct ScoreDiffEntry: Identifiable {
 }
 
 /// The negotiation state the detail/list screens act on: which phase the
-/// viewer is in, the standing proposal's id (the acceptance / supersedes
-/// token), its board (viewer-oriented, for seeding a correction), and the
-/// server-computed diff shown in the `corrected` phase.
+/// viewer is in (the lenient DTO enum, used directly like `APIMatchStatus`),
+/// the standing proposal's id (the acceptance / supersedes token), its board
+/// (viewer-oriented, for seeding a correction), and the server-computed diff
+/// shown in the `corrected` phase.
 struct MatchNegotiation {
-    let viewerState: NegotiationViewerState
-    let yourTurn: Bool
+    let viewerState: ViewerStateDTO
     let standingResultId: UUID?
     /// The standing proposal's games with `a` = you, `b` = them — the immutable
     /// snapshot a correction board is seeded from (mirroring the web's
@@ -142,18 +135,25 @@ struct FinalMatch: Identifiable {
     /// posted result is still awaiting the opponent's confirmation, so the
     /// W/L celebration and rating change are not yet real.
     var decided: Bool = true
+    /// The viewer-relative negotiation state, when the match came from the API
+    /// (nil only for seed/preview builders). Carries the acceptance token, the
+    /// standing board for corrections, and the `corrected`-phase diff — and is
+    /// the single source the derived flags below read, so they can't drift
+    /// from it.
+    var negotiation: MatchNegotiation? = nil
+
     /// True when a result has been posted but the match isn't decided yet — i.e.
     /// it's genuinely awaiting a sign-off. Distinct from `!decided`, which is
     /// also true for a freshly-created *live* match that has no posted result.
-    var awaitingConfirmation: Bool = false
+    var awaitingConfirmation: Bool {
+        inProgress && negotiation?.viewerState.hasStandingProposal == true
+    }
     /// The current user owes an accept-or-correct on the standing proposal
     /// (negotiation `review` or `corrected` — the states where the opponent
     /// posted and it's the viewer's turn).
-    var canConfirm: Bool = false
-    /// The viewer-relative negotiation state, when the match came from the API
-    /// (nil only for seed/preview builders). Carries the acceptance token, the
-    /// standing board for corrections, and the `corrected`-phase diff.
-    var negotiation: MatchNegotiation? = nil
+    var canConfirm: Bool {
+        viewerIsParticipant && negotiation?.viewerState.viewerOwesResponse == true
+    }
     /// Server head-to-head, when the detail BFF provided it.
     var h2h: MatchH2H? = nil
     // --- neutral, side-ordered view (for the matches list, which is a global
@@ -178,10 +178,9 @@ struct FinalMatch: Identifiable {
     var canScore: Bool = false
     /// The saved games already form a decided, valid match and the viewer can
     /// post the result. True for a match scored to a decision but never posted
-    /// (e.g. a web user entered the games then left, or a dispute that cleared
-    /// the signatures). `canScore` is *also* true here — the board stays
-    /// editable until signed — so the detail screen offers both "Post result"
-    /// (resubmit) and "Edit scores".
+    /// (e.g. a web user entered the games then left). `canScore` is *also*
+    /// true here — the board stays a scratchpad until a result is proposed —
+    /// so the detail screen offers both "Post result" and "Edit scores".
     var canFinalize: Bool = false
     /// The viewer's side number (1 or 2). Used to orient entered scores back to
     /// the canonical side-1/side-2 axis when resuming a match the viewer didn't
@@ -219,7 +218,7 @@ struct FinalMatch: Identifiable {
         guard viewerIsParticipant,
               let negotiation,
               let standingId = negotiation.standingResultId,
-              [.review, .corrected, .awaiting].contains(negotiation.viewerState),
+              negotiation.viewerState.hasStandingProposal,
               let uuid = UUID(uuidString: id) else { return nil }
         return ResumeScoring(
             matchId: uuid,

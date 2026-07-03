@@ -11,21 +11,28 @@ import Foundation
 
 // MARK: - Status
 
-/// Mirror of `app.models.match.MatchStatus`. Lenient: an unrecognised value
-/// (e.g. a status added server-side later) decodes to `.unknown` rather than
+/// A string-backed API enum that decodes leniently: an unrecognised value
+/// (e.g. a case added server-side later) decodes to `.unknown` rather than
 /// throwing, so the app keeps rendering.
-enum APIMatchStatus: String, Decodable {
+protocol LenientRawDecodable: RawRepresentable, Decodable where RawValue == String {
+    static var unknown: Self { get }
+}
+
+extension LenientRawDecodable {
+    init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = Self(rawValue: raw) ?? .unknown
+    }
+}
+
+/// Mirror of `app.models.match.MatchStatus`.
+enum APIMatchStatus: String, LenientRawDecodable {
     case pending
     case inProgress = "in_progress"
     case completed
     case disputed
     case voided
     case unknown
-
-    init(from decoder: Decoder) throws {
-        let raw = try decoder.singleValueContainer().decode(String.self)
-        self = APIMatchStatus(rawValue: raw) ?? .unknown
-    }
 }
 
 // MARK: - Shared nested types
@@ -75,9 +82,8 @@ struct MatchGameDTO: Decodable {
 // MARK: - Result negotiation (propose/accept)
 
 /// Mirror of `app.schemas.match.ViewerState` — the viewer-relative phase of the
-/// propose/accept negotiation. Lenient like `APIMatchStatus`: an unrecognised
-/// value decodes to `.unknown` so a server-side addition doesn't brick the app.
-enum ViewerStateDTO: String, Decodable {
+/// propose/accept negotiation.
+enum ViewerStateDTO: String, LenientRawDecodable {
     /// No result posted yet — the match is still being scored.
     case live
     /// The viewer's side posted the standing result and owes nothing.
@@ -91,9 +97,25 @@ enum ViewerStateDTO: String, Decodable {
     case `final`
     case unknown
 
-    init(from decoder: Decoder) throws {
-        let raw = try decoder.singleValueContainer().decode(String.self)
-        self = ViewerStateDTO(rawValue: raw) ?? .unknown
+    /// A proposal has been posted and is still being negotiated — the states
+    /// where the board is no longer a live scratchpad but the match isn't
+    /// settled either.
+    var hasStandingProposal: Bool {
+        switch self {
+        case .awaiting, .review, .corrected: return true
+        case .live, .final, .unknown: return false
+        }
+    }
+
+    /// The viewer owes an accept-or-correct on the standing proposal: the
+    /// opponent posted it (first posting → `review`; a correction over the
+    /// viewer's own prior proposal → `corrected`). Matches the server's
+    /// `your_turn`, which is set exactly for these two states.
+    var viewerOwesResponse: Bool {
+        switch self {
+        case .review, .corrected: return true
+        case .live, .awaiting, .final, .unknown: return false
+        }
     }
 }
 
@@ -107,12 +129,14 @@ struct NegotiationGameDTO: Decodable {
 
 /// A proposed result (`NegotiationResult`) — an immutable snapshot of the board
 /// as claimed by whoever submitted it. `id` doubles as the concurrency token
-/// for `POST .../results/{id}/acceptance` and `supersedes_result_id`.
+/// for `POST .../results/{id}/acceptance` and `supersedes_result_id`. The wire
+/// shape also carries `submitted_by`/`submitted_at`; they're left undeclared
+/// (JSONDecoder ignores them) so decoding never depends on fields the app
+/// doesn't read — the failure mode that broke every match screen when
+/// `signatures` was removed server-side.
 struct NegotiationResultDTO: Decodable {
     let id: UUID
     let games: [NegotiationGameDTO]
-    let submittedBy: UUID
-    let submittedAt: Date
 }
 
 /// One changed game between the viewer's prior proposal and the standing
@@ -125,12 +149,13 @@ struct NegotiationDiffEntryDTO: Decodable {
 }
 
 /// Mirror of `MatchNegotiation` — always present on both the detail and list
-/// shapes. `diff` is only populated for the `corrected` state.
+/// shapes. `diff` is only populated for the `corrected` state. The wire shape's
+/// `your_turn` and `prior_result` are left undeclared: `your_turn` is fully
+/// implied by `viewer_state` (review/corrected), and nothing reads the prior
+/// result (the diff is server-computed).
 struct MatchNegotiationDTO: Decodable {
     let viewerState: ViewerStateDTO
-    let yourTurn: Bool
     let standingResult: NegotiationResultDTO?
-    let priorResult: NegotiationResultDTO?
     let diff: [NegotiationDiffEntryDTO]?
 }
 

@@ -95,16 +95,20 @@ struct MatchService {
         return Self.finalMatch(from: details)
     }
 
-    /// Fetch the match and accept its standing proposal, if the viewer owes one
-    /// (negotiation `review`/`corrected`). Used by the push-notification
-    /// "Approve" action, whose payload carries only the match id — the fetch
-    /// resolves the current standing result id (the acceptance token). Throws
-    /// if nothing is awaiting the viewer's sign-off (e.g. already accepted).
+    /// Nothing is standing to accept (the match is live or already settled) —
+    /// a client-side precondition, deliberately distinct from `APIError.http`
+    /// so it can't be mistaken for a real server 409.
+    struct NoStandingResult: Error {}
+
+    /// Fetch the match and accept its standing proposal. Used by the
+    /// push-notification "Approve" action, whose payload carries only the
+    /// match id — the fetch resolves the current standing result id (the
+    /// acceptance token). Whether the viewer is actually allowed to accept is
+    /// the server's call: an out-of-turn acceptance gets the real 409/4xx.
     func acceptStandingResult(_ matchId: UUID) async throws -> FinalMatch {
         let details: MatchDetailsDTO = try await client.get("/v1/matches/\(matchId.uuidString)")
-        guard details.negotiation.yourTurn,
-              let standing = details.negotiation.standingResult else {
-            throw APIError.http(status: 409, detail: "No result is awaiting your sign-off.")
+        guard let standing = details.negotiation.standingResult else {
+            throw NoStandingResult()
         }
         return try await acceptResult(matchId: matchId, resultId: standing.id)
     }
@@ -176,31 +180,22 @@ struct MatchService {
 
     // MARK: Negotiation DTO → view model
 
-    private static func viewerState(_ s: ViewerStateDTO) -> NegotiationViewerState {
-        switch s {
-        case .live: return .live
-        case .awaiting: return .awaiting
-        case .review: return .review
-        case .corrected: return .corrected
-        case .final: return .settled
-        case .unknown: return .unknown
-        }
+    /// Project canonical side-1/side-2 points onto the viewer-relative axis
+    /// (`a` = you, `b` = them) — the one place the orientation rule lives, used
+    /// by both the match-games and standing-result mappings.
+    private static func orientedGame(side1: Int, side2: Int, mineIsSide1: Bool) -> Game {
+        mineIsSide1 ? Game(a: side1, b: side2) : Game(a: side2, b: side1)
     }
 
-    /// Map the wire negotiation onto the view model: resolve the viewer phase,
-    /// re-orient the standing board so `a` = you, and pre-format the
-    /// `corrected`-phase diff (canonical side-1–side-2, like the web's
-    /// ScoreDiff).
+    /// Map the wire negotiation onto the view model: re-orient the standing
+    /// board so `a` = you, and pre-format the `corrected`-phase diff (canonical
+    /// side-1–side-2, like the web's ScoreDiff).
     private static func negotiation(
         _ n: MatchNegotiationDTO, mineIsSide1: Bool
     ) -> MatchNegotiation {
         let standingGames: [Game] = (n.standingResult?.games ?? [])
             .sorted { $0.gameNumber < $1.gameNumber }
-            .map { g in
-                mineIsSide1
-                    ? Game(a: g.side1Points, b: g.side2Points)
-                    : Game(a: g.side2Points, b: g.side1Points)
-            }
+            .map { orientedGame(side1: $0.side1Points, side2: $0.side2Points, mineIsSide1: mineIsSide1) }
         func fmt(_ g: NegotiationGameDTO) -> String { "\(g.side1Points)–\(g.side2Points)" }
         let diff: [ScoreDiffEntry] = (n.diff ?? []).map { entry in
             ScoreDiffEntry(
@@ -210,8 +205,7 @@ struct MatchService {
             )
         }
         return MatchNegotiation(
-            viewerState: viewerState(n.viewerState),
-            yourTurn: n.yourTurn,
+            viewerState: n.viewerState,
             standingResultId: n.standingResult?.id,
             standingGames: standingGames,
             diff: diff
@@ -277,27 +271,19 @@ struct MatchService {
             .sorted { $0.gameNumber < $1.gameNumber }
             .compactMap { g in
                 guard let s = g.score else { return nil }
-                return mineIsSide1
-                    ? Game(a: s.side1Points, b: s.side2Points)
-                    : Game(a: s.side2Points, b: s.side1Points)
+                return orientedGame(
+                    side1: s.side1Points, side2: s.side2Points, mineIsSide1: mineIsSide1
+                )
             }
 
         let decided = status == .completed
         let rated = ratedHint ?? (mine?.ratingChange != nil)
         let delta = mine?.ratingChange.map { Int($0.delta.rounded()) }
         // The negotiation block is populated on both the detail and list shapes,
-        // so "a result has been posted" is authoritative everywhere — no more
+        // so the sign-off flags (`awaitingConfirmation`, `canConfirm`) are
+        // derived from it on `FinalMatch` itself — authoritative everywhere, no
         // games-won heuristic (which mis-read a rewound board as posted).
         let negotiation = Self.negotiation(negotiationDTO, mineIsSide1: mineIsSide1)
-        let resultPosted = [.awaiting, .review, .corrected]
-            .contains(negotiation.viewerState)
-        let awaitingConfirmation = status == .inProgress && resultPosted
-        // The viewer owes an accept-or-correct: the opponent posted the standing
-        // proposal (first posting → `review`; a correction over the viewer's own
-        // prior proposal → `corrected`). Matches `your_turn`, which the server
-        // sets exactly for these two states.
-        let canConfirm = viewerIsParticipant && negotiation.yourTurn
-            && [.review, .corrected].contains(negotiation.viewerState)
 
         return FinalMatch(
             id: id.uuidString,
@@ -316,8 +302,6 @@ struct MatchService {
             context: rated ? "Rated · \(league.name)" : "Casual",
             statusLabel: statusLabel,
             decided: decided,
-            awaitingConfirmation: awaitingConfirmation,
-            canConfirm: canConfirm,
             negotiation: negotiation,
             h2h: h2h.map { mapH2H($0, mineIsSide1: mineIsSide1) },
             sideA: sidePlayer(side1),
@@ -327,10 +311,9 @@ struct MatchService {
             viewerIsParticipant: viewerIsParticipant,
             inProgress: status == .inProgress,
             // `canScore` is the server's authoritative "scores are editable"
-            // signal — true whenever no result is signed (the scratchpad is
-            // open), regardless of whether a next game remains. `canResume` is
-            // built on it, so it stays correct on the list surface where
-            // `awaitingConfirmation` is only a heuristic.
+            // signal — true whenever no result has been proposed (the
+            // scratchpad is open), regardless of whether a next game remains.
+            // `canResume` is built on it.
             canScore: canScore && viewerIsParticipant,
             canFinalize: canFinalize && viewerIsParticipant,
             yourSideNumber: mine?.sideNumber ?? 1
