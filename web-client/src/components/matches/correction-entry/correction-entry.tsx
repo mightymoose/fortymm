@@ -93,10 +93,16 @@ export function CorrectionEntry({ matchId }: { matchId: string }) {
   const standing = data.negotiation.standing_result;
   const mySide = data.sides.find((s) => s.is_current_user_side) ?? null;
   const oppSide = data.sides.find((s) => !s.is_current_user_side) ?? null;
-
-  // The correction flow only applies to participants with a standing result to
-  // correct. Spectators, or a match with no proposal in play, bounce back.
-  if (!standing || !mySide || !oppSide) {
+  // The correction flow only applies to participants with a standing result on
+  // a match still open for negotiation: `review`/`corrected` (an opponent's
+  // proposal to react to) and `awaiting` (editing the viewer's own pending
+  // proposal, via the match-detail "Edit result" action) all belong here.
+  // `final` is the one open-negotiation-shaped exception — it still carries a
+  // `standing_result` (the settled score), so that check alone doesn't catch
+  // it, but the match is locked and must bounce back instead of rendering a
+  // live, submittable editor on direct nav (#730).
+  const settled = data.negotiation.viewer_state === "final";
+  if (!standing || !mySide || !oppSide || settled) {
     return <Navigate {...matchDetailRoute(matchId)} />;
   }
 

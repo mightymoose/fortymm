@@ -9,6 +9,7 @@ import { waitFor } from "@/test/utilities";
 import {
   STANDING_RESULT_ID,
   buildCorrectableMatch,
+  buildStandingResult,
 } from "./correction-entry.factory";
 import { correctionEntryPage } from "./correction-entry.page";
 
@@ -197,6 +198,59 @@ describe("CorrectionEntry", () => {
           .queryAlerts()
           .some((a: HTMLElement) => /moved on/i.test(a.textContent ?? "")),
       ).toBe(true),
+    );
+    expect(correctionEntryPage.queryMatchLanding()).not.toBeInTheDocument();
+  });
+
+  it("redirects to match details instead of rendering when the match is already settled (#730)", async () => {
+    // A finalized match still carries a `standing_result` (the settled score),
+    // so the redirect must key off `viewer_state`, not just the presence of a
+    // standing result. Direct-nav to /results/new on such a match must bounce
+    // back to the (locked) match-detail page instead of rendering a live,
+    // submittable correction editor.
+    correctionEntryPage.mockMatch(() =>
+      HttpResponse.json(
+        buildCorrectableMatch({
+          negotiation: {
+            viewer_state: "final",
+            your_turn: false,
+            standing_result: buildStandingResult(),
+            prior_result: null,
+            diff: null,
+          },
+        }),
+      ),
+    );
+    correctionEntryPage.render();
+
+    await waitFor(() =>
+      expect(correctionEntryPage.queryMatchLanding()).toBeInTheDocument(),
+    );
+  });
+
+  it("still renders for the viewer's own pending proposal (awaiting), reachable via match-detail's Edit result action", async () => {
+    // `awaiting` also has `your_turn: false` (it's the opponent's move, not
+    // the viewer's), but unlike `final` it's a self-edit of the viewer's own
+    // standing proposal, wired up via the match-detail "Edit result" link — so
+    // the redirect guard must key specifically off `final`, not `your_turn`,
+    // or this legitimate entry point breaks (regression check on the #730 fix).
+    correctionEntryPage.mockMatch(() =>
+      HttpResponse.json(
+        buildCorrectableMatch({
+          negotiation: {
+            viewer_state: "awaiting",
+            your_turn: false,
+            standing_result: buildStandingResult(),
+            prior_result: null,
+            diff: null,
+          },
+        }),
+      ),
+    );
+    correctionEntryPage.render();
+
+    await waitFor(() =>
+      expect(correctionEntryPage.getInput("rita.kovac")).toHaveValue("11"),
     );
     expect(correctionEntryPage.queryMatchLanding()).not.toBeInTheDocument();
   });
