@@ -726,15 +726,11 @@ def _filtered_matches_query(
     return base if filter_ is None else _apply_list_filter(base, filter_)
 
 
-# Open statuses an attention row can hold — the only ones where the current
-# user can still owe (or be owed) a move. Completed/voided drop out. Used by the
-# sort-key fallback below; membership itself is the narrower *actionable* set
-# (``_actionable_attention_filter``).
-_ATTENTION_STATUSES = (
-    MatchStatus.pending,
-    MatchStatus.in_progress,
-    MatchStatus.disputed,
-)
+# Sort rank for a match that ``list_attention_kind`` can't classify — sits above
+# every real ``attention_priority`` (0–5) so a surprise row sinks to the bottom
+# rather than crashing the page. Only reachable defensively: the actionable
+# filter already excludes everything that would classify as ``None``.
+_UNCLASSIFIED_SORT_RANK = 99
 
 
 def _actionable_attention_filter[SelectT: Select[Any]](
@@ -788,7 +784,7 @@ def _attention_sort_key(
     if kind is None:
         # Defensive: an open participant match always classifies. Sink any
         # surprise to the bottom rather than crash the page.
-        return (len(_ATTENTION_STATUSES) + 99, match.updated_at)
+        return (_UNCLASSIFIED_SORT_RANK, match.updated_at)
     return (
         attention_priority(kind, match.match_settings.affects_rating),
         match.updated_at,
