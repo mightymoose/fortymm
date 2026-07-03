@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// Circular avatar for the match flow. `you` players get the orange gradient;
-/// everyone else gets their palette color. `glow` is the win/focus halo.
+/// everyone else gets their palette color. `glow` is the focus halo.
 struct MatchAvatar: View {
     let player: MatchPlayer
     var size: CGFloat = 40

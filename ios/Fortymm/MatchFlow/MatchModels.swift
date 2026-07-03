@@ -133,7 +133,7 @@ struct FinalMatch: Identifiable {
     var statusLabel: String = "Final"
     /// True once the result is official (match completed). When false, the
     /// posted result is still awaiting the opponent's confirmation, so the
-    /// W/L celebration and rating change are not yet real.
+    /// rating change is not yet real.
     var decided: Bool = true
     /// The viewer-relative negotiation state, when the match came from the API
     /// (nil only for seed/preview builders). Carries the acceptance token, the
