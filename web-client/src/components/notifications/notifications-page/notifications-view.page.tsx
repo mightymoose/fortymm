@@ -30,7 +30,14 @@ const scoped = (container: Container) => ({
 
 export const notificationsViewPage = {
   render(overrides: Partial<NotificationsViewProps> = {}) {
-    render(<NotificationsView {...buildNotificationsViewProps(overrides)} />)
+    const utils = render(<NotificationsView {...buildNotificationsViewProps(overrides)} />)
+    return {
+      ...utils,
+      /** Re-render with a fresh set of overrides (e.g. an updated feed). */
+      rerenderWith(next: Partial<NotificationsViewProps> = {}) {
+        utils.rerender(<NotificationsView {...buildNotificationsViewProps(next)} />)
+      },
+    }
   },
 
   within(container: Container = screen) {

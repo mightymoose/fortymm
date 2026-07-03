@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useCallback, useState } from 'react'
 import {
   useMarkAllNotificationsRead,
   useNotificationFeed,
@@ -11,6 +11,7 @@ import {
 } from './notifications-page/notifications-view'
 import { useAutoMarkRead } from './use-auto-mark-read'
 import { useFollowNotification } from './use-follow-notification'
+import { useStickyUnread } from './use-sticky-unread'
 
 /** Route container for the full notifications page — wires the feed query, the
  * filter state, and the mark-read mutations to the pure view. */
@@ -21,6 +22,26 @@ export function NotificationsPage() {
   const follow = useFollowNotification()
   const markAll = useMarkAllNotificationsRead()
   const markSeen = useAutoMarkRead()
+  const { pinned: stickyUnread, remember, forget } = useStickyUnread(
+    filter === 'unread',
+  )
+
+  // A row that scrolls into view auto-marks-read AND gets pinned, so viewing it
+  // doesn't drop it off the Unread filter mid-read (#762).
+  const handleSeen = useCallback(
+    (id: string) => {
+      remember(id)
+      markSeen(id)
+    },
+    [remember, markSeen],
+  )
+
+  // "Mark all read" is an explicit bulk dismiss — forget the snapshot so the
+  // Unread list actually empties instead of leaving the just-read rows pinned.
+  const handleMarkAllRead = useCallback(() => {
+    forget()
+    markAll.mutate()
+  }, [forget, markAll])
 
   if (feed.isPending || taxonomy.isPending) {
     return (
@@ -49,8 +70,9 @@ export function NotificationsPage() {
       filter={filter}
       onFilterChange={setFilter}
       onActivate={follow}
-      onMarkAllRead={() => markAll.mutate()}
-      onSeen={markSeen}
+      onMarkAllRead={handleMarkAllRead}
+      onSeen={handleSeen}
+      stickyUnread={stickyUnread}
     />
   )
 }

@@ -46,6 +46,7 @@ export function buildNotificationsViewProps(
     onFilterChange: () => {},
     onActivate: () => {},
     onMarkAllRead: () => {},
+    stickyUnread: new Set<string>(),
     ...overrides,
   }
 }
