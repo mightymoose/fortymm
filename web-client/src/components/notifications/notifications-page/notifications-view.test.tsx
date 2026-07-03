@@ -29,22 +29,37 @@ describe('NotificationsView', () => {
     expect(notificationsViewPage.queryTitle('Rating +12')).not.toBeInTheDocument()
   })
 
-  it('keeps an unread row visible after it auto-marks-read (#762)', () => {
+  it('keeps a seen row visible after it auto-marks-read (#762)', () => {
     const items = buildNotificationsItems()
+    // n-1 has been seen (auto-mark-read pins it via stickyUnread).
+    const stickyUnread = new Set(['n-1'])
     const { rerenderWith } = notificationsViewPage.render({
       items,
       filter: 'unread',
+      stickyUnread,
     })
     expect(notificationsViewPage.queryTitle('Confirm your score')).toBeInTheDocument()
 
-    // The row is seen and auto-marked-read: the feed cache flips its read_at.
+    // The auto-mark-read lands: the feed cache flips the row's read_at.
     const readNow = items.map((item) =>
       item.id === 'n-1' ? { ...item, read_at: '2026-07-03T00:00:00.000Z' } : item,
     )
-    rerenderWith({ items: readNow, filter: 'unread' })
+    rerenderWith({ items: readNow, filter: 'unread', stickyUnread })
 
     // It stays on screen (just loses the unread emphasis) instead of vanishing.
     expect(notificationsViewPage.queryTitle('Confirm your score')).toBeInTheDocument()
+  })
+
+  it('drops a read row that was never pinned from the unread filter', () => {
+    const items = buildNotificationsItems().map((item) =>
+      item.id === 'n-1' ? { ...item, read_at: '2026-07-03T00:00:00.000Z' } : item,
+    )
+    // Empty snapshot: nothing was seen, so a read row (e.g. Mark all read, or a
+    // read on another tab) is not kept around.
+    notificationsViewPage.render({ items, filter: 'unread', stickyUnread: new Set() })
+    expect(
+      notificationsViewPage.queryTitle('Confirm your score'),
+    ).not.toBeInTheDocument()
   })
 
   it('filters by category', () => {
