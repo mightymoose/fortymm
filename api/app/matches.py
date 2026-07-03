@@ -591,7 +591,15 @@ def my_standing_proposal_exists(current_user_id: uuid.UUID) -> Any:
     opponent* to accept: the current user has already signed and owes no move.
     It's the SQL twin of ``list_attention_kind``'s ``waiting_opponent`` bucket.
     Shared by the dashboard's waiting/actionable split and the matches-list
-    Attention filter so the two can never disagree about who owes a move."""
+    Attention filter so the two can never disagree about who owes a move.
+
+    Singles-only assumption: this keys on ``submitted_by_user_id ==
+    current_user``, whereas ``list_attention_kind`` treats a proposal from *any*
+    player on the viewer's side as theirs (``_submitted_on_side``). For
+    ``team_size == 1`` (the only topology today — see ``create_match``) the two
+    coincide. When doubles lands, a partner's proposal would make this ``False``
+    while the classifier says ``waiting_opponent``, so this must move to a
+    side-based match to keep the SQL and Python twins aligned."""
     superseding = aliased(MatchResult)
     return (
         select(MatchResult.id)
