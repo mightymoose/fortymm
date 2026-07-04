@@ -205,6 +205,7 @@ function SubmitRow({
           className="nm-btn nm-btn-primary"
           onClick={onSubmit}
           disabled={submitting}
+          aria-busy={submitting}
         >
           {submitting ? 'Starting…' : 'Start match'}
           {!submitting && <ArrowRight size={16} strokeWidth={2.5} />}
