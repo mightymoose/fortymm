@@ -345,11 +345,13 @@ async def _find_session_user(db: AsyncSession, raw_token: str) -> User | None:
 
 
 def _clear_cookie_header() -> dict[str, str]:
-    """A ``Set-Cookie`` that clears the session cookie, for attaching to the 401
-    we raise when a cookie resolves to a tombstoned guest. The cookie is
-    HttpOnly, so only the server can drop it — clearing it lets the holder start
-    a fresh guest from the login screen. Mirror ``_clear_session_cookie``'s
-    attributes so the browser actually matches and drops it."""
+    """A ``Set-Cookie`` that clears the session cookie, for attaching to a 401
+    that ends a session no longer good for auth — a cookie resolving to a
+    tombstoned (merged-away) guest, or one that no longer resolves at all
+    (signed out / expired). The cookie is HttpOnly, so only the server can drop
+    it — clearing it lets the holder start a fresh guest from the login screen.
+    Mirror ``_clear_session_cookie``'s attributes so the browser actually
+    matches and drops it."""
     attrs = [
         f"{SESSION_COOKIE_NAME}=",
         "Path=/",

@@ -8,7 +8,6 @@ import './index.css'
 import { Toaster } from '@/components/ui/sonner'
 import { NotFoundPage } from '@/components/not-found-page'
 import { setSessionEndedHandler } from '@/api/client'
-import { SESSION_QUERY_KEY } from '@/api/session'
 import { clearAppEntered } from '@/lib/landing-redirect'
 import { initFaro } from '@/observability/faro'
 import { routeTree } from './routeTree.gen'
@@ -47,9 +46,15 @@ declare module '@tanstack/react-router' {
 // and route to sign-in (email prefilled when the server knows it; the
 // signed-out case has none). Never let the next bootstrap silently mint a fresh
 // guest in the signed-out user's place.
+//
+// `clear()`, not `removeQueries(['session'])`: this is an identity-loss event,
+// so drop ALL cached per-user data (dashboard, matches, players, ...) the same
+// way `useLogout`/`useConsumeLoginToken` do — otherwise the departed user's BFF
+// responses leak into the next ephemeral session if the browser re-enters the
+// app as a fresh guest before those queries go stale (#754).
 setSessionEndedHandler(({ message, email }) => {
   clearAppEntered()
-  queryClient.removeQueries({ queryKey: SESSION_QUERY_KEY })
+  queryClient.clear()
   toast.message(message)
   void router.navigate({ to: '/login', search: { email, error: undefined } })
 })
