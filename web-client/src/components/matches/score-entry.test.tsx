@@ -526,6 +526,83 @@ describe('ScoreEntry — create', () => {
     expect(await screen.findByText('scoring-new m-1 4')).toBeInTheDocument()
   })
 
+  it('blocks with a "View match →" interstitial when the concurrent scratchpad already decided the match', async () => {
+    // Stale poster: their view is 2-0 on game 3, so a win reads as a 3-0 sweep.
+    // But while they were away the opponent committed games 3, 4 and 5 in their
+    // own favor — the true board is 2-3 and the match is *already decided* (for
+    // the opponent), no result posted yet. The interstitial must recognise the
+    // decided board and offer "View match →" rather than pointing "Resume" at an
+    // unplayable game.
+    const user = userEvent.setup()
+    const committedMatch = matchDetails({
+      id: 'm-1',
+      status: 'in_progress',
+      status_label: 'Live',
+      best_of: 5,
+      games_to_win: 3,
+      affects_rating: true,
+      sides: participantSides({ meWins: 2, oppWins: 3 }),
+      games: [
+        { id: 'g-1', game_number: 1, score: score('s-1', 11, 4) },
+        { id: 'g-2', game_number: 2, score: score('s-2', 11, 6) },
+        { id: 'g-3', game_number: 3, score: score('s-3', 3, 11) },
+        { id: 'g-4', game_number: 4, score: score('s-4', 5, 11) },
+        { id: 'g-5', game_number: 5, score: score('s-5', 7, 11) },
+      ],
+      current_game: null,
+      can_score: false,
+      can_finalize: false,
+    })
+    server.use(
+      http.get('*/v1/matches/m-1', () =>
+        HttpResponse.json(
+          inProgressMatch({
+            sides: participantSides({ meWins: 2, oppWins: 0 }),
+            games: [
+              { id: 'g-1', game_number: 1, score: score('s-1', 11, 4) },
+              { id: 'g-2', game_number: 2, score: score('s-2', 11, 6) },
+            ],
+            current_game: { game_number: 3 },
+          }),
+        ),
+      ),
+      http.post('*/v1/matches/m-1/results', () =>
+        HttpResponse.json(
+          {
+            detail: {
+              message: 'The score changed while you were entering it.',
+              committed_match: committedMatch,
+            },
+          },
+          { status: 409 },
+        ),
+      ),
+    )
+
+    renderScoreEntry({ kind: 'create', matchId: 'm-1', gameNumber: 3 })
+    const meInput = await screen.findByRole('textbox', {
+      name: 'rita.kovac score',
+    })
+    const oppInput = screen.getByRole('textbox', { name: 'nguyen.t score' })
+    await user.type(meInput, '11')
+    await user.type(oppInput, '0')
+    await user.click(screen.getByRole('button', { name: /post result/i }))
+
+    // The interstitial renders (not preempted by the decided-board nav bounce)
+    // and reads the true board as decided, so the CTA is "View match →".
+    expect(
+      await screen.findByText(/the score changed while you were entering it/i),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole('textbox', { name: 'rita.kovac score' }),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: /resume scoring/i }),
+    ).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /view match/i }))
+    expect(await screen.findByText('match-page m-1')).toBeInTheDocument()
+  })
+
   it('finalizes an out-of-order clinch (game 4 blank) and posts the compacted board (#742)', async () => {
     // The repro: Bo7, games 1-3 to side 1, then the user jumps to game 5 (game 4
     // still blank) and scores the clinching 4th win there. That leaves a gappy

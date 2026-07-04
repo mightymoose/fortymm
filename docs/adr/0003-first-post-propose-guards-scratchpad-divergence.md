@@ -62,8 +62,11 @@ The reconcile is server-authoritative and lands the poster on the *true* board.
 score-entry screen replaces the score pad with a **blocking interstitial** ("the
 score changed — a game was saved by someone else") whose single action resumes
 scoring at the next still-unplayed game (or the match page when the committed
-board is already fully scored). It never presents the opponent's committed game as
-the poster's editable draft.
+board is already *decided* — keyed on the decider, not on the first empty slot, so
+a board clinched before its last game doesn't point "Resume" at an unplayable
+game). The interstitial is computed ahead of the screen's participant/decided/
+out-of-range nav bounces so a decided committed board can't preempt it. It never
+presents the opponent's committed game as the poster's editable draft.
 
 ## Known non-goal: delete-divergence
 

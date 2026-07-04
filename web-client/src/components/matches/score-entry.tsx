@@ -170,6 +170,22 @@ function ScoreEntryInner({
     )
   }
 
+  // A first-post that lost to a concurrent scratchpad save (issue D1): the
+  // proposed board disagreed with a game someone else committed. The 409 carries
+  // the true committed match; `useProposeResult`'s onError already re-synced the
+  // caches from it, so `data` now reflects reality. We block the score pad below
+  // and show a "the score changed" interstitial instead of silently overwriting.
+  // Computed up here — ahead of every early `<Navigate>` return — because the
+  // re-synced committed board can be decided or leave this route's game past the
+  // decider, either of which would otherwise bounce the poster away (to match
+  // detail, or the edit page) before the interstitial ever renders, dropping the
+  // "score changed" explanation the conflict exists to deliver.
+  const finalizeApiError =
+    finalizeMutation.error instanceof ApiError ? finalizeMutation.error : null
+  const boardConflict = finalizeApiError
+    ? boardConflictDetail(finalizeApiError)
+    : null
+
   // The scoring screen is participant-only; spectators bounce back to the
   // read-only details page. The opponent side is always present — a real
   // player, or the player-less placeholder for solo matches.
@@ -182,7 +198,10 @@ function ScoreEntryInner({
   // Once a match is finalized every write path 409s — there's nothing to do
   // here. Same goes once a result is posted — scores are frozen the instant the
   // first proposal lands; accepting it lives on the match-details page.
-  if (data.status === 'completed' || data.negotiation.standing_result !== null) {
+  if (
+    !boardConflict &&
+    (data.status === 'completed' || data.negotiation.standing_result !== null)
+  ) {
     return <Navigate {...matchDetailRoute(matchId)} />
   }
   // The game number past which no more games can be played: once a side has
@@ -198,31 +217,17 @@ function ScoreEntryInner({
   // can never be played. An already-scored game at/under the decider stays
   // editable (you can still fix the deciding game itself).
   if (
-    !Number.isInteger(gameNumber) ||
-    gameNumber < 1 ||
-    gameNumber > data.best_of ||
-    (decider !== null && gameNumber > decider && !isScored(gameNumber))
+    !boardConflict &&
+    (!Number.isInteger(gameNumber) ||
+      gameNumber < 1 ||
+      gameNumber > data.best_of ||
+      (decider !== null && gameNumber > decider && !isScored(gameNumber)))
   ) {
     return <Navigate {...matchDetailRoute(matchId)} />
   }
 
   const game = data.games.find((g) => g.game_number === gameNumber) ?? null
   const persistedScore = game?.score ?? null
-
-  // A first-post that lost to a concurrent scratchpad save (issue D1): the
-  // proposed board disagreed with a game someone else committed. The 409 carries
-  // the true committed match; `useProposeResult`'s onError already re-synced the
-  // caches from it, so `data` now reflects reality. We block the score pad below
-  // and show a "the score changed" interstitial instead of silently overwriting.
-  // Computed here (before the create→edit redirect) because the re-sync gives the
-  // active game a committed score, which would otherwise bounce the poster to the
-  // edit page — presenting the opponent's committed game as their editable draft,
-  // the exact thing the interstitial exists to avoid.
-  const finalizeApiError =
-    finalizeMutation.error instanceof ApiError ? finalizeMutation.error : null
-  const boardConflict = finalizeApiError
-    ? boardConflictDetail(finalizeApiError)
-    : null
 
   // Mode/URL/state alignment: in create mode but a score exists → swap to
   // the edit URL so Save doesn't try to POST .../scores/new and 409. The
@@ -413,9 +418,16 @@ function ScoreEntryInner({
     )
   })
   // Where "Resume" sends them: the first still-unplayed game on the true board,
-  // or the match page when the committed board is already fully scored.
+  // or the match page when the committed board leaves nothing left to play. A
+  // board decided *before* its last slot (a 3-0 sweep with games 4-5 blank) has
+  // unscored slots that can never be played — so gate on the decider, not on the
+  // first empty slot, or "Resume" would point at an unplayable game.
   const committedForResume = committedMatch ?? data
   const nextUnplayedGame = (() => {
+    const resumeScored = scoredGamePoints(committedForResume.games)
+    if (deciderGameNumber(resumeScored, committedForResume.best_of) !== null) {
+      return null
+    }
     const scored = new Set(
       committedForResume.games.filter((g) => g.score).map((g) => g.game_number),
     )
