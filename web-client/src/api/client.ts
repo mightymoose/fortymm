@@ -209,6 +209,34 @@ export function conflictDetail(
 }
 
 /**
+ * The structured conflict detail when `error` is a first-post propose 409 whose
+ * body carries `{ detail: { message, committed_match } }` — the board-level
+ * concurrency conflict (issue D1): the proposed board disagreed with a game a
+ * concurrent participant committed to the shared scratchpad, so the server
+ * rejected it and returned the true committed match to re-sync from. Keyed on
+ * `committed_match`, which distinguishes it from the per-game `committed_score`
+ * conflict, the negotiation conflict, and a plain-string 409 (a locked match).
+ * Returns `null` for anything else. `committed_match` is left `unknown` here in
+ * the same loose style as `conflictDetail`; the caller narrows it to
+ * `MatchDetails`.
+ */
+export function boardConflictDetail(
+  error: ApiError,
+): { message?: string; committed_match: unknown } | null {
+  if (error.status !== 409) return null
+  const detail = (error.body as { detail?: unknown } | null | undefined)?.detail
+  if (
+    detail &&
+    typeof detail === 'object' &&
+    !Array.isArray(detail) &&
+    'committed_match' in detail
+  ) {
+    return detail as { message?: string; committed_match: unknown }
+  }
+  return null
+}
+
+/**
  * Throws ApiError when the openapi-fetch result has an error or no data. Pass
  * `{ allowEmpty: true }` for endpoints that legitimately return no body (e.g.
  * 204 DELETEs).

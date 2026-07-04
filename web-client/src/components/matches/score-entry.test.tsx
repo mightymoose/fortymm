@@ -449,6 +449,226 @@ describe('ScoreEntry — create', () => {
     })
   })
 
+  it('blocks with a "the score changed" interstitial when the first-post loses to a concurrent scratchpad save (D1)', async () => {
+    // The poster is stale: their view is 2-0 with game 3 unplayed, so typing a
+    // win reads as a 3-0 sweep. But the opponent has committed game 3 in *their*
+    // favor (real board 2-1). Posting the sweep 409s with the committed match;
+    // the entry screen must replace the score pad with a blocking notice instead
+    // of silently overwriting the opponent's game 3.
+    const user = userEvent.setup()
+    const committedMatch = matchDetails({
+      id: 'm-1',
+      status: 'in_progress',
+      status_label: 'Live',
+      best_of: 5,
+      games_to_win: 3,
+      affects_rating: true,
+      sides: participantSides({ meWins: 2, oppWins: 1 }),
+      games: [
+        { id: 'g-1', game_number: 1, score: score('s-1', 11, 4) },
+        { id: 'g-2', game_number: 2, score: score('s-2', 11, 6) },
+        // Opponent's committed game 3 — 3-11 in their favor.
+        { id: 'g-3', game_number: 3, score: score('s-3', 3, 11) },
+      ],
+      current_game: { game_number: 4 },
+      can_score: true,
+      can_finalize: false,
+    })
+    server.use(
+      http.get('*/v1/matches/m-1', () =>
+        HttpResponse.json(
+          inProgressMatch({
+            sides: participantSides({ meWins: 2, oppWins: 0 }),
+            games: [
+              { id: 'g-1', game_number: 1, score: score('s-1', 11, 4) },
+              { id: 'g-2', game_number: 2, score: score('s-2', 11, 6) },
+            ],
+            current_game: { game_number: 3 },
+          }),
+        ),
+      ),
+      http.post('*/v1/matches/m-1/results', () =>
+        HttpResponse.json(
+          {
+            detail: {
+              message: 'The score changed while you were entering it.',
+              committed_match: committedMatch,
+            },
+          },
+          { status: 409 },
+        ),
+      ),
+    )
+
+    renderScoreEntry({ kind: 'create', matchId: 'm-1', gameNumber: 3 })
+    const meInput = await screen.findByRole('textbox', {
+      name: 'rita.kovac score',
+    })
+    const oppInput = screen.getByRole('textbox', { name: 'nguyen.t score' })
+    await user.type(meInput, '11')
+    await user.type(oppInput, '0')
+    await user.click(screen.getByRole('button', { name: /post result/i }))
+
+    // The blocking interstitial replaces the score pad, names the game the
+    // opponent committed, and shows the true (2-1) board isn't over.
+    expect(
+      await screen.findByText(/the score changed while you were entering it/i),
+    ).toBeInTheDocument()
+    expect(screen.getByText(/Game 3:/)).toBeInTheDocument()
+    expect(screen.getByText(/2–1 and isn't over/i)).toBeInTheDocument()
+    // The editable field is gone — no path to re-overwrite the committed game.
+    expect(
+      screen.queryByRole('textbox', { name: 'rita.kovac score' }),
+    ).not.toBeInTheDocument()
+
+    // "Resume scoring →" takes the poster to the next unplayed game (4).
+    await user.click(screen.getByRole('button', { name: /resume scoring/i }))
+    expect(await screen.findByText('scoring-new m-1 4')).toBeInTheDocument()
+  })
+
+  it('blocks with a "View match →" interstitial when the concurrent scratchpad already decided the match', async () => {
+    // Stale poster: their view is 2-0 on game 3, so a win reads as a 3-0 sweep.
+    // But while they were away the opponent committed games 3, 4 and 5 in their
+    // own favor — the true board is 2-3 and the match is *already decided* (for
+    // the opponent), no result posted yet. The interstitial must recognise the
+    // decided board and offer "View match →" rather than pointing "Resume" at an
+    // unplayable game.
+    const user = userEvent.setup()
+    const committedMatch = matchDetails({
+      id: 'm-1',
+      status: 'in_progress',
+      status_label: 'Live',
+      best_of: 5,
+      games_to_win: 3,
+      affects_rating: true,
+      sides: participantSides({ meWins: 2, oppWins: 3 }),
+      games: [
+        { id: 'g-1', game_number: 1, score: score('s-1', 11, 4) },
+        { id: 'g-2', game_number: 2, score: score('s-2', 11, 6) },
+        { id: 'g-3', game_number: 3, score: score('s-3', 3, 11) },
+        { id: 'g-4', game_number: 4, score: score('s-4', 5, 11) },
+        { id: 'g-5', game_number: 5, score: score('s-5', 7, 11) },
+      ],
+      current_game: null,
+      can_score: false,
+      can_finalize: false,
+    })
+    server.use(
+      http.get('*/v1/matches/m-1', () =>
+        HttpResponse.json(
+          inProgressMatch({
+            sides: participantSides({ meWins: 2, oppWins: 0 }),
+            games: [
+              { id: 'g-1', game_number: 1, score: score('s-1', 11, 4) },
+              { id: 'g-2', game_number: 2, score: score('s-2', 11, 6) },
+            ],
+            current_game: { game_number: 3 },
+          }),
+        ),
+      ),
+      http.post('*/v1/matches/m-1/results', () =>
+        HttpResponse.json(
+          {
+            detail: {
+              message: 'The score changed while you were entering it.',
+              committed_match: committedMatch,
+            },
+          },
+          { status: 409 },
+        ),
+      ),
+    )
+
+    renderScoreEntry({ kind: 'create', matchId: 'm-1', gameNumber: 3 })
+    const meInput = await screen.findByRole('textbox', {
+      name: 'rita.kovac score',
+    })
+    const oppInput = screen.getByRole('textbox', { name: 'nguyen.t score' })
+    await user.type(meInput, '11')
+    await user.type(oppInput, '0')
+    await user.click(screen.getByRole('button', { name: /post result/i }))
+
+    // The interstitial renders (not preempted by the decided-board nav bounce)
+    // and reads the true board as decided, so the CTA is "View match →".
+    expect(
+      await screen.findByText(/the score changed while you were entering it/i),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole('textbox', { name: 'rita.kovac score' }),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: /resume scoring/i }),
+    ).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /view match/i }))
+    expect(await screen.findByText('match-page m-1')).toBeInTheDocument()
+  })
+
+  it('shows the board-conflict interstitial from the edit route too (not bounced to scoring-new)', async () => {
+    // Edit-mode variant of D1: the poster is on the *edit* sheet for a game they
+    // already scored, and posts. The concurrent participant both cleared that
+    // game and changed another, so the re-synced committed board leaves this
+    // route's game unscored — which would otherwise trip the "edit mode + no
+    // saved score → scoring-new" bounce and preempt the interstitial. The
+    // conflict must win: the interstitial renders in place.
+    const user = userEvent.setup()
+    const committedMatch = matchDetails({
+      id: 'm-1',
+      status: 'in_progress',
+      status_label: 'Live',
+      best_of: 5,
+      games_to_win: 3,
+      affects_rating: true,
+      sides: participantSides({ meWins: 1, oppWins: 1 }),
+      games: [
+        { id: 'g-1', game_number: 1, score: score('s-1', 11, 4) },
+        // Opponent changed game 2 to their favor and cleared game 3.
+        { id: 'g-2', game_number: 2, score: score('s-2', 3, 11) },
+      ],
+      current_game: { game_number: 3 },
+      can_score: true,
+      can_finalize: false,
+    })
+    server.use(
+      http.get('*/v1/matches/m-1', () =>
+        HttpResponse.json(
+          inProgressMatch({
+            sides: participantSides({ meWins: 3, oppWins: 0 }),
+            games: [
+              { id: 'g-1', game_number: 1, score: score('s-1', 11, 4) },
+              { id: 'g-2', game_number: 2, score: score('s-2', 11, 6) },
+              // The poster's stale view has game 3 scored — hence the edit route.
+              { id: 'g-3', game_number: 3, score: score('s-3', 11, 0) },
+            ],
+            current_game: null,
+          }),
+        ),
+      ),
+      http.post('*/v1/matches/m-1/results', () =>
+        HttpResponse.json(
+          {
+            detail: {
+              message: 'The score changed while you were entering it.',
+              committed_match: committedMatch,
+            },
+          },
+          { status: 409 },
+        ),
+      ),
+    )
+
+    renderScoreEntry({ kind: 'edit', matchId: 'm-1', gameNumber: 3 })
+    await user.click(await screen.findByRole('button', { name: /post result/i }))
+
+    expect(
+      await screen.findByText(/the score changed while you were entering it/i),
+    ).toBeInTheDocument()
+    // Not bounced to the scoring-new stub despite edit-mode + now-unscored game.
+    expect(screen.queryByText('scoring-new m-1 3')).not.toBeInTheDocument()
+    // Resume lands on the true next game (3).
+    await user.click(screen.getByRole('button', { name: /resume scoring/i }))
+    expect(await screen.findByText('scoring-new m-1 3')).toBeInTheDocument()
+  })
+
   it('finalizes an out-of-order clinch (game 4 blank) and posts the compacted board (#742)', async () => {
     // The repro: Bo7, games 1-3 to side 1, then the user jumps to game 5 (game 4
     // still blank) and scores the clinching 4th win there. That leaves a gappy

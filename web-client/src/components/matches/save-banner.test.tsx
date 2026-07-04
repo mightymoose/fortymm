@@ -16,7 +16,7 @@ import { http, HttpResponse } from 'msw'
 import { describe, expect, it } from 'vitest'
 import { server } from '@/mocks/server'
 import { matchDetails } from '@/test/factories'
-import { fireScoreSave } from '@/api/matches'
+import { fireScoreSave, useProposeResult } from '@/api/matches'
 import { SaveBanner } from './save-banner'
 
 // Bo5, 1-1 on the board, game 3 next — a single game-3 failure can't decide the
@@ -79,6 +79,7 @@ function renderBanner({
     path: '/',
     component: function Harness() {
       const qc = useQueryClient()
+      const proposeMutation = useProposeResult('m-1')
       return (
         <>
           <button
@@ -92,7 +93,11 @@ function renderBanner({
           >
             fail game {failGameNumber}
           </button>
-          <SaveBanner matchId="m-1" activeGameNumber={activeGameNumber} />
+          <SaveBanner
+            matchId="m-1"
+            activeGameNumber={activeGameNumber}
+            proposeMutation={proposeMutation}
+          />
         </>
       )
     },

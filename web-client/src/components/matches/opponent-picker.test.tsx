@@ -99,11 +99,14 @@ describe('OpponentPicker', () => {
     expect(opponentPickerPage.getCombobox()).not.toHaveFocus()
   })
 
-  it('opens straight into search when defaultToSearch is set', async () => {
+  it('opens straight into search when defaultToSearch is set, focused', async () => {
     opponentPickerPage.mockSearch(() => HttpResponse.json([]))
     opponentPickerPage.render({ defaultToSearch: true })
 
     expect(opponentPickerPage.queryCombobox()).toBeInTheDocument()
+    // The dashboard hero opens into search — the input should be focused on
+    // mount so the user can type without a click.
+    expect(opponentPickerPage.getCombobox()).toHaveFocus()
   })
 
   it('surfaces a failed recent-opponents load in the error boundary (#96)', async () => {
