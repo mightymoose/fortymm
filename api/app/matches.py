@@ -1176,11 +1176,21 @@ def _game_scores_text(match: Match, poster_side_number: int) -> str:
 
 
 def _result_confirmation_copy(
-    match: Match, poster_id: uuid.UUID
+    match: Match, poster_id: uuid.UUID, *, is_counter: bool
 ) -> tuple[str, str] | None:
     """Title + body for the "accept or suggest a correction to the result your
     opponent posted" push, framed for the *recipient* (the side that didn't
     post).
+
+    ``is_counter`` picks the closing prompt to match the actual button pair
+    the recipient's in-app callout renders: a first-post shows Accept /
+    Suggest correction (``confirmation-callout-display.tsx``'s ``"review"``
+    case), while a counter shows Accept / Counter (its ``"corrected"`` case,
+    #728). The native iOS push notification itself only ever offers a single,
+    static Approve/Suggest-correction action pair (``PushNotificationManager
+    .swift``) — it doesn't yet grow a counter-specific action — so this body
+    text is the only place a tapped-through counter reads "Counter" until the
+    push actions themselves are split the same way.
 
     The headline carries the games-won score and, where there's room, the
     body lists the individual game scores — both oriented so the poster's
@@ -1204,26 +1214,38 @@ def _result_confirmation_copy(
         phrase, hi, lo = "losing to you", recipient_games, poster_games
     headline = f"{poster_name} reported {phrase} {hi}{_SCORE_DASH}{lo}"
 
+    prompt = "Accept or counter?" if is_counter else "Accept or suggest a correction?"
     games = _game_scores_text(match, poster_side.side_number)
-    body = (
-        f"{headline}. Games: {games}. Accept or suggest a correction?"
-        if games
-        else f"{headline}. Accept or suggest a correction?"
-    )
+    body = f"{headline}. Games: {games}. {prompt}" if games else f"{headline}. {prompt}"
     return "Review your match result", body
 
 
 async def _notify_result_posted(
     notifications: NotificationService, match: Match, poster_id: uuid.UUID
 ) -> None:
-    """Queue an accept/counter prompt to every player on the side that now owes
-    a response. Each enqueued job persists the in-app record (the bell feed) and
-    fans out push/email per the recipient's preferences in the worker. The APNs
-    ``category``/``data`` carry the action group and the match id so a tapped
-    push deep-links to the right match."""
-    copy = _result_confirmation_copy(match, poster_id)
+    """Queue an accept/counter (or accept/suggest-correction) prompt to every
+    player on the side that now owes a response. Each enqueued job persists
+    the in-app record (the bell feed) and fans out push/email per the
+    recipient's preferences in the worker. The APNs ``category``/``data``
+    carry the action group and the match id so a tapped push deep-links to
+    the right match."""
     recipient_side = opponent_side(match, poster_id)
-    if copy is None or recipient_side is None:
+    if recipient_side is None or not recipient_side.players:
+        return
+    # Derive counter-vs-first-post from the same viewer-relative negotiation
+    # state the BFF/UI use (``_negotiation``'s ``"corrected"`` vs ``"review"``),
+    # rather than the raw ``supersedes_result_id is not None`` check — that
+    # naive check is wrong on a self-edit (poster corrects their own standing
+    # proposal before the recipient ever answers): it supersedes a result, but
+    # the recipient still lands on the first-post "review" view, not
+    # "corrected", so they must get the Accept/Suggest-correction prompt, not
+    # Accept/Counter.
+    is_counter = (
+        _negotiation(match, recipient_side.players[0].user_id).viewer_state
+        == "corrected"
+    )
+    copy = _result_confirmation_copy(match, poster_id, is_counter=is_counter)
+    if copy is None:
         return
     title, body = copy
     for player in recipient_side.players:
