@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
-import { ArrowRight } from 'lucide-react'
+import { ArrowRight, Loader2 } from 'lucide-react'
 
 import { deriveEmailStatus, useSession } from '@/api/session'
 import { OpponentPicker } from '@/components/matches/opponent-picker'
@@ -223,10 +223,13 @@ function SubmitRow({
         </button>
         <button
           type="button"
-          className="nm-btn nm-btn-primary"
+          className={`nm-btn nm-btn-primary${submitting ? ' cursor-wait' : ''}`}
           onClick={onSubmit}
           disabled={submitting}
         >
+          {submitting ? (
+            <Loader2 size={16} strokeWidth={2.5} className="animate-spin" />
+          ) : null}
           {submitting ? 'Starting…' : 'Start match'}
           {!submitting && <ArrowRight size={16} strokeWidth={2.5} />}
         </button>
