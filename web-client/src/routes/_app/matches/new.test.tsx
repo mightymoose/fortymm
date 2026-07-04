@@ -387,6 +387,84 @@ describe('NewMatchPage', () => {
     expect(posts).toBe(1)
   })
 
+  it('navigates away immediately on Cancel when the form is untouched', async () => {
+    const user = userEvent.setup()
+    server.use(http.get('*/v1/players/recent', () => HttpResponse.json([])))
+    renderNewMatch()
+
+    await user.click(await screen.findByRole('button', { name: /^cancel$/i }))
+
+    await waitFor(() =>
+      expect(screen.getByText('Dashboard route')).toBeInTheDocument(),
+    )
+  })
+
+  it('confirms before discarding a dirty form on Cancel (#75)', async () => {
+    const user = userEvent.setup()
+    server.use(
+      http.get('*/v1/players/recent', () =>
+        HttpResponse.json([{ id: 'pl-1', username: 'ada.lovelace' }]),
+      ),
+    )
+    renderNewMatch()
+
+    await user.click(
+      await screen.findByRole('button', { name: /ada\.lovelace/i }),
+    )
+    await user.click(screen.getByRole('button', { name: /^cancel$/i }))
+
+    // A confirmation gates the navigation — the form is still up, not the
+    // dashboard.
+    expect(
+      await screen.findByRole('alertdialog', { name: /discard changes/i }),
+    ).toBeInTheDocument()
+    expect(screen.queryByText('Dashboard route')).not.toBeInTheDocument()
+
+    // "Keep editing" dismisses the dialog without navigating.
+    await user.click(screen.getByRole('button', { name: /keep editing/i }))
+    expect(
+      screen.queryByRole('alertdialog', { name: /discard changes/i }),
+    ).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^change$/i })).toBeInTheDocument()
+
+    // Confirming discards the form and navigates away.
+    await user.click(screen.getByRole('button', { name: /^cancel$/i }))
+    await user.click(
+      await screen.findByRole('button', { name: /discard.*leave/i }),
+    )
+    await waitFor(() =>
+      expect(screen.getByText('Dashboard route')).toBeInTheDocument(),
+    )
+  })
+
+  it('shows a wait cursor on the Start match button while submitting (#77)', async () => {
+    const user = userEvent.setup()
+    server.use(
+      http.get('*/v1/players/recent', () => HttpResponse.json([])),
+      http.post('*/v1/matches', async () => {
+        await delay(20)
+        return HttpResponse.json(pendingMatch(), { status: 201 })
+      }),
+    )
+    renderNewMatch()
+
+    await user.click(
+      await screen.findByRole('button', { name: /start match/i }),
+    )
+
+    const pendingButton = screen.getByRole('button', { name: /starting/i })
+    expect(pendingButton).toHaveClass('nm-btn-pending')
+    expect(
+      pendingButton.querySelector('.nm-btn-spin'),
+    ).toBeInTheDocument()
+
+    await waitFor(() =>
+      expect(
+        screen.getByText('Scoring route m-test game 1'),
+      ).toBeInTheDocument(),
+    )
+  })
+
   it('surfaces a timeout error and re-enables the button when the create aborts (#76)', async () => {
     const user = userEvent.setup()
     server.use(http.get('*/v1/players/recent', () => HttpResponse.json([])))

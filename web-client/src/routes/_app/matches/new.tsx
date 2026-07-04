@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
-import { ArrowRight } from 'lucide-react'
+import { ArrowRight, Loader2 } from 'lucide-react'
 
 import { deriveEmailStatus, useSession } from '@/api/session'
 import { OpponentPicker } from '@/components/matches/opponent-picker'
@@ -16,6 +16,16 @@ import {
 } from '@/components/matches/match-setup/opponent'
 import { useStartMatch } from '@/components/matches/match-setup/use-start-match'
 import { UserAvatar } from '@/components/ui/user-avatar'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { pageTitle } from '@/lib/page-title'
 import './new.css'
 
@@ -58,7 +68,13 @@ function MatchCard() {
   // Default off so submitting without picking an opponent "just works" —
   // the no-opponent match is unrated by definition.
   const [rated, setRated] = useState(false)
+  const [confirmDiscard, setConfirmDiscard] = useState(false)
   const { submit, apiError, submitting, submitted } = useStartMatch()
+
+  // Anything away from the form's defaults means the user has invested effort
+  // that a bare Cancel would silently destroy (#75) — gate on a confirmation
+  // rather than navigating straight away.
+  const isDirty = opponent !== null || bestOf !== 5 || rated !== false
 
   const me = session?.data.user ?? null
   // The hint nudges guests toward claiming an account so their rated history
@@ -128,8 +144,35 @@ function MatchCard() {
         error={submitted ? apiError : null}
         submitting={submitting}
         onSubmit={() => submit({ opponent, bestOf, rated })}
-        onCancel={() => navigate({ to: '/dashboard' })}
+        onCancel={() => {
+          if (isDirty) {
+            setConfirmDiscard(true)
+          } else {
+            navigate({ to: '/dashboard' })
+          }
+        }}
       />
+
+      <AlertDialog open={confirmDiscard} onOpenChange={setConfirmDiscard}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Discard changes?</AlertDialogTitle>
+            <AlertDialogDescription>
+              You've picked an opponent or changed the match settings. Leaving
+              now discards them.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Keep editing</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={() => navigate({ to: '/dashboard' })}
+            >
+              Discard &amp; leave
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }
@@ -202,10 +245,13 @@ function SubmitRow({
         </button>
         <button
           type="button"
-          className="nm-btn nm-btn-primary"
+          className={`nm-btn nm-btn-primary${submitting ? ' nm-btn-pending' : ''}`}
           onClick={onSubmit}
           disabled={submitting}
         >
+          {submitting && (
+            <Loader2 className="nm-btn-spin" size={16} strokeWidth={2.5} />
+          )}
           {submitting ? 'Starting…' : 'Start match'}
           {!submitting && <ArrowRight size={16} strokeWidth={2.5} />}
         </button>
