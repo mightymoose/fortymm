@@ -3,7 +3,12 @@ import { Link, createFileRoute, useNavigate } from '@tanstack/react-router'
 import { toast } from 'sonner'
 
 import { ApiError } from '@/api/client'
-import { type Session, useConfirmEmail, useMergePreview } from '@/api/session'
+import {
+  type FinalizeTokenInput,
+  type Session,
+  useConfirmEmail,
+  useMergePreview,
+} from '@/api/session'
 import { btnPrimary } from '@/components/login/styles'
 import {
   LinkCheckPage,
@@ -66,6 +71,12 @@ function ConfirmEmailPage() {
     }
   }
 
+  // Every confirm this page ever fires wants the toast wired the same way —
+  // wrap it once so the mutate-level `onSuccess` doesn't repeat at each call
+  // site.
+  const confirmWithToast = (input: FinalizeTokenInput) =>
+    confirm.mutate(input, { onSuccess: showMergeToast })
+
   // Preview the link first. A merge that would carry matches over waits for the
   // user at the gate; everything else (plain confirm, empty guest, or a preview
   // failure) finalizes straight away.
@@ -75,11 +86,12 @@ function ConfirmEmailPage() {
     preview.mutate(token, {
       onSuccess: (p) => {
         if (!(p.is_merge && p.guest_matches_count > 0)) {
-          confirm.mutate({ token }, { onSuccess: showMergeToast })
+          confirmWithToast({ token })
         }
       },
-      onError: () => confirm.mutate({ token }, { onSuccess: showMergeToast }),
+      onError: () => confirmWithToast({ token }),
     })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, preview, confirm])
 
   // The token is a single-use bearer credential. Once the confirm settles,
@@ -126,15 +138,8 @@ function ConfirmEmailPage() {
         guestUsername={p.guest_username ?? null}
         matchesCount={p.guest_matches_count}
         busy={confirm.isPending}
-        onBringThemOver={() =>
-          confirm.mutate({ token }, { onSuccess: showMergeToast })
-        }
-        onNotNow={() =>
-          confirm.mutate(
-            { token, skipMerge: true },
-            { onSuccess: showMergeToast },
-          )
-        }
+        onBringThemOver={() => confirmWithToast({ token })}
+        onNotNow={() => confirmWithToast({ token, skipMerge: true })}
       />
     )
   }

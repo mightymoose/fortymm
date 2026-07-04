@@ -274,7 +274,7 @@ function SubmitRow({
           disabled={submitting}
         >
           {submitting && (
-            <Loader2 className="nm-btn-spin" size={16} strokeWidth={2.5} />
+            <Loader2 className="fmm-icon-spin" size={16} strokeWidth={2.5} />
           )}
           {submitting ? 'Starting…' : 'Start match'}
           {!submitting && <ArrowRight size={16} strokeWidth={2.5} />}

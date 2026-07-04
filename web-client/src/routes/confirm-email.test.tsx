@@ -147,11 +147,12 @@ describe('/confirm-email merged-matches toast (#241)', () => {
   })
 
   it('fires the toast exactly once for a single settled confirm (#233)', async () => {
-    // #233: the toast effect previously had no once-guard ref, so a second
-    // invocation of the same settled mutation (e.g. React StrictMode's
+    // #233: the toast used to live in a useEffect with no once-guard ref, so a
+    // second invocation of the same settled mutation (e.g. React StrictMode's
     // mount-time double-invoke) fired it twice. This locks in that a single
     // successful confirm produces exactly one toast call with this message —
-    // the `toastFired` ref in confirm-email.tsx is what keeps it that way.
+    // confirm-email.tsx now fires it from each confirm.mutate call's own
+    // onSuccess, which React Query only ever invokes once per call.
     server.use(
       http.post('*/v1/me/email/confirm', () =>
         HttpResponse.json({

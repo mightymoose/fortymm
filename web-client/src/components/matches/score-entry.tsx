@@ -44,6 +44,7 @@ import {
   overrunDecider,
   type GamePoints,
 } from '@/lib/scoring'
+import { useNavigationOverrideRef } from '@/lib/use-navigation-override-ref'
 import { isScoreConflict, useGameSaveState } from './score-saves'
 import { SaveBanner } from './save-banner'
 import { ScorePad } from './score-pad'
@@ -139,12 +140,11 @@ function ScoreEntryInner({
   // Guard against losing un-submitted typing on refresh/close or an in-app
   // navigation (#441). `isDirty` is driven by the score change handlers as the
   // user types (set below, once `data`-derived baselines are in scope) — the
-  // blocker only reads it. `submittingRef` is flipped just before the
+  // blocker only reads it. `navOverride` is armed just before the
   // fire-and-forget Save (or an explicit Clear) navigates so that intentional
-  // hop is never blocked; it's a ref since it's read inside the blocker
-  // callbacks, not rendered.
+  // hop is never blocked.
   const [isDirty, setIsDirty] = useState(false)
-  const submittingRef = useRef(false)
+  const navOverride = useNavigationOverrideRef()
   // Synchronous finalize-in-flight guard. `finalizeMutation.isPending` is a
   // render snapshot that only flips on the next commit, so a fast double-click
   // on "Finalize result" lands a second tap before React re-renders — firing
@@ -159,7 +159,7 @@ function ScoreEntryInner({
     // Blocks browser refresh/close (beforeunload) only while genuinely dirty.
     enableBeforeUnload: () => isDirty,
     // Blocks in-app route changes the same way — but never the Save hop.
-    shouldBlockFn: () => isDirty && !submittingRef.current,
+    shouldBlockFn: () => isDirty && !navOverride.isArmed(),
     withResolver: true,
   })
 
@@ -501,7 +501,7 @@ function ScoreEntryInner({
     // This is the sanctioned write path: any navigation it triggers (the
     // synchronous next-game hop, or finalize's onSuccess to the match page)
     // is intentional, so wave the unsaved-input blocker through it (#441).
-    submittingRef.current = true
+    navOverride.arm()
     // Finalizing posts the canonical result — but that's the one write that
     // can't be faked offline. When offline we instead fall through to the
     // scratchpad save below, which stores the deciding game's score in the
@@ -572,7 +572,7 @@ function ScoreEntryInner({
       // so a stale failure doesn't outlive the score it referred to. The
       // edit→new hop it triggers is intentional, so the unsaved-input blocker
       // stays out (#441).
-      submittingRef.current = true
+      navOverride.arm()
       forgetScoreSaves(queryClient, matchId, gameNumber)
       deleteMutation.mutate(undefined, {
         // After clearing, land back on this game's create route so the user
@@ -618,7 +618,7 @@ function ScoreEntryInner({
     // version), so the mutation PUTs with that fresh version and overwrites
     // deliberately — no longer a blind last-write-wins, but a choice made
     // against the value we just showed them.
-    submittingRef.current = true
+    navOverride.arm()
     saveMutation.mutate(failedEntry)
   }
 
@@ -1161,7 +1161,7 @@ function ScorelineCell({
 
   const badge = saving ? (
     <span className="sl-badge saving" aria-hidden>
-      <Loader2 className="sl-spin" size={13} strokeWidth={2.25} />
+      <Loader2 className="fmm-icon-spin" size={13} strokeWidth={2.25} />
     </span>
   ) : failed ? (
     <span className="sl-badge" aria-hidden>

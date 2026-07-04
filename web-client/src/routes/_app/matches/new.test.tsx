@@ -488,7 +488,7 @@ describe('NewMatchPage', () => {
     const pendingButton = screen.getByRole('button', { name: /starting/i })
     expect(pendingButton).toHaveClass('nm-btn-pending')
     expect(
-      pendingButton.querySelector('.nm-btn-spin'),
+      pendingButton.querySelector('.fmm-icon-spin'),
     ).toBeInTheDocument()
 
     await waitFor(() =>
