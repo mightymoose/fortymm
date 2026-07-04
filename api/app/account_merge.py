@@ -188,9 +188,16 @@ async def merge_user(
         .scalars()
         .all()
     )
-    await db.execute(
+    dropped_side_players = await db.execute(
         delete(MatchSidePlayer).where(MatchSidePlayer.user_id == from_user_id)
     )
+    # These rows didn't re-point above only because the verified user already
+    # sat on the same match (the NOT EXISTS guard skipped them) — the match is
+    # still one the ephemeral user played, now solely under the verified
+    # account, so it counts as moved just like the rows the UPDATE re-pointed.
+    # Without this, `matches_moved` (and the "we brought your matches with
+    # you" toast) silently under-reports for that collision case.
+    matches_moved += cast(CursorResult[Any], dropped_side_players).rowcount or 0
     # The collision case is self-play across two guest sessions (both sides of
     # the same match were the same real person). The NOT EXISTS guard skipped
     # re-pointing the ephemeral side because the verified user was already

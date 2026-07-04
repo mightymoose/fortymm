@@ -575,8 +575,15 @@ async def test_merge_self_play_drops_orphaned_match_side(db_session: AsyncSessio
     # Now merge guest_a → verified. Side 1's player can't re-point (verified
     # is already on the match); the belt-and-braces DELETE fires; without the
     # fix, side 1 would be left playerless.
-    await merge_user(db_session, from_user_id=guest_a.id, to_user_id=verified.id)
+    summary = await merge_user(
+        db_session, from_user_id=guest_a.id, to_user_id=verified.id
+    )
     await db_session.commit()
+
+    # guest_a played this one match — the NOT EXISTS guard skipping the
+    # re-point (because verified was already on the match) must not make the
+    # summary under-report it as zero matches moved (#235).
+    assert summary.matches_moved == 1
 
     result = await db_session.execute(
         select(MatchSide).where(MatchSide.match_id == match.id)
