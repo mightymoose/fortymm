@@ -655,7 +655,7 @@ function ScoreEntryInner({
     : `Enter game ${gameNumber} score.`
   const subtitle = wouldFinalize
     ? data.affects_rating
-      ? 'This score finishes the match — submitting posts the result for your opponent to confirm.'
+      ? 'This score finishes the match — submitting posts the result for your opponent to accept.'
       : 'This score finishes the match — submitting will finalize the result immediately.'
     : isEdit
       ? 'Save updates the score for this game.'

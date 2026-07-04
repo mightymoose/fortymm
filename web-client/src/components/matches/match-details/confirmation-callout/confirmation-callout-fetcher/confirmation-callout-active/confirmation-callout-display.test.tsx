@@ -23,7 +23,7 @@ describe("ConfirmationCalloutDisplay", () => {
         confirmationCalloutDisplayPage.getCallout(),
       );
       expect(callout).toHaveTextContent(
-        "Posted result · awaiting your sign-off",
+        "Posted result · awaiting your acceptance",
       );
       expect(callout).toHaveTextContent(
         "Accept the result to finalize this match.",

@@ -6,22 +6,22 @@ export interface ConfirmationCalloutProps {
   matchId: string;
 }
 
-/** The posted-result sign-off callout: featured Confirm/Dispute CTAs when the
- * viewer's signature is the one missing, or the passive "Awaiting <opponent>"
- * notice once they've signed. Self-fetching; renders nothing when neither
+/** The posted-result acceptance callout: featured Accept/Counter CTAs when the
+ * viewer's acceptance is the one missing, or the passive "Awaiting <opponent>"
+ * notice once they've accepted. Self-fetching; renders nothing when neither
  * state applies. */
 export function ConfirmationCallout({ matchId }: ConfirmationCalloutProps) {
   return (
-    // Renders nothing when no sign-off is in play, so a visible skeleton would
-    // flash then collapse. A visually-hidden status keeps the load announced
-    // (and tests a sync handle) while reserving no space.
+    // Renders nothing when no acceptance is in play, so a visible skeleton
+    // would flash then collapse. A visually-hidden status keeps the load
+    // announced (and tests a sync handle) while reserving no space.
     <Suspense
       fallback={
         <span
           className="sr-only"
           role="status"
           aria-busy="true"
-          aria-label="Loading the result sign-off prompt"
+          aria-label="Loading the result acceptance prompt"
         />
       }
     >
