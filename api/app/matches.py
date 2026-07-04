@@ -339,33 +339,39 @@ def _negotiation_diff(
     standing_games: list[dict[str, int]],
 ) -> list[NegotiationDiffEntry]:
     """Viewer-relative diff between the viewer's own last proposal (baseline)
-    and the standing proposal. Emits an entry only for games whose points
-    differ (or that the baseline lacks → ``old=None``), ordered by game number.
-    Computed purely from the two snapshots; the chain walk to pick the baseline
-    is what collapses the opponent's intermediate self-edits."""
-    by_number = {g["game_number"]: g for g in baseline_games}
+    and the standing proposal. Emits one entry per game that differs, ordered by
+    game number over the union of both boards. A correction may add, remove, or
+    change games (a decided board can shorten or lengthen — CONTEXT.md
+    "Correction", ADR-0001), so an entry is one of:
+
+    - **added** — the standing board has a game the baseline lacked (``old=None``);
+    - **removed** — the baseline had a game the standing board dropped (``new=None``);
+    - **changed** — both present, points differ.
+
+    Unchanged games are skipped. Computed purely from the two snapshots; the
+    chain walk to pick the baseline is what collapses the opponent's intermediate
+    self-edits."""
+    baseline_by_number = {g["game_number"]: g for g in baseline_games}
+    standing_by_number = {g["game_number"]: g for g in standing_games}
     entries: list[NegotiationDiffEntry] = []
-    for game in sorted(standing_games, key=lambda g: g["game_number"]):
-        old = by_number.get(game["game_number"])
-        if old is None:
-            entries.append(
-                NegotiationDiffEntry(
-                    game_number=game["game_number"],
-                    old=None,
-                    new=_negotiation_game(game),
-                )
-            )
-        elif (
-            old["side_1_points"] != game["side_1_points"]
-            or old["side_2_points"] != game["side_2_points"]
+    for number in sorted(baseline_by_number.keys() | standing_by_number.keys()):
+        old = baseline_by_number.get(number)
+        new = standing_by_number.get(number)
+        if (
+            old is not None
+            and new is not None
+            and old["side_1_points"] == new["side_1_points"]
+            and old["side_2_points"] == new["side_2_points"]
         ):
-            entries.append(
-                NegotiationDiffEntry(
-                    game_number=game["game_number"],
-                    old=_negotiation_game(old),
-                    new=_negotiation_game(game),
-                )
+            continue  # unchanged — omit
+        # ``old``/``new`` null encode removed/added; both-present is a change.
+        entries.append(
+            NegotiationDiffEntry(
+                game_number=number,
+                old=_negotiation_game(old) if old is not None else None,
+                new=_negotiation_game(new) if new is not None else None,
             )
+        )
     return entries
 
 

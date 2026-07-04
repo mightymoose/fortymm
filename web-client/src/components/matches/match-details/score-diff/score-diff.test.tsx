@@ -65,6 +65,67 @@ describe("ScoreDiff", () => {
     expect(scoreDiffPage.queryAddedTag(5)).toBeInTheDocument();
   });
 
+  it("renders a removed game (new === null) as struck-through old with a removed tag", () => {
+    scoreDiffPage.render({
+      diff: [
+        buildNegotiationDiffEntry({
+          game_number: 4,
+          old: buildNegotiationGame({
+            game_number: 4,
+            side_1_points: 11,
+            side_2_points: 4,
+          }),
+          new: null,
+        }),
+      ],
+    });
+
+    // The dropped game shows its old score struck through and a "removed" tag,
+    // with no new score.
+    const old = scoreDiffPage.queryOld(4);
+    expect(old).toHaveTextContent("11–4");
+    expect(old).toHaveClass("line-through");
+    expect(scoreDiffPage.queryNew(4)).not.toBeInTheDocument();
+    expect(scoreDiffPage.queryRemovedTag(4)).toBeInTheDocument();
+  });
+
+  it("renders a shortening correction: a changed game plus a removed tail game", () => {
+    // Mirrors the API oracle (3–1 → 3–0): game 3 flips, game 4 is dropped.
+    scoreDiffPage.render({
+      diff: [
+        buildNegotiationDiffEntry({
+          game_number: 3,
+          old: buildNegotiationGame({
+            game_number: 3,
+            side_1_points: 4,
+            side_2_points: 11,
+          }),
+          new: buildNegotiationGame({
+            game_number: 3,
+            side_1_points: 11,
+            side_2_points: 4,
+          }),
+        }),
+        buildNegotiationDiffEntry({
+          game_number: 4,
+          old: buildNegotiationGame({
+            game_number: 4,
+            side_1_points: 11,
+            side_2_points: 4,
+          }),
+          new: null,
+        }),
+      ],
+    });
+
+    // The board shortening is visible: game 4's removal is not silently dropped.
+    expect(scoreDiffPage.getNew(3)).toHaveTextContent("11–4");
+    expect(scoreDiffPage.queryRemovedTag(3)).not.toBeInTheDocument();
+    expect(scoreDiffPage.queryNew(4)).not.toBeInTheDocument();
+    expect(scoreDiffPage.queryRemovedTag(4)).toBeInTheDocument();
+    expect(scoreDiffPage.queryOld(4)).toHaveTextContent("11–4");
+  });
+
   it("renders a multi-game diff mixing a changed game and an added game", () => {
     scoreDiffPage.render({
       diff: [

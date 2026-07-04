@@ -3410,7 +3410,14 @@ internal enum Components {
             }
         }
         /// One game's difference between the prior and standing result, so the FE
-        /// can highlight what changed in a correction.
+        /// can highlight what changed in a correction. A correction may add, remove, or
+        /// change games (CONTEXT.md "Correction", ADR-0001), so an entry is one of:
+        ///
+        /// - **added** — ``old`` is ``None`` (the standing board gained this game);
+        /// - **removed** — ``new`` is ``None`` (the standing board dropped this game);
+        /// - **changed** — both present, points differ.
+        ///
+        /// At least one of ``old``/``new`` is always present.
         ///
         /// - Remark: Generated from `#/components/schemas/NegotiationDiffEntry`.
         internal struct NegotiationDiffEntry: Codable, Hashable, Sendable {
@@ -3437,7 +3444,25 @@ internal enum Components {
             /// - Remark: Generated from `#/components/schemas/NegotiationDiffEntry/old`.
             internal var old: Components.Schemas.NegotiationDiffEntry.OldPayload?
             /// - Remark: Generated from `#/components/schemas/NegotiationDiffEntry/new`.
-            internal var new: Components.Schemas.NegotiationGame
+            internal struct NewPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/NegotiationDiffEntry/new/value1`.
+                internal var value1: Components.Schemas.NegotiationGame
+                /// Creates a new `NewPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                internal init(value1: Components.Schemas.NegotiationGame) {
+                    self.value1 = value1
+                }
+                internal init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                internal func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/NegotiationDiffEntry/new`.
+            internal var new: Components.Schemas.NegotiationDiffEntry.NewPayload?
             /// Creates a new `NegotiationDiffEntry`.
             ///
             /// - Parameters:
@@ -3447,7 +3472,7 @@ internal enum Components {
             internal init(
                 gameNumber: Swift.Int,
                 old: Components.Schemas.NegotiationDiffEntry.OldPayload? = nil,
-                new: Components.Schemas.NegotiationGame
+                new: Components.Schemas.NegotiationDiffEntry.NewPayload? = nil
             ) {
                 self.gameNumber = gameNumber
                 self.old = old

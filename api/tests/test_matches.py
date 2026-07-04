@@ -1848,6 +1848,78 @@ async def test_propose_counter_chain_across_sides(
         assert len(results) == 3
 
 
+async def _propose_board(
+    client: AsyncClient,
+    match_id: str,
+    games: list[tuple[int, int]],
+    *,
+    supersedes: str | None = None,
+) -> dict:
+    """Propose a multi-game board (list of ``(side_1, side_2)`` per game).
+    Returns the response body wrapper (``status`` + ``body``)."""
+    body: dict[str, object] = {
+        "games": [
+            {"game_number": i, "side_1_points": s1, "side_2_points": s2}
+            for i, (s1, s2) in enumerate(games, start=1)
+        ]
+    }
+    if supersedes is not None:
+        body["supersedes_result_id"] = supersedes
+    response = await client.post(f"/v1/matches/{match_id}/results", json=body)
+    return {"status": response.status_code, "body": response.json()}
+
+
+async def test_negotiation_diff_shows_removed_game_when_board_shortens(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """Regression: a correction that DROPS a game must surface in the diff.
+
+    Per CONTEXT.md "Correction" / ADR-0001 a correction may add, remove, or
+    change games. I propose a 3–1 board (four games); the opponent counters with
+    a 3–0 board (three games), which flips game 3's winner (so the board clinches
+    a game earlier) and drops game 4 entirely. From my view the diff must report
+    BOTH the game-3 change AND the game-4 removal (``new`` null), ordered by
+    game number — otherwise the accept decision is made on an understated diff."""
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "shorten-rival") as (opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=5)
+        # My board: S1 wins g1,g2,g4; S2 wins g3 → 3–1, decided at game 4.
+        mine = await _propose_board(
+            api_client,
+            match["id"],
+            [(11, 4), (11, 4), (4, 11), (11, 4)],
+        )
+        assert mine["status"] == 201, mine
+        mine_id = mine["body"]["negotiation"]["standing_result"]["id"]
+
+        # Opponent counters: S1 sweeps g1–g3 → 3–0, decided at game 3, game 4 gone.
+        counter = await _propose_board(
+            opp_client,
+            match["id"],
+            [(11, 4), (11, 4), (11, 4)],
+            supersedes=mine_id,
+        )
+        assert counter["status"] == 201, counter
+
+        my_neg = (await api_client.get(f"/v1/matches/{match['id']}")).json()[
+            "negotiation"
+        ]
+        assert my_neg["viewer_state"] == "corrected"
+        # Game 1/2 unchanged → skipped. Game 3 changed, game 4 removed, in order.
+        assert my_neg["diff"] == [
+            {
+                "game_number": 3,
+                "old": {"game_number": 3, "side_1_points": 4, "side_2_points": 11},
+                "new": {"game_number": 3, "side_1_points": 11, "side_2_points": 4},
+            },
+            {
+                "game_number": 4,
+                "old": {"game_number": 4, "side_1_points": 11, "side_2_points": 4},
+                "new": None,
+            },
+        ]
+
+
 # ----- negotiation BFF oracle (SPEC §4 worked cases) ----------------------
 #
 # Each case below pins the EXPECTED viewer_state + diff from the SPEC, computed

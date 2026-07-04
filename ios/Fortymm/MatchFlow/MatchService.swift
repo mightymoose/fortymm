@@ -201,7 +201,7 @@ struct MatchService {
             ScoreDiffEntry(
                 gameNumber: entry.gameNumber,
                 old: entry.old.map(fmt),
-                new: fmt(entry.new)
+                new: entry.new.map(fmt)
             )
         }
         return MatchNegotiation(
