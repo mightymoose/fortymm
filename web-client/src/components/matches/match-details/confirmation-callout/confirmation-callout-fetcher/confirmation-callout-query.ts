@@ -74,7 +74,7 @@ const selectConfirmationCallout = (
 
     default:
       // `live` (no proposal in play) or `final` (the match is settled) — there's
-      // no sign-off to surface, so nothing renders.
+      // no acceptance to surface, so nothing renders.
       return null;
   }
 };

@@ -6,7 +6,7 @@ import SwiftUI
 /// Wired to the API: "Start match" creates the match server-side (capturing its
 /// id), and "Post result" posts the canonical games and renders the detail from
 /// the server's response — so a solo match shows "Final" and a two-player match
-/// shows "Awaiting confirmation" honestly, rather than an optimistic result.
+/// shows "Awaiting acceptance" honestly, rather than an optimistic result.
 struct MatchFlowView: View {
     var service: MatchService = .shared
     /// When set, the flow skips setup and opens straight into scoring an

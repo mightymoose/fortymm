@@ -13,29 +13,28 @@ import type { FilterTabView } from './filter-row'
 
 type MatchListRowSide = components['schemas']['MatchDetailsSide']
 
-// The server-derived label for a posted-but-unconfirmed result (an in_progress
-// match with ≥1 signature; see `_status_label` in the API). When the row has no
-// current-user-aware attention bucket, the list re-tones these rows to the
-// dedicated "awaiting" treatment — they share the `in_progress` DB status with
-// true-live rows but aren't live anymore (issue #381).
-export const AWAITING_CONFIRMATION_LABEL = 'Awaiting confirmation'
+// The server-derived label for a posted-but-unaccepted result (an in_progress
+// match with a standing proposed result; see `_status_label` in the API). When
+// the row has no current-user-aware attention bucket, the list re-tones these
+// rows to the dedicated "awaiting" treatment — they share the `in_progress` DB
+// status with true-live rows but aren't live anymore (issue #381).
+export const AWAITING_ACCEPTANCE_LABEL = 'Awaiting acceptance'
 
 // The current-user-aware attention bucket the server stamps on a row (or null).
 export type AttentionKind = NonNullable<MatchListRow['attention']>
 // The subset where the user has a move to make — these get a row CTA.
-export type ActionableKind = 'dispute' | 'review' | 'score'
+export type ActionableKind = 'review' | 'score'
 
-const ACTIONABLE_KINDS = new Set<AttentionKind>(['dispute', 'review', 'score'])
+const ACTIONABLE_KINDS = new Set<AttentionKind>(['review', 'score'])
 
 function isActionable(kind: AttentionKind | null): kind is ActionableKind {
   return kind !== null && ACTIONABLE_KINDS.has(kind)
 }
 
 // Current-user-aware status-chip labels. They replace the ambiguous
-// "Awaiting confirmation" with copy that says *who* must act (PRD §"Row Status
+// "Awaiting acceptance" with copy that says *who* must act (PRD §"Row Status
 // Labels").
 const ATTENTION_LABEL: Record<AttentionKind, string> = {
-  dispute: 'Disputed',
   review: 'Needs your review',
   score: 'Needs score',
   waiting_opponent: 'Waiting on opponent',
@@ -46,7 +45,6 @@ const ATTENTION_LABEL: Record<AttentionKind, string> = {
 // rows stay visually quiet so they don't compete with rows that need the user
 // (PRD §"Visual Hierarchy").
 const ATTENTION_TONE: Record<AttentionKind, string> = {
-  dispute: 'status-tone-attention',
   review: 'status-tone-attention',
   score: 'status-tone-attention',
   waiting_opponent: 'status-tone-waiting',
@@ -55,16 +53,14 @@ const ATTENTION_TONE: Record<AttentionKind, string> = {
 
 // Button copy per actionable bucket (PRD §"Row Actions").
 const ACTION_LABEL: Record<ActionableKind, string> = {
-  dispute: 'Resolve dispute',
   review: 'Review result',
   score: 'Enter score',
 }
 
 // Relative urgency among actionable buckets, used to pick the single bucket
 // that earns the primary (orange) CTA. Mirrors the server's priority order:
-// dispute > review > score. Lower wins.
+// review > score. Lower wins.
 const ACTIONABLE_RANK: Record<ActionableKind, number> = {
-  dispute: 0,
   review: 1,
   score: 2,
 }
@@ -128,8 +124,8 @@ function projectPlayerChip(side: MatchListRowSide | null): {
 
 /** The trailing-cell action for a row, or null for a passive row (waiting /
  * non-participant / final). `score` deep-links to the next un-played game, or
- * to match detail when the board is already decided-but-unposted; review and
- * dispute route to detail, which holds the confirm/dispute/post-result CTAs. */
+ * to match detail when the board is already decided-but-unposted; review
+ * routes to detail, which holds the accept/counter/post-result CTAs. */
 function projectAction(
   row: MatchListRow,
   primaryKind: ActionableKind | null,
@@ -155,7 +151,7 @@ export function projectMatchListRow(
   primaryKind: ActionableKind | null = null,
 ): MatchListRowView {
   const attention = row.attention
-  // An in_progress row with a posted result reads as "Awaiting confirmation",
+  // An in_progress row with a posted result reads as "Awaiting acceptance",
   // not Live — re-tone it and drop the live-dot so it stops masquerading as a
   // live match (issue #381). The DB status is still in_progress, so the
   // games-score still shows. A current-user-aware attention bucket takes
@@ -163,7 +159,7 @@ export function projectMatchListRow(
   // below).
   const isAwaiting =
     row.status === 'in_progress' &&
-    row.status_label === AWAITING_CONFIRMATION_LABEL
+    row.status_label === AWAITING_ACCEPTANCE_LABEL
   const tone: StatusKey = isAwaiting ? 'awaiting' : API_TO_TONE[row.status]
   const side1 = row.sides.find((s) => s.side_number === 1) ?? row.sides[0]
   const side2 = row.sides.find((s) => s.side_number === 2) ?? null
@@ -196,7 +192,7 @@ export function projectMatchListRow(
       label: attention ? ATTENTION_LABEL[attention] : row.status_label,
       toneClass: attention ? ATTENTION_TONE[attention] : STATUS_TONE[tone],
       // Only the plain "Live" chip pulses; an attention-labeled in-progress row
-      // (e.g. "Needs your review") or an awaiting-confirmation row shouldn't
+      // (e.g. "Needs your review") or an awaiting-acceptance row shouldn't
       // carry a live dot next to its copy.
       isLive: attention === null && isLive,
     },
@@ -252,7 +248,7 @@ function tabCount(
   }
   // `awaiting` reads its dedicated bucket; `live` reads the
   // (already awaiting-subtracted) in_progress count — disjoint (issue #381).
-  if (tabToApi[tab.value] === 'awaiting_confirmation') {
+  if (tabToApi[tab.value] === 'awaiting_acceptance') {
     return awaitingCount ?? 0
   }
   return statusCounts[tabToApi[tab.value]] ?? 0

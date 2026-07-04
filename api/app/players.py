@@ -198,7 +198,7 @@ async def _load_wl_counts(
 
     Explicitly gates on ``Match.status == completed`` even though
     ``MatchSide.won`` is only set non-null today when a match completes —
-    so a future void/dispute flow that nulls ``won`` doesn't silently
+    so a future void flow that nulls ``won`` doesn't silently
     leak into career W-L. Matches the gate used by ``_load_form``.
     """
     if not user_ids:
@@ -409,9 +409,9 @@ def _player_matches_eager() -> tuple[ExecutableOption, ...]:
         .selectinload(MatchSide.players)
         .selectinload(MatchSidePlayer.user),
         selectinload(Match.games).selectinload(MatchGame.score),
-        # Needed to derive the "Awaiting confirmation" boolean (#364): an
-        # ``in_progress`` match with a posted-but-unconfirmed result carries
-        # a pending ``MatchResult``.
+        # Needed to derive the "Awaiting acceptance" boolean (#364): an
+        # ``in_progress`` match with a posted-but-unaccepted result carries
+        # a standing ``MatchResult``.
         selectinload(Match.results),
     )
 
@@ -463,9 +463,9 @@ def _serialize_player_match(match: Match, player_id: uuid.UUID) -> PlayerMatchRo
             )
 
     # ``mine.won`` is only stamped when a match completes — immediately at
-    # /results for solo/unrated matches, at /confirmation for rated ones
-    # (issue #485). A rated match awaiting confirmation therefore carries
-    # ``result: null`` here: the opponent hasn't ratified the claim, so the
+    # /results for solo/unrated matches, at /results/{id}/acceptance for rated
+    # ones (issue #485). A rated match awaiting acceptance therefore carries
+    # ``result: null`` here: the opponent hasn't accepted the claim, so the
     # profile must not show a W/L yet. The per-game scores stay public.
     result: Literal["W", "L"] | None = None
     if mine.won is True:
@@ -473,13 +473,13 @@ def _serialize_player_match(match: Match, player_id: uuid.UUID) -> PlayerMatchRo
     elif mine.won is False:
         result = "L"
 
-    # A result has been posted but the opponent hasn't ratified it yet. This
-    # mirrors matches.py's ``_status_label`` ("Awaiting confirmation") bucket
+    # A result has been proposed but the opponent hasn't accepted it yet. This
+    # mirrors matches.py's ``_status_label`` ("Awaiting acceptance") bucket
     # — computed inline here so players.py doesn't import the matches router's
     # internals (api/CLAUDE.md: routers must not depend on each other). The FE
     # uses this to render a distinct chip instead of the green "LIVE" one a
     # genuinely-live ``in_progress`` match gets (#364).
-    awaiting_confirmation = (
+    awaiting_acceptance = (
         match.status == MatchStatus.in_progress and len(match.results) > 0
     )
 
@@ -490,7 +490,7 @@ def _serialize_player_match(match: Match, player_id: uuid.UUID) -> PlayerMatchRo
         opponent=opponent,
         sets=sets,
         result=result,
-        awaiting_confirmation=awaiting_confirmation,
+        awaiting_acceptance=awaiting_acceptance,
     )
 
 

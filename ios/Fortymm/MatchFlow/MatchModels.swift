@@ -129,10 +129,10 @@ struct FinalMatch: Identifiable {
     let context: String
     // --- server-backed extras (defaulted so the seed/local builders still
     // compile; populated when the match comes from the API) ---
-    /// User-facing status, e.g. "Final" / "Awaiting confirmation" / "Live".
+    /// User-facing status, e.g. "Final" / "Awaiting acceptance" / "Live".
     var statusLabel: String = "Final"
     /// True once the result is official (match completed). When false, the
-    /// posted result is still awaiting the opponent's confirmation, so the
+    /// posted result is still awaiting the opponent's acceptance, so the
     /// rating change is not yet real.
     var decided: Bool = true
     /// The viewer-relative negotiation state, when the match came from the API
@@ -143,15 +143,15 @@ struct FinalMatch: Identifiable {
     var negotiation: MatchNegotiation? = nil
 
     /// True when a result has been posted but the match isn't decided yet — i.e.
-    /// it's genuinely awaiting a sign-off. Distinct from `!decided`, which is
+    /// it's genuinely awaiting acceptance. Distinct from `!decided`, which is
     /// also true for a freshly-created *live* match that has no posted result.
-    var awaitingConfirmation: Bool {
+    var awaitingAcceptance: Bool {
         inProgress && negotiation?.viewerState.hasStandingProposal == true
     }
     /// The current user owes an accept-or-correct on the standing proposal
     /// (negotiation `review` or `corrected` — the states where the opponent
     /// posted and it's the viewer's turn).
-    var canConfirm: Bool {
+    var canAccept: Bool {
         viewerIsParticipant && negotiation?.viewerState.viewerOwesResponse == true
     }
     /// Server head-to-head, when the detail BFF provided it.
@@ -173,7 +173,7 @@ struct FinalMatch: Identifiable {
     /// True while the match is live (`in_progress`) — not yet decided or voided.
     var inProgress: Bool = false
     /// The viewer can enter/continue scores: a participant on a live match with
-    /// no posted result currently awaiting confirmation. Drives the "resume
+    /// no posted result currently awaiting acceptance. Drives the "resume
     /// scoring" affordances on the detail, list, and dashboard surfaces.
     var canScore: Bool = false
     /// The saved games already form a decided, valid match and the viewer can

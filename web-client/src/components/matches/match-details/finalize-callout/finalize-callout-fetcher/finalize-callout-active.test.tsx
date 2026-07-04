@@ -85,7 +85,7 @@ describe("FinalizeCalloutActive", () => {
   });
 
   it("surfaces the API error detail inline when the post is rejected", async () => {
-    // e.g. a 409 race: the opponent confirmed/disputed first, or a double
+    // e.g. a 409 race: the opponent accepted/countered first, or a double
     // click — without inline surfacing the button would appear inert.
     finalizeCalloutActivePage.mockResultsEndpoint(() =>
       HttpResponse.json(

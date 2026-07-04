@@ -34,14 +34,13 @@ describe('projectAttentionPanelView', () => {
   it('marks only the highest-priority visible bucket as primary', () => {
     const view = projectAttentionPanelView(
       [
-        dashboardAttentionItem({ match_id: 'm-dispute', kind: 'dispute' }),
         dashboardAttentionItem({ match_id: 'm-review', kind: 'review' }),
         dashboardAttentionItem({ match_id: 'm-score', kind: 'score' }),
       ],
       0,
     )
 
-    expect(view.rows.map((r) => r.primary)).toEqual([true, false, false])
+    expect(view.rows.map((r) => r.primary)).toEqual([true, false])
   })
 
   it('makes every same-type row primary', () => {

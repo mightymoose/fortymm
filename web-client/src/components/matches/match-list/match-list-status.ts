@@ -9,9 +9,9 @@ import type {
 
 // Single source of truth for the status-backed filter-tab values — the ones
 // that map onto a `MatchListFilter` query. `awaiting` is the
-// posted-but-unconfirmed bucket (in_progress + ≥1 signature), split out from
-// `live` so a posted result no longer inflates the Live tab / count (issue
-// #381). `attention` is a *separate* dimension (its own server flag + ranking),
+// posted-but-unaccepted bucket (in_progress + a standing proposed result),
+// split out from `live` so a posted result no longer inflates the Live tab /
+// count (issue #381). `attention` is a *separate* dimension (its own server flag + ranking),
 // so it lives in `FILTER_KEYS` below, not here.
 export const STATUS_KEYS = ['scheduled', 'live', 'awaiting', 'final'] as const
 export type StatusKey = (typeof STATUS_KEYS)[number]
@@ -45,12 +45,12 @@ export const matchesSearchSchema = z.object({
 export const TAB_TO_API: Record<StatusKey, MatchListFilter> = {
   scheduled: 'pending',
   live: 'in_progress',
-  awaiting: 'awaiting_confirmation',
+  awaiting: 'awaiting_acceptance',
   final: 'completed',
 }
 // Terminal statuses (disputed, voided) fall back to the `final` tone — they
 // share final's "no further action" semantics, not scheduled's pending one.
-// in_progress maps to the `live` tone; awaiting-confirmation rows (also
+// in_progress maps to the `live` tone; awaiting-acceptance rows (also
 // in_progress) are re-toned in `projectMatchListRow` from their `status_label`.
 export const API_TO_TONE: Record<MatchStatus, ToneKey> = {
   pending: 'scheduled',

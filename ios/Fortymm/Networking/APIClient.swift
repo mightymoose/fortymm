@@ -112,7 +112,7 @@ struct APIClient {
         try await send("POST", path, body: body)
     }
 
-    /// Bodyless POST for endpoints that take no payload (e.g. confirm/dispute).
+    /// Bodyless POST for endpoints that take no payload (e.g. result acceptance).
     /// Mirrors `get`/`delete` by handing `send` a concrete `Optional<Empty>.none`
     /// — which also sidesteps a swift-frontend codegen crash seen when the
     /// defaulted opaque `body:` parameter above is resolved at a no-arg callsite.

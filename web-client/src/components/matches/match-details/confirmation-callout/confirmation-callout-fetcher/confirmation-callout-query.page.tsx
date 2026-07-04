@@ -14,7 +14,7 @@ const DEFAULT_MATCH_ID = "m-1";
 /**
  * Test page-object for `confirmationCalloutQuery`. The query is built on top
  * of `matchDetailsQuery` and projects a `ConfirmationCalloutView | null` off
- * the full match-details payload via `select` (null = no sign-off in play for
+ * the full match-details payload via `select` (null = no acceptance in play for
  * this viewer), so the test stubs the same `GET /v1/matches/:matchId` endpoint
  * and asserts on the projected view.
  */

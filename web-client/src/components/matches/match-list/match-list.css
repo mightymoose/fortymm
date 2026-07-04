@@ -426,7 +426,7 @@
   color: var(--info);
   background: rgba(111, 181, 255, 0.12);
 }
-/* Actionable attention rows (needs score / your review / disputed) — warm
+/* Actionable attention rows (needs score / your review) — warm
    accent so they read as "you have a move here". */
 .match-list-page .status-tone-attention {
   color: var(--ball-400);

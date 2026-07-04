@@ -58,10 +58,10 @@ describe('listParamsFromSearch', () => {
 
   // The bug in #381: the Live tab and the Awaiting tab must hit *distinct*
   // server buckets — otherwise a posted-but-unconfirmed result rides under
-  // Live. `awaiting` maps to the dedicated `awaiting_confirmation` filter.
-  it('maps the awaiting tab to the awaiting_confirmation filter, distinct from live', () => {
+  // Live. `awaiting` maps to the dedicated `awaiting_acceptance` filter.
+  it('maps the awaiting tab to the awaiting_acceptance filter, distinct from live', () => {
     expect(listParamsFromSearch({ status: 'awaiting' }).status).toBe(
-      'awaiting_confirmation',
+      'awaiting_acceptance',
     )
     expect(listParamsFromSearch({ status: 'awaiting' }).status).not.toBe(
       listParamsFromSearch({ status: 'live' }).status,
@@ -114,7 +114,7 @@ describe('TAB_TO_API', () => {
 
   it('maps live and awaiting to distinct filter buckets', () => {
     expect(TAB_TO_API.live).toBe('in_progress')
-    expect(TAB_TO_API.awaiting).toBe('awaiting_confirmation')
+    expect(TAB_TO_API.awaiting).toBe('awaiting_acceptance')
     expect(TAB_TO_API.live).not.toBe(TAB_TO_API.awaiting)
   })
 })

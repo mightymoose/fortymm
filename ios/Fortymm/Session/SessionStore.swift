@@ -40,7 +40,7 @@ final class SessionStore: ObservableObject {
         pendingDeepLink = nil
     }
 
-    /// Open a match deep link (a tapped confirm/dispute notification). Held like
+    /// Open a match deep link (a tapped result notification). Held like
     /// any pending link so `RootView` presents it once the shell is up.
     func openMatch(_ id: UUID) {
         pendingDeepLink = .match(id: id)

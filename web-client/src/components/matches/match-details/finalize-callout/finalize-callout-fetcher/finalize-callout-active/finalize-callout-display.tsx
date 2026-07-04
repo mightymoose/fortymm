@@ -24,11 +24,11 @@ export function FinalizeCalloutDisplay({
           yet posted
         </div>
         <h3 className="md-confirm-callout__headline">
-          Post this result for your opponent to confirm.
+          Post this result for your opponent to accept.
         </h3>
         <p className="md-confirm-callout__body">
           These scores already decide the match but haven't been posted. Post
-          them as-is to send the result for sign-off, or edit any game in the
+          them as-is to send the result for acceptance, or edit any game in the
           scoreboard below first.
         </p>
         {errorMessage && (

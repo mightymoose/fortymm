@@ -26,12 +26,12 @@ describe('AttentionPanel', () => {
       view: buildAttentionPanelView({
         rows: [
           buildAttentionRowView({
-            matchId: 'm-dispute',
+            matchId: 'm-review',
             opponentName: 'congenial.wallaby',
             headline: 'vs congenial.wallaby',
-            actionLabel: 'Resolve dispute',
+            actionLabel: 'Review result',
             primary: true,
-            route: matchDetailRoute('m-dispute'),
+            route: matchDetailRoute('m-review'),
           }),
           buildAttentionRowView({
             matchId: 'm-score',
@@ -47,9 +47,9 @@ describe('AttentionPanel', () => {
     await page.findPanel()
     expect(page.getRows()).toHaveLength(2)
 
-    const dispute = page.getRowAction('vs congenial.wallaby')
-    expect(dispute).toHaveTextContent('Resolve dispute')
-    expect(dispute).toHaveAttribute('href', '/matches/m-dispute')
+    const review = page.getRowAction('vs congenial.wallaby')
+    expect(review).toHaveTextContent('Review result')
+    expect(review).toHaveAttribute('href', '/matches/m-review')
 
     const score = page.getRowAction('vs nguyen.t')
     expect(score).toHaveTextContent('Enter score')

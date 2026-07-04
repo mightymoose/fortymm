@@ -145,7 +145,7 @@ export function ConfirmationCalloutDisplay({
         <div className="md-confirm-callout__copy">
           <div className="md-confirm-callout__kicker">
             <span className="ball-dot" aria-hidden="true" /> Posted result ·
-            awaiting your sign-off
+            awaiting your acceptance
           </div>
           <h3 className="md-confirm-callout__headline">
             Accept the result to finalize this match.
@@ -190,7 +190,7 @@ export function ConfirmationCalloutDisplay({
         <div className="md-confirm-callout__copy">
           <div className="md-confirm-callout__kicker">
             <span className="ball-dot" aria-hidden="true" /> Corrected result ·
-            awaiting your sign-off
+            awaiting your acceptance
           </div>
           <h3 className="md-confirm-callout__headline">
             Your opponent corrected the score.

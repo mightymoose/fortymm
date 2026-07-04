@@ -4,8 +4,8 @@ import SwiftUI
 
 /// Where an attention row's button takes the user. Mirrors the web view-model's
 /// `routeOf`: a `score` row with a known game deep-links into scoring; every
-/// other row (review/dispute, or a decided-but-unposted board) goes to match
-/// detail, which holds the confirm/dispute/post-result actions.
+/// other row (review, or a decided-but-unposted board) goes to match
+/// detail, which holds the accept/counter/post-result actions.
 enum AttentionTarget: Equatable {
     case scoring(gameNumber: Int)
     case detail
@@ -19,7 +19,7 @@ struct AttentionRowView: Identifiable {
     let opponentUsername: String?
     /// Row headline, e.g. `vs nguyen.t` or `No opponent`.
     let headline: String
-    /// Button copy: `Resolve dispute` | `Review result` | `Enter score`.
+    /// Button copy: `Review result` | `Enter score`.
     let actionLabel: String
     /// Whether this row takes the primary (filled) button — true for every row
     /// in the highest-priority bucket currently visible.
@@ -56,8 +56,8 @@ private let attentionVisibleLimit = 3
 private let noOpponentLabel = "No opponent"
 
 // A row's attention "bucket" — the unit the primary-button rule operates on
-// (score rows split rated vs unrated; review/dispute are each their own
-// bucket). The priority *ordering* is the server's job: items arrive
+// (score rows split rated vs unrated; review is its own bucket). The priority
+// *ordering* is the server's job: items arrive
 // pre-sorted, so the first visible row is the highest-priority bucket present,
 // and every row sharing its bucket takes the primary button.
 private func bucketKey(_ item: DashboardAttentionItem) -> String {
@@ -66,7 +66,6 @@ private func bucketKey(_ item: DashboardAttentionItem) -> String {
 
 private func actionLabel(_ kind: AttentionKind) -> String {
     switch kind {
-    case .dispute: return "Resolve dispute"
     case .review: return "Review result"
     case .score: return "Enter score"
     case .unknown: return "View match"
@@ -82,8 +81,8 @@ private func target(_ item: DashboardAttentionItem) -> AttentionTarget {
 
 /// Project the BFF's pre-ranked attention items into the panel's view model:
 /// cap visible rows at 3, compute the footer counts, and mark the
-/// highest-priority *visible* bucket as primary (so a `Review result` beneath a
-/// `Resolve dispute` renders secondary). Items arrive already sorted by the
+/// highest-priority *visible* bucket as primary (so an `Enter score` beneath a
+/// `Review result` renders secondary). Items arrive already sorted by the
 /// server, so their order is preserved as-is. Mirrors the web's
 /// `projectAttentionPanelView`.
 ///

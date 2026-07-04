@@ -56,7 +56,9 @@ const STATUS_LABELS: Record<MatchStatus, string> = {
   pending: 'Scheduled',
   in_progress: 'Live',
   completed: 'Final',
-  disputed: 'Disputed',
+  // Dead status under propose/accept — never set — mirrors the server's
+  // neutral `_status_label` fallback, not the retired "Disputed".
+  disputed: 'In review',
   voided: 'Voided',
 }
 
@@ -404,7 +406,7 @@ function projectSides(seed: SeedMatch): {
 
 function seedStatusLabel(seed: SeedMatch): string {
   if (seed.status === 'in_progress' && standingResult(seed) !== null) {
-    return 'Awaiting confirmation'
+    return 'Awaiting acceptance'
   }
   return STATUS_LABELS[seed.status]
 }
@@ -604,7 +606,9 @@ type ListAttentionKind = NonNullable<MatchListRow['attention']>
 export function listAttentionKind(seed: SeedMatch): ListAttentionKind | null {
   switch (seed.status) {
     case 'disputed':
-      return 'dispute'
+      // Dead status under propose/accept — never an attention row (mirrors
+      // the server's `disputed → None`).
+      return null
     case 'pending':
       return 'waiting_others'
     case 'in_progress': {
@@ -622,7 +626,6 @@ export function listAttentionKind(seed: SeedMatch): ListAttentionKind | null {
 
 // Priority for ranking the Attention tab — mirrors `attention_priority`.
 const LIST_ATTENTION_PRIORITY: Record<ListAttentionKind, number> = {
-  dispute: 0,
   review: 1,
   // score splits rated (2) / unrated (3) — handled in `listAttentionRank`.
   score: 2,
@@ -641,7 +644,7 @@ function listAttentionRank(seed: SeedMatch, kind: ListAttentionKind): number {
 // *waiting* kind can't silently leak in). Mirrors the server's
 // `_actionable_attention_filter` (issue #729).
 const ACTIONABLE_LIST_KINDS: ReadonlySet<ListAttentionKind> =
-  new Set<ListAttentionKind>(['dispute', 'review', 'score'])
+  new Set<ListAttentionKind>(['review', 'score'])
 
 /** The Attention tab's row set: the current user's *actionable* open matches,
  * ranked by urgency then oldest-first — mirrors the BFF's attention path. Only
@@ -691,7 +694,6 @@ export function projectListRow(seed: SeedMatch): MatchListRow {
 function classifyAttention(
   seed: SeedMatch,
 ): { kind: DashboardAttentionItem['kind']; priority: number } | null {
-  if (seed.status === 'disputed') return { kind: 'dispute', priority: 0 }
   if (seed.status === 'in_progress') {
     const standing = standingResult(seed)
     if (standing !== null) {
@@ -859,27 +861,27 @@ export function projectStreak(seeds: SeedMatch[]): DashboardStreak | null {
 }
 
 /** A posted-but-unaccepted result: an in_progress seed with a standing result.
- * Mirrors the server's "Awaiting confirmation" bucket (issue #381). */
-export function isAwaitingConfirmation(seed: SeedMatch): boolean {
+ * Mirrors the server's "Awaiting acceptance" bucket (issue #381). */
+export function isAwaitingAcceptance(seed: SeedMatch): boolean {
   return seed.status === 'in_progress' && standingResult(seed) !== null
 }
 
-/** Count of awaiting-confirmation seeds — its own bucket, peeled out of the
+/** Count of awaiting-acceptance seeds — its own bucket, peeled out of the
  * in_progress status count so Live reads as true-live. */
 export function awaitingCountOf(seeds: SeedMatch[]): number {
-  return seeds.filter(isAwaitingConfirmation).length
+  return seeds.filter(isAwaitingAcceptance).length
 }
 
 /** Single source of truth for the per-status histogram returned alongside
  * the paginated list — the FE renders pill counts from this. The in_progress
- * count is true-live only: awaiting-confirmation seeds are split out into
+ * count is true-live only: awaiting-acceptance seeds are split out into
  * `awaitingCountOf` (issue #381). */
 export function statusCountsOf(seeds: SeedMatch[]): Record<string, number> {
   const counts: Record<string, number> = Object.fromEntries(
     ALL_STATUSES.map((s) => [s, 0]),
   )
   for (const s of seeds) {
-    if (isAwaitingConfirmation(s)) continue
+    if (isAwaitingAcceptance(s)) continue
     counts[s.status] = (counts[s.status] ?? 0) + 1
   }
   return counts
@@ -1225,8 +1227,8 @@ export function proposeSeed(
     games: games.slice().sort((a, b) => a.game_number - b.game_number),
   }
 
-  const requiresConfirmation = seed.opponent !== null && seed.affects_rating
-  if (!requiresConfirmation) {
+  const requiresAcceptance = seed.opponent !== null && seed.affects_rating
+  if (!requiresAcceptance) {
     // Solo / unrated: the proposer self-accepts and the match finalizes.
     result.accepted_by = MOCK_CURRENT_USER.id
     seed.results.push(result)

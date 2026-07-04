@@ -278,13 +278,13 @@ export function matchListResponse(
     ALL_STATUSES.map((s) => [s, 0]),
   )
   // Mirror the server: a posted-but-unconfirmed result is an in_progress row
-  // labelled "Awaiting confirmation". Count it under its own bucket and peel it
+  // labelled "Awaiting acceptance". Count it under its own bucket and peel it
   // out of in_progress so status_counts.in_progress reads as true-live (#381).
   let awaiting = 0
   for (const item of items) {
     if (
       item.status === 'in_progress' &&
-      item.status_label === 'Awaiting confirmation'
+      item.status_label === 'Awaiting acceptance'
     ) {
       awaiting += 1
     } else {
@@ -301,7 +301,7 @@ export function matchListResponse(
     total: items.length,
     status_counts: baseCounts,
     attention_count,
-    awaiting_confirmation_count: awaiting,
+    awaiting_acceptance_count: awaiting,
     ...overrides,
   }
 }
@@ -406,7 +406,7 @@ export function notificationItem(
     id: nextId('n'),
     category: 'result_confirm',
     title: 'Confirm your score',
-    body: 'def. Patel, M. — you logged 3–1. Tap to confirm.',
+    body: 'def. Patel, M. — you logged 3–1. Tap to accept.',
     link: '/matches/m-1',
     action_label: 'Review',
     delta: null,

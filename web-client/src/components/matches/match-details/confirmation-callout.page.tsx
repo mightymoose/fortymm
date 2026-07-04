@@ -33,7 +33,7 @@ const scoped = (container: Container) => ({
    * so it stays unambiguous when composed alongside the other sections. */
   queryLoading() {
     return container.queryByRole("status", {
-      name: /loading the result sign-off prompt/i,
+      name: /loading the result acceptance prompt/i,
     });
   },
   /**

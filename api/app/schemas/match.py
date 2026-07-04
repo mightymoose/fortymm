@@ -14,16 +14,17 @@ from app.schemas.view.match_details import MatchDetails as MatchDetailsView
 class MatchListFilter(enum.Enum):
     """The selectable buckets on the ``/matches`` list filter.
 
-    Mostly a 1:1 echo of ``MatchStatus``, but ``awaiting_confirmation`` is a
+    Mostly a 1:1 echo of ``MatchStatus``, but ``awaiting_acceptance`` is a
     *derived* bucket with no DB status of its own — it's an ``in_progress``
-    match that already carries at least one signature (a posted result waiting
-    on the other side; see ``_status_label``). The ``live`` filter therefore
-    means "``in_progress`` with **no** signature yet", so a posted-but-unconfirmed
-    result no longer silently inflates the Live tab / count (issue #381)."""
+    match that already has a standing proposed result (waiting on the other
+    side to accept or counter; see ``_status_label``). The ``live`` filter
+    therefore means "``in_progress`` with **no** proposed result yet", so a
+    posted-but-unaccepted result no longer silently inflates the Live tab /
+    count (issue #381)."""
 
     pending = "pending"
     live = "in_progress"
-    awaiting_confirmation = "awaiting_confirmation"
+    awaiting_acceptance = "awaiting_acceptance"
     completed = "completed"
     disputed = "disputed"
     voided = "voided"
@@ -239,14 +240,14 @@ class MatchDetails(BaseModel):
     current_game: MatchDetailsCurrentGame | None
     can_score: bool
     # True when the saved games form a decided, validly-ordered match, the
-    # current user is a participant on an in-progress match, AND no posted
-    # result is currently awaiting confirmation. The FE uses this to swap
+    # current user is a participant on an in-progress match, AND no proposed
+    # result is currently awaiting acceptance. The FE uses this to swap
     # the scoring page's submit button between "save game" and "post result"
     # (the latter calls ``POST /v1/matches/{id}/results``).
     can_finalize: bool
-    # Viewer-relative result-negotiation state (the posting/correction/accept
-    # chain). Always populated; the FE reads it instead of the old
-    # signature/dispute fields.
+    # Viewer-relative result-negotiation state (the propose/counter/accept
+    # chain). Always populated; the FE reads it instead of any per-side
+    # status fields.
     negotiation: MatchNegotiation
     recent_form: list[MatchDetailsPlayerForm] = Field(default_factory=list)
     head_to_head: MatchDetailsH2H | None = None
@@ -277,7 +278,7 @@ class MatchListRow(BaseModel):
     can_score: bool
     # Viewer-relative result-negotiation state (same block as
     # ``MatchDetails.negotiation``) so the list can surface the right CTA
-    # without re-deriving signature/dispute state. Always populated.
+    # without re-deriving the negotiation state. Always populated.
     negotiation: MatchNegotiation
     # The current-user-aware attention bucket this row falls in (see
     # ``app.attention``), or ``None`` when the row isn't an attention item for
@@ -294,19 +295,19 @@ class MatchListResponse(BaseModel):
     page_size: int
     total: int
     # Per-status counts (honoring ``q``, ignoring the status filter). The
-    # ``in_progress`` count here is *true-live only* — posted-but-unconfirmed
-    # results are split out into ``awaiting_confirmation_count`` so the Live tab
+    # ``in_progress`` count here is *true-live only* — posted-but-unaccepted
+    # results are split out into ``awaiting_acceptance_count`` so the Live tab
     # / count can't silently fold them in (issue #381). ``in_progress`` +
-    # ``awaiting_confirmation_count`` is the total of all ``in_progress`` rows.
+    # ``awaiting_acceptance_count`` is the total of all ``in_progress`` rows.
     status_counts: dict[MatchStatus, int]
     # Count of the caller's *open* matches (any attention bucket) under the
     # active search, independent of which status tab is selected — powers the
     # Attention tab's badge even while another tab is showing. Always present.
     attention_count: int
-    # Count of ``in_progress`` matches with at least one signature — a posted
-    # result waiting on the other side ("Awaiting confirmation"). Its own bucket
-    # so it neither inflates Live nor needs the FE to re-derive it.
-    awaiting_confirmation_count: int
+    # Count of ``in_progress`` matches with a standing proposed result — one
+    # waiting on the other side to accept or counter ("Awaiting acceptance").
+    # Its own bucket so it neither inflates Live nor needs the FE to re-derive it.
+    awaiting_acceptance_count: int
 
 
 # ----- score write (POST/PUT body) -----------------------------------------

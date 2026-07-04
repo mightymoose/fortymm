@@ -372,8 +372,8 @@ async def _record_match_with_winner(
     becomes final, never while one is still in progress.
 
     ``signed_by`` seeds a standing (unaccepted) ``MatchResult`` submitted by
-    that user — a posted-but-unconfirmed result — so an ``in_progress`` match
-    can be put in the "Awaiting confirmation" bucket (#364). Awaiting is now
+    that user — a posted-but-unaccepted result — so an ``in_progress`` match
+    can be put in the "Awaiting acceptance" bucket (#364). Awaiting is now
     derived from "the match has any result row", so no acceptor is stamped."""
     settings = MatchSettings(team_size=1, best_of=5, affects_rating=False)
     league = await get_default_league(db_session)
@@ -577,7 +577,7 @@ async def test_list_player_matches_returns_perspective_paginated(
     assert items[1]["opponent"]["username"] == "rival.a"
 
 
-async def test_list_player_matches_result_hidden_while_awaiting_confirmation(
+async def test_list_player_matches_result_hidden_while_awaiting_acceptance(
     api_client: AsyncClient, db_session: AsyncSession
 ):
     """A rated match awaiting confirmation has no official outcome yet —
@@ -605,14 +605,14 @@ async def test_list_player_matches_result_hidden_while_awaiting_confirmation(
     assert row["status"] == "in_progress"
     assert row["result"] is None
     # No signature posted yet → genuinely live, not awaiting confirmation.
-    assert row["awaiting_confirmation"] is False
+    assert row["awaiting_acceptance"] is False
 
 
-async def test_list_player_matches_flags_awaiting_confirmation(
+async def test_list_player_matches_flags_awaiting_acceptance(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    """An ``in_progress`` match with a posted-but-unconfirmed result (at least
-    one signature) reports ``awaiting_confirmation: true`` so the profile chip
+    """An ``in_progress`` match with a posted-but-unaccepted result (at least
+    one signature) reports ``awaiting_acceptance: true`` so the profile chip
     can distinguish it from a genuinely-live match — both sit at
     ``in_progress`` (#364). A true-live match (no signature) and a completed
     match both report false."""
@@ -646,11 +646,11 @@ async def test_list_player_matches_flags_awaiting_confirmation(
     assert len(items) == 3
     # Newest-first: awaiting, then live, then completed.
     assert items[0]["status"] == "in_progress"
-    assert items[0]["awaiting_confirmation"] is True
+    assert items[0]["awaiting_acceptance"] is True
     assert items[1]["status"] == "in_progress"
-    assert items[1]["awaiting_confirmation"] is False
+    assert items[1]["awaiting_acceptance"] is False
     assert items[2]["status"] == "completed"
-    assert items[2]["awaiting_confirmation"] is False
+    assert items[2]["awaiting_acceptance"] is False
 
 
 async def test_list_player_matches_excludes_other_players_matches(

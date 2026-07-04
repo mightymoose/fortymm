@@ -206,7 +206,7 @@ struct ScoreEntryView: View {
                     clearButton
                 } else {
                     Text(correction
-                         ? "Sending posts the corrected score for \(opp.handle) to confirm."
+                         ? "Sending posts the corrected score for \(opp.handle) to accept."
                          : "This finishes the match — post the result.")
                         .font(FMFont.ui(12, weight: .medium))
                         .foregroundStyle(FMColor.fg3)

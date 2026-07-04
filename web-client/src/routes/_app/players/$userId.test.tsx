@@ -27,7 +27,7 @@ function matchRows(count: number, page: number, pageSize: number) {
       result: 'W' as const,
       status: 'completed' as const,
       created_at: '2026-06-01T12:00:00Z',
-      awaiting_confirmation: false,
+      awaiting_acceptance: false,
     }))
 }
 
@@ -179,7 +179,7 @@ describe('player profile match-history pagination', () => {
         result: null,
         status: 'in_progress' as const,
         created_at: '2026-06-02T12:00:00Z',
-        awaiting_confirmation: true,
+        awaiting_acceptance: true,
       },
       {
         id: 'm-live',
@@ -188,7 +188,7 @@ describe('player profile match-history pagination', () => {
         result: null,
         status: 'in_progress' as const,
         created_at: '2026-06-01T12:00:00Z',
-        awaiting_confirmation: false,
+        awaiting_acceptance: false,
       },
     ]
     const bundle = { items: rows, page: 1, page_size: 25, total: rows.length }

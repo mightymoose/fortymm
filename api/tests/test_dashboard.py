@@ -240,7 +240,7 @@ async def test_dashboard_review_item_when_opponent_posted_result(
     assert item["match_id"] == match["id"]
     assert item["kind"] == "review"
     assert item["opponent_username"] == "poster"
-    # Review/dispute rows route to match detail, never deep-link to scoring.
+    # Review rows route to match detail, never deep-link to scoring.
     assert item["current_game_number"] is None
     assert body["waiting_count"] == 0
 
@@ -249,7 +249,7 @@ async def test_dashboard_my_posted_result_counts_as_waiting(
     api_client: AsyncClient, db_session: AsyncSession
 ):
     """The flip side of review: when *I* posted and the opponent owes the
-    sign-off, the match is waiting on them — footer count, never a row."""
+    proposed a result, the match is waiting on them — footer count, never a row."""
     await start_session(api_client, db_session)
     async with opponent_session(db_session, "reviewer") as (_opp_client, opp):
         match = await _create_match(api_client, opp.id, best_of=1)

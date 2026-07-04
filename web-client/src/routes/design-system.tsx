@@ -1373,10 +1373,9 @@ function FeedbackSection() {
           </Alert>
           <Alert variant="destructive">
             <XCircle />
-            <AlertTitle>Match disputed</AlertTitle>
+            <AlertTitle>Match voided</AlertTitle>
             <AlertDescription>
-              A player has filed a score dispute. Review the appeal in the admin
-              panel.
+              This match was voided by an admin and no longer affects ratings.
             </AlertDescription>
           </Alert>
           <Alert className="border-[color:var(--serve-500)]/40 bg-[color:var(--serve-500)]/10">

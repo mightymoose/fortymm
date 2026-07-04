@@ -2610,9 +2610,9 @@ body.dark.fortymm-theme {
   border-radius: var(--r-md);
 }
 
-/* Sign-off callout that leads the match-details page when a posted result
+/* Acceptance callout that leads the match-details page when a posted result
    needs the viewer's action (or is waiting on the opponent's). The active
-   "your sign-off" state is a Featured card (orange ring + accent glow, the
+   "awaiting your acceptance" state is a Featured card (orange ring + accent glow, the
    same treatment as the dashboard score banner) so the one thing the viewer
    must do is the first thing they see; the passive "waiting on them" state
    stays a quiet accent-stripe note. */
@@ -2633,7 +2633,7 @@ body.dark.fortymm-theme {
   border-left-color: var(--ink-500);
   opacity: 0.92;
 }
-/* Featured treatment for the active sign-off state. */
+/* Featured treatment for the active acceptance state. */
 .fortymm-theme .md-confirm-callout--featured {
   align-items: center;
   padding: 22px 26px;
@@ -2696,9 +2696,9 @@ body.dark.fortymm-theme {
   gap: 16px;
   box-shadow: var(--shadow-glow);
 }
-/* When the featured sign-off callout leads the page above this card, step the
+/* When the featured acceptance callout leads the page above this card, step the
    save nudge down to the plain card treatment so two Featured glows don't
-   compete — the sign-off action stays the single point of emphasis. */
+   compete — the acceptance action stays the single point of emphasis. */
 .fortymm-theme .md-save--soft {
   border-color: var(--border-subtle);
   box-shadow: var(--shadow-sm);

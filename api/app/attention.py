@@ -9,10 +9,11 @@ matches:
 - how urgent is that bucket relative to the others.
 
 The classification is current-user-aware: the poster and the reviewer of the
-same posted result land in different buckets (the poster has signed, so for
-them the match is *waiting on the opponent*; the reviewer hasn't, so they get a
-``review``). Keeping this here — rather than re-deriving it in each router —
-means the list and the dashboard can never disagree about who owes a move.
+same posted result land in different buckets (the poster has proposed, so for
+them the match is *waiting on the opponent*; the reviewer hasn't accepted, so
+they get a ``review``). Keeping this here — rather than re-deriving it in each
+router — means the list and the dashboard can never disagree about who owes a
+move.
 """
 
 import uuid
@@ -26,17 +27,14 @@ from app.result_chain import head_result
 # "waiting" rows the dashboard folds into a count, so a user can see *why* a
 # match is parked, not just that it needs someone else.
 #
-#   dispute          — a disputed match, reopened for correction (either side
-#                      may re-score and re-post).
-#   review           — the opponent posted a result; the current user must
-#                      confirm or dispute it.
+#   review           — the opponent proposed a result; the current user must
+#                      accept it or counter with a correction.
 #   score            — an in-progress match with no posted result; the current
 #                      user can still enter scores.
-#   waiting_opponent — the current user posted a result; it's awaiting the
-#                      opponent's sign-off.
+#   waiting_opponent — the current user proposed a result; it's awaiting the
+#                      opponent's acceptance.
 #   waiting_others   — a pending/scheduled match (nobody has started scoring).
 ListAttentionKind = Literal[
-    "dispute",
     "review",
     "score",
     "waiting_opponent",
@@ -60,7 +58,9 @@ def list_attention_kind(
 
     match match.status:
         case MatchStatus.disputed:
-            return "dispute"
+            # Dead status under the propose/accept model — nothing sets it — so
+            # it's never an attention row. (Follow-up: drop the enum value.)
+            return None
         case MatchStatus.pending:
             return "waiting_others"
         case MatchStatus.in_progress:
@@ -88,7 +88,6 @@ def list_attention_kind(
 # urgent. ``score`` splits rated-above-unrated by ``affects_rating``; the
 # passive ``waiting`` buckets sink to the bottom. Within a bucket the caller
 # orders oldest-first so a long-stalled match floats to the top.
-_DISPUTE_PRIORITY = 0
 _REVIEW_PRIORITY = 1
 _RATED_SCORE_PRIORITY = 2
 _UNRATED_SCORE_PRIORITY = 3
@@ -100,8 +99,6 @@ def attention_priority(kind: ListAttentionKind, affects_rating: bool) -> int:
     """Sort rank for an attention row. Exhaustive over ``ListAttentionKind`` —
     adding a member is a type error until it's handled here."""
     match kind:
-        case "dispute":
-            return _DISPUTE_PRIORITY
         case "review":
             return _REVIEW_PRIORITY
         case "score":
