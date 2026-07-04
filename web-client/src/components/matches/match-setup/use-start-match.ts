@@ -85,7 +85,15 @@ export function useStartMatch(): UseStartMatchResult {
       // history stack shouldn't keep it. Otherwise browser/mobile Back from
       // score entry re-opens the creation form for a match that already
       // exists, instead of returning to wherever the user came from (#441).
-      navigate({ ...nextScoringDestination(created), replace: true })
+      // `ignoreBlocker` skips the form's own dirty-navigation guard (#75) —
+      // a successful create isn't a discard, and gating the guard on mutation
+      // state instead would race this redirect against the still-dirty form
+      // fields re-rendering.
+      navigate({
+        ...nextScoringDestination(created),
+        replace: true,
+        ignoreBlocker: true,
+      })
     } catch (err) {
       // Let the user try again — only a *successful* create latches the guard.
       submitState.current = 'idle'

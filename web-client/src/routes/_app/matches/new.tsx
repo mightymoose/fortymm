@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { createFileRoute, useNavigate } from '@tanstack/react-router'
+import { createFileRoute, useBlocker, useNavigate } from '@tanstack/react-router'
 import { ArrowRight } from 'lucide-react'
 
 import {
@@ -69,10 +69,18 @@ function MatchCard() {
   // the no-opponent match is unrated by definition.
   const [rated, setRated] = useState(false)
   const { submit, apiError, submitting, submitted } = useStartMatch()
-  // Guards Cancel against silently discarding an in-progress setup (#75) — any
-  // deviation from the form's defaults counts as dirty.
-  const dirty = opponent !== null || bestOf !== 5 || rated !== false
-  const [confirmDiscard, setConfirmDiscard] = useState(false)
+  // Guards any in-app navigation away from an in-progress setup — Cancel,
+  // browser Back, a sidebar link — not just the Cancel button (#75). Any
+  // deviation from the form's defaults counts as dirty. Mirrors the
+  // useBlocker pattern already established on /settings (#440); the
+  // post-submit redirect to scoring bypasses it via `ignoreBlocker`
+  // (use-start-match.ts) rather than racing this flag back to false.
+  const dirty = opponent !== null || bestOf !== 5 || rated
+  const blocker = useBlocker({
+    shouldBlockFn: () => dirty,
+    enableBeforeUnload: () => dirty,
+    withResolver: true,
+  })
 
   const me = session?.data.user ?? null
   // The hint nudges guests toward claiming an account so their rated history
@@ -142,12 +150,17 @@ function MatchCard() {
         error={submitted ? apiError : null}
         submitting={submitting}
         onSubmit={() => submit({ opponent, bestOf, rated })}
-        onCancel={() =>
-          dirty ? setConfirmDiscard(true) : navigate({ to: '/dashboard' })
-        }
+        onCancel={() => navigate({ to: '/dashboard' })}
       />
 
-      <AlertDialog open={confirmDiscard} onOpenChange={setConfirmDiscard}>
+      <AlertDialog
+        open={blocker.status === 'blocked'}
+        onOpenChange={(open) => {
+          // Radix fires onOpenChange(false) on overlay click / Escape — treat
+          // that as "stay on the page" so a stray dismiss never discards edits.
+          if (!open) blocker.reset?.()
+        }}
+      >
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Discard changes?</AlertDialogTitle>
@@ -157,10 +170,12 @@ function MatchCard() {
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Keep editing</AlertDialogCancel>
+            <AlertDialogCancel onClick={() => blocker.reset?.()}>
+              Keep editing
+            </AlertDialogCancel>
             <AlertDialogAction
               variant="destructive"
-              onClick={() => navigate({ to: '/dashboard' })}
+              onClick={() => blocker.proceed?.()}
             >
               Discard changes
             </AlertDialogAction>
