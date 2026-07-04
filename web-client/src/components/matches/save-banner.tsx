@@ -91,14 +91,16 @@ function FailedSaveBanner({
   // retry shouldn't re-POST each game's scratch save — it should post the
   // canonical result in one shot (the same write the entry screen's "Post
   // result" button fires). Build the merged set the same way the entry screen
-  // builds `hypotheticalGames`. Include the active game's failed scratch here:
-  // the deciding game stays on its own entry screen (we don't advance once the
-  // match is over), so its scratch is what finishes the match. Failed scratch
-  // overrides the persisted score for the same game — it's the newer data the
-  // cell shows.
+  // builds `hypotheticalGames`. Include the active game too — its own persisted
+  // score is part of the real board, so a cleanly-persisted active game must
+  // not be dropped or the match reads as not-decided and the finalize CTA hides
+  // behind an unrelated failed game (#755). The active game's failed scratch,
+  // when it has one, still wins below: the failed-saves loop overrides the same
+  // game number, and that scratch — not the persisted score — is what the cell
+  // shows and what finishes the match (we don't advance once it's over).
   const mergedByNumber = new Map<number, GamePoints>()
   for (const game of data?.games ?? []) {
-    if (!game.score || game.game_number === activeGameNumber) continue
+    if (!game.score) continue
     mergedByNumber.set(game.game_number, {
       game_number: game.game_number,
       side_1_points: game.score.side_1_points,

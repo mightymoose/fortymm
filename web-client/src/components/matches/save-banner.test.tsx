@@ -58,12 +58,18 @@ const inProgressMatch = matchDetails({
   can_finalize: false,
 })
 
-// Render the banner for an active game OTHER than the one that fails, so the
-// failure is surfaced (the active game's own failure is suppressed). A sibling
-// button re-fires game 3's scratch save imperatively — the same `fireScoreSave`
-// the banner's own Retry calls — so a re-failure happens WITHOUT unmounting the
-// banner (its dismiss state, the thing under test, must survive).
-function renderBanner() {
+// Mounts the banner with `activeGameNumber` active and a sibling button that
+// imperatively fails `failGameNumber`'s scratch save — the same `fireScoreSave`
+// the banner's own Retry calls — so a (re-)failure happens WITHOUT unmounting
+// the banner. Keep the failing game distinct from the active one where the test
+// needs the failure surfaced (the active game's own failure is suppressed).
+function renderBanner({
+  failGameNumber,
+  activeGameNumber,
+}: {
+  failGameNumber: number
+  activeGameNumber: number
+}) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
@@ -79,17 +85,17 @@ function renderBanner() {
           <button
             type="button"
             onClick={() =>
-              fireScoreSave(qc, 'm-1', 3, {
+              fireScoreSave(qc, 'm-1', failGameNumber, {
                 side_1_points: 11,
                 side_2_points: 4,
               })
             }
           >
-            fail game 3
+            fail game {failGameNumber}
           </button>
           <SaveBanner
             matchId="m-1"
-            activeGameNumber={4}
+            activeGameNumber={activeGameNumber}
             proposeMutation={proposeMutation}
           />
         </>
@@ -107,6 +113,35 @@ function renderBanner() {
   )
 }
 
+// #755 scenario. Bo3, game 2 cleanly persisted (side 1 won it), game 1's save
+// failed offline (side 1 won it too). The real board is 2-0 for side 1 — a
+// decided match — but the user is sitting on game 2's edit screen
+// (`activeGameNumber={2}`). The banner must include the cleanly-persisted active
+// game 2 in its merged board so it reads the match as decided.
+const decidedActivePersistedMatch = matchDetails({
+  id: 'm-1',
+  status: 'in_progress',
+  status_label: 'Live',
+  best_of: 3,
+  affects_rating: true,
+  games: [
+    {
+      id: 'g-2',
+      game_number: 2,
+      score: {
+        id: 's-2',
+        side_1_points: 11,
+        side_2_points: 5,
+        winner_side_number: 1,
+        version: 1,
+      },
+    },
+  ],
+  current_game: { game_number: 2 },
+  can_score: true,
+  can_finalize: false,
+})
+
 describe('SaveBanner', () => {
   // Regression for #528: the dismiss key folded only the failed game NUMBERS,
   // so a same-game repeat failure (set still {3}) kept the signature unchanged
@@ -123,7 +158,7 @@ describe('SaveBanner', () => {
       ),
     )
 
-    renderBanner()
+    renderBanner({ failGameNumber: 3, activeGameNumber: 4 })
 
     // First failure → banner surfaces.
     await user.click(await screen.findByRole('button', { name: 'fail game 3' }))
@@ -143,6 +178,72 @@ describe('SaveBanner', () => {
       expect(screen.getByRole('alert')).toHaveTextContent(
         "Game 3 didn't save.",
       ),
+    )
+  })
+
+  // #755: a cleanly-persisted active game was dropped from the merged board, so
+  // the deciding board read as undecided and the finalize CTA hid behind the
+  // unrelated failed game's "Game 1 didn't save." retry.
+  it('shows the finalize CTA when a cleanly-persisted active game completes the board', async () => {
+    const user = userEvent.setup()
+    server.use(
+      http.get('*/v1/matches/m-1', () =>
+        HttpResponse.json(decidedActivePersistedMatch),
+      ),
+      http.post('*/v1/matches/m-1/games/1/scores/new', () =>
+        HttpResponse.json({ detail: 'boom' }, { status: 500 }),
+      ),
+    )
+
+    renderBanner({ failGameNumber: 1, activeGameNumber: 2 })
+
+    await user.click(await screen.findByRole('button', { name: 'fail game 1' }))
+
+    const alert = await screen.findByRole('alert')
+    await waitFor(() =>
+      expect(alert).toHaveTextContent('These scores finish the match.'),
+    )
+    expect(alert).toHaveTextContent(
+      "Post the result now — they didn't save individually, but the match is decided.",
+    )
+    expect(
+      screen.getByRole('button', { name: /Post result/ }),
+    ).toBeInTheDocument()
+    expect(alert).not.toHaveTextContent("Game 1 didn't save.")
+  })
+
+  // The finalize action must post the compacted decided board — the failed
+  // game 1 (11-4) plus the persisted active game 2 (11-5) — not the older
+  // per-game scratch saves.
+  it('posts the compacted decided board when Post result is clicked', async () => {
+    const user = userEvent.setup()
+    let postedBody: unknown = null
+    server.use(
+      http.get('*/v1/matches/m-1', () =>
+        HttpResponse.json(decidedActivePersistedMatch),
+      ),
+      http.post('*/v1/matches/m-1/games/1/scores/new', () =>
+        HttpResponse.json({ detail: 'boom' }, { status: 500 }),
+      ),
+      http.post('*/v1/matches/m-1/results', async ({ request }) => {
+        postedBody = await request.json()
+        return HttpResponse.json(decidedActivePersistedMatch)
+      }),
+    )
+
+    renderBanner({ failGameNumber: 1, activeGameNumber: 2 })
+
+    await user.click(await screen.findByRole('button', { name: 'fail game 1' }))
+    await screen.findByRole('button', { name: /Post result/ })
+    await user.click(screen.getByRole('button', { name: /Post result/ }))
+
+    await waitFor(() =>
+      expect(postedBody).toEqual({
+        games: [
+          { game_number: 1, side_1_points: 11, side_2_points: 4 },
+          { game_number: 2, side_1_points: 11, side_2_points: 5 },
+        ],
+      }),
     )
   })
 })
