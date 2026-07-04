@@ -52,24 +52,97 @@ source it *should* have folded in.
   Fixed by including the active game's persisted score in the merged board
   (source 3 for the active game was being dropped).
 
-- **#747 F2** — `score-entry` ignores **failed scratch saves** on non-active
-  games (it builds its board from persisted + live input only). A failed
-  non-active game therefore compacts out (ADR 0002), so "Post result" records
-  e.g. a 2–1 board as 2–0 — it **erases a game**. Data corruption, the opposite
-  symptom, in the opposite file. Fix pending: `score-entry` must fold source 2
-  (failed scratch saves) into its board the way `save-banner` already does.
+- **#747 F2** — `score-entry` ignored **failed scratch saves** on non-active
+  games (it built its board from persisted + live input only). A failed
+  non-active game therefore compacted out (ADR 0002), so "Post result" recorded
+  e.g. a 2–1 board as 2–0 — it **erased a game**. Data corruption, the opposite
+  symptom, in the opposite file. Fixed by routing `score-entry`'s board through
+  the shared `reconstructBoard` helper below, which folds in source 2.
 
-Same contract violated from both ends. #755's half is fixed here; #747 F2's half
-is tracked on that issue. Once both land, both surfaces reconstruct a board that
-covers all three sources and can never hide a real finalize nor mint a board
-missing a played game.
+Same contract was violated from both ends. Both halves are now fixed: both
+surfaces reconstruct a board that covers all three sources and can never hide a
+real finalize nor mint a board missing a played game.
 
-## Rejected (for now): one shared reconstruction helper
+## Why F2 could only be fixed client-side (two boundaries, not one)
 
-The obvious end-state is a single `reconstructDecidedBoard()` both surfaces
-call, instead of two hand-rolled merges that drift. Deferred because the active
-game's live input lives only in `score-entry`'s RHF state and would have to be
-threaded into a shared helper (the banner has no access to it), making the
-shared-helper change materially larger than the two targeted source fixes. Both
-issues are fixed by adding the missing source to each existing merge; the
-unification can follow once both sides read the same three sources.
+F2 looks like a sibling of the first-post board-conflict guard (ADR 0003 / issue
+#747-B2), and both are about *not posting a board that isn't the true board* —
+but they are **complementary guards at two different boundaries**, not one fix:
+
+- **B2 is server-side.** On first propose the server value-compares the proposed
+  board against the games another participant **committed** to the scratchpad and
+  409s on divergence (`_scratchpad_divergence`, `matches.py`). It works precisely
+  because the diverging game *reached the server*.
+- **F2 can never be caught server-side.** The dropped game is a *failed* scratch
+  save — it **never reached the server**, so there is nothing for the propose
+  endpoint to compare against or "keep." The endpoint faithfully validates and
+  mints exactly the board it is handed (`_validate_finalize_games` +
+  `_commit_canonical_games`, "the list is canon, no merge"); a board missing G2
+  is a clean, decided board it cannot object to. The failed G2 exists **only** in
+  the client's mutation cache, so the reconstruction has to happen in the client
+  before the payload is sent.
+
+So "propose validates the whole match" does not rescue F2: the client must
+assemble the true board from all local sources (this ADR), *and* the server
+rejects committed-divergence (ADR 0003). Different files, different failure
+modes, both required.
+
+## Adopted: one shared `reconstructBoard` helper
+
+Both surfaces now call a single `reconstructBoard` helper
+(`web-client/src/components/matches/reconstruct-board.ts`) instead of
+hand-rolling two merges that drift — that drift was the shared root cause of
+*both* #755 and #747 F2. The module lives beside its two callers (not in the
+framework-pure `@/lib/scoring`) because it is app-aware, and it owns **both**
+app-shape → board mappings so neither caller hand-rolls either one:
+
+- `scoredGamePoints(games)` — the persisted `data.games` → `GamePoints[]`
+  mapping, exported and called by both surfaces (and by `score-entry` for its
+  `decider`), so the persisted mapping has one source.
+- the `FailedGameSave.variables` → `GamePoints` mapping, inside
+  `reconstructBoard`.
+
+Shape:
+
+```ts
+reconstructBoard({
+  persisted,                 // GamePoints[] (via scoredGamePoints)
+  failedSaves,               // FailedGameSave[]; caller passes conflicts already excluded
+  activeInput?,              // GamePoints; score-entry only, only when inputsValid
+}): GamePoints[]             // raw merged board — the CALLER compacts
+```
+
+Design points that fell out of the interview:
+
+- **Overlay order `persisted → failed → activeInput`.** The last write wins per
+  game number, so `activeInput` (passed only by `score-entry`) naturally beats a
+  same-game failed scratch, giving exactly the source precedence `live > failed >
+  persisted`. Callers therefore need not pre-filter the active game out of
+  `failedSaves`.
+- **Callers exclude conflicts**, not the helper. A conflicted failed save's
+  committed value is already in `persisted`; folding the *rejected* scratch would
+  re-introduce the data-loss overwrite the version guard prevents. `save-banner`
+  already filters `!entry.conflict` at the call site — `score-entry` does the
+  same. The helper stays a pure board-merge with no conflict opinion.
+- **The helper returns the raw merged board; the caller compacts.**
+  `score-entry` needs the un-compacted board for `overrunDecider` (which reports
+  the true game number), and both callers already own their `compactGames` call.
+
+The earlier objection — "the active game's live input lives only in
+`score-entry`'s RHF state" — is answered by making `activeInput` an *optional
+parameter*: `score-entry` passes it, `save-banner` passes none (it defers the
+active game's live value to `score-entry`'s button via `decidedHere`, unchanged).
+
+## Known limitation: the scoreline `decider` stays persisted-only
+
+The fix reconstructs only the **finalize board** (`hypotheticalGames` →
+`wouldFinalize`/`overrunDecider`/posted payload). `score-entry`'s other
+persisted-only read — `decider` (lines ~212–213), which gates scoreline cell
+muting and the out-of-range nav bounce — is deliberately **left unchanged**. So a
+failed save that would itself clinch the match (e.g. G1 persisted, G2 *failed*,
+both wins in a best-of-3) does not mute the trailing cells. This is not a
+corruption path: the **save-banner** reads persisted ⊕ failed, sees the decided
+board, and surfaces "These scores finish the match — Post result." Folding failed
+(unsaved, possibly mid-retry) scratch data into `decider` would change muting
+behavior with its own edge cases, beyond F2's blast radius; scoped out, revisit
+if it becomes a real confusion.
