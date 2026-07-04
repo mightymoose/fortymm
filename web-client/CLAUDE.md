@@ -42,8 +42,7 @@ custom element only when nothing in the design system is a reasonable fit.
 
 ## Boundaries
 
-We **parse untrusted data at every boundary with Zod** (the repo-wide rule and its
-rationale live in `.claude/rules/parse-at-boundaries.md`). The tool per surface:
+We **parse untrusted data at every boundary with Zod.** The tool per surface:
 
 - **Forms** → React Hook Form + `zodResolver`. See `## Forms` below.
 - **URL search + path params** → a Zod schema. Prefer a route
