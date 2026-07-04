@@ -3359,10 +3359,10 @@ async def test_posting_result_enqueues_confirmation_for_opponent(
     db_session: AsyncSession,
     fake_notifications_queue: Queue,
 ):
-    """Posting a result on a two-human match enqueues one confirm/dispute
+    """Posting a result on a two-human match enqueues one accept/counter
     delivery for the opponent — filed under the result-confirmation category,
-    deep-linked to the match, carrying the Approve/Dispute push category + match
-    id, with recipient-framed copy. The poster gets nothing."""
+    deep-linked to the match, carrying the result-confirmation push category +
+    match id, with recipient-framed copy. The poster gets nothing."""
     me = await start_session(api_client, db_session)
     me.username = "poster"
     await db_session.commit()
@@ -3388,6 +3388,10 @@ async def test_posting_result_enqueues_confirmation_for_opponent(
     assert job.link == f"/matches/{match['id']}"
     assert job.push_category == MATCH_RESULT_CONFIRMATION_CATEGORY
     assert job.push_data == {"match_id": match["id"]}
+    # Propose/accept vocabulary, not the retired confirm/dispute model (#728).
+    assert job.title == "Review your match result"
+    assert "Accept or counter?" in job.body
+    assert "dispute" not in job.body.lower()
     # Recipient-framed games-won (poster won 2–1) and the per-game scores.
     assert "poster reported beating you 2–1" in job.body
     assert "11–7" in job.body
