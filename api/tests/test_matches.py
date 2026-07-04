@@ -3389,8 +3389,10 @@ async def test_posting_result_enqueues_confirmation_for_opponent(
     assert job.push_category == MATCH_RESULT_CONFIRMATION_CATEGORY
     assert job.push_data == {"match_id": match["id"]}
     # Propose/accept vocabulary, not the retired confirm/dispute model (#728).
+    # A first post's recipient sees Accept/Suggest-correction buttons (not
+    # Accept/Counter — that pair is reserved for the corrected-result case).
     assert job.title == "Review your match result"
-    assert "Accept or counter?" in job.body
+    assert "Accept it, or suggest a correction?" in job.body
     assert "dispute" not in job.body.lower()
     # Recipient-framed games-won (poster won 2–1) and the per-game scores.
     assert "poster reported beating you 2–1" in job.body
@@ -3428,6 +3430,38 @@ async def test_posting_losing_result_enqueues_confirmation_for_opponent(
     job = jobs[0]
     # Recipient-framed games-won (poster lost 0–2), phrased grammatically.
     assert "poster reported losing to you 2–0" in job.body
+
+
+async def test_posting_counter_enqueues_confirmation_with_counter_prompt(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    fake_notifications_queue: Queue,
+):
+    """Countering a standing result (``supersedes_result_id`` set) prompts the
+    recipient with "Accept or counter?" — the Accept/Counter button pair the
+    corrected-result callout actually renders — not the first-post's
+    Accept/Suggest-correction prompt (#728)."""
+    me = await start_session(api_client, db_session)
+    me.username = "proposer"
+    await db_session.commit()
+
+    async with opponent_session(db_session, "counterer") as (opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=1)
+        first = await _propose(api_client, match["id"], s1=11, s2=4)
+        assert first["status"] == 201
+        first_id = first["body"]["negotiation"]["standing_result"]["id"]
+
+        counter = await _propose(
+            opp_client, match["id"], s1=4, s2=11, supersedes=first_id
+        )
+        assert counter["status"] == 201, counter
+
+    jobs = enqueued_notification_jobs(fake_notifications_queue)
+    # The first post notifies the opponent; the counter notifies me back.
+    assert [job.user_id for job in jobs] == [opp.id, me.id]
+    counter_job = jobs[1]
+    assert "Accept or counter?" in counter_job.body
+    assert "suggest a correction" not in counter_job.body.lower()
 
 
 async def test_solo_result_enqueues_no_confirmation(

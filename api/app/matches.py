@@ -1176,11 +1176,17 @@ def _game_scores_text(match: Match, poster_side_number: int) -> str:
 
 
 def _result_confirmation_copy(
-    match: Match, poster_id: uuid.UUID
+    match: Match, poster_id: uuid.UUID, *, is_counter: bool
 ) -> tuple[str, str] | None:
     """Title + body for the "accept or suggest a correction to the result your
     opponent posted" push, framed for the *recipient* (the side that didn't
     post).
+
+    ``is_counter`` picks the closing prompt to match the actual button pair
+    the recipient will see: a first-post callout offers Accept / Suggest
+    correction (``confirmation-callout-display.tsx``'s ``"review"`` case),
+    while a counter offers Accept / Counter (its ``"corrected"`` case) — the
+    same verbs the iOS push actions use (#728).
 
     The headline carries the games-won score and, where there's room, the
     body lists the individual game scores — both oriented so the poster's
@@ -1204,24 +1210,26 @@ def _result_confirmation_copy(
         phrase, hi, lo = "losing to you", recipient_games, poster_games
     headline = f"{poster_name} reported {phrase} {hi}{_SCORE_DASH}{lo}"
 
+    prompt = "Accept or counter?" if is_counter else "Accept or suggest a correction?"
     games = _game_scores_text(match, poster_side.side_number)
-    body = (
-        f"{headline}. Games: {games}. Accept or suggest a correction?"
-        if games
-        else f"{headline}. Accept or suggest a correction?"
-    )
+    body = f"{headline}. Games: {games}. {prompt}" if games else f"{headline}. {prompt}"
     return "Review your match result", body
 
 
 async def _notify_result_posted(
-    notifications: NotificationService, match: Match, poster_id: uuid.UUID
+    notifications: NotificationService,
+    match: Match,
+    poster_id: uuid.UUID,
+    *,
+    is_counter: bool,
 ) -> None:
-    """Queue an accept/counter prompt to every player on the side that now owes
-    a response. Each enqueued job persists the in-app record (the bell feed) and
-    fans out push/email per the recipient's preferences in the worker. The APNs
-    ``category``/``data`` carry the action group and the match id so a tapped
-    push deep-links to the right match."""
-    copy = _result_confirmation_copy(match, poster_id)
+    """Queue an accept/counter (or accept/suggest-correction) prompt to every
+    player on the side that now owes a response. Each enqueued job persists
+    the in-app record (the bell feed) and fans out push/email per the
+    recipient's preferences in the worker. The APNs ``category``/``data``
+    carry the action group and the match id so a tapped push deep-links to
+    the right match."""
+    copy = _result_confirmation_copy(match, poster_id, is_counter=is_counter)
     recipient_side = opponent_side(match, poster_id)
     if copy is None or recipient_side is None:
         return
@@ -2385,7 +2393,12 @@ async def post_match_result(
     # clean even when the failure was the in-app persist commit.
     if awaiting_confirmation:
         try:
-            await _notify_result_posted(notifications, reloaded, current_user.id)
+            await _notify_result_posted(
+                notifications,
+                reloaded,
+                current_user.id,
+                is_counter=payload.supersedes_result_id is not None,
+            )
         except Exception:
             await db.rollback()
             log.exception(
