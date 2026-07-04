@@ -9,7 +9,7 @@ describe("FinalizeCalloutDisplay", () => {
     const callout = finalizeCalloutDisplayPage.getCallout();
     expect(callout).toHaveTextContent("Scores ready · not yet posted");
     expect(callout).toHaveTextContent(
-      "Post this result for your opponent to confirm.",
+      "Post this result for your opponent to accept.",
     );
     expect(finalizeCalloutDisplayPage.getPostButton()).toHaveTextContent(
       "Post result",

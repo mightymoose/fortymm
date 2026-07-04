@@ -1,3 +1,4 @@
+import uuid
 from collections.abc import AsyncIterator
 
 import pytest_asyncio
@@ -7,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_session
 from app.main import app
-from app.models import Permission, Role, RolePermission, User, UserRole
+from app.models import Permission, Role, RolePermission, Tournament, User, UserRole
 from app.rbac import _require_rbac
 from app.sessions import get_current_user
 from tests._helpers import CSRF_EVENT_HOOKS
@@ -373,6 +374,32 @@ async def test_delete_user_refuses_self(api_client: AsyncClient, admin_user: Use
     response = await api_client.delete(f"/v1/users/{admin_user.id}")
     assert response.status_code == 400
     assert "your own" in response.json()["detail"]
+
+
+async def test_delete_user_with_activity_returns_409(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """A user referenced by an ON DELETE RESTRICT FK (e.g. a tournament they
+    created) can't be hard-deleted — the route must turn the IntegrityError
+    into a clean 409 instead of a raw 500 (#751)."""
+    user = (await api_client.post("/v1/users", json={"username": "doomed"})).json()
+    db_session.add(
+        Tournament(
+            name="Doomed Open",
+            address={},
+            created_by_user_id=uuid.UUID(user["id"]),
+        )
+    )
+    await db_session.commit()
+
+    response = await api_client.delete(f"/v1/users/{user['id']}")
+    assert response.status_code == 409
+    assert "activity" in response.json()["detail"]
+
+    remaining = (
+        await db_session.execute(select(User).where(User.username == "doomed"))
+    ).scalar_one_or_none()
+    assert remaining is not None
 
 
 # ----- regression: case-insensitive uniqueness ----------------------------
