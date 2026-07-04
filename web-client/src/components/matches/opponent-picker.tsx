@@ -25,6 +25,10 @@ export interface OpponentPickerProps {
  * children — preserves the typed query and the search view instead of dropping
  * back to the recent grid (#96). The `focusOnMountRef` ref likewise survives a
  * reset remount, so error recovery doesn't yank focus back to the input (#131).
+ *
+ * The ref starts `true` on the `defaultToSearch` entry (the dashboard hero opens
+ * straight into search), so the input is focused on first mount without a click;
+ * on the recent-grid entry it's flipped `true` by `onSearchAll` instead.
  */
 export const OpponentPicker = ({
   onPick,
@@ -32,7 +36,7 @@ export const OpponentPicker = ({
 }: OpponentPickerProps) => {
   const [showSearch, setShowSearch] = useState(defaultToSearch)
   const [query, setQuery] = useState('')
-  const focusOnMountRef = useRef(false)
+  const focusOnMountRef = useRef(defaultToSearch)
 
   return (
     <OpponentPickerBoundary>
