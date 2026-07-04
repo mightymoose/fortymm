@@ -29,6 +29,12 @@ export interface SaveBannerProps {
    * finishes the match: we stay on it, the banner surfaces (informational
    * only), and the main "Post result" button owns finalizing. */
   activeGameNumber: number
+  /** The entry screen's own propose mutation, shared so a "Post result" fired
+   * from this banner and one fired from the main button are the *same* request.
+   * That way a board-level conflict (issue D1) surfaces once — on the entry
+   * screen's blocking interstitial — instead of only inside this banner, and
+   * the banner is hidden while that interstitial owns the reconcile. */
+  proposeMutation: ReturnType<typeof useProposeResult>
 }
 
 /**
@@ -57,11 +63,14 @@ export function SaveBanner(props: SaveBannerProps) {
   )
 }
 
-function FailedSaveBanner({ matchId, activeGameNumber }: SaveBannerProps) {
+function FailedSaveBanner({
+  matchId,
+  activeGameNumber,
+  proposeMutation: finalizeMutation,
+}: SaveBannerProps) {
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const { data } = useMatch(matchId)
-  const finalizeMutation = useProposeResult(matchId)
   // Conflicts are handled by ConflictReviewBanner — exclude them here so the
   // retry/finalize path never re-fires a stale write over the committed score.
   const allFailed = useFailedGameSaves(matchId).filter((entry) => !entry.conflict)

@@ -1192,7 +1192,7 @@ export function proposeSeed(
   seed: SeedMatch,
   games: SeedResultGame[],
   supersedesResultId: string | null,
-): { status: number; message: string } | null {
+): { status: number; message: string; boardConflict?: boolean } | null {
   // Strict decided-board precondition (422), before the negotiation gates.
   const validationError = validateProposedGames(seed, games)
   if (validationError) return { status: 422, message: validationError }
@@ -1203,6 +1203,30 @@ export function proposeSeed(
       return {
         status: 409,
         message: 'This match already has a posted result.',
+      }
+    }
+    // Board-level scratchpad guard (issue D1): reject a proposal that would
+    // overwrite a game another participant committed to the shared scratchpad
+    // that this client never saw. Every committed-scored game must appear
+    // unchanged; additions (games with no committed score) are fine. Mirrors the
+    // server's ``_scratchpad_divergence``. Runs before syncScratchpadGames so the
+    // committed board the handler returns still reflects what's saved.
+    const diverges = seed.games.some((g) => {
+      if (!g.score) return false
+      const proposed = games.find((pg) => pg.game_number === g.game_number)
+      return (
+        !proposed ||
+        proposed.side_1_points !== g.score.side_1_points ||
+        proposed.side_2_points !== g.score.side_2_points
+      )
+    })
+    if (diverges) {
+      return {
+        status: 409,
+        boardConflict: true,
+        message:
+          'The score changed while you were entering it — a game was ' +
+          'saved by someone else. Review the board before posting.',
       }
     }
   } else {
