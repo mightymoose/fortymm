@@ -71,7 +71,7 @@ describe("MeetingRow", () => {
     );
   });
 
-  it("tints neither side when no winner was recorded", async () => {
+  it("tints neither side and shows a No result tag when no winner was recorded", async () => {
     meetingRowPage.render({
       meeting: buildHeadToHeadMeetingView({ leftWon: null }),
     });
@@ -83,5 +83,15 @@ describe("MeetingRow", () => {
     expect(meetingRowPage.getRightScore()).not.toHaveClass(
       "md-h2h__score-side--win",
     );
+    expect(meetingRowPage.getNoResultTag()).toHaveTextContent(/^No result$/);
+  });
+
+  it("omits the No result tag for a decided meeting", async () => {
+    meetingRowPage.render({
+      meeting: buildHeadToHeadMeetingView({ leftWon: true }),
+    });
+
+    await meetingRowPage.findRow();
+    expect(meetingRowPage.getNoResultTag()).toBeNull();
   });
 });

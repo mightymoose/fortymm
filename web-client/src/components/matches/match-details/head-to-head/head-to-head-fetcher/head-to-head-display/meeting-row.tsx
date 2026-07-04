@@ -23,6 +23,9 @@ export const MeetingRow = ({ meeting }: MeetingRowProps) => (
     <span className="md-h2h__meta">
       <span className="md-h2h__label">Match</span>
       {meeting.rated && <span className="md-h2h__tag">Rated</span>}
+      {meeting.leftWon === null && (
+        <span className="md-h2h__tag md-h2h__tag--neutral">No result</span>
+      )}
     </span>
     <span className="md-h2h__score">
       <span

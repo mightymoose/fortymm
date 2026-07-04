@@ -3719,6 +3719,10 @@ body.dark.fortymm-theme {
   text-transform: uppercase;
   color: var(--serve-500);
 }
+.fortymm-theme .md-h2h__tag--neutral {
+  border-color: var(--border-subtle);
+  color: var(--fg-3);
+}
 .fortymm-theme .md-h2h__label--tonight {
   font-weight: 600;
   color: var(--ball-500);

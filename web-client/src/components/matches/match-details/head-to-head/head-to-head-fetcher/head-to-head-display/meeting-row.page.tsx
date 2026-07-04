@@ -44,7 +44,12 @@ const scoped = (container: Container) => {
     },
     /** The "Rated" marker, or `null` for an unrated meeting. */
     getRatedTag() {
-      return getRow().querySelector(".md-h2h__tag");
+      return getRow().querySelector(".md-h2h__tag:not(.md-h2h__tag--neutral)");
+    },
+    /** The "No result" marker, or `null` when the meeting has a decided
+     * winner. */
+    getNoResultTag() {
+      return getRow().querySelector(".md-h2h__tag--neutral");
     },
   };
 };
