@@ -16,8 +16,9 @@ export const api = createClient<paths>({
 })
 
 /**
- * Info carried by the `session_merged` 401: the backend's human message and the
- * owning account's email (to prefill on the login screen).
+ * Info carried by a session-ended 401 (`session_merged` or `session_ended`): the
+ * backend's human message, and — only for the merged case — the owning account's
+ * email to prefill on the login screen.
  */
 export interface SessionEndedInfo {
   message: string
@@ -28,10 +29,11 @@ let sessionEndedHandler: ((info: SessionEndedInfo) => void) | null = null
 let sessionEndedFiring = false
 
 /**
- * Register the global "your session was merged away" handler (set once at app
- * bootstrap). It fires from the response middleware below for *any* request, so
- * a guest whose account was merged on another device is sent to sign in no
- * matter which call surfaces it — not just the session bootstrap.
+ * Register the global "your session ended" handler (set once at app bootstrap).
+ * It fires from the response middleware below for *any* request, so a holder
+ * whose session went away — merged on another device, or signed out / expired —
+ * is sent to sign in no matter which call surfaces it, not just the session
+ * bootstrap.
  */
 export function setSessionEndedHandler(
   fn: ((info: SessionEndedInfo) => void) | null,
@@ -39,7 +41,25 @@ export function setSessionEndedHandler(
   sessionEndedHandler = fn
 }
 
-async function readSessionMerged(
+// The structured 401 `code`s that mean "this tab's session is gone — sign in":
+// a guest merged away on another device (`session_merged`, carries the owner's
+// email to prefill), or a signed-out/expired session (`session_ended`, no
+// email). Any other 401 — a bare string, a different code — is an ordinary auth
+// failure and must NOT trip the global sign-out, so we match on the code, never
+// the bare status.
+const SESSION_ENDED_CODES = new Set(['session_merged', 'session_ended'])
+
+/** True when a 401's `detail` payload carries one of the session-ended codes.
+ * Both the response-middleware reader and the `ApiError` classifier narrow the
+ * same `unknown` body (from a live `Response` vs. a stored `ApiError`), so the
+ * check lives here once. */
+function hasSessionEndedCode(detail: unknown): boolean {
+  if (!detail || typeof detail !== 'object') return false
+  const code = (detail as { code?: unknown }).code
+  return typeof code === 'string' && SESSION_ENDED_CODES.has(code)
+}
+
+async function readSessionEnded(
   response: Response,
 ): Promise<SessionEndedInfo | null> {
   try {
@@ -47,11 +67,7 @@ async function readSessionMerged(
       detail?: { code?: unknown; message?: unknown; email?: unknown }
     }
     const detail = body?.detail
-    if (
-      detail &&
-      typeof detail === 'object' &&
-      detail.code === 'session_merged'
-    ) {
+    if (detail && hasSessionEndedCode(detail)) {
       return {
         message:
           typeof detail.message === 'string'
@@ -109,7 +125,7 @@ api.use({
     if (response.ok) {
       sessionEndedFiring = false
     } else if (response.status === 401 && !sessionEndedFiring) {
-      const info = await readSessionMerged(response)
+      const info = await readSessionEnded(response)
       if (info) {
         // Latch so a burst of in-flight 401s triggers a single redirect.
         sessionEndedFiring = true
@@ -121,21 +137,18 @@ api.use({
 })
 
 /**
- * True when `error` is the structured `session_merged` 401 — the user's guest
- * account was merged away on another device. The global response middleware
- * (`setSessionEndedHandler`) already handles this by redirecting to `/login`, so
+ * True when `error` is a structured session-ended 401 — the guest was merged
+ * away on another device (`session_merged`), or the session was signed out /
+ * expired (`session_ended`). The global response middleware
+ * (`setSessionEndedHandler`) already handles both by redirecting to `/login`, so
  * UI error boundaries should defer to that redirect rather than show a generic
- * "something went wrong" screen (#672). A *bare* 401 (no `session_merged` code)
- * is not this case and should still surface normally.
+ * "something went wrong" screen (#672). A *bare* 401 (no session-ended code) is
+ * an ordinary auth failure and should still surface normally.
  */
-export function isSessionMergedError(error: unknown): boolean {
+export function isSessionEndedError(error: unknown): boolean {
   if (!(error instanceof ApiError) || error.status !== 401) return false
   const detail = (error.body as { detail?: unknown } | null | undefined)?.detail
-  return (
-    !!detail &&
-    typeof detail === 'object' &&
-    (detail as { code?: unknown }).code === 'session_merged'
-  )
+  return hasSessionEndedCode(detail)
 }
 
 export function extractDetail(value: unknown): string | null {

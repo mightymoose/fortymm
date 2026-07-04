@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import {
   RouterProvider,
@@ -356,29 +356,6 @@ describe('NewMatchPage', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
       /opponent not found/i,
-    )
-  })
-
-  it('offers a "Sign in again" path instead of a dead error string on a 401 (#70)', async () => {
-    const user = userEvent.setup()
-    server.use(
-      http.get('*/v1/players/recent', () => HttpResponse.json([])),
-      http.post('*/v1/matches', () =>
-        HttpResponse.json({ detail: 'Not authenticated' }, { status: 401 }),
-      ),
-    )
-    renderNewMatch()
-
-    await user.click(
-      await screen.findByRole('button', { name: /start match/i }),
-    )
-
-    // The bare 401 surfaces with a recovery CTA, not just an unstyled string.
-    const alert = await screen.findByRole('alert')
-    expect(alert).toHaveTextContent(/not authenticated/i)
-    await user.click(within(alert).getByRole('button', { name: /sign in again/i }))
-    await waitFor(() =>
-      expect(screen.getByText('Login route')).toBeInTheDocument(),
     )
   })
 

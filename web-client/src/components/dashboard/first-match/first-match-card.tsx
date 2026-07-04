@@ -1,5 +1,4 @@
 import { useState } from 'react'
-import { useNavigate } from '@tanstack/react-router'
 import { ArrowRight } from 'lucide-react'
 
 import { deriveEmailStatus, useSession } from '@/api/session'
@@ -28,7 +27,6 @@ import '@/components/matches/match-setup/match-setup.css'
  * pattern at the page level).
  */
 export const FirstMatchCard = () => {
-  const navigate = useNavigate()
   const { data: session } = useSession()
   const [opponent, setOpponent] = useState<Opponent | null>(null)
   const [bestOf, setBestOf] = useState(5)
@@ -36,8 +34,7 @@ export const FirstMatchCard = () => {
   // this hero requires an opponent before it is even submittable, so rated
   // defaults on the moment one is picked — matching the mock.
   const [rated, setRated] = useState(true)
-  const { submit, apiError, sessionExpired, submitting, submitted } =
-    useStartMatch()
+  const { submit, apiError, submitting, submitted } = useStartMatch()
 
   const me = session?.data.user ?? null
   const isGuest =
@@ -129,28 +126,11 @@ export const FirstMatchCard = () => {
             {summary}
           </div>
         )}
-        {error &&
-          (sessionExpired ? (
-            <div className="nm-recovery" role="alert">
-              <p className="nm-error">{error}</p>
-              <button
-                type="button"
-                className="nm-btn nm-btn-primary nm-recovery-btn"
-                onClick={() =>
-                  navigate({
-                    to: '/login',
-                    search: { email: undefined, error: undefined },
-                  })
-                }
-              >
-                Sign in again
-              </button>
-            </div>
-          ) : (
-            <p className="nm-error" role="alert">
-              {error}
-            </p>
-          ))}
+        {error && (
+          <p className="nm-error" role="alert">
+            {error}
+          </p>
+        )}
         <button
           type="button"
           className="nm-btn nm-btn-primary"

@@ -58,8 +58,7 @@ function MatchCard() {
   // Default off so submitting without picking an opponent "just works" —
   // the no-opponent match is unrated by definition.
   const [rated, setRated] = useState(false)
-  const { submit, apiError, sessionExpired, submitting, submitted } =
-    useStartMatch()
+  const { submit, apiError, submitting, submitted } = useStartMatch()
 
   const me = session?.data.user ?? null
   // The hint nudges guests toward claiming an account so their rated history
@@ -127,12 +126,8 @@ function MatchCard() {
         bestOf={bestOf}
         rated={rated}
         error={submitted ? apiError : null}
-        sessionExpired={sessionExpired}
         submitting={submitting}
         onSubmit={() => submit({ opponent, bestOf, rated })}
-        onSignIn={() =>
-          navigate({ to: '/login', search: { email: undefined, error: undefined } })
-        }
         onCancel={() => navigate({ to: '/dashboard' })}
       />
     </div>
@@ -148,20 +143,16 @@ function SubmitRow({
   bestOf,
   rated,
   error,
-  sessionExpired,
   submitting,
   onSubmit,
-  onSignIn,
   onCancel,
 }: {
   opponent: Opponent | null
   bestOf: number
   rated: boolean
   error: string | null
-  sessionExpired: boolean
   submitting: boolean
   onSubmit: () => void
-  onSignIn: () => void
   onCancel: () => void
 }) {
   const effectivelyRated = rated && opponent !== null
@@ -194,23 +185,11 @@ function SubmitRow({
           <span className="dot">·</span>{' '}
           games to 11, win by 2
         </div>
-        {error &&
-          (sessionExpired ? (
-            <div className="nm-recovery" role="alert">
-              <p className="nm-error">{error}</p>
-              <button
-                type="button"
-                className="nm-btn nm-btn-primary nm-recovery-btn"
-                onClick={onSignIn}
-              >
-                Sign in again
-              </button>
-            </div>
-          ) : (
-            <p className="nm-error" role="alert">
-              {error}
-            </p>
-          ))}
+        {error && (
+          <p className="nm-error" role="alert">
+            {error}
+          </p>
+        )}
       </div>
       <div className="actions">
         <button
