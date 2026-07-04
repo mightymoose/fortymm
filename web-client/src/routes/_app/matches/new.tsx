@@ -2,6 +2,16 @@ import { useState } from 'react'
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { ArrowRight } from 'lucide-react'
 
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { deriveEmailStatus, useSession } from '@/api/session'
 import { OpponentPicker } from '@/components/matches/opponent-picker'
 import {
@@ -59,6 +69,10 @@ function MatchCard() {
   // the no-opponent match is unrated by definition.
   const [rated, setRated] = useState(false)
   const { submit, apiError, submitting, submitted } = useStartMatch()
+  // Guards Cancel against silently discarding an in-progress setup (#75) — any
+  // deviation from the form's defaults counts as dirty.
+  const dirty = opponent !== null || bestOf !== 5 || rated !== false
+  const [confirmDiscard, setConfirmDiscard] = useState(false)
 
   const me = session?.data.user ?? null
   // The hint nudges guests toward claiming an account so their rated history
@@ -128,8 +142,31 @@ function MatchCard() {
         error={submitted ? apiError : null}
         submitting={submitting}
         onSubmit={() => submit({ opponent, bestOf, rated })}
-        onCancel={() => navigate({ to: '/dashboard' })}
+        onCancel={() =>
+          dirty ? setConfirmDiscard(true) : navigate({ to: '/dashboard' })
+        }
       />
+
+      <AlertDialog open={confirmDiscard} onOpenChange={setConfirmDiscard}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Discard changes?</AlertDialogTitle>
+            <AlertDialogDescription>
+              You've picked an opponent or changed the match settings. Leaving
+              now discards them.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Keep editing</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={() => navigate({ to: '/dashboard' })}
+            >
+              Discard changes
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

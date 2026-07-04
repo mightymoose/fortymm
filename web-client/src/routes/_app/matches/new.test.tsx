@@ -387,6 +387,56 @@ describe('NewMatchPage', () => {
     expect(posts).toBe(1)
   })
 
+  it('navigates away immediately on Cancel when the form is untouched', async () => {
+    const user = userEvent.setup()
+    server.use(http.get('*/v1/players/recent', () => HttpResponse.json([])))
+    renderNewMatch()
+
+    await user.click(
+      await screen.findByRole('button', { name: /^cancel$/i }),
+    )
+    await waitFor(() =>
+      expect(screen.getByText('Dashboard route')).toBeInTheDocument(),
+    )
+  })
+
+  it('confirms before discarding a dirty form on Cancel (#75)', async () => {
+    const user = userEvent.setup()
+    server.use(
+      http.get('*/v1/players/recent', () =>
+        HttpResponse.json([{ id: 'pl-1', username: 'ada.lovelace' }]),
+      ),
+    )
+    renderNewMatch()
+
+    // Dirty the form by picking an opponent.
+    await user.click(
+      await screen.findByRole('button', { name: /ada\.lovelace/i }),
+    )
+    await user.click(screen.getByRole('button', { name: /^cancel$/i }))
+
+    // Still on the form — a confirmation dialog blocks the navigation.
+    const dialog = await screen.findByRole('alertdialog')
+    expect(dialog).toHaveTextContent(/discard changes/i)
+    expect(screen.queryByText('Dashboard route')).not.toBeInTheDocument()
+
+    // "Keep editing" dismisses the dialog without navigating.
+    await user.click(screen.getByRole('button', { name: /keep editing/i }))
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: /ada\.lovelace|^change$/i }),
+    ).toBeInTheDocument()
+
+    // Cancel again and confirm the discard.
+    await user.click(screen.getByRole('button', { name: /^cancel$/i }))
+    await user.click(
+      await screen.findByRole('button', { name: /discard changes/i }),
+    )
+    await waitFor(() =>
+      expect(screen.getByText('Dashboard route')).toBeInTheDocument(),
+    )
+  })
+
   it('surfaces a timeout error and re-enables the button when the create aborts (#76)', async () => {
     const user = userEvent.setup()
     server.use(http.get('*/v1/players/recent', () => HttpResponse.json([])))

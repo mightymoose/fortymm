@@ -49,6 +49,7 @@ function ConfirmEmailPage() {
   const preview = useMergePreview()
   const confirm = useConfirmEmail()
   const fired = useRef(false)
+  const toastFired = useRef(false)
 
   // Preview the link first. A merge that would carry matches over waits for the
   // user at the gate; everything else (plain confirm, empty guest, or a preview
@@ -67,7 +68,8 @@ function ConfirmEmailPage() {
   }, [token, preview, confirm])
 
   useEffect(() => {
-    if (!confirm.isSuccess) return
+    if (!confirm.isSuccess || toastFired.current) return
+    toastFired.current = true
     const moved = confirm.data?.merged?.matches_moved ?? 0
     if (moved > 0) {
       toast.success(

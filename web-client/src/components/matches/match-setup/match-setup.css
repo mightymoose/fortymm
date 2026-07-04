@@ -659,6 +659,13 @@
   cursor: not-allowed;
   opacity: 0.55;
 }
+/* The primary submit button disables while its "Starting…" request is in
+   flight, not because the action is forbidden — `wait` distinguishes that
+   pending state from the `not-allowed` cursor other disabled controls use
+   (#77). */
+.nm-btn-primary:disabled {
+  cursor: wait;
+}
 .nm-btn-primary:disabled:hover {
   background: var(--ball-500);
   box-shadow: none;

@@ -57,6 +57,37 @@ describe('useConsumeLoginToken', () => {
       data: { user: { id: 'u-2' } },
     })
   })
+
+  // #239: `merged` is a one-time mutation result, never returned by
+  // `GET /v1/session` — caching it verbatim would let a later
+  // `useSession().data.merged` read see a stale truthy value for the whole
+  // 5min staleTime window.
+  it('strips `merged` before seeding the session cache', async () => {
+    server.use(
+      http.post('*/v1/login/consume', () =>
+        HttpResponse.json({
+          data: { user: { id: 'u-2', username: 'new-user' } },
+          merged: { matches_moved: 3 },
+        }),
+      ),
+    )
+
+    const { result } = renderHook(() => useConsumeLoginToken(), {
+      wrapper: wrapperFor(queryClient),
+    })
+    result.current.mutate({ token: 'tok' })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+
+    // The mutation result itself still carries `merged` (callers read it off
+    // the mutate callback to drive the toast) — only the cached copy is
+    // stripped.
+    expect(result.current.data?.merged).toEqual({ matches_moved: 3 })
+    expect(
+      queryClient.getQueryData<{ merged: unknown }>(SESSION_QUERY_KEY)
+        ?.merged,
+    ).toBeNull()
+  })
 })
 
 describe('useConfirmEmail', () => {
@@ -81,5 +112,30 @@ describe('useConfirmEmail', () => {
     expect(queryClient.getQueryData(SESSION_QUERY_KEY)).toMatchObject({
       data: { user: { id: 'u-2' } },
     })
+  })
+
+  // #239: same stale-cache guard as useConsumeLoginToken.
+  it('strips `merged` before seeding the session cache', async () => {
+    server.use(
+      http.post('*/v1/me/email/confirm', () =>
+        HttpResponse.json({
+          data: { user: { id: 'u-2', username: 'new-user' } },
+          merged: { matches_moved: 2 },
+        }),
+      ),
+    )
+
+    const { result } = renderHook(() => useConfirmEmail(), {
+      wrapper: wrapperFor(queryClient),
+    })
+    result.current.mutate({ token: 'tok' })
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+
+    expect(result.current.data?.merged).toEqual({ matches_moved: 2 })
+    expect(
+      queryClient.getQueryData<{ merged: unknown }>(SESSION_QUERY_KEY)
+        ?.merged,
+    ).toBeNull()
   })
 })

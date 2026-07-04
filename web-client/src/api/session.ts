@@ -238,7 +238,11 @@ export function useConfirmEmail() {
     // it doesn't need a refetch.
     onSuccess: (session) => {
       qc.clear()
-      qc.setQueryData(SESSION_QUERY_KEY, session)
+      // `merged` is a one-time mutation result, not a field `GET /v1/session`
+      // ever returns — cache it verbatim and a stale truthy value would sit
+      // under SESSION_QUERY_KEY for the 5min staleTime, ready to mislead any
+      // future `useSession().data.merged` reader (#239).
+      qc.setQueryData(SESSION_QUERY_KEY, { ...session, merged: null })
     },
   })
 }
@@ -302,7 +306,9 @@ export function useConsumeLoginToken() {
     // browsing guest into a different existing account.
     onSuccess: (session) => {
       qc.clear()
-      qc.setQueryData(SESSION_QUERY_KEY, session)
+      // Strip the one-time `merged` result before caching (#239) — see the
+      // matching comment on useConfirmEmail.
+      qc.setQueryData(SESSION_QUERY_KEY, { ...session, merged: null })
     },
   })
 }
