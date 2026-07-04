@@ -33,10 +33,11 @@ const scoped = (container: Container) => ({
   getInput(name: string) {
     return container.getByLabelText(`${name} score`) as HTMLInputElement;
   },
-  /** The single "Send corrected score" submit (or its pending label). */
+  /** The single "Send corrected score" / "Send updated score" submit (the
+   * latter on a proposer self-edit), or its pending label. */
   getSubmit() {
     return container.getByRole("button", {
-      name: /send corrected score|sending/i,
+      name: /send (corrected|updated) score|sending/i,
     });
   },
   /** The in-pad "Clear" action that empties the open game. */

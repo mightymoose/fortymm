@@ -486,7 +486,7 @@ const NOTIF_TYPE_INFOS: NotificationTypeInfo[] = [
   { key: 'rating_change', label: 'Rating changes', short: 'Rating' },
   { key: 'tournament', label: 'Tournament news', short: 'Tourney' },
   { key: 'opponent', label: 'Challenges & friends', short: 'Social' },
-  { key: 'result_confirm', label: 'Score confirmations', short: 'Scores' },
+  { key: 'result_confirm', label: 'Score acceptances', short: 'Scores' },
 ]
 
 const NOTIF_CHANNEL_INFOS: NotificationChannelInfo[] = [

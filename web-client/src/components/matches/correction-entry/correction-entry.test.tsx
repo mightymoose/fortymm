@@ -4,7 +4,7 @@ import { fireEvent } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { buildMatchDetails } from "@/mocks/factories/matches/match-details.factory";
-import { waitFor } from "@/test/utilities";
+import { screen, waitFor } from "@/test/utilities";
 
 import {
   STANDING_RESULT_ID,
@@ -253,5 +253,16 @@ describe("CorrectionEntry", () => {
       expect(correctionEntryPage.getInput("rita.kovac")).toHaveValue("11"),
     );
     expect(correctionEntryPage.queryMatchLanding()).not.toBeInTheDocument();
+    // A self-edit isn't "correcting" anyone — the copy reads as an edit, not a
+    // correction (the entry link that reaches this state says "Edit result").
+    expect(
+      screen.getByRole("heading", { name: "Edit your result." }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: "Suggest a correction." }),
+    ).not.toBeInTheDocument();
+    expect(correctionEntryPage.getSubmit()).toHaveTextContent(
+      "Send updated score",
+    );
   });
 });
