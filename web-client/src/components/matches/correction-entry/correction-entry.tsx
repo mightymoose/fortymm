@@ -283,7 +283,7 @@ export function CorrectionEntry({ matchId }: { matchId: string }) {
         <div className="hint">
           Fix the game(s) that look off — switch games on the SCORELINE, add or
           remove games until the board has a winner, then send the corrected
-          score to {oppName} to confirm.
+          score to {oppName} to accept.
         </div>
       </div>
 
@@ -347,7 +347,7 @@ export function CorrectionEntry({ matchId }: { matchId: string }) {
           selectedValidation.oneSideFilled && selectedValidation.error === null
         }
         inputsLocked={inputsLocked}
-        subtitle={`Sending the corrected score posts the result for ${oppName} to confirm.`}
+        subtitle={`Sending the corrected score posts the result for ${oppName} to accept.`}
         submitLabel={
           proposeMutation.isPending ? "Sending…" : "Send corrected score"
         }

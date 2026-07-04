@@ -135,6 +135,7 @@ export const FirstMatchCard = () => {
           type="button"
           className="nm-btn nm-btn-primary"
           disabled={!opponent || submitting}
+          aria-busy={submitting}
           onClick={() => submit({ opponent, bestOf, rated })}
         >
           {submitting ? 'Starting…' : 'Start scoring'}

@@ -1178,13 +1178,14 @@ def _game_scores_text(match: Match, poster_side_number: int) -> str:
 def _result_confirmation_copy(
     match: Match, poster_id: uuid.UUID
 ) -> tuple[str, str] | None:
-    """Title + body for the "confirm or dispute the result your opponent
-    posted" push, framed for the *recipient* (the side that didn't post).
+    """Title + body for the "accept or suggest a correction to the result your
+    opponent posted" push, framed for the *recipient* (the side that didn't
+    post).
 
     The headline carries the games-won score and, where there's room, the
     body lists the individual game scores — both oriented so the poster's
     number comes first. Returns ``None`` when the match isn't a two-human
-    match (nothing to confirm)."""
+    match (nothing to accept)."""
     poster_side = my_side(match, poster_id)
     recipient_side = opponent_side(match, poster_id)
     if poster_side is None or recipient_side is None or not poster_side.players:
@@ -1205,21 +1206,21 @@ def _result_confirmation_copy(
 
     games = _game_scores_text(match, poster_side.side_number)
     body = (
-        f"{headline}. Games: {games}. Approve or dispute?"
+        f"{headline}. Games: {games}. Accept or suggest a correction?"
         if games
-        else f"{headline}. Approve or dispute?"
+        else f"{headline}. Accept or suggest a correction?"
     )
-    return "Confirm your match result", body
+    return "Review your match result", body
 
 
 async def _notify_result_posted(
     notifications: NotificationService, match: Match, poster_id: uuid.UUID
 ) -> None:
-    """Queue a confirm/dispute prompt to every player on the side that now owes
-    a sign-off. Each enqueued job persists the in-app record (the bell feed) and
+    """Queue an accept/counter prompt to every player on the side that now owes
+    a response. Each enqueued job persists the in-app record (the bell feed) and
     fans out push/email per the recipient's preferences in the worker. The APNs
-    ``category``/``data`` carry the Approve/Dispute action group and the match
-    id so a tapped push deep-links to the right match."""
+    ``category``/``data`` carry the action group and the match id so a tapped
+    push deep-links to the right match."""
     copy = _result_confirmation_copy(match, poster_id)
     recipient_side = opponent_side(match, poster_id)
     if copy is None or recipient_side is None:
