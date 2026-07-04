@@ -11,6 +11,7 @@ import { ApiError, boardConflictDetail } from '@/api/client'
 import {
   forgetScoreSaves,
   matchDetailRoute,
+  nextScoringDestination,
   recordedGameNumbers,
   scoringEditRoute,
   scoringNewRoute,
@@ -244,7 +245,7 @@ function ScoreEntryInner({
   ) {
     return <Navigate {...scoringEditRoute(matchId, gameNumber)} replace />
   }
-  if (mode.kind === 'edit' && !persistedScore) {
+  if (mode.kind === 'edit' && !persistedScore && !boardConflict) {
     return <Navigate {...scoringNewRoute(matchId, gameNumber)} replace />
   }
 
@@ -404,38 +405,26 @@ function ScoreEntryInner({
     | MatchDetails
     | undefined
   // The games the poster's proposal changed or dropped vs. what's committed —
-  // named in the interstitial so the poster sees exactly what moved.
+  // named in the interstitial so the poster sees exactly what moved. Only the
+  // rare conflict path consumes this, so skip the work when there's no conflict.
   const attemptedByNumber = new Map(
     (finalizeMutation.variables?.games ?? []).map((g) => [g.game_number, g]),
   )
-  const divergingGames = (committedMatch?.games ?? []).filter((g) => {
-    if (!g.score) return false
-    const attempted = attemptedByNumber.get(g.game_number)
-    return (
-      !attempted ||
-      attempted.side_1_points !== g.score.side_1_points ||
-      attempted.side_2_points !== g.score.side_2_points
-    )
-  })
-  // Where "Resume" sends them: the first still-unplayed game on the true board,
-  // or the match page when the committed board leaves nothing left to play. A
-  // board decided *before* its last slot (a 3-0 sweep with games 4-5 blank) has
-  // unscored slots that can never be played — so gate on the decider, not on the
-  // first empty slot, or "Resume" would point at an unplayable game.
-  const committedForResume = committedMatch ?? data
-  const nextUnplayedGame = (() => {
-    const resumeScored = scoredGamePoints(committedForResume.games)
-    if (deciderGameNumber(resumeScored, committedForResume.best_of) !== null) {
-      return null
-    }
-    const scored = new Set(
-      committedForResume.games.filter((g) => g.score).map((g) => g.game_number),
-    )
-    for (let n = 1; n <= committedForResume.best_of; n += 1) {
-      if (!scored.has(n)) return n
-    }
-    return null
-  })()
+  const divergingGames = committedMatch
+    ? committedMatch.games.filter((g) => {
+        if (!g.score) return false
+        const attempted = attemptedByNumber.get(g.game_number)
+        return (
+          !attempted ||
+          attempted.side_1_points !== g.score.side_1_points ||
+          attempted.side_2_points !== g.score.side_2_points
+        )
+      })
+    : []
+  // Where "Resume" sends them on the true board: the server already computes the
+  // next playable game as `current_game` (null once the board is decided, even
+  // when it clinched before its last slot — a 3-0 sweep has no game 4 to resume),
+  // so reuse it rather than re-deriving the decider here.
   // The score *inputs* are only invalid for genuine validation problems (local
   // illegal score, or a 422 drift the server rejected) — a 409/500 means the
   // entered score is fine, so don't paint the fields red for those.
@@ -731,20 +720,13 @@ function ScoreEntryInner({
             divergingGames={divergingGames}
             meWins={meWins}
             oppWins={oppWins}
-            decided={nextUnplayedGame === null}
-            resumeLabel={
-              nextUnplayedGame === null ? 'View match →' : 'Resume scoring →'
-            }
+            decided={committedMatch?.current_game == null}
             onResume={() => {
               // Clear the propose error before leaving so it doesn't re-render
               // the interstitial over the next game's screen (the component
               // stays mounted across the game-number param change).
               finalizeMutation.reset()
-              navigate(
-                nextUnplayedGame === null
-                  ? matchDetailRoute(matchId)
-                  : scoringNewRoute(matchId, nextUnplayedGame),
-              )
+              navigate(nextScoringDestination(committedMatch ?? data))
             }}
           />
         ) : (
@@ -905,7 +887,6 @@ function BoardChangedInterstitial({
   meWins,
   oppWins,
   decided,
-  resumeLabel,
   onResume,
 }: {
   meName: string
@@ -915,9 +896,9 @@ function BoardChangedInterstitial({
   meWins: number
   oppWins: number
   decided: boolean
-  resumeLabel: string
   onResume: () => void
 }) {
+  const resumeLabel = decided ? 'View match →' : 'Resume scoring →'
   return (
     <Alert
       role="alert"
