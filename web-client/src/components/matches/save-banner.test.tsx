@@ -58,12 +58,18 @@ const inProgressMatch = matchDetails({
   can_finalize: false,
 })
 
-// Render the banner for an active game OTHER than the one that fails, so the
-// failure is surfaced (the active game's own failure is suppressed). A sibling
-// button re-fires game 3's scratch save imperatively — the same `fireScoreSave`
-// the banner's own Retry calls — so a re-failure happens WITHOUT unmounting the
-// banner (its dismiss state, the thing under test, must survive).
-function renderBanner() {
+// Mounts the banner with `activeGameNumber` active and a sibling button that
+// imperatively fails `failGameNumber`'s scratch save — the same `fireScoreSave`
+// the banner's own Retry calls — so a (re-)failure happens WITHOUT unmounting
+// the banner. Keep the failing game distinct from the active one where the test
+// needs the failure surfaced (the active game's own failure is suppressed).
+function renderBanner({
+  failGameNumber,
+  activeGameNumber,
+}: {
+  failGameNumber: number
+  activeGameNumber: number
+}) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
@@ -78,15 +84,15 @@ function renderBanner() {
           <button
             type="button"
             onClick={() =>
-              fireScoreSave(qc, 'm-1', 3, {
+              fireScoreSave(qc, 'm-1', failGameNumber, {
                 side_1_points: 11,
                 side_2_points: 4,
               })
             }
           >
-            fail game 3
+            fail game {failGameNumber}
           </button>
-          <SaveBanner matchId="m-1" activeGameNumber={4} />
+          <SaveBanner matchId="m-1" activeGameNumber={activeGameNumber} />
         </>
       )
     },
@@ -131,48 +137,6 @@ const decidedActivePersistedMatch = matchDetails({
   can_finalize: false,
 })
 
-// Mounts the banner with game 2 active and a sibling button that imperatively
-// fails game 1's scratch save — reproducing "game 1 saved offline and failed"
-// without unmounting the banner.
-function renderDecidedActivePersisted() {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  })
-  const rootRoute = createRootRoute()
-  const indexRoute = createRoute({
-    getParentRoute: () => rootRoute,
-    path: '/',
-    component: function Harness() {
-      const qc = useQueryClient()
-      return (
-        <>
-          <button
-            type="button"
-            onClick={() =>
-              fireScoreSave(qc, 'm-1', 1, {
-                side_1_points: 11,
-                side_2_points: 4,
-              })
-            }
-          >
-            fail game 1
-          </button>
-          <SaveBanner matchId="m-1" activeGameNumber={2} />
-        </>
-      )
-    },
-  })
-  const router = createRouter({
-    routeTree: rootRoute.addChildren([indexRoute]),
-    history: createMemoryHistory({ initialEntries: ['/'] }),
-  })
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <RouterProvider router={router} />
-    </QueryClientProvider>,
-  )
-}
-
 describe('SaveBanner', () => {
   // Regression for #528: the dismiss key folded only the failed game NUMBERS,
   // so a same-game repeat failure (set still {3}) kept the signature unchanged
@@ -189,7 +153,7 @@ describe('SaveBanner', () => {
       ),
     )
 
-    renderBanner()
+    renderBanner({ failGameNumber: 3, activeGameNumber: 4 })
 
     // First failure → banner surfaces.
     await user.click(await screen.findByRole('button', { name: 'fail game 3' }))
@@ -226,7 +190,7 @@ describe('SaveBanner', () => {
       ),
     )
 
-    renderDecidedActivePersisted()
+    renderBanner({ failGameNumber: 1, activeGameNumber: 2 })
 
     await user.click(await screen.findByRole('button', { name: 'fail game 1' }))
 
@@ -262,7 +226,7 @@ describe('SaveBanner', () => {
       }),
     )
 
-    renderDecidedActivePersisted()
+    renderBanner({ failGameNumber: 1, activeGameNumber: 2 })
 
     await user.click(await screen.findByRole('button', { name: 'fail game 1' }))
     await screen.findByRole('button', { name: /Post result/ })
