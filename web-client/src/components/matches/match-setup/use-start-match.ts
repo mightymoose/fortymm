@@ -33,6 +33,12 @@ export interface UseStartMatchResult {
   apiError: string | null
   submitting: boolean
   submitted: boolean
+  // Reads the submit guard's *live* value, not a snapshot from the render
+  // that created this closure — a caller gating a `useBlocker` shouldBlockFn
+  // on "has this form already succeeded?" needs the answer as of the instant
+  // the navigation this hook triggers actually fires, which can land before
+  // React re-renders with a fresh `submitting`/`submitted` value.
+  hasSucceeded: () => boolean
 }
 
 /**
@@ -108,5 +114,6 @@ export function useStartMatch(): UseStartMatchResult {
     apiError,
     submitting: createMatch.isPending,
     submitted,
+    hasSucceeded: () => submitState.current === 'done',
   }
 }

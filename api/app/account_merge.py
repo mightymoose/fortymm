@@ -49,6 +49,9 @@ _SESSION_TOKEN_CONTEXT = "session"
 
 @dataclass(frozen=True)
 class MergeSummary:
+    #: Distinct matches the ephemeral user played that now belong to the
+    #: survivor — both cleanly re-pointed rows and ones dropped by the
+    #: belt-and-braces delete because the survivor already sat on that match.
     matches_moved: int
 
 

@@ -200,12 +200,9 @@
   cursor: wait;
 }
 .nm-btn-spin {
-  animation: nm-btn-spin 0.7s linear infinite;
-}
-@keyframes nm-btn-spin {
-  to {
-    transform: rotate(360deg);
-  }
+  /* Reuse the existing spin keyframe (index.css) rather than declaring an
+     identical one here. */
+  animation: sys-health-spin 0.7s linear infinite;
 }
 @media (prefers-reduced-motion: reduce) {
   .nm-btn-spin {

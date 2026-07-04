@@ -437,6 +437,39 @@ describe('NewMatchPage', () => {
     )
   })
 
+  it('does not block the post-create redirect for a dirty (rated, opponent-picked) form', async () => {
+    // Regression: the dirty-form blocker's `shouldBlockFn` must not catch the
+    // in-app navigate() a successful Start match fires — the form is still
+    // "dirty" (opponent picked, Rated on) at that instant, so without the
+    // `hasSucceeded()` escape hatch this redirect would incorrectly pop the
+    // "Discard changes?" dialog instead of landing on the scoring page.
+    const user = userEvent.setup()
+    server.use(
+      http.get('*/v1/players/recent', () =>
+        HttpResponse.json([{ id: 'pl-1', username: 'ada.lovelace' }]),
+      ),
+      http.post('*/v1/matches', () =>
+        HttpResponse.json(pendingMatch(), { status: 201 }),
+      ),
+    )
+    renderNewMatch()
+
+    await user.click(
+      await screen.findByRole('button', { name: /ada\.lovelace/i }),
+    )
+    await user.click(screen.getByRole('switch', { name: /rated match/i }))
+    await user.click(screen.getByRole('button', { name: /start match/i }))
+
+    await waitFor(() =>
+      expect(
+        screen.getByText('Scoring route m-test game 1'),
+      ).toBeInTheDocument(),
+    )
+    expect(
+      screen.queryByRole('alertdialog', { name: /discard changes/i }),
+    ).not.toBeInTheDocument()
+  })
+
   it('shows a wait cursor on the Start match button while submitting (#77)', async () => {
     const user = userEvent.setup()
     server.use(
