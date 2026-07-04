@@ -18,7 +18,7 @@ from fastapi import (
     status,
 )
 from pyrate_limiter import Duration, Rate
-from sqlalchemy import CursorResult, Select, and_, func, select, update
+from sqlalchemy import CursorResult, Select, func, select, update
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased, selectinload
@@ -759,10 +759,8 @@ def _actionable_attention_filter[SelectT: Select[Any]](
     on. The poster and the reviewer of the same posted result therefore see
     *different* Attention counts, unlike before."""
     return query.where(
-        and_(
-            Match.status == MatchStatus.in_progress,
-            ~my_standing_proposal_exists(current_user_id),
-        )
+        Match.status == MatchStatus.in_progress,
+        ~my_standing_proposal_exists(current_user_id),
     )
 
 
