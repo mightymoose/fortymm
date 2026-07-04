@@ -16,8 +16,9 @@ export const api = createClient<paths>({
 })
 
 /**
- * Info carried by the `session_merged` 401: the backend's human message and the
- * owning account's email (to prefill on the login screen).
+ * Info carried by a session-ended 401 (`session_merged` or `session_ended`): the
+ * backend's human message, and — only for the merged case — the owning account's
+ * email to prefill on the login screen.
  */
 export interface SessionEndedInfo {
   message: string
@@ -28,10 +29,11 @@ let sessionEndedHandler: ((info: SessionEndedInfo) => void) | null = null
 let sessionEndedFiring = false
 
 /**
- * Register the global "your session was merged away" handler (set once at app
- * bootstrap). It fires from the response middleware below for *any* request, so
- * a guest whose account was merged on another device is sent to sign in no
- * matter which call surfaces it — not just the session bootstrap.
+ * Register the global "your session ended" handler (set once at app bootstrap).
+ * It fires from the response middleware below for *any* request, so a holder
+ * whose session went away — merged on another device, or signed out / expired —
+ * is sent to sign in no matter which call surfaces it, not just the session
+ * bootstrap.
  */
 export function setSessionEndedHandler(
   fn: ((info: SessionEndedInfo) => void) | null,
@@ -47,6 +49,16 @@ export function setSessionEndedHandler(
 // the bare status.
 const SESSION_ENDED_CODES = new Set(['session_merged', 'session_ended'])
 
+/** True when a 401's `detail` payload carries one of the session-ended codes.
+ * Both the response-middleware reader and the `ApiError` classifier narrow the
+ * same `unknown` body (from a live `Response` vs. a stored `ApiError`), so the
+ * check lives here once. */
+function hasSessionEndedCode(detail: unknown): boolean {
+  if (!detail || typeof detail !== 'object') return false
+  const code = (detail as { code?: unknown }).code
+  return typeof code === 'string' && SESSION_ENDED_CODES.has(code)
+}
+
 async function readSessionEnded(
   response: Response,
 ): Promise<SessionEndedInfo | null> {
@@ -55,12 +67,7 @@ async function readSessionEnded(
       detail?: { code?: unknown; message?: unknown; email?: unknown }
     }
     const detail = body?.detail
-    if (
-      detail &&
-      typeof detail === 'object' &&
-      typeof detail.code === 'string' &&
-      SESSION_ENDED_CODES.has(detail.code)
-    ) {
+    if (detail && hasSessionEndedCode(detail)) {
       return {
         message:
           typeof detail.message === 'string'
@@ -141,9 +148,7 @@ api.use({
 export function isSessionEndedError(error: unknown): boolean {
   if (!(error instanceof ApiError) || error.status !== 401) return false
   const detail = (error.body as { detail?: unknown } | null | undefined)?.detail
-  if (!detail || typeof detail !== 'object') return false
-  const code = (detail as { code?: unknown }).code
-  return typeof code === 'string' && SESSION_ENDED_CODES.has(code)
+  return hasSessionEndedCode(detail)
 }
 
 export function extractDetail(value: unknown): string | null {

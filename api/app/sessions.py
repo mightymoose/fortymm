@@ -601,8 +601,9 @@ async def get_current_user(
 
     Resolves the cookie directly (rather than via ``get_optional_user``) so it
     can tell a *tombstoned* guest — whose cookie still resolves — apart from no
-    session at all, and raise the structured ``session_merged`` 401 that sends
-    the holder to sign in instead of letting them act as a merged-away ghost.
+    session at all, raising the structured ``session_merged`` 401 for the former
+    and ``session_ended`` for the latter. Both send the holder to sign in
+    (instead of acting as a merged-away ghost, or silently minting a new guest).
     """
     user = await _find_session_user(db, session_cookie) if session_cookie else None
     if user is not None and user.merged_into_user_id is not None:
