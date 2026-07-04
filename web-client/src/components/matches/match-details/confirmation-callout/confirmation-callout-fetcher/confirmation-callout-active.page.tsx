@@ -19,7 +19,7 @@ import {
 } from "./confirmation-callout-active";
 import { confirmationCalloutDisplayPage } from "./confirmation-callout-active/confirmation-callout-display.page";
 import {
-  buildAwaitingConfirmationView,
+  buildAwaitingAcceptanceView,
   buildReviewConfirmationView,
 } from "./confirmation-callout-active/confirmation-callout-display.factory";
 
@@ -46,7 +46,7 @@ export const confirmationCalloutActivePage = {
   },
 
   /** The submitter's passive awaiting view. */
-  awaitingView: buildAwaitingConfirmationView,
+  awaitingView: buildAwaitingAcceptanceView,
 
   render(overrides: Partial<ConfirmationCalloutActiveProps> = {}) {
     const props: ConfirmationCalloutActiveProps = {

@@ -5,7 +5,7 @@ import { notificationDropdownPage } from './notification-dropdown.page'
 describe('NotificationDropdown', () => {
   it('lists the notifications', () => {
     notificationDropdownPage.render()
-    expect(notificationDropdownPage.queryTitle('Confirm your score')).toBeInTheDocument()
+    expect(notificationDropdownPage.queryTitle('Accept your score')).toBeInTheDocument()
     expect(notificationDropdownPage.queryTitle('Rating +12')).toBeInTheDocument()
   })
 
@@ -52,7 +52,7 @@ describe('NotificationDropdown', () => {
     const items = buildDropdownItems()
     notificationDropdownPage.render({ items, onActivate })
 
-    await notificationDropdownPage.clickRow('Confirm your score')
+    await notificationDropdownPage.clickRow('Accept your score')
 
     expect(onActivate).toHaveBeenCalledTimes(1)
     expect(onActivate).toHaveBeenCalledWith(items[0])

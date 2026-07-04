@@ -10,7 +10,7 @@ export function buildNotificationsItems(): NotificationItem[] {
     buildNotificationItem({
       id: 'n-1',
       category: 'result_confirm',
-      title: 'Confirm your score',
+      title: 'Accept your score',
       read_at: null,
     }),
     buildNotificationItem({

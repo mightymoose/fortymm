@@ -4,7 +4,7 @@ import { notificationsViewPage } from './notifications-view.page'
 describe('NotificationsView', () => {
   it('lists every notification under the "all" filter', () => {
     notificationsViewPage.render({ filter: 'all' })
-    expect(notificationsViewPage.queryTitle('Confirm your score')).toBeInTheDocument()
+    expect(notificationsViewPage.queryTitle('Accept your score')).toBeInTheDocument()
     expect(notificationsViewPage.queryTitle('Rating +12')).toBeInTheDocument()
     expect(
       notificationsViewPage.queryTitle('Spring Open · R16 posted'),
@@ -25,7 +25,7 @@ describe('NotificationsView', () => {
 
   it('shows only unread notifications under the "unread" filter', () => {
     notificationsViewPage.render({ filter: 'unread' })
-    expect(notificationsViewPage.queryTitle('Confirm your score')).toBeInTheDocument()
+    expect(notificationsViewPage.queryTitle('Accept your score')).toBeInTheDocument()
     expect(notificationsViewPage.queryTitle('Rating +12')).not.toBeInTheDocument()
   })
 
@@ -38,7 +38,7 @@ describe('NotificationsView', () => {
       filter: 'unread',
       stickyUnread,
     })
-    expect(notificationsViewPage.queryTitle('Confirm your score')).toBeInTheDocument()
+    expect(notificationsViewPage.queryTitle('Accept your score')).toBeInTheDocument()
 
     // The auto-mark-read lands: the feed cache flips the row's read_at.
     const readNow = items.map((item) =>
@@ -47,7 +47,7 @@ describe('NotificationsView', () => {
     rerenderWith({ items: readNow, filter: 'unread', stickyUnread })
 
     // It stays on screen (just loses the unread emphasis) instead of vanishing.
-    expect(notificationsViewPage.queryTitle('Confirm your score')).toBeInTheDocument()
+    expect(notificationsViewPage.queryTitle('Accept your score')).toBeInTheDocument()
   })
 
   it('drops a read row that was never pinned from the unread filter', () => {
@@ -58,7 +58,7 @@ describe('NotificationsView', () => {
     // read on another tab) is not kept around.
     notificationsViewPage.render({ items, filter: 'unread', stickyUnread: new Set() })
     expect(
-      notificationsViewPage.queryTitle('Confirm your score'),
+      notificationsViewPage.queryTitle('Accept your score'),
     ).not.toBeInTheDocument()
   })
 
@@ -66,7 +66,7 @@ describe('NotificationsView', () => {
     notificationsViewPage.render({ filter: 'rating_change' })
     expect(notificationsViewPage.queryTitle('Rating +12')).toBeInTheDocument()
     expect(
-      notificationsViewPage.queryTitle('Confirm your score'),
+      notificationsViewPage.queryTitle('Accept your score'),
     ).not.toBeInTheDocument()
   })
 
@@ -96,7 +96,7 @@ describe('NotificationsView', () => {
     const onActivate = vi.fn()
     const items = buildNotificationsItems()
     notificationsViewPage.render({ items, onActivate })
-    await notificationsViewPage.clickRow('Confirm your score')
+    await notificationsViewPage.clickRow('Accept your score')
     expect(onActivate).toHaveBeenCalledWith(items[0])
   })
 

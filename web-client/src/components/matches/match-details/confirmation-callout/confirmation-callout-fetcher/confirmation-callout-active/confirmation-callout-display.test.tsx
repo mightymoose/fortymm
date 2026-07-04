@@ -4,7 +4,7 @@ import { newResultRoute } from "@/api/matches";
 import { waitFor } from "@/test/utilities";
 
 import {
-  buildAwaitingConfirmationView,
+  buildAwaitingAcceptanceView,
   buildCorrectedConfirmationView,
 } from "./confirmation-callout-display.factory";
 import { confirmationCalloutDisplayPage } from "./confirmation-callout-display.page";
@@ -167,7 +167,7 @@ describe("ConfirmationCalloutDisplay", () => {
   describe("awaiting variant", () => {
     it("names the opponent and offers an Edit result self-edit, no Accept", async () => {
       confirmationCalloutDisplayPage.render({
-        view: buildAwaitingConfirmationView({ pendingSignerName: "nguyen.t" }),
+        view: buildAwaitingAcceptanceView({ pendingSignerName: "nguyen.t" }),
       });
 
       const callout = await waitFor(() =>

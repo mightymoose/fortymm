@@ -1089,9 +1089,12 @@ async def get_match(
 
 
 # A match that has reached one of these states is read-only — never scorable.
-# (``disputed`` is a dead status under the propose/accept model — nothing sets
-# it — so it's deliberately absent; corrections happen in the supersede chain,
-# not by reopening the scratchpad.)
+# ``disputed`` is a dead status under the propose/accept model (nothing sets it;
+# corrections happen in the supersede chain, not by reopening the scratchpad).
+# It's omitted here only because the enum value is retained pending its removal
+# migration — its terminal classification is settled there. In practice a
+# disputed row is unreachable, and would carry a result anyway, so ``_is_scorable``
+# (which also gates on "no result exists") already treats it as non-scorable.
 _TERMINAL_STATUSES = {
     MatchStatus.completed,
     MatchStatus.voided,
