@@ -3392,7 +3392,7 @@ async def test_posting_result_enqueues_confirmation_for_opponent(
     # A first post's recipient sees Accept/Suggest-correction buttons (not
     # Accept/Counter — that pair is reserved for the corrected-result case).
     assert job.title == "Review your match result"
-    assert "Accept it, or suggest a correction?" in job.body
+    assert "Accept or suggest a correction?" in job.body
     assert "dispute" not in job.body.lower()
     # Recipient-framed games-won (poster won 2–1) and the per-game scores.
     assert "poster reported beating you 2–1" in job.body
@@ -3462,6 +3462,41 @@ async def test_posting_counter_enqueues_confirmation_with_counter_prompt(
     counter_job = jobs[1]
     assert "Accept or counter?" in counter_job.body
     assert "suggest a correction" not in counter_job.body.lower()
+
+
+async def test_posting_self_edit_enqueues_first_post_prompt_not_counter(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    fake_notifications_queue: Queue,
+):
+    """A proposer correcting their own still-standing proposal (before the
+    opponent ever answers) sets ``supersedes_result_id``, but the opponent's
+    view stays the first-post ``review`` state (mirrors
+    ``test_propose_self_edit_chain_supersedes_own_proposal``) — so the
+    re-sent notification must keep the Accept/Suggest-correction prompt, not
+    switch to "Accept or counter?" just because a result was superseded."""
+    me = await start_session(api_client, db_session)
+    me.username = "proposer"
+    await db_session.commit()
+
+    async with opponent_session(db_session, "rival") as (_opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=1)
+        first = await _propose(api_client, match["id"], s1=11, s2=4)
+        assert first["status"] == 201
+        first_id = first["body"]["negotiation"]["standing_result"]["id"]
+
+        # Same proposer corrects their own board before the opponent responds.
+        second = await _propose(
+            api_client, match["id"], s1=11, s2=9, supersedes=first_id
+        )
+        assert second["status"] == 201, second
+
+    jobs = enqueued_notification_jobs(fake_notifications_queue)
+    # Both the first post and the self-edit notify the opponent (never me).
+    assert [job.user_id for job in jobs] == [opp.id, opp.id]
+    self_edit_job = jobs[1]
+    assert "Accept or suggest a correction?" in self_edit_job.body
+    assert "Accept or counter?" not in self_edit_job.body
 
 
 async def test_solo_result_enqueues_no_confirmation(
