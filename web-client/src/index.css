@@ -3670,7 +3670,7 @@ body.dark.fortymm-theme {
 }
 .fortymm-theme .md-h2h__row {
   display: grid;
-  grid-template-columns: 70px 1fr auto auto;
+  grid-template-columns: 70px 1fr auto;
   align-items: center;
   gap: 10px;
   padding: 10px 8px;
@@ -3724,24 +3724,18 @@ body.dark.fortymm-theme {
   color: var(--ball-500);
 }
 .fortymm-theme .md-h2h__score {
+  display: flex;
+  align-items: baseline;
+  gap: 2px;
   font: 700 13px var(--font-mono);
   color: var(--fg-1);
   font-variant-numeric: tabular-nums;
 }
-.fortymm-theme .md-h2h__score--win {
+.fortymm-theme .md-h2h__score-side--win {
   color: var(--serve-500);
 }
-.fortymm-theme .md-h2h__result {
-  font: 600 10px var(--font-mono);
-  letter-spacing: 0.14em;
-  min-width: 18px;
-  text-align: right;
-}
-.fortymm-theme .md-h2h__result--w {
-  color: var(--serve-500);
-}
-.fortymm-theme .md-h2h__result--l {
-  color: var(--loss);
+.fortymm-theme .md-h2h__score-sep {
+  color: var(--fg-3);
 }
 .fortymm-theme .md-h2h__empty {
   font: 400 13px var(--font-ui);

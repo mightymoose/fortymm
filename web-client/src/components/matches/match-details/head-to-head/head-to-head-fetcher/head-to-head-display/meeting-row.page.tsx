@@ -28,14 +28,19 @@ const scoped = (container: Container) => {
     getDate() {
       return getRow().querySelector(".md-h2h__date")!;
     },
-    /** The "left–right" games-won score; its `--win` modifier marks a left
-     * win. */
+    /** The "left–right" games-won score container. */
     getScore() {
       return getRow().querySelector(".md-h2h__score")!;
     },
-    /** The W/L marker; its `--w`/`--l` modifier carries the win/loss tone. */
-    getResult() {
-      return getRow().querySelector(".md-h2h__result")!;
+    /** The left side's games-won count; carries the `--win` modifier when the
+     * left side won that meeting. */
+    getLeftScore() {
+      return getRow().querySelectorAll(".md-h2h__score-side")[0]!;
+    },
+    /** The right side's games-won count; carries the `--win` modifier when
+     * the right side won that meeting. */
+    getRightScore() {
+      return getRow().querySelectorAll(".md-h2h__score-side")[1]!;
     },
     /** The "Rated" marker, or `null` for an unrated meeting. */
     getRatedTag() {

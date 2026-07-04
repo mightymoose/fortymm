@@ -9,6 +9,10 @@ export interface MeetingRowProps {
   meeting: HeadToHeadMeetingView;
 }
 
+/** A bare "W"/"L" reads as a personal result ("you won"), which has no
+ * referent for a spectator watching two other players' history (#499) — so
+ * the outcome is conveyed by tinting whichever side's game count actually
+ * won, the same way the scoreboard's hero row and game grid do. */
 export const MeetingRow = ({ meeting }: MeetingRowProps) => (
   <Link
     {...matchDetailRoute(meeting.matchId)}
@@ -20,19 +24,24 @@ export const MeetingRow = ({ meeting }: MeetingRowProps) => (
       <span className="md-h2h__label">Match</span>
       {meeting.rated && <span className="md-h2h__tag">Rated</span>}
     </span>
-    <span
-      className={cn("md-h2h__score", meeting.leftWon === true && "md-h2h__score--win")}
-    >
-      {meeting.leftGamesWon}–{meeting.rightGamesWon}
-    </span>
-    <span
-      className={cn(
-        "md-h2h__result",
-        meeting.leftWon === true && "md-h2h__result--w",
-        meeting.leftWon === false && "md-h2h__result--l",
-      )}
-    >
-      {meeting.leftWon === true ? "W" : meeting.leftWon === false ? "L" : "–"}
+    <span className="md-h2h__score">
+      <span
+        className={cn(
+          "md-h2h__score-side",
+          meeting.leftWon === true && "md-h2h__score-side--win",
+        )}
+      >
+        {meeting.leftGamesWon}
+      </span>
+      <span className="md-h2h__score-sep">–</span>
+      <span
+        className={cn(
+          "md-h2h__score-side",
+          meeting.leftWon === false && "md-h2h__score-side--win",
+        )}
+      >
+        {meeting.rightGamesWon}
+      </span>
     </span>
   </Link>
 );
