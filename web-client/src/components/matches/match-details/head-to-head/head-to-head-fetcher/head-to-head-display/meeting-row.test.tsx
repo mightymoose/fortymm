@@ -45,42 +45,53 @@ describe("MeetingRow", () => {
     expect(meetingRowPage.getRatedTag()).toBeNull();
   });
 
-  it("marks a left win with the win-toned score and a W result", async () => {
+  it("tints the left side's score when the left side won", async () => {
     meetingRowPage.render({
       meeting: buildHeadToHeadMeetingView({ leftWon: true }),
     });
 
     await meetingRowPage.findRow();
-    expect(meetingRowPage.getScore()).toHaveClass("md-h2h__score--win");
-    const result = meetingRowPage.getResult();
-    expect(result).toHaveTextContent(/^W$/);
-    expect(result).toHaveClass("md-h2h__result--w");
-    expect(result).not.toHaveClass("md-h2h__result--l");
+    expect(meetingRowPage.getLeftScore()).toHaveClass("md-h2h__score-side--win");
+    expect(meetingRowPage.getRightScore()).not.toHaveClass(
+      "md-h2h__score-side--win",
+    );
   });
 
-  it("marks a left loss without the win tone and an L result", async () => {
+  it("tints the right side's score when the right side won", async () => {
     meetingRowPage.render({
       meeting: buildHeadToHeadMeetingView({ leftWon: false }),
     });
 
     await meetingRowPage.findRow();
-    expect(meetingRowPage.getScore()).not.toHaveClass("md-h2h__score--win");
-    const result = meetingRowPage.getResult();
-    expect(result).toHaveTextContent(/^L$/);
-    expect(result).toHaveClass("md-h2h__result--l");
-    expect(result).not.toHaveClass("md-h2h__result--w");
+    expect(meetingRowPage.getRightScore()).toHaveClass(
+      "md-h2h__score-side--win",
+    );
+    expect(meetingRowPage.getLeftScore()).not.toHaveClass(
+      "md-h2h__score-side--win",
+    );
   });
 
-  it("shows a neutral dash with no outcome class when winner is unknown", async () => {
+  it("tints neither side and shows a No result tag when no winner was recorded", async () => {
     meetingRowPage.render({
       meeting: buildHeadToHeadMeetingView({ leftWon: null }),
     });
 
     await meetingRowPage.findRow();
-    expect(meetingRowPage.getScore()).not.toHaveClass("md-h2h__score--win");
-    const result = meetingRowPage.getResult();
-    expect(result).toHaveTextContent(/^–$/);
-    expect(result).not.toHaveClass("md-h2h__result--w");
-    expect(result).not.toHaveClass("md-h2h__result--l");
+    expect(meetingRowPage.getLeftScore()).not.toHaveClass(
+      "md-h2h__score-side--win",
+    );
+    expect(meetingRowPage.getRightScore()).not.toHaveClass(
+      "md-h2h__score-side--win",
+    );
+    expect(meetingRowPage.getNoResultTag()).toHaveTextContent(/^No result$/);
+  });
+
+  it("omits the No result tag for a decided meeting", async () => {
+    meetingRowPage.render({
+      meeting: buildHeadToHeadMeetingView({ leftWon: true }),
+    });
+
+    await meetingRowPage.findRow();
+    expect(meetingRowPage.getNoResultTag()).toBeNull();
   });
 });
