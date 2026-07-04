@@ -191,6 +191,15 @@
   gap: 10px;
 }
 
+/* --- Pending submit state (#77) --- */
+/* Beats match-setup.css's `.nm-btn:disabled { cursor: not-allowed }` (also
+   two-class specificity) via the shared button + Cancel's disabled state
+   still reading as "not-allowed" is correct — only the pending Start button
+   should read as "wait". */
+.nm-btn-primary.nm-btn-pending:disabled {
+  cursor: wait;
+}
+
 /* --- Responsive --- */
 @media (max-width: 760px) {
   .nm-settings {

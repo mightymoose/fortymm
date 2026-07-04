@@ -1352,6 +1352,19 @@ body.dark.fortymm-theme {
 
 @keyframes sys-health-spin { to { transform: rotate(360deg); } }
 
+/* Shared "spin this icon" utility — unscoped (not under `.fortymm-theme`) so
+   pages that don't wrap in that theme class (e.g. new.css) can still use it.
+   Apply directly to the spinning icon element (e.g. `<Loader2>`); it carries
+   no sizing of its own. */
+.fmm-icon-spin {
+  animation: sys-health-spin 0.7s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .fmm-icon-spin {
+    animation: none;
+  }
+}
+
 .fortymm-theme .sys-health__lede {
   position: relative;
   z-index: 1;
@@ -2042,10 +2055,6 @@ body.dark.fortymm-theme {
 .fortymm-theme .sl-badge.saving {
   background: var(--warn);
 }
-.fortymm-theme .sl-spin {
-  animation: sys-health-spin 0.7s linear infinite;
-}
-
 /* ---------- Resolved cell (transient) ----------
    A failed/saving cell whose retry just succeeded: a brief green tint + check
    before it settles to the plain saved look. */
@@ -2080,8 +2089,7 @@ body.dark.fortymm-theme {
 }
 @media (prefers-reduced-motion: reduce) {
   .fortymm-theme .sl-cell.resolved,
-  .fortymm-theme .sl-badge.resolved,
-  .fortymm-theme .sl-spin {
+  .fortymm-theme .sl-badge.resolved {
     animation: none;
   }
 }

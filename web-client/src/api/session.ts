@@ -1,4 +1,5 @@
 import {
+  type QueryClient,
   queryOptions,
   useMutation,
   useQuery,
@@ -219,6 +220,14 @@ export interface FinalizeTokenInput {
   skipMerge?: boolean
 }
 
+/** Seed `SESSION_QUERY_KEY` from a sign-in/confirm response. `GET /v1/session`
+ * never returns `merged` — strip it before caching so a future
+ * `useSession().data.merged` read can't see this mutation's stale value for
+ * the full 5-minute staleTime (#239). */
+function cacheSession(qc: QueryClient, session: Session): void {
+  qc.setQueryData(SESSION_QUERY_KEY, { ...session, merged: null })
+}
+
 export function useConfirmEmail() {
   const qc = useQueryClient()
   return useMutation({
@@ -238,7 +247,7 @@ export function useConfirmEmail() {
     // it doesn't need a refetch.
     onSuccess: (session) => {
       qc.clear()
-      qc.setQueryData(SESSION_QUERY_KEY, session)
+      cacheSession(qc, session)
     },
   })
 }
@@ -302,7 +311,7 @@ export function useConsumeLoginToken() {
     // browsing guest into a different existing account.
     onSuccess: (session) => {
       qc.clear()
-      qc.setQueryData(SESSION_QUERY_KEY, session)
+      cacheSession(qc, session)
     },
   })
 }
