@@ -4,7 +4,6 @@ import { z } from 'zod'
 
 import { ApiError } from '@/api/client'
 import { nextScoringDestination, useCreateMatch } from '@/api/matches'
-import { useNavigationOverrideRef } from '@/lib/use-navigation-override-ref'
 
 import type { Opponent } from './opponent'
 
@@ -37,7 +36,8 @@ export interface UseStartMatchResult {
   // A caller gating a `useBlocker` shouldBlockFn on "has this form already
   // succeeded?" needs the live value as of the instant the navigation this
   // hook triggers actually fires, which can land before React re-renders with
-  // a fresh `submitting`/`submitted` value — see useNavigationOverrideRef.
+  // a fresh `submitting`/`submitted` value — a ref read does that, a
+  // state-derived boolean wouldn't.
   hasSucceeded: () => boolean
 }
 
@@ -57,12 +57,11 @@ export function useStartMatch(): UseStartMatchResult {
   // Synchronous submit guard. `'submitting'` blocks the double-click race before
   // `isPending` flips on a batched re-render; `'done'` latches after a match is
   // created so the same mounted form (e.g. restored from the bfcache on Back)
-  // can't fire a duplicate create (#81). A failed attempt resets to `'idle'`.
+  // can't fire a duplicate create (#81). A failed attempt resets to `'idle'`,
+  // which also doubles as the dirty-form blocker's escape hatch (#75):
+  // `hasSucceeded()` below reads this same ref, so a retry-after-error
+  // correctly re-arms the blocker instead of leaving it permanently bypassed.
   const submitState = useRef<'idle' | 'submitting' | 'done'>('idle')
-  // Separate from the guard above: the shared "let this navigation through a
-  // dirty-form blocker" latch (#75), armed only on the success path so it
-  // stays unarmed through the retry-after-error case submitState covers.
-  const navOverride = useNavigationOverrideRef()
 
   async function submit({ opponent, bestOf, rated }: StartMatchInput) {
     setSubmitted(true)
@@ -91,7 +90,6 @@ export function useStartMatch(): UseStartMatchResult {
         rated: opponent !== null && rated,
       })
       submitState.current = 'done'
-      navOverride.arm()
       // Replace, don't push: the new-match form is a one-shot step, so the
       // history stack shouldn't keep it. Otherwise browser/mobile Back from
       // score entry re-opens the creation form for a match that already
@@ -119,6 +117,6 @@ export function useStartMatch(): UseStartMatchResult {
     apiError,
     submitting: createMatch.isPending,
     submitted,
-    hasSucceeded: navOverride.isArmed,
+    hasSucceeded: () => submitState.current === 'done',
   }
 }
