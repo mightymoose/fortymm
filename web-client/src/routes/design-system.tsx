@@ -4,10 +4,10 @@ import { useForm } from 'react-hook-form'
 import { toast } from 'sonner'
 import { z } from 'zod'
 import {
-  AlertCircle,
   Calendar as CalendarIcon,
   ChevronDown,
   Check,
+  CircleCheck,
   Info,
   RefreshCw,
   Search,
@@ -1218,21 +1218,27 @@ function OverlaysSection() {
         </Popover>
       </Showcase>
 
-      <Showcase title="Tooltip" tag="on hover">
-        <div className="flex items-center gap-16">
-          <Tooltip>
+      <Showcase title="Tooltip" tag="shown open">
+        {/* Force both tooltips open (controlled) so the showcase always renders
+            the bubbles, matching the kit reference — a hover-only demo shows a
+            bare button + badge with nothing to see (#256). `sideOffset` lifts
+            them clear of the trigger. */}
+        <div className="flex items-center gap-16 pt-12">
+          <Tooltip open>
             <TooltipTrigger asChild>
               <Button variant="outline" size="icon" aria-label="Refresh">
                 <RefreshCw />
               </Button>
             </TooltipTrigger>
-            <TooltipContent>Refresh standings</TooltipContent>
+            <TooltipContent sideOffset={8}>Refresh standings</TooltipContent>
           </Tooltip>
-          <Tooltip>
+          <Tooltip open>
             <TooltipTrigger asChild>
               <Badge>Seed 1</Badge>
             </TooltipTrigger>
-            <TooltipContent>Highest rated player in this bracket</TooltipContent>
+            <TooltipContent sideOffset={8}>
+              Highest rated player in this bracket
+            </TooltipContent>
           </Tooltip>
         </div>
       </Showcase>
@@ -1380,7 +1386,9 @@ function FeedbackSection() {
             </AlertDescription>
           </Alert>
           <Alert className="border-[color:var(--serve-500)]/40 bg-[color:var(--serve-500)]/10">
-            <AlertCircle className="text-[color:var(--serve-500)]" />
+            {/* Success alerts read as a check (✓), not an info glyph — matches
+                the FortyMM kit reference (#272). */}
+            <CircleCheck className="text-[color:var(--serve-500)]" />
             <AlertTitle className="text-[color:var(--serve-500)]">
               Match logged
             </AlertTitle>
