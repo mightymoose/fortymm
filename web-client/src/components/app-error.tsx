@@ -1,6 +1,6 @@
 import { useRouter } from '@tanstack/react-router'
 
-import { isSessionMergedError } from '@/api/client'
+import { isSessionEndedError } from '@/api/client'
 import { Wordmark } from '@/components/wordmark'
 import './app-error.css'
 
@@ -27,13 +27,13 @@ export interface AppErrorProps {
  */
 export function AppError({ error, reset }: AppErrorProps) {
   const router = useRouter()
-  // The `session_merged` 401 (guest account merged away on another device) is
-  // already handled by the global session-ended middleware, which clears the
-  // session and redirects to `/login`. Defer to that redirect instead of
-  // flashing the generic error + a "Try again" that would just re-fire the
-  // merged-away session (#672). Render nothing while the redirect lands — a
-  // bare 401 (no `session_merged` code) still falls through to the screen below.
-  if (isSessionMergedError(error)) return null
+  // A session-ended 401 (guest merged away on another device, or a signed-out /
+  // expired session) is already handled by the global session-ended middleware,
+  // which clears the session and redirects to `/login`. Defer to that redirect
+  // instead of flashing the generic error + a "Try again" that would just
+  // re-fire the dead session (#672). Render nothing while the redirect lands — a
+  // bare 401 (no session-ended code) still falls through to the screen below.
+  if (isSessionEndedError(error)) return null
   return (
     <div className="app-error dark fortymm-theme">
       <Wordmark size={20} className="app-error__wordmark" />

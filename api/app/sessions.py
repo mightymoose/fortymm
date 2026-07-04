@@ -73,6 +73,12 @@ SESSION_TOKEN_CONTEXT = "session"
 # apart from an ordinary auth failure and redirect to login (with the owner's
 # email prefilled) instead of looping.
 SESSION_MERGED_CODE = "session_merged"
+# Stable `code` on the 401 we raise when a session cookie no longer resolves to a
+# usable user — the holder signed out (the cookie is shared across the origin, so
+# a sign-out in one tab ends every tab's session) or the session expired. Lets a
+# client tell "your session ended, sign in" apart from any other 401 and route to
+# login instead of silently minting a fresh guest in the signed-out user's place.
+SESSION_ENDED_CODE = "session_ended"
 # Email-change confirmation tokens carry the *prior* address in their context
 # (e.g. "change:old@example.com", or "change:" on first-ever set). This gives
 # us an audit trail of what each token was changing away from. Look up
@@ -356,6 +362,23 @@ def _clear_cookie_header() -> dict[str, str]:
     return {"set-cookie": "; ".join(attrs)}
 
 
+def _session_ended_exception() -> HTTPException:
+    """Build the 401 for a request whose session cookie no longer resolves to a
+    usable user — a signed-out or expired session. Carries the stable
+    ``SESSION_ENDED_CODE`` so clients redirect to login rather than treating it
+    as an ordinary auth failure (or silently minting a fresh guest), and clears
+    any lingering dead cookie so the login screen can start a clean guest. There
+    is no email to prefill — the holder isn't a known account here."""
+    return HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail={
+            "code": SESSION_ENDED_CODE,
+            "message": "You've been signed out. Sign in to continue.",
+        },
+        headers=_clear_cookie_header(),
+    )
+
+
 async def _merged_session_exception(db: AsyncSession, user: User) -> HTTPException:
     """Build the 401 for a cookie that resolves to a tombstoned (merged-away)
     guest. Carries the stable ``SESSION_MERGED_CODE`` so clients redirect to
@@ -585,10 +608,7 @@ async def get_current_user(
     if user is not None and user.merged_into_user_id is not None:
         raise await _merged_session_exception(db, user)
     if user is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="authentication required",
-        )
+        raise _session_ended_exception()
     return user
 
 

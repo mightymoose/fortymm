@@ -42,8 +42,11 @@ declare module '@tanstack/react-router' {
   }
 }
 
-// When any request reports the session was merged away on another device, drop
-// the stale session, flash the reason, and route to sign-in (email prefilled).
+// When any request reports the session has ended — merged away on another
+// device, or signed out / expired — drop the stale session, flash the reason,
+// and route to sign-in (email prefilled when the server knows it; the
+// signed-out case has none). Never let the next bootstrap silently mint a fresh
+// guest in the signed-out user's place.
 setSessionEndedHandler(({ message, email }) => {
   clearAppEntered()
   queryClient.removeQueries({ queryKey: SESSION_QUERY_KEY })

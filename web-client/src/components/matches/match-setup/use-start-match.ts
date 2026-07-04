@@ -2,7 +2,7 @@ import { useRef, useState } from 'react'
 import { useNavigate } from '@tanstack/react-router'
 import { z } from 'zod'
 
-import { ApiError, isSessionMergedError } from '@/api/client'
+import { ApiError, isSessionEndedError } from '@/api/client'
 import { nextScoringDestination, useCreateMatch } from '@/api/matches'
 
 import type { Opponent } from './opponent'
@@ -92,13 +92,14 @@ export function useStartMatch(): UseStartMatchResult {
     } catch (err) {
       // Let the user try again — only a *successful* create latches the guard.
       submitState.current = 'idle'
-      // A bare 401 (the session lapsed mid-form) renders an unstyled "Not
-      // authenticated" with no way forward; offer a sign-in path instead (#70).
-      // The `session_merged` 401 is handled globally by a redirect, so skip it.
+      // A bare, code-less 401 (the session lapsed mid-form) renders an unstyled
+      // "Not authenticated" with no way forward; offer a sign-in path instead
+      // (#70). A session-ended 401 (signed-out / merged) is handled globally by
+      // a redirect to `/login`, so skip it here and let that redirect win.
       if (
         err instanceof ApiError &&
         err.status === 401 &&
-        !isSessionMergedError(err)
+        !isSessionEndedError(err)
       ) {
         setSessionExpired(true)
         setApiError(err.detail ?? 'Your session has expired.')
