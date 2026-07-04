@@ -62,7 +62,7 @@ export const FirstMatchCard = () => {
   const error = submitted ? apiError : null
 
   return (
-    <Card style={{ minWidth: 0 }}>
+    <Card style={{ minWidth: 0, overflow: 'visible' }}>
       <Overline style={{ color: C.ball400 }}>Your next match</Overline>
       <h2
         style={{
