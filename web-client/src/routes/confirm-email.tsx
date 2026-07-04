@@ -1,6 +1,5 @@
 import { useEffect, useRef } from 'react'
 import { Link, createFileRoute, useNavigate } from '@tanstack/react-router'
-import { toast } from 'sonner'
 
 import { ApiError } from '@/api/client'
 import { useConfirmEmail, useMergePreview } from '@/api/session'
@@ -65,18 +64,6 @@ function ConfirmEmailPage() {
       onError: () => confirm.mutate({ token }),
     })
   }, [token, preview, confirm])
-
-  useEffect(() => {
-    if (!confirm.isSuccess) return
-    const moved = confirm.data?.merged?.matches_moved ?? 0
-    if (moved > 0) {
-      toast.success(
-        moved === 1
-          ? 'We brought your 1 match with you.'
-          : `We brought your ${moved} matches with you.`,
-      )
-    }
-  }, [confirm.isSuccess, confirm.data])
 
   // The token is a single-use bearer credential. Once the confirm settles,
   // drop it from the URL so it doesn't linger in the address bar / history /

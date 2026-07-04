@@ -4,6 +4,7 @@ import {
   useQuery,
   useQueryClient,
 } from '@tanstack/react-query'
+import { toast } from 'sonner'
 import { ApiError, api, hasCsrfCookie, unwrap } from './client'
 import { clearAppEntered } from '@/lib/landing-redirect'
 import type { components } from './schema'
@@ -239,6 +240,17 @@ export function useConfirmEmail() {
     onSuccess: (session) => {
       qc.clear()
       qc.setQueryData(SESSION_QUERY_KEY, session)
+      // Announce carried-over matches here, in the once-per-result mutation
+      // lifecycle, rather than in a component `useEffect` — StrictMode
+      // double-invokes effects on mount, which fired this toast twice (#233).
+      const moved = session.merged?.matches_moved ?? 0
+      if (moved > 0) {
+        toast.success(
+          moved === 1
+            ? 'We brought your 1 match with you.'
+            : `We brought your ${moved} matches with you.`,
+        )
+      }
     },
   })
 }
