@@ -15,17 +15,8 @@ import {
   type Opponent,
 } from '@/components/matches/match-setup/opponent'
 import { useStartMatch } from '@/components/matches/match-setup/use-start-match'
+import { DiscardMatchSetupDialog } from '@/components/matches/match-setup/discard-match-setup-dialog'
 import { UserAvatar } from '@/components/ui/user-avatar'
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from '@/components/ui/alert-dialog'
 import { pageTitle } from '@/lib/page-title'
 import './new.css'
 
@@ -167,36 +158,11 @@ function MatchCard() {
         onCancel={() => navigate({ to: '/dashboard' })}
       />
 
-      <AlertDialog
+      <DiscardMatchSetupDialog
         open={blocker.status === 'blocked'}
-        onOpenChange={(open) => {
-          // Radix fires onOpenChange(false) on overlay click / Escape — treat
-          // that as "stay on the page" so a stray dismiss never discards the
-          // form.
-          if (!open) blocker.reset?.()
-        }}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Discard changes?</AlertDialogTitle>
-            <AlertDialogDescription>
-              You've picked an opponent or changed the match settings. Leaving
-              now discards them.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel onClick={() => blocker.reset?.()}>
-              Keep editing
-            </AlertDialogCancel>
-            <AlertDialogAction
-              variant="destructive"
-              onClick={() => blocker.proceed?.()}
-            >
-              Discard &amp; leave
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+        onLeave={() => blocker.proceed?.()}
+        onStay={() => blocker.reset?.()}
+      />
     </div>
   )
 }

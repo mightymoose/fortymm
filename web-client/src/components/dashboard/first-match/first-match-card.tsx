@@ -15,16 +15,7 @@ import { useStartMatch } from '@/components/matches/match-setup/use-start-match'
 import { Card } from '@/components/dashboard/your-game-row/card'
 import { C, MONO, UI } from '@/components/dashboard/dashboard-tokens'
 import { Overline } from '@/components/overline'
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from '@/components/ui/alert-dialog'
+import { DiscardMatchSetupDialog } from '@/components/matches/match-setup/discard-match-setup-dialog'
 import '@/components/matches/match-setup/match-setup.css'
 
 /**
@@ -55,9 +46,10 @@ export const FirstMatchCard = () => {
   // `useBlocker` + `AlertDialog` treatment here (#811). `hasSucceeded()` reads
   // a ref so the post-create redirect isn't itself blocked.
   const isDirty = opponent !== null
+  const shouldBlock = () => isDirty && !hasSucceeded()
   const blocker = useBlocker({
-    shouldBlockFn: () => isDirty && !hasSucceeded(),
-    enableBeforeUnload: () => isDirty && !hasSucceeded(),
+    shouldBlockFn: shouldBlock,
+    enableBeforeUnload: shouldBlock,
     withResolver: true,
   })
 
@@ -179,36 +171,11 @@ export const FirstMatchCard = () => {
         )}
       </div>
 
-      <AlertDialog
+      <DiscardMatchSetupDialog
         open={blocker.status === 'blocked'}
-        onOpenChange={(open) => {
-          // Radix fires onOpenChange(false) on overlay click / Escape — treat
-          // that as "stay" so a stray dismiss never discards the picked
-          // opponent.
-          if (!open) blocker.reset?.()
-        }}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Discard changes?</AlertDialogTitle>
-            <AlertDialogDescription>
-              You've picked an opponent or changed the match settings. Leaving
-              now discards them.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel onClick={() => blocker.reset?.()}>
-              Keep editing
-            </AlertDialogCancel>
-            <AlertDialogAction
-              variant="destructive"
-              onClick={() => blocker.proceed?.()}
-            >
-              Discard &amp; leave
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+        onLeave={() => blocker.proceed?.()}
+        onStay={() => blocker.reset?.()}
+      />
     </Card>
   )
 }
