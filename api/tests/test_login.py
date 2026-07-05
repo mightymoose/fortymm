@@ -155,15 +155,14 @@ async def test_request_for_unknown_email_sends_no_account_email_without_token(
     assert job.args == ("rita@example.com",)
 
 
-async def test_request_for_unconfirmed_account_resends_confirmation(
+async def test_request_for_emailed_account_always_issues_login_link(
     api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
 ):
-    """An account whose email isn't confirmed yet gets the confirmation
-    link re-sent instead of a sign-in link, so the user has a path
-    forward. Response shape stays identical for enumeration safety."""
-    user = User(username="pending", email="rita@example.com", confirmed_at=None)
-    db_session.add(user)
-    await db_session.commit()
+    """``users.email`` is only ever set by ``confirm_email`` (alongside
+    ``confirmed_at``), so an address lookup can only match a confirmed
+    account — there is no unconfirmed-resend branch. A found account always
+    gets a sign-in link, never a confirmation re-send. (#278)"""
+    await _make_confirmed_user(db_session, "rita@example.com")
 
     response = await api_client.post("/v1/login/request", json=REQUEST_BODY)
     assert response.status_code == 202
@@ -178,7 +177,8 @@ async def test_request_for_unconfirmed_account_resends_confirmation(
         .scalars()
         .all()
     )
-    assert login_tokens == []
+    assert len(login_tokens) == 1
+    assert login_tokens[0].sent_to == "rita@example.com"
 
     change_tokens = (
         (
@@ -189,11 +189,14 @@ async def test_request_for_unconfirmed_account_resends_confirmation(
         .scalars()
         .all()
     )
-    assert len(change_tokens) == 1
-    assert change_tokens[0].sent_to == "rita@example.com"
-    assert change_tokens[0].user_id == user.id
+    assert change_tokens == []
 
     assert fake_email_queue.finished_job_registry.count == 1
+    job = fake_email_queue.fetch_job(
+        fake_email_queue.finished_job_registry.get_job_ids()[0]
+    )
+    assert job is not None
+    assert job.func_name == "app.email.send_login_email"
 
 
 async def test_request_replaces_prior_login_token_for_same_user(

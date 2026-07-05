@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useBlocker } from '@tanstack/react-router'
 import { ArrowRight } from 'lucide-react'
 
 import { deriveEmailStatus, useSession } from '@/api/session'
@@ -14,6 +15,7 @@ import { useStartMatch } from '@/components/matches/match-setup/use-start-match'
 import { Card } from '@/components/dashboard/your-game-row/card'
 import { C, MONO, UI } from '@/components/dashboard/dashboard-tokens'
 import { Overline } from '@/components/overline'
+import { DiscardMatchSetupDialog } from '@/components/matches/match-setup/discard-match-setup-dialog'
 import '@/components/matches/match-setup/match-setup.css'
 
 /**
@@ -34,7 +36,22 @@ export const FirstMatchCard = () => {
   // this hero requires an opponent before it is even submittable, so rated
   // defaults on the moment one is picked — matching the mock.
   const [rated, setRated] = useState(true)
-  const { submit, apiError, submitting, submitted } = useStartMatch()
+  const { submit, apiError, submitting, submitted, hasSucceeded } =
+    useStartMatch()
+
+  // The only reachable dirty state is a picked opponent — best-of and rated
+  // are gated behind `opponent !== null`, so a null opponent means the hero is
+  // untouched. Leaving with an opponent picked would silently discard it, the
+  // same class of gap #75 closed on /matches/new; reuse that page's
+  // `useBlocker` + `AlertDialog` treatment here (#811). `hasSucceeded()` reads
+  // a ref so the post-create redirect isn't itself blocked.
+  const isDirty = opponent !== null
+  const shouldBlock = () => isDirty && !hasSucceeded()
+  const blocker = useBlocker({
+    shouldBlockFn: shouldBlock,
+    enableBeforeUnload: shouldBlock,
+    withResolver: true,
+  })
 
   const me = session?.data.user ?? null
   const isGuest =
@@ -153,6 +170,12 @@ export const FirstMatchCard = () => {
           </p>
         )}
       </div>
+
+      <DiscardMatchSetupDialog
+        open={blocker.status === 'blocked'}
+        onLeave={() => blocker.proceed?.()}
+        onStay={() => blocker.reset?.()}
+      />
     </Card>
   )
 }

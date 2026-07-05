@@ -2250,16 +2250,14 @@ body.dark.fortymm-theme {
     border-color: var(--loss);
   }
 
-  /* Single row of buttons, equal-width, full-bleed across the card. */
+  /* Subtitle stacked above a single row of equal-width, full-bleed buttons.
+     The subtitle carries the pre-submit finalize warning, so it must stay
+     visible on mobile — don't hide it (#813). */
   .fortymm-theme .single-actions {
-    flex-direction: row;
+    flex-direction: column;
     align-items: stretch;
-    flex-wrap: nowrap;
-    gap: 8px;
+    gap: 10px;
     padding: 0;
-  }
-  .fortymm-theme .result-line {
-    display: none;
   }
   .fortymm-theme .action-btns {
     width: 100%;

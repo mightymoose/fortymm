@@ -79,12 +79,6 @@ internal protocol APIProtocol: Sendable {
     /// piece of mail either way — rather than the unknown case silently
     /// delivering nothing.
     ///
-    /// Accounts whose email hasn't been confirmed yet get the confirmation
-    /// link re-sent instead of a sign-in link. The login token would let
-    /// someone sign in without proving control of the inbox; the confirmation
-    /// link clears that hurdle and (per ``confirm_email``) rotates them into
-    /// a session anyway.
-    ///
     /// Records the requesting browser's guest on the token so the merge it drives
     /// is token-bound (follows the guest cross-device), mirroring the settings
     /// merge flow.
@@ -580,12 +574,6 @@ extension APIProtocol {
     /// indistinguishable from the outside — same status, same shape, and a
     /// piece of mail either way — rather than the unknown case silently
     /// delivering nothing.
-    ///
-    /// Accounts whose email hasn't been confirmed yet get the confirmation
-    /// link re-sent instead of a sign-in link. The login token would let
-    /// someone sign in without proving control of the inbox; the confirmation
-    /// link clears that hurdle and (per ``confirm_email``) rotates them into
-    /// a session anyway.
     ///
     /// Records the requesting browser's guest on the token so the merge it drives
     /// is token-bound (follows the guest cross-device), mirroring the settings
@@ -7446,12 +7434,6 @@ internal enum Operations {
     /// indistinguishable from the outside — same status, same shape, and a
     /// piece of mail either way — rather than the unknown case silently
     /// delivering nothing.
-    ///
-    /// Accounts whose email hasn't been confirmed yet get the confirmation
-    /// link re-sent instead of a sign-in link. The login token would let
-    /// someone sign in without proving control of the inbox; the confirmation
-    /// link clears that hurdle and (per ``confirm_email``) rotates them into
-    /// a session anyway.
     ///
     /// Records the requesting browser's guest on the token so the merge it drives
     /// is token-bound (follows the guest cross-device), mirroring the settings

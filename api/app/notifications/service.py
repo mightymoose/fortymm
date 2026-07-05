@@ -18,6 +18,7 @@ from typing import Any, assert_never, cast
 
 from sqlalchemy import ColumnElement, CursorResult, delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import queue as queue_module
@@ -232,13 +233,30 @@ class NotificationService:
             result.in_app_created = True
 
         if NotificationChannel.PUSH in effective:
-            result.pushed = await self.send_to_user(
-                user_id,
-                title=title,
-                body=body,
-                category=push_category,
-                data=push_data,
-            )
+            # Push is best-effort and must never sink the whole notification:
+            # the in-app row above is already committed, and the email below
+            # still needs to enqueue. The APNs client already self-guards its
+            # own send (a bad auth key returns FAILED rather than raising, see
+            # apns.py), so the residual raiser on this path is a DB error from
+            # the device-token query or the gone-token prune — catch that
+            # specifically (not a bare Exception, which would also swallow the
+            # programmer errors we want to surface) so a Redis/DB flap can't
+            # drop the email (#753). Roll back so the failed push transaction
+            # doesn't taint the session for the email enqueue below.
+            try:
+                result.pushed = await self.send_to_user(
+                    user_id,
+                    title=title,
+                    body=body,
+                    category=push_category,
+                    data=push_data,
+                )
+            except SQLAlchemyError:
+                await self._db.rollback()
+                log.exception(
+                    "Push delivery failed; continuing with remaining channels",
+                    extra={"user_id": str(user_id), "category": category.value},
+                )
 
         if (
             NotificationChannel.EMAIL in effective

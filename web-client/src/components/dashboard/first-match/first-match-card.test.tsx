@@ -111,6 +111,48 @@ describe('FirstMatchCard', () => {
     expect(screen.getByRole('button', { name: /start scoring/i })).toBeDisabled()
   })
 
+  it('warns before discarding a picked opponent on navigation (#811)', async () => {
+    const { router } = renderFirstMatchCard()
+    await pickNguyen()
+
+    // Attempt to leave for another route while the hero holds a picked
+    // opponent — the blocker should intercept and open the confirmation.
+    act(() => {
+      void router.navigate({ to: '/settings' })
+    })
+
+    expect(
+      await screen.findByRole('alertdialog', { name: 'Discard changes?' }),
+    ).toBeInTheDocument()
+
+    // "Keep editing" stays put.
+    await userEvent.click(screen.getByRole('button', { name: 'Keep editing' }))
+    expect(router.state.location.pathname).toBe('/')
+
+    // "Discard & leave" lets the navigation through.
+    act(() => {
+      void router.navigate({ to: '/settings' })
+    })
+    await screen.findByRole('alertdialog', { name: 'Discard changes?' })
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Discard & leave' }),
+    )
+    await screen.findByText('settings route')
+    expect(router.state.location.pathname).toBe('/settings')
+  })
+
+  it('does not block navigation before an opponent is picked (#811)', async () => {
+    const { router } = renderFirstMatchCard()
+    await screen.findByRole('combobox')
+
+    act(() => {
+      void router.navigate({ to: '/settings' })
+    })
+
+    await screen.findByText('settings route')
+    expect(router.state.location.pathname).toBe('/settings')
+  })
+
   it('creates the match and navigates to scoring on submit', async () => {
     const { router } = renderFirstMatchCard()
     await pickNguyen()
