@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
+import { toast } from 'sonner'
 
 import { ApiError } from '@/api/client'
 import {
-  announceMergedMatches,
   type MergePreview,
   useConsumeLoginToken,
   useMergePreview,
@@ -50,7 +50,14 @@ function LoginVerifyingPage() {
       { token, skipMerge },
       {
         onSuccess: (session) => {
-          announceMergedMatches(session)
+          const moved = session.merged?.matches_moved ?? 0
+          if (moved > 0) {
+            toast.success(
+              moved === 1
+                ? 'We brought your 1 match with you.'
+                : `We brought your ${moved} matches with you.`,
+            )
+          }
           navigate({ to: '/login/welcome' })
         },
         onError: (err) => {

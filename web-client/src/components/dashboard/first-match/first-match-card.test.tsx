@@ -8,7 +8,7 @@ import {
 } from '@tanstack/react-router'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { http, HttpResponse } from 'msw'
-import { act, fireEvent, screen, within } from '@testing-library/react'
+import { act, fireEvent, screen } from '@testing-library/react'
 
 import { render } from '@/test/utilities'
 import { server } from '@/mocks/server'
@@ -164,12 +164,15 @@ describe('FirstMatchCard', () => {
     expect(postCount).toBe(1)
   })
 
-  it('offers a sign-in recovery on a 401', async () => {
+  it('surfaces a server error in an alert', async () => {
+    // A lapsed session is a `session_ended` 401 that the global middleware
+    // catches and redirects to `/login` (covered in api/client.test.ts); any
+    // other failure surfaces inline here.
     server.use(
       http.post('*/v1/matches', () =>
         HttpResponse.json(
-          { detail: 'Your session has expired.' },
-          { status: 401 },
+          { detail: 'Could not start the match right now.' },
+          { status: 500 },
         ),
       ),
     )
@@ -181,9 +184,6 @@ describe('FirstMatchCard', () => {
     )
 
     const alert = await screen.findByRole('alert')
-    expect(alert).toHaveTextContent('Your session has expired.')
-    expect(
-      within(alert).getByRole('button', { name: /sign in again/i }),
-    ).toBeInTheDocument()
+    expect(alert).toHaveTextContent('Could not start the match right now.')
   })
 })

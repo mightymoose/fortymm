@@ -30,7 +30,8 @@ Environment = Literal["sandbox", "production"]
 
 # Category identifier shared with the iOS client (see
 # ``PushNotificationManager`` in the iOS app). A push carrying this category
-# renders the Approve / Dispute action buttons the app registered for it.
+# renders the Approve / Suggest correction action buttons the app registered
+# for it.
 MATCH_RESULT_CONFIRMATION_CATEGORY = "MATCH_RESULT_CONFIRMATION"
 
 _APNS_HOSTS: dict[str, str] = {
@@ -187,8 +188,17 @@ class APNsClient:
         data: Mapping[str, str] | None = None,
     ) -> SendResult:
         url = f"{_APNS_HOSTS[environment]}/3/device/{token}"
+        try:
+            provider_jwt = self._provider_jwt()
+        except (jwt.PyJWTError, ValueError) as exc:
+            # A malformed/expired ``auth_key_pem`` surfaces as a bare
+            # ``ValueError`` from cryptography's PEM loader (via PyJWT's
+            # ``ECAlgorithm.prepare_key``), not a ``PyJWTError`` — catch both
+            # so a bad key can't raise out of `send` (#753).
+            log.warning("APNs provider JWT minting failed: %s", exc)
+            return SendResult(SendOutcome.FAILED, str(exc) or exc.__class__.__name__)
         headers = {
-            "authorization": f"bearer {self._provider_jwt()}",
+            "authorization": f"bearer {provider_jwt}",
             "apns-topic": self._config.bundle_id,
             "apns-push-type": "alert",
         }

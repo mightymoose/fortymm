@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { createFileRoute, useNavigate } from '@tanstack/react-router'
+import { createFileRoute, useBlocker, useNavigate } from '@tanstack/react-router'
 import { ArrowRight, Loader2 } from 'lucide-react'
 
 import { deriveEmailStatus, useSession } from '@/api/session'
@@ -16,8 +16,23 @@ import {
 } from '@/components/matches/match-setup/opponent'
 import { useStartMatch } from '@/components/matches/match-setup/use-start-match'
 import { UserAvatar } from '@/components/ui/user-avatar'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { pageTitle } from '@/lib/page-title'
 import './new.css'
+
+// The form's untouched defaults — shared between the initial state and the
+// dirty check below so the two can't drift apart.
+const DEFAULT_BEST_OF = 5
+const DEFAULT_RATED = false
 
 export const Route = createFileRoute('/_app/matches/new')({
   head: () => ({
@@ -54,12 +69,32 @@ function MatchCard() {
   const { data: session } = useSession()
 
   const [opponent, setOpponent] = useState<Opponent | null>(null)
-  const [bestOf, setBestOf] = useState<BestOfFieldProps['bestOf']>(5)
+  const [bestOf, setBestOf] =
+    useState<BestOfFieldProps['bestOf']>(DEFAULT_BEST_OF)
   // Default off so submitting without picking an opponent "just works" —
   // the no-opponent match is unrated by definition.
-  const [rated, setRated] = useState(false)
-  const { submit, apiError, sessionExpired, submitting, submitted } =
+  const [rated, setRated] = useState(DEFAULT_RATED)
+  const { submit, apiError, submitting, submitted, hasSucceeded } =
     useStartMatch()
+
+  // Anything away from the form's defaults means the user has invested effort
+  // that leaving would silently destroy (#75).
+  const isDirty =
+    opponent !== null || bestOf !== DEFAULT_BEST_OF || rated !== DEFAULT_RATED
+
+  // Blocks in-app navigation (Cancel, back button, any other link) and
+  // browser refresh/close alike while the form is dirty — the same
+  // `useBlocker` + design-system `AlertDialog` pattern already used by
+  // settings.tsx (#440) and score-entry.tsx (#441), rather than a bespoke
+  // check on just the Cancel button. `hasSucceeded()` reads a ref, not
+  // reactive state, so the escape hatch for the post-create redirect sees the
+  // true value even if it fires before React re-renders with it (mirrors
+  // score-entry.tsx's `submittingRef` guard).
+  const blocker = useBlocker({
+    shouldBlockFn: () => isDirty && !hasSucceeded(),
+    enableBeforeUnload: () => isDirty && !hasSucceeded(),
+    withResolver: true,
+  })
 
   const me = session?.data.user ?? null
   // The hint nudges guests toward claiming an account so their rated history
@@ -127,14 +162,41 @@ function MatchCard() {
         bestOf={bestOf}
         rated={rated}
         error={submitted ? apiError : null}
-        sessionExpired={sessionExpired}
         submitting={submitting}
         onSubmit={() => submit({ opponent, bestOf, rated })}
-        onSignIn={() =>
-          navigate({ to: '/login', search: { email: undefined, error: undefined } })
-        }
         onCancel={() => navigate({ to: '/dashboard' })}
       />
+
+      <AlertDialog
+        open={blocker.status === 'blocked'}
+        onOpenChange={(open) => {
+          // Radix fires onOpenChange(false) on overlay click / Escape — treat
+          // that as "stay on the page" so a stray dismiss never discards the
+          // form.
+          if (!open) blocker.reset?.()
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Discard changes?</AlertDialogTitle>
+            <AlertDialogDescription>
+              You've picked an opponent or changed the match settings. Leaving
+              now discards them.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => blocker.reset?.()}>
+              Keep editing
+            </AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={() => blocker.proceed?.()}
+            >
+              Discard &amp; leave
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }
@@ -148,20 +210,16 @@ function SubmitRow({
   bestOf,
   rated,
   error,
-  sessionExpired,
   submitting,
   onSubmit,
-  onSignIn,
   onCancel,
 }: {
   opponent: Opponent | null
   bestOf: number
   rated: boolean
   error: string | null
-  sessionExpired: boolean
   submitting: boolean
   onSubmit: () => void
-  onSignIn: () => void
   onCancel: () => void
 }) {
   const effectivelyRated = rated && opponent !== null
@@ -194,23 +252,11 @@ function SubmitRow({
           <span className="dot">·</span>{' '}
           games to 11, win by 2
         </div>
-        {error &&
-          (sessionExpired ? (
-            <div className="nm-recovery" role="alert">
-              <p className="nm-error">{error}</p>
-              <button
-                type="button"
-                className="nm-btn nm-btn-primary nm-recovery-btn"
-                onClick={onSignIn}
-              >
-                Sign in again
-              </button>
-            </div>
-          ) : (
-            <p className="nm-error" role="alert">
-              {error}
-            </p>
-          ))}
+        {error && (
+          <p className="nm-error" role="alert">
+            {error}
+          </p>
+        )}
       </div>
       <div className="actions">
         <button
@@ -223,21 +269,16 @@ function SubmitRow({
         </button>
         <button
           type="button"
-          className={`nm-btn nm-btn-primary${submitting ? ' cursor-wait' : ''}`}
+          className={`nm-btn nm-btn-primary${submitting ? ' nm-btn-pending' : ''}`}
           onClick={onSubmit}
           disabled={submitting}
+          aria-busy={submitting}
         >
-          {submitting ? (
-            <>
-              <Loader2 size={16} strokeWidth={2.5} className="animate-spin" />
-              Starting…
-            </>
-          ) : (
-            <>
-              Start match
-              <ArrowRight size={16} strokeWidth={2.5} />
-            </>
+          {submitting && (
+            <Loader2 className="fmm-icon-spin" size={16} strokeWidth={2.5} />
           )}
+          {submitting ? 'Starting…' : 'Start match'}
+          {!submitting && <ArrowRight size={16} strokeWidth={2.5} />}
         </button>
       </div>
     </div>

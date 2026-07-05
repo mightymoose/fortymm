@@ -26,9 +26,17 @@ const scoped = (container: Container) => ({
   getNew(gameNumber: number) {
     return container.getByTestId(`score-diff-new-${gameNumber}`);
   },
+  /** The emphasized new score for game `n`; absent when the game was removed. */
+  queryNew(gameNumber: number) {
+    return container.queryByTestId(`score-diff-new-${gameNumber}`);
+  },
   /** The "new game" tag rendered only for added games (`old === null`). */
   queryAddedTag(gameNumber: number) {
     return container.queryByTestId(`score-diff-added-${gameNumber}`);
+  },
+  /** The "removed game" tag rendered only for removed games (`new === null`). */
+  queryRemovedTag(gameNumber: number) {
+    return container.queryByTestId(`score-diff-removed-${gameNumber}`);
   },
 });
 

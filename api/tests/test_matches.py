@@ -1848,6 +1848,78 @@ async def test_propose_counter_chain_across_sides(
         assert len(results) == 3
 
 
+async def _propose_board(
+    client: AsyncClient,
+    match_id: str,
+    games: list[tuple[int, int]],
+    *,
+    supersedes: str | None = None,
+) -> dict:
+    """Propose a multi-game board (list of ``(side_1, side_2)`` per game).
+    Returns the response body wrapper (``status`` + ``body``)."""
+    body: dict[str, object] = {
+        "games": [
+            {"game_number": i, "side_1_points": s1, "side_2_points": s2}
+            for i, (s1, s2) in enumerate(games, start=1)
+        ]
+    }
+    if supersedes is not None:
+        body["supersedes_result_id"] = supersedes
+    response = await client.post(f"/v1/matches/{match_id}/results", json=body)
+    return {"status": response.status_code, "body": response.json()}
+
+
+async def test_negotiation_diff_shows_removed_game_when_board_shortens(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """Regression: a correction that DROPS a game must surface in the diff.
+
+    Per CONTEXT.md "Correction" / ADR-0001 a correction may add, remove, or
+    change games. I propose a 3–1 board (four games); the opponent counters with
+    a 3–0 board (three games), which flips game 3's winner (so the board clinches
+    a game earlier) and drops game 4 entirely. From my view the diff must report
+    BOTH the game-3 change AND the game-4 removal (``new`` null), ordered by
+    game number — otherwise the accept decision is made on an understated diff."""
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "shorten-rival") as (opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=5)
+        # My board: S1 wins g1,g2,g4; S2 wins g3 → 3–1, decided at game 4.
+        mine = await _propose_board(
+            api_client,
+            match["id"],
+            [(11, 4), (11, 4), (4, 11), (11, 4)],
+        )
+        assert mine["status"] == 201, mine
+        mine_id = mine["body"]["negotiation"]["standing_result"]["id"]
+
+        # Opponent counters: S1 sweeps g1–g3 → 3–0, decided at game 3, game 4 gone.
+        counter = await _propose_board(
+            opp_client,
+            match["id"],
+            [(11, 4), (11, 4), (11, 4)],
+            supersedes=mine_id,
+        )
+        assert counter["status"] == 201, counter
+
+        my_neg = (await api_client.get(f"/v1/matches/{match['id']}")).json()[
+            "negotiation"
+        ]
+        assert my_neg["viewer_state"] == "corrected"
+        # Game 1/2 unchanged → skipped. Game 3 changed, game 4 removed, in order.
+        assert my_neg["diff"] == [
+            {
+                "game_number": 3,
+                "old": {"game_number": 3, "side_1_points": 4, "side_2_points": 11},
+                "new": {"game_number": 3, "side_1_points": 11, "side_2_points": 4},
+            },
+            {
+                "game_number": 4,
+                "old": {"game_number": 4, "side_1_points": 11, "side_2_points": 4},
+                "new": None,
+            },
+        ]
+
+
 # ----- negotiation BFF oracle (SPEC §4 worked cases) ----------------------
 #
 # Each case below pins the EXPECTED viewer_state + diff from the SPEC, computed
@@ -3359,10 +3431,10 @@ async def test_posting_result_enqueues_confirmation_for_opponent(
     db_session: AsyncSession,
     fake_notifications_queue: Queue,
 ):
-    """Posting a result on a two-human match enqueues one confirm/dispute
+    """Posting a result on a two-human match enqueues one accept/counter
     delivery for the opponent — filed under the result-confirmation category,
-    deep-linked to the match, carrying the Approve/Dispute push category + match
-    id, with recipient-framed copy. The poster gets nothing."""
+    deep-linked to the match, carrying the result-confirmation push category +
+    match id, with recipient-framed copy. The poster gets nothing."""
     me = await start_session(api_client, db_session)
     me.username = "poster"
     await db_session.commit()
@@ -3388,6 +3460,12 @@ async def test_posting_result_enqueues_confirmation_for_opponent(
     assert job.link == f"/matches/{match['id']}"
     assert job.push_category == MATCH_RESULT_CONFIRMATION_CATEGORY
     assert job.push_data == {"match_id": match["id"]}
+    # Propose/accept vocabulary, not the retired confirm/dispute model (#728).
+    # A first post's recipient sees Accept/Suggest-correction buttons (not
+    # Accept/Counter — that pair is reserved for the corrected-result case).
+    assert job.title == "Review your match result"
+    assert "Accept or suggest a correction?" in job.body
+    assert "dispute" not in job.body.lower()
     # Recipient-framed games-won (poster won 2–1) and the per-game scores.
     assert "poster reported beating you 2–1" in job.body
     assert "11–7" in job.body
@@ -3424,6 +3502,73 @@ async def test_posting_losing_result_enqueues_confirmation_for_opponent(
     job = jobs[0]
     # Recipient-framed games-won (poster lost 0–2), phrased grammatically.
     assert "poster reported losing to you 2–0" in job.body
+
+
+async def test_posting_counter_enqueues_confirmation_with_counter_prompt(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    fake_notifications_queue: Queue,
+):
+    """Countering a standing result (``supersedes_result_id`` set) prompts the
+    recipient with "Accept or counter?" — the Accept/Counter button pair the
+    corrected-result callout actually renders — not the first-post's
+    Accept/Suggest-correction prompt (#728)."""
+    me = await start_session(api_client, db_session)
+    me.username = "proposer"
+    await db_session.commit()
+
+    async with opponent_session(db_session, "counterer") as (opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=1)
+        first = await _propose(api_client, match["id"], s1=11, s2=4)
+        assert first["status"] == 201
+        first_id = first["body"]["negotiation"]["standing_result"]["id"]
+
+        counter = await _propose(
+            opp_client, match["id"], s1=4, s2=11, supersedes=first_id
+        )
+        assert counter["status"] == 201, counter
+
+    jobs = enqueued_notification_jobs(fake_notifications_queue)
+    # The first post notifies the opponent; the counter notifies me back.
+    assert [job.user_id for job in jobs] == [opp.id, me.id]
+    counter_job = jobs[1]
+    assert "Accept or counter?" in counter_job.body
+    assert "suggest a correction" not in counter_job.body.lower()
+
+
+async def test_posting_self_edit_enqueues_first_post_prompt_not_counter(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    fake_notifications_queue: Queue,
+):
+    """A proposer correcting their own still-standing proposal (before the
+    opponent ever answers) sets ``supersedes_result_id``, but the opponent's
+    view stays the first-post ``review`` state (mirrors
+    ``test_propose_self_edit_chain_supersedes_own_proposal``) — so the
+    re-sent notification must keep the Accept/Suggest-correction prompt, not
+    switch to "Accept or counter?" just because a result was superseded."""
+    me = await start_session(api_client, db_session)
+    me.username = "proposer"
+    await db_session.commit()
+
+    async with opponent_session(db_session, "rival") as (_opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=1)
+        first = await _propose(api_client, match["id"], s1=11, s2=4)
+        assert first["status"] == 201
+        first_id = first["body"]["negotiation"]["standing_result"]["id"]
+
+        # Same proposer corrects their own board before the opponent responds.
+        second = await _propose(
+            api_client, match["id"], s1=11, s2=9, supersedes=first_id
+        )
+        assert second["status"] == 201, second
+
+    jobs = enqueued_notification_jobs(fake_notifications_queue)
+    # Both the first post and the self-edit notify the opponent (never me).
+    assert [job.user_id for job in jobs] == [opp.id, opp.id]
+    self_edit_job = jobs[1]
+    assert "Accept or suggest a correction?" in self_edit_job.body
+    assert "Accept or counter?" not in self_edit_job.body
 
 
 async def test_solo_result_enqueues_no_confirmation(

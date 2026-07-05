@@ -68,6 +68,8 @@ The iOS app mirrors this with `ios/Fortymm/Generated/Types.swift`, generated fro
 
 **BFF endpoints — one per page.** Each page-level UI surface has a single backend endpoint that returns all the data it needs, pre-shaped for that page; joining, aggregation, and status-label mapping happen on the server, current-user-aware. Exception: independently-interactive widgets (typeaheads, infinite-scroll panels) keep their own endpoints. Rule of thumb: if the widget fetches in response to user input rather than on page load, it's its own endpoint.
 
+**Parse untrusted data at every boundary.** The parser is idiomatic to each surface: the API validates request/response bodies with **Pydantic** (`api/CLAUDE.md` — "type the I/O boundaries"); the iOS app decodes with **`Codable`** against generated `ios/Fortymm/Generated/Types.swift`; the **web client uses Zod** everywhere (`web-client/CLAUDE.md` — `## Boundaries` and `## Forms`).
+
 Layer-specific architecture and conventions live in `api/CLAUDE.md` and `web-client/CLAUDE.md` (loaded automatically when working in those directories).
 
 ## Conventions

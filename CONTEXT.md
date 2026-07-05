@@ -47,6 +47,35 @@ decided board, not an edit of individual game cells. The corrector may add,
 remove, or change games, so long as the outcome is again a decided board.
 _Avoid_: dispute, edit, amendment.
 
+## Session and identity
+
+**Guest**:
+An ephemeral, email-less account minted automatically on first contact so
+anyone can start playing without signing up. Identified only by the browser's
+session cookie; disposable, and folded into a claimed account when the holder
+later signs in (a merge).
+_Avoid_: anonymous user, ephemeral user (use "guest" in product language).
+
+**Claimed account**:
+A user who has attached a confirmed email, giving them a durable identity that
+outlives any one browser session and can be signed back into on another device.
+The opposite pole from a guest.
+_Avoid_: registered user, real account.
+
+**Sign out**:
+Discarding the session cookie for the current browser origin, abandoning the
+current identity. The cookie is shared across every tab on the origin, so
+signing out in one tab ends the session for all of them — not just the tab that
+did it.
+_Avoid_: log out (button copy may say "Log out"; the act is "sign out").
+
+**Session-ended**:
+The state a tab lands in when its session cookie no longer resolves to a usable
+user — the holder signed out elsewhere, or was merged away. The app's response
+is to drop the stale identity and send the holder to sign in, never to quietly
+mint a fresh guest in their place.
+_Avoid_: logged out, expired, unauthenticated.
+
 ## Dashboard
 
 **First-match**:

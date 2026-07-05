@@ -339,33 +339,39 @@ def _negotiation_diff(
     standing_games: list[dict[str, int]],
 ) -> list[NegotiationDiffEntry]:
     """Viewer-relative diff between the viewer's own last proposal (baseline)
-    and the standing proposal. Emits an entry only for games whose points
-    differ (or that the baseline lacks → ``old=None``), ordered by game number.
-    Computed purely from the two snapshots; the chain walk to pick the baseline
-    is what collapses the opponent's intermediate self-edits."""
-    by_number = {g["game_number"]: g for g in baseline_games}
+    and the standing proposal. Emits one entry per game that differs, ordered by
+    game number over the union of both boards. A correction may add, remove, or
+    change games (a decided board can shorten or lengthen — CONTEXT.md
+    "Correction", ADR-0001), so an entry is one of:
+
+    - **added** — the standing board has a game the baseline lacked (``old=None``);
+    - **removed** — the baseline had a game the standing board dropped (``new=None``);
+    - **changed** — both present, points differ.
+
+    Unchanged games are skipped. Computed purely from the two snapshots; the
+    chain walk to pick the baseline is what collapses the opponent's intermediate
+    self-edits."""
+    baseline_by_number = {g["game_number"]: g for g in baseline_games}
+    standing_by_number = {g["game_number"]: g for g in standing_games}
     entries: list[NegotiationDiffEntry] = []
-    for game in sorted(standing_games, key=lambda g: g["game_number"]):
-        old = by_number.get(game["game_number"])
-        if old is None:
-            entries.append(
-                NegotiationDiffEntry(
-                    game_number=game["game_number"],
-                    old=None,
-                    new=_negotiation_game(game),
-                )
-            )
-        elif (
-            old["side_1_points"] != game["side_1_points"]
-            or old["side_2_points"] != game["side_2_points"]
+    for number in sorted(baseline_by_number.keys() | standing_by_number.keys()):
+        old = baseline_by_number.get(number)
+        new = standing_by_number.get(number)
+        if (
+            old is not None
+            and new is not None
+            and old["side_1_points"] == new["side_1_points"]
+            and old["side_2_points"] == new["side_2_points"]
         ):
-            entries.append(
-                NegotiationDiffEntry(
-                    game_number=game["game_number"],
-                    old=_negotiation_game(old),
-                    new=_negotiation_game(game),
-                )
+            continue  # unchanged — omit
+        # ``old``/``new`` null encode removed/added; both-present is a change.
+        entries.append(
+            NegotiationDiffEntry(
+                game_number=number,
+                old=_negotiation_game(old) if old is not None else None,
+                new=_negotiation_game(new) if new is not None else None,
             )
+        )
     return entries
 
 
@@ -1176,15 +1182,26 @@ def _game_scores_text(match: Match, poster_side_number: int) -> str:
 
 
 def _result_confirmation_copy(
-    match: Match, poster_id: uuid.UUID
+    match: Match, poster_id: uuid.UUID, *, is_counter: bool
 ) -> tuple[str, str] | None:
-    """Title + body for the "confirm or dispute the result your opponent
-    posted" push, framed for the *recipient* (the side that didn't post).
+    """Title + body for the "accept or suggest a correction to the result your
+    opponent posted" push, framed for the *recipient* (the side that didn't
+    post).
+
+    ``is_counter`` picks the closing prompt to match the actual button pair
+    the recipient's in-app callout renders: a first-post shows Accept /
+    Suggest correction (``confirmation-callout-display.tsx``'s ``"review"``
+    case), while a counter shows Accept / Counter (its ``"corrected"`` case,
+    #728). The native iOS push notification itself only ever offers a single,
+    static Approve/Suggest-correction action pair (``PushNotificationManager
+    .swift``) — it doesn't yet grow a counter-specific action — so this body
+    text is the only place a tapped-through counter reads "Counter" until the
+    push actions themselves are split the same way.
 
     The headline carries the games-won score and, where there's room, the
     body lists the individual game scores — both oriented so the poster's
     number comes first. Returns ``None`` when the match isn't a two-human
-    match (nothing to confirm)."""
+    match (nothing to accept)."""
     poster_side = my_side(match, poster_id)
     recipient_side = opponent_side(match, poster_id)
     if poster_side is None or recipient_side is None or not poster_side.players:
@@ -1203,26 +1220,38 @@ def _result_confirmation_copy(
         phrase, hi, lo = "losing to you", recipient_games, poster_games
     headline = f"{poster_name} reported {phrase} {hi}{_SCORE_DASH}{lo}"
 
+    prompt = "Accept or counter?" if is_counter else "Accept or suggest a correction?"
     games = _game_scores_text(match, poster_side.side_number)
-    body = (
-        f"{headline}. Games: {games}. Approve or dispute?"
-        if games
-        else f"{headline}. Approve or dispute?"
-    )
-    return "Confirm your match result", body
+    body = f"{headline}. Games: {games}. {prompt}" if games else f"{headline}. {prompt}"
+    return "Review your match result", body
 
 
 async def _notify_result_posted(
     notifications: NotificationService, match: Match, poster_id: uuid.UUID
 ) -> None:
-    """Queue a confirm/dispute prompt to every player on the side that now owes
-    a sign-off. Each enqueued job persists the in-app record (the bell feed) and
-    fans out push/email per the recipient's preferences in the worker. The APNs
-    ``category``/``data`` carry the Approve/Dispute action group and the match
-    id so a tapped push deep-links to the right match."""
-    copy = _result_confirmation_copy(match, poster_id)
+    """Queue an accept/counter (or accept/suggest-correction) prompt to every
+    player on the side that now owes a response. Each enqueued job persists
+    the in-app record (the bell feed) and fans out push/email per the
+    recipient's preferences in the worker. The APNs ``category``/``data``
+    carry the action group and the match id so a tapped push deep-links to
+    the right match."""
     recipient_side = opponent_side(match, poster_id)
-    if copy is None or recipient_side is None:
+    if recipient_side is None or not recipient_side.players:
+        return
+    # Derive counter-vs-first-post from the same viewer-relative negotiation
+    # state the BFF/UI use (``_negotiation``'s ``"corrected"`` vs ``"review"``),
+    # rather than the raw ``supersedes_result_id is not None`` check — that
+    # naive check is wrong on a self-edit (poster corrects their own standing
+    # proposal before the recipient ever answers): it supersedes a result, but
+    # the recipient still lands on the first-post "review" view, not
+    # "corrected", so they must get the Accept/Suggest-correction prompt, not
+    # Accept/Counter.
+    is_counter = (
+        _negotiation(match, recipient_side.players[0].user_id).viewer_state
+        == "corrected"
+    )
+    copy = _result_confirmation_copy(match, poster_id, is_counter=is_counter)
+    if copy is None:
         return
     title, body = copy
     for player in recipient_side.players:

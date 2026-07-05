@@ -42,9 +42,14 @@ import {
   deciderGameNumber,
   isDecidedMatch,
   overrunDecider,
-  type GamePoints,
 } from '@/lib/scoring'
-import { isScoreConflict, useGameSaveState } from './score-saves'
+import { useNavigationOverrideRef } from '@/lib/use-navigation-override-ref'
+import { reconstructBoard, scoredGamePoints } from './reconstruct-board'
+import {
+  isScoreConflict,
+  useFailedGameSaves,
+  useGameSaveState,
+} from './score-saves'
 import { SaveBanner } from './save-banner'
 import { ScorePad } from './score-pad'
 import {
@@ -54,19 +59,6 @@ import {
 
 /** The non-null persisted score on a game. */
 type PersistedScore = NonNullable<MatchDetails['games'][number]['score']>
-
-/** The persisted games as `GamePoints` for the scoring lib — drops un-scored
- * games and the side orientation, the shape `deciderGameNumber`/`overrunDecider`
- * expect. */
-function scoredGamePoints(games: MatchDetails['games']): GamePoints[] {
-  return games
-    .filter((g) => g.score)
-    .map((g) => ({
-      game_number: g.game_number,
-      side_1_points: g.score!.side_1_points,
-      side_2_points: g.score!.side_2_points,
-    }))
-}
 
 // Placeholder for the opponent label on solo matches — mirrors the match
 // details hero. Distinct from `initialsOf('Opponent')` so users can tell
@@ -116,6 +108,12 @@ function ScoreEntryInner({
   // used only to pre-fill the inputs after a failed save (the scoreline cells
   // and banner each read their own state).
   const ownSave = useGameSaveState(matchId, gameNumber)
+  // Every match game whose latest scratch save failed — needed so the finalize
+  // board folds in a game that failed on a *different* screen (issue #747-F2;
+  // ADR 0004). Conflicts are excluded below before the fold: their committed
+  // value is already persisted, and re-adding the rejected scratch would
+  // silently overwrite it.
+  const failedSaves = useFailedGameSaves(matchId)
 
   // `null` means "user hasn't typed anything yet" — we fall through to the
   // persisted score in edit mode. Avoids a state-syncing effect when `data`
@@ -139,12 +137,11 @@ function ScoreEntryInner({
   // Guard against losing un-submitted typing on refresh/close or an in-app
   // navigation (#441). `isDirty` is driven by the score change handlers as the
   // user types (set below, once `data`-derived baselines are in scope) — the
-  // blocker only reads it. `submittingRef` is flipped just before the
+  // blocker only reads it. `navOverride` is armed just before the
   // fire-and-forget Save (or an explicit Clear) navigates so that intentional
-  // hop is never blocked; it's a ref since it's read inside the blocker
-  // callbacks, not rendered.
+  // hop is never blocked.
   const [isDirty, setIsDirty] = useState(false)
-  const submittingRef = useRef(false)
+  const navOverride = useNavigationOverrideRef()
   // Synchronous finalize-in-flight guard. `finalizeMutation.isPending` is a
   // render snapshot that only flips on the next commit, so a fast double-click
   // on "Finalize result" lands a second tap before React re-renders — firing
@@ -159,7 +156,7 @@ function ScoreEntryInner({
     // Blocks browser refresh/close (beforeunload) only while genuinely dirty.
     enableBeforeUnload: () => isDirty,
     // Blocks in-app route changes the same way — but never the Save hop.
-    shouldBlockFn: () => isDirty && !submittingRef.current,
+    shouldBlockFn: () => isDirty && !navOverride.isArmed(),
     withResolver: true,
   })
 
@@ -361,21 +358,20 @@ function ScoreEntryInner({
   // so we can ask the scoring lib whether saving this entry would make the
   // match finalize-able. If so, the single submit button swaps to "Finalize
   // match" and posts /results instead of /scores/new.
+  //
+  // Reconstructed from all three sources (ADR 0004) via the shared helper the
+  // banner also uses: persisted ⊕ failed scratch ⊕ this game's live input. The
+  // failed-scratch fold is the #747-F2 fix — without it a game that failed to
+  // save on a different screen compacts out and a 2–1 board posts as 2–0.
+  // Conflicts are excluded (their committed value is already in `scoredGames`);
+  // the live input is layered last, so it wins for the active game even over its
+  // own failed scratch.
   const hypotheticalGames: MatchResultsGameWrite[] = inputsValid
-    ? [
-        ...scoredGames.filter((g) => g.game_number !== gameNumber),
-        mySideNumber === 1
-          ? {
-              game_number: gameNumber,
-              side_1_points: Number(me),
-              side_2_points: Number(opp),
-            }
-          : {
-              game_number: gameNumber,
-              side_1_points: Number(opp),
-              side_2_points: Number(me),
-            },
-      ]
+    ? reconstructBoard({
+        persisted: scoredGames,
+        failedSaves: failedSaves.filter((entry) => !entry.conflict),
+        activeInput: { game_number: gameNumber, ...toBody() },
+      })
     : []
   // The canonical board this entry would post — an out-of-order clinch's gap
   // closed (see `compactGames`), so the predicate and the posted payload below
@@ -501,7 +497,7 @@ function ScoreEntryInner({
     // This is the sanctioned write path: any navigation it triggers (the
     // synchronous next-game hop, or finalize's onSuccess to the match page)
     // is intentional, so wave the unsaved-input blocker through it (#441).
-    submittingRef.current = true
+    navOverride.arm()
     // Finalizing posts the canonical result — but that's the one write that
     // can't be faked offline. When offline we instead fall through to the
     // scratchpad save below, which stores the deciding game's score in the
@@ -572,7 +568,7 @@ function ScoreEntryInner({
       // so a stale failure doesn't outlive the score it referred to. The
       // edit→new hop it triggers is intentional, so the unsaved-input blocker
       // stays out (#441).
-      submittingRef.current = true
+      navOverride.arm()
       forgetScoreSaves(queryClient, matchId, gameNumber)
       deleteMutation.mutate(undefined, {
         // After clearing, land back on this game's create route so the user
@@ -618,7 +614,7 @@ function ScoreEntryInner({
     // version), so the mutation PUTs with that fresh version and overwrites
     // deliberately — no longer a blind last-write-wins, but a choice made
     // against the value we just showed them.
-    submittingRef.current = true
+    navOverride.arm()
     saveMutation.mutate(failedEntry)
   }
 
@@ -655,7 +651,7 @@ function ScoreEntryInner({
     : `Enter game ${gameNumber} score.`
   const subtitle = wouldFinalize
     ? data.affects_rating
-      ? 'This score finishes the match — submitting posts the result for your opponent to confirm.'
+      ? 'This score finishes the match — submitting posts the result for your opponent to accept.'
       : 'This score finishes the match — submitting will finalize the result immediately.'
     : isEdit
       ? 'Save updates the score for this game.'
@@ -1161,7 +1157,7 @@ function ScorelineCell({
 
   const badge = saving ? (
     <span className="sl-badge saving" aria-hidden>
-      <Loader2 className="sl-spin" size={13} strokeWidth={2.25} />
+      <Loader2 className="fmm-icon-spin" size={13} strokeWidth={2.25} />
     </span>
   ) : failed ? (
     <span className="sl-badge" aria-hidden>

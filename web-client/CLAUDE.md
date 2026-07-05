@@ -40,6 +40,22 @@ treatments via the same className/token patterns the showcase uses (e.g. the
 "Featured" highlight) rather than reinventing borders and gradients. Reach for a
 custom element only when nothing in the design system is a reasonable fit.
 
+## Boundaries
+
+We **parse untrusted data at every boundary with Zod.** The tool per surface:
+
+- **Forms** → React Hook Form + `zodResolver`. See `## Forms` below.
+- **URL search + path params** → a Zod schema. Prefer a route
+  `validateSearch: (s) => schema.parse(s)` over the raw
+  `(search: Record<string, unknown>) => ({ ... })` spread for new routes, so a malformed
+  URL fails at the route boundary instead of leaking `undefined`s into the page.
+- **Network responses** → Zod-parse the decoded payload at the fetch boundary before it
+  flows into the app. The generated `schema.d.ts` (see the root `CLAUDE.md` OpenAPI
+  invariant) gives the compile-time shape; Zod gives the runtime guarantee — they're
+  complementary, not redundant.
+- **`localStorage` / `sessionStorage` / any other external input** → read the value as
+  `unknown` and `.parse()` it through a Zod schema; treat a parse failure as absent.
+
 ## Forms
 
 **Every form that submits a mutation uses React Hook Form + Zod.** Drive the

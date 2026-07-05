@@ -1,10 +1,10 @@
 import {
+  type QueryClient,
   queryOptions,
   useMutation,
   useQuery,
   useQueryClient,
 } from '@tanstack/react-query'
-import { toast } from 'sonner'
 import { ApiError, api, hasCsrfCookie, unwrap } from './client'
 import { clearAppEntered } from '@/lib/landing-redirect'
 import type { components } from './schema'
@@ -220,6 +220,14 @@ export interface FinalizeTokenInput {
   skipMerge?: boolean
 }
 
+/** Seed `SESSION_QUERY_KEY` from a sign-in/confirm response. `GET /v1/session`
+ * never returns `merged` — strip it before caching so a future
+ * `useSession().data.merged` read can't see this mutation's stale value for
+ * the full 5-minute staleTime (#239). */
+function cacheSession(qc: QueryClient, session: Session): void {
+  qc.setQueryData(SESSION_QUERY_KEY, { ...session, merged: null })
+}
+
 export function useConfirmEmail() {
   const qc = useQueryClient()
   return useMutation({
@@ -239,29 +247,9 @@ export function useConfirmEmail() {
     // it doesn't need a refetch.
     onSuccess: (session) => {
       qc.clear()
-      qc.setQueryData(SESSION_QUERY_KEY, session)
-      // Announce carried-over matches here, in the once-per-result mutation
-      // lifecycle, rather than in a component `useEffect` — StrictMode
-      // double-invokes effects on mount, which fired this toast twice (#233).
-      announceMergedMatches(session)
+      cacheSession(qc, session)
     },
   })
-}
-
-/**
- * Toast the "we carried your matches over" confirmation after a merge-capable
- * finalize (email confirm or login-token consume). Single source of the
- * singular/plural copy so the #241 grammar guard lives in one place, not two.
- */
-export function announceMergedMatches(session: Session): void {
-  const moved = session.merged?.matches_moved ?? 0
-  if (moved > 0) {
-    toast.success(
-      moved === 1
-        ? 'We brought your 1 match with you.'
-        : `We brought your ${moved} matches with you.`,
-    )
-  }
 }
 
 export interface RequestLoginInput {
@@ -323,7 +311,7 @@ export function useConsumeLoginToken() {
     // browsing guest into a different existing account.
     onSuccess: (session) => {
       qc.clear()
-      qc.setQueryData(SESSION_QUERY_KEY, session)
+      cacheSession(qc, session)
     },
   })
 }
