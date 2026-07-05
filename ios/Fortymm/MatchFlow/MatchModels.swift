@@ -155,11 +155,6 @@ enum GameWriteIntent: Equatable {
             return .create
         }
     }
-
-    /// Convenience overload deriving the intent straight from a `ScoredGame`.
-    static func forWrite(_ game: ScoredGame) -> GameWriteIntent? {
-        forWrite(game.sync)
-    }
 }
 
 // MARK: - Result negotiation (view model)

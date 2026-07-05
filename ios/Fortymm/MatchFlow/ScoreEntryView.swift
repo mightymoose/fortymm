@@ -587,10 +587,10 @@ struct ScoreEntryView: View {
             games[index].sync = .saved(version: version)
         case .completed(.failure(let conflict)):
             if let committed = conflict.committedScore {
-                let mineIsSide1 = yourSideNumber != 2
-                let oriented = mineIsSide1
-                    ? Game(a: committed.side1Points, b: committed.side2Points)
-                    : Game(a: committed.side2Points, b: committed.side1Points)
+                let oriented = MatchService.orientedGame(
+                    side1: committed.side1Points, side2: committed.side2Points,
+                    mineIsSide1: yourSideNumber != 2
+                )
                 games[index].sync = .conflict(committed: oriented, version: committed.version)
                 // If the conflict landed on the game the user is still looking at,
                 // prompt the decision immediately; otherwise the chip's warn

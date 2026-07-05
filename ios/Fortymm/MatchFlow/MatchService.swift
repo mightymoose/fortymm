@@ -63,14 +63,13 @@ struct MatchService {
         matchId: UUID, games: [Game], yourSideNumber: Int = 1,
         supersedes: UUID? = nil
     ) async throws -> FinalMatch {
-        let youAreSide1 = yourSideNumber != 2
         let payload = PostResultsBody(
             games: games.enumerated().compactMap { i, g in
-                guard let a = g.a, let b = g.b else { return nil }
+                guard let sides = Self.sidePoints(g, yourSideNumber: yourSideNumber) else { return nil }
                 return PostResultsBody.GameWrite(
                     gameNumber: i + 1,
-                    side1Points: youAreSide1 ? a : b,
-                    side2Points: youAreSide1 ? b : a
+                    side1Points: sides.side1,
+                    side2Points: sides.side2
                 )
             },
             supersedesResultId: supersedes
@@ -98,11 +97,12 @@ struct MatchService {
     func createGameScore(
         matchId: UUID, gameNumber: Int, game: Game, yourSideNumber: Int = 1
     ) async throws -> Result<Int, GameScoreConflictDTO> {
-        let youAreSide1 = yourSideNumber != 2
-        guard let a = game.a, let b = game.b else { throw MissingScoreVersion() }
+        guard let sides = Self.sidePoints(game, yourSideNumber: yourSideNumber) else {
+            throw MissingScoreVersion()
+        }
         let body = GameScoreWriteBody(
-            side1Points: youAreSide1 ? a : b,
-            side2Points: youAreSide1 ? b : a
+            side1Points: sides.side1,
+            side2Points: sides.side2
         )
         let result: Result<MatchDetailsDTO, GameScoreConflictDTO> =
             try await client.sendExpectingConflict(
@@ -119,11 +119,12 @@ struct MatchService {
         matchId: UUID, gameNumber: Int, game: Game, expectedVersion: Int,
         yourSideNumber: Int = 1
     ) async throws -> Result<Int, GameScoreConflictDTO> {
-        let youAreSide1 = yourSideNumber != 2
-        guard let a = game.a, let b = game.b else { throw MissingScoreVersion() }
+        guard let sides = Self.sidePoints(game, yourSideNumber: yourSideNumber) else {
+            throw MissingScoreVersion()
+        }
         let body = GameScoreUpdateBody(
-            side1Points: youAreSide1 ? a : b,
-            side2Points: youAreSide1 ? b : a,
+            side1Points: sides.side1,
+            side2Points: sides.side2,
             expectedVersion: expectedVersion
         )
         let result: Result<MatchDetailsDTO, GameScoreConflictDTO> =
@@ -260,10 +261,23 @@ struct MatchService {
     // MARK: Negotiation DTO → view model
 
     /// Project canonical side-1/side-2 points onto the viewer-relative axis
-    /// (`a` = you, `b` = them) — the one place the orientation rule lives, used
-    /// by both the match-games and standing-result mappings.
-    private static func orientedGame(side1: Int, side2: Int, mineIsSide1: Bool) -> Game {
+    /// (`a` = you, `b` = them) — the one place the read-orientation rule lives,
+    /// used by the match-games and standing-result mappings and the score-entry
+    /// conflict reducer.
+    static func orientedGame(side1: Int, side2: Int, mineIsSide1: Bool) -> Game {
         mineIsSide1 ? Game(a: side1, b: side2) : Game(a: side2, b: side1)
+    }
+
+    /// The write-direction mirror of `orientedGame`: project the viewer-relative
+    /// `a` = you / `b` = them points back onto the canonical side-1/side-2 axis
+    /// the API expects (swapped when the viewer is side 2). `nil` when the game
+    /// isn't fully entered, so callers skip it or reject the write. The single
+    /// home for the write orientation, shared by `postResult` and the per-game
+    /// scratchpad writes.
+    static func sidePoints(_ game: Game, yourSideNumber: Int) -> (side1: Int, side2: Int)? {
+        guard let a = game.a, let b = game.b else { return nil }
+        let youAreSide1 = yourSideNumber != 2
+        return youAreSide1 ? (a, b) : (b, a)
     }
 
     /// Map the wire negotiation onto the view model: re-orient the standing
