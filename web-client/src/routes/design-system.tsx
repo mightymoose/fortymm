@@ -1,5 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { zodResolver } from '@hookform/resolvers/zod'
+import { format } from 'date-fns'
 import { useForm } from 'react-hook-form'
 import { toast } from 'sonner'
 import { z } from 'zod'
@@ -122,6 +123,7 @@ import {
 } from '@/components/ui/tooltip'
 import { Calendar } from '@/components/ui/calendar'
 import { pageTitle } from '@/lib/page-title'
+import { cn } from '@/lib/utils'
 
 export const Route = createFileRoute('/design-system')({
   head: () => ({
@@ -138,13 +140,19 @@ const DEMO_AVATAR_SRC =
 
 /** Selected day for the Date Picker showcase (matches the trigger label). */
 const SHOWCASE_DAY = new Date(2026, 3, 12)
-const formatWeekdayNameShort = (date: Date) =>
-  date.toLocaleString('en-US', { weekday: 'short' })
+const formatWeekdayNameShort = (date: Date) => format(date, 'EEE')
+const CALENDAR_FORMATTERS = { formatWeekdayName: formatWeekdayNameShort }
+const noop = () => {}
 
 /** Shared slot style for the Input OTP showcase; index 2 carries its own
  * active/focused variant. */
 const OTP_SLOT_CLASS =
   'size-11 rounded-md border border-[color:var(--border-subtle)] text-base first:rounded-l-md last:rounded-r-md first:border-l'
+
+const TOGGLE_GROUP_ACCENT_CLASS =
+  'border-transparent data-[state=on]:bg-[color:var(--ball-500)]/15 data-[state=on]:text-[color:var(--ball-500)]'
+
+const TABLE_HEAD_CLASS = 'uppercase text-xs tracking-[0.08em] text-[color:var(--fg-3)]'
 
 function Section({
   id,
@@ -413,13 +421,16 @@ function FormsSection() {
       </Showcase>
 
       <Showcase title="Input OTP" tag="6-digit">
-        <InputOTP maxLength={6} value="42" onChange={() => {}}>
+        <InputOTP maxLength={6} value="42" onChange={noop}>
           <InputOTPGroup className="gap-2">
             <InputOTPSlot index={0} className={OTP_SLOT_CLASS} />
             <InputOTPSlot index={1} className={OTP_SLOT_CLASS} />
             <InputOTPSlot
               index={2}
-              className="relative z-10 size-11 rounded-md border border-[color:var(--ball-500)] text-base ring-3 ring-[color:var(--ball-500)]/50 first:rounded-l-md last:rounded-r-md first:border-l"
+              className={cn(
+                OTP_SLOT_CLASS,
+                'relative z-10 border-[color:var(--ball-500)] ring-3 ring-[color:var(--ball-500)]/50',
+              )}
             />
           </InputOTPGroup>
           <InputOTPSeparator />
@@ -565,8 +576,8 @@ function FormsSection() {
                   mode="single"
                   selected={SHOWCASE_DAY}
                   defaultMonth={SHOWCASE_DAY}
-                  onSelect={() => {}}
-                  formatters={{ formatWeekdayName: formatWeekdayNameShort }}
+                  onSelect={noop}
+                  formatters={CALENDAR_FORMATTERS}
                 />
               </PopoverContent>
             </Popover>
@@ -575,8 +586,8 @@ function FormsSection() {
             mode="single"
             selected={SHOWCASE_DAY}
             defaultMonth={SHOWCASE_DAY}
-            onSelect={() => {}}
-            formatters={{ formatWeekdayName: formatWeekdayNameShort }}
+            onSelect={noop}
+            formatters={CALENDAR_FORMATTERS}
             className="rounded-lg border border-[color:var(--border-subtle)]"
           />
         </div>
@@ -595,22 +606,13 @@ function FormsSection() {
             variant="outline"
             className="gap-0 rounded-lg border border-[color:var(--border-subtle)] p-0.5"
           >
-            <ToggleGroupItem
-              value="singles"
-              className="border-transparent data-[state=on]:bg-[color:var(--ball-500)]/15 data-[state=on]:text-[color:var(--ball-500)]"
-            >
+            <ToggleGroupItem value="singles" className={TOGGLE_GROUP_ACCENT_CLASS}>
               Singles
             </ToggleGroupItem>
-            <ToggleGroupItem
-              value="doubles"
-              className="border-transparent data-[state=on]:bg-[color:var(--ball-500)]/15 data-[state=on]:text-[color:var(--ball-500)]"
-            >
+            <ToggleGroupItem value="doubles" className={TOGGLE_GROUP_ACCENT_CLASS}>
               Doubles
             </ToggleGroupItem>
-            <ToggleGroupItem
-              value="mixed"
-              className="border-transparent data-[state=on]:bg-[color:var(--ball-500)]/15 data-[state=on]:text-[color:var(--ball-500)]"
-            >
+            <ToggleGroupItem value="mixed" className={TOGGLE_GROUP_ACCENT_CLASS}>
               Mixed
             </ToggleGroupItem>
           </ToggleGroup>
@@ -725,21 +727,11 @@ function DataDisplaySection() {
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead className="uppercase text-xs tracking-[0.08em] text-[color:var(--fg-3)]">
-                Player
-              </TableHead>
-              <TableHead className="uppercase text-xs tracking-[0.08em] text-[color:var(--fg-3)]">
-                Club
-              </TableHead>
-              <TableHead className="text-right uppercase text-xs tracking-[0.08em] text-[color:var(--fg-3)]">
-                Rating
-              </TableHead>
-              <TableHead className="text-right uppercase text-xs tracking-[0.08em] text-[color:var(--fg-3)]">
-                W–L
-              </TableHead>
-              <TableHead className="text-right uppercase text-xs tracking-[0.08em] text-[color:var(--fg-3)]">
-                Δ
-              </TableHead>
+              <TableHead className={TABLE_HEAD_CLASS}>Player</TableHead>
+              <TableHead className={TABLE_HEAD_CLASS}>Club</TableHead>
+              <TableHead className={cn(TABLE_HEAD_CLASS, 'text-right')}>Rating</TableHead>
+              <TableHead className={cn(TABLE_HEAD_CLASS, 'text-right')}>W–L</TableHead>
+              <TableHead className={cn(TABLE_HEAD_CLASS, 'text-right')}>Δ</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -1631,11 +1623,12 @@ function LayoutSection() {
               return (
                 <CarouselItem key={n} className="basis-1/3">
                   <div
-                    className={
+                    className={cn(
+                      'font-display flex h-32 items-center justify-center rounded-lg bg-[color:var(--ink-700)] tracking-[0.04em] text-[color:var(--fg-1)]',
                       selected
-                        ? 'font-display flex h-32 items-center justify-center rounded-lg border border-[color:var(--ball-500)] bg-[color:var(--ink-700)] text-3xl font-semibold tracking-[0.04em] text-[color:var(--fg-1)] ring-2 ring-[color:var(--ball-500)]'
-                        : 'font-display flex h-32 items-center justify-center rounded-lg border border-[color:var(--border-subtle)] bg-[color:var(--ink-700)] text-2xl tracking-[0.04em] text-[color:var(--fg-1)]'
-                    }
+                        ? 'border border-[color:var(--ball-500)] text-3xl font-semibold ring-2 ring-[color:var(--ball-500)]'
+                        : 'border border-[color:var(--border-subtle)] text-2xl',
+                    )}
                     style={selected ? { boxShadow: 'var(--shadow-glow)' } : undefined}
                   >
                     {String(n).padStart(2, '0')}

@@ -36,22 +36,22 @@ test.describe('Design System', () => {
     const designSystemPage = await DesignSystemPage.navigateTo(page);
 
     const dialog = await designSystemPage.overlayShowcase.dialogPanel();
-    await expect(
-      dialog.getByRole('button', { name: 'Forfeit' }),
-    ).toBeVisible();
-    await expect(dialog.getByRole('button', { name: 'Cancel' })).toBeVisible();
+    await Promise.all([
+      expect(dialog.getByRole('button', { name: 'Forfeit' })).toBeVisible(),
+      expect(dialog.getByRole('button', { name: 'Cancel' })).toBeVisible(),
+    ]);
   });
 
   test('renders the alert dialog facsimile with its actions', async ({ page }) => {
     const designSystemPage = await DesignSystemPage.navigateTo(page);
 
     const alertDialog = await designSystemPage.overlayShowcase.alertDialogPanel();
-    await expect(
-      alertDialog.getByRole('button', { name: 'Delete' }),
-    ).toBeVisible();
-    await expect(
-      alertDialog.getByRole('button', { name: 'Keep account' }),
-    ).toBeVisible();
+    await Promise.all([
+      expect(alertDialog.getByRole('button', { name: 'Delete' })).toBeVisible(),
+      expect(
+        alertDialog.getByRole('button', { name: 'Keep account' }),
+      ).toBeVisible(),
+    ]);
   });
 
   test('renders the sheet facsimile with its filter controls', async ({ page }) => {
