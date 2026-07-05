@@ -42,6 +42,10 @@ struct ScoreEntryView: View {
     @State private var games: [ScoredGame] = []
     @State private var active = 0          // index being entered
     @State private var editing = false     // true when re-entering an already-complete game
+    // The game index whose 409 conflict the user is currently resolving, driving
+    // the keep-committed / use-mine dialog. Set when a conflict chip is tapped, or
+    // when a conflict lands on the game that's still active; cleared on decision.
+    @State private var resolving: Int?
     // Raw text backing the two score fields for the *active* game. Kept verbatim
     // so a malformed entry (extra characters, too many digits) is shown back to
     // the user and flagged inline rather than silently stripped/truncated into a
@@ -107,6 +111,28 @@ struct ScoreEntryView: View {
         // the raw fields to the newly-active slot's stored scores.
         .onChange(of: active) { _, _ in syncRawFromActive(); focusYou() }
         .onChange(of: editing) { _, _ in focusYou() }
+        // A 409 leaves the slot in `.conflict`, holding the server's committed
+        // score alongside our entry. Make the user re-decide against reality:
+        // keep the committed score, or overwrite it with theirs — mirroring web's
+        // keepCommittedScore / overwriteWithMyScore.
+        .confirmationDialog(
+            "Score conflict",
+            isPresented: Binding(
+                get: { resolving != nil },
+                set: { if !$0 { resolving = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            if let c = resolvingConflict, let i = resolving {
+                Button("Keep their score") { keepCommitted(i, committed: c.committed, version: c.version) }
+                Button("Use my score") { useMyScore(i) }
+                Button("Cancel", role: .cancel) {}
+            }
+        } message: {
+            if let c = resolvingConflict, let i = resolving {
+                Text("They saved \(scoreText(c.committed)). You entered \(scoreText(games[i].points)).")
+            }
+        }
     }
 
     // MARK: Score error
@@ -376,6 +402,9 @@ struct ScoreEntryView: View {
         guard games.indices.contains(i) else { return }
         active = i
         editing = MatchRules.gameComplete(games[i].points)
+        // A conflicted slot demands an explicit keep-mine / use-theirs decision —
+        // surface it as soon as the user lands on that game.
+        if case .conflict = games[i].sync { resolving = i }
     }
 
     /// First incomplete slot searching forward from `active` and wrapping.
@@ -498,12 +527,56 @@ struct ScoreEntryView: View {
                     ? Game(a: committed.side1Points, b: committed.side2Points)
                     : Game(a: committed.side2Points, b: committed.side1Points)
                 games[index].sync = .conflict(committed: oriented, version: committed.version)
+                // If the conflict landed on the game the user is still looking at,
+                // prompt the decision immediately; otherwise the chip's warn
+                // triangle flags it and tapping it opens the same dialog.
+                if index == active { resolving = index }
             } else {
                 games[index].sync = .failed(retained: sent)
             }
         case .threw:
             games[index].sync = .failed(retained: sent)
         }
+    }
+
+    // MARK: Conflict resolution (keep-committed vs use-mine)
+
+    /// The committed server points and version for the game currently being
+    /// resolved, if any — drives the conflict dialog's copy and its keep action.
+    /// `committed` is already on the viewer's `a` = you / `b` = them axis.
+    private var resolvingConflict: (committed: Game, version: Int)? {
+        guard let i = resolving, games.indices.contains(i),
+              case let .conflict(committed, version) = games[i].sync else { return nil }
+        return (committed, version)
+    }
+
+    /// "Keep their score": adopt the server's committed points for game `i`, mark
+    /// the slot saved at the conflict's version, and clear the conflict. Fires NO
+    /// write — we're accepting what the server already holds. Mirrors web's
+    /// keepCommittedScore. Re-seeds the raw fields when the game is active so the
+    /// inputs show the adopted score.
+    private func keepCommitted(_ i: Int, committed: Game, version: Int) {
+        guard games.indices.contains(i) else { return }
+        games[i].points = committed
+        games[i].sync = .saved(version: version)
+        resolving = nil
+        if i == active { syncRawFromActive() }
+    }
+
+    /// "Use my score": keep the slot's current entry and re-fire the write. The
+    /// slot is still `.conflict(_, v)`, so `fireWrite` re-derives an
+    /// `.update(expectedVersion: v)` and PUTs with the fresh version — a
+    /// deliberate overwrite, not a blind last-write-wins. Mirrors web's
+    /// overwriteWithMyScore; delegates to the existing write path rather than
+    /// duplicating it.
+    private func useMyScore(_ i: Int) {
+        resolving = nil
+        fireWrite(for: i)
+    }
+
+    /// A game's points as a compact "you–them" scoreline for the conflict copy.
+    private func scoreText(_ g: Game) -> String {
+        "\(g.a.map(String.init) ?? "?")–\(g.b.map(String.init) ?? "?")"
     }
 
     private func post() {
