@@ -5,6 +5,7 @@ import {
   useQuery,
   useQueryClient,
 } from '@tanstack/react-query'
+import { z } from 'zod'
 import { ApiError, api, hasCsrfCookie, unwrap } from './client'
 import { clearAppEntered } from '@/lib/landing-redirect'
 import type { components } from './schema'
@@ -27,16 +28,23 @@ const SESSION_LOCK_STORAGE_KEY = 'fortymm:session-bootstrap:lock'
 const SESSION_LOCK_TTL_MS = 10_000
 const SESSION_LOCK_POLL_MS = 50
 
-interface StorageLockRecord {
-  owner: string
-  expires: number
-}
+// The lock record is persisted client state (localStorage), so it's untrusted
+// on read — a different app version, a manual edit, or a truncated write could
+// leave anything there. Parse it at the boundary instead of casting the
+// `JSON.parse` result (see `.claude/rules/parse-at-boundaries.md`); a shape
+// mismatch is treated as "no lock", exactly like a parse/JSON error.
+const storageLockSchema = z.object({
+  owner: z.string(),
+  expires: z.number(),
+})
+type StorageLockRecord = z.infer<typeof storageLockSchema>
 
-function readStorageLock(): StorageLockRecord | null {
+export function readStorageLock(): StorageLockRecord | null {
   const raw = localStorage.getItem(SESSION_LOCK_STORAGE_KEY)
   if (!raw) return null
   try {
-    return JSON.parse(raw) as StorageLockRecord
+    const parsed = storageLockSchema.safeParse(JSON.parse(raw))
+    return parsed.success ? parsed.data : null
   } catch {
     return null
   }
