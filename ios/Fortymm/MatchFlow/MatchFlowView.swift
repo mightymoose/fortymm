@@ -73,10 +73,16 @@ struct MatchFlowView: View {
             case .score:
                 ScoreEntryView(
                     config: config,
-                    // Down-adapter: ScoreEntryView still takes plain `[Game]`, so
-                    // strip each game's sync state back off here. The board is
-                    // byte-for-byte what it was before ResumeScoring widened.
-                    initialGames: resume?.games.map(\.points) ?? [],
+                    // Carried for the (future) per-game write path; unused by the
+                    // board today. `matchId` is set before this step in both
+                    // paths (start() on new matches, the resume seed otherwise) —
+                    // same non-nil guarantee `post()` leans on with `guard let`.
+                    matchId: matchId,
+                    yourSideNumber: resume?.yourSideNumber ?? 1,
+                    // ScoreEntryView now holds `[ScoredGame]` directly, so the
+                    // resume games ride in with their sync state intact — no
+                    // down-adapter. The board still reads only `.points`.
+                    initialGames: resume?.games ?? [],
                     onPost: post,
                     correction: resume?.isCorrection ?? false,
                     meName: session.username,

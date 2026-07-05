@@ -6,10 +6,17 @@ import SwiftUI
 /// and by tapping a score field directly.
 struct ScoreEntryView: View {
     let config: MatchConfig
+    /// The server match id these scores belong to, and which side ("you") the
+    /// signed-in player is. Unused today — carried so the per-game write path
+    /// (next task) can address the shared scratchpad without re-threading them.
+    let matchId: UUID?
+    let yourSideNumber: Int
     /// Games already entered for this match, in order (game 1…N). Empty for a
     /// new match; populated when resuming a live one so the user continues from
-    /// where they left off rather than re-entering scored games.
-    var initialGames: [Game] = []
+    /// where they left off rather than re-entering scored games. Each slot
+    /// carries its scratchpad sync state alongside the points (see `ScoredGame`);
+    /// scoring reads only `.points`, so today's board is unchanged.
+    var initialGames: [ScoredGame] = []
     /// Hand the completed games (in order, game 1…N) up to the coordinator,
     /// which posts them to the API and renders the server's result.
     var onPost: ([Game]) -> Void
@@ -26,7 +33,9 @@ struct ScoreEntryView: View {
 
     // One slot per game in the match; any slot can be entered or edited in any
     // order by tapping its scoreline chip. Populated on first appear from bestOf.
-    @State private var games: [Game] = []
+    // Each slot pairs the entered points with their scratchpad sync state; the
+    // scoring UI reads `.points`, leaving `sync` for the (future) write path.
+    @State private var games: [ScoredGame] = []
     @State private var active = 0          // index being entered
     @State private var editing = false     // true when re-entering an already-complete game
     // Raw text backing the two score fields for the *active* game. Kept verbatim
@@ -44,18 +53,18 @@ struct ScoreEntryView: View {
     }
     private var opp: MatchPlayer { config.opponent ?? .guest }
 
-    private var current: Game { games.indices.contains(active) ? games[active] : Game() }
+    private var current: Game { games.indices.contains(active) ? games[active].points : Game() }
     private var currentValid: Bool { MatchRules.gameComplete(current) }
 
     /// Tally shown in the VS column. `setsWon` already ignores incomplete games,
     /// so counting over all slots (including the one being entered) is correct.
-    private var setsDisplay: SetScore { MatchRules.setsWon(games) }
+    private var setsDisplay: SetScore { MatchRules.setsWon(games.map(\.points)) }
     /// True when the games entered so far form a complete, decided match — i.e.
     /// there's a valid result to Post. Uses the same canonical rule as `post()`
     /// so the Post button never appears for games the server would reject, and
     /// never goes dead when it does appear.
     private var deciding: Bool {
-        MatchRules.gamesThroughDecider(games, bestOf: config.bestOf) != nil
+        MatchRules.gamesThroughDecider(games.map(\.points), bestOf: config.bestOf) != nil
     }
 
     var body: some View {
@@ -79,10 +88,13 @@ struct ScoreEntryView: View {
                 // first slot still needing a score.
                 var seeded = Array(initialGames.prefix(config.bestOf))
                 if seeded.count < config.bestOf {
-                    seeded += Array(repeating: Game(), count: config.bestOf - seeded.count)
+                    seeded += Array(
+                        repeating: ScoredGame(points: Game(), sync: .localOnly),
+                        count: config.bestOf - seeded.count
+                    )
                 }
                 games = seeded
-                active = seeded.firstIndex { !MatchRules.gameComplete($0) } ?? 0
+                active = seeded.firstIndex { !MatchRules.gameComplete($0.points) } ?? 0
             }
             syncRawFromActive()
             focusYou()
@@ -179,7 +191,7 @@ struct ScoreEntryView: View {
                 .foregroundStyle(FMColor.fgMuted)
             HStack(spacing: 7) {
                 ForEach(0..<config.bestOf, id: \.self) { i in
-                    let g = games.indices.contains(i) ? games[i] : Game()
+                    let g = games.indices.contains(i) ? games[i].points : Game()
                     GameChip(index: i, game: g, active: i == active) {
                         if i != active { selectGame(i) }
                     }
@@ -331,7 +343,9 @@ struct ScoreEntryView: View {
 
     private func setCurrent(_ mutate: (inout Game) -> Void) {
         guard games.indices.contains(active) else { return }
-        mutate(&games[active])
+        // Mutate the active slot's points only; its sync state is left untouched
+        // (nothing consumes it yet, and no write fires this task).
+        mutate(&games[active].points)
     }
 
     private func focusYou() {
@@ -351,7 +365,7 @@ struct ScoreEntryView: View {
     private func selectGame(_ i: Int) {
         guard games.indices.contains(i) else { return }
         active = i
-        editing = MatchRules.gameComplete(games[i])
+        editing = MatchRules.gameComplete(games[i].points)
     }
 
     /// First incomplete slot searching forward from `active` and wrapping.
@@ -359,7 +373,7 @@ struct ScoreEntryView: View {
         guard !games.isEmpty else { return nil }
         return (1...games.count)
             .map { (active + $0) % games.count }
-            .first { !MatchRules.gameComplete(games[$0]) }
+            .first { !MatchRules.gameComplete(games[$0].points) }
     }
 
     private func clearEdit() {
@@ -372,7 +386,7 @@ struct ScoreEntryView: View {
         guard currentValid else { return }
         editing = false
         // Return to the first still-incomplete game, else stay on the last.
-        if let firstIncomplete = games.indices.first(where: { $0 != active && !MatchRules.gameComplete(games[$0]) }) {
+        if let firstIncomplete = games.indices.first(where: { $0 != active && !MatchRules.gameComplete(games[$0].points) }) {
             active = firstIncomplete
         } else {
             active = games.count - 1
@@ -385,7 +399,7 @@ struct ScoreEntryView: View {
         // server's finalize rules. The coordinator posts these to
         // `POST /v1/matches/{id}/results`; the server computes sets won, the
         // winner, and any rating change — so we don't here.
-        guard let finalGames = MatchRules.gamesThroughDecider(games, bestOf: config.bestOf) else { return }
+        guard let finalGames = MatchRules.gamesThroughDecider(games.map(\.points), bestOf: config.bestOf) else { return }
         focus = nil
         onPost(finalGames)
     }
