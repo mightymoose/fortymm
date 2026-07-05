@@ -1,11 +1,14 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { zodResolver } from '@hookform/resolvers/zod'
+import { format } from 'date-fns'
 import { useForm } from 'react-hook-form'
 import { toast } from 'sonner'
 import { z } from 'zod'
 import {
   Calendar as CalendarIcon,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   Check,
   CircleCheck,
   Info,
@@ -17,17 +20,6 @@ import {
 
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from '@/components/ui/alert-dialog'
 import { AspectRatio } from '@/components/ui/aspect-ratio'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
@@ -68,45 +60,6 @@ import {
   CommandShortcut,
 } from '@/components/ui/command'
 import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuSeparator,
-  ContextMenuTrigger,
-} from '@/components/ui/context-menu'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from '@/components/ui/dialog'
-import {
-  Drawer,
-  DrawerContent,
-  DrawerDescription,
-  DrawerFooter,
-  DrawerHeader,
-  DrawerTitle,
-  DrawerTrigger,
-} from '@/components/ui/drawer'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuShortcut,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
-import {
-  HoverCard,
-  HoverCardContent,
-  HoverCardTrigger,
-} from '@/components/ui/hover-card'
-import {
   Form,
   FormControl,
   FormDescription,
@@ -119,32 +72,16 @@ import { Input } from '@/components/ui/input'
 import {
   InputOTP,
   InputOTPGroup,
+  InputOTPSeparator,
   InputOTPSlot,
 } from '@/components/ui/input-otp'
 import { Label } from '@/components/ui/label'
-import {
-  Menubar,
-  MenubarContent,
-  MenubarItem,
-  MenubarMenu,
-  MenubarTrigger,
-} from '@/components/ui/menubar'
-import {
-  NavigationMenu,
-  NavigationMenuContent,
-  NavigationMenuItem,
-  NavigationMenuLink,
-  NavigationMenuList,
-  NavigationMenuTrigger,
-} from '@/components/ui/navigation-menu'
 import {
   Pagination,
   PaginationContent,
   PaginationEllipsis,
   PaginationItem,
   PaginationLink,
-  PaginationNext,
-  PaginationPrevious,
 } from '@/components/ui/pagination'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Progress } from '@/components/ui/progress'
@@ -163,15 +100,6 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Separator } from '@/components/ui/separator'
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetFooter,
-  SheetHeader,
-  SheetTitle,
-  SheetTrigger,
-} from '@/components/ui/sheet'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Slider } from '@/components/ui/slider'
 import { Switch } from '@/components/ui/switch'
@@ -195,6 +123,7 @@ import {
 } from '@/components/ui/tooltip'
 import { Calendar } from '@/components/ui/calendar'
 import { pageTitle } from '@/lib/page-title'
+import { cn } from '@/lib/utils'
 
 export const Route = createFileRoute('/design-system')({
   head: () => ({
@@ -208,6 +137,22 @@ export const Route = createFileRoute('/design-system')({
  * offline and in the e2e run instead of falling back to initials. */
 const DEMO_AVATAR_SRC =
   "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' fill='%233a4a6e'/%3E%3Ccircle cx='32' cy='25' r='13' fill='%23e9edf5'/%3E%3Crect x='11' y='42' width='42' height='24' rx='12' fill='%23e9edf5'/%3E%3C/svg%3E"
+
+/** Selected day for the Date Picker showcase (matches the trigger label). */
+const SHOWCASE_DAY = new Date(2026, 3, 12)
+const formatWeekdayNameShort = (date: Date) => format(date, 'EEE')
+const CALENDAR_FORMATTERS = { formatWeekdayName: formatWeekdayNameShort }
+const noop = () => {}
+
+/** Shared slot style for the Input OTP showcase; index 2 carries its own
+ * active/focused variant. */
+const OTP_SLOT_CLASS =
+  'size-11 rounded-md border border-[color:var(--border-subtle)] text-base first:rounded-l-md last:rounded-r-md first:border-l'
+
+const TOGGLE_GROUP_ACCENT_CLASS =
+  'border-transparent data-[state=on]:bg-[color:var(--ball-500)]/15 data-[state=on]:text-[color:var(--ball-500)]'
+
+const TABLE_HEAD_CLASS = 'uppercase text-xs tracking-[0.08em] text-[color:var(--fg-3)]'
 
 function Section({
   id,
@@ -476,14 +421,23 @@ function FormsSection() {
       </Showcase>
 
       <Showcase title="Input OTP" tag="6-digit">
-        <InputOTP maxLength={6}>
-          <InputOTPGroup>
-            <InputOTPSlot index={0} />
-            <InputOTPSlot index={1} />
-            <InputOTPSlot index={2} />
-            <InputOTPSlot index={3} />
-            <InputOTPSlot index={4} />
-            <InputOTPSlot index={5} />
+        <InputOTP maxLength={6} value="42" onChange={noop}>
+          <InputOTPGroup className="gap-2">
+            <InputOTPSlot index={0} className={OTP_SLOT_CLASS} />
+            <InputOTPSlot index={1} className={OTP_SLOT_CLASS} />
+            <InputOTPSlot
+              index={2}
+              className={cn(
+                OTP_SLOT_CLASS,
+                'relative z-10 border-[color:var(--ball-500)] ring-3 ring-[color:var(--ball-500)]/50',
+              )}
+            />
+          </InputOTPGroup>
+          <InputOTPSeparator />
+          <InputOTPGroup className="gap-2">
+            <InputOTPSlot index={3} className={OTP_SLOT_CLASS} />
+            <InputOTPSlot index={4} className={OTP_SLOT_CLASS} />
+            <InputOTPSlot index={5} className={OTP_SLOT_CLASS} />
           </InputOTPGroup>
         </InputOTP>
       </Showcase>
@@ -558,10 +512,10 @@ function FormsSection() {
         </div>
       </Showcase>
 
-      <Showcase title="Select" tag="dropdown">
+      <Showcase title="Select" tag="compact">
         <div className="flex flex-wrap items-center gap-3">
           <Select defaultValue="singles">
-            <SelectTrigger className="w-[180px]">
+            <SelectTrigger size="sm" className="w-[140px]">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -571,7 +525,7 @@ function FormsSection() {
             </SelectContent>
           </Select>
           <Select defaultValue="bo5">
-            <SelectTrigger className="w-[220px]">
+            <SelectTrigger size="sm" className="w-[180px]">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -618,11 +572,24 @@ function FormsSection() {
                 </Button>
               </PopoverTrigger>
               <PopoverContent className="w-auto p-0">
-                <Calendar mode="single" />
+                <Calendar
+                  mode="single"
+                  selected={SHOWCASE_DAY}
+                  defaultMonth={SHOWCASE_DAY}
+                  onSelect={noop}
+                  formatters={CALENDAR_FORMATTERS}
+                />
               </PopoverContent>
             </Popover>
           </div>
-          <Calendar mode="single" className="rounded-lg border border-[color:var(--border-subtle)]" />
+          <Calendar
+            mode="single"
+            selected={SHOWCASE_DAY}
+            defaultMonth={SHOWCASE_DAY}
+            onSelect={noop}
+            formatters={CALENDAR_FORMATTERS}
+            className="rounded-lg border border-[color:var(--border-subtle)]"
+          />
         </div>
       </Showcase>
 
@@ -633,10 +600,21 @@ function FormsSection() {
           </Toggle>
           <Toggle aria-label="Italic">I</Toggle>
           <Separator orientation="vertical" className="h-8" />
-          <ToggleGroup type="single" defaultValue="singles">
-            <ToggleGroupItem value="singles">Singles</ToggleGroupItem>
-            <ToggleGroupItem value="doubles">Doubles</ToggleGroupItem>
-            <ToggleGroupItem value="mixed">Mixed</ToggleGroupItem>
+          <ToggleGroup
+            type="single"
+            defaultValue="singles"
+            variant="outline"
+            className="gap-0 rounded-lg border border-[color:var(--border-subtle)] p-0.5"
+          >
+            <ToggleGroupItem value="singles" className={TOGGLE_GROUP_ACCENT_CLASS}>
+              Singles
+            </ToggleGroupItem>
+            <ToggleGroupItem value="doubles" className={TOGGLE_GROUP_ACCENT_CLASS}>
+              Doubles
+            </ToggleGroupItem>
+            <ToggleGroupItem value="mixed" className={TOGGLE_GROUP_ACCENT_CLASS}>
+              Mixed
+            </ToggleGroupItem>
           </ToggleGroup>
         </div>
       </Showcase>
@@ -749,11 +727,11 @@ function DataDisplaySection() {
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>Player</TableHead>
-              <TableHead>Club</TableHead>
-              <TableHead className="text-right">Rating</TableHead>
-              <TableHead className="text-right">W–L</TableHead>
-              <TableHead className="text-right">Δ</TableHead>
+              <TableHead className={TABLE_HEAD_CLASS}>Player</TableHead>
+              <TableHead className={TABLE_HEAD_CLASS}>Club</TableHead>
+              <TableHead className={cn(TABLE_HEAD_CLASS, 'text-right')}>Rating</TableHead>
+              <TableHead className={cn(TABLE_HEAD_CLASS, 'text-right')}>W–L</TableHead>
+              <TableHead className={cn(TABLE_HEAD_CLASS, 'text-right')}>Δ</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -761,7 +739,7 @@ function DataDisplaySection() {
               <TableCell>
                 <div className="flex items-center gap-2.5">
                   <Avatar className="size-7 text-xs">
-                    <AvatarFallback>TN</AvatarFallback>
+                    <AvatarFallback className="bg-[#3a4a6e]">TN</AvatarFallback>
                   </Avatar>
                   Nguyen, Tien
                 </div>
@@ -869,41 +847,86 @@ function NavigationSection() {
       title="Navigation"
       lead="Tabs, breadcrumbs, pagination, menus. Wayfinding inside the app."
     >
-      <Showcase title="Tabs" tag="boxed">
-        <Tabs defaultValue="overview">
-          <TabsList>
-            <TabsTrigger value="overview">Overview</TabsTrigger>
-            <TabsTrigger value="schedule">Schedule</TabsTrigger>
-            <TabsTrigger value="standings">Standings</TabsTrigger>
-            <TabsTrigger value="players">Players</TabsTrigger>
-          </TabsList>
-          <TabsContent
-            value="overview"
-            className="pt-5 text-sm text-[color:var(--fg-2)]"
-          >
-            Tournament overview — 32 players, 4 courts, finals projected for
-            6:45pm.
-          </TabsContent>
-          <TabsContent
-            value="schedule"
-            className="pt-5 text-sm text-[color:var(--fg-2)]"
-          >
-            Schedule auto-generated by the SMT solver. Re-run after any draw
-            change.
-          </TabsContent>
-          <TabsContent
-            value="standings"
-            className="pt-5 text-sm text-[color:var(--fg-2)]"
-          >
-            Live standings. Sorted by W–L, then rating delta.
-          </TabsContent>
-          <TabsContent
-            value="players"
-            className="pt-5 text-sm text-[color:var(--fg-2)]"
-          >
-            32 registered. 28 checked in. 4 pending.
-          </TabsContent>
-        </Tabs>
+      <Showcase title="Tabs" tag="boxed + underlined">
+        <div className="flex flex-col gap-8">
+          <div>
+            <span className="ds-overline">BOXED</span>
+            <Tabs defaultValue="overview" className="mt-3">
+              <TabsList>
+                <TabsTrigger value="overview">Overview</TabsTrigger>
+                <TabsTrigger value="schedule">Schedule</TabsTrigger>
+                <TabsTrigger value="standings">Standings</TabsTrigger>
+                <TabsTrigger value="players">Players</TabsTrigger>
+              </TabsList>
+              <TabsContent
+                value="overview"
+                className="pt-5 text-sm text-[color:var(--fg-2)]"
+              >
+                Tournament overview — 32 players, 4 courts, finals projected for
+                6:45pm.
+              </TabsContent>
+              <TabsContent
+                value="schedule"
+                className="pt-5 text-sm text-[color:var(--fg-2)]"
+              >
+                Schedule auto-generated by the SMT solver. Re-run after any draw
+                change.
+              </TabsContent>
+              <TabsContent
+                value="standings"
+                className="pt-5 text-sm text-[color:var(--fg-2)]"
+              >
+                Live standings. Sorted by W–L, then rating delta.
+              </TabsContent>
+              <TabsContent
+                value="players"
+                className="pt-5 text-sm text-[color:var(--fg-2)]"
+              >
+                32 registered. 28 checked in. 4 pending.
+              </TabsContent>
+            </Tabs>
+          </div>
+          <div>
+            <span className="ds-overline">UNDERLINED</span>
+            <Tabs defaultValue="overview" className="mt-3">
+              <TabsList
+                variant="line"
+                className="[&_[data-slot=tabs-trigger]]:after:bg-[color:var(--ball-500)]"
+              >
+                <TabsTrigger value="overview">Overview</TabsTrigger>
+                <TabsTrigger value="schedule">Schedule</TabsTrigger>
+                <TabsTrigger value="standings">Standings</TabsTrigger>
+                <TabsTrigger value="players">Players</TabsTrigger>
+              </TabsList>
+              <TabsContent
+                value="overview"
+                className="pt-5 text-sm text-[color:var(--fg-2)]"
+              >
+                Tournament overview — 32 players, 4 courts, finals projected for
+                6:45pm.
+              </TabsContent>
+              <TabsContent
+                value="schedule"
+                className="pt-5 text-sm text-[color:var(--fg-2)]"
+              >
+                Schedule auto-generated by the SMT solver. Re-run after any draw
+                change.
+              </TabsContent>
+              <TabsContent
+                value="standings"
+                className="pt-5 text-sm text-[color:var(--fg-2)]"
+              >
+                Live standings. Sorted by W–L, then rating delta.
+              </TabsContent>
+              <TabsContent
+                value="players"
+                className="pt-5 text-sm text-[color:var(--fg-2)]"
+              >
+                32 registered. 28 checked in. 4 pending.
+              </TabsContent>
+            </Tabs>
+          </div>
+        </div>
       </Showcase>
 
       <Showcase title="Accordion" tag="collapsible FAQ">
@@ -952,10 +975,12 @@ function NavigationSection() {
       </Showcase>
 
       <Showcase title="Pagination" tag="paged tables">
-        <Pagination>
+        <Pagination className="justify-start">
           <PaginationContent>
             <PaginationItem>
-              <PaginationPrevious href="#" />
+              <PaginationLink href="#" aria-label="Go to previous page">
+                <ChevronLeft className="size-4" />
+              </PaginationLink>
             </PaginationItem>
             <PaginationItem>
               <PaginationLink href="#" isActive>
@@ -975,118 +1000,107 @@ function NavigationSection() {
               <PaginationLink href="#">12</PaginationLink>
             </PaginationItem>
             <PaginationItem>
-              <PaginationNext href="#" />
+              <PaginationLink href="#" aria-label="Go to next page">
+                <ChevronRight className="size-4" />
+              </PaginationLink>
             </PaginationItem>
           </PaginationContent>
         </Pagination>
       </Showcase>
 
       <Showcase title="Navigation Menu" tag="mega-dropdown">
-        <NavigationMenu>
-          <NavigationMenuList>
-            <NavigationMenuItem>
-              <NavigationMenuTrigger>Product</NavigationMenuTrigger>
-              <NavigationMenuContent>
-                <ul className="grid w-[480px] grid-cols-2 gap-2 p-3">
-                  <NavigationMenuLink asChild>
-                    <a className="block rounded-md p-2.5 hover:bg-[color:var(--bg-hover)]">
-                      <p className="text-sm font-medium">Match recorder</p>
-                      <p className="text-xs text-[color:var(--fg-3)]">
-                        Track scores in real time, no internet needed.
-                      </p>
-                    </a>
-                  </NavigationMenuLink>
-                  <NavigationMenuLink asChild>
-                    <a className="block rounded-md p-2.5 hover:bg-[color:var(--bg-hover)]">
-                      <p className="text-sm font-medium">Tournament admin</p>
-                      <p className="text-xs text-[color:var(--fg-3)]">
-                        SMT-solved draws and live scoring.
-                      </p>
-                    </a>
-                  </NavigationMenuLink>
-                  <NavigationMenuLink asChild>
-                    <a className="block rounded-md p-2.5 hover:bg-[color:var(--bg-hover)]">
-                      <p className="text-sm font-medium">Spectator brackets</p>
-                      <p className="text-xs text-[color:var(--fg-3)]">
-                        Shareable, public, branded.
-                      </p>
-                    </a>
-                  </NavigationMenuLink>
-                  <NavigationMenuLink asChild>
-                    <a className="block rounded-md p-2.5 hover:bg-[color:var(--bg-hover)]">
-                      <p className="text-sm font-medium">Club tools</p>
-                      <p className="text-xs text-[color:var(--fg-3)]">
-                        Member rosters, ladder leagues.
-                      </p>
-                    </a>
-                  </NavigationMenuLink>
-                </ul>
-              </NavigationMenuContent>
-            </NavigationMenuItem>
-            <NavigationMenuItem>
-              <NavigationMenuTrigger>Tournaments</NavigationMenuTrigger>
-              <NavigationMenuContent>
-                <ul className="grid w-[280px] gap-1 p-3">
-                  <NavigationMenuLink asChild>
-                    <a className="block rounded-md p-2.5 text-sm hover:bg-[color:var(--bg-hover)]">
-                      Upcoming
-                    </a>
-                  </NavigationMenuLink>
-                  <NavigationMenuLink asChild>
-                    <a className="block rounded-md p-2.5 text-sm hover:bg-[color:var(--bg-hover)]">
-                      Live now
-                    </a>
-                  </NavigationMenuLink>
-                  <NavigationMenuLink asChild>
-                    <a className="block rounded-md p-2.5 text-sm hover:bg-[color:var(--bg-hover)]">
-                      Past results
-                    </a>
-                  </NavigationMenuLink>
-                </ul>
-              </NavigationMenuContent>
-            </NavigationMenuItem>
-          </NavigationMenuList>
-        </NavigationMenu>
+        {/* Static inline facsimile of the open mega-dropdown — the real
+            NavigationMenuContent renders in an absolutely-positioned viewport
+            that escapes this card and collides with the Menubar below, so we
+            show the Product panel open inline (#251). */}
+        <div>
+          <div className="flex gap-1">
+            <div className="inline-flex h-9 items-center gap-1 rounded-md bg-[color:var(--bg-hover)] px-4 text-sm font-medium">
+              Product <ChevronDown className="size-3.5 rotate-180" />
+            </div>
+            <div className="inline-flex h-9 items-center gap-1 rounded-md px-4 text-sm font-medium text-[color:var(--fg-2)]">
+              Tournaments <ChevronDown className="size-3.5" />
+            </div>
+          </div>
+          <div
+            className="mt-2 w-fit rounded-md border border-[color:var(--border-subtle)] bg-popover text-popover-foreground"
+            style={{ boxShadow: 'var(--shadow-lg)' }}
+          >
+            <ul className="grid w-[480px] grid-cols-2 gap-2 p-3">
+              <li>
+                <a className="block rounded-md p-2.5 hover:bg-[color:var(--bg-hover)]">
+                  <p className="text-sm font-medium">Match recorder</p>
+                  <p className="text-xs text-[color:var(--fg-3)]">
+                    Track scores in real time, no internet needed.
+                  </p>
+                </a>
+              </li>
+              <li>
+                <a className="block rounded-md p-2.5 hover:bg-[color:var(--bg-hover)]">
+                  <p className="text-sm font-medium">Tournament admin</p>
+                  <p className="text-xs text-[color:var(--fg-3)]">
+                    SMT-solved draws and live scoring.
+                  </p>
+                </a>
+              </li>
+              <li>
+                <a className="block rounded-md p-2.5 hover:bg-[color:var(--bg-hover)]">
+                  <p className="text-sm font-medium">Spectator brackets</p>
+                  <p className="text-xs text-[color:var(--fg-3)]">
+                    Shareable, public, branded.
+                  </p>
+                </a>
+              </li>
+              <li>
+                <a className="block rounded-md p-2.5 hover:bg-[color:var(--bg-hover)]">
+                  <p className="text-sm font-medium">Club tools</p>
+                  <p className="text-xs text-[color:var(--fg-3)]">
+                    Member rosters, ladder leagues.
+                  </p>
+                </a>
+              </li>
+            </ul>
+          </div>
+        </div>
       </Showcase>
 
       <Showcase title="Menubar" tag="desktop app">
-        <Menubar>
-          <MenubarMenu>
-            <MenubarTrigger>File</MenubarTrigger>
-            <MenubarContent>
-              <MenubarItem>New tournament</MenubarItem>
-              <MenubarItem>Open…</MenubarItem>
-              <MenubarItem>Export draw</MenubarItem>
-            </MenubarContent>
-          </MenubarMenu>
-          <MenubarMenu>
-            <MenubarTrigger>Edit</MenubarTrigger>
-            <MenubarContent>
-              <MenubarItem>Undo</MenubarItem>
-              <MenubarItem>Redo</MenubarItem>
-            </MenubarContent>
-          </MenubarMenu>
-          <MenubarMenu>
-            <MenubarTrigger>View</MenubarTrigger>
-            <MenubarContent>
-              <MenubarItem>Show seeds</MenubarItem>
-              <MenubarItem>Show ratings</MenubarItem>
-            </MenubarContent>
-          </MenubarMenu>
-          <MenubarMenu>
-            <MenubarTrigger>Tournament</MenubarTrigger>
-            <MenubarContent>
-              <MenubarItem>Re-run scheduler</MenubarItem>
-              <MenubarItem>Lock draw</MenubarItem>
-            </MenubarContent>
-          </MenubarMenu>
-          <MenubarMenu>
-            <MenubarTrigger>Help</MenubarTrigger>
-            <MenubarContent>
-              <MenubarItem>Read manifesto</MenubarItem>
-            </MenubarContent>
-          </MenubarMenu>
-        </Menubar>
+        {/* Static inline facsimile with the File menu open and active — the real
+            MenubarContent portals and floats, colliding with the Navigation Menu
+            card above, so the open state is rendered inline (#271). */}
+        <div className="w-fit">
+          <div className="flex items-center gap-0.5 rounded-md border border-[color:var(--border-subtle)] bg-[color:var(--bg-card)] p-1">
+            <div className="rounded-sm bg-[color:var(--bg-hover)] px-3 py-1 text-sm font-medium">
+              File
+            </div>
+            <div className="rounded-sm px-3 py-1 text-sm font-medium text-[color:var(--fg-2)]">
+              Edit
+            </div>
+            <div className="rounded-sm px-3 py-1 text-sm font-medium text-[color:var(--fg-2)]">
+              View
+            </div>
+            <div className="rounded-sm px-3 py-1 text-sm font-medium text-[color:var(--fg-2)]">
+              Tournament
+            </div>
+            <div className="rounded-sm px-3 py-1 text-sm font-medium text-[color:var(--fg-2)]">
+              Help
+            </div>
+          </div>
+          <div
+            className="mt-1 w-[200px] rounded-md border border-[color:var(--border-subtle)] bg-popover p-1 text-popover-foreground"
+            style={{ boxShadow: 'var(--shadow-lg)' }}
+          >
+            <div className="rounded-sm px-2 py-1.5 text-sm hover:bg-[color:var(--bg-hover)]">
+              New tournament
+            </div>
+            <div className="rounded-sm px-2 py-1.5 text-sm hover:bg-[color:var(--bg-hover)]">
+              Open…
+            </div>
+            <div className="rounded-sm px-2 py-1.5 text-sm hover:bg-[color:var(--bg-hover)]">
+              Export draw
+            </div>
+          </div>
+        </div>
       </Showcase>
     </Section>
   )
@@ -1099,68 +1113,58 @@ function OverlaysSection() {
       title="Overlays"
       lead="Dialogs, sheets, popovers, menus. Content that floats above the canvas."
     >
-      <Showcase title="Dialog · Alert Dialog" tag="modal">
+      <Showcase title="Dialog · Alert Dialog" tag="modal · open state">
         <div className="flex flex-wrap gap-3">
-          <Dialog>
-            <DialogTrigger asChild>
-              <Button variant="outline">Open dialog</Button>
-            </DialogTrigger>
-            <DialogContent showCloseButton={false}>
-              <DialogHeader>
-                <DialogTitle>Forfeit this match?</DialogTitle>
-                <DialogDescription>
-                  Your opponent will be awarded the win and your rating will be
-                  adjusted accordingly. This can't be undone.
-                </DialogDescription>
-              </DialogHeader>
-              <label className="mt-5 flex items-center gap-2.5 text-sm">
-                <Checkbox />
-                <span>Send a note to my opponent</span>
-              </label>
-              <DialogFooter>
-                <Button variant="outline">Cancel</Button>
-                <Button variant="destructive">Forfeit</Button>
-              </DialogFooter>
-            </DialogContent>
-          </Dialog>
+          <div
+            className="w-full max-w-[420px] rounded-xl border border-[color:var(--border-subtle)] bg-[color:var(--bg-card)] p-6"
+            style={{ boxShadow: 'var(--shadow-lg)' }}
+          >
+            <h3 className="font-semibold">Forfeit this match?</h3>
+            <p className="mt-2 text-sm text-[color:var(--fg-3)]">
+              Your opponent will be awarded the win and your rating will be
+              adjusted accordingly. This can't be undone.
+            </p>
+            <label className="mt-5 flex items-center gap-2.5 text-sm">
+              <Checkbox />
+              <span>Send a note to my opponent</span>
+            </label>
+            <div className="mt-6 flex justify-end gap-2">
+              <Button variant="outline">Cancel</Button>
+              <Button variant="destructive">Forfeit</Button>
+            </div>
+          </div>
 
-          <AlertDialog>
-            <AlertDialogTrigger asChild>
-              <Button variant="destructive">Delete account…</Button>
-            </AlertDialogTrigger>
-            <AlertDialogContent className="w-[380px]">
-              <AlertDialogHeader>
-                <AlertDialogTitle className="flex items-center gap-2.5">
-                  <TriangleAlert className="size-5 text-[color:var(--warn)]" />
-                  Delete account
-                </AlertDialogTitle>
-                <AlertDialogDescription>
-                  All match history, ratings, and tournament records will be
-                  permanently deleted.
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter>
-                <AlertDialogCancel>Keep account</AlertDialogCancel>
-                <AlertDialogAction variant="destructive">
-                  Delete
-                </AlertDialogAction>
-              </AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
+          <div
+            className="w-full max-w-[380px] rounded-xl border border-[color:var(--border-subtle)] bg-[color:var(--bg-card)] p-6"
+            style={{ boxShadow: 'var(--shadow-lg)' }}
+          >
+            <h3 className="flex items-center gap-2.5 font-semibold">
+              <TriangleAlert className="size-5 text-[color:var(--warn)]" />
+              Delete account
+            </h3>
+            <p className="mt-2 text-sm text-[color:var(--fg-3)]">
+              All match history, ratings, and tournament records will be
+              permanently deleted.
+            </p>
+            <div className="mt-6 flex justify-end gap-2">
+              <Button variant="outline">Keep account</Button>
+              <Button variant="destructive">Delete</Button>
+            </div>
+          </div>
         </div>
       </Showcase>
 
-      <Showcase title="Sheet" tag="side panel">
-        <Sheet>
-          <SheetTrigger asChild>
-            <Button variant="outline">Open filters</Button>
-          </SheetTrigger>
-          <SheetContent side="right" showCloseButton={false}>
-            <SheetHeader>
-              <SheetTitle>Filters</SheetTitle>
-              <SheetDescription>Narrow the player list.</SheetDescription>
-            </SheetHeader>
-            <div className="mb-[18px]">
+      <Showcase title="Sheet" tag="side panel · open">
+        <div className="flex justify-end">
+          <div
+            className="w-[320px] rounded-lg border border-[color:var(--border-subtle)] bg-[color:var(--bg-card)] p-6"
+            style={{ boxShadow: 'var(--shadow-lg)' }}
+          >
+            <h3 className="text-lg font-semibold">Filters</h3>
+            <p className="mt-1 text-sm text-[color:var(--fg-3)]">
+              Narrow the player list.
+            </p>
+            <div className="mt-6 mb-[18px]">
               <Label className="mb-1.5 block text-sm">Club</Label>
               <Select defaultValue="brooklyn">
                 <SelectTrigger className="w-full">
@@ -1176,46 +1180,48 @@ function OverlaysSection() {
               <Label className="mb-1.5 block text-sm">Rating range</Label>
               <Slider defaultValue={[20, 80]} max={100} />
             </div>
-            <SheetFooter>
-              <Button className="w-full">Apply filters</Button>
-            </SheetFooter>
-          </SheetContent>
-        </Sheet>
+            <Button className="w-full">Apply filters</Button>
+          </div>
+        </div>
       </Showcase>
 
       <Showcase title="Drawer" tag="mobile bottom sheet">
-        <Drawer>
-          <DrawerTrigger asChild>
-            <Button variant="outline">Quick log</Button>
-          </DrawerTrigger>
-          <DrawerContent>
-            <DrawerHeader>
-              <DrawerTitle>Quick log</DrawerTitle>
-              <DrawerDescription>
-                Tap to record a finished match.
-              </DrawerDescription>
-            </DrawerHeader>
-            <DrawerFooter>
+        <div className="w-full">
+          <div
+            className="mx-auto w-full max-w-[420px] rounded-t-xl border border-[color:var(--border-subtle)] bg-[color:var(--bg-card)] p-6"
+            style={{ boxShadow: 'var(--shadow-lg)' }}
+          >
+            <div className="mx-auto mb-4 h-1 w-[100px] rounded-full bg-[color:var(--ink-700)]" />
+            <h3 className="font-semibold">Quick log</h3>
+            <p className="mt-1 text-sm text-[color:var(--fg-3)]">
+              Tap to record a finished match.
+            </p>
+            <div className="mt-6 flex flex-col gap-2">
               <Button>Pick opponent</Button>
               <Button variant="outline">Cancel</Button>
-            </DrawerFooter>
-          </DrawerContent>
-        </Drawer>
+            </div>
+          </div>
+        </div>
       </Showcase>
 
       <Showcase title="Popover" tag="contextual content">
-        <Popover>
-          <PopoverTrigger asChild>
-            <Button variant="outline">Skill rating info</Button>
-          </PopoverTrigger>
-          <PopoverContent>
+        {/* Rendered as a static inline facsimile of the open popover. The real
+            PopoverContent portals to <body> and floats anchored to the trigger,
+            so forcing it open drifts outside this demo card and over the next
+            one; an inline panel keeps the open state contained (#255). */}
+        <div className="flex flex-col items-start gap-2">
+          <Button variant="outline">Skill rating info</Button>
+          <div
+            className="w-72 rounded-md border border-[color:var(--border-subtle)] bg-popover p-4 text-popover-foreground"
+            style={{ boxShadow: 'var(--shadow-lg)' }}
+          >
             <h4 className="mb-1 text-sm font-semibold">Skill rating</h4>
             <p className="text-xs text-[color:var(--fg-3)]">
               Your rating is calculated using a Glicko-2 system with a 0.06
               volatility cap. Updates after every match.
             </p>
-          </PopoverContent>
-        </Popover>
+          </div>
+        </div>
       </Showcase>
 
       <Showcase title="Tooltip" tag="shown open">
@@ -1244,11 +1250,15 @@ function OverlaysSection() {
       </Showcase>
 
       <Showcase title="Hover Card" tag="player preview">
-        <HoverCard>
-          <HoverCardTrigger asChild>
-            <Button variant="link">@nguyen.t</Button>
-          </HoverCardTrigger>
-          <HoverCardContent className="w-[280px]">
+        {/* Static inline facsimile of the open hover card — the real
+            HoverCardContent portals and floats anchored to the trigger, drifting
+            outside this card, so we render the open panel inline (#257). */}
+        <div className="flex flex-col items-start gap-2">
+          <Button variant="link">@nguyen.t</Button>
+          <div
+            className="w-[280px] rounded-md border border-[color:var(--border-subtle)] bg-popover p-4 text-popover-foreground"
+            style={{ boxShadow: 'var(--shadow-lg)' }}
+          >
             <div className="mb-3 flex items-center gap-3">
               <Avatar className="size-14 text-base">
                 <AvatarFallback className="bg-[#3a4a6e]">TN</AvatarFallback>
@@ -1269,52 +1279,71 @@ function OverlaysSection() {
                 <span className="text-[color:var(--fg-3)]">W–L</span> 14–3
               </span>
             </div>
-          </HoverCardContent>
-        </HoverCard>
+          </div>
+        </div>
       </Showcase>
 
       <Showcase title="Dropdown · Context Menu" tag="right-click + chevron">
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="outline">
-                Match actions <ChevronDown className="ml-1 size-4" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent>
-              <DropdownMenuLabel>Match actions</DropdownMenuLabel>
-              <DropdownMenuItem>
-                Rematch
-                <DropdownMenuShortcut>⌘R</DropdownMenuShortcut>
-              </DropdownMenuItem>
-              <DropdownMenuItem>
-                Share match link
-                <DropdownMenuShortcut>⌘⇧S</DropdownMenuShortcut>
-              </DropdownMenuItem>
-              <DropdownMenuItem>Edit score</DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem className="text-[color:var(--loss)]">
-                Forfeit
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-
-          <ContextMenu>
-            <ContextMenuTrigger asChild>
-              <div className="flex h-24 items-center justify-center rounded-lg border border-dashed border-[color:var(--border-subtle)] text-sm text-[color:var(--fg-3)]">
-                Right-click here
+          {/* Static inline facsimile of the open dropdown menu — the real
+              DropdownMenuContent portals and (being modal) would lock page
+              scroll while permanently open, so we render the menu inline (#258). */}
+          <div className="flex flex-col gap-2">
+            <Button variant="outline" className="w-fit">
+              Match actions <ChevronDown className="ml-1 size-4" />
+            </Button>
+            <div
+              className="w-full rounded-lg border border-[color:var(--border-subtle)] bg-[color:var(--bg-card)] p-1 text-popover-foreground"
+              style={{ boxShadow: 'var(--shadow-lg)' }}
+            >
+              <div className="px-2 py-1.5 text-xs font-medium text-[color:var(--fg-3)]">
+                Match actions
               </div>
-            </ContextMenuTrigger>
-            <ContextMenuContent>
-              <ContextMenuItem>
+              <div className="flex items-center justify-between rounded-sm px-2 py-1.5 text-sm hover:bg-[color:var(--bg-hover)]">
+                <span>Rematch</span>
+                <span className="font-mono text-xs tracking-widest text-[color:var(--fg-3)]">
+                  ⌘R
+                </span>
+              </div>
+              <div className="flex items-center justify-between rounded-sm px-2 py-1.5 text-sm hover:bg-[color:var(--bg-hover)]">
+                <span>Share match link</span>
+                <span className="font-mono text-xs tracking-widest text-[color:var(--fg-3)]">
+                  ⌘⇧S
+                </span>
+              </div>
+              <div className="rounded-sm px-2 py-1.5 text-sm hover:bg-[color:var(--bg-hover)]">
+                Edit score
+              </div>
+              <div className="-mx-1 my-1 h-px bg-[color:var(--border-subtle)]" />
+              <div className="rounded-sm px-2 py-1.5 text-sm text-[color:var(--loss)] hover:bg-[color:var(--bg-hover)]">
+                Forfeit
+              </div>
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-2">
+            <div className="flex h-9 items-center justify-center rounded-lg border border-dashed border-[color:var(--border-subtle)] text-sm text-[color:var(--fg-3)]">
+              Right-click here
+            </div>
+            <div
+              className="w-full rounded-lg border border-[color:var(--border-subtle)] bg-[color:var(--bg-card)] p-1 text-popover-foreground"
+              style={{ boxShadow: 'var(--shadow-lg)' }}
+            >
+              <div className="flex items-center rounded-sm px-2 py-1.5 text-sm hover:bg-[color:var(--bg-hover)]">
                 <Check className="mr-2 size-4" /> Show seeds
-              </ContextMenuItem>
-              <ContextMenuItem>Show ratings</ContextMenuItem>
-              <ContextMenuSeparator />
-              <ContextMenuItem>Reschedule…</ContextMenuItem>
-              <ContextMenuItem>Print bracket</ContextMenuItem>
-            </ContextMenuContent>
-          </ContextMenu>
+              </div>
+              <div className="rounded-sm px-2 py-1.5 text-sm hover:bg-[color:var(--bg-hover)]">
+                Show ratings
+              </div>
+              <div className="-mx-1 my-1 h-px bg-[color:var(--border-subtle)]" />
+              <div className="rounded-sm px-2 py-1.5 text-sm hover:bg-[color:var(--bg-hover)]">
+                Reschedule…
+              </div>
+              <div className="rounded-sm px-2 py-1.5 text-sm hover:bg-[color:var(--bg-hover)]">
+                Print bracket
+              </div>
+            </div>
+          </div>
         </div>
       </Showcase>
 
@@ -1549,7 +1578,10 @@ function LayoutSection() {
       </Showcase>
 
       <Showcase title="Scroll Area" tag="styled scrollbar">
-        <ScrollArea className="h-40 rounded-lg border border-[color:var(--border-subtle)] p-4">
+        <ScrollArea
+          type="always"
+          className="h-40 rounded-lg border border-[color:var(--border-subtle)] p-4"
+        >
           <div className="flex flex-col gap-2 text-sm leading-loose text-[color:var(--fg-2)]">
             {Array.from({ length: 5 }, (_, round) =>
               Array.from({ length: 4 }, (_, court) => (
@@ -1563,38 +1595,54 @@ function LayoutSection() {
       </Showcase>
 
       <Showcase title="Resizable" tag="drag handle">
-        <ResizablePanelGroup
-          orientation="horizontal"
-          className="h-40 rounded-lg border border-[color:var(--border-subtle)]"
-        >
-          <ResizablePanel defaultSize={30}>
-            <div className="flex h-full items-center justify-center bg-[color:var(--ink-900)] text-sm text-[color:var(--fg-2)]">
-              Sidebar
-            </div>
-          </ResizablePanel>
-          <ResizableHandle />
-          <ResizablePanel defaultSize={70}>
-            <div className="flex h-full items-center justify-center bg-[color:var(--ink-900)] text-sm text-[color:var(--fg-2)]">
-              Main canvas
-            </div>
-          </ResizablePanel>
-        </ResizablePanelGroup>
+        {/* Fixed-height wrapper: the ResizablePanelGroup's base class is `h-full`,
+            which overrides a `h-40` set directly on it and collapses the panels to
+            content height — so the height goes on the parent instead (#267). */}
+        <div className="h-40 overflow-hidden rounded-lg border border-[color:var(--border-subtle)]">
+          <ResizablePanelGroup orientation="horizontal">
+            <ResizablePanel defaultSize={30}>
+              <div className="flex h-full items-center justify-center bg-[color:var(--ink-900)] text-sm text-[color:var(--fg-2)]">
+                Sidebar
+              </div>
+            </ResizablePanel>
+            <ResizableHandle withHandle />
+            <ResizablePanel defaultSize={70}>
+              <div className="flex h-full items-center justify-center bg-[color:var(--ink-900)] text-sm text-[color:var(--fg-2)]">
+                Main canvas
+              </div>
+            </ResizablePanel>
+          </ResizablePanelGroup>
+        </div>
       </Showcase>
 
       <Showcase title="Carousel" tag="slider">
         <Carousel className="w-full">
           <CarouselContent>
-            {[1, 2, 3, 4, 5].map((n) => (
-              <CarouselItem key={n} className="basis-1/3">
-                <div className="font-display flex h-32 items-center justify-center rounded-lg border border-[color:var(--border-subtle)] bg-[color:var(--ink-700)] text-2xl tracking-[0.04em] text-[color:var(--fg-1)]">
-                  {String(n).padStart(2, '0')}
-                </div>
-              </CarouselItem>
-            ))}
+            {[1, 2, 3, 4, 5].map((n) => {
+              const selected = n === 1
+              return (
+                <CarouselItem key={n} className="basis-1/3">
+                  <div
+                    className={cn(
+                      'font-display flex h-32 items-center justify-center rounded-lg bg-[color:var(--ink-700)] tracking-[0.04em] text-[color:var(--fg-1)]',
+                      selected
+                        ? 'border border-[color:var(--ball-500)] text-3xl font-semibold ring-2 ring-[color:var(--ball-500)]'
+                        : 'border border-[color:var(--border-subtle)] text-2xl',
+                    )}
+                    style={selected ? { boxShadow: 'var(--shadow-glow)' } : undefined}
+                  >
+                    {String(n).padStart(2, '0')}
+                  </div>
+                </CarouselItem>
+              )
+            })}
           </CarouselContent>
           <CarouselPrevious />
           <CarouselNext />
         </Carousel>
+        <div className="mt-4 text-center font-mono text-xs tracking-[0.1em] text-[color:var(--fg-3)]">
+          01 / 05
+        </div>
       </Showcase>
     </Section>
   )
