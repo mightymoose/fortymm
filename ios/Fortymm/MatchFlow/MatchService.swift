@@ -346,14 +346,22 @@ struct MatchService {
         let side1 = sides.first { $0.sideNumber == 1 } ?? sides.first
         let side2 = sides.first { $0.sideNumber == 2 }
 
-        let mappedGames: [Game] = (games ?? [])
+        // The resume board, enriched: each committed game keeps its scratchpad
+        // version so the per-game write path can PUT-guard on it. Same sort and
+        // compactMap as the plain `mappedGames` below, so the two carry the exact
+        // same games in the same order — only `sync`/`version` is added.
+        let scoredGames: [ScoredGame] = (games ?? [])
             .sorted { $0.gameNumber < $1.gameNumber }
             .compactMap { g in
                 guard let s = g.score else { return nil }
-                return orientedGame(
-                    side1: s.side1Points, side2: s.side2Points, mineIsSide1: mineIsSide1
+                return ScoredGame(
+                    points: orientedGame(
+                        side1: s.side1Points, side2: s.side2Points, mineIsSide1: mineIsSide1
+                    ),
+                    sync: .saved(version: s.version)
                 )
             }
+        let mappedGames: [Game] = scoredGames.map(\.points)
 
         let decided = status == .completed
         let rated = ratedHint ?? (mine?.ratingChange != nil)
@@ -382,6 +390,7 @@ struct MatchService {
             statusLabel: statusLabel,
             decided: decided,
             negotiation: negotiation,
+            scoredGames: scoredGames,
             h2h: h2h.map { mapH2H($0, mineIsSide1: mineIsSide1) },
             sideA: sidePlayer(side1),
             sideB: (side2?.players.isEmpty ?? true) ? .guest : sidePlayer(side2),

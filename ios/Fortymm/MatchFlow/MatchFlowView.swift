@@ -73,7 +73,10 @@ struct MatchFlowView: View {
             case .score:
                 ScoreEntryView(
                     config: config,
-                    initialGames: resume?.games ?? [],
+                    // Down-adapter: ScoreEntryView still takes plain `[Game]`, so
+                    // strip each game's sync state back off here. The board is
+                    // byte-for-byte what it was before ResumeScoring widened.
+                    initialGames: resume?.games.map(\.points) ?? [],
                     onPost: post,
                     correction: resume?.isCorrection ?? false,
                     meName: session.username,

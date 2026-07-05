@@ -220,6 +220,11 @@ struct FinalMatch: Identifiable {
     /// the single source the derived flags below read, so they can't drift
     /// from it.
     var negotiation: MatchNegotiation? = nil
+    /// The same games as `games`, enriched with each committed game's scratchpad
+    /// version (`sync: .saved(version:)`). Kept parallel to `games` — which stays
+    /// a plain `[Game]` for `MatchRules`/display — so only the resume path pays
+    /// the widened shape. Defaulted empty for seed/local builders.
+    var scoredGames: [ScoredGame] = []
 
     /// True when a result has been posted but the match isn't decided yet — i.e.
     /// it's genuinely awaiting a sign-off. Distinct from `!decided`, which is
@@ -282,7 +287,7 @@ struct FinalMatch: Identifiable {
         return ResumeScoring(
             matchId: uuid,
             config: MatchConfig(opponent: solo ? nil : opponent, bestOf: bestOf, rated: rated),
-            games: games,
+            games: scoredGames,
             yourSideNumber: yourSideNumber
         )
     }
@@ -302,7 +307,10 @@ struct FinalMatch: Identifiable {
         return ResumeScoring(
             matchId: uuid,
             config: MatchConfig(opponent: solo ? nil : opponent, bestOf: bestOf, rated: rated),
-            games: negotiation.standingGames,
+            // The standing board never per-game writes to the scratchpad — it's an
+            // immutable snapshot the correction is seeded from — so each game seeds
+            // as `.localOnly`.
+            games: negotiation.standingGames.map { ScoredGame(points: $0, sync: .localOnly) },
             yourSideNumber: yourSideNumber,
             supersedesResultId: standingId
         )
@@ -316,7 +324,11 @@ struct FinalMatch: Identifiable {
 struct ResumeScoring: Identifiable {
     let matchId: UUID
     let config: MatchConfig
-    let games: [Game]
+    /// The games already entered, each carrying its scratchpad sync state. The
+    /// score-entry screen currently reads only `.points` (via a down-adapter at
+    /// the call site), so today's board is identical; the `sync`/`version` ride
+    /// along for the per-game write path that will consume them.
+    let games: [ScoredGame]
     var yourSideNumber: Int = 1
     /// When set, this board is a *correction*: it was seeded from the standing
     /// proposal with this id, and posting supersedes that proposal (a counter,
