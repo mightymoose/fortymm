@@ -51,6 +51,11 @@ struct ScoreEntryView: View {
     // a game that HAS a server-committed score; cleared on decision. A never-
     // committed game clears locally without ever setting this.
     @State private var clearing: Int?
+    // Game numbers cleared while a *create* was still in flight, so the DELETE is
+    // deferred until that write resolves (we don't yet know if a row landed).
+    // `applyWriteResult` fires the DELETE and consumes the entry. Avoids both an
+    // orphaned committed row and a DELETE that races ahead of the create.
+    @State private var pendingClearDeletes: Set<Int> = []
     // Raw text backing the two score fields for the *active* game. Kept verbatim
     // so a malformed entry (extra characters, too many digits) is shown back to
     // the user and flagged inline rather than silently stripped/truncated into a
@@ -438,19 +443,26 @@ struct ScoreEntryView: View {
             .first { !MatchRules.gameComplete(games[$0].points) }
     }
 
-    /// Clear the active game. Sync-state-aware: a game that HAS a server-committed
-    /// score (`.saved` / `.conflict`) lives on the shared scratchpad, so clearing
-    /// it must confirm and DELETE — we defer to the clear dialog. A game that never
-    /// successfully committed (`.localOnly` / `.saving` / `.failed`) wipes purely
-    /// locally with no dialog and no network, exactly as before. Correction boards
-    /// seed every slot `.localOnly`, so they always take the local branch (no
-    /// DELETE against a frozen scratchpad).
+    /// Clear the active game. Sync-state-aware: a game that has (or may be about to
+    /// have) a server-committed row — `.saved`, `.conflict`, an in-flight `.saving`,
+    /// or a `.failed` that had committed before failing — lives on the shared
+    /// scratchpad, so clearing it must confirm and DELETE via the clear dialog. A
+    /// game that never reached the server (`.localOnly`, or a `.failed` first
+    /// create) wipes purely locally with no dialog and no network. Correction
+    /// boards seed every slot `.localOnly`, so they always take the local branch
+    /// (no DELETE against a frozen scratchpad).
     private func clearEdit() {
         guard games.indices.contains(active) else { return }
         switch games[active].sync {
-        case .saved, .conflict:
+        case .saved, .conflict, .saving:
+            // A committed row exists, or a write is in flight that may leave one —
+            // confirm, then DELETE (or defer the DELETE for an in-flight create).
             clearing = active
-        case .localOnly, .saving, .failed:
+        case .failed(let committedVersion):
+            // A committed row exists only if a prior write succeeded before the
+            // failure; otherwise the failed create left nothing to delete.
+            if committedVersion != nil { clearing = active } else { clearLocally(active) }
+        case .localOnly:
             clearLocally(active)
         }
     }
@@ -469,17 +481,26 @@ struct ScoreEntryView: View {
         }
     }
 
-    /// Confirmed clear of a committed game: fire the scratchpad DELETE (game
-    /// number `i + 1`) fire-and-forget — same optimistic idiom as the write path —
-    /// then reset the slot locally. If the DELETE throws we still leave the slot
-    /// cleared: mirroring the optimistic write path, a later post's divergence
-    /// guard / resync reconciles the server rather than us surfacing a failure
-    /// here. A nil `matchId` (shouldn't happen once live scoring is reached) still
-    /// clears locally.
+    /// Confirmed clear of a committed (or in-flight) game: remove its scratchpad
+    /// row and reset the slot locally.
+    ///
+    /// - An in-flight *create* (`.saving(nil)`) hasn't told us whether a row
+    ///   landed, so the DELETE is *deferred* (`pendingClearDeletes`) until the
+    ///   write resolves — firing it now could race ahead of the create and leave
+    ///   an orphan.
+    /// - Otherwise a row exists (or an in-flight update is over one — the DELETE
+    ///   and that PUT converge on "no row" in either order), so DELETE now,
+    ///   fire-and-forget. A thrown DELETE still leaves the slot cleared; a later
+    ///   post's divergence guard reconciles the server.
+    ///
+    /// A nil `matchId` (shouldn't happen once live scoring is reached) still clears
+    /// locally.
     private func confirmClear(_ i: Int) {
         guard games.indices.contains(i) else { return }
-        if let matchId {
-            let gameNumber = i + 1
+        let gameNumber = i + 1
+        if case .saving(nil) = games[i].sync {
+            pendingClearDeletes.insert(gameNumber)
+        } else if let matchId {
             Task { try? await service.deleteGameScore(matchId: matchId, gameNumber: gameNumber) }
         }
         clearLocally(i)
@@ -532,10 +553,14 @@ struct ScoreEntryView: View {
         guard let intent = GameWriteIntent.forWrite(games[index].sync) else { return }
 
         let gameNumber = index + 1
-        // The points just entered — captured before mutating so the stale-result
-        // guard in `applyWriteResult` can compare against them.
+        // The points just entered — captured before mutating so `applyWriteResult`
+        // can tell whether the slot moved on while the write was in flight.
         let points = games[index].points
-        games[index].sync = .saving
+        // The version the server already holds for this game (nil for a first
+        // create) — carried through `.saving` so a failure re-derives the verb and
+        // an in-flight clear knows whether a committed row exists.
+        let committedVersion = Self.committedVersion(of: games[index].sync)
+        games[index].sync = .saving(committedVersion: committedVersion)
 
         Task {
             do {
@@ -560,31 +585,69 @@ struct ScoreEntryView: View {
         }
     }
 
-    /// Reduce one write's result into the addressed slot's sync state, keyed by
-    /// GAME NUMBER (not a captured array index) since the user may have moved on.
+    /// The version the server holds for a slot in this sync state, or nil when no
+    /// committed row exists yet — the token a retry/update or an in-flight clear
+    /// needs. `.saving`/`.failed` carry the pre-write version; `.saved`/`.conflict`
+    /// carry the current one; `.localOnly` has none.
+    private static func committedVersion(of sync: SyncState) -> Int? {
+        switch sync {
+        case .localOnly: return nil
+        case .saving(let v), .failed(let v): return v
+        case .saved(let v), .conflict(_, let v): return v
+        }
+    }
+
+    /// Reduce one write's result into the addressed slot, keyed by GAME NUMBER
+    /// (not a captured array index) since the user may have moved on.
     ///
-    /// Stale-result guard: the transition applies only when the slot is still the
-    /// `.saving` we set for THIS write *and* its points still equal what we sent.
-    /// If a newer edit moved the slot off `.saving` (e.g. a later write for the
-    /// same game already resolved) or changed its points, this in-flight result is
-    /// stale and dropped — so a slow earlier write can't clobber a newer state.
+    /// - A slot cleared while this write was in flight resolves the deferred
+    ///   DELETE here (see `pendingClearDeletes`): now that the write settled, a
+    ///   row may exist, so fire the DELETE and drop the result.
+    /// - Otherwise the transition applies only while the slot is still the
+    ///   `.saving` we set for THIS write (a clear that moved it off `.saving`
+    ///   already handled the server). Only one write is ever in flight per slot
+    ///   (`.saving` maps to a nil intent), so a live `.saving` is always ours.
     ///
     /// Transitions:
-    /// - success(version) → `.saved(version:)`.
+    /// - success(version): `.saved(version:)`. If the user *edited* the game while
+    ///   the write was in flight, the server now holds the stale points, so re-fire
+    ///   to overwrite them at the fresh version rather than stranding the edit.
     /// - 409 with a committed score → `.conflict`, the committed points re-oriented
     ///   from canonical side-1/side-2 onto the viewer's `a` = you / `b` = them axis
     ///   (the same `mineIsSide1` rule the read path uses).
     /// - 409 without a committed score (shouldn't happen) / thrown error →
-    ///   `.failed(retained:)`, keeping the entered points for a later retry.
+    ///   `.failed(committedVersion:)`, preserving the pre-write version so a retry
+    ///   re-fires the correct verb.
     @MainActor
     private func applyWriteResult(gameNumber: Int, sent: Game, outcome: WriteOutcome) {
+        // Deferred clear: the slot was cleared while this create was in flight.
+        // The write has now settled, so fire the DELETE (best-effort — a 404 means
+        // the write never landed) and consume the entry without touching the slot,
+        // which the user already reset locally. (Edge: if the create 409'd because
+        // another participant scored this game, the DELETE removes their score —
+        // permitted under the shared-board model, and only reachable via a
+        // clear-during-a-concurrent-create race.)
+        if pendingClearDeletes.remove(gameNumber) != nil {
+            if let matchId {
+                Task { try? await service.deleteGameScore(matchId: matchId, gameNumber: gameNumber) }
+            }
+            return
+        }
+
         let index = gameNumber - 1
         guard games.indices.contains(index) else { return }
-        guard case .saving = games[index].sync, games[index].points == sent else { return }
+        guard case .saving(let committedVersion) = games[index].sync else { return }
 
         switch outcome {
         case .completed(.success(let version)):
             games[index].sync = .saved(version: version)
+            if games[index].points != sent {
+                // The user edited this game while the write was in flight, so the
+                // server now holds `sent`, not what's on screen. Re-fire: with the
+                // slot at `.saved(version)`, `fireWrite` derives an update at the
+                // fresh version and persists the current points.
+                fireWrite(for: index)
+            }
         case .completed(.failure(let conflict)):
             if let committed = conflict.committedScore {
                 let oriented = MatchService.orientedGame(
@@ -597,10 +660,10 @@ struct ScoreEntryView: View {
                 // triangle flags it and tapping it opens the same dialog.
                 if index == active { resolving = index }
             } else {
-                games[index].sync = .failed(retained: sent)
+                games[index].sync = .failed(committedVersion: committedVersion)
             }
         case .threw:
-            games[index].sync = .failed(retained: sent)
+            games[index].sync = .failed(committedVersion: committedVersion)
         }
     }
 

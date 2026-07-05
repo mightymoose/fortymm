@@ -90,12 +90,20 @@ struct Game: Hashable {
 enum SyncState: Hashable {
     /// Entered on this device; never written to the server.
     case localOnly
-    /// A write for these points is in flight.
-    case saving
+    /// A write for these points is in flight. `committedVersion` is the version
+    /// the server already held for this game *before* this write (nil when this
+    /// is a first create), so the reducer can re-derive the verb and the clear
+    /// path can tell an in-flight create (no row yet) from an update over a
+    /// committed row.
+    case saving(committedVersion: Int?)
     /// Committed server-side at this scratchpad version.
     case saved(version: Int)
-    /// A write failed; the entered points are retained for retry.
-    case failed(retained: Game)
+    /// A write failed. `committedVersion` is the version committed before the
+    /// failed write (nil if the game was never committed), so a retry re-fires
+    /// as the correct verb — an `update` over an existing row, not a `create`
+    /// that would 409 against the game's own prior save. The entered points live
+    /// in `ScoredGame.points`, so they aren't duplicated here.
+    case failed(committedVersion: Int?)
     /// A 409 conflict: carries the server's committed points and version, for
     /// the keep-mine / use-theirs decision.
     case conflict(committed: Game, version: Int)
@@ -131,12 +139,10 @@ enum GameWriteIntent: Equatable {
     /// - `.saved(v)`  → `.update(expectedVersion: v)`.
     /// - `.conflict(_, v)` → `.update(expectedVersion: v)`: the "use-mine"
     ///   overwrite re-fires the write with the *fresh* version the 409 carried.
-    /// - `.failed` → `.create`: a `SyncState` alone can't say whether the failed
-    ///   write was a create or an update, because `.failed(retained:)` carries
-    ///   only the points, not a prior version. An update-retry is instead
-    ///   represented by the caller keeping the pre-failure `.saved(version)`
-    ///   state (so it re-derives as an `.update`) rather than transitioning to
-    ///   `.failed`; a genuine `.failed` here is therefore a first-write retry.
+    /// - `.failed(committedVersion)` → `.update(expectedVersion:)` when the game
+    ///   was already committed before the failed write (so a retry re-fires the
+    ///   correct verb instead of a `.create` that would 409 against the game's
+    ///   own prior save), else `.create` for a never-committed first write.
     /// - `.saving` → `nil` (a write is in flight — see above).
     ///
     /// Exhaustive with no `default`, so a new `SyncState` case is a compile
@@ -151,8 +157,8 @@ enum GameWriteIntent: Equatable {
             return .update(expectedVersion: version)
         case .conflict(_, let version):
             return .update(expectedVersion: version)
-        case .failed:
-            return .create
+        case .failed(let committedVersion):
+            return committedVersion.map { .update(expectedVersion: $0) } ?? .create
         }
     }
 }
