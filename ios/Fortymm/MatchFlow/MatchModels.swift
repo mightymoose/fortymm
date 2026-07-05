@@ -84,6 +84,31 @@ struct Game: Hashable {
     var b: Int?
 }
 
+/// The server-sync status of a single game's entered points, relative to the
+/// shared scratchpad. Tracked alongside the points (see `ScoredGame`) rather
+/// than baked into `Game` so `MatchRules` stays purely score-based.
+enum SyncState: Hashable {
+    /// Entered on this device; never written to the server.
+    case localOnly
+    /// A write for these points is in flight.
+    case saving
+    /// Committed server-side at this scratchpad version.
+    case saved(version: Int)
+    /// A write failed; the entered points are retained for retry.
+    case failed(retained: Game)
+    /// A 409 conflict: carries the server's committed points and version, for
+    /// the keep-mine / use-theirs decision.
+    case conflict(committed: Game, version: Int)
+}
+
+/// A game's entered points paired with its scratchpad sync status. Wraps `Game`
+/// (rather than replacing it) so scoring logic in `MatchRules` keeps operating
+/// on plain `Game` values while the score-entry flow tracks per-game sync.
+struct ScoredGame: Hashable {
+    var points: Game
+    var sync: SyncState
+}
+
 // MARK: - Result negotiation (view model)
 
 /// One game the standing correction added, removed, or changed relative to the
