@@ -109,6 +109,59 @@ struct ScoredGame: Hashable {
     var sync: SyncState
 }
 
+/// The write a game's current sync state implies against the shared scratchpad:
+/// a first-time create, or a version-guarded update. Derived by
+/// `GameWriteIntent.forWrite(_:)`; consumed by the write path that calls
+/// `MatchService.createGameScore` / `updateGameScore(expectedVersion:)`.
+enum GameWriteIntent: Equatable {
+    /// POST a new game score — no prior committed version.
+    case create
+    /// PUT an existing game score, guarded by `expectedVersion` (the optimistic
+    /// concurrency token the server checks; a mismatch is a 409).
+    case update(expectedVersion: Int)
+
+    /// The write a `SyncState` implies, or `nil` when no write should be
+    /// derived right now.
+    ///
+    /// Returns an Optional so the mapping stays total *and* honest about
+    /// `.saving`: a write is already in flight, so deriving another intent
+    /// would double-fire it. Callers get `nil` and must not write.
+    ///
+    /// - `.localOnly` → `.create` (never written before).
+    /// - `.saved(v)`  → `.update(expectedVersion: v)`.
+    /// - `.conflict(_, v)` → `.update(expectedVersion: v)`: the "use-mine"
+    ///   overwrite re-fires the write with the *fresh* version the 409 carried.
+    /// - `.failed` → `.create`: a `SyncState` alone can't say whether the failed
+    ///   write was a create or an update, because `.failed(retained:)` carries
+    ///   only the points, not a prior version. An update-retry is instead
+    ///   represented by the caller keeping the pre-failure `.saved(version)`
+    ///   state (so it re-derives as an `.update`) rather than transitioning to
+    ///   `.failed`; a genuine `.failed` here is therefore a first-write retry.
+    /// - `.saving` → `nil` (a write is in flight — see above).
+    ///
+    /// Exhaustive with no `default`, so a new `SyncState` case is a compile
+    /// error until its intent is decided here.
+    static func forWrite(_ state: SyncState) -> GameWriteIntent? {
+        switch state {
+        case .localOnly:
+            return .create
+        case .saving:
+            return nil
+        case .saved(let version):
+            return .update(expectedVersion: version)
+        case .conflict(_, let version):
+            return .update(expectedVersion: version)
+        case .failed:
+            return .create
+        }
+    }
+
+    /// Convenience overload deriving the intent straight from a `ScoredGame`.
+    static func forWrite(_ game: ScoredGame) -> GameWriteIntent? {
+        forWrite(game.sync)
+    }
+}
+
 // MARK: - Result negotiation (view model)
 
 /// One game the standing correction added, removed, or changed relative to the
