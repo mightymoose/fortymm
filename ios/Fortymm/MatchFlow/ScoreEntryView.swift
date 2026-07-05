@@ -46,6 +46,11 @@ struct ScoreEntryView: View {
     // the keep-committed / use-mine dialog. Set when a conflict chip is tapped, or
     // when a conflict lands on the game that's still active; cleared on decision.
     @State private var resolving: Int?
+    // The game index whose committed scratchpad score the user is confirming a
+    // clear of, driving the destructive clear dialog. Set when Clear is tapped on
+    // a game that HAS a server-committed score; cleared on decision. A never-
+    // committed game clears locally without ever setting this.
+    @State private var clearing: Int?
     // Raw text backing the two score fields for the *active* game. Kept verbatim
     // so a malformed entry (extra characters, too many digits) is shown back to
     // the user and flagged inline rather than silently stripped/truncated into a
@@ -132,6 +137,24 @@ struct ScoreEntryView: View {
             if let c = resolvingConflict, let i = resolving {
                 Text("They saved \(scoreText(c.committed)). You entered \(scoreText(games[i].points)).")
             }
+        }
+        // Clearing a game that HAS a server-committed score removes it from the
+        // shared scratchpad — confirm first, then DELETE. A never-committed clear
+        // never reaches here (it wipes locally). Mirrors web's confirm-then-delete.
+        .confirmationDialog(
+            "Clear game \((clearing ?? 0) + 1)?",
+            isPresented: Binding(
+                get: { clearing != nil },
+                set: { if !$0 { clearing = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            if let i = clearing {
+                Button("Clear", role: .destructive) { confirmClear(i) }
+                Button("Cancel", role: .cancel) {}
+            }
+        } message: {
+            Text("This removes the saved score.")
         }
     }
 
@@ -415,10 +438,52 @@ struct ScoreEntryView: View {
             .first { !MatchRules.gameComplete(games[$0].points) }
     }
 
+    /// Clear the active game. Sync-state-aware: a game that HAS a server-committed
+    /// score (`.saved` / `.conflict`) lives on the shared scratchpad, so clearing
+    /// it must confirm and DELETE — we defer to the clear dialog. A game that never
+    /// successfully committed (`.localOnly` / `.saving` / `.failed`) wipes purely
+    /// locally with no dialog and no network, exactly as before. Correction boards
+    /// seed every slot `.localOnly`, so they always take the local branch (no
+    /// DELETE against a frozen scratchpad).
     private func clearEdit() {
-        setCurrent { $0 = Game() }
-        syncRawFromActive()
-        focusYou()
+        guard games.indices.contains(active) else { return }
+        switch games[active].sync {
+        case .saved, .conflict:
+            clearing = active
+        case .localOnly, .saving, .failed:
+            clearLocally(active)
+        }
+    }
+
+    /// Wipe a slot back to an empty local game (`.localOnly`) with no network
+    /// call — the never-committed clear path, and what a confirmed DELETE resets
+    /// the slot to. Re-seeds the raw fields and refocuses when it's the active
+    /// game, as the old `clearEdit` did.
+    private func clearLocally(_ i: Int) {
+        guard games.indices.contains(i) else { return }
+        games[i].points = Game()
+        games[i].sync = .localOnly
+        if i == active {
+            syncRawFromActive()
+            focusYou()
+        }
+    }
+
+    /// Confirmed clear of a committed game: fire the scratchpad DELETE (game
+    /// number `i + 1`) fire-and-forget — same optimistic idiom as the write path —
+    /// then reset the slot locally. If the DELETE throws we still leave the slot
+    /// cleared: mirroring the optimistic write path, a later post's divergence
+    /// guard / resync reconciles the server rather than us surfacing a failure
+    /// here. A nil `matchId` (shouldn't happen once live scoring is reached) still
+    /// clears locally.
+    private func confirmClear(_ i: Int) {
+        guard games.indices.contains(i) else { return }
+        if let matchId {
+            let gameNumber = i + 1
+            Task { try? await service.deleteGameScore(matchId: matchId, gameNumber: gameNumber) }
+        }
+        clearLocally(i)
+        clearing = nil
     }
 
     private func saveEdit() {
