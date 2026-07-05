@@ -58,7 +58,7 @@ jobs:
 
       - name: Cache Swift toolchain
         id: swift-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: /tmp/swift-6.1-RELEASE-ubuntu24.04
           key: ${{ runner.os }}-swift-6.1-RELEASE-ubuntu24.04
@@ -79,7 +79,7 @@ jobs:
         working-directory: api
 
       - name: Cache swift-openapi-generator build
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ios/Tools/OpenAPIGeneratorCLI/.build
           key: ${{ runner.os }}-openapi-generator-cli-${{ hashFiles('ios/Tools/OpenAPIGeneratorCLI/Package.resolved') }}
