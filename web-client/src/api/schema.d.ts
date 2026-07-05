@@ -1686,13 +1686,20 @@ export interface components {
         /**
          * NegotiationDiffEntry
          * @description One game's difference between the prior and standing result, so the FE
-         *     can highlight what changed in a correction.
+         *     can highlight what changed in a correction. A correction may add, remove, or
+         *     change games (CONTEXT.md "Correction", ADR-0001), so an entry is one of:
+         *
+         *     - **added** — ``old`` is ``None`` (the standing board gained this game);
+         *     - **removed** — ``new`` is ``None`` (the standing board dropped this game);
+         *     - **changed** — both present, points differ.
+         *
+         *     At least one of ``old``/``new`` is always present.
          */
         NegotiationDiffEntry: {
             /** Game Number */
             game_number: number;
             old: components["schemas"]["NegotiationGame"] | null;
-            new: components["schemas"]["NegotiationGame"];
+            new: components["schemas"]["NegotiationGame"] | null;
         };
         /**
          * NegotiationGame

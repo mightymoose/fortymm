@@ -86,14 +86,15 @@ struct Game: Hashable {
 
 // MARK: - Result negotiation (view model)
 
-/// One changed game between the viewer's prior proposal and the standing
-/// correction, pre-formatted for display. Scores are canonical side-1–side-2,
-/// matching the web's `ScoreDiff` rendering.
+/// One game the standing correction added, removed, or changed relative to the
+/// viewer's prior proposal, pre-formatted for display. Scores are canonical
+/// side-1–side-2, matching the web's `ScoreDiff` rendering.
 struct ScoreDiffEntry: Identifiable {
     let gameNumber: Int
     /// "11–7" as previously proposed; nil when the correction added this game.
     let old: String?
-    let new: String
+    /// "11–7" as now proposed; nil when the correction removed this game.
+    let new: String?
     var id: Int { gameNumber }
 }
 

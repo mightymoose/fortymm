@@ -139,13 +139,14 @@ struct NegotiationResultDTO: Decodable {
     let games: [NegotiationGameDTO]
 }
 
-/// One changed game between the viewer's prior proposal and the standing
-/// correction (`NegotiationDiffEntry`). `old == nil` means the correction added
-/// this game.
+/// One game the standing correction added, removed, or changed relative to the
+/// viewer's prior proposal (`NegotiationDiffEntry`). A correction may add,
+/// remove, or change games: `old == nil` means the game was added; `new == nil`
+/// means it was removed. At least one is always present.
 struct NegotiationDiffEntryDTO: Decodable {
     let gameNumber: Int
     let old: NegotiationGameDTO?
-    let new: NegotiationGameDTO
+    let new: NegotiationGameDTO?
 }
 
 /// Mirror of `MatchNegotiation` — always present on both the detail and list

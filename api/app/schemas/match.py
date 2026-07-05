@@ -193,12 +193,24 @@ class NegotiationResult(BaseModel):
 
 class NegotiationDiffEntry(BaseModel):
     """One game's difference between the prior and standing result, so the FE
-    can highlight what changed in a correction."""
+    can highlight what changed in a correction. A correction may add, remove, or
+    change games (CONTEXT.md "Correction", ADR-0001), so an entry is one of:
+
+    - **added** — ``old`` is ``None`` (the standing board gained this game);
+    - **removed** — ``new`` is ``None`` (the standing board dropped this game);
+    - **changed** — both present, points differ.
+
+    At least one of ``old``/``new`` is always present."""
 
     game_number: int
-    # ``None`` if the game didn't exist in the baseline (prior) result.
     old: NegotiationGame | None
-    new: NegotiationGame
+    new: NegotiationGame | None
+
+    @model_validator(mode="after")
+    def _at_least_one_side(self) -> "NegotiationDiffEntry":
+        if self.old is None and self.new is None:
+            raise ValueError("a diff entry must have at least one of old/new")
+        return self
 
 
 # The viewer-relative phase of the result negotiation. ``live`` = no result

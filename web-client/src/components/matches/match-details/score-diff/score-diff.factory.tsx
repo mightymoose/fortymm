@@ -18,7 +18,8 @@ export function buildNegotiationGame(
 
 /**
  * One diff entry. By default a *changed* game (both `old` and `new` present);
- * pass `old: null` to model a newly-added game.
+ * pass `old: null` to model a newly-added game, or `new: null` (with a
+ * `game_number`) to model a removed game.
  */
 export function buildNegotiationDiffEntry(
   overrides: Partial<NegotiationDiffEntry> = {},
