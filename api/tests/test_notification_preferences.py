@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 
 from httpx import AsyncClient
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
@@ -326,6 +327,46 @@ async def test_notify_defaults_deliver_in_app_push_and_email(
     assert result.pushed == 1
     assert result.emailed is True
     assert [p.token for p in sender.sent] == [f"tok-{user.id}"]
+    stored = (
+        (
+            await db_session.execute(
+                select(Notification).where(Notification.user_id == user.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert [n.title for n in stored] == ["Draw posted"]
+
+
+async def test_notify_push_failure_does_not_drop_email(db_session: AsyncSession):
+    """#753: a DB error on the push path (device-token query or gone-token
+    prune) must not sink the whole notification — the in-app row is already
+    committed and the email still has to enqueue. The push branch catches the
+    SQLAlchemyError, rolls back, and lets the remaining channels proceed."""
+
+    class DbFlappingService(NotificationService):
+        async def _tokens_for_user(self, user_id):
+            raise SQLAlchemyError("db connection lost mid-push")
+
+    user = await make_user(db_session, "push-explodes")
+    user.email = "boom@example.com"
+    user.confirmed_at = datetime.now(UTC)
+    await db_session.commit()
+    await _add_device(db_session, user.id)
+
+    service = DbFlappingService(db_session, FakeSender())
+    result = await service.notify(
+        user_id=user.id,
+        category=NotificationCategory.TOURNAMENT,
+        title="Draw posted",
+        body="R16 is live",
+    )
+
+    # Push failed silently; the durable in-app row and the email both survive.
+    assert result.pushed == 0
+    assert result.in_app_created is True
+    assert result.emailed is True
     stored = (
         (
             await db_session.execute(

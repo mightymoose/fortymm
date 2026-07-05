@@ -6,6 +6,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
+import redis.exceptions
 from coolname import generate_slug
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response, status
 from pyrate_limiter import Duration, Rate
@@ -764,7 +765,12 @@ def _enqueue_rating_recompute_after_merge(user_id: uuid.UUID) -> None:
     leave the DB inconsistent because the merge stands on its own. We
     log+swallow enqueue failures rather than fail the sign-in: the recompute
     is recoverable (re-run by admin tool or re-fire on next login), but a
-    failed sign-in here is user-visible breakage."""
+    failed sign-in here is user-visible breakage.
+
+    We catch only the Redis/connection failures we mean to tolerate — a
+    programmer error here (a signature mismatch in the recompute job, an
+    ImportError from a rename) should crash loudly in tests, not hide behind a
+    log line."""
     try:
         queue_module.get_ratings_queue().enqueue(
             RECOMPUTE_AFTER_MERGE_JOB,
@@ -772,7 +778,7 @@ def _enqueue_rating_recompute_after_merge(user_id: uuid.UUID) -> None:
             result_ttl=60,
             failure_ttl=86400,
         )
-    except Exception:
+    except (redis.exceptions.RedisError, ConnectionError, TimeoutError):
         log.exception(
             "Failed to enqueue rating recompute after merge",
             extra={"user_id": str(user_id)},
@@ -1150,12 +1156,6 @@ async def request_login_email(
     piece of mail either way — rather than the unknown case silently
     delivering nothing.
 
-    Accounts whose email hasn't been confirmed yet get the confirmation
-    link re-sent instead of a sign-in link. The login token would let
-    someone sign in without proving control of the inbox; the confirmation
-    link clears that hurdle and (per ``confirm_email``) rotates them into
-    a session anyway.
-
     Records the requesting browser's guest on the token so the merge it drives
     is token-bound (follows the guest cross-device), mirroring the settings
     merge flow.
@@ -1167,15 +1167,14 @@ async def request_login_email(
 
     await _verify_captcha_or_400(payload.captcha_token)
 
+    # ``users.email`` is only ever set by ``confirm_email`` (alongside
+    # ``confirmed_at``), so an address lookup can only ever match a confirmed
+    # account — there is no unconfirmed-user branch to handle here.
     user = (
         await db.execute(select(User).where(User.email == email))
     ).scalar_one_or_none()
     if user is None:
         await _send_no_account_email_or_503(email)
-        return LoginRequestAccepted(email=email)
-
-    if user.confirmed_at is None:
-        await _issue_and_send_confirmation_email(db, user, email)
         return LoginRequestAccepted(email=email)
 
     guest_id = await _requesting_guest_id(db, session_cookie, target=user)
@@ -1246,35 +1245,6 @@ async def _issue_and_send_login_email(
     )
     try:
         job = _enqueue_login_email(email, raw_token, user.username)
-    except Exception:
-        await db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Email service unavailable. Try again in a moment.",
-        ) from None
-    try:
-        await db.commit()
-    except Exception:
-        await db.rollback()
-        try:
-            job.cancel()
-        except Exception:
-            pass
-        raise
-
-
-async def _issue_and_send_confirmation_email(
-    db: AsyncSession, user: User, email: str
-) -> None:
-    """Re-issue this user's pending email-confirmation link. Preserves the
-    prior change-token's context so the audit trail still records what the
-    user was originally changing away from."""
-    prior = await _pending_change_token(db, user.id)
-    raw_token = await _issue_confirmation_token(
-        db, user, email, prior.context if prior else _email_change_context(None)
-    )
-    try:
-        job = _enqueue_confirmation_email(email, raw_token, user.username)
     except Exception:
         await db.rollback()
         raise HTTPException(
