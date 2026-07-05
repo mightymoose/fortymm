@@ -196,7 +196,8 @@ struct ScoreEntryView: View {
             HStack(spacing: 7) {
                 ForEach(0..<config.bestOf, id: \.self) { i in
                     let g = games.indices.contains(i) ? games[i].points : Game()
-                    GameChip(index: i, game: g, active: i == active) {
+                    let s = games.indices.contains(i) ? games[i].sync : .localOnly
+                    GameChip(index: i, game: g, sync: s, active: i == active) {
                         if i != active { selectGame(i) }
                     }
                 }
@@ -569,6 +570,11 @@ private struct ScorePanel: View {
 private struct GameChip: View {
     let index: Int
     let game: Game
+    /// The slot's scratchpad sync status, surfaced as a tiny corner indicator so
+    /// the user sees each game's save progress (saving → saved) or trouble
+    /// (failed / conflict) without leaving the scoreline — mirrors web's
+    /// per-cell status dot.
+    let sync: SyncState
     let active: Bool
     let onTap: () -> Void
 
@@ -608,11 +614,48 @@ private struct GameChip: View {
                              color: active ? FMColor.ball500 : (done ? FMColor.borderDefault : FMColor.borderSubtle),
                              lineWidth: 1.5)
             .opacity(!done && !active ? 0.5 : 1)
+            // Sync status rides in the top-trailing corner as an overlay so it
+            // never widens the chip — a full best-of-7 row still shares the width
+            // evenly. `.localOnly` shows nothing (looks like today's board).
+            .overlay(alignment: .topTrailing) {
+                syncIndicator
+                    .padding(2)
+            }
         }
         .buttonStyle(.plain)
         // Any game can be selected and edited in any order; only the slot that's
         // already active is inert.
         .disabled(active)
+    }
+
+    /// Tiny, unobtrusive glyph reflecting the slot's scratchpad sync: a spinner
+    /// while saving, a subtle success check once saved, and a warning mark on
+    /// failure — with conflict distinguished from a plain failure by hue (amber
+    /// `warn` vs red `loss`). Resolving a conflict is a later task; this only
+    /// flags it.
+    @ViewBuilder
+    private var syncIndicator: some View {
+        switch sync {
+        case .localOnly:
+            EmptyView()
+        case .saving:
+            ProgressView()
+                .controlSize(.mini)
+                .tint(FMColor.fgMuted)
+                .scaleEffect(0.7)
+        case .saved:
+            Image(systemName: "checkmark")
+                .font(.system(size: 7, weight: .bold))
+                .foregroundStyle(FMColor.serve500)
+        case .failed:
+            Image(systemName: "exclamationmark.circle.fill")
+                .font(.system(size: 8, weight: .bold))
+                .foregroundStyle(FMColor.loss)
+        case .conflict:
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 8, weight: .bold))
+                .foregroundStyle(FMColor.warn)
+        }
     }
 }
 
