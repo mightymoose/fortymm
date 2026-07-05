@@ -63,14 +63,13 @@ struct MatchService {
         matchId: UUID, games: [Game], yourSideNumber: Int = 1,
         supersedes: UUID? = nil
     ) async throws -> FinalMatch {
-        let youAreSide1 = yourSideNumber != 2
         let payload = PostResultsBody(
             games: games.enumerated().compactMap { i, g in
-                guard let a = g.a, let b = g.b else { return nil }
+                guard let sides = Self.sidePoints(g, yourSideNumber: yourSideNumber) else { return nil }
                 return PostResultsBody.GameWrite(
                     gameNumber: i + 1,
-                    side1Points: youAreSide1 ? a : b,
-                    side2Points: youAreSide1 ? b : a
+                    side1Points: sides.side1,
+                    side2Points: sides.side2
                 )
             },
             supersedesResultId: supersedes
@@ -79,6 +78,87 @@ struct MatchService {
             "/v1/matches/\(matchId.uuidString)/results", body: payload
         )
         return Self.finalMatch(from: details)
+    }
+
+    // MARK: Per-game scratchpad writes
+
+    /// A successful score write came back without a score for the game we just
+    /// wrote — a can't-happen shape the server never emits, deliberately
+    /// distinct from `APIError` so a bug here can't masquerade as a real
+    /// network/decoding failure.
+    struct MissingScoreVersion: Error {}
+
+    /// Create this game's score (`POST .../games/{n}/scores/new`) and return the
+    /// new `version`, or the conflict body on a 409. Points are oriented exactly
+    /// like `postResult` (`a` = you, `b` = them → side-1/side-2, swapped when the
+    /// viewer is side 2). The success response is the full board, but this
+    /// deliberately reads back only this game's version — refreshing the rest of
+    /// the board is out of scope.
+    func createGameScore(
+        matchId: UUID, gameNumber: Int, game: Game, yourSideNumber: Int = 1
+    ) async throws -> Result<Int, GameScoreConflictDTO> {
+        guard let sides = Self.sidePoints(game, yourSideNumber: yourSideNumber) else {
+            throw MissingScoreVersion()
+        }
+        let body = GameScoreWriteBody(
+            side1Points: sides.side1,
+            side2Points: sides.side2
+        )
+        let result: Result<MatchDetailsDTO, GameScoreConflictDTO> =
+            try await client.sendExpectingConflict(
+                "POST", "/v1/matches/\(matchId.uuidString)/games/\(gameNumber)/scores/new",
+                body: body
+            )
+        return try Self.newVersion(from: result, gameNumber: gameNumber)
+    }
+
+    /// Update this game's score (`PUT .../games/{n}/scores`) as a conditional
+    /// write against `expectedVersion`, returning the new `version` or the
+    /// conflict body on a 409. Points are oriented like `createGameScore`.
+    func updateGameScore(
+        matchId: UUID, gameNumber: Int, game: Game, expectedVersion: Int,
+        yourSideNumber: Int = 1
+    ) async throws -> Result<Int, GameScoreConflictDTO> {
+        guard let sides = Self.sidePoints(game, yourSideNumber: yourSideNumber) else {
+            throw MissingScoreVersion()
+        }
+        let body = GameScoreUpdateBody(
+            side1Points: sides.side1,
+            side2Points: sides.side2,
+            expectedVersion: expectedVersion
+        )
+        let result: Result<MatchDetailsDTO, GameScoreConflictDTO> =
+            try await client.sendExpectingConflict(
+                "PUT", "/v1/matches/\(matchId.uuidString)/games/\(gameNumber)/scores",
+                body: body
+            )
+        return try Self.newVersion(from: result, gameNumber: gameNumber)
+    }
+
+    /// Delete this game's score (`DELETE .../games/{n}/scores`). The endpoint
+    /// returns the refreshed board, deliberately ignored — clearing a scratch
+    /// entry has no version to carry forward.
+    func deleteGameScore(matchId: UUID, gameNumber: Int) async throws {
+        let _: MatchDetailsDTO = try await client.delete(
+            "/v1/matches/\(matchId.uuidString)/games/\(gameNumber)/scores"
+        )
+    }
+
+    /// On success, pull the freshly written game's `version` out of the returned
+    /// board (throwing `MissingScoreVersion` if it's absent); on 409, pass the
+    /// conflict body straight through.
+    private static func newVersion(
+        from result: Result<MatchDetailsDTO, GameScoreConflictDTO>, gameNumber: Int
+    ) throws -> Result<Int, GameScoreConflictDTO> {
+        switch result {
+        case let .success(details):
+            guard let version = details.games
+                .first(where: { $0.gameNumber == gameNumber })?.score?.version
+            else { throw MissingScoreVersion() }
+            return .success(version)
+        case let .failure(conflict):
+            return .failure(conflict)
+        }
     }
 
     // MARK: Accept
@@ -181,10 +261,23 @@ struct MatchService {
     // MARK: Negotiation DTO → view model
 
     /// Project canonical side-1/side-2 points onto the viewer-relative axis
-    /// (`a` = you, `b` = them) — the one place the orientation rule lives, used
-    /// by both the match-games and standing-result mappings.
-    private static func orientedGame(side1: Int, side2: Int, mineIsSide1: Bool) -> Game {
+    /// (`a` = you, `b` = them) — the one place the read-orientation rule lives,
+    /// used by the match-games and standing-result mappings and the score-entry
+    /// conflict reducer.
+    static func orientedGame(side1: Int, side2: Int, mineIsSide1: Bool) -> Game {
         mineIsSide1 ? Game(a: side1, b: side2) : Game(a: side2, b: side1)
+    }
+
+    /// The write-direction mirror of `orientedGame`: project the viewer-relative
+    /// `a` = you / `b` = them points back onto the canonical side-1/side-2 axis
+    /// the API expects (swapped when the viewer is side 2). `nil` when the game
+    /// isn't fully entered, so callers skip it or reject the write. The single
+    /// home for the write orientation, shared by `postResult` and the per-game
+    /// scratchpad writes.
+    static func sidePoints(_ game: Game, yourSideNumber: Int) -> (side1: Int, side2: Int)? {
+        guard let a = game.a, let b = game.b else { return nil }
+        let youAreSide1 = yourSideNumber != 2
+        return youAreSide1 ? (a, b) : (b, a)
     }
 
     /// Map the wire negotiation onto the view model: re-orient the standing
@@ -267,14 +360,22 @@ struct MatchService {
         let side1 = sides.first { $0.sideNumber == 1 } ?? sides.first
         let side2 = sides.first { $0.sideNumber == 2 }
 
-        let mappedGames: [Game] = (games ?? [])
+        // The resume board, enriched: each committed game keeps its scratchpad
+        // version so the per-game write path can PUT-guard on it. Same sort and
+        // compactMap as the plain `mappedGames` below, so the two carry the exact
+        // same games in the same order — only `sync`/`version` is added.
+        let scoredGames: [ScoredGame] = (games ?? [])
             .sorted { $0.gameNumber < $1.gameNumber }
             .compactMap { g in
                 guard let s = g.score else { return nil }
-                return orientedGame(
-                    side1: s.side1Points, side2: s.side2Points, mineIsSide1: mineIsSide1
+                return ScoredGame(
+                    points: orientedGame(
+                        side1: s.side1Points, side2: s.side2Points, mineIsSide1: mineIsSide1
+                    ),
+                    sync: .saved(version: s.version)
                 )
             }
+        let mappedGames: [Game] = scoredGames.map(\.points)
 
         let decided = status == .completed
         let rated = ratedHint ?? (mine?.ratingChange != nil)
@@ -303,6 +404,7 @@ struct MatchService {
             statusLabel: statusLabel,
             decided: decided,
             negotiation: negotiation,
+            scoredGames: scoredGames,
             h2h: h2h.map { mapH2H($0, mineIsSide1: mineIsSide1) },
             sideA: sidePlayer(side1),
             sideB: (side2?.players.isEmpty ?? true) ? .guest : sidePlayer(side2),

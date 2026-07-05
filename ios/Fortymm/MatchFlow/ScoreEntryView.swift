@@ -6,10 +6,21 @@ import SwiftUI
 /// and by tapping a score field directly.
 struct ScoreEntryView: View {
     let config: MatchConfig
+    /// The server match id these scores belong to, and which side ("you") the
+    /// signed-in player is. Unused today — carried so the per-game write path
+    /// (next task) can address the shared scratchpad without re-threading them.
+    let matchId: UUID?
+    let yourSideNumber: Int
+    /// Gateway for the per-game scratchpad writes fired on save. Injected from
+    /// `MatchFlowView` (which holds the same instance it posts results through)
+    /// so tests/previews can substitute a stub; defaults to the shared client.
+    var service: MatchService = .shared
     /// Games already entered for this match, in order (game 1…N). Empty for a
     /// new match; populated when resuming a live one so the user continues from
-    /// where they left off rather than re-entering scored games.
-    var initialGames: [Game] = []
+    /// where they left off rather than re-entering scored games. Each slot
+    /// carries its scratchpad sync state alongside the points (see `ScoredGame`);
+    /// scoring reads only `.points`, so today's board is unchanged.
+    var initialGames: [ScoredGame] = []
     /// Hand the completed games (in order, game 1…N) up to the coordinator,
     /// which posts them to the API and renders the server's result.
     var onPost: ([Game]) -> Void
@@ -26,9 +37,25 @@ struct ScoreEntryView: View {
 
     // One slot per game in the match; any slot can be entered or edited in any
     // order by tapping its scoreline chip. Populated on first appear from bestOf.
-    @State private var games: [Game] = []
+    // Each slot pairs the entered points with their scratchpad sync state; the
+    // scoring UI reads `.points`, leaving `sync` for the (future) write path.
+    @State private var games: [ScoredGame] = []
     @State private var active = 0          // index being entered
     @State private var editing = false     // true when re-entering an already-complete game
+    // The game index whose 409 conflict the user is currently resolving, driving
+    // the keep-committed / use-mine dialog. Set when a conflict chip is tapped, or
+    // when a conflict lands on the game that's still active; cleared on decision.
+    @State private var resolving: Int?
+    // The game index whose committed scratchpad score the user is confirming a
+    // clear of, driving the destructive clear dialog. Set when Clear is tapped on
+    // a game that HAS a server-committed score; cleared on decision. A never-
+    // committed game clears locally without ever setting this.
+    @State private var clearing: Int?
+    // Game numbers cleared while a *create* was still in flight, so the DELETE is
+    // deferred until that write resolves (we don't yet know if a row landed).
+    // `applyWriteResult` fires the DELETE and consumes the entry. Avoids both an
+    // orphaned committed row and a DELETE that races ahead of the create.
+    @State private var pendingClearDeletes: Set<Int> = []
     // Raw text backing the two score fields for the *active* game. Kept verbatim
     // so a malformed entry (extra characters, too many digits) is shown back to
     // the user and flagged inline rather than silently stripped/truncated into a
@@ -44,18 +71,18 @@ struct ScoreEntryView: View {
     }
     private var opp: MatchPlayer { config.opponent ?? .guest }
 
-    private var current: Game { games.indices.contains(active) ? games[active] : Game() }
+    private var current: Game { games.indices.contains(active) ? games[active].points : Game() }
     private var currentValid: Bool { MatchRules.gameComplete(current) }
 
     /// Tally shown in the VS column. `setsWon` already ignores incomplete games,
     /// so counting over all slots (including the one being entered) is correct.
-    private var setsDisplay: SetScore { MatchRules.setsWon(games) }
+    private var setsDisplay: SetScore { MatchRules.setsWon(games.map(\.points)) }
     /// True when the games entered so far form a complete, decided match — i.e.
     /// there's a valid result to Post. Uses the same canonical rule as `post()`
     /// so the Post button never appears for games the server would reject, and
     /// never goes dead when it does appear.
     private var deciding: Bool {
-        MatchRules.gamesThroughDecider(games, bestOf: config.bestOf) != nil
+        MatchRules.gamesThroughDecider(games.map(\.points), bestOf: config.bestOf) != nil
     }
 
     var body: some View {
@@ -79,10 +106,13 @@ struct ScoreEntryView: View {
                 // first slot still needing a score.
                 var seeded = Array(initialGames.prefix(config.bestOf))
                 if seeded.count < config.bestOf {
-                    seeded += Array(repeating: Game(), count: config.bestOf - seeded.count)
+                    seeded += Array(
+                        repeating: ScoredGame(points: Game(), sync: .localOnly),
+                        count: config.bestOf - seeded.count
+                    )
                 }
                 games = seeded
-                active = seeded.firstIndex { !MatchRules.gameComplete($0) } ?? 0
+                active = seeded.firstIndex { !MatchRules.gameComplete($0.points) } ?? 0
             }
             syncRawFromActive()
             focusYou()
@@ -91,6 +121,46 @@ struct ScoreEntryView: View {
         // the raw fields to the newly-active slot's stored scores.
         .onChange(of: active) { _, _ in syncRawFromActive(); focusYou() }
         .onChange(of: editing) { _, _ in focusYou() }
+        // A 409 leaves the slot in `.conflict`, holding the server's committed
+        // score alongside our entry. Make the user re-decide against reality:
+        // keep the committed score, or overwrite it with theirs — mirroring web's
+        // keepCommittedScore / overwriteWithMyScore.
+        .confirmationDialog(
+            "Score conflict",
+            isPresented: Binding(
+                get: { resolving != nil },
+                set: { if !$0 { resolving = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            if let c = resolvingConflict, let i = resolving {
+                Button("Keep their score") { keepCommitted(i, committed: c.committed, version: c.version) }
+                Button("Use my score") { useMyScore(i) }
+                Button("Cancel", role: .cancel) {}
+            }
+        } message: {
+            if let c = resolvingConflict, let i = resolving {
+                Text("They saved \(scoreText(c.committed)). You entered \(scoreText(games[i].points)).")
+            }
+        }
+        // Clearing a game that HAS a server-committed score removes it from the
+        // shared scratchpad — confirm first, then DELETE. A never-committed clear
+        // never reaches here (it wipes locally). Mirrors web's confirm-then-delete.
+        .confirmationDialog(
+            "Clear game \((clearing ?? 0) + 1)?",
+            isPresented: Binding(
+                get: { clearing != nil },
+                set: { if !$0 { clearing = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            if let i = clearing {
+                Button("Clear", role: .destructive) { confirmClear(i) }
+                Button("Cancel", role: .cancel) {}
+            }
+        } message: {
+            Text("This removes the saved score.")
+        }
     }
 
     // MARK: Score error
@@ -179,8 +249,9 @@ struct ScoreEntryView: View {
                 .foregroundStyle(FMColor.fgMuted)
             HStack(spacing: 7) {
                 ForEach(0..<config.bestOf, id: \.self) { i in
-                    let g = games.indices.contains(i) ? games[i] : Game()
-                    GameChip(index: i, game: g, active: i == active) {
+                    let g = games.indices.contains(i) ? games[i].points : Game()
+                    let s = games.indices.contains(i) ? games[i].sync : .localOnly
+                    GameChip(index: i, game: g, sync: s, active: i == active) {
                         if i != active { selectGame(i) }
                     }
                 }
@@ -331,7 +402,9 @@ struct ScoreEntryView: View {
 
     private func setCurrent(_ mutate: (inout Game) -> Void) {
         guard games.indices.contains(active) else { return }
-        mutate(&games[active])
+        // Mutate the active slot's points only; its sync state is left untouched
+        // (nothing consumes it yet, and no write fires this task).
+        mutate(&games[active].points)
     }
 
     private func focusYou() {
@@ -340,10 +413,15 @@ struct ScoreEntryView: View {
 
     private func saveNext() {
         guard currentValid else { return }
+        // The slot just saved — captured before we advance `active` off it.
+        let saved = active
         // Advance to the next still-incomplete game (wrapping); stay put if the
         // match is fully scored.
         if let next = nextIncompleteIndex() { active = next }
         editing = false
+        // Fire the optimistic scratchpad write for the game we just left; the
+        // UI has already advanced (fire-and-forget).
+        fireWrite(for: saved)
     }
 
     /// Jump to any game's slot. Re-entering an already-complete game opens edit
@@ -351,7 +429,10 @@ struct ScoreEntryView: View {
     private func selectGame(_ i: Int) {
         guard games.indices.contains(i) else { return }
         active = i
-        editing = MatchRules.gameComplete(games[i])
+        editing = MatchRules.gameComplete(games[i].points)
+        // A conflicted slot demands an explicit keep-mine / use-theirs decision —
+        // surface it as soon as the user lands on that game.
+        if case .conflict = games[i].sync { resolving = i }
     }
 
     /// First incomplete slot searching forward from `active` and wrapping.
@@ -359,24 +440,271 @@ struct ScoreEntryView: View {
         guard !games.isEmpty else { return nil }
         return (1...games.count)
             .map { (active + $0) % games.count }
-            .first { !MatchRules.gameComplete(games[$0]) }
+            .first { !MatchRules.gameComplete(games[$0].points) }
     }
 
+    /// Clear the active game. Sync-state-aware: a game that has (or may be about to
+    /// have) a server-committed row — `.saved`, `.conflict`, an in-flight `.saving`,
+    /// or a `.failed` that had committed before failing — lives on the shared
+    /// scratchpad, so clearing it must confirm and DELETE via the clear dialog. A
+    /// game that never reached the server (`.localOnly`, or a `.failed` first
+    /// create) wipes purely locally with no dialog and no network. Correction
+    /// boards seed every slot `.localOnly`, so they always take the local branch
+    /// (no DELETE against a frozen scratchpad).
     private func clearEdit() {
-        setCurrent { $0 = Game() }
-        syncRawFromActive()
-        focusYou()
+        guard games.indices.contains(active) else { return }
+        switch games[active].sync {
+        case .saved, .conflict, .saving:
+            // A committed row exists, or a write is in flight that may leave one —
+            // confirm, then DELETE (or defer the DELETE for an in-flight create).
+            clearing = active
+        case .failed(let committedVersion):
+            // A committed row exists only if a prior write succeeded before the
+            // failure; otherwise the failed create left nothing to delete.
+            if committedVersion != nil { clearing = active } else { clearLocally(active) }
+        case .localOnly:
+            clearLocally(active)
+        }
+    }
+
+    /// Wipe a slot back to an empty local game (`.localOnly`) with no network
+    /// call — the never-committed clear path, and what a confirmed DELETE resets
+    /// the slot to. Re-seeds the raw fields and refocuses when it's the active
+    /// game, as the old `clearEdit` did.
+    private func clearLocally(_ i: Int) {
+        guard games.indices.contains(i) else { return }
+        games[i].points = Game()
+        games[i].sync = .localOnly
+        if i == active {
+            syncRawFromActive()
+            focusYou()
+        }
+    }
+
+    /// Confirmed clear of a committed (or in-flight) game: remove its scratchpad
+    /// row and reset the slot locally.
+    ///
+    /// - An in-flight *create* (`.saving(nil)`) hasn't told us whether a row
+    ///   landed, so the DELETE is *deferred* (`pendingClearDeletes`) until the
+    ///   write resolves — firing it now could race ahead of the create and leave
+    ///   an orphan.
+    /// - Otherwise a row exists (or an in-flight update is over one — the DELETE
+    ///   and that PUT converge on "no row" in either order), so DELETE now,
+    ///   fire-and-forget. A thrown DELETE still leaves the slot cleared; a later
+    ///   post's divergence guard reconciles the server.
+    ///
+    /// A nil `matchId` (shouldn't happen once live scoring is reached) still clears
+    /// locally.
+    private func confirmClear(_ i: Int) {
+        guard games.indices.contains(i) else { return }
+        let gameNumber = i + 1
+        if case .saving(nil) = games[i].sync {
+            pendingClearDeletes.insert(gameNumber)
+        } else if let matchId {
+            Task { try? await service.deleteGameScore(matchId: matchId, gameNumber: gameNumber) }
+        }
+        clearLocally(i)
+        clearing = nil
     }
 
     private func saveEdit() {
         guard currentValid else { return }
+        // The slot just edited — captured before we move `active` off it.
+        let saved = active
         editing = false
         // Return to the first still-incomplete game, else stay on the last.
-        if let firstIncomplete = games.indices.first(where: { $0 != active && !MatchRules.gameComplete(games[$0]) }) {
+        if let firstIncomplete = games.indices.first(where: { $0 != active && !MatchRules.gameComplete(games[$0].points) }) {
             active = firstIncomplete
         } else {
             active = games.count - 1
         }
+        // Persist the edit to the shared scratchpad (fire-and-forget).
+        fireWrite(for: saved)
+    }
+
+    // MARK: Per-game scratchpad writes (fire-and-forget)
+
+    /// The result of one in-flight per-game write, handed back to the reducer.
+    private enum WriteOutcome {
+        /// The verb returned — either the new version on success, or the 409
+        /// conflict body.
+        case completed(Result<Int, GameScoreConflictDTO>)
+        /// The verb threw (offline, decoding, or any non-409 failure).
+        case threw
+    }
+
+    /// Fire the optimistic scratchpad write for the slot at `index` (game number
+    /// `index + 1`), having already advanced the UI. This never blocks the save.
+    ///
+    /// No-op on a *correction* board: once a result is proposed the scratchpad is
+    /// frozen, so a per-game write would 409 — corrections post through `post()`
+    /// alone. Also a no-op when there's no server match to address (`matchId` is
+    /// nil, which shouldn't happen once live scoring is reached).
+    ///
+    /// The slot's current sync decides the verb via `GameWriteIntent.forWrite`; a
+    /// `nil` intent means a write is already in flight, so we don't double-fire.
+    /// The slot is marked `.saving`, the write runs in a detached `Task`, and its
+    /// result is reduced back on the main actor by `applyWriteResult`.
+    private func fireWrite(for index: Int) {
+        guard !correction else { return }
+        guard let matchId else { return }
+        guard games.indices.contains(index) else { return }
+
+        guard let intent = GameWriteIntent.forWrite(games[index].sync) else { return }
+
+        let gameNumber = index + 1
+        // The points just entered — captured before mutating so `applyWriteResult`
+        // can tell whether the slot moved on while the write was in flight.
+        let points = games[index].points
+        // The version the server already holds for this game (nil for a first
+        // create) — carried through `.saving` so a failure re-derives the verb and
+        // an in-flight clear knows whether a committed row exists.
+        let committedVersion = Self.committedVersion(of: games[index].sync)
+        games[index].sync = .saving(committedVersion: committedVersion)
+
+        Task {
+            do {
+                let result: Result<Int, GameScoreConflictDTO>
+                switch intent {
+                case .create:
+                    result = try await service.createGameScore(
+                        matchId: matchId, gameNumber: gameNumber,
+                        game: points, yourSideNumber: yourSideNumber
+                    )
+                case .update(let expectedVersion):
+                    result = try await service.updateGameScore(
+                        matchId: matchId, gameNumber: gameNumber,
+                        game: points, expectedVersion: expectedVersion,
+                        yourSideNumber: yourSideNumber
+                    )
+                }
+                applyWriteResult(gameNumber: gameNumber, sent: points, outcome: .completed(result))
+            } catch {
+                applyWriteResult(gameNumber: gameNumber, sent: points, outcome: .threw)
+            }
+        }
+    }
+
+    /// The version the server holds for a slot in this sync state, or nil when no
+    /// committed row exists yet — the token a retry/update or an in-flight clear
+    /// needs. `.saving`/`.failed` carry the pre-write version; `.saved`/`.conflict`
+    /// carry the current one; `.localOnly` has none.
+    private static func committedVersion(of sync: SyncState) -> Int? {
+        switch sync {
+        case .localOnly: return nil
+        case .saving(let v), .failed(let v): return v
+        case .saved(let v), .conflict(_, let v): return v
+        }
+    }
+
+    /// Reduce one write's result into the addressed slot, keyed by GAME NUMBER
+    /// (not a captured array index) since the user may have moved on.
+    ///
+    /// - A slot cleared while this write was in flight resolves the deferred
+    ///   DELETE here (see `pendingClearDeletes`): now that the write settled, a
+    ///   row may exist, so fire the DELETE and drop the result.
+    /// - Otherwise the transition applies only while the slot is still the
+    ///   `.saving` we set for THIS write (a clear that moved it off `.saving`
+    ///   already handled the server). Only one write is ever in flight per slot
+    ///   (`.saving` maps to a nil intent), so a live `.saving` is always ours.
+    ///
+    /// Transitions:
+    /// - success(version): `.saved(version:)`. If the user *edited* the game while
+    ///   the write was in flight, the server now holds the stale points, so re-fire
+    ///   to overwrite them at the fresh version rather than stranding the edit.
+    /// - 409 with a committed score → `.conflict`, the committed points re-oriented
+    ///   from canonical side-1/side-2 onto the viewer's `a` = you / `b` = them axis
+    ///   (the same `mineIsSide1` rule the read path uses).
+    /// - 409 without a committed score (shouldn't happen) / thrown error →
+    ///   `.failed(committedVersion:)`, preserving the pre-write version so a retry
+    ///   re-fires the correct verb.
+    @MainActor
+    private func applyWriteResult(gameNumber: Int, sent: Game, outcome: WriteOutcome) {
+        // Deferred clear: the slot was cleared while this create was in flight.
+        // The write has now settled, so fire the DELETE (best-effort — a 404 means
+        // the write never landed) and consume the entry without touching the slot,
+        // which the user already reset locally. (Edge: if the create 409'd because
+        // another participant scored this game, the DELETE removes their score —
+        // permitted under the shared-board model, and only reachable via a
+        // clear-during-a-concurrent-create race.)
+        if pendingClearDeletes.remove(gameNumber) != nil {
+            if let matchId {
+                Task { try? await service.deleteGameScore(matchId: matchId, gameNumber: gameNumber) }
+            }
+            return
+        }
+
+        let index = gameNumber - 1
+        guard games.indices.contains(index) else { return }
+        guard case .saving(let committedVersion) = games[index].sync else { return }
+
+        switch outcome {
+        case .completed(.success(let version)):
+            games[index].sync = .saved(version: version)
+            if games[index].points != sent {
+                // The user edited this game while the write was in flight, so the
+                // server now holds `sent`, not what's on screen. Re-fire: with the
+                // slot at `.saved(version)`, `fireWrite` derives an update at the
+                // fresh version and persists the current points.
+                fireWrite(for: index)
+            }
+        case .completed(.failure(let conflict)):
+            if let committed = conflict.committedScore {
+                let oriented = MatchService.orientedGame(
+                    side1: committed.side1Points, side2: committed.side2Points,
+                    mineIsSide1: yourSideNumber != 2
+                )
+                games[index].sync = .conflict(committed: oriented, version: committed.version)
+                // If the conflict landed on the game the user is still looking at,
+                // prompt the decision immediately; otherwise the chip's warn
+                // triangle flags it and tapping it opens the same dialog.
+                if index == active { resolving = index }
+            } else {
+                games[index].sync = .failed(committedVersion: committedVersion)
+            }
+        case .threw:
+            games[index].sync = .failed(committedVersion: committedVersion)
+        }
+    }
+
+    // MARK: Conflict resolution (keep-committed vs use-mine)
+
+    /// The committed server points and version for the game currently being
+    /// resolved, if any — drives the conflict dialog's copy and its keep action.
+    /// `committed` is already on the viewer's `a` = you / `b` = them axis.
+    private var resolvingConflict: (committed: Game, version: Int)? {
+        guard let i = resolving, games.indices.contains(i),
+              case let .conflict(committed, version) = games[i].sync else { return nil }
+        return (committed, version)
+    }
+
+    /// "Keep their score": adopt the server's committed points for game `i`, mark
+    /// the slot saved at the conflict's version, and clear the conflict. Fires NO
+    /// write — we're accepting what the server already holds. Mirrors web's
+    /// keepCommittedScore. Re-seeds the raw fields when the game is active so the
+    /// inputs show the adopted score.
+    private func keepCommitted(_ i: Int, committed: Game, version: Int) {
+        guard games.indices.contains(i) else { return }
+        games[i].points = committed
+        games[i].sync = .saved(version: version)
+        resolving = nil
+        if i == active { syncRawFromActive() }
+    }
+
+    /// "Use my score": keep the slot's current entry and re-fire the write. The
+    /// slot is still `.conflict(_, v)`, so `fireWrite` re-derives an
+    /// `.update(expectedVersion: v)` and PUTs with the fresh version — a
+    /// deliberate overwrite, not a blind last-write-wins. Mirrors web's
+    /// overwriteWithMyScore; delegates to the existing write path rather than
+    /// duplicating it.
+    private func useMyScore(_ i: Int) {
+        resolving = nil
+        fireWrite(for: i)
+    }
+
+    /// A game's points as a compact "you–them" scoreline for the conflict copy.
+    private func scoreText(_ g: Game) -> String {
+        "\(g.a.map(String.init) ?? "?")–\(g.b.map(String.init) ?? "?")"
     }
 
     private func post() {
@@ -385,7 +713,7 @@ struct ScoreEntryView: View {
         // server's finalize rules. The coordinator posts these to
         // `POST /v1/matches/{id}/results`; the server computes sets won, the
         // winner, and any rating change — so we don't here.
-        guard let finalGames = MatchRules.gamesThroughDecider(games, bestOf: config.bestOf) else { return }
+        guard let finalGames = MatchRules.gamesThroughDecider(games.map(\.points), bestOf: config.bestOf) else { return }
         focus = nil
         onPost(finalGames)
     }
@@ -443,6 +771,11 @@ private struct ScorePanel: View {
 private struct GameChip: View {
     let index: Int
     let game: Game
+    /// The slot's scratchpad sync status, surfaced as a tiny corner indicator so
+    /// the user sees each game's save progress (saving → saved) or trouble
+    /// (failed / conflict) without leaving the scoreline — mirrors web's
+    /// per-cell status dot.
+    let sync: SyncState
     let active: Bool
     let onTap: () -> Void
 
@@ -482,11 +815,48 @@ private struct GameChip: View {
                              color: active ? FMColor.ball500 : (done ? FMColor.borderDefault : FMColor.borderSubtle),
                              lineWidth: 1.5)
             .opacity(!done && !active ? 0.5 : 1)
+            // Sync status rides in the top-trailing corner as an overlay so it
+            // never widens the chip — a full best-of-7 row still shares the width
+            // evenly. `.localOnly` shows nothing (looks like today's board).
+            .overlay(alignment: .topTrailing) {
+                syncIndicator
+                    .padding(2)
+            }
         }
         .buttonStyle(.plain)
         // Any game can be selected and edited in any order; only the slot that's
         // already active is inert.
         .disabled(active)
+    }
+
+    /// Tiny, unobtrusive glyph reflecting the slot's scratchpad sync: a spinner
+    /// while saving, a subtle success check once saved, and a warning mark on
+    /// failure — with conflict distinguished from a plain failure by hue (amber
+    /// `warn` vs red `loss`). Resolving a conflict is a later task; this only
+    /// flags it.
+    @ViewBuilder
+    private var syncIndicator: some View {
+        switch sync {
+        case .localOnly:
+            EmptyView()
+        case .saving:
+            ProgressView()
+                .controlSize(.mini)
+                .tint(FMColor.fgMuted)
+                .scaleEffect(0.7)
+        case .saved:
+            Image(systemName: "checkmark")
+                .font(.system(size: 7, weight: .bold))
+                .foregroundStyle(FMColor.serve500)
+        case .failed:
+            Image(systemName: "exclamationmark.circle.fill")
+                .font(.system(size: 8, weight: .bold))
+                .foregroundStyle(FMColor.loss)
+        case .conflict:
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 8, weight: .bold))
+                .foregroundStyle(FMColor.warn)
+        }
     }
 }
 

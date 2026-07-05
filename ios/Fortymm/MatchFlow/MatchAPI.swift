@@ -269,3 +269,44 @@ struct PostResultsBody: Encodable {
         }
     }
 }
+
+/// Body for `POST .../games/{n}/scores/new` (`app.schemas.match.MatchGameScoreWrite`).
+/// Creates a game's score; the success response is the full `MatchDetailsDTO` (201).
+struct GameScoreWriteBody: Encodable {
+    let side1Points: Int
+    let side2Points: Int
+
+    // Digit-segment keys: spell them out so they survive the encoder
+    // unchanged instead of becoming `side1_points`.
+    enum CodingKeys: String, CodingKey {
+        case side1Points = "side_1_points"
+        case side2Points = "side_2_points"
+    }
+}
+
+/// Body for `PUT .../games/{n}/scores` (`app.schemas.match.MatchGameScoreUpdate`).
+/// A conditional write: `expectedVersion` is the `MatchScoreDTO.version` the
+/// caller last read, so a concurrent save 409s rather than being clobbered.
+struct GameScoreUpdateBody: Encodable {
+    let side1Points: Int
+    let side2Points: Int
+    let expectedVersion: Int
+
+    // Digit-segment keys: spell them out so they survive the encoder unchanged.
+    enum CodingKeys: String, CodingKey {
+        case side1Points = "side_1_points"
+        case side2Points = "side_2_points"
+        case expectedVersion = "expected_version"
+    }
+}
+
+/// 409 body for a rejected conditional score write
+/// (`app.schemas.match.MatchGameScoreConflict`). `committedScore` is the row as
+/// it actually stands now (`committed_score`, decoded via `.convertFromSnakeCase`).
+/// Conforms to `Error` so it can ride as the `Failure` of the `Result` that
+/// `APIClient.sendExpectingConflict` (and the `MatchService` score verbs) hand
+/// back — `Swift.Result` requires its failure type to be an `Error`.
+struct GameScoreConflictDTO: Decodable, Error {
+    let message: String
+    let committedScore: MatchScoreDTO?
+}
