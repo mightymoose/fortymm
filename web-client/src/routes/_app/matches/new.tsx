@@ -228,10 +228,16 @@ function SubmitRow({
           disabled={submitting}
         >
           {submitting ? (
-            <Loader2 size={16} strokeWidth={2.5} className="animate-spin" />
-          ) : null}
-          {submitting ? 'Starting…' : 'Start match'}
-          {!submitting && <ArrowRight size={16} strokeWidth={2.5} />}
+            <>
+              <Loader2 size={16} strokeWidth={2.5} className="animate-spin" />
+              Starting…
+            </>
+          ) : (
+            <>
+              Start match
+              <ArrowRight size={16} strokeWidth={2.5} />
+            </>
+          )}
         </button>
       </div>
     </div>

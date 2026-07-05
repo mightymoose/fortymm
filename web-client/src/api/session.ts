@@ -243,16 +243,25 @@ export function useConfirmEmail() {
       // Announce carried-over matches here, in the once-per-result mutation
       // lifecycle, rather than in a component `useEffect` — StrictMode
       // double-invokes effects on mount, which fired this toast twice (#233).
-      const moved = session.merged?.matches_moved ?? 0
-      if (moved > 0) {
-        toast.success(
-          moved === 1
-            ? 'We brought your 1 match with you.'
-            : `We brought your ${moved} matches with you.`,
-        )
-      }
+      announceMergedMatches(session)
     },
   })
+}
+
+/**
+ * Toast the "we carried your matches over" confirmation after a merge-capable
+ * finalize (email confirm or login-token consume). Single source of the
+ * singular/plural copy so the #241 grammar guard lives in one place, not two.
+ */
+export function announceMergedMatches(session: Session): void {
+  const moved = session.merged?.matches_moved ?? 0
+  if (moved > 0) {
+    toast.success(
+      moved === 1
+        ? 'We brought your 1 match with you.'
+        : `We brought your ${moved} matches with you.`,
+    )
+  }
 }
 
 export interface RequestLoginInput {
