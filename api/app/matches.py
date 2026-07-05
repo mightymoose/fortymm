@@ -1349,7 +1349,7 @@ async def _load_recent_form(
             db, user_id, match.league_id, match.created_at
         )
         matches_before, wins_before = await _load_career_before(
-            db, user_id, match.id, match.created_at
+            db, user_id, match.created_at
         )
         result.append(
             MatchDetailsPlayerForm(
@@ -1398,11 +1398,13 @@ async def _load_pre_match_rating(
 async def _load_career_before(
     db: AsyncSession,
     user_id: uuid.UUID,
-    current_match_id: uuid.UUID,
     before: datetime,
 ) -> tuple[int, int]:
-    """Cross-league ``(matches, wins)``. Excludes ``current_match_id`` so a
-    just-completed match isn't double-counted into its own pre-match record."""
+    """Cross-league ``(matches, wins)`` completed strictly before ``before``
+    (the current match's ``created_at``). The current match is excluded by the
+    date filter alone: a completed match's ``completed_at`` is always ``>=`` its
+    own ``created_at``, so it can never satisfy ``completed_at < created_at``. No
+    separate ``id`` guard is needed (issue #202)."""
     side = aliased(MatchSide)
     player = aliased(MatchSidePlayer)
     row = (
@@ -1416,7 +1418,6 @@ async def _load_career_before(
             .where(
                 player.user_id == user_id,
                 Match.status == MatchStatus.completed,
-                Match.id != current_match_id,
                 Match.completed_at < before,
             )
         )
