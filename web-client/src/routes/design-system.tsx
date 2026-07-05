@@ -136,6 +136,16 @@ export const Route = createFileRoute('/design-system')({
 const DEMO_AVATAR_SRC =
   "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' fill='%233a4a6e'/%3E%3Ccircle cx='32' cy='25' r='13' fill='%23e9edf5'/%3E%3Crect x='11' y='42' width='42' height='24' rx='12' fill='%23e9edf5'/%3E%3C/svg%3E"
 
+/** Selected day for the Date Picker showcase (matches the trigger label). */
+const SHOWCASE_DAY = new Date(2026, 3, 12)
+const formatWeekdayNameShort = (date: Date) =>
+  date.toLocaleString('en-US', { weekday: 'short' })
+
+/** Shared slot style for the Input OTP showcase; index 2 carries its own
+ * active/focused variant. */
+const OTP_SLOT_CLASS =
+  'size-11 rounded-md border border-[color:var(--border-subtle)] text-base first:rounded-l-md last:rounded-r-md first:border-l'
+
 function Section({
   id,
   title,
@@ -405,14 +415,8 @@ function FormsSection() {
       <Showcase title="Input OTP" tag="6-digit">
         <InputOTP maxLength={6} value="42" onChange={() => {}}>
           <InputOTPGroup className="gap-2">
-            <InputOTPSlot
-              index={0}
-              className="size-11 rounded-md border border-[color:var(--border-subtle)] text-base first:rounded-l-md last:rounded-r-md first:border-l"
-            />
-            <InputOTPSlot
-              index={1}
-              className="size-11 rounded-md border border-[color:var(--border-subtle)] text-base first:rounded-l-md last:rounded-r-md first:border-l"
-            />
+            <InputOTPSlot index={0} className={OTP_SLOT_CLASS} />
+            <InputOTPSlot index={1} className={OTP_SLOT_CLASS} />
             <InputOTPSlot
               index={2}
               className="relative z-10 size-11 rounded-md border border-[color:var(--ball-500)] text-base ring-3 ring-[color:var(--ball-500)]/50 first:rounded-l-md last:rounded-r-md first:border-l"
@@ -420,18 +424,9 @@ function FormsSection() {
           </InputOTPGroup>
           <InputOTPSeparator />
           <InputOTPGroup className="gap-2">
-            <InputOTPSlot
-              index={3}
-              className="size-11 rounded-md border border-[color:var(--border-subtle)] text-base first:rounded-l-md last:rounded-r-md first:border-l"
-            />
-            <InputOTPSlot
-              index={4}
-              className="size-11 rounded-md border border-[color:var(--border-subtle)] text-base first:rounded-l-md last:rounded-r-md first:border-l"
-            />
-            <InputOTPSlot
-              index={5}
-              className="size-11 rounded-md border border-[color:var(--border-subtle)] text-base first:rounded-l-md last:rounded-r-md first:border-l"
-            />
+            <InputOTPSlot index={3} className={OTP_SLOT_CLASS} />
+            <InputOTPSlot index={4} className={OTP_SLOT_CLASS} />
+            <InputOTPSlot index={5} className={OTP_SLOT_CLASS} />
           </InputOTPGroup>
         </InputOTP>
       </Showcase>
@@ -568,26 +563,20 @@ function FormsSection() {
               <PopoverContent className="w-auto p-0">
                 <Calendar
                   mode="single"
-                  selected={new Date(2026, 3, 12)}
-                  defaultMonth={new Date(2026, 3, 12)}
+                  selected={SHOWCASE_DAY}
+                  defaultMonth={SHOWCASE_DAY}
                   onSelect={() => {}}
-                  formatters={{
-                    formatWeekdayName: (date) =>
-                      date.toLocaleString('en-US', { weekday: 'short' }),
-                  }}
+                  formatters={{ formatWeekdayName: formatWeekdayNameShort }}
                 />
               </PopoverContent>
             </Popover>
           </div>
           <Calendar
             mode="single"
-            selected={new Date(2026, 3, 12)}
-            defaultMonth={new Date(2026, 3, 12)}
+            selected={SHOWCASE_DAY}
+            defaultMonth={SHOWCASE_DAY}
             onSelect={() => {}}
-            formatters={{
-              formatWeekdayName: (date) =>
-                date.toLocaleString('en-US', { weekday: 'short' }),
-            }}
+            formatters={{ formatWeekdayName: formatWeekdayNameShort }}
             className="rounded-lg border border-[color:var(--border-subtle)]"
           />
         </div>
