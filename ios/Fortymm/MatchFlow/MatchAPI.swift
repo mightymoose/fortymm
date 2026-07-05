@@ -303,7 +303,10 @@ struct GameScoreUpdateBody: Encodable {
 /// 409 body for a rejected conditional score write
 /// (`app.schemas.match.MatchGameScoreConflict`). `committedScore` is the row as
 /// it actually stands now (`committed_score`, decoded via `.convertFromSnakeCase`).
-struct GameScoreConflictDTO: Decodable {
+/// Conforms to `Error` so it can ride as the `Failure` of the `Result` that
+/// `APIClient.sendExpectingConflict` (and the `MatchService` score verbs) hand
+/// back — `Swift.Result` requires its failure type to be an `Error`.
+struct GameScoreConflictDTO: Decodable, Error {
     let message: String
     let committedScore: MatchScoreDTO?
 }

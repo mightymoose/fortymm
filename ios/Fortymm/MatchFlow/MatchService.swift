@@ -81,6 +81,85 @@ struct MatchService {
         return Self.finalMatch(from: details)
     }
 
+    // MARK: Per-game scratchpad writes
+
+    /// A successful score write came back without a score for the game we just
+    /// wrote — a can't-happen shape the server never emits, deliberately
+    /// distinct from `APIError` so a bug here can't masquerade as a real
+    /// network/decoding failure.
+    struct MissingScoreVersion: Error {}
+
+    /// Create this game's score (`POST .../games/{n}/scores/new`) and return the
+    /// new `version`, or the conflict body on a 409. Points are oriented exactly
+    /// like `postResult` (`a` = you, `b` = them → side-1/side-2, swapped when the
+    /// viewer is side 2). The success response is the full board, but this
+    /// deliberately reads back only this game's version — refreshing the rest of
+    /// the board is out of scope.
+    func createGameScore(
+        matchId: UUID, gameNumber: Int, game: Game, yourSideNumber: Int = 1
+    ) async throws -> Result<Int, GameScoreConflictDTO> {
+        let youAreSide1 = yourSideNumber != 2
+        guard let a = game.a, let b = game.b else { throw MissingScoreVersion() }
+        let body = GameScoreWriteBody(
+            side1Points: youAreSide1 ? a : b,
+            side2Points: youAreSide1 ? b : a
+        )
+        let result: Result<MatchDetailsDTO, GameScoreConflictDTO> =
+            try await client.sendExpectingConflict(
+                "POST", "/v1/matches/\(matchId.uuidString)/games/\(gameNumber)/scores/new",
+                body: body
+            )
+        return try Self.newVersion(from: result, gameNumber: gameNumber)
+    }
+
+    /// Update this game's score (`PUT .../games/{n}/scores`) as a conditional
+    /// write against `expectedVersion`, returning the new `version` or the
+    /// conflict body on a 409. Points are oriented like `createGameScore`.
+    func updateGameScore(
+        matchId: UUID, gameNumber: Int, game: Game, expectedVersion: Int,
+        yourSideNumber: Int = 1
+    ) async throws -> Result<Int, GameScoreConflictDTO> {
+        let youAreSide1 = yourSideNumber != 2
+        guard let a = game.a, let b = game.b else { throw MissingScoreVersion() }
+        let body = GameScoreUpdateBody(
+            side1Points: youAreSide1 ? a : b,
+            side2Points: youAreSide1 ? b : a,
+            expectedVersion: expectedVersion
+        )
+        let result: Result<MatchDetailsDTO, GameScoreConflictDTO> =
+            try await client.sendExpectingConflict(
+                "PUT", "/v1/matches/\(matchId.uuidString)/games/\(gameNumber)/scores",
+                body: body
+            )
+        return try Self.newVersion(from: result, gameNumber: gameNumber)
+    }
+
+    /// Delete this game's score (`DELETE .../games/{n}/scores`). The endpoint
+    /// returns the refreshed board, deliberately ignored — clearing a scratch
+    /// entry has no version to carry forward.
+    func deleteGameScore(matchId: UUID, gameNumber: Int) async throws {
+        let _: MatchDetailsDTO = try await client.delete(
+            "/v1/matches/\(matchId.uuidString)/games/\(gameNumber)/scores"
+        )
+    }
+
+    /// On success, pull the freshly written game's `version` out of the returned
+    /// board (throwing `MissingScoreVersion` if it's absent); on 409, pass the
+    /// conflict body straight through.
+    private static func newVersion(
+        from result: Result<MatchDetailsDTO, GameScoreConflictDTO>, gameNumber: Int
+    ) throws -> Result<Int, GameScoreConflictDTO> {
+        switch result {
+        case let .success(details):
+            guard let version = details.games
+                .first(where: { $0.gameNumber == gameNumber })?.score?.version
+            else { throw MissingScoreVersion() }
+            return .success(version)
+        case let .failure(conflict):
+            return .failure(conflict)
+        }
+    }
+
     // MARK: Accept
 
     /// Accept the standing proposal (`POST /v1/matches/{id}/results/{resultId}/
