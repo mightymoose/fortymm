@@ -37,3 +37,18 @@ jobs:
           name: playwright-report
           path: web-client/playwright-report
           retention-days: 14
+
+      # TEMP (reverted in this same PR alongside the committed baselines): the
+      # real regression check above stays intact. This extra step only
+      # (re)generates the design-system screenshot baselines on the linux runner
+      # — local Docker can't build the playwright image here — and uploads them
+      # so they can be downloaded and committed.
+      - name: Capture linux screenshot baselines
+        if: ${{ !cancelled() }}
+        run: npx playwright test design-system.spec.ts --update-snapshots
+      - uses: actions/upload-artifact@v7
+        if: ${{ !cancelled() }}
+        with:
+          name: updated-snapshots
+          path: web-client/e2e/design-system.spec.ts-snapshots
+          retention-days: 1
