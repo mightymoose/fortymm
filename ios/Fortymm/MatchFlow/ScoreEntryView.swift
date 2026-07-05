@@ -11,6 +11,10 @@ struct ScoreEntryView: View {
     /// (next task) can address the shared scratchpad without re-threading them.
     let matchId: UUID?
     let yourSideNumber: Int
+    /// Gateway for the per-game scratchpad writes fired on save. Injected from
+    /// `MatchFlowView` (which holds the same instance it posts results through)
+    /// so tests/previews can substitute a stub; defaults to the shared client.
+    var service: MatchService = .shared
     /// Games already entered for this match, in order (game 1…N). Empty for a
     /// new match; populated when resuming a live one so the user continues from
     /// where they left off rather than re-entering scored games. Each slot
@@ -354,10 +358,15 @@ struct ScoreEntryView: View {
 
     private func saveNext() {
         guard currentValid else { return }
+        // The slot just saved — captured before we advance `active` off it.
+        let saved = active
         // Advance to the next still-incomplete game (wrapping); stay put if the
         // match is fully scored.
         if let next = nextIncompleteIndex() { active = next }
         editing = false
+        // Fire the optimistic scratchpad write for the game we just left; the
+        // UI has already advanced (fire-and-forget).
+        fireWrite(for: saved)
     }
 
     /// Jump to any game's slot. Re-entering an already-complete game opens edit
@@ -384,12 +393,115 @@ struct ScoreEntryView: View {
 
     private func saveEdit() {
         guard currentValid else { return }
+        // The slot just edited — captured before we move `active` off it.
+        let saved = active
         editing = false
         // Return to the first still-incomplete game, else stay on the last.
         if let firstIncomplete = games.indices.first(where: { $0 != active && !MatchRules.gameComplete(games[$0].points) }) {
             active = firstIncomplete
         } else {
             active = games.count - 1
+        }
+        // Persist the edit to the shared scratchpad (fire-and-forget).
+        fireWrite(for: saved)
+    }
+
+    // MARK: Per-game scratchpad writes (fire-and-forget)
+
+    /// The result of one in-flight per-game write, handed back to the reducer.
+    private enum WriteOutcome {
+        /// The verb returned — either the new version on success, or the 409
+        /// conflict body.
+        case completed(Result<Int, GameScoreConflictDTO>)
+        /// The verb threw (offline, decoding, or any non-409 failure).
+        case threw
+    }
+
+    /// Fire the optimistic scratchpad write for the slot at `index` (game number
+    /// `index + 1`), having already advanced the UI. This never blocks the save.
+    ///
+    /// No-op on a *correction* board: once a result is proposed the scratchpad is
+    /// frozen, so a per-game write would 409 — corrections post through `post()`
+    /// alone. Also a no-op when there's no server match to address (`matchId` is
+    /// nil, which shouldn't happen once live scoring is reached).
+    ///
+    /// The slot's current sync decides the verb via `GameWriteIntent.forWrite`; a
+    /// `nil` intent means a write is already in flight, so we don't double-fire.
+    /// The slot is marked `.saving`, the write runs in a detached `Task`, and its
+    /// result is reduced back on the main actor by `applyWriteResult`.
+    private func fireWrite(for index: Int) {
+        guard !correction else { return }
+        guard let matchId else { return }
+        guard games.indices.contains(index) else { return }
+
+        guard let intent = GameWriteIntent.forWrite(games[index].sync) else { return }
+
+        let gameNumber = index + 1
+        // The points just entered — captured before mutating so the stale-result
+        // guard in `applyWriteResult` can compare against them.
+        let points = games[index].points
+        games[index].sync = .saving
+
+        Task {
+            do {
+                let result: Result<Int, GameScoreConflictDTO>
+                switch intent {
+                case .create:
+                    result = try await service.createGameScore(
+                        matchId: matchId, gameNumber: gameNumber,
+                        game: points, yourSideNumber: yourSideNumber
+                    )
+                case .update(let expectedVersion):
+                    result = try await service.updateGameScore(
+                        matchId: matchId, gameNumber: gameNumber,
+                        game: points, expectedVersion: expectedVersion,
+                        yourSideNumber: yourSideNumber
+                    )
+                }
+                applyWriteResult(gameNumber: gameNumber, sent: points, outcome: .completed(result))
+            } catch {
+                applyWriteResult(gameNumber: gameNumber, sent: points, outcome: .threw)
+            }
+        }
+    }
+
+    /// Reduce one write's result into the addressed slot's sync state, keyed by
+    /// GAME NUMBER (not a captured array index) since the user may have moved on.
+    ///
+    /// Stale-result guard: the transition applies only when the slot is still the
+    /// `.saving` we set for THIS write *and* its points still equal what we sent.
+    /// If a newer edit moved the slot off `.saving` (e.g. a later write for the
+    /// same game already resolved) or changed its points, this in-flight result is
+    /// stale and dropped — so a slow earlier write can't clobber a newer state.
+    ///
+    /// Transitions:
+    /// - success(version) → `.saved(version:)`.
+    /// - 409 with a committed score → `.conflict`, the committed points re-oriented
+    ///   from canonical side-1/side-2 onto the viewer's `a` = you / `b` = them axis
+    ///   (the same `mineIsSide1` rule the read path uses).
+    /// - 409 without a committed score (shouldn't happen) / thrown error →
+    ///   `.failed(retained:)`, keeping the entered points for a later retry.
+    @MainActor
+    private func applyWriteResult(gameNumber: Int, sent: Game, outcome: WriteOutcome) {
+        let index = gameNumber - 1
+        guard games.indices.contains(index) else { return }
+        guard case .saving = games[index].sync, games[index].points == sent else { return }
+
+        switch outcome {
+        case .completed(.success(let version)):
+            games[index].sync = .saved(version: version)
+        case .completed(.failure(let conflict)):
+            if let committed = conflict.committedScore {
+                let mineIsSide1 = yourSideNumber != 2
+                let oriented = mineIsSide1
+                    ? Game(a: committed.side1Points, b: committed.side2Points)
+                    : Game(a: committed.side2Points, b: committed.side1Points)
+                games[index].sync = .conflict(committed: oriented, version: committed.version)
+            } else {
+                games[index].sync = .failed(retained: sent)
+            }
+        case .threw:
+            games[index].sync = .failed(retained: sent)
         }
     }
 

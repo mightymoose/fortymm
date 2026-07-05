@@ -79,6 +79,9 @@ struct MatchFlowView: View {
                     // same non-nil guarantee `post()` leans on with `guard let`.
                     matchId: matchId,
                     yourSideNumber: resume?.yourSideNumber ?? 1,
+                    // Same service the flow posts results through, so per-game
+                    // scratchpad writes and the final post share one client.
+                    service: service,
                     // ScoreEntryView now holds `[ScoredGame]` directly, so the
                     // resume games ride in with their sync state intact — no
                     // down-adapter. The board still reads only `.points`.
