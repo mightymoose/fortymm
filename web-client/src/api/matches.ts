@@ -8,7 +8,6 @@ import {
 import {
   ApiError,
   api,
-  boardConflictDetail,
   conflictDetail,
   resolveBaseUrl,
   unwrap,
@@ -609,19 +608,6 @@ export function useProposeResult(matchId: string) {
         }),
       ),
     onSuccess: (data) => applyScoreMutationCache(queryClient, matchId, data),
-    onError: (error) => {
-      // Board-level conflict (issue D1): the proposed board disagreed with a
-      // game a concurrent participant committed to the shared scratchpad. The
-      // 409 carries the true committed match, so re-sync the caches straight
-      // from it (games + scoreboard + list) — no refetch. The entry screen
-      // reads the same `boardConflictDetail` off the mutation error to render
-      // the blocking "the score changed" interstitial against this fresh board.
-      if (!(error instanceof ApiError)) return
-      const committed = boardConflictDetail(error)?.committed_match as
-        | MatchDetails
-        | undefined
-      if (committed) applyScoreMutationCache(queryClient, matchId, committed)
-    },
   })
 }
 

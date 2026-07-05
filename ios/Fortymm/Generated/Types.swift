@@ -3134,44 +3134,6 @@ internal enum Components {
                 case diff
             }
         }
-        /// 409 body for a first-post proposal whose board disagrees with a game
-        /// already committed to the shared scratchpad — the board-level analogue of
-        /// ``MatchGameScoreConflict``'s per-game version guard (issue D1 / #747-B2).
-        ///
-        /// A pre-result "Post result" assembles its board client-side; if a concurrent
-        /// participant committed a game this client never saw, the payload would
-        /// silently overwrite it. The handler rejects that and returns the true board
-        /// in ``committed_match`` (the same ``MatchDetails`` shape the success path
-        /// returns) so the client re-syncs from the body — without a refetch — and the
-        /// poster re-decides against reality instead of clobbering a committed game.
-        ///
-        /// ``committed_match`` is the discriminator the client keys on to tell this
-        /// apart from the per-game ``committed_score`` conflict, the negotiation
-        /// conflict, and a plain-string 409 (a locked match).
-        ///
-        /// - Remark: Generated from `#/components/schemas/MatchResultBoardConflict`.
-        internal struct MatchResultBoardConflict: Codable, Hashable, Sendable {
-            /// - Remark: Generated from `#/components/schemas/MatchResultBoardConflict/message`.
-            internal var message: Swift.String
-            /// - Remark: Generated from `#/components/schemas/MatchResultBoardConflict/committed_match`.
-            internal var committedMatch: Components.Schemas.AppSchemasMatchMatchDetails
-            /// Creates a new `MatchResultBoardConflict`.
-            ///
-            /// - Parameters:
-            ///   - message:
-            ///   - committedMatch:
-            internal init(
-                message: Swift.String,
-                committedMatch: Components.Schemas.AppSchemasMatchMatchDetails
-            ) {
-                self.message = message
-                self.committedMatch = committedMatch
-            }
-            internal enum CodingKeys: String, CodingKey {
-                case message
-                case committedMatch = "committed_match"
-            }
-        }
         /// One game inside a finalize-the-match payload. Per-game point legality
         /// is checked here; cross-game checks (contiguous numbering, decided result,
         /// no scores past the decider) live in the handler against the full list.
@@ -12148,57 +12110,6 @@ internal enum Operations {
                     default:
                         try throwUnexpectedResponseStatus(
                             expectedStatus: "created",
-                            response: self
-                        )
-                    }
-                }
-            }
-            internal struct Conflict: Sendable, Hashable {
-                /// - Remark: Generated from `#/paths/v1/matches/{match_id}/results/POST/responses/409/content`.
-                internal enum Body: Sendable, Hashable {
-                    /// - Remark: Generated from `#/paths/v1/matches/{match_id}/results/POST/responses/409/content/application\/json`.
-                    case json(Components.Schemas.MatchResultBoardConflict)
-                    /// The associated value of the enum case if `self` is `.json`.
-                    ///
-                    /// - Throws: An error if `self` is not `.json`.
-                    /// - SeeAlso: `.json`.
-                    internal var json: Components.Schemas.MatchResultBoardConflict {
-                        get throws {
-                            switch self {
-                            case let .json(body):
-                                return body
-                            }
-                        }
-                    }
-                }
-                /// Received HTTP response body
-                internal var body: Operations.PostMatchResultV1MatchesMatchIdResultsPost.Output.Conflict.Body
-                /// Creates a new `Conflict`.
-                ///
-                /// - Parameters:
-                ///   - body: Received HTTP response body
-                internal init(body: Operations.PostMatchResultV1MatchesMatchIdResultsPost.Output.Conflict.Body) {
-                    self.body = body
-                }
-            }
-            /// Conflict
-            ///
-            /// - Remark: Generated from `#/paths//v1/matches/{match_id}/results/post(post_match_result_v1_matches__match_id__results_post)/responses/409`.
-            ///
-            /// HTTP response code: `409 conflict`.
-            case conflict(Operations.PostMatchResultV1MatchesMatchIdResultsPost.Output.Conflict)
-            /// The associated value of the enum case if `self` is `.conflict`.
-            ///
-            /// - Throws: An error if `self` is not `.conflict`.
-            /// - SeeAlso: `.conflict`.
-            internal var conflict: Operations.PostMatchResultV1MatchesMatchIdResultsPost.Output.Conflict {
-                get throws {
-                    switch self {
-                    case let .conflict(response):
-                        return response
-                    default:
-                        try throwUnexpectedResponseStatus(
-                            expectedStatus: "conflict",
                             response: self
                         )
                     }
