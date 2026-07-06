@@ -74,15 +74,16 @@ struct ScoreEntryView: View {
     private var current: Game { games.indices.contains(active) ? games[active].points : Game() }
     private var currentValid: Bool { MatchRules.gameComplete(current) }
 
-    /// Tally shown in the VS column. `setsWon` already ignores incomplete games,
-    /// so counting over all slots (including the one being entered) is correct.
-    private var setsDisplay: SetScore { MatchRules.setsWon(games.map(\.points)) }
+    /// Tally shown in the VS column. `setsWon` ignores incomplete games *and* now
+    /// caps the count at the decider, so a board scored past the clinch still shows
+    /// the decided score (e.g. 3–0), never a phantom tally from overrun games.
+    private var setsDisplay: SetScore { MatchRules.setsWon(games.map(\.points), bestOf: config.bestOf) }
     /// True when the games entered so far form a complete, decided match — i.e.
     /// there's a valid result to Post. Uses the same canonical rule as `post()`
     /// so the Post button never appears for games the server would reject, and
     /// never goes dead when it does appear.
     private var deciding: Bool {
-        MatchRules.gamesThroughDecider(games.map(\.points), bestOf: config.bestOf) != nil
+        MatchRules.decidedGames(games.map(\.points), bestOf: config.bestOf) != nil
     }
 
     var body: some View {
@@ -92,6 +93,7 @@ struct ScoreEntryView: View {
             scoreError
             Spacer().frame(height: 12)
             scoreline
+            overrunHint
             actionRow
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
@@ -182,6 +184,27 @@ struct ScoreEntryView: View {
         }
     }
 
+    // MARK: Overrun hint
+
+    /// Inline, purely-informational callout shown when the board has a completed
+    /// game *past* the decider (an overrun). Post is already unavailable — the
+    /// single source of truth for postability is `decidedGames`/`deciding`, which
+    /// returns nil for an overrun, so this is NOT a second disable gate. It only
+    /// tells the user which trailing games to clear (tap a chip → Clear, reusing
+    /// the existing confirm-clear → delete flow) so the decided board can be posted.
+    @ViewBuilder
+    private var overrunHint: some View {
+        if let decidedAt = MatchRules.overrunDecider(games.map(\.points), bestOf: config.bestOf) {
+            Text("The match is decided at game \(decidedAt) — clear the games after it before posting.")
+                .font(FMFont.ui(12, weight: .medium))
+                .foregroundStyle(FMColor.warn)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, 24)
+                .padding(.top, 10)
+        }
+    }
+
     // MARK: Header
 
     private var header: some View {
@@ -251,7 +274,7 @@ struct ScoreEntryView: View {
                 ForEach(0..<config.bestOf, id: \.self) { i in
                     let g = games.indices.contains(i) ? games[i].points : Game()
                     let s = games.indices.contains(i) ? games[i].sync : .localOnly
-                    GameChip(index: i, game: g, sync: s, active: i == active) {
+                    GameChip(index: i, game: g, sync: s, active: i == active, locked: lockedForEntry(i)) {
                         if i != active { selectGame(i) }
                     }
                 }
@@ -424,10 +447,24 @@ struct ScoreEntryView: View {
         fireWrite(for: saved)
     }
 
+    /// True for an *empty* slot strictly past the decider once a side has clinched:
+    /// scoring it would overrun a decided match, so it can't be entered. Already-
+    /// scored slots stay tappable (so an overrun game can be selected and cleared),
+    /// and the decider game and everything before it stay editable (so the user can
+    /// still fix an earlier game). `deciderGameNumber` is 1-based, so game numbers
+    /// strictly past it are exactly the indices `>= decider`.
+    private func lockedForEntry(_ i: Int) -> Bool {
+        guard games.indices.contains(i),
+              let decider = MatchRules.deciderGameNumber(games.map(\.points), bestOf: config.bestOf)
+        else { return false }
+        return i >= decider && !MatchRules.gameComplete(games[i].points)
+    }
+
     /// Jump to any game's slot. Re-entering an already-complete game opens edit
-    /// mode (Clear / Save changes); an empty slot is plain entry.
+    /// mode (Clear / Save changes); an empty slot is plain entry. An empty slot
+    /// past the decider is locked (see `lockedForEntry`) and ignored.
     private func selectGame(_ i: Int) {
-        guard games.indices.contains(i) else { return }
+        guard games.indices.contains(i), !lockedForEntry(i) else { return }
         active = i
         editing = MatchRules.gameComplete(games[i].points)
         // A conflicted slot demands an explicit keep-mine / use-theirs decision —
@@ -435,12 +472,15 @@ struct ScoreEntryView: View {
         if case .conflict = games[i].sync { resolving = i }
     }
 
-    /// First incomplete slot searching forward from `active` and wrapping.
+    /// First incomplete slot searching forward from `active` and wrapping. Slots
+    /// locked past the decider are skipped, so saving the clinching game never
+    /// advances the user into a game they can't enter (the match is decided —
+    /// `deciding` now offers Post instead).
     private func nextIncompleteIndex() -> Int? {
         guard !games.isEmpty else { return nil }
         return (1...games.count)
             .map { (active + $0) % games.count }
-            .first { !MatchRules.gameComplete(games[$0].points) }
+            .first { !MatchRules.gameComplete(games[$0].points) && !lockedForEntry($0) }
     }
 
     /// Clear the active game. Sync-state-aware: a game that has (or may be about to
@@ -708,12 +748,13 @@ struct ScoreEntryView: View {
     }
 
     private func post() {
-        // The completed games in play order, game 1 up to and including the
-        // decider — anything entered past the decider is dropped, matching the
-        // server's finalize rules. The coordinator posts these to
-        // `POST /v1/matches/{id}/results`; the server computes sets won, the
-        // winner, and any rating change — so we don't here.
-        guard let finalGames = MatchRules.gamesThroughDecider(games.map(\.points), bestOf: config.bestOf) else { return }
+        // The clean decided board: the completed games in play order, game 1 up to
+        // and including the decider. `decidedGames` returns nil for an overrun (a
+        // completed slot past the decider) — so an overrun board is *refused* here,
+        // not silently truncated, matching the server's finalize rules and the web
+        // client. The coordinator posts these to `POST /v1/matches/{id}/results`;
+        // the server computes sets won, the winner, and any rating change — not us.
+        guard let finalGames = MatchRules.decidedGames(games.map(\.points), bestOf: config.bestOf) else { return }
         focus = nil
         onPost(finalGames)
     }
@@ -777,6 +818,10 @@ private struct GameChip: View {
     /// per-cell status dot.
     let sync: SyncState
     let active: Bool
+    /// True for an empty slot past the decider: the match is already decided, so
+    /// entering it would overrun. Rendered dimmer and made untappable — but only
+    /// empty slots are locked, so an overrun game stays selectable to be cleared.
+    let locked: Bool
     let onTap: () -> Void
 
     private var done: Bool { MatchRules.gameComplete(game) }
@@ -814,7 +859,7 @@ private struct GameChip: View {
             .fmRoundedBorder(radius: FMRadius.md,
                              color: active ? FMColor.ball500 : (done ? FMColor.borderDefault : FMColor.borderSubtle),
                              lineWidth: 1.5)
-            .opacity(!done && !active ? 0.5 : 1)
+            .opacity(locked ? 0.32 : (!done && !active ? 0.5 : 1))
             // Sync status rides in the top-trailing corner as an overlay so it
             // never widens the chip — a full best-of-7 row still shares the width
             // evenly. `.localOnly` shows nothing (looks like today's board).
@@ -824,9 +869,9 @@ private struct GameChip: View {
             }
         }
         .buttonStyle(.plain)
-        // Any game can be selected and edited in any order; only the slot that's
-        // already active is inert.
-        .disabled(active)
+        // Any scored game can be selected and edited in any order; the slot that's
+        // already active is inert, as is an empty slot locked past the decider.
+        .disabled(active || locked)
     }
 
     /// Tiny, unobtrusive glyph reflecting the slot's scratchpad sync: a spinner

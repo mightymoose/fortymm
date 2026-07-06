@@ -166,6 +166,7 @@ class NotificationService:
         body: str,
         category: str | None = None,
         data: Mapping[str, str] | None = None,
+        collapse_id: str | None = None,
     ) -> int:
         """Best-effort push to every device a user has registered. Returns the
         number APNs accepted and prunes any gone tokens as a side effect.
@@ -181,7 +182,12 @@ class NotificationService:
             return 0
         tokens = await self._tokens_for_user(user_id)
         sent, _ = await self._fan_out(
-            tokens, title=title, body=body, category=category, data=data
+            tokens,
+            title=title,
+            body=body,
+            category=category,
+            data=data,
+            collapse_id=collapse_id,
         )
         return sent
 
@@ -199,6 +205,7 @@ class NotificationService:
         delta: str | None = None,
         push_category: str | None = None,
         push_data: Mapping[str, str] | None = None,
+        collapse_id: str | None = None,
     ) -> NotifyResult:
         """Deliver one notification to one user across every channel the user's
         preferences allow for the notification's category.
@@ -250,6 +257,7 @@ class NotificationService:
                     body=body,
                     category=push_category,
                     data=push_data,
+                    collapse_id=collapse_id,
                 )
             except SQLAlchemyError:
                 await self._db.rollback()
@@ -836,6 +844,7 @@ class NotificationService:
         body: str,
         category: str | None = None,
         data: Mapping[str, str] | None = None,
+        collapse_id: str | None = None,
     ) -> tuple[int, int]:
         """Send one push per token, returning ``(sent, pruned)``. Tokens APNs
         reports as gone are deleted in a single statement."""
@@ -852,6 +861,7 @@ class NotificationService:
                 body=body,
                 category=category,
                 data=data,
+                collapse_id=collapse_id,
             )
             if result.outcome is SendOutcome.SUCCESS:
                 sent += 1

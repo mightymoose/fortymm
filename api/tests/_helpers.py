@@ -171,6 +171,7 @@ class SentPush:
     body: str
     category: str | None
     data: Mapping[str, str] | None
+    collapse_id: str | None = None
 
 
 class FakeSender:
@@ -197,8 +198,11 @@ class FakeSender:
         body: str,
         category: str | None = None,
         data: Mapping[str, str] | None = None,
+        collapse_id: str | None = None,
     ) -> SendResult:
-        self.sent.append(SentPush(token, environment, title, body, category, data))
+        self.sent.append(
+            SentPush(token, environment, title, body, category, data, collapse_id)
+        )
         return SendResult(self._outcomes.get(token, SendOutcome.SUCCESS))
 
 

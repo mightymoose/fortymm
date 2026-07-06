@@ -4,9 +4,11 @@ import UserNotifications
 /// Identifiers shared with the backend push payload (`api/app/notifications`).
 /// A push whose `aps.category` is `MATCH_RESULT_CONFIRMATION` renders the
 /// Approve / Suggest-correction buttons registered below; the `match_id`
-/// userInfo key tells the app which match the buttons (and a tap) act on. Kept
-/// in one place so the device-side registration can't drift from what the
-/// server sends.
+/// userInfo key tells the app which match the buttons (and a tap) act on, and
+/// `result_id` pins Approve to the specific standing result the notification
+/// was about (so a stale push can't sign the user onto a later one). Kept in
+/// one place so the device-side registration can't drift from what the server
+/// sends.
 enum MatchNotification {
     /// Must equal `MATCH_RESULT_CONFIRMATION_CATEGORY` in `app/notifications/apns.py`.
     static let category = "MATCH_RESULT_CONFIRMATION"
@@ -16,6 +18,10 @@ enum MatchNotification {
     static let suggestCorrectionAction = "DISPUTE_MATCH_ACTION"
     /// Must equal the `data` key the server sends (`{"match_id": "<uuid>"}`).
     static let matchIdKey = "match_id"
+    /// Must equal the `data` key the server sends (`{"result_id": "<uuid>"}`) —
+    /// the standing result this push is about, used as the acceptance token so
+    /// Approve binds to that exact result rather than whatever is standing now.
+    static let resultIdKey = "result_id"
 }
 
 /// Owns the device side of remote (APNs) push notifications:
@@ -28,9 +34,10 @@ enum MatchNotification {
 ///    push carries Approve / Suggest-correction action buttons,
 /// 4. presents pushes as a banner even while the app is foregrounded (otherwise
 ///    a self-test looks like nothing happened),
-/// 5. handles a tapped action: Approve accepts the standing proposal in the
-///    background (no need to open the app); Suggest correction and a body tap
-///    both deep-link to the match via `onOpenMatch`.
+/// 5. handles a tapped action: Approve accepts the exact result the push
+///    carried (its `result_id` token) in the background (no need to open the
+///    app), 409ing gracefully if that result was superseded; Suggest
+///    correction and a body tap both deep-link to the match via `onOpenMatch`.
 ///
 /// A singleton because the `UIApplicationDelegate` token callbacks and the
 /// SwiftUI view that triggers registration must talk to the same instance, and
@@ -76,10 +83,11 @@ final class PushNotificationManager: NSObject {
         center.setNotificationCategories([Self.matchConfirmationCategory()])
     }
 
-    /// The "a result is waiting on you" category: Approve accepts the standing
-    /// proposal in the background (no `.foreground` — a quick tap acts without
-    /// opening the app). Suggesting a correction needs the full board editor,
-    /// so that action opens the app on the match instead of acting inline.
+    /// The "a result is waiting on you" category: Approve accepts the exact
+    /// result the push named in the background (no `.foreground` — a quick tap
+    /// acts without opening the app). Suggesting a correction needs the full
+    /// board editor, so that action opens the app on the match instead of
+    /// acting inline.
     private static func matchConfirmationCategory() -> UNNotificationCategory {
         let approve = UNNotificationAction(
             identifier: MatchNotification.approveAction,
@@ -164,10 +172,10 @@ extension PushNotificationManager: UNUserNotificationCenterDelegate {
     }
 
     /// The user acted on a notification. For a match-confirmation push:
-    /// Approve accepts the standing proposal in the background; "Suggest
-    /// correction" and a body tap both open the app on the match (a correction
-    /// needs the full board editor). Anything we don't recognise — or a payload
-    /// missing its `match_id` — just dismisses.
+    /// Approve accepts the exact result the push carried (its `result_id`) in
+    /// the background; "Suggest correction" and a body tap both open the app on
+    /// the match (a correction needs the full board editor). Anything we don't
+    /// recognise — or a payload missing its `match_id` — just dismisses.
     func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         didReceive response: UNNotificationResponse,
@@ -184,17 +192,39 @@ extension PushNotificationManager: UNUserNotificationCenterDelegate {
 
         switch response.actionIdentifier {
         case MatchNotification.approveAction:
-            // The push payload carries only the match id; the service fetches
-            // the match to resolve the standing proposal (the acceptance
-            // token) and accepts it. Best-effort: a failed sign-off (the
-            // proposal moved on, or was already accepted) shouldn't hang the
-            // notification — the match screen reconciles state on next open.
-            // iOS gives this background action a short window; the fetch +
-            // accept pair fits comfortably.
+            // Bind the acceptance to the *specific* result this push named
+            // (`result_id`, the acceptance token) rather than re-resolving
+            // whatever is standing now — otherwise a stale notification about
+            // result R1 could silently sign the user onto a later R2 they never
+            // saw. iOS gives this background action a short window; a single
+            // accept POST fits comfortably.
+            guard
+                let rawResult = userInfo[MatchNotification.resultIdKey] as? String,
+                let resultId = UUID(uuidString: rawResult)
+            else {
+                // Older/malformed push with no result token: don't blind-accept
+                // the current standing result — open the match so the user
+                // reviews and confirms the score themselves.
+                DispatchQueue.main.async {
+                    self.openMatch(matchId)
+                    completionHandler()
+                }
+                return
+            }
             Task {
                 do {
-                    _ = try await self.matchService.acceptStandingResult(matchId)
+                    _ = try await self.matchService.acceptResult(
+                        matchId: matchId, resultId: resultId
+                    )
+                } catch APIError.http(409, _) {
+                    // The tapped result was superseded (a correction landed, or
+                    // it was already accepted) — do NOT accept whatever replaced
+                    // it. Nudge the user to review the current score instead of
+                    // binding them to a result they never saw.
+                    await self.handleSupersededApproval(matchId: matchId)
                 } catch {
+                    // Any other failure is best-effort: the match screen
+                    // reconciles state on next open.
                     print("[push] match accept failed: \(error.fmMessage)")
                 }
                 completionHandler()
@@ -221,6 +251,33 @@ extension PushNotificationManager: UNUserNotificationCenterDelegate {
             onOpenMatch(matchId)
         } else {
             pendingMatchOpen = matchId
+        }
+    }
+
+    /// The Approve action's result was superseded before the tap landed (409).
+    /// If the app is foregrounded, deep-link to the match so the user sees the
+    /// current score right away; otherwise post a plain local notification
+    /// (no Approve button — it carries only `match_id`, so tapping its body
+    /// opens the match) nudging them to review before signing off.
+    @MainActor
+    private func handleSupersededApproval(matchId: UUID) async {
+        if UIApplication.shared.applicationState == .active {
+            openMatch(matchId)
+            return
+        }
+        let content = UNMutableNotificationContent()
+        content.title = "Result changed"
+        content.body = "This result changed since we notified you — open the match to review the current score."
+        content.userInfo = [MatchNotification.matchIdKey: matchId.uuidString]
+        let request = UNNotificationRequest(
+            identifier: UUID().uuidString,
+            content: content,
+            trigger: nil
+        )
+        do {
+            try await UNUserNotificationCenter.current().add(request)
+        } catch {
+            print("[push] superseded-approval nudge failed: \(error.localizedDescription)")
         }
     }
 }

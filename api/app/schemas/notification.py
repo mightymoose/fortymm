@@ -272,6 +272,7 @@ class NotificationJob(BaseModel):
     delta: str | None = None
     push_category: str | None = None
     push_data: dict[str, str] | None = None
+    collapse_id: str | None = None
 
 
 class BroadcastRecipient(BaseModel):
