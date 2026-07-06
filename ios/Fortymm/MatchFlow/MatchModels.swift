@@ -412,7 +412,13 @@ enum MatchRules {
         return a > b ? .you : .opponent
     }
 
-    static func setsWon(_ games: [Game]) -> SetScore {
+    /// Games-won tally, stopping at the decider: once a side reaches
+    /// `gamesToWin(bestOf:)` the count freezes, so the score reported is the
+    /// *decided* score and never an inflated post-decider count (a board that
+    /// clinched 3–0 then had a stray 4th completed game still reports 3–0).
+    /// Gap-tolerant like the web `matchDecision` (incomplete slots are skipped).
+    static func setsWon(_ games: [Game], bestOf: Int) -> SetScore {
+        let need = gamesToWin(bestOf: bestOf)
         var a = 0, b = 0
         for g in games {
             switch gameWinner(g) {
@@ -420,31 +426,69 @@ enum MatchRules {
             case .opponent: b += 1
             case .none: break
             }
+            if a >= need || b >= need { break }
         }
         return SetScore(a: a, b: b)
     }
 
     static func matchDecided(_ games: [Game], bestOf: Int) -> Bool {
-        let sw = setsWon(games)
+        let sw = setsWon(games, bestOf: bestOf)
         let need = gamesToWin(bestOf: bestOf)
         return sw.a >= need || sw.b >= need
     }
 
-    /// The canonical postable games: the gap-free run of completed games from
-    /// game 1 up to *and including* the game that decides the match, dropping
-    /// anything entered past the decider. Returns nil when the games entered so
-    /// far don't yet form a complete, decided match — in which case Post must
-    /// not be offered.
+    /// The 1-based game number at which some side first reaches
+    /// `gamesToWin(bestOf:)`, walking completed slots in index order. Gap-tolerant:
+    /// incomplete slots are skipped while counting wins (index + 1 is the game
+    /// number). nil when no side has clinched yet. Mirrors the web
+    /// `deciderGameNumber` / `matchDecision.decidedAt` in
+    /// web-client/src/lib/scoring.ts.
+    static func deciderGameNumber(_ games: [Game], bestOf: Int) -> Int? {
+        let need = gamesToWin(bestOf: bestOf)
+        var a = 0, b = 0
+        for (i, g) in games.enumerated() {
+            switch gameWinner(g) {
+            case .you: a += 1
+            case .opponent: b += 1
+            case .none: continue
+            }
+            if a >= need || b >= need { return i + 1 }
+        }
+        return nil
+    }
+
+    /// The decider game number *only* when a completed slot exists strictly past
+    /// the decider (an "overrun" — some side clinched before the last completed
+    /// game). nil for empty, undecided, or cleanly-decided-at-the-last-completed
+    /// boards. Mirrors the web `overrunDecider` in web-client/src/lib/scoring.ts
+    /// (`decidedAt < lastCompletedGameNumber ? decidedAt : nil`).
+    static func overrunDecider(_ games: [Game], bestOf: Int) -> Int? {
+        guard let decidedAt = deciderGameNumber(games, bestOf: bestOf) else { return nil }
+        // Highest 1-based game number among completed slots.
+        var lastCompleted = 0
+        for (i, g) in games.enumerated() where gameWinner(g) != nil {
+            lastCompleted = i + 1
+        }
+        return decidedAt < lastCompleted ? decidedAt : nil
+    }
+
+    /// The canonical postable games — the completed prefix from game 1 up to *and
+    /// including* the decider — returned **only** when the board is a clean decided
+    /// match. Returns nil otherwise; Post must not be offered.
     ///
     /// Assumes `games` is the dense, position-indexed slot array the score-entry
-    /// screen builds (index i ⇒ game i+1, length == bestOf). Contiguity, the
-    /// no-duplicate-game-numbers rule, and the bestOf bound that the server's
-    /// finalize validator (api/app/matches.py) and the web client's `decidedSide`
-    /// (web-client/src/lib/scoring.ts) check explicitly are guaranteed here by
-    /// that array shape rather than re-validated: a gap (incomplete slot) before
-    /// the decider yields nil, and games past the decider are truncated rather
-    /// than rejected (the client simply never posts them).
-    static func gamesThroughDecider(_ games: [Game], bestOf: Int) -> [Game]? {
+    /// screen builds (index i ⇒ game i+1, length == bestOf). Strict, at parity with
+    /// the web client's `isDecidedMatch` (web-client/src/lib/scoring.ts) and the
+    /// server's finalize validator (api/app/matches.py):
+    ///
+    /// - a gap (incomplete slot) *before* the decider ⇒ nil, and
+    /// - an **overrun** — any completed slot strictly *past* the decider ⇒ nil.
+    ///
+    /// Overruns are **refused (nil), not truncated**: a board scored past the
+    /// decider is rejected outright rather than silently trimmed to the decider.
+    static func decidedGames(_ games: [Game], bestOf: Int) -> [Game]? {
+        // A completed slot past the decider is an overrun ⇒ refuse (don't truncate).
+        if overrunDecider(games, bestOf: bestOf) != nil { return nil }
         let need = gamesToWin(bestOf: bestOf)
         var a = 0, b = 0
         for (i, g) in games.enumerated() {

@@ -3452,6 +3452,7 @@ async def test_posting_result_enqueues_confirmation_for_opponent(
             },
         )
         assert response.status_code == 201
+        standing_result_id = response.json()["negotiation"]["standing_result"]["id"]
 
     jobs = enqueued_notification_jobs(fake_notifications_queue)
     assert [job.user_id for job in jobs] == [opp.id]
@@ -3459,7 +3460,14 @@ async def test_posting_result_enqueues_confirmation_for_opponent(
     assert job.category.value == "result_confirm"
     assert job.link == f"/matches/{match['id']}"
     assert job.push_category == MATCH_RESULT_CONFIRMATION_CATEGORY
-    assert job.push_data == {"match_id": match["id"]}
+    # The push carries the specific result it's about (so the client can route
+    # to it) and a per-match collapse id (so a superseding confirmation replaces
+    # the stale banner rather than stacking).
+    assert job.push_data == {
+        "match_id": match["id"],
+        "result_id": standing_result_id,
+    }
+    assert job.collapse_id == f"result-confirm:{match['id']}"
     # Propose/accept vocabulary, not the retired confirm/dispute model (#728).
     # A first post's recipient sees Accept/Suggest-correction buttons (not
     # Accept/Counter — that pair is reserved for the corrected-result case).

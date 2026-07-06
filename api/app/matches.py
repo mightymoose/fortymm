@@ -1254,6 +1254,10 @@ async def _notify_result_posted(
     if copy is None:
         return
     title, body = copy
+    result = standing_result(match)
+    push_data = {"match_id": str(match.id)}
+    if result is not None:
+        push_data["result_id"] = str(result.id)
     for player in recipient_side.players:
         notifications.enqueue_notification(
             NotificationJob(
@@ -1264,7 +1268,8 @@ async def _notify_result_posted(
                 link=f"/matches/{match.id}",
                 action_label="Review",
                 push_category=MATCH_RESULT_CONFIRMATION_CATEGORY,
-                push_data={"match_id": str(match.id)},
+                push_data=push_data,
+                collapse_id=f"result-confirm:{match.id}",
             )
         )
 

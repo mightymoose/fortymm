@@ -41,6 +41,14 @@ table-tennis score, ending the instant one side clinches the majority (no games
 recorded after the decider). Every result must describe a decided board.
 _Avoid_: finished score, final board.
 
+**Overrun**:
+A board with a game scored *past* the decider — some side clinched the majority,
+yet a later game is also recorded. Not a decided board, and never healed into
+one: every surface refuses it (the score-entry page blocks the save, the propose
+endpoint 422s) and the fix is to clear the games after the decider, not to drop
+them silently. Distinct from an empty *gap*, which compaction closes harmlessly.
+_Avoid_: extra games, overflow, trailing games.
+
 **Result**:
 A claim about how a match ended — a decided board that one participant puts
 forward for the other to agree to. Frozen when proposed; never edited in place.
