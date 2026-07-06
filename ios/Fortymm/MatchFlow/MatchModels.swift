@@ -431,12 +431,6 @@ enum MatchRules {
         return SetScore(a: a, b: b)
     }
 
-    static func matchDecided(_ games: [Game], bestOf: Int) -> Bool {
-        let sw = setsWon(games, bestOf: bestOf)
-        let need = gamesToWin(bestOf: bestOf)
-        return sw.a >= need || sw.b >= need
-    }
-
     /// The 1-based game number at which some side first reaches
     /// `gamesToWin(bestOf:)`, walking completed slots in index order. Gap-tolerant:
     /// incomplete slots are skipped while counting wins (index + 1 is the game
@@ -487,20 +481,14 @@ enum MatchRules {
     /// Overruns are **refused (nil), not truncated**: a board scored past the
     /// decider is rejected outright rather than silently trimmed to the decider.
     static func decidedGames(_ games: [Game], bestOf: Int) -> [Game]? {
-        // A completed slot past the decider is an overrun ⇒ refuse (don't truncate).
-        if overrunDecider(games, bestOf: bestOf) != nil { return nil }
-        let need = gamesToWin(bestOf: bestOf)
-        var a = 0, b = 0
-        for (i, g) in games.enumerated() {
-            // A gap (incomplete game) before the match is decided ⇒ not postable.
-            guard let winner = gameWinner(g) else { return nil }
-            switch winner {
-            case .you: a += 1
-            case .opponent: b += 1
-            }
-            if a >= need || b >= need { return Array(games.prefix(i + 1)) }
-        }
-        return nil
+        // Refuse an overrun (a completed slot past the decider) — don't truncate —
+        // and require a clinch. `deciderGameNumber` is gap-tolerant, so also reject
+        // a gap (an incomplete slot) inside the prefix through the decider.
+        guard overrunDecider(games, bestOf: bestOf) == nil,
+              let decidedAt = deciderGameNumber(games, bestOf: bestOf)
+        else { return nil }
+        let prefix = Array(games.prefix(decidedAt))
+        return prefix.allSatisfy { gameWinner($0) != nil } ? prefix : nil
     }
 
     /// Elo delta, K = 26. Caller passes `won`; returns the signed change.

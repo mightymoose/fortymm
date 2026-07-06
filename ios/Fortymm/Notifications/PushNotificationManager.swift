@@ -216,7 +216,7 @@ extension PushNotificationManager: UNUserNotificationCenterDelegate {
                     _ = try await self.matchService.acceptResult(
                         matchId: matchId, resultId: resultId
                     )
-                } catch let APIError.http(status, _) where status == 409 {
+                } catch APIError.http(409, _) {
                     // The tapped result was superseded (a correction landed, or
                     // it was already accepted) — do NOT accept whatever replaced
                     // it. Nudge the user to review the current score instead of
