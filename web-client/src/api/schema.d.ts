@@ -456,7 +456,7 @@ export interface paths {
          *     the proposed board (validated as complete + decided) becomes the canonical
          *     ``match_games`` snapshot.
          *
-         *     Solo / unrated matches (no second party whose sign-off is worth waiting on)
+         *     Solo / unrated matches (no second party whose acceptance is worth waiting on)
          *     self-accept and finalize immediately — ``side.won`` and the rating update
          *     fire here. Rated two-human matches leave the result *standing* (unaccepted)
          *     for the opposing side to accept via
@@ -1097,7 +1097,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "dispute" | "review" | "score";
+            kind: "review" | "score";
             /** Affects Rating */
             affects_rating: boolean;
             /** Current Game Number */
@@ -1496,15 +1496,16 @@ export interface components {
          * MatchListFilter
          * @description The selectable buckets on the ``/matches`` list filter.
          *
-         *     Mostly a 1:1 echo of ``MatchStatus``, but ``awaiting_confirmation`` is a
+         *     Mostly a 1:1 echo of ``MatchStatus``, but ``awaiting_acceptance`` is a
          *     *derived* bucket with no DB status of its own — it's an ``in_progress``
-         *     match that already carries at least one signature (a posted result waiting
-         *     on the other side; see ``_status_label``). The ``live`` filter therefore
-         *     means "``in_progress`` with **no** signature yet", so a posted-but-unconfirmed
-         *     result no longer silently inflates the Live tab / count (issue #381).
+         *     match that already has a standing proposed result (waiting on the other
+         *     side to accept or counter; see ``_status_label``). The ``live`` filter
+         *     therefore means "``in_progress`` with **no** proposed result yet", so a
+         *     posted-but-unaccepted result no longer silently inflates the Live tab /
+         *     count (issue #381).
          * @enum {string}
          */
-        MatchListFilter: "pending" | "in_progress" | "awaiting_confirmation" | "completed" | "disputed" | "voided";
+        MatchListFilter: "pending" | "in_progress" | "awaiting_acceptance" | "completed" | "disputed" | "voided";
         /** MatchListResponse */
         MatchListResponse: {
             /** Items */
@@ -1521,8 +1522,8 @@ export interface components {
             };
             /** Attention Count */
             attention_count: number;
-            /** Awaiting Confirmation Count */
-            awaiting_confirmation_count: number;
+            /** Awaiting Acceptance Count */
+            awaiting_acceptance_count: number;
         };
         /** MatchListRow */
         MatchListRow: {
@@ -1552,7 +1553,7 @@ export interface components {
             can_score: boolean;
             negotiation: components["schemas"]["MatchNegotiation"];
             /** Attention */
-            attention: ("dispute" | "review" | "score" | "waiting_opponent" | "waiting_others") | null;
+            attention: ("review" | "score" | "waiting_opponent" | "waiting_others") | null;
         };
         /**
          * MatchNegotiation
@@ -2066,10 +2067,10 @@ export interface components {
             /** Result */
             result?: ("W" | "L") | null;
             /**
-             * Awaiting Confirmation
+             * Awaiting Acceptance
              * @default false
              */
-            awaiting_confirmation: boolean;
+            awaiting_acceptance: boolean;
         };
         /**
          * PlayerMatchSet

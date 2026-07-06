@@ -118,7 +118,7 @@ function projectMatchDetails(seed: Seed) {
       in_progress: 'Live',
       pending: 'Scheduled',
       completed: 'Final',
-      disputed: 'Disputed',
+      disputed: 'In review',
       voided: 'Voided',
     }[seed.status],
     best_of: seed.best_of,

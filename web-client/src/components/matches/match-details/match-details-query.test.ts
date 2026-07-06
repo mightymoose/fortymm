@@ -10,7 +10,7 @@ import type { Query } from "@tanstack/react-query";
 import {
   matchDetailsQuery,
   matchDetailsResultFromPayload,
-  refetchWhileAwaitingConfirmation,
+  refetchWhileAwaitingAcceptance,
   type MatchDetailsResult,
 } from "./match-details-query";
 import { matchDetailsQueryPage } from "./match-details-query.page";
@@ -31,37 +31,37 @@ describe("matchDetailsQuery", () => {
     expect(matchDetailsQuery("m-1").throwOnError).toBe(true);
   });
 
-  it("polls while awaiting the opponent's confirmation (#493)", () => {
-    // The reporter posts a result and leaves the page open; the opponent
-    // confirms in a different session, so nothing invalidates this cache.
-    // Polling is the only thing that flips the page off "Awaiting confirmation".
+  it("polls while awaiting the opponent's acceptance (#493)", () => {
+    // The proposer posts a result and leaves the page open; the opponent
+    // accepts in a different session, so nothing invalidates this cache.
+    // Polling is the only thing that flips the page off "Awaiting acceptance".
     expect(matchDetailsQuery("m-1").refetchInterval).toBe(
-      refetchWhileAwaitingConfirmation,
+      refetchWhileAwaitingAcceptance,
     );
     expect(
-      refetchWhileAwaitingConfirmation(
-        queryWithStatusLabel("Awaiting confirmation"),
+      refetchWhileAwaitingAcceptance(
+        queryWithStatusLabel("Awaiting acceptance"),
       ),
     ).toBeGreaterThan(0);
   });
 
-  it.each(["Scheduled", "Live", "Final", "Disputed", "Voided"])(
+  it.each(["Scheduled", "Live", "Final", "In review", "Voided"])(
     "stops polling once the match settles (%s)",
     (label) => {
       expect(
-        refetchWhileAwaitingConfirmation(queryWithStatusLabel(label)),
+        refetchWhileAwaitingAcceptance(queryWithStatusLabel(label)),
       ).toBe(false);
     },
   );
 
   it("does not poll while it's the viewer's turn to act, so a correction can't swap the result out from under them (#726)", () => {
-    // A standing result is still in play (label "Awaiting confirmation"), but
+    // A standing result is still in play (label "Awaiting acceptance"), but
     // `your_turn` means the viewer is reviewing it. Polling here would silently
     // replace the reviewed result with a freshly-posted correction, and the
     // still-rendered Accept would finalize a result the viewer never saw.
     expect(
-      refetchWhileAwaitingConfirmation(
-        queryWithStatusLabel("Awaiting confirmation", {
+      refetchWhileAwaitingAcceptance(
+        queryWithStatusLabel("Awaiting acceptance", {
           negotiation: {
             ...LIVE_NEGOTIATION,
             viewer_state: "review",
@@ -76,8 +76,8 @@ describe("matchDetailsQuery", () => {
     // Spectators share this query for the scoreboard and get `your_turn=false`,
     // so suppressing the viewer's poll must not freeze theirs.
     expect(
-      refetchWhileAwaitingConfirmation(
-        queryWithStatusLabel("Awaiting confirmation", {
+      refetchWhileAwaitingAcceptance(
+        queryWithStatusLabel("Awaiting acceptance", {
           negotiation: {
             ...LIVE_NEGOTIATION,
             viewer_state: "review",
@@ -90,7 +90,7 @@ describe("matchDetailsQuery", () => {
 
   it("does not poll before any data has loaded", () => {
     expect(
-      refetchWhileAwaitingConfirmation({
+      refetchWhileAwaitingAcceptance({
         state: { data: undefined } as Query<MatchDetailsResult>["state"],
       }),
     ).toBe(false);

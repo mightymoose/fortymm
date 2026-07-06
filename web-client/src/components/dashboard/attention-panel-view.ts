@@ -19,12 +19,12 @@ export interface AttentionRowView {
   opponentName: string | null
   /** Row headline, e.g. `vs nguyen.t` or `No opponent`. */
   headline: string
-  /** Button copy: `Resolve dispute` | `Review result` | `Enter score`. */
+  /** Button copy: `Review result` | `Enter score`. */
   actionLabel: string
   /** Whether this row takes the primary (filled) button — true for every row
    * in the highest-priority bucket currently visible (PRD §6.3). */
   primary: boolean
-  /** Where the button routes: match detail for dispute/review, the scoring
+  /** Where the button routes: match detail for a review, the scoring
    * page for a score row (or match detail when the board is already decided). */
   route: RowRoute
 }
@@ -43,7 +43,7 @@ export interface AttentionPanelView {
 }
 
 // A row's attention "bucket" — the unit the primary-button rule operates on.
-// It is keyed by the action *kind* (the button copy: dispute / review / score)
+// It is keyed by the action *kind* (the button copy: review / score)
 // so same-type rows always share styling: all `Enter score` rows render primary
 // together or secondary together, regardless of rated-vs-unrated (PRD §6.3 —
 // "multiple same-type actionable items → all primary"). The rated/unrated split
@@ -55,15 +55,14 @@ function bucketKey(item: DashboardAttentionItem): string {
 }
 
 function actionLabelOf(kind: DashboardAttentionItem['kind']): string {
-  if (kind === 'dispute') return 'Resolve dispute'
   if (kind === 'review') return 'Review result'
   return 'Enter score'
 }
 
 function routeOf(item: DashboardAttentionItem): RowRoute {
-  // A score row deep-links to the next un-played game; review/dispute rows (and
+  // A score row deep-links to the next un-played game; review rows (and
   // a decided-but-unposted board, current_game_number === null) route to match
-  // detail, which holds the confirm/dispute/post-result actions.
+  // detail, which holds the accept/counter/post-result actions.
   if (item.kind === 'score' && item.current_game_number !== null) {
     return scoringNewRoute(item.match_id, item.current_game_number)
   }
@@ -86,7 +85,7 @@ export function isAttentionPanelEmpty(view: AttentionPanelView): boolean {
  * Project the BFF's pre-ranked attention items into the panel's view model:
  * cap visible rows at 3, compute the footer counts, and mark the
  * highest-priority *visible* bucket as primary (so a `Review result` beneath a
- * `Resolve dispute` renders secondary). Items arrive already sorted by the
+ * `Enter score` renders secondary). Items arrive already sorted by the
  * server (PRD §5), so their order is preserved as-is.
  *
  * `attentionTotalCount` is the server's exact actionable-match total. The

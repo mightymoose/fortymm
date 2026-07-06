@@ -38,7 +38,7 @@ describe("ConfirmationCalloutFetcher", () => {
     );
   });
 
-  it("renders nothing when the projection is null (no sign-off in play)", async () => {
+  it("renders nothing when the projection is null (no acceptance in play)", async () => {
     confirmationCalloutFetcherPage.mockEndpoint(() =>
       HttpResponse.json(buildMatchDetails()),
     );

@@ -62,7 +62,6 @@ ATTENTION_BANNERS_LIMIT = 10
 _OPEN_STATUSES = (
     MatchStatus.pending,
     MatchStatus.in_progress,
-    MatchStatus.disputed,
 )
 
 
@@ -230,7 +229,7 @@ def _build_attention(
         # defensively so a stray match can never produce a bogus row.
         if kind is None or kind == "waiting_opponent" or kind == "waiting_others":
             continue
-        # kind is now narrowed to AttentionKind (dispute / review / score).
+        # kind is now narrowed to AttentionKind (review / score).
         ranked.append(
             (
                 attention_priority(kind, match.match_settings.affects_rating),
@@ -251,7 +250,7 @@ def _attention_item(
         opponent_username=opponent_username(match, current_user_id),
         kind=kind,
         affects_rating=match.match_settings.affects_rating,
-        # Only ``score`` rows deep-link to the scoring page; review/dispute rows
+        # Only ``score`` rows deep-link to the scoring page; review rows
         # route to match detail and carry no game number.
         current_game_number=current_game_number(match) if kind == "score" else None,
     )

@@ -384,8 +384,8 @@ struct DesignSystemContent: View {
                     FMAlert(title: "Late check-in",
                             message: "3 players haven't checked in. They'll be defaulted at 6:00pm.",
                             variant: .warn)
-                    FMAlert(title: "Match disputed",
-                            message: "A player has filed a score dispute. Review the appeal in the admin panel.",
+                    FMAlert(title: "Match voided",
+                            message: "This match was voided by an admin and no longer affects ratings.",
                             variant: .destructive)
                     FMAlert(title: "Match logged",
                             message: "Your rating moved from 1602 to 1620 (+18).",

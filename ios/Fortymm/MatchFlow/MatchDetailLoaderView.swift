@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// Presents a match's detail from just its id — the entry point for a tapped
-/// confirm/dispute push notification, where all we carry is the `match_id`.
+/// result push notification, where all we carry is the `match_id`.
 ///
 /// `MatchDetailView` needs a `FinalMatch` in hand (it renders immediately, then
 /// refetches), so this fetches the match first and shows a spinner meanwhile.

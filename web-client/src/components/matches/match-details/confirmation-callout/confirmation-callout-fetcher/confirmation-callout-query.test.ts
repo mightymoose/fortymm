@@ -35,7 +35,7 @@ const reviewMatch = (
 ): MatchDetails =>
   buildMatchDetails({
     status: "in_progress",
-    status_label: "Awaiting confirmation",
+    status_label: "Awaiting acceptance",
     negotiation: {
       viewer_state: "review",
       your_turn: true,

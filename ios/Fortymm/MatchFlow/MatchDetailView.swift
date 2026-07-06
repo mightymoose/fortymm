@@ -105,7 +105,7 @@ struct MatchDetailView: View {
     /// Post the result of a match that's been scored to a decision but never
     /// posted (the `can_finalize` recovery path) — sends the already-saved games
     /// and refreshes. For a solo match this finalizes immediately; a two-player
-    /// match moves to awaiting the opponent's confirmation.
+    /// match moves to awaiting the opponent's acceptance.
     private func finalize() async {
         guard !actioning, let id = UUID(uuidString: match.id) else { return }
         actioning = true
@@ -125,7 +125,7 @@ struct MatchDetailView: View {
     /// hold the full payload (a freshly posted result) or for non-server ids
     /// (e.g. SwiftUI previews) — a list row arrives without games, so that path
     /// fetches. `force: true` always refetches: used after an action (resume,
-    /// sign-off) or on foreground, where the held copy is known to be stale.
+    /// acceptance) or on foreground, where the held copy is known to be stale.
     private func refresh(force: Bool = false) async {
         guard force || initial.games.isEmpty, let id = UUID(uuidString: match.id) else { return }
         if let updated = try? await service.matchDetails(id) {
@@ -197,12 +197,12 @@ struct MatchDetailView: View {
                 playerColumn(match.opponent, name: match.opponent.handle)
             }
 
-            if match.awaitingConfirmation {
+            if match.awaitingAcceptance {
                 VStack(spacing: 5) {
                     Text(negotiationCopy)
                         .font(FMFont.ui(12, weight: .medium))
                         .foregroundStyle(FMColor.fg3)
-                    if match.canConfirm {
+                    if match.canAccept {
                         // The stakes line, mirroring the web callout.
                         Text(match.rated
                              ? "Accepting finalizes this rated match and updates both ratings."
@@ -225,7 +225,7 @@ struct MatchDetailView: View {
     }
 
     /// The one-line negotiation status under the hero score, keyed off the
-    /// viewer phase — mirrors the web's confirmation callout copy.
+    /// viewer phase — mirrors the web's acceptance callout copy.
     private var negotiationCopy: String {
         switch negotiationState {
         case .review:
@@ -451,7 +451,7 @@ struct MatchDetailView: View {
     @ViewBuilder
     private var footer: some View {
         Group {
-            if match.canConfirm {
+            if match.canAccept {
                 acceptFooter
             } else if negotiationState == .awaiting, let ctx = match.correctionContext {
                 awaitingFooter(ctx)
@@ -546,11 +546,11 @@ struct MatchDetailView: View {
         .disabled(actioning)
     }
 
-    /// Sign-off footer: the current user owes an accept-or-correct on the
+    /// Acceptance footer: the current user owes an accept-or-correct on the
     /// standing proposal. Accept makes the result official; the secondary verb
     /// opens the correction board — "Suggest correction" against a first
     /// posting (`review`), "Counter" against a correction of the viewer's own
-    /// prior proposal (`corrected`). Mirrors the web's confirmation callout.
+    /// prior proposal (`corrected`). Mirrors the web's acceptance callout.
     private var acceptFooter: some View {
         VStack(spacing: 10) {
             footerButton("Accept result", showArrow: false, disabled: actioning) {

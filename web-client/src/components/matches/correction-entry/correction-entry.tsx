@@ -1,6 +1,7 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Navigate, useNavigate } from "@tanstack/react-router";
 import { ApiError } from "@/api/client";
+import { pageTitle } from "@/lib/page-title";
 import {
   matchDetailRoute,
   useMatch,
@@ -86,6 +87,19 @@ export function CorrectionEntry({ matchId }: { matchId: string }) {
   // submit gesture, so it catches the second tap even within the same frame.
   const submittingRef = useRef(false);
 
+  // The route's static `head` title defaults to the opponent-facing "Suggest a
+  // correction"; when this is actually the proposer editing their own pending
+  // result (`viewer_state: "awaiting"`) the tab title must match the on-page
+  // "Edit your result." heading, not leak the retired counter wording (C1).
+  // Set from the fetched state here since the static `head` can't see it.
+  const selfEditTitle = data?.negotiation.viewer_state === "awaiting";
+  useEffect(() => {
+    if (!data) return;
+    document.title = pageTitle(
+      selfEditTitle ? "Edit your result" : "Suggest a correction",
+    );
+  }, [data, selfEditTitle]);
+
   if (isLoading || !data) {
     return <div aria-busy="true" data-testid="correction-entry-loading" />;
   }
@@ -117,6 +131,17 @@ export function CorrectionEntry({ matchId }: { matchId: string }) {
   const oppUsername = oppSide.players[0]?.username ?? null;
   const oppName = oppUsername ?? NO_OPPONENT_LABEL;
   const oppHasPlayer = oppUsername !== null;
+
+  // The proposer editing their own still-pending proposal (reached via the
+  // match-detail "Edit result" action, `viewer_state: "awaiting"`) isn't
+  // correcting anyone — frame the copy as an edit. The reviewer reacting to the
+  // opponent's proposal (`review`/`corrected`) is suggesting a correction.
+  const isSelfEdit = data.negotiation.viewer_state === "awaiting";
+  const heading = isSelfEdit ? "Edit your result." : "Suggest a correction.";
+  const scoreNoun = isSelfEdit ? "updated" : "corrected";
+  const hintLead = isSelfEdit
+    ? "Adjust the game(s) you need to change"
+    : "Fix the game(s) that look off";
 
   const current = drafts ?? seedDrafts(standing.games, mySideNumber, bestOf);
   const selected =
@@ -279,11 +304,11 @@ export function CorrectionEntry({ matchId }: { matchId: string }) {
   return (
     <div className="entry-wrap">
       <div className="entry-head">
-        <h2>Suggest a correction.</h2>
+        <h2>{heading}</h2>
         <div className="hint">
-          Fix the game(s) that look off — switch games on the SCORELINE, add or
-          remove games until the board has a winner, then send the corrected
-          score to {oppName} to accept.
+          {hintLead} — switch games on the SCORELINE, add or remove games until
+          the board has a winner, then send the {scoreNoun} score to {oppName} to
+          accept.
         </div>
       </div>
 
@@ -347,9 +372,9 @@ export function CorrectionEntry({ matchId }: { matchId: string }) {
           selectedValidation.oneSideFilled && selectedValidation.error === null
         }
         inputsLocked={inputsLocked}
-        subtitle={`Sending the corrected score posts the result for ${oppName} to accept.`}
+        subtitle={`Sending the ${scoreNoun} score posts the result for ${oppName} to accept.`}
         submitLabel={
-          proposeMutation.isPending ? "Sending…" : "Send corrected score"
+          proposeMutation.isPending ? "Sending…" : `Send ${scoreNoun} score`
         }
         canSubmit={canSubmit}
         onSubmit={onSubmit}

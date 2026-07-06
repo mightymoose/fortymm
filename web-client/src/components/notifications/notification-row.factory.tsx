@@ -12,7 +12,7 @@ export function buildNotificationItem(
   return {
     id: 'n-1',
     category: 'result_confirm',
-    title: 'Confirm your score',
+    title: 'Accept your score',
     body: 'def. Patel, M. — you logged 3–1. Tap to confirm.',
     link: '/matches/m-1',
     action_label: 'Review',

@@ -448,7 +448,7 @@ describe('ScoreEntry — create', () => {
   it('flips the submit button to "Post result" when this score would decide the match', async () => {
     // Bo5, 2-0 on the board, entering G3. An 11-3 win clinches at 3-0, so
     // the single submit button should POST /results (atomically saving +
-    // posting the result for the opponent to confirm) instead of /scores/new.
+    // posting the result for the opponent to accept) instead of /scores/new.
     const user = userEvent.setup()
     let finalizedBody: unknown = null
     server.use(
@@ -504,7 +504,7 @@ describe('ScoreEntry — create', () => {
 
     // The same button morphs into "Post result" because saving this score
     // posts the canonical result of a decided best-of-5; the match flips to
-    // "awaiting confirmation" until the opponent confirms.
+    // "awaiting acceptance" until the opponent accepts.
     const postBtn = screen.getByRole('button', { name: /post result/i })
     expect(postBtn).toBeInTheDocument()
     expect(

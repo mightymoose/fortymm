@@ -109,7 +109,7 @@ export const matchDetailsPage = {
   finalizeCallout: finalizeCalloutPage.within(screen),
 
   /**
-   * The Accept sign-off callout is rendered through the self-fetching
+   * The accept/counter callout is rendered through the self-fetching
    * `ConfirmationCallout` wrapper — reuse its page object's callout queries.
    */
   confirmationCallout: confirmationCalloutPage.within(screen),

@@ -251,7 +251,7 @@ internal protocol APIProtocol: Sendable {
     /// the proposed board (validated as complete + decided) becomes the canonical
     /// ``match_games`` snapshot.
     ///
-    /// Solo / unrated matches (no second party whose sign-off is worth waiting on)
+    /// Solo / unrated matches (no second party whose acceptance is worth waiting on)
     /// self-accept and finalize immediately — ``side.won`` and the rating update
     /// fire here. Rated two-human matches leave the result *standing* (unaccepted)
     /// for the opposing side to accept via
@@ -939,7 +939,7 @@ extension APIProtocol {
     /// the proposed board (validated as complete + decided) becomes the canonical
     /// ``match_games`` snapshot.
     ///
-    /// Solo / unrated matches (no second party whose sign-off is worth waiting on)
+    /// Solo / unrated matches (no second party whose acceptance is worth waiting on)
     /// self-accept and finalize immediately — ``side.won`` and the rating update
     /// fire here. Rated two-human matches leave the result *standing* (unaccepted)
     /// for the opposing side to accept via
@@ -1782,7 +1782,6 @@ internal enum Components {
             internal var opponentUsername: Swift.String?
             /// - Remark: Generated from `#/components/schemas/DashboardAttentionItem/kind`.
             internal enum KindPayload: String, Codable, Hashable, Sendable, CaseIterable {
-                case dispute = "dispute"
                 case review = "review"
                 case score = "score"
             }
@@ -2855,18 +2854,19 @@ internal enum Components {
         }
         /// The selectable buckets on the ``/matches`` list filter.
         ///
-        /// Mostly a 1:1 echo of ``MatchStatus``, but ``awaiting_confirmation`` is a
+        /// Mostly a 1:1 echo of ``MatchStatus``, but ``awaiting_acceptance`` is a
         /// *derived* bucket with no DB status of its own — it's an ``in_progress``
-        /// match that already carries at least one signature (a posted result waiting
-        /// on the other side; see ``_status_label``). The ``live`` filter therefore
-        /// means "``in_progress`` with **no** signature yet", so a posted-but-unconfirmed
-        /// result no longer silently inflates the Live tab / count (issue #381).
+        /// match that already has a standing proposed result (waiting on the other
+        /// side to accept or counter; see ``_status_label``). The ``live`` filter
+        /// therefore means "``in_progress`` with **no** proposed result yet", so a
+        /// posted-but-unaccepted result no longer silently inflates the Live tab /
+        /// count (issue #381).
         ///
         /// - Remark: Generated from `#/components/schemas/MatchListFilter`.
         internal enum MatchListFilter: String, Codable, Hashable, Sendable, CaseIterable {
             case pending = "pending"
             case inProgress = "in_progress"
-            case awaitingConfirmation = "awaiting_confirmation"
+            case awaitingAcceptance = "awaiting_acceptance"
             case completed = "completed"
             case disputed = "disputed"
             case voided = "voided"
@@ -2903,8 +2903,8 @@ internal enum Components {
             internal var statusCounts: Components.Schemas.MatchListResponse.StatusCountsPayload
             /// - Remark: Generated from `#/components/schemas/MatchListResponse/attention_count`.
             internal var attentionCount: Swift.Int
-            /// - Remark: Generated from `#/components/schemas/MatchListResponse/awaiting_confirmation_count`.
-            internal var awaitingConfirmationCount: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/MatchListResponse/awaiting_acceptance_count`.
+            internal var awaitingAcceptanceCount: Swift.Int
             /// Creates a new `MatchListResponse`.
             ///
             /// - Parameters:
@@ -2914,7 +2914,7 @@ internal enum Components {
             ///   - total:
             ///   - statusCounts:
             ///   - attentionCount:
-            ///   - awaitingConfirmationCount:
+            ///   - awaitingAcceptanceCount:
             internal init(
                 items: [Components.Schemas.MatchListRow],
                 page: Swift.Int,
@@ -2922,7 +2922,7 @@ internal enum Components {
                 total: Swift.Int,
                 statusCounts: Components.Schemas.MatchListResponse.StatusCountsPayload,
                 attentionCount: Swift.Int,
-                awaitingConfirmationCount: Swift.Int
+                awaitingAcceptanceCount: Swift.Int
             ) {
                 self.items = items
                 self.page = page
@@ -2930,7 +2930,7 @@ internal enum Components {
                 self.total = total
                 self.statusCounts = statusCounts
                 self.attentionCount = attentionCount
-                self.awaitingConfirmationCount = awaitingConfirmationCount
+                self.awaitingAcceptanceCount = awaitingAcceptanceCount
             }
             internal enum CodingKeys: String, CodingKey {
                 case items
@@ -2939,7 +2939,7 @@ internal enum Components {
                 case total
                 case statusCounts = "status_counts"
                 case attentionCount = "attention_count"
-                case awaitingConfirmationCount = "awaiting_confirmation_count"
+                case awaitingAcceptanceCount = "awaiting_acceptance_count"
             }
         }
         /// - Remark: Generated from `#/components/schemas/MatchListRow`.
@@ -2968,7 +2968,6 @@ internal enum Components {
             internal var negotiation: Components.Schemas.MatchNegotiation
             /// - Remark: Generated from `#/components/schemas/MatchListRow/attention`.
             internal enum AttentionPayload: String, Codable, Hashable, Sendable, CaseIterable {
-                case dispute = "dispute"
                 case review = "review"
                 case score = "score"
                 case waitingOpponent = "waiting_opponent"
@@ -4316,8 +4315,8 @@ internal enum Components {
             }
             /// - Remark: Generated from `#/components/schemas/PlayerMatchRow/result`.
             internal var result: Components.Schemas.PlayerMatchRow.ResultPayload?
-            /// - Remark: Generated from `#/components/schemas/PlayerMatchRow/awaiting_confirmation`.
-            internal var awaitingConfirmation: Swift.Bool?
+            /// - Remark: Generated from `#/components/schemas/PlayerMatchRow/awaiting_acceptance`.
+            internal var awaitingAcceptance: Swift.Bool?
             /// Creates a new `PlayerMatchRow`.
             ///
             /// - Parameters:
@@ -4327,7 +4326,7 @@ internal enum Components {
             ///   - opponent:
             ///   - sets:
             ///   - result:
-            ///   - awaitingConfirmation:
+            ///   - awaitingAcceptance:
             internal init(
                 id: Swift.String,
                 status: Components.Schemas.MatchStatus,
@@ -4335,7 +4334,7 @@ internal enum Components {
                 opponent: Components.Schemas.PlayerMatchOpponent,
                 sets: [Components.Schemas.PlayerMatchSet],
                 result: Components.Schemas.PlayerMatchRow.ResultPayload? = nil,
-                awaitingConfirmation: Swift.Bool? = nil
+                awaitingAcceptance: Swift.Bool? = nil
             ) {
                 self.id = id
                 self.status = status
@@ -4343,7 +4342,7 @@ internal enum Components {
                 self.opponent = opponent
                 self.sets = sets
                 self.result = result
-                self.awaitingConfirmation = awaitingConfirmation
+                self.awaitingAcceptance = awaitingAcceptance
             }
             internal enum CodingKeys: String, CodingKey {
                 case id
@@ -4352,7 +4351,7 @@ internal enum Components {
                 case opponent
                 case sets
                 case result
-                case awaitingConfirmation = "awaiting_confirmation"
+                case awaitingAcceptance = "awaiting_acceptance"
             }
         }
         /// A single game's score from the headline player's perspective.
@@ -12025,7 +12024,7 @@ internal enum Operations {
     /// the proposed board (validated as complete + decided) becomes the canonical
     /// ``match_games`` snapshot.
     ///
-    /// Solo / unrated matches (no second party whose sign-off is worth waiting on)
+    /// Solo / unrated matches (no second party whose acceptance is worth waiting on)
     /// self-accept and finalize immediately — ``side.won`` and the rating update
     /// fire here. Rated two-human matches leave the result *standing* (unaccepted)
     /// for the opposing side to accept via

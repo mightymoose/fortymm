@@ -478,7 +478,7 @@ function ClaimBanner({
           : 'linear-gradient(90deg, rgba(255,196,61,0.18), rgba(255,196,61,0.04) 70%)',
         border: `1px solid ${guest ? 'var(--ball-500)' : 'rgba(255,196,61,0.3)'}`,
         // Guest is the urgent, act-now state — give it the Featured accent glow
-        // (matches the match-details sign-off / save-your-match cards). The
+        // (matches the match-details acceptance / save-your-match cards). The
         // pending "check your inbox" state is informational, so it stays flat.
         boxShadow: guest ? 'var(--shadow-glow)' : undefined,
       }}

@@ -15,7 +15,7 @@ struct DashboardResponse: Decodable {
     /// accurate however many there are.
     let attentionTotalCount: Int
     /// Matches that need *someone else's* move — a result we posted awaiting the
-    /// opponent's sign-off, plus pending/scheduled matches. Footer text only;
+    /// opponent's acceptance, plus pending/scheduled matches. Footer text only;
     /// never a row.
     let waitingCount: Int
     let recentResults: [DashboardRecentResult]
@@ -24,11 +24,10 @@ struct DashboardResponse: Decodable {
 }
 
 /// The actionable bucket a match falls in for the current user, in priority
-/// order (`dispute` > `review` > `score`). Mirrors the API's `AttentionKind`
+/// order (`review` > `score`). Mirrors the API's `AttentionKind`
 /// (`api/app/schemas/dashboard.py`). An unknown future kind decodes to
 /// `.unknown` so an older client doesn't fail the whole payload.
 enum AttentionKind: String, Decodable {
-    case dispute
     case review
     case score
     case unknown
@@ -48,11 +47,11 @@ struct DashboardAttentionItem: Decodable, Identifiable {
     let opponentUsername: String?
     let kind: AttentionKind
     /// `score` rows split rated-above-unrated by this flag; always true for
-    /// `review`/`dispute` (both only arise on rated matches).
+    /// `review` (only arises on rated matches).
     let affectsRating: Bool
     /// The next un-scored game for a `score` row, used to deep-link straight
     /// into scoring. `nil` when the board is decided but unposted (route to
-    /// match detail to post instead), and always `nil` for `review`/`dispute`.
+    /// match detail to post instead), and always `nil` for `review`.
     let currentGameNumber: Int?
 
     var id: UUID { matchId }

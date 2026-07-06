@@ -64,7 +64,7 @@ struct MatchesListView: View {
                 else { reload() }
             }
             // Foregrounding may surface cross-device changes (a match the opponent
-            // just confirmed/disputed) — re-fetch the feed.
+            // just accepted/countered) — re-fetch the feed.
             .refetchOnForeground { reload() }
             // Also handle the case where this tab is already visible when the
             // filter is set (no fresh .onAppear) — apply it live.
@@ -320,7 +320,7 @@ private struct MatchRow: View {
         case .lost: return FMColor.loss
         }
     }
-    /// Single-glyph badge: a dot while awaiting confirmation, a neutral check for
+    /// Single-glyph badge: a dot while awaiting acceptance, a neutral check for
     /// a spectated decided match, W / L for the viewer's own decided matches.
     private var badge: String {
         switch outcome {

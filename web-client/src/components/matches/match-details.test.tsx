@@ -50,7 +50,7 @@ describe("MatchDetails — confirmation-callout seam", () => {
     matchDetailsPage.mockMatch("m-1", {
       ...decidedMatch(),
       status: "in_progress",
-      status_label: "Awaiting confirmation",
+      status_label: "Awaiting acceptance",
       negotiation: {
         viewer_state: "review",
         your_turn: true,

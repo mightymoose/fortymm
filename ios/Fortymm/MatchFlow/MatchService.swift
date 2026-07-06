@@ -363,7 +363,7 @@ struct MatchService {
         let rated = ratedHint ?? (mine?.ratingChange != nil)
         let delta = mine?.ratingChange.map { Int($0.delta.rounded()) }
         // The negotiation block is populated on both the detail and list shapes,
-        // so the sign-off flags (`awaitingConfirmation`, `canConfirm`) are
+        // so the negotiation flags (`awaitingAcceptance`, `canAccept`) are
         // derived from it on `FinalMatch` itself — authoritative everywhere, no
         // games-won heuristic (which mis-read a rewound board as posted).
         let negotiation = Self.negotiation(negotiationDTO, mineIsSide1: mineIsSide1)

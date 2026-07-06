@@ -52,7 +52,7 @@ struct DashboardView: View {
             // refreshes in place once content is loaded.
             .onAppear { Task { await store.load(force: true) } }
             // Returning to the foreground may surface cross-device changes (a
-            // match the other player just confirmed) — refetch in place.
+            // match the other player just accepted) — refetch in place.
             .refetchOnForeground { Task { await store.load(force: true) } }
             // The signed-in identity just changed under us — an in-app sign-in /
             // account merge folded a new user into the session. The dashboard

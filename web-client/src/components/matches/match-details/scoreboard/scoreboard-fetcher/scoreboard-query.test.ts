@@ -133,7 +133,7 @@ describe("scoreboardQuery", () => {
     scoreboardQueryPage.mockEndpoint(() =>
       HttpResponse.json(
         buildMatchDetails({
-          status_label: "Awaiting confirmation",
+          status_label: "Awaiting acceptance",
           current_game: null,
           data: { scoreboard: { status: "live" } },
         }),
@@ -145,7 +145,7 @@ describe("scoreboardQuery", () => {
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(result.current.data?.heading.chip).toEqual({
       status: "live",
-      label: "Awaiting confirmation",
+      label: "Awaiting acceptance",
     });
   });
 
@@ -168,14 +168,14 @@ describe("scoreboardQuery", () => {
     });
   });
 
-  it("projects the Disputed label, not 'Final', for a disputed match (#561)", async () => {
-    // A disputed board maps to the coarse `final` scoreboard status, but its
-    // chip must read the server's "Disputed" label so it agrees with the
-    // Match-info Status field.
+  it("projects the server's status label, not 'Final', when the coarse status is final (#561)", async () => {
+    // Some boards map to the coarse `final` scoreboard status while carrying a
+    // more specific lifecycle label; the chip must read the server's label so
+    // it agrees with the Match-info Status field.
     scoreboardQueryPage.mockEndpoint(() =>
       HttpResponse.json(
         buildMatchDetails({
-          status_label: "Disputed",
+          status_label: "In review",
           data: { scoreboard: { status: "final" } },
         }),
       ),
@@ -186,7 +186,7 @@ describe("scoreboardQuery", () => {
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(result.current.data?.heading.chip).toEqual({
       status: "final",
-      label: "Disputed",
+      label: "In review",
     });
   });
 
@@ -286,14 +286,14 @@ describe("scoreboardQuery", () => {
     expect(result.current.data?.outcome).toBe("leo.mertens leads by 2 games to 1");
   });
 
-  it("describes a posted result awaiting confirmation as won, not leading (#491)", async () => {
+  it("describes a posted result awaiting acceptance as won, not leading (#491)", async () => {
     // The board is decided (a result was posted) but `side.won` is still null
     // until the other side confirms. The outcome must read "won … awaiting
     // confirmation", not "leading", which implies play continues.
     scoreboardQueryPage.mockEndpoint(() =>
       HttpResponse.json(
         buildMatchDetails({
-          status_label: "Awaiting confirmation",
+          status_label: "Awaiting acceptance",
           current_game: null,
           data: { scoreboard: { status: "live" } },
           sides: [
@@ -315,7 +315,7 @@ describe("scoreboardQuery", () => {
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(result.current.data?.outcome).toBe(
-      "rita.kovac won 3 games to 0 — awaiting confirmation",
+      "rita.kovac won 3 games to 0 — awaiting acceptance",
     );
   });
 

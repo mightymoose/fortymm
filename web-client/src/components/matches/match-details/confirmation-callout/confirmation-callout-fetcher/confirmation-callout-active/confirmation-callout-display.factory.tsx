@@ -49,7 +49,7 @@ export function buildCorrectedConfirmationView(
 
 /** The passive awaiting variant: the viewer has posted, leo.mertens hasn't
  * accepted. */
-export function buildAwaitingConfirmationView(
+export function buildAwaitingAcceptanceView(
   overrides: Partial<
     Extract<ConfirmationCalloutView, { kind: "awaiting" }>
   > = {},

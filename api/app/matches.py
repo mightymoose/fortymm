@@ -18,7 +18,7 @@ from fastapi import (
     status,
 )
 from pyrate_limiter import Duration, Rate
-from sqlalchemy import CursorResult, Select, and_, func, or_, select, update
+from sqlalchemy import CursorResult, Select, func, select, update
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased, selectinload
@@ -136,7 +136,7 @@ def _side_schema(
 # Shared eager-load chain. Used by every read path that returns a hierarchical
 # match — async SQLAlchemy can't lazy-load mid-request, so all collections are
 # pulled up front. The posted results (the propose/accept chain) are needed
-# wherever ``can_finalize`` / the awaiting-confirmation status label / the
+# wherever ``can_finalize`` / the awaiting-acceptance status label / the
 # derived ``negotiation`` block are computed.
 def match_eager_options() -> tuple[ExecutableOption, ...]:
     return (
@@ -192,7 +192,7 @@ def _is_participant(match: Match, user_id: uuid.UUID) -> bool:
 
 def _all_sides_have_players(match: Match) -> bool:
     """Solo matches (no opponent picked) carry one player-less sentinel side.
-    The signature/confirmation flow needs a second human, so solo matches skip
+    The acceptance flow needs a second human, so solo matches skip
     it entirely; this is the predicate that detects that case."""
     return len(match.sides) >= 2 and all(side.players for side in match.sides)
 
@@ -203,7 +203,7 @@ def _status_label(match: Match) -> str:
     that distinctly so the FE doesn't need to know about the result model to
     render it."""
     if match.status == MatchStatus.in_progress and standing_result(match) is not None:
-        return "Awaiting confirmation"
+        return "Awaiting acceptance"
     # Exhaustive — adding an enum member is a type error until handled.
     match match.status:
         case MatchStatus.pending:
@@ -213,7 +213,10 @@ def _status_label(match: Match) -> str:
         case MatchStatus.completed:
             return "Final"
         case MatchStatus.disputed:
-            return "Disputed"
+            # Dead: nothing sets MatchStatus.disputed under the propose/accept
+            # model (there is no dispute verb). Kept only to satisfy the
+            # exhaustive match; follow-up: drop the enum value entirely.
+            return "In review"
         case MatchStatus.voided:
             return "Voided"
 
@@ -524,10 +527,10 @@ def _serialize_details(
         games=games,
         current_game=current_game,
         # "This participant may edit scores" — true whenever the match is
-        # scorable (no signature; see ``_is_scorable``), *independent* of
-        # whether there's a next un-played game. A decided-but-unsigned board
-        # (e.g. just after a dispute) is still editable, so this is True while
-        # ``current_game`` is None. Spectators get the read-only view — writes
+        # scorable (no result posted yet; see ``_is_scorable``), *independent*
+        # of whether there's a next un-played game. A decided-but-unposted
+        # board is still editable, so this is True while ``current_game`` is
+        # None. Spectators get the read-only view — writes
         # 404 for non-participants in the score endpoints regardless.
         can_score=(is_participant and _is_scorable(match)),
         # True iff the saved games already form a decided, validly-ordered
@@ -584,7 +587,7 @@ def _has_result_exists() -> Any:
     ``in_progress`` match the presence of any result means a standing proposal
     exists (acceptance moves the match to ``completed``, so the head of the
     chain is necessarily unaccepted) — making "has a result" the derived
-    "Awaiting confirmation" bucket (see ``_status_label``). Pulled into a helper
+    "Awaiting acceptance" bucket (see ``_status_label``). Pulled into a helper
     so the list filter and the status-count aggregate split the Live vs awaiting
     buckets identically (issue #381)."""
     return select(MatchResult.id).where(MatchResult.match_id == Match.id).exists()
@@ -717,14 +720,14 @@ def _apply_list_filter[SelectT: Select[Any]](
     query: SelectT, filter_: MatchListFilter
 ) -> SelectT:
     """Narrow ``query`` to one filter bucket. ``live`` and
-    ``awaiting_confirmation`` both sit on the ``in_progress`` status but split
+    ``awaiting_acceptance`` both sit on the ``in_progress`` status but split
     on whether any result has been posted, so neither bucket leaks into the
     other (issue #381). Every other bucket is a plain status match."""
     if filter_ is MatchListFilter.live:
         return query.where(
             Match.status == MatchStatus.in_progress, ~_has_result_exists()
         )
-    if filter_ is MatchListFilter.awaiting_confirmation:
+    if filter_ is MatchListFilter.awaiting_acceptance:
         return query.where(
             Match.status == MatchStatus.in_progress, _has_result_exists()
         )
@@ -755,22 +758,16 @@ def _actionable_attention_filter[SelectT: Select[Any]](
     the Attention tab's membership, computed per viewer (issue #729).
 
     Mirrors the actionable half of ``app.attention.list_attention_kind``
-    (``dispute`` / ``review`` / ``score``): a disputed match (either side may
-    re-score) or an in-progress match where the caller has *not* submitted the
-    standing proposal. This deliberately excludes the passive waiting buckets —
-    ``waiting_others`` (a pending/scheduled match) and ``waiting_opponent`` (the
-    caller's own posted result awaiting the opponent's sign-off) — so the tab
-    never flags a match the caller is merely waiting on. The poster and the
-    reviewer of the same posted result therefore see *different* Attention
-    counts, unlike before."""
+    (``review`` / ``score``): an in-progress match where the caller has *not*
+    submitted the standing proposal. This deliberately excludes the passive
+    waiting buckets — ``waiting_others`` (a pending/scheduled match) and
+    ``waiting_opponent`` (the caller's own posted result awaiting the opponent's
+    acceptance) — so the tab never flags a match the caller is merely waiting
+    on. The poster and the reviewer of the same posted result therefore see
+    *different* Attention counts, unlike before."""
     return query.where(
-        or_(
-            Match.status == MatchStatus.disputed,
-            and_(
-                Match.status == MatchStatus.in_progress,
-                ~my_standing_proposal_exists(current_user_id),
-            ),
-        )
+        Match.status == MatchStatus.in_progress,
+        ~my_standing_proposal_exists(current_user_id),
     )
 
 
@@ -855,7 +852,7 @@ async def list_matches(
     # status_counts honors `q` but ignores the status/attention filter, so it's
     # built from its own aggregate and powers the All/Live/Awaiting/Up-next/Final
     # badges (and the browsing `total`) for either filter mode. The
-    # awaiting-confirmation bucket is an `in_progress` row with a pending result,
+    # awaiting-acceptance bucket is an `in_progress` row with a standing result,
     # so it's counted separately and peeled out of the `in_progress` total — the
     # `in_progress` count then reads as true-live (no posted result), keeping the
     # two buckets disjoint (issue #381).
@@ -872,7 +869,7 @@ async def list_matches(
     ).all():
         status_counts[status_value] = count
     awaiting_count = (await db.execute(awaiting_query)).scalar_one()
-    # Split the raw in_progress total into true-live + awaiting-confirmation.
+    # Split the raw in_progress total into true-live + awaiting-acceptance.
     status_counts[MatchStatus.in_progress] -= awaiting_count
 
     # The list is open to every signed-in user. Writes still gate on
@@ -920,7 +917,7 @@ async def list_matches(
         items = [_list_row(match, current_user.id) for match in matches]
         if status_ is None:
             total = sum(status_counts.values()) + awaiting_count
-        elif status_ is MatchListFilter.awaiting_confirmation:
+        elif status_ is MatchListFilter.awaiting_acceptance:
             total = awaiting_count
         else:
             total = status_counts[MatchStatus(status_.value)]
@@ -933,7 +930,7 @@ async def list_matches(
         page=page,
         page_size=page_size,
         total=total,
-        awaiting_confirmation_count=awaiting_count,
+        awaiting_acceptance_count=awaiting_count,
         status_counts=status_counts,
         attention_count=attention_count,
     )
@@ -959,8 +956,8 @@ def _list_row(match: Match, current_user_id: uuid.UUID) -> MatchListRow:
     sides_sorted = sorted(match.sides, key=lambda s: s.side_number)
     next_number = current_game_number(match)
     is_participant = _is_participant(match, current_user_id)
-    # Editability follows the no-signature scratchpad rule (``_is_scorable``),
-    # not whether a next game exists — so a decided-but-unsigned row still reads
+    # Editability follows the no-result scratchpad rule (``_is_scorable``),
+    # not whether a next game exists — so a decided-but-unposted row still reads
     # as scorable. ``current_game_number`` stays the next-playable-game
     # deep-link target (None when decided or signed); suppressed for spectators.
     can_score = is_participant and _is_scorable(match)
@@ -1099,9 +1096,12 @@ async def get_match(
 
 
 # A match that has reached one of these states is read-only — never scorable.
-# ``disputed`` is deliberately absent: a dispute reopens the match for score
-# correction (either side may edit — see ``dispute_match_result``), so a
-# disputed match is scorable again with its games intact.
+# ``disputed`` is a dead status under the propose/accept model (nothing sets it;
+# corrections happen in the supersede chain, not by reopening the scratchpad).
+# It's omitted here only because the enum value is retained pending its removal
+# migration — its terminal classification is settled there. In practice a
+# disputed row is unreachable, and would carry a result anyway, so ``_is_scorable``
+# (which also gates on "no result exists") already treats it as non-scorable.
 _TERMINAL_STATUSES = {
     MatchStatus.completed,
     MatchStatus.voided,
@@ -1153,7 +1153,7 @@ def _enforce_scorable(match: Match) -> None:
     raise HTTPException(status_code=409, detail="This match is no longer scorable.")
 
 
-# ----- result-confirmation push -------------------------------------------
+# ----- result-acceptance push ---------------------------------------------
 
 # En-dash between scores reads better than a hyphen in notification copy.
 _SCORE_DASH = "–"
@@ -1223,7 +1223,7 @@ def _result_confirmation_copy(
     prompt = "Accept or counter?" if is_counter else "Accept or suggest a correction?"
     games = _game_scores_text(match, poster_side.side_number)
     body = f"{headline}. Games: {games}. {prompt}" if games else f"{headline}. {prompt}"
-    return "Review your match result", body
+    return "Accept your match result", body
 
 
 async def _notify_result_posted(
@@ -1494,7 +1494,7 @@ async def _load_head_to_head(
 
     # Prior-meetings aggregates (completed before this match) so the displayed
     # window doesn't undercount the rivalry going into this match. Driven from
-    # MatchSide.won so a future void/dispute that leaves `won` null naturally
+    # MatchSide.won so a future void that leaves `won` null naturally
     # drops out of both totals.
     a_side = aliased(MatchSide)
     b_side = aliased(MatchSide)
@@ -1579,7 +1579,7 @@ async def _apply_rating_update(db: AsyncSession, match: Match) -> None:
 
     Idempotent on subsequent score edits: if any history row already exists for
     this match, we skip. Re-applying ratings after a score correction is its own
-    feature (tied to dispute/void flows, which aren't wired up yet)."""
+    feature (tied to void flows, which aren't wired up yet)."""
     if match.status != MatchStatus.completed:
         return
     if not match.match_settings.affects_rating:
@@ -1886,7 +1886,7 @@ async def _commit_canonical_games(
     """Replace ``match.games`` (and the attached score rows) with the canonical
     payload and set ``side.score`` from it. **Does not change ``match.status``
     or ``side.won``** — the caller picks whether the result is final
-    (solo/unrated: immediately at /results) or awaiting confirmation (rated),
+    (solo/unrated: immediately at /results) or awaiting acceptance (rated),
     and stamps ``side.won`` via ``_set_side_won`` only at that final moment."""
     # ``Match.games`` cascades ``all, delete-orphan``; clearing the collection
     # marks each existing MatchGame (and via MatchGame.score's own cascade,
@@ -1917,19 +1917,19 @@ async def _commit_canonical_games(
 
 def _set_side_won(match: Match, decided_side: int) -> None:
     """Stamp the W/L outcome on each side. Called only at the moment a match
-    becomes ``completed`` — /results for matches that skip confirmation,
-    /confirmation for rated ones — so a profile never shows a WIN/LOSS for a
-    result the opponent hasn't ratified yet (issue #485)."""
+    becomes ``completed`` — /results for matches that skip acceptance,
+    /results/{id}/acceptance for rated ones — so a profile never shows a
+    WIN/LOSS for a result the opponent hasn't accepted yet (issue #485)."""
     for side in match.sides:
         side.won = side.side_number == decided_side
 
 
 def _requires_confirmation(match: Match) -> bool:
-    """Only rated matches go through the sign-off round-trip. Confirmation
+    """Only rated matches go through the accept round-trip. Acceptance
     exists to protect ratings from one-sided claims; an unrated match has no
-    stakes worth a second signature, and a solo match has no second human to
-    sign anyway (rated already implies a registered opponent at creation —
-    the player check is defensive)."""
+    stakes worth a second party's consent, and a solo match has no second
+    human to accept anyway (rated already implies a registered opponent at
+    creation — the player check is defensive)."""
     return match.match_settings.affects_rating and _all_sides_have_players(match)
 
 
@@ -1937,7 +1937,7 @@ def _posted_decided_side(match: Match) -> int:
     """Winner side number per the committed canonical games. Only meaningful
     once a result has been posted: /results validated the games as decided,
     and ``_enforce_scorable`` freezes them while a result is pending, so exactly
-    one side has clinched by the time /confirmation reads this."""
+    one side has clinched by the time acceptance reads this."""
     target = _games_to_win(match.match_settings.best_of)
     for side_number, count in sorted(side_win_counts(match).items()):
         if count >= target:
@@ -1952,7 +1952,7 @@ def _posted_decided_side(match: Match) -> int:
 
 class MatchLockUnavailable(Exception):
     """``SELECT ... FOR UPDATE NOWAIT`` found the match row already locked by a
-    concurrent sign-off transaction. Raised by ``_lock_match_row(nowait=True)``
+    concurrent negotiation transaction. Raised by ``_lock_match_row(nowait=True)``
     so the caller can translate it into a fast, clean 409 instead of blocking
     on the lock (see ``post_match_result``)."""
 
@@ -1981,7 +1981,7 @@ async def _lock_match_row(
     fans out into a selectinload query per relationship) just to take the lock,
     and acquiring it on its own line makes the lock-then-read ordering explicit
     — the subsequent load sees the serialized state. Locking just the parent
-    row is enough — every sign-off transition reads and writes that match's
+    row is enough — every negotiation transition reads and writes that match's
     children under cover of this lock.
 
     ``nowait=True`` adds ``NOWAIT``: if the row is already locked, Postgres
@@ -2009,7 +2009,7 @@ async def _load_match_for_scoring(
     lock: bool = False,
     nowait: bool = False,
 ) -> Match:
-    # ``lock`` callers (the sign-off transitions) take the row lock *before*
+    # ``lock`` callers (the negotiation transitions) take the row lock *before*
     # the eager load so the match state they read is the serialized one.
     if lock:
         await _lock_match_row(db, match_id, nowait=nowait)
@@ -2268,7 +2268,7 @@ async def post_match_result(
     the proposed board (validated as complete + decided) becomes the canonical
     ``match_games`` snapshot.
 
-    Solo / unrated matches (no second party whose sign-off is worth waiting on)
+    Solo / unrated matches (no second party whose acceptance is worth waiting on)
     self-accept and finalize immediately — ``side.won`` and the rating update
     fire here. Rated two-human matches leave the result *standing* (unaccepted)
     for the opposing side to accept via
@@ -2380,9 +2380,9 @@ async def post_match_result(
     # Drives the post-commit push: only a rated two-human match leaves the other
     # side owing an acceptance. Computed before commit; the recipient gets pinged
     # once the result is durably saved.
-    awaiting_confirmation = _requires_confirmation(match)
-    if not awaiting_confirmation:
-        # Solo / unrated path: no second sign-off needed — the proposer
+    awaiting_acceptance = _requires_confirmation(match)
+    if not awaiting_acceptance:
+        # Solo / unrated path: no second acceptance needed — the proposer
         # self-accepts and the match finalizes immediately (stamping
         # ``completed_at``). A solo match has no second human to accept, so the
         # proposer's own id is recorded as the acceptor.
@@ -2420,13 +2420,13 @@ async def post_match_result(
     # blanket catch, mirroring the fire-and-forget enqueue guards in
     # app.sessions. The session is rolled back so the request's teardown is
     # clean even when the failure was the in-app persist commit.
-    if awaiting_confirmation:
+    if awaiting_acceptance:
         try:
             await _notify_result_posted(notifications, reloaded, current_user.id)
         except Exception:
             await db.rollback()
             log.exception(
-                "Failed to record result-confirmation notification",
+                "Failed to record result-acceptance notification",
                 extra={"match_id": str(match.id)},
             )
     return details

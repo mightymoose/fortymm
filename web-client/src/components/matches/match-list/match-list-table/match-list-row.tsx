@@ -11,7 +11,7 @@ import { TimeCell, type TimeCellView } from './match-list-row/time-cell'
 import type { NavigateFn } from '../match-list-status'
 
 /** The trailing-cell CTA for an actionable row (Enter score / Review result /
- * Resolve dispute). Passive rows (waiting / final / non-participant) carry
+ * Review result). Passive rows (waiting / final / non-participant) carry
  * `action: null` and render no button. `primary` is true only for the page's
  * top actionable bucket, which takes the filled orange button. */
 export interface RowActionView {

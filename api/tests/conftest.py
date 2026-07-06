@@ -210,7 +210,7 @@ NOTIFICATION_TYPE_LABELS: dict[NotificationCategory, tuple[str, str]] = {
     NotificationCategory.RATING_CHANGE: ("Rating changes", "Rating"),
     NotificationCategory.TOURNAMENT: ("Tournament news", "Tourney"),
     NotificationCategory.OPPONENT: ("Challenges & friends", "Social"),
-    NotificationCategory.RESULT_CONFIRM: ("Score confirmations", "Scores"),
+    NotificationCategory.RESULT_CONFIRM: ("Score acceptances", "Scores"),
 }
 NOTIFICATION_CHANNEL_LABELS: dict[ChannelEnum, str] = {
     ChannelEnum.IN_APP: "In-app",

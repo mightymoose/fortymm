@@ -7,12 +7,11 @@ from pydantic import BaseModel
 from app.schemas.rating import RatingChange
 
 # The actionable bucket a match falls in for the current user, in priority
-# order: a disputed match reopened for correction (``dispute``) outranks a
-# rated result the opponent posted and is awaiting our review (``review``),
-# which outranks a match we still need to score (``score``). Passive states —
-# a result we posted awaiting the opponent, or a pending/scheduled match — are
-# never rows; they only feed ``waiting_count``.
-AttentionKind = Literal["dispute", "review", "score"]
+# order: a rated result the opponent proposed that is awaiting our review
+# (``review``) outranks a match we still need to score (``score``). Passive
+# states — a result we proposed awaiting the opponent, or a pending/scheduled
+# match — are never rows; they only feed ``waiting_count``.
+AttentionKind = Literal["review", "score"]
 
 
 class DashboardAttentionItem(BaseModel):
@@ -25,12 +24,12 @@ class DashboardAttentionItem(BaseModel):
     kind: AttentionKind
     # ``score`` rows split rated-above-unrated by this flag (the FE derives the
     # primary-button priority from ``kind`` + ``affects_rating``). It is always
-    # True for ``review``/``dispute`` (both only arise on rated matches).
+    # True for ``review`` (only arises on rated matches).
     affects_rating: bool
     # The next un-scored game for a ``score`` row, used to deep-link straight to
     # the scoring page. ``None`` when the board is already decided but unposted
     # (the FE routes to match detail to post the result instead), and always
-    # ``None`` for ``review``/``dispute`` rows (which route to match detail).
+    # ``None`` for ``review`` rows (which route to match detail).
     current_game_number: int | None
 
 
@@ -85,12 +84,12 @@ class DashboardResponse(BaseModel):
     # since the panel only renders the top few as rows. Not the full set — use
     # ``attention_total_count`` for the true total and the footer overflow.
     attention: list[DashboardAttentionItem]
-    # Total actionable matches for the current user (disputes + in_progress the
-    # user hasn't signed), counted independently of the ``attention`` cap so the
-    # footer's "+N more need attention" stays accurate however many there are.
+    # Total actionable matches for the current user (in_progress the user hasn't
+    # accepted), counted independently of the ``attention`` cap so the footer's
+    # "+N more need attention" stays accurate however many there are.
     attention_total_count: int
-    # Count of matches that need *someone else's* move (a result we posted
-    # awaiting the opponent's sign-off, plus pending/scheduled matches). Shown
+    # Count of matches that need *someone else's* move (a result we proposed
+    # awaiting the opponent's acceptance, plus pending/scheduled matches). Shown
     # as footer text only — never a row.
     waiting_count: int
     recent_results: list[DashboardRecentResult]

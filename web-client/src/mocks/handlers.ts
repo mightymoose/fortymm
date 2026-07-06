@@ -7,7 +7,7 @@ import {
   findMatch,
   MOCK_CURRENT_USER,
   awaitingCountOf,
-  isAwaitingConfirmation,
+  isAwaitingAcceptance,
   mockMatches,
   newMatchSeed,
   projectDashboardAttention,
@@ -89,15 +89,15 @@ function matchHasPlayerLike(m: SeedMatch, q: string): boolean {
 }
 
 /** Whether a seed falls in the requested `MatchListFilter` bucket. `in_progress`
- * (Live) excludes posted-but-unconfirmed results; `awaiting_confirmation` is
+ * (Live) excludes posted-but-unaccepted results; `awaiting_acceptance` is
  * exactly those — mirrors the server split so a posted result never leaks into
  * Live (issue #381). Shared by the list and CSV handlers. */
 function matchesListFilter(m: SeedMatch, statusFilter: string): boolean {
-  if (statusFilter === 'awaiting_confirmation') {
-    return isAwaitingConfirmation(m)
+  if (statusFilter === 'awaiting_acceptance') {
+    return isAwaitingAcceptance(m)
   }
   if (statusFilter === 'in_progress') {
-    return m.status === 'in_progress' && !isAwaitingConfirmation(m)
+    return m.status === 'in_progress' && !isAwaitingAcceptance(m)
   }
   return m.status === statusFilter
 }
@@ -293,7 +293,7 @@ function projectPlayerMatches(player: {
         opponent: { id: opponentId, username: opponentUsername },
         sets,
         result,
-        awaiting_confirmation: false,
+        awaiting_acceptance: false,
       }
     })
 }
@@ -672,7 +672,7 @@ export const handlers = [
       total: filtered.length,
       status_counts: statusCountsOf(scoped),
       attention_count: attentionSeeds.length,
-      awaiting_confirmation_count: awaitingCountOf(scoped),
+      awaiting_acceptance_count: awaitingCountOf(scoped),
     })
   }),
 

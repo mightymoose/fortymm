@@ -18,8 +18,8 @@ let feed: NotificationItem[] = [
   {
     id: 'mn-1',
     category: 'result_confirm',
-    title: 'Confirm your score',
-    body: 'def. Patel, M. — you logged 3–1. Tap to confirm.',
+    title: 'Accept your score',
+    body: 'def. Patel, M. — you logged 3–1. Tap to accept.',
     link: '/matches/m-1',
     action_label: 'Review',
     delta: null,

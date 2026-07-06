@@ -160,11 +160,11 @@ describe('projectMatchListRow', () => {
   })
 
   it('resolves the status tone from STATUS_TONE[API_TO_TONE[status]]', () => {
-    const row = matchListRow({ status: 'disputed', status_label: 'Disputed' })
+    const row = matchListRow({ status: 'disputed', status_label: 'In review' })
     const view = projectMatchListRow(row)
     expect(view.status.toneClass).toBe(STATUS_TONE[API_TO_TONE.disputed])
     expect(view.status.toneClass).toBe('status-tone-final')
-    expect(view.status.label).toBe('Disputed')
+    expect(view.status.label).toBe('In review')
   })
 
   it('marks isLive only for in_progress', () => {
@@ -180,19 +180,19 @@ describe('projectMatchListRow', () => {
   })
 
   // The #381 bug at the row level: a posted-but-unconfirmed result is an
-  // in_progress row labelled "Awaiting confirmation". It must NOT read as Live
+  // in_progress row labelled "Awaiting acceptance". It must NOT read as Live
   // (no live-dot) and must take its own "called" tone, not the live tone.
   it('does not mark an awaiting-confirmation row as live and re-tones it', () => {
     const row = matchListRow({
       status: 'in_progress',
-      status_label: 'Awaiting confirmation',
+      status_label: 'Awaiting acceptance',
     })
     const view = projectMatchListRow(row)
     expect(view.isLive).toBe(false)
     expect(view.status.isLive).toBe(false)
     expect(view.status.toneClass).toBe('status-tone-called')
     expect(view.status.toneClass).not.toBe(STATUS_TONE.live)
-    expect(view.status.label).toBe('Awaiting confirmation')
+    expect(view.status.label).toBe('Awaiting acceptance')
   })
 
   it('still marks a signature-free in_progress row as live', () => {
@@ -267,16 +267,11 @@ describe('projectMatchListRow', () => {
     expect(action?.route).toEqual(matchDetailRoute('m-decided'))
   })
 
-  it('routes review and dispute actions to match detail', () => {
+  it('routes the review action to match detail', () => {
     const review = matchListRow({ id: 'm-r', attention: 'review' })
     expect(projectMatchListRow(review).action).toMatchObject({
       label: 'Review result',
       route: matchDetailRoute('m-r'),
-    })
-    const dispute = matchListRow({ id: 'm-d', attention: 'dispute' })
-    expect(projectMatchListRow(dispute).action).toMatchObject({
-      label: 'Resolve dispute',
-      route: matchDetailRoute('m-d'),
     })
   })
 
@@ -316,16 +311,15 @@ describe('projectMatchListRow', () => {
 })
 
 describe('topActionableKind', () => {
-  it('returns the most urgent actionable bucket present (dispute > review > score)', () => {
+  it('returns the most urgent actionable bucket present (review > score)', () => {
     const rows = [
       matchListRow({ attention: 'score' }),
-      matchListRow({ attention: 'review' }),
       matchListRow({ attention: 'waiting_others' }),
     ]
-    expect(topActionableKind(rows)).toBe('review')
+    expect(topActionableKind(rows)).toBe('score')
     expect(
-      topActionableKind([...rows, matchListRow({ attention: 'dispute' })]),
-    ).toBe('dispute')
+      topActionableKind([...rows, matchListRow({ attention: 'review' })]),
+    ).toBe('review')
   })
 
   it('ignores passive and non-attention rows, returning null when none are actionable', () => {

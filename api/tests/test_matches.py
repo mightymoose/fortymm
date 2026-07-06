@@ -619,17 +619,17 @@ async def test_list_filter_by_status(api_client: AsyncClient, db_session: AsyncS
     assert listing["status_counts"]["completed"] == 1
 
 
-async def test_list_live_filter_excludes_awaiting_confirmation(
+async def test_list_live_filter_excludes_awaiting_acceptance(
     api_client: AsyncClient, db_session: AsyncSession
 ):
     """Regression for #381: a posted-but-unconfirmed result is an in_progress
-    match with a signature ("Awaiting confirmation"). It must NOT count or list
-    under the Live filter — it has its own ``awaiting_confirmation`` bucket."""
+    match with a signature ("Awaiting acceptance"). It must NOT count or list
+    under the Live filter — it has its own ``awaiting_acceptance`` bucket."""
     await start_session(api_client, db_session)
     async with opponent_session(db_session, "rival") as (opp_client, opp):
         live = await _create_match(api_client, opp.id, best_of=1)
         # A second match with a posted (but unconfirmed) result: status stays
-        # in_progress, one signature recorded → "Awaiting confirmation".
+        # in_progress, one signature recorded → "Awaiting acceptance".
         awaiting = await _create_match(api_client, opp.id, best_of=1)
         post = await api_client.post(
             f"/v1/matches/{awaiting['id']}/results",
@@ -641,7 +641,7 @@ async def test_list_live_filter_excludes_awaiting_confirmation(
         )
         assert post.status_code == 201
         assert post.json()["status"] == "in_progress"
-        assert post.json()["status_label"] == "Awaiting confirmation"
+        assert post.json()["status_label"] == "Awaiting acceptance"
 
     # Live filter: only the signature-free in_progress match.
     live_listing = (
@@ -650,21 +650,21 @@ async def test_list_live_filter_excludes_awaiting_confirmation(
     assert [row["id"] for row in live_listing["items"]] == [live["id"]]
     assert live_listing["total"] == 1
     assert live_listing["status_counts"]["in_progress"] == 1
-    assert live_listing["awaiting_confirmation_count"] == 1
+    assert live_listing["awaiting_acceptance_count"] == 1
 
     # Awaiting filter: only the posted-but-unconfirmed match.
     awaiting_listing = (
-        await api_client.get("/v1/matches", params={"status": "awaiting_confirmation"})
+        await api_client.get("/v1/matches", params={"status": "awaiting_acceptance"})
     ).json()
     assert [row["id"] for row in awaiting_listing["items"]] == [awaiting["id"]]
     assert awaiting_listing["total"] == 1
-    assert awaiting_listing["items"][0]["status_label"] == "Awaiting confirmation"
+    assert awaiting_listing["items"][0]["status_label"] == "Awaiting acceptance"
 
     # Unfiltered: both rows present, and the total counts each exactly once.
     full = (await api_client.get("/v1/matches")).json()
     assert full["total"] == 2
     assert full["status_counts"]["in_progress"] == 1
-    assert full["awaiting_confirmation_count"] == 1
+    assert full["awaiting_acceptance_count"] == 1
 
 
 async def test_list_q_filter_matches_any_player_username(
@@ -1493,7 +1493,7 @@ async def test_propose_commits_canon_and_leaves_result_standing(
         # Status holds at in_progress with the awaiting-confirmation label —
         # the proposal is on the table, the other side hasn't accepted.
         assert body["status"] == "in_progress"
-        assert body["status_label"] == "Awaiting confirmation"
+        assert body["status_label"] == "Awaiting acceptance"
         assert body["can_score"] is False
         assert body["can_finalize"] is False
         # The proposer's negotiation view: their own side proposed, so it's the
@@ -2704,7 +2704,7 @@ async def test_details_head_to_head_counts_prior_meetings_per_side(
     assert h2h["side_2_wins"] == 1
     # Most-recent meeting is the one I just lost.
     assert h2h["recent_meetings"][0]["winner_side_number"] == 2
-    # Every meeting here went through the rated sign-off flow.
+    # Every meeting here went through the rated acceptance flow.
     assert all(m["rated"] for m in h2h["recent_meetings"])
 
 
@@ -2718,7 +2718,7 @@ async def test_details_head_to_head_flags_rated_vs_unrated_meetings(
         rival_client,
         rival,
     ):
-        # A rated prior meeting (full sign-off) ...
+        # A rated prior meeting (full acceptance) ...
         await _play_match_to_completion(
             api_client, rival_client, rival.id, best_of=3, side_1_wins=True
         )
@@ -3216,7 +3216,7 @@ async def test_results_on_unrated_match_finalizes_immediately(
 ):
     """An unrated match with a real opponent skips the accept round-trip (#485):
     acceptance exists to protect ratings from one-sided claims, and an unrated
-    match has no stakes worth a second sign-off. The propose call flips straight
+    match has no stakes worth a second acceptance. The propose call flips straight
     to completed, stamps ``side.won``, and self-accepts — same as the solo
     path."""
     await start_session(api_client, db_session)
@@ -3261,7 +3261,7 @@ async def test_standing_proposal_keeps_scores_public_but_not_won(
         # Authed read (proposer's perspective).
         authed = (await api_client.get(f"/v1/matches/{match['id']}")).json()
         assert authed["status"] == "in_progress"
-        assert authed["status_label"] == "Awaiting confirmation"
+        assert authed["status_label"] == "Awaiting acceptance"
         sides = sorted(authed["sides"], key=lambda s: s["side_number"])
         assert [s["won"] for s in sides] == [None, None]
         assert [s["games_won"] for s in sides] == [2, 0]
@@ -3277,7 +3277,7 @@ async def test_standing_proposal_keeps_scores_public_but_not_won(
         async with make_client() as anon:
             anon_view = (await anon.get(f"/v1/matches/{match['id']}")).json()
         assert anon_view["status"] == "in_progress"
-        assert anon_view["status_label"] == "Awaiting confirmation"
+        assert anon_view["status_label"] == "Awaiting acceptance"
         anon_sides = sorted(anon_view["sides"], key=lambda s: s["side_number"])
         assert [s["won"] for s in anon_sides] == [None, None]
         for g in sorted(anon_view["games"], key=lambda g: g["game_number"]):
@@ -3294,11 +3294,11 @@ async def test_standing_proposal_keeps_scores_public_but_not_won(
         assert anon_view["can_finalize"] is False
 
 
-async def test_list_status_label_reflects_awaiting_confirmation(
+async def test_list_status_label_reflects_awaiting_acceptance(
     api_client: AsyncClient, db_session: AsyncSession
 ):
     """A list row for a match with a standing (unaccepted) result shows the
-    ``Awaiting confirmation`` label, even though ``status`` remains
+    ``Awaiting acceptance`` label, even though ``status`` remains
     ``in_progress`` — the FE renders the label directly."""
     await start_session(api_client, db_session)
     async with opponent_session(db_session, "list-label-opp") as (_opp_client, opp):
@@ -3308,7 +3308,7 @@ async def test_list_status_label_reflects_awaiting_confirmation(
     listing = (await api_client.get("/v1/matches")).json()
     row = next(r for r in listing["items"] if r["id"] == match["id"])
     assert row["status"] == "in_progress"
-    assert row["status_label"] == "Awaiting confirmation"
+    assert row["status_label"] == "Awaiting acceptance"
 
 
 async def test_list_row_negotiation_reflects_whose_turn(
@@ -3316,7 +3316,7 @@ async def test_list_row_negotiation_reflects_whose_turn(
 ):
     """The matches list carries the same viewer-relative ``negotiation`` block
     as the details endpoint, so the FE can pick the row CTA without re-deriving
-    sign-off state. The proposer's row reads ``awaiting`` (not their turn); the
+    acceptance state. The proposer's row reads ``awaiting`` (not their turn); the
     opposing side's row reads ``review`` (their turn)."""
     await start_session(api_client, db_session)
     async with opponent_session(db_session, "list-neg-opp") as (opp_client, opp):
@@ -3471,7 +3471,7 @@ async def test_posting_result_enqueues_confirmation_for_opponent(
     # Propose/accept vocabulary, not the retired confirm/dispute model (#728).
     # A first post's recipient sees Accept/Suggest-correction buttons (not
     # Accept/Counter — that pair is reserved for the corrected-result case).
-    assert job.title == "Review your match result"
+    assert job.title == "Accept your match result"
     assert "Accept or suggest a correction?" in job.body
     assert "dispute" not in job.body.lower()
     # Recipient-framed games-won (poster won 2–1) and the per-game scores.

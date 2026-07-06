@@ -3,15 +3,17 @@ import UserNotifications
 
 /// Identifiers shared with the backend push payload (`api/app/notifications`).
 /// A push whose `aps.category` is `MATCH_RESULT_CONFIRMATION` renders the
-/// Approve / Suggest-correction buttons registered below; the `match_id`
+/// Accept / Suggest-correction buttons registered below; the `match_id`
 /// userInfo key tells the app which match the buttons (and a tap) act on, and
-/// `result_id` pins Approve to the specific standing result the notification
+/// `result_id` pins Accept to the specific standing result the notification
 /// was about (so a stale push can't sign the user onto a later one). Kept in
 /// one place so the device-side registration can't drift from what the server
 /// sends.
 enum MatchNotification {
     /// Must equal `MATCH_RESULT_CONFIRMATION_CATEGORY` in `app/notifications/apns.py`.
     static let category = "MATCH_RESULT_CONFIRMATION"
+    /// Surface verb is "Accept" (the confirm verb was replaced by the
+    /// propose/accept negotiation); the wire identifier stays stable.
     static let approveAction = "CONFIRM_MATCH_ACTION"
     /// Surface verb is "Suggest correction" (the dispute verb was replaced by
     /// the propose/accept negotiation); the wire identifier stays stable.
@@ -20,7 +22,7 @@ enum MatchNotification {
     static let matchIdKey = "match_id"
     /// Must equal the `data` key the server sends (`{"result_id": "<uuid>"}`) —
     /// the standing result this push is about, used as the acceptance token so
-    /// Approve binds to that exact result rather than whatever is standing now.
+    /// Accept binds to that exact result rather than whatever is standing now.
     static let resultIdKey = "result_id"
 }
 
@@ -31,10 +33,10 @@ enum MatchNotification {
 ///    `FortymmApp.swift`), hex-encodes it, and POSTs it to the backend so the
 ///    server can push to this device,
 /// 3. registers the "match result" notification category so a result-awaiting
-///    push carries Approve / Suggest-correction action buttons,
+///    push carries Accept / Suggest-correction action buttons,
 /// 4. presents pushes as a banner even while the app is foregrounded (otherwise
 ///    a self-test looks like nothing happened),
-/// 5. handles a tapped action: Approve accepts the exact result the push
+/// 5. handles a tapped action: Accept accepts the exact result the push
 ///    carried (its `result_id` token) in the background (no need to open the
 ///    app), 409ing gracefully if that result was superseded; Suggest
 ///    correction and a body tap both deep-link to the match via `onOpenMatch`.
@@ -83,7 +85,7 @@ final class PushNotificationManager: NSObject {
         center.setNotificationCategories([Self.matchConfirmationCategory()])
     }
 
-    /// The "a result is waiting on you" category: Approve accepts the exact
+    /// The "a result is waiting on you" category: Accept accepts the exact
     /// result the push named in the background (no `.foreground` — a quick tap
     /// acts without opening the app). Suggesting a correction needs the full
     /// board editor, so that action opens the app on the match instead of
@@ -91,7 +93,7 @@ final class PushNotificationManager: NSObject {
     private static func matchConfirmationCategory() -> UNNotificationCategory {
         let approve = UNNotificationAction(
             identifier: MatchNotification.approveAction,
-            title: "Approve",
+            title: "Accept",
             options: []
         )
         let suggestCorrection = UNNotificationAction(
@@ -171,8 +173,8 @@ extension PushNotificationManager: UNUserNotificationCenterDelegate {
         completionHandler([.banner, .sound, .badge])
     }
 
-    /// The user acted on a notification. For a match-confirmation push:
-    /// Approve accepts the exact result the push carried (its `result_id`) in
+    /// The user acted on a notification. For a match-result push:
+    /// Accept accepts the exact result the push carried (its `result_id`) in
     /// the background; "Suggest correction" and a body tap both open the app on
     /// the match (a correction needs the full board editor). Anything we don't
     /// recognise — or a payload missing its `match_id` — just dismisses.
@@ -254,10 +256,10 @@ extension PushNotificationManager: UNUserNotificationCenterDelegate {
         }
     }
 
-    /// The Approve action's result was superseded before the tap landed (409).
+    /// The Accept action's result was superseded before the tap landed (409).
     /// If the app is foregrounded, deep-link to the match so the user sees the
     /// current score right away; otherwise post a plain local notification
-    /// (no Approve button — it carries only `match_id`, so tapping its body
+    /// (no Accept button — it carries only `match_id`, so tapping its body
     /// opens the match) nudging them to review before signing off.
     @MainActor
     private func handleSupersededApproval(matchId: UUID) async {

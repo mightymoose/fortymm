@@ -26,7 +26,7 @@ const selectFinalizeCallout = (
   // This is the recovery path for scores entered then left unposted, and the
   // one-click resubmit after a mistaken dispute — the scratchpad scores
   // survive a dispute, so re-posting them unchanged drops back into the
-  // sign-off flow.
+  // acceptance flow.
   if (!details.can_finalize) return null;
   return {
     // The recovery surface for an already-stuck gappy-decided match: the

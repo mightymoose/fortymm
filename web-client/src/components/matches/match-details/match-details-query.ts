@@ -53,23 +53,23 @@ export type MatchDetailsResult = ReturnType<
   typeof matchDetailsResultFromPayload
 >;
 
-/** The server's lifecycle label for a posted-but-unconfirmed result (mirrors
+/** The server's lifecycle label for a posted-but-unaccepted result (mirrors
  * `_status_label` in api/app/matches.py). While a match sits here it is waiting
- * on the *other* side to confirm — a transition that happens in a different
+ * on the *other* side to accept — a transition that happens in a different
  * browser session and so triggers no cache invalidation on this page. */
-const AWAITING_CONFIRMATION = "Awaiting confirmation";
+const AWAITING_ACCEPTANCE = "Awaiting acceptance";
 
 /** How often (ms) to re-poll `GET /v1/matches/{id}` while a result is awaiting
- * the opponent's confirmation. */
-const AWAITING_CONFIRMATION_POLL_MS = 5_000;
+ * the opponent's acceptance. */
+const AWAITING_ACCEPTANCE_POLL_MS = 5_000;
 
-/** Poll only while the match is awaiting the opponent's confirmation, and stop
- * once it leaves that state (confirmed → Final, or contested → Disputed).
+/** Poll only while the match is awaiting the opponent's acceptance, and stop
+ * once it leaves that state (accepted → Final).
  *
- * The reporter posts a result, then leaves the match page open; the opponent
- * confirms in their own session. Nothing invalidates the reporter's cache, and
+ * The proposer posts a result, then leaves the match page open; the opponent
+ * accepts in their own session. Nothing invalidates the proposer's cache, and
  * the global client disables `refetchOnWindowFocus` with a 30s `staleTime`, so
- * without this the page is stuck on "Awaiting confirmation" until a manual
+ * without this the page is stuck on "Awaiting acceptance" until a manual
  * reload (#493). Returning `false` outside that state means a settled match
  * isn't polled, so the open page goes quiet again once it resolves.
  *
@@ -80,18 +80,18 @@ const AWAITING_CONFIRMATION_POLL_MS = 5_000;
  * Freezing the rendered result means accepting a now-superseded one 409s, and
  * the callout surfaces that as a "reload to re-review" prompt. Spectators and
  * the waiting proposer have `your_turn=false`, so they keep polling. */
-export function refetchWhileAwaitingConfirmation(
+export function refetchWhileAwaitingAcceptance(
   query: Pick<Query<MatchDetailsResult>, "state">,
 ): number | false {
   const data = query.state.data?.unmigrated;
-  if (data?.status_label !== AWAITING_CONFIRMATION) return false;
+  if (data?.status_label !== AWAITING_ACCEPTANCE) return false;
   if (data.negotiation.your_turn) return false;
-  return AWAITING_CONFIRMATION_POLL_MS;
+  return AWAITING_ACCEPTANCE_POLL_MS;
 }
 
 export const matchDetailsQuery = (matchId: string) => ({
   queryKey: queryKey(matchId),
   queryFn: fetchMatchDetails,
   throwOnError: true,
-  refetchInterval: refetchWhileAwaitingConfirmation,
+  refetchInterval: refetchWhileAwaitingAcceptance,
 });

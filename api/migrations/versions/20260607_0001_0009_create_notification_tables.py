@@ -32,7 +32,7 @@ NOTIFICATION_TYPE_SEED = [
     ("33333333-3333-3333-3333-333333330002", "rating_change", "Rating changes", "Rating"),
     ("33333333-3333-3333-3333-333333330003", "tournament", "Tournament news", "Tourney"),
     ("33333333-3333-3333-3333-333333330004", "opponent", "Challenges & friends", "Social"),
-    ("33333333-3333-3333-3333-333333330005", "result_confirm", "Score confirmations", "Scores"),
+    ("33333333-3333-3333-3333-333333330005", "result_confirm", "Score acceptances", "Scores"),
 ]
 
 NOTIFICATION_CHANNEL_SEED = [

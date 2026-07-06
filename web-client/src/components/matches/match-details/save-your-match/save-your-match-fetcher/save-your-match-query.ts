@@ -30,7 +30,7 @@ const selectSaveYourMatch = (
   match: MatchDetailsResult,
 ): SaveYourMatchView | null => {
   // Show as soon as the match is being played — we don't wait for the
-  // opponent's sign-off. The "save it before cookies clear" risk applies the
+  // opponent's acceptance. The "save it before cookies clear" risk applies the
   // moment the guest has invested real time, not just at the rated-finalized
   // boundary (which can be hours later, after the guest has closed the tab).
   if (match.data.scoreboard.status === "scheduled") return null;

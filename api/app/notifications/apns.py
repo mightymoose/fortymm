@@ -30,8 +30,9 @@ Environment = Literal["sandbox", "production"]
 
 # Category identifier shared with the iOS client (see
 # ``PushNotificationManager`` in the iOS app). A push carrying this category
-# renders the Approve / Suggest correction action buttons the app registered
-# for it.
+# renders the Accept / Suggest-correction action buttons the app registered
+# for it. The identifier string is a wire contract with the client and is kept
+# stable even though the buttons' user-facing verbs moved to accept/counter.
 MATCH_RESULT_CONFIRMATION_CATEGORY = "MATCH_RESULT_CONFIRMATION"
 
 _APNS_HOSTS: dict[str, str] = {

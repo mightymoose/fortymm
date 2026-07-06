@@ -124,7 +124,7 @@ const textLuminance = (loc: Locator): Promise<number> =>
 
 test.use({ viewport: { width: 375, height: 667 } });
 
-test.describe('Mobile sign-off callout layout (375px)', () => {
+test.describe('Mobile acceptance callout layout (375px)', () => {
     test('corrected: diff box, stakes line, and actions do not overlap', async ({
         page,
     }, testInfo) => {
