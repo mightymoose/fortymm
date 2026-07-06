@@ -1,6 +1,7 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Navigate, useNavigate } from "@tanstack/react-router";
 import { ApiError } from "@/api/client";
+import { pageTitle } from "@/lib/page-title";
 import {
   matchDetailRoute,
   useMatch,
@@ -85,6 +86,19 @@ export function CorrectionEntry({ matchId }: { matchId: string }) {
   // submit before React re-renders. This ref flips synchronously inside the
   // submit gesture, so it catches the second tap even within the same frame.
   const submittingRef = useRef(false);
+
+  // The route's static `head` title defaults to the opponent-facing "Suggest a
+  // correction"; when this is actually the proposer editing their own pending
+  // result (`viewer_state: "awaiting"`) the tab title must match the on-page
+  // "Edit your result." heading, not leak the retired counter wording (C1).
+  // Set from the fetched state here since the static `head` can't see it.
+  const selfEditTitle = data?.negotiation.viewer_state === "awaiting";
+  useEffect(() => {
+    if (!data) return;
+    document.title = pageTitle(
+      selfEditTitle ? "Edit your result" : "Suggest a correction",
+    );
+  }, [data, selfEditTitle]);
 
   if (isLoading || !data) {
     return <div aria-busy="true" data-testid="correction-entry-loading" />;

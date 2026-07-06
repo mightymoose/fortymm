@@ -264,5 +264,36 @@ describe("CorrectionEntry", () => {
     expect(correctionEntryPage.getSubmit()).toHaveTextContent(
       "Send updated score",
     );
+    // The browser tab title must match the heading, not leak the opponent-facing
+    // "Suggest a correction" wording the shared route defaults to (C1 QA leak).
+    await waitFor(() =>
+      expect(document.title).toBe("Edit your result · FortyMM"),
+    );
+  });
+
+  it("titles the tab 'Suggest a correction' when reacting to the opponent's proposal", async () => {
+    correctionEntryPage.mockMatch(() =>
+      HttpResponse.json(
+        buildCorrectableMatch({
+          negotiation: {
+            viewer_state: "review",
+            your_turn: true,
+            standing_result: buildStandingResult(),
+            prior_result: null,
+            diff: null,
+          },
+        }),
+      ),
+    );
+    correctionEntryPage.render();
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole("heading", { name: "Suggest a correction." }),
+      ).toBeInTheDocument(),
+    );
+    await waitFor(() =>
+      expect(document.title).toBe("Suggest a correction · FortyMM"),
+    );
   });
 });
