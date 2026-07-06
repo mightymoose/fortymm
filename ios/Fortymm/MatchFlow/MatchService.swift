@@ -175,24 +175,6 @@ struct MatchService {
         return Self.finalMatch(from: details)
     }
 
-    /// Nothing is standing to accept (the match is live or already settled) —
-    /// a client-side precondition, deliberately distinct from `APIError.http`
-    /// so it can't be mistaken for a real server 409.
-    struct NoStandingResult: Error {}
-
-    /// Fetch the match and accept its standing proposal. Used by the
-    /// push-notification "Approve" action, whose payload carries only the
-    /// match id — the fetch resolves the current standing result id (the
-    /// acceptance token). Whether the viewer is actually allowed to accept is
-    /// the server's call: an out-of-turn acceptance gets the real 409/4xx.
-    func acceptStandingResult(_ matchId: UUID) async throws -> FinalMatch {
-        let details: MatchDetailsDTO = try await client.get("/v1/matches/\(matchId.uuidString)")
-        guard let standing = details.negotiation.standingResult else {
-            throw NoStandingResult()
-        }
-        return try await acceptResult(matchId: matchId, resultId: standing.id)
-    }
-
     // MARK: Read
 
     /// Full detail for one match (`GET /v1/matches/{id}`).

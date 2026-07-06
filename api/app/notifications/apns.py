@@ -83,6 +83,7 @@ class PushSender(Protocol):
         body: str,
         category: str | None = None,
         data: Mapping[str, str] | None = None,
+        collapse_id: str | None = None,
     ) -> SendResult: ...
 
 
@@ -101,6 +102,7 @@ class NoopSender:
         body: str,
         category: str | None = None,
         data: Mapping[str, str] | None = None,
+        collapse_id: str | None = None,
     ) -> SendResult:
         return SendResult(SendOutcome.FAILED, "push not configured")
 
@@ -187,6 +189,7 @@ class APNsClient:
         body: str,
         category: str | None = None,
         data: Mapping[str, str] | None = None,
+        collapse_id: str | None = None,
     ) -> SendResult:
         url = f"{_APNS_HOSTS[environment]}/3/device/{token}"
         try:
@@ -203,6 +206,8 @@ class APNsClient:
             "apns-topic": self._config.bundle_id,
             "apns-push-type": "alert",
         }
+        if collapse_id is not None:
+            headers["apns-collapse-id"] = collapse_id
         # ``object`` (not ``Any``) so the heterogeneous JSON payload still
         # type-checks under mypy --strict without loosening the interior.
         aps: dict[str, object] = {

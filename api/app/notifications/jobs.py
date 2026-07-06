@@ -41,4 +41,5 @@ async def _deliver(job: NotificationJob) -> None:
             delta=job.delta,
             push_category=job.push_category,
             push_data=job.push_data,
+            collapse_id=job.collapse_id,
         )
