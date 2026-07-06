@@ -7,10 +7,11 @@ import {
 } from '@tanstack/react-router'
 import { onlineManager, useQueryClient } from '@tanstack/react-query'
 import { Check, Loader2, TriangleAlert, X as XIcon } from 'lucide-react'
-import { ApiError } from '@/api/client'
+import { ApiError, boardConflictDetail } from '@/api/client'
 import {
   forgetScoreSaves,
   matchDetailRoute,
+  nextScoringDestination,
   recordedGameNumbers,
   scoringEditRoute,
   scoringNewRoute,
@@ -41,9 +42,14 @@ import {
   deciderGameNumber,
   isDecidedMatch,
   overrunDecider,
-  type GamePoints,
 } from '@/lib/scoring'
-import { isScoreConflict, useGameSaveState } from './score-saves'
+import { useNavigationOverrideRef } from '@/lib/use-navigation-override-ref'
+import { reconstructBoard, scoredGamePoints } from './reconstruct-board'
+import {
+  isScoreConflict,
+  useFailedGameSaves,
+  useGameSaveState,
+} from './score-saves'
 import { SaveBanner } from './save-banner'
 import { ScorePad } from './score-pad'
 import {
@@ -53,19 +59,6 @@ import {
 
 /** The non-null persisted score on a game. */
 type PersistedScore = NonNullable<MatchDetails['games'][number]['score']>
-
-/** The persisted games as `GamePoints` for the scoring lib — drops un-scored
- * games and the side orientation, the shape `deciderGameNumber`/`overrunDecider`
- * expect. */
-function scoredGamePoints(games: MatchDetails['games']): GamePoints[] {
-  return games
-    .filter((g) => g.score)
-    .map((g) => ({
-      game_number: g.game_number,
-      side_1_points: g.score!.side_1_points,
-      side_2_points: g.score!.side_2_points,
-    }))
-}
 
 // Placeholder for the opponent label on solo matches — mirrors the match
 // details hero. Distinct from `initialsOf('Opponent')` so users can tell
@@ -115,6 +108,12 @@ function ScoreEntryInner({
   // used only to pre-fill the inputs after a failed save (the scoreline cells
   // and banner each read their own state).
   const ownSave = useGameSaveState(matchId, gameNumber)
+  // Every match game whose latest scratch save failed — needed so the finalize
+  // board folds in a game that failed on a *different* screen (issue #747-F2;
+  // ADR 0004). Conflicts are excluded below before the fold: their committed
+  // value is already persisted, and re-adding the rejected scratch would
+  // silently overwrite it.
+  const failedSaves = useFailedGameSaves(matchId)
 
   // `null` means "user hasn't typed anything yet" — we fall through to the
   // persisted score in edit mode. Avoids a state-syncing effect when `data`
@@ -138,12 +137,11 @@ function ScoreEntryInner({
   // Guard against losing un-submitted typing on refresh/close or an in-app
   // navigation (#441). `isDirty` is driven by the score change handlers as the
   // user types (set below, once `data`-derived baselines are in scope) — the
-  // blocker only reads it. `submittingRef` is flipped just before the
+  // blocker only reads it. `navOverride` is armed just before the
   // fire-and-forget Save (or an explicit Clear) navigates so that intentional
-  // hop is never blocked; it's a ref since it's read inside the blocker
-  // callbacks, not rendered.
+  // hop is never blocked.
   const [isDirty, setIsDirty] = useState(false)
-  const submittingRef = useRef(false)
+  const navOverride = useNavigationOverrideRef()
   // Synchronous finalize-in-flight guard. `finalizeMutation.isPending` is a
   // render snapshot that only flips on the next commit, so a fast double-click
   // on "Finalize result" lands a second tap before React re-renders — firing
@@ -158,7 +156,7 @@ function ScoreEntryInner({
     // Blocks browser refresh/close (beforeunload) only while genuinely dirty.
     enableBeforeUnload: () => isDirty,
     // Blocks in-app route changes the same way — but never the Save hop.
-    shouldBlockFn: () => isDirty && !submittingRef.current,
+    shouldBlockFn: () => isDirty && !navOverride.isArmed(),
     withResolver: true,
   })
 
@@ -169,6 +167,22 @@ function ScoreEntryInner({
       </>
     )
   }
+
+  // A first-post that lost to a concurrent scratchpad save (issue D1): the
+  // proposed board disagreed with a game someone else committed. The 409 carries
+  // the true committed match; `useProposeResult`'s onError already re-synced the
+  // caches from it, so `data` now reflects reality. We block the score pad below
+  // and show a "the score changed" interstitial instead of silently overwriting.
+  // Computed up here — ahead of every early `<Navigate>` return — because the
+  // re-synced committed board can be decided or leave this route's game past the
+  // decider, either of which would otherwise bounce the poster away (to match
+  // detail, or the edit page) before the interstitial ever renders, dropping the
+  // "score changed" explanation the conflict exists to deliver.
+  const finalizeApiError =
+    finalizeMutation.error instanceof ApiError ? finalizeMutation.error : null
+  const boardConflict = finalizeApiError
+    ? boardConflictDetail(finalizeApiError)
+    : null
 
   // The scoring screen is participant-only; spectators bounce back to the
   // read-only details page. The opponent side is always present — a real
@@ -182,7 +196,10 @@ function ScoreEntryInner({
   // Once a match is finalized every write path 409s — there's nothing to do
   // here. Same goes once a result is posted — scores are frozen the instant the
   // first proposal lands; accepting it lives on the match-details page.
-  if (data.status === 'completed' || data.negotiation.standing_result !== null) {
+  if (
+    !boardConflict &&
+    (data.status === 'completed' || data.negotiation.standing_result !== null)
+  ) {
     return <Navigate {...matchDetailRoute(matchId)} />
   }
   // The game number past which no more games can be played: once a side has
@@ -198,10 +215,11 @@ function ScoreEntryInner({
   // can never be played. An already-scored game at/under the decider stays
   // editable (you can still fix the deciding game itself).
   if (
-    !Number.isInteger(gameNumber) ||
-    gameNumber < 1 ||
-    gameNumber > data.best_of ||
-    (decider !== null && gameNumber > decider && !isScored(gameNumber))
+    !boardConflict &&
+    (!Number.isInteger(gameNumber) ||
+      gameNumber < 1 ||
+      gameNumber > data.best_of ||
+      (decider !== null && gameNumber > decider && !isScored(gameNumber)))
   ) {
     return <Navigate {...matchDetailRoute(matchId)} />
   }
@@ -214,11 +232,17 @@ function ScoreEntryInner({
   // inverse — edit mode but no saved score — swaps to the create URL.
   // Skipped while this page's own save is settling: the success cache
   // write makes the score "exist" a beat before onSettled navigates to the
-  // next game, and this redirect must not outrun that navigation.
-  if (mode.kind === 'create' && persistedScore && !saveMutation.isSuccess) {
+  // next game, and this redirect must not outrun that navigation. Also skipped
+  // during a board conflict — the interstitial owns the reconcile in place.
+  if (
+    mode.kind === 'create' &&
+    persistedScore &&
+    !saveMutation.isSuccess &&
+    !boardConflict
+  ) {
     return <Navigate {...scoringEditRoute(matchId, gameNumber)} replace />
   }
-  if (mode.kind === 'edit' && !persistedScore) {
+  if (mode.kind === 'edit' && !persistedScore && !boardConflict) {
     return <Navigate {...scoringNewRoute(matchId, gameNumber)} replace />
   }
 
@@ -334,21 +358,20 @@ function ScoreEntryInner({
   // so we can ask the scoring lib whether saving this entry would make the
   // match finalize-able. If so, the single submit button swaps to "Finalize
   // match" and posts /results instead of /scores/new.
+  //
+  // Reconstructed from all three sources (ADR 0004) via the shared helper the
+  // banner also uses: persisted ⊕ failed scratch ⊕ this game's live input. The
+  // failed-scratch fold is the #747-F2 fix — without it a game that failed to
+  // save on a different screen compacts out and a 2–1 board posts as 2–0.
+  // Conflicts are excluded (their committed value is already in `scoredGames`);
+  // the live input is layered last, so it wins for the active game even over its
+  // own failed scratch.
   const hypotheticalGames: MatchResultsGameWrite[] = inputsValid
-    ? [
-        ...scoredGames.filter((g) => g.game_number !== gameNumber),
-        mySideNumber === 1
-          ? {
-              game_number: gameNumber,
-              side_1_points: Number(me),
-              side_2_points: Number(opp),
-            }
-          : {
-              game_number: gameNumber,
-              side_1_points: Number(opp),
-              side_2_points: Number(me),
-            },
-      ]
+    ? reconstructBoard({
+        persisted: scoredGames,
+        failedSaves: failedSaves.filter((entry) => !entry.conflict),
+        activeInput: { game_number: gameNumber, ...toBody() },
+      })
     : []
   // The canonical board this entry would post — an out-of-order clinch's gap
   // closed (see `compactGames`), so the predicate and the posted payload below
@@ -374,8 +397,30 @@ function ScoreEntryInner({
   // finalize errors surface, not just 422 validation drift — for a deciding
   // game this button is the sole finalize path (the banner is informational),
   // so a 409 "already posted" / 500 must be visible here rather than swallowed.
-  const finalizeApiError =
-    finalizeMutation.error instanceof ApiError ? finalizeMutation.error : null
+  const committedMatch = boardConflict?.committed_match as
+    | MatchDetails
+    | undefined
+  // The games the poster's proposal changed or dropped vs. what's committed —
+  // named in the interstitial so the poster sees exactly what moved. Only the
+  // rare conflict path consumes this, so skip the work when there's no conflict.
+  const attemptedByNumber = new Map(
+    (finalizeMutation.variables?.games ?? []).map((g) => [g.game_number, g]),
+  )
+  const divergingGames = committedMatch
+    ? committedMatch.games.filter((g) => {
+        if (!g.score) return false
+        const attempted = attemptedByNumber.get(g.game_number)
+        return (
+          !attempted ||
+          attempted.side_1_points !== g.score.side_1_points ||
+          attempted.side_2_points !== g.score.side_2_points
+        )
+      })
+    : []
+  // Where "Resume" sends them on the true board: the server already computes the
+  // next playable game as `current_game` (null once the board is decided, even
+  // when it clinched before its last slot — a 3-0 sweep has no game 4 to resume),
+  // so reuse it rather than re-deriving the decider here.
   // The score *inputs* are only invalid for genuine validation problems (local
   // illegal score, or a 422 drift the server rejected) — a 409/500 means the
   // entered score is fine, so don't paint the fields red for those.
@@ -452,7 +497,7 @@ function ScoreEntryInner({
     // This is the sanctioned write path: any navigation it triggers (the
     // synchronous next-game hop, or finalize's onSuccess to the match page)
     // is intentional, so wave the unsaved-input blocker through it (#441).
-    submittingRef.current = true
+    navOverride.arm()
     // Finalizing posts the canonical result — but that's the one write that
     // can't be faked offline. When offline we instead fall through to the
     // scratchpad save below, which stores the deciding game's score in the
@@ -523,7 +568,7 @@ function ScoreEntryInner({
       // so a stale failure doesn't outlive the score it referred to. The
       // edit→new hop it triggers is intentional, so the unsaved-input blocker
       // stays out (#441).
-      submittingRef.current = true
+      navOverride.arm()
       forgetScoreSaves(queryClient, matchId, gameNumber)
       deleteMutation.mutate(undefined, {
         // After clearing, land back on this game's create route so the user
@@ -569,7 +614,7 @@ function ScoreEntryInner({
     // version), so the mutation PUTs with that fresh version and overwrites
     // deliberately — no longer a blind last-write-wins, but a choice made
     // against the value we just showed them.
-    submittingRef.current = true
+    navOverride.arm()
     saveMutation.mutate(failedEntry)
   }
 
@@ -638,9 +683,15 @@ function ScoreEntryInner({
           </div>
         </div>
 
-        <SaveBanner matchId={matchId} activeGameNumber={gameNumber} />
+        {!boardConflict && (
+          <SaveBanner
+            matchId={matchId}
+            activeGameNumber={gameNumber}
+            proposeMutation={finalizeMutation}
+          />
+        )}
 
-        {conflict && (
+        {conflict && !boardConflict && (
           <ScoreConflictNotice
             meName={meName}
             oppName={oppName}
@@ -653,48 +704,71 @@ function ScoreEntryInner({
           />
         )}
 
-        <ScorePad
-          me={{
-            name: meName,
-            initials: meInitials,
-            value: me,
-            inputRef: meRef,
-            autoFocus: true,
-            invalid: meInvalid,
-            onChange: onMeChange,
-            onKeyDown: (e) => handleKey(e, 'me'),
-          }}
-          opp={{
-            name: oppName,
-            initials: oppHasPlayer ? initialsOf(oppName) : null,
-            value: opp,
-            inputRef: oppRef,
-            invalid: oppInvalid,
-            onChange: onOppChange,
-            onKeyDown: (e) => handleKey(e, 'opp'),
-          }}
-          gamesTally={bestOf > 1 ? `${meWins} – ${oppWins}` : null}
-          // The scratchpad surfaces the local validation error, the cross-game
-          // overrun block, and a finalize API rejection (409/500 too) here;
-          // `showScoreError` gates when any of them shows, in that precedence.
-          scoreError={
-            showScoreError
-              ? (localScoreError ??
-                overrunError ??
-                finalizeApiError?.detail ??
-                finalizeApiError?.message ??
-                null)
-              : null
-          }
-          showBothRequired={showBothRequired}
-          inputsLocked={inputsLocked}
-          subtitle={subtitle}
-          submitLabel={submitLabel}
-          canSubmit={inputsValid && overrunAt === null}
-          onSubmit={onSubmit}
-          onClear={isEdit ? onClear : undefined}
-          clearDisabled={deleteMutation.isPending}
-        />
+        {boardConflict ? (
+          // The board changed under the poster (issue D1). Replace the score pad
+          // with a blocking notice — no editable field, since the game they were
+          // about to overwrite is now committed and read-only in the scoreline
+          // below — and send them to the *true* state on click.
+          <BoardChangedInterstitial
+            meName={meName}
+            oppName={oppName}
+            mySideNumber={mySideNumber}
+            divergingGames={divergingGames}
+            meWins={meWins}
+            oppWins={oppWins}
+            decided={committedMatch?.current_game == null}
+            onResume={() => {
+              // Clear the propose error before leaving so it doesn't re-render
+              // the interstitial over the next game's screen (the component
+              // stays mounted across the game-number param change).
+              finalizeMutation.reset()
+              navigate(nextScoringDestination(committedMatch ?? data))
+            }}
+          />
+        ) : (
+          <ScorePad
+            me={{
+              name: meName,
+              initials: meInitials,
+              value: me,
+              inputRef: meRef,
+              autoFocus: true,
+              invalid: meInvalid,
+              onChange: onMeChange,
+              onKeyDown: (e) => handleKey(e, 'me'),
+            }}
+            opp={{
+              name: oppName,
+              initials: oppHasPlayer ? initialsOf(oppName) : null,
+              value: opp,
+              inputRef: oppRef,
+              invalid: oppInvalid,
+              onChange: onOppChange,
+              onKeyDown: (e) => handleKey(e, 'opp'),
+            }}
+            gamesTally={bestOf > 1 ? `${meWins} – ${oppWins}` : null}
+            // The scratchpad surfaces the local validation error, the cross-game
+            // overrun block, and a finalize API rejection (409/500 too) here;
+            // `showScoreError` gates when any of them shows, in that precedence.
+            scoreError={
+              showScoreError
+                ? (localScoreError ??
+                  overrunError ??
+                  finalizeApiError?.detail ??
+                  finalizeApiError?.message ??
+                  null)
+                : null
+            }
+            showBothRequired={showBothRequired}
+            inputsLocked={inputsLocked}
+            subtitle={subtitle}
+            submitLabel={submitLabel}
+            canSubmit={inputsValid && overrunAt === null}
+            onSubmit={onSubmit}
+            onClear={isEdit ? onClear : undefined}
+            clearDisabled={deleteMutation.isPending}
+          />
+        )}
 
         <Scoreline
           data={data}
@@ -791,6 +865,85 @@ function UnsavedScorePrompt({
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
+  )
+}
+
+// Surfaced when a first-post "Post result" lost to a concurrent scratchpad save
+// (issue D1): the board the poster tried to post disagreed with a game someone
+// else committed, so the server rejected it and re-synced the true board. This
+// *replaces* the score pad — a blocking notice, not an editable field, because
+// the game they were about to overwrite is now committed and read-only. The one
+// action re-decides against reality: resume scoring the still-live board (or view
+// the match when it's already fully scored). A design-system Alert, loss-tinted.
+function BoardChangedInterstitial({
+  meName,
+  oppName,
+  mySideNumber,
+  divergingGames,
+  meWins,
+  oppWins,
+  decided,
+  onResume,
+}: {
+  meName: string
+  oppName: string
+  mySideNumber: 1 | 2
+  divergingGames: MatchDetails['games']
+  meWins: number
+  oppWins: number
+  decided: boolean
+  onResume: () => void
+}) {
+  const resumeLabel = decided ? 'View match →' : 'Resume scoring →'
+  return (
+    <Alert
+      role="alert"
+      variant="destructive"
+      className="save-banner mb-4 border-[color:var(--loss)]/45 bg-[color:var(--loss)]/10"
+    >
+      <TriangleAlert aria-hidden />
+      <AlertTitle>The score changed while you were entering it.</AlertTitle>
+      <AlertDescription className="text-[color:var(--fg-3)]">
+        <span>
+          {divergingGames.length > 0 ? (
+            <>
+              A game was saved by someone else:{' '}
+              {divergingGames.map((g, i) => {
+                const me =
+                  mySideNumber === 1 ? g.score!.side_1_points : g.score!.side_2_points
+                const opp =
+                  mySideNumber === 1 ? g.score!.side_2_points : g.score!.side_1_points
+                return (
+                  <span key={g.game_number}>
+                    {i > 0 ? ', ' : ''}
+                    <strong className="text-[color:var(--fg-1)]">
+                      Game {g.game_number}: {meName} {me}–{opp} {oppName}
+                    </strong>
+                  </span>
+                )
+              })}
+              .{' '}
+            </>
+          ) : (
+            <>The board was updated by someone else. </>
+          )}
+          {decided
+            ? 'The match is decided on the current board — review it before posting again.'
+            : `The match is ${meWins}–${oppWins} and isn't over yet.`}
+        </span>
+        <span className="mt-3 flex flex-wrap gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="border-[color:var(--loss)]/50 text-[color:var(--loss)] hover:bg-[color:var(--loss)]/10 hover:text-[color:var(--loss)]"
+            onClick={onResume}
+          >
+            {resumeLabel}
+          </Button>
+        </span>
+      </AlertDescription>
+    </Alert>
   )
 }
 
@@ -1004,7 +1157,7 @@ function ScorelineCell({
 
   const badge = saving ? (
     <span className="sl-badge saving" aria-hidden>
-      <Loader2 className="sl-spin" size={13} strokeWidth={2.25} />
+      <Loader2 className="fmm-icon-spin" size={13} strokeWidth={2.25} />
     </span>
   ) : failed ? (
     <span className="sl-badge" aria-hidden>

@@ -194,12 +194,24 @@ class NegotiationResult(BaseModel):
 
 class NegotiationDiffEntry(BaseModel):
     """One game's difference between the prior and standing result, so the FE
-    can highlight what changed in a correction."""
+    can highlight what changed in a correction. A correction may add, remove, or
+    change games (CONTEXT.md "Correction", ADR-0001), so an entry is one of:
+
+    - **added** — ``old`` is ``None`` (the standing board gained this game);
+    - **removed** — ``new`` is ``None`` (the standing board dropped this game);
+    - **changed** — both present, points differ.
+
+    At least one of ``old``/``new`` is always present."""
 
     game_number: int
-    # ``None`` if the game didn't exist in the baseline (prior) result.
     old: NegotiationGame | None
-    new: NegotiationGame
+    new: NegotiationGame | None
+
+    @model_validator(mode="after")
+    def _at_least_one_side(self) -> "NegotiationDiffEntry":
+        if self.old is None and self.new is None:
+            raise ValueError("a diff entry must have at least one of old/new")
+        return self
 
 
 # The viewer-relative phase of the result negotiation. ``live`` = no result
@@ -415,3 +427,23 @@ class MatchResultsWrite(BaseModel):
     # posting; otherwise must equal the current standing result's id (the
     # handler 409s on a stale or mismatched value).
     supersedes_result_id: uuid.UUID | None = None
+
+
+class MatchResultBoardConflict(BaseModel):
+    """409 body for a first-post proposal whose board disagrees with a game
+    already committed to the shared scratchpad — the board-level analogue of
+    ``MatchGameScoreConflict``'s per-game version guard (issue D1 / #747-B2).
+
+    A pre-result "Post result" assembles its board client-side; if a concurrent
+    participant committed a game this client never saw, the payload would
+    silently overwrite it. The handler rejects that and returns the true board
+    in ``committed_match`` (the same ``MatchDetails`` shape the success path
+    returns) so the client re-syncs from the body — without a refetch — and the
+    poster re-decides against reality instead of clobbering a committed game.
+
+    ``committed_match`` is the discriminator the client keys on to tell this
+    apart from the per-game ``committed_score`` conflict, the negotiation
+    conflict, and a plain-string 409 (a locked match)."""
+
+    message: str
+    committed_match: MatchDetails

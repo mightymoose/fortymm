@@ -12,12 +12,14 @@ import {
   QueryClient,
   QueryClientProvider,
   onlineManager,
+  useQueryClient,
 } from '@tanstack/react-query'
 import { http, HttpResponse } from 'msw'
 import { afterEach, describe, expect, it } from 'vitest'
 import { server } from '@/mocks/server'
 import { matchDetails } from '@/test/factories'
 import type { components } from '@/api/schema'
+import { fireScoreSave } from '@/api/matches'
 import { ScoreEntry } from './score-entry'
 
 type MatchDetailsSide = components['schemas']['MatchDetailsSide']
@@ -134,6 +136,80 @@ function renderScoreEntry(spec: RouteSpec, options: { path?: string } = {}) {
       matchPage,
     ]),
     history: createMemoryHistory({ initialEntries: [options.path ?? '/entry'] }),
+  })
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <RouterProvider router={router} />
+    </QueryClientProvider>,
+  )
+}
+
+// Like `renderScoreEntry`, but also mounts a sibling button that imperatively
+// fails `failGameNumber`'s scratch save via `fireScoreSave` — the same call the
+// real fire-and-forget save makes — so a failed save for a NON-active game lands
+// in the shared mutation cache without unmounting the entry screen. Used to
+// reproduce #747-F2: the finalize board must fold that failed game in.
+function renderEntryWithFailedSibling({
+  gameNumber,
+  failGameNumber,
+}: {
+  gameNumber: number
+  failGameNumber: number
+}) {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  })
+  const rootRoute = createRootRoute()
+  const entryRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/entry',
+    component: function Entry() {
+      const qc = useQueryClient()
+      return (
+        <>
+          <button
+            type="button"
+            onClick={() =>
+              fireScoreSave(qc, 'm-1', failGameNumber, {
+                side_1_points: 9,
+                side_2_points: 11,
+              })
+            }
+          >
+            fail game {failGameNumber}
+          </button>
+          <ScoreEntry
+            matchId="m-1"
+            gameNumber={gameNumber}
+            mode={{ kind: 'create' }}
+          />
+        </>
+      )
+    },
+  })
+  const matchPage = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/matches/$matchId',
+    component: () => <div>match-page m-1</div>,
+  })
+  const scoringNew = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/matches/$matchId/games/$gameNumber/scores/new',
+    component: () => <div>scoring-new</div>,
+  })
+  const scoringEdit = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/matches/$matchId/games/$gameNumber/scores/edit',
+    component: () => <div>scoring-edit</div>,
+  })
+  const router = createRouter({
+    routeTree: rootRoute.addChildren([
+      entryRoute,
+      matchPage,
+      scoringNew,
+      scoringEdit,
+    ]),
+    history: createMemoryHistory({ initialEntries: ['/entry'] }),
   })
   return render(
     <QueryClientProvider client={queryClient}>
@@ -447,6 +523,311 @@ describe('ScoreEntry — create', () => {
         { game_number: 3, side_1_points: 11, side_2_points: 3 },
       ],
     })
+  })
+
+  it('folds a FAILED scratch save on a non-active game into the posted board (#747-F2)', async () => {
+    // Bo3. G1 persisted (I won 11-8). G2's save FAILED (I lost 9-11) and lives
+    // only in the mutation cache — never persisted. I'm now on G3 and win it
+    // 11-7, so the true board is 2-1 for me. The finalize board must fold in the
+    // failed G2: post 2-1, not the 2-0 that dropping G2 would compact into
+    // (which would erase my opponent's game).
+    const user = userEvent.setup()
+    let finalizedBody: unknown = null
+    server.use(
+      http.get('*/v1/matches/m-1', () =>
+        HttpResponse.json(
+          matchDetails({
+            id: 'm-1',
+            status: 'in_progress',
+            status_label: 'Live',
+            best_of: 3,
+            games_to_win: 2,
+            affects_rating: true,
+            sides: participantSides({ meWins: 1, oppWins: 0 }),
+            games: [{ id: 'g-1', game_number: 1, score: score('s-1', 11, 8) }],
+            current_game: { game_number: 2 },
+            can_score: true,
+            can_finalize: false,
+          }),
+        ),
+      ),
+      // G2's scratch save fails (500) — it never persists, so it only ever
+      // exists as a failed mutation in the cache.
+      http.post('*/v1/matches/m-1/games/2/scores/new', () =>
+        HttpResponse.json({ detail: 'boom' }, { status: 500 }),
+      ),
+      http.post('*/v1/matches/m-1/results', async ({ request }) => {
+        finalizedBody = await request.json()
+        return HttpResponse.json(
+          matchDetails({
+            id: 'm-1',
+            status: 'completed',
+            status_label: 'Final',
+            best_of: 3,
+            games_to_win: 2,
+            sides: participantSides({ meWins: 2, oppWins: 1, meWon: true }),
+            games: [
+              { id: 'g-1', game_number: 1, score: score('s-1', 11, 8) },
+              { id: 'g-2', game_number: 2, score: score('s-2', 9, 11) },
+              { id: 'g-3', game_number: 3, score: score('s-3', 11, 7) },
+            ],
+            current_game: null,
+            can_score: false,
+            can_finalize: false,
+          }),
+          { status: 201 },
+        )
+      }),
+    )
+
+    renderEntryWithFailedSibling({ gameNumber: 3, failGameNumber: 2 })
+
+    // Seed the failed G2 save into the shared mutation cache.
+    await user.click(await screen.findByRole('button', { name: 'fail game 2' }))
+    // The "Not saved" cell confirms the failure landed before we finalize.
+    await screen.findByText('Not saved')
+
+    const meInput = screen.getByRole('textbox', { name: 'rita.kovac score' })
+    const oppInput = screen.getByRole('textbox', { name: 'nguyen.t score' })
+    await user.type(meInput, '11')
+    await user.type(oppInput, '7')
+
+    // G3 clinches a 2-1 board (G1 me, G2 opp, G3 me), so the button finalizes.
+    const postBtn = await screen.findByRole('button', { name: /post result/i })
+    await user.click(postBtn)
+
+    await waitFor(() =>
+      expect(screen.getByText('match-page m-1')).toBeInTheDocument(),
+    )
+    // The failed G2 (9-11, my loss) is present — the board is 2-1, not the 2-0
+    // that omitting G2 would have compacted and posted.
+    expect(finalizedBody).toEqual({
+      games: [
+        { game_number: 1, side_1_points: 11, side_2_points: 8 },
+        { game_number: 2, side_1_points: 9, side_2_points: 11 },
+        { game_number: 3, side_1_points: 11, side_2_points: 7 },
+      ],
+    })
+  })
+
+  it('blocks with a "the score changed" interstitial when the first-post loses to a concurrent scratchpad save (D1)', async () => {
+    // The poster is stale: their view is 2-0 with game 3 unplayed, so typing a
+    // win reads as a 3-0 sweep. But the opponent has committed game 3 in *their*
+    // favor (real board 2-1). Posting the sweep 409s with the committed match;
+    // the entry screen must replace the score pad with a blocking notice instead
+    // of silently overwriting the opponent's game 3.
+    const user = userEvent.setup()
+    const committedMatch = matchDetails({
+      id: 'm-1',
+      status: 'in_progress',
+      status_label: 'Live',
+      best_of: 5,
+      games_to_win: 3,
+      affects_rating: true,
+      sides: participantSides({ meWins: 2, oppWins: 1 }),
+      games: [
+        { id: 'g-1', game_number: 1, score: score('s-1', 11, 4) },
+        { id: 'g-2', game_number: 2, score: score('s-2', 11, 6) },
+        // Opponent's committed game 3 — 3-11 in their favor.
+        { id: 'g-3', game_number: 3, score: score('s-3', 3, 11) },
+      ],
+      current_game: { game_number: 4 },
+      can_score: true,
+      can_finalize: false,
+    })
+    server.use(
+      http.get('*/v1/matches/m-1', () =>
+        HttpResponse.json(
+          inProgressMatch({
+            sides: participantSides({ meWins: 2, oppWins: 0 }),
+            games: [
+              { id: 'g-1', game_number: 1, score: score('s-1', 11, 4) },
+              { id: 'g-2', game_number: 2, score: score('s-2', 11, 6) },
+            ],
+            current_game: { game_number: 3 },
+          }),
+        ),
+      ),
+      http.post('*/v1/matches/m-1/results', () =>
+        HttpResponse.json(
+          {
+            detail: {
+              message: 'The score changed while you were entering it.',
+              committed_match: committedMatch,
+            },
+          },
+          { status: 409 },
+        ),
+      ),
+    )
+
+    renderScoreEntry({ kind: 'create', matchId: 'm-1', gameNumber: 3 })
+    const meInput = await screen.findByRole('textbox', {
+      name: 'rita.kovac score',
+    })
+    const oppInput = screen.getByRole('textbox', { name: 'nguyen.t score' })
+    await user.type(meInput, '11')
+    await user.type(oppInput, '0')
+    await user.click(screen.getByRole('button', { name: /post result/i }))
+
+    // The blocking interstitial replaces the score pad, names the game the
+    // opponent committed, and shows the true (2-1) board isn't over.
+    expect(
+      await screen.findByText(/the score changed while you were entering it/i),
+    ).toBeInTheDocument()
+    expect(screen.getByText(/Game 3:/)).toBeInTheDocument()
+    expect(screen.getByText(/2–1 and isn't over/i)).toBeInTheDocument()
+    // The editable field is gone — no path to re-overwrite the committed game.
+    expect(
+      screen.queryByRole('textbox', { name: 'rita.kovac score' }),
+    ).not.toBeInTheDocument()
+
+    // "Resume scoring →" takes the poster to the next unplayed game (4).
+    await user.click(screen.getByRole('button', { name: /resume scoring/i }))
+    expect(await screen.findByText('scoring-new m-1 4')).toBeInTheDocument()
+  })
+
+  it('blocks with a "View match →" interstitial when the concurrent scratchpad already decided the match', async () => {
+    // Stale poster: their view is 2-0 on game 3, so a win reads as a 3-0 sweep.
+    // But while they were away the opponent committed games 3, 4 and 5 in their
+    // own favor — the true board is 2-3 and the match is *already decided* (for
+    // the opponent), no result posted yet. The interstitial must recognise the
+    // decided board and offer "View match →" rather than pointing "Resume" at an
+    // unplayable game.
+    const user = userEvent.setup()
+    const committedMatch = matchDetails({
+      id: 'm-1',
+      status: 'in_progress',
+      status_label: 'Live',
+      best_of: 5,
+      games_to_win: 3,
+      affects_rating: true,
+      sides: participantSides({ meWins: 2, oppWins: 3 }),
+      games: [
+        { id: 'g-1', game_number: 1, score: score('s-1', 11, 4) },
+        { id: 'g-2', game_number: 2, score: score('s-2', 11, 6) },
+        { id: 'g-3', game_number: 3, score: score('s-3', 3, 11) },
+        { id: 'g-4', game_number: 4, score: score('s-4', 5, 11) },
+        { id: 'g-5', game_number: 5, score: score('s-5', 7, 11) },
+      ],
+      current_game: null,
+      can_score: false,
+      can_finalize: false,
+    })
+    server.use(
+      http.get('*/v1/matches/m-1', () =>
+        HttpResponse.json(
+          inProgressMatch({
+            sides: participantSides({ meWins: 2, oppWins: 0 }),
+            games: [
+              { id: 'g-1', game_number: 1, score: score('s-1', 11, 4) },
+              { id: 'g-2', game_number: 2, score: score('s-2', 11, 6) },
+            ],
+            current_game: { game_number: 3 },
+          }),
+        ),
+      ),
+      http.post('*/v1/matches/m-1/results', () =>
+        HttpResponse.json(
+          {
+            detail: {
+              message: 'The score changed while you were entering it.',
+              committed_match: committedMatch,
+            },
+          },
+          { status: 409 },
+        ),
+      ),
+    )
+
+    renderScoreEntry({ kind: 'create', matchId: 'm-1', gameNumber: 3 })
+    const meInput = await screen.findByRole('textbox', {
+      name: 'rita.kovac score',
+    })
+    const oppInput = screen.getByRole('textbox', { name: 'nguyen.t score' })
+    await user.type(meInput, '11')
+    await user.type(oppInput, '0')
+    await user.click(screen.getByRole('button', { name: /post result/i }))
+
+    // The interstitial renders (not preempted by the decided-board nav bounce)
+    // and reads the true board as decided, so the CTA is "View match →".
+    expect(
+      await screen.findByText(/the score changed while you were entering it/i),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole('textbox', { name: 'rita.kovac score' }),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: /resume scoring/i }),
+    ).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /view match/i }))
+    expect(await screen.findByText('match-page m-1')).toBeInTheDocument()
+  })
+
+  it('shows the board-conflict interstitial from the edit route too (not bounced to scoring-new)', async () => {
+    // Edit-mode variant of D1: the poster is on the *edit* sheet for a game they
+    // already scored, and posts. The concurrent participant both cleared that
+    // game and changed another, so the re-synced committed board leaves this
+    // route's game unscored — which would otherwise trip the "edit mode + no
+    // saved score → scoring-new" bounce and preempt the interstitial. The
+    // conflict must win: the interstitial renders in place.
+    const user = userEvent.setup()
+    const committedMatch = matchDetails({
+      id: 'm-1',
+      status: 'in_progress',
+      status_label: 'Live',
+      best_of: 5,
+      games_to_win: 3,
+      affects_rating: true,
+      sides: participantSides({ meWins: 1, oppWins: 1 }),
+      games: [
+        { id: 'g-1', game_number: 1, score: score('s-1', 11, 4) },
+        // Opponent changed game 2 to their favor and cleared game 3.
+        { id: 'g-2', game_number: 2, score: score('s-2', 3, 11) },
+      ],
+      current_game: { game_number: 3 },
+      can_score: true,
+      can_finalize: false,
+    })
+    server.use(
+      http.get('*/v1/matches/m-1', () =>
+        HttpResponse.json(
+          inProgressMatch({
+            sides: participantSides({ meWins: 3, oppWins: 0 }),
+            games: [
+              { id: 'g-1', game_number: 1, score: score('s-1', 11, 4) },
+              { id: 'g-2', game_number: 2, score: score('s-2', 11, 6) },
+              // The poster's stale view has game 3 scored — hence the edit route.
+              { id: 'g-3', game_number: 3, score: score('s-3', 11, 0) },
+            ],
+            current_game: null,
+          }),
+        ),
+      ),
+      http.post('*/v1/matches/m-1/results', () =>
+        HttpResponse.json(
+          {
+            detail: {
+              message: 'The score changed while you were entering it.',
+              committed_match: committedMatch,
+            },
+          },
+          { status: 409 },
+        ),
+      ),
+    )
+
+    renderScoreEntry({ kind: 'edit', matchId: 'm-1', gameNumber: 3 })
+    await user.click(await screen.findByRole('button', { name: /post result/i }))
+
+    expect(
+      await screen.findByText(/the score changed while you were entering it/i),
+    ).toBeInTheDocument()
+    // Not bounced to the scoring-new stub despite edit-mode + now-unscored game.
+    expect(screen.queryByText('scoring-new m-1 3')).not.toBeInTheDocument()
+    // Resume lands on the true next game (3).
+    await user.click(screen.getByRole('button', { name: /resume scoring/i }))
+    expect(await screen.findByText('scoring-new m-1 3')).toBeInTheDocument()
   })
 
   it('finalizes an out-of-order clinch (game 4 blank) and posts the compacted board (#742)', async () => {
@@ -1680,10 +2061,12 @@ describe('ScoreEntry — failed saves', () => {
   // Regression for the fully-offline path (QA BUG 1): with NO games persisted
   // server-side, entering game after game offline must keep advancing — the
   // next-game prediction has to count the failed scratch saves, not just
-  // `data.games`, or it bounces back to game 1 and the decided-match banner
-  // never appears. Bo3: two offline wins decide the match; we must land on
-  // game 3 with the finalize banner, then post the result online.
-  it('offline end-to-end: enter every game offline, advance correctly, then post the decided result', async () => {
+  // `data.games`, or it bounces back to game 1. Bo3 split G1 win / G2 loss so
+  // the board is still 1-1 after two offline games (no early clinch): we must
+  // advance G1→G2→G3 counting both failed saves. G3's win then finalizes the
+  // true 2-1 board — which, per #747-F2, must carry the FAILED game 2 that
+  // score-entry's board now folds in (dropping it would post a wrong 2-0).
+  it('offline: advance through every game counting failed saves, then finalize the true 2-1 board', async () => {
     const user = userEvent.setup()
     let resultsBody: unknown = null
     server.use(
@@ -1711,7 +2094,7 @@ describe('ScoreEntry — failed saves', () => {
             status_label: 'Final',
             best_of: 3,
             games_to_win: 2,
-            sides: participantSides({ meWins: 2, oppWins: 0, meWon: true }),
+            sides: participantSides({ meWins: 2, oppWins: 1, meWon: true }),
             current_game: null,
             can_score: false,
             can_finalize: false,
@@ -1725,7 +2108,7 @@ describe('ScoreEntry — failed saves', () => {
     await screen.findByRole('heading', { name: /enter game 1 score/i })
     onlineManager.setOnline(false)
 
-    // Game 1 offline → fails, advances to game 2.
+    // Game 1 offline (my win) → fails, advances to game 2.
     await user.type(
       screen.getByRole('textbox', { name: 'rita.kovac score' }),
       '11',
@@ -1734,36 +2117,43 @@ describe('ScoreEntry — failed saves', () => {
     await user.click(screen.getByRole('button', { name: /save game & next/i }))
     await screen.findByRole('heading', { name: /enter game 2 score/i })
 
-    // Game 2 offline → fails, and must advance to game 3 (NOT bounce back to
-    // game 1, which is the bug this guards).
+    // Game 2 offline (my loss) → still 1-1, undecided, so it must advance to
+    // game 3 (NOT bounce back to game 1 — the prediction has to count both
+    // failed scratch saves, which is the bug this guards).
+    await user.type(screen.getByRole('textbox', { name: 'rita.kovac score' }), '9')
+    await user.type(
+      screen.getByRole('textbox', { name: 'nguyen.t score' }),
+      '11',
+    )
+    await user.click(screen.getByRole('button', { name: /save game & next/i }))
+    await screen.findByRole('heading', { name: /enter game 3 score/i })
+
+    // Both offline games sit in the strip.
+    expect(
+      screen.getByRole('link', { name: /game 1 didn't save, 11 to 9/i }),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('link', { name: /game 2 didn't save, 9 to 11/i }),
+    ).toBeInTheDocument()
+
+    // Back online, enter the deciding game 3. Its win clinches a 2-1 board — and
+    // the finalize board must fold in the FAILED game 2 (#747-F2), posting 2-1
+    // rather than dropping G2 and compacting to a wrong 2-0.
+    onlineManager.setOnline(true)
     await user.type(
       screen.getByRole('textbox', { name: 'rita.kovac score' }),
       '11',
     )
     await user.type(screen.getByRole('textbox', { name: 'nguyen.t score' }), '7')
-    await user.click(screen.getByRole('button', { name: /save game & next/i }))
-    await screen.findByRole('heading', { name: /enter game 3 score/i })
-
-    // Both offline games sit in the strip, and since they decide the Bo3 the
-    // banner offers to post the result.
-    expect(
-      screen.getByRole('link', { name: /game 1 didn't save, 11 to 9/i }),
-    ).toBeInTheDocument()
-    const banner = await screen.findByRole('alert')
-    expect(banner).toHaveTextContent('These scores finish the match.')
-
-    // Back online, post the result — both games are carried.
-    onlineManager.setOnline(true)
-    await user.click(
-      within(banner).getByRole('button', { name: /post result/i }),
-    )
+    await user.click(screen.getByRole('button', { name: /post result/i }))
     await waitFor(() =>
       expect(screen.getByText('match-page')).toBeInTheDocument(),
     )
     expect(resultsBody).toEqual({
       games: [
         { game_number: 1, side_1_points: 11, side_2_points: 9 },
-        { game_number: 2, side_1_points: 11, side_2_points: 7 },
+        { game_number: 2, side_1_points: 9, side_2_points: 11 },
+        { game_number: 3, side_1_points: 11, side_2_points: 7 },
       ],
     })
   })

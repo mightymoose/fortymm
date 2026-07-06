@@ -833,7 +833,23 @@ export const handlers = [
         body.games,
         body.supersedes_result_id ?? null,
       )
-      if (error) return detail(error.message, error.status)
+      if (error) {
+        // A board-level conflict (issue D1) carries the whole committed match so
+        // the client re-syncs from the body — mirror the server's
+        // `MatchResultBoardConflict` shape rather than the plain-string 409.
+        if (error.boardConflict) {
+          return HttpResponse.json(
+            {
+              detail: {
+                message: error.message,
+                committed_match: projectMatchDetails(seed),
+              },
+            },
+            { status: 409 },
+          )
+        }
+        return detail(error.message, error.status)
+      }
       return HttpResponse.json(projectMatchDetails(seed), { status: 201 })
     },
   ),

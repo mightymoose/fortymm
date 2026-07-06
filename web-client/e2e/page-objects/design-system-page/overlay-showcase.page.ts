@@ -1,31 +1,24 @@
 import { Locator, Page, expect } from '@playwright/test';
 
 export class OverlayShowcasePage {
-    constructor(
-        private readonly page: Page,
-        private readonly container: Locator,
-    ) {}
+    constructor(private readonly container: Locator) {}
 
-    async openDialog(): Promise<Locator> {
-        await this.container
-            .getByRole('button', { name: 'Open dialog' })
-            .click();
-        const dialog = this.page.getByRole('dialog', {
-            name: 'Forfeit this match?',
-        });
-        await expect(dialog).toBeVisible();
-        return dialog;
+    // The showcase renders a static, always-open facsimile of each overlay —
+    // the real portaled component can't show its open state inside a demo
+    // card (it renders a full-screen backdrop). Locate the panel by its
+    // heading instead of opening it.
+    private async panelByHeading(name: string): Promise<Locator> {
+        const panel = this.container.getByRole('heading', { name }).locator('..');
+        await expect(panel).toBeVisible();
+        return panel;
     }
 
-    async openAlertDialog(): Promise<Locator> {
-        await this.container
-            .getByRole('button', { name: 'Delete account…' })
-            .click();
-        const dialog = this.page.getByRole('alertdialog', {
-            name: 'Delete account',
-        });
-        await expect(dialog).toBeVisible();
-        return dialog;
+    async dialogPanel(): Promise<Locator> {
+        return this.panelByHeading('Forfeit this match?');
+    }
+
+    async alertDialogPanel(): Promise<Locator> {
+        return this.panelByHeading('Delete account');
     }
 }
 
@@ -35,15 +28,16 @@ export class SheetShowcasePage {
         private readonly container: Locator,
     ) {}
 
-    async openSheet(): Promise<Locator> {
-        await this.container
-            .getByRole('button', { name: 'Open filters' })
-            .click();
-        const sheet = this.page.getByRole('dialog', { name: 'Filters' });
-        await expect(sheet).toBeVisible();
+    async sheetPanel(): Promise<Locator> {
+        // Static, always-open facsimile of the right-anchored sheet (the real
+        // Sheet portals a full-screen backdrop). Locate it by its heading.
+        const panel = this.container
+            .getByRole('heading', { name: 'Filters' })
+            .locator('..');
+        await expect(panel).toBeVisible();
         // TanStack Router/Query devtools render fixed-position toggle buttons
-        // that overlap a right-side sheet. Remove them after the sheet has
-        // opened so the screenshot is deterministic.
+        // that can overlap the panel. Remove them so the screenshot is
+        // deterministic.
         await this.page.evaluate(() => {
             document
                 .querySelectorAll(
@@ -51,6 +45,6 @@ export class SheetShowcasePage {
                 )
                 .forEach((el) => el.remove());
         });
-        return sheet;
+        return panel;
     }
 }

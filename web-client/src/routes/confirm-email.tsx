@@ -3,7 +3,12 @@ import { Link, createFileRoute, useNavigate } from '@tanstack/react-router'
 import { toast } from 'sonner'
 
 import { ApiError } from '@/api/client'
-import { useConfirmEmail, useMergePreview } from '@/api/session'
+import {
+  type FinalizeTokenInput,
+  type Session,
+  useConfirmEmail,
+  useMergePreview,
+} from '@/api/session'
 import { btnPrimary } from '@/components/login/styles'
 import {
   LinkCheckPage,
@@ -50,6 +55,28 @@ function ConfirmEmailPage() {
   const confirm = useConfirmEmail()
   const fired = useRef(false)
 
+  // Fires after any successful confirm, passed as every call site's
+  // mutate-level onSuccess below. A mutate's onSuccess runs exactly once per
+  // call by construction, so — unlike a useEffect keyed on isSuccess/data —
+  // it needs no once-guard ref to survive a second invocation (e.g. React
+  // StrictMode's double-render) (#233).
+  const showMergeToast = (session: Session) => {
+    const moved = session.merged?.matches_moved ?? 0
+    if (moved > 0) {
+      toast.success(
+        moved === 1
+          ? 'We brought your 1 match with you.'
+          : `We brought your ${moved} matches with you.`,
+      )
+    }
+  }
+
+  // Every confirm this page ever fires wants the toast wired the same way —
+  // wrap it once so the mutate-level `onSuccess` doesn't repeat at each call
+  // site.
+  const confirmWithToast = (input: FinalizeTokenInput) =>
+    confirm.mutate(input, { onSuccess: showMergeToast })
+
   // Preview the link first. A merge that would carry matches over waits for the
   // user at the gate; everything else (plain confirm, empty guest, or a preview
   // failure) finalizes straight away.
@@ -59,24 +86,13 @@ function ConfirmEmailPage() {
     preview.mutate(token, {
       onSuccess: (p) => {
         if (!(p.is_merge && p.guest_matches_count > 0)) {
-          confirm.mutate({ token })
+          confirmWithToast({ token })
         }
       },
-      onError: () => confirm.mutate({ token }),
+      onError: () => confirmWithToast({ token }),
     })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, preview, confirm])
-
-  useEffect(() => {
-    if (!confirm.isSuccess) return
-    const moved = confirm.data?.merged?.matches_moved ?? 0
-    if (moved > 0) {
-      toast.success(
-        moved === 1
-          ? 'We brought your 1 match with you.'
-          : `We brought your ${moved} matches with you.`,
-      )
-    }
-  }, [confirm.isSuccess, confirm.data])
 
   // The token is a single-use bearer credential. Once the confirm settles,
   // drop it from the URL so it doesn't linger in the address bar / history /
@@ -122,8 +138,8 @@ function ConfirmEmailPage() {
         guestUsername={p.guest_username ?? null}
         matchesCount={p.guest_matches_count}
         busy={confirm.isPending}
-        onBringThemOver={() => confirm.mutate({ token })}
-        onNotNow={() => confirm.mutate({ token, skipMerge: true })}
+        onBringThemOver={() => confirmWithToast({ token })}
+        onNotNow={() => confirmWithToast({ token, skipMerge: true })}
       />
     )
   }

@@ -265,7 +265,7 @@ negotiation: {
     { id: uuid, games: [...], submitted_at: datetime } | null,
   diff:                               // server-computed, viewer-relative; null when there's nothing to compare
     { game_number: int, old: { side_1_points, side_2_points } | null,
-      new: { side_1_points, side_2_points } }[] | null
+      new: { side_1_points, side_2_points } | null }[] | null
 }
 ```
 
@@ -287,8 +287,17 @@ negotiation: {
 recent proposal in the chain made by the viewer's own side** — *not* the row
 immediately superseded. Walk the chain back from `standing_result` to the
 newest row whose `submitted_by` is on the viewer's side; that's `prior_result`.
-The diff is `prior_result.games` → `standing_result.games`, emitting only
-changed game numbers with old→new points. This **collapses the opponent's
+The diff is `prior_result.games` → `standing_result.games`, emitting one entry
+per game that differs, ordered by `game_number` over the **union** of both
+boards. Because a correction may add, remove, or change games (a decided board
+can shorten or lengthen — CONTEXT.md "Correction", ADR-0001), each entry is one
+of three kinds:
+
+- **added** — `old` is `null` (the standing board gained this game);
+- **removed** — `new` is `null` (the standing board dropped this game);
+- **changed** — both present, points differ.
+
+Never both `null`; unchanged games are omitted. This **collapses the opponent's
 intermediate self-edits**: the viewer sees "what changed since I last spoke",
 not the opponent's churn. `diff` is `null` when `prior_result` is `null`
 (the viewer has nothing of their own to compare — e.g. `review`).
@@ -307,6 +316,10 @@ Worked cases (chain written oldest→newest; `A`/`B` = who proposed):
 - **opponent flip-flop then the viewer reads** — `[R1·A, R2·B, R3·B]`. Viewer
   **A**: `corrected`, `prior_result = R1`, `diff = R1→R3` — collapses B's R2/R3
   self-edits to a single "since you proposed R1" diff.
+- **shortening counter** — A proposes a 3–1 board (four games); B counters with a
+  3–0 board (three games). Viewer **A**: `corrected`, `prior_result = R1`, and the
+  diff carries a **changed** entry for the flipped game plus a **removed** entry
+  (`new` null) for the dropped game 4 — the board shortening is not silent.
 - **final** — standing row accepted. `viewer_state = final` for both;
   `standing_result` is the accepted row; the FE shows "confirmed" or "agreed
   after N corrections" (N = chain length − 1).

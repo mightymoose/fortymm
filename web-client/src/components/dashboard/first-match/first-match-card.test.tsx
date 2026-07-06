@@ -8,7 +8,7 @@ import {
 } from '@tanstack/react-router'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { http, HttpResponse } from 'msw'
-import { act, fireEvent, screen, within } from '@testing-library/react'
+import { act, fireEvent, screen } from '@testing-library/react'
 
 import { render } from '@/test/utilities'
 import { server } from '@/mocks/server'
@@ -111,6 +111,48 @@ describe('FirstMatchCard', () => {
     expect(screen.getByRole('button', { name: /start scoring/i })).toBeDisabled()
   })
 
+  it('warns before discarding a picked opponent on navigation (#811)', async () => {
+    const { router } = renderFirstMatchCard()
+    await pickNguyen()
+
+    // Attempt to leave for another route while the hero holds a picked
+    // opponent — the blocker should intercept and open the confirmation.
+    act(() => {
+      void router.navigate({ to: '/settings' })
+    })
+
+    expect(
+      await screen.findByRole('alertdialog', { name: 'Discard changes?' }),
+    ).toBeInTheDocument()
+
+    // "Keep editing" stays put.
+    await userEvent.click(screen.getByRole('button', { name: 'Keep editing' }))
+    expect(router.state.location.pathname).toBe('/')
+
+    // "Discard & leave" lets the navigation through.
+    act(() => {
+      void router.navigate({ to: '/settings' })
+    })
+    await screen.findByRole('alertdialog', { name: 'Discard changes?' })
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Discard & leave' }),
+    )
+    await screen.findByText('settings route')
+    expect(router.state.location.pathname).toBe('/settings')
+  })
+
+  it('does not block navigation before an opponent is picked (#811)', async () => {
+    const { router } = renderFirstMatchCard()
+    await screen.findByRole('combobox')
+
+    act(() => {
+      void router.navigate({ to: '/settings' })
+    })
+
+    await screen.findByText('settings route')
+    expect(router.state.location.pathname).toBe('/settings')
+  })
+
   it('creates the match and navigates to scoring on submit', async () => {
     const { router } = renderFirstMatchCard()
     await pickNguyen()
@@ -164,12 +206,15 @@ describe('FirstMatchCard', () => {
     expect(postCount).toBe(1)
   })
 
-  it('offers a sign-in recovery on a 401', async () => {
+  it('surfaces a server error in an alert', async () => {
+    // A lapsed session is a `session_ended` 401 that the global middleware
+    // catches and redirects to `/login` (covered in api/client.test.ts); any
+    // other failure surfaces inline here.
     server.use(
       http.post('*/v1/matches', () =>
         HttpResponse.json(
-          { detail: 'Your session has expired.' },
-          { status: 401 },
+          { detail: 'Could not start the match right now.' },
+          { status: 500 },
         ),
       ),
     )
@@ -181,9 +226,6 @@ describe('FirstMatchCard', () => {
     )
 
     const alert = await screen.findByRole('alert')
-    expect(alert).toHaveTextContent('Your session has expired.')
-    expect(
-      within(alert).getByRole('button', { name: /sign in again/i }),
-    ).toBeInTheDocument()
+    expect(alert).toHaveTextContent('Could not start the match right now.')
   })
 })

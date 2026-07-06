@@ -10,7 +10,7 @@ import {
   useProposeResult,
   useMatch,
 } from '@/api/matches'
-import { compactGames, isDecidedMatch, type GamePoints } from '@/lib/scoring'
+import { compactGames, isDecidedMatch } from '@/lib/scoring'
 import { cn } from '@/lib/utils'
 import {
   Alert,
@@ -19,6 +19,7 @@ import {
   AlertTitle,
 } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
+import { reconstructBoard, scoredGamePoints } from './reconstruct-board'
 import { useFailedGameSaves } from './score-saves'
 
 export interface SaveBannerProps {
@@ -29,6 +30,12 @@ export interface SaveBannerProps {
    * finishes the match: we stay on it, the banner surfaces (informational
    * only), and the main "Post result" button owns finalizing. */
   activeGameNumber: number
+  /** The entry screen's own propose mutation, shared so a "Post result" fired
+   * from this banner and one fired from the main button are the *same* request.
+   * That way a board-level conflict (issue D1) surfaces once — on the entry
+   * screen's blocking interstitial — instead of only inside this banner, and
+   * the banner is hidden while that interstitial owns the reconcile. */
+  proposeMutation: ReturnType<typeof useProposeResult>
 }
 
 /**
@@ -57,11 +64,14 @@ export function SaveBanner(props: SaveBannerProps) {
   )
 }
 
-function FailedSaveBanner({ matchId, activeGameNumber }: SaveBannerProps) {
+function FailedSaveBanner({
+  matchId,
+  activeGameNumber,
+  proposeMutation: finalizeMutation,
+}: SaveBannerProps) {
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const { data } = useMatch(matchId)
-  const finalizeMutation = useProposeResult(matchId)
   // Conflicts are handled by ConflictReviewBanner — exclude them here so the
   // retry/finalize path never re-fires a stale write over the committed score.
   const allFailed = useFailedGameSaves(matchId).filter((entry) => !entry.conflict)
@@ -82,30 +92,26 @@ function FailedSaveBanner({ matchId, activeGameNumber }: SaveBannerProps) {
   // retry shouldn't re-POST each game's scratch save — it should post the
   // canonical result in one shot (the same write the entry screen's "Post
   // result" button fires). Build the merged set the same way the entry screen
-  // builds `hypotheticalGames`. Include the active game's failed scratch here:
-  // the deciding game stays on its own entry screen (we don't advance once the
-  // match is over), so its scratch is what finishes the match. Failed scratch
-  // overrides the persisted score for the same game — it's the newer data the
-  // cell shows.
-  const mergedByNumber = new Map<number, GamePoints>()
-  for (const game of data?.games ?? []) {
-    if (!game.score || game.game_number === activeGameNumber) continue
-    mergedByNumber.set(game.game_number, {
-      game_number: game.game_number,
-      side_1_points: game.score.side_1_points,
-      side_2_points: game.score.side_2_points,
-    })
-  }
-  for (const entry of allFailed) {
-    mergedByNumber.set(entry.gameNumber, {
-      game_number: entry.gameNumber,
-      side_1_points: entry.variables.side_1_points,
-      side_2_points: entry.variables.side_2_points,
-    })
-  }
+  // builds `hypotheticalGames`. Include the active game too — its own persisted
+  // score is part of the real board, so a cleanly-persisted active game must
+  // not be dropped or the match reads as not-decided and the finalize CTA hides
+  // behind an unrelated failed game (#755). The active game's failed scratch,
+  // when it has one, still wins below: the failed-saves loop overrides the same
+  // game number, and that scratch — not the persisted score — is what the cell
+  // shows and what finishes the match (we don't advance once it's over).
+  // The shared board reconstruction (ADR 0004): persisted ⊕ failed scratch.
+  // The banner reads no live input — it may be on another game's screen — so it
+  // passes no `activeInput`, deferring the active game's live value to
+  // `score-entry`'s button via `decidedHere` below. `allFailed` already excludes
+  // conflicts (see above), as the helper requires.
   // Compact so a gappy offline clinch posts a contiguous board (see
   // `compactGames`). `compactGames` sorts internally, so no pre-sort here.
-  const mergedGames = compactGames([...mergedByNumber.values()])
+  const mergedGames = compactGames(
+    reconstructBoard({
+      persisted: scoredGamePoints(data?.games ?? []),
+      failedSaves: allFailed,
+    }),
+  )
   const wouldFinalize =
     data != null && isDecidedMatch(mergedGames, data.best_of)
 

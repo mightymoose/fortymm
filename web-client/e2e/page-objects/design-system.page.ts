@@ -34,10 +34,7 @@ export class DesignSystemPage {
         const overlayShowcaseContainer = page.getByRole('region', {
             name: 'Dialog · Alert Dialog',
         });
-        this.overlayShowcase = new OverlayShowcasePage(
-            page,
-            overlayShowcaseContainer,
-        );
+        this.overlayShowcase = new OverlayShowcasePage(overlayShowcaseContainer);
 
         const sheetShowcaseContainer = page.getByRole('region', { name: 'Sheet' });
         this.sheetShowcase = new SheetShowcasePage(page, sheetShowcaseContainer);

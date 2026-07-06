@@ -73,6 +73,18 @@ struct MatchFlowView: View {
             case .score:
                 ScoreEntryView(
                     config: config,
+                    // Carried for the (future) per-game write path; unused by the
+                    // board today. `matchId` is set before this step in both
+                    // paths (start() on new matches, the resume seed otherwise) —
+                    // same non-nil guarantee `post()` leans on with `guard let`.
+                    matchId: matchId,
+                    yourSideNumber: resume?.yourSideNumber ?? 1,
+                    // Same service the flow posts results through, so per-game
+                    // scratchpad writes and the final post share one client.
+                    service: service,
+                    // ScoreEntryView now holds `[ScoredGame]` directly, so the
+                    // resume games ride in with their sync state intact — no
+                    // down-adapter. The board still reads only `.points`.
                     initialGames: resume?.games ?? [],
                     onPost: post,
                     correction: resume?.isCorrection ?? false,

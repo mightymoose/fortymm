@@ -1468,11 +1468,15 @@ async def test_propose_commits_canon_and_leaves_result_standing(
     async with opponent_session(db_session, "rival") as (opp_client, opp):
         match = await _create_match(api_client, opp.id, best_of=3)
 
-        # Pre-propose, the FE has scratched in a totally different game 1 score.
-        # The /results payload is canon — it should win.
+        # Pre-propose, the FE has scratched game 1 into the shared scratchpad;
+        # the /results payload posts the *same* board (agreeing with the
+        # committed game and adding game 2). Propose obliterates the scratchpad
+        # and reinserts from the payload. (A payload that *disagreed* with a
+        # committed game would be rejected — see
+        # ``test_propose_first_post_409s_on_scratchpad_divergence``.)
         await api_client.post(
             f"/v1/matches/{match['id']}/games/1/scores/new",
-            json={"side_1_points": 5, "side_2_points": 11},
+            json={"side_1_points": 11, "side_2_points": 4},
         )
 
         response = await api_client.post(
@@ -1556,6 +1560,133 @@ async def test_propose_first_post_requires_no_existing_result(
             detail["standing_result"]["id"]
             == first.json()["negotiation"]["standing_result"]["id"]
         )
+
+
+async def test_propose_first_post_409s_on_scratchpad_divergence(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """The D1 guard: a first proposal whose board disagrees with a game a
+    concurrent participant committed to the shared scratchpad is rejected 409
+    (``MatchResultBoardConflict``) rather than silently overwriting it. The body
+    carries the true committed match so the client re-syncs from it.
+
+    Repro: the creator (side 1) commits games 1-2 in their own favor (2-0), the
+    opponent (side 2) commits game 3 in *theirs* (real board 2-1), then the
+    creator — stale, still seeing game 3 unplayed — posts a 3-0 board that
+    overwrites game 3. The committed game 3 must win."""
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "stale-poster-rival") as (
+        opp_client,
+        opp,
+    ):
+        match = await _create_match(api_client, opp.id, best_of=5)
+        # Creator commits games 1 + 2 (their wins).
+        for n in (1, 2):
+            await api_client.post(
+                f"/v1/matches/{match['id']}/games/{n}/scores/new",
+                json={"side_1_points": 11, "side_2_points": 3},
+            )
+        # Opponent commits game 3 in their own favor — the game the stale poster
+        # never saw.
+        opp_g3 = await opp_client.post(
+            f"/v1/matches/{match['id']}/games/3/scores/new",
+            json={"side_1_points": 3, "side_2_points": 11},
+        )
+        assert opp_g3.status_code == 201
+
+        # Stale poster posts a 3-0 sweep, overwriting the opponent's game 3.
+        response = await api_client.post(
+            f"/v1/matches/{match['id']}/results",
+            json={
+                "games": [
+                    {"game_number": 1, "side_1_points": 11, "side_2_points": 3},
+                    {"game_number": 2, "side_1_points": 11, "side_2_points": 3},
+                    {"game_number": 3, "side_1_points": 11, "side_2_points": 0},
+                ]
+            },
+        )
+        assert response.status_code == 409
+        detail = response.json()["detail"]
+        # Board conflict, not the negotiation conflict: it carries the whole
+        # committed match so the client re-syncs without a refetch.
+        assert "committed_match" in detail
+        committed = detail["committed_match"]
+        g3 = next(g for g in committed["games"] if g["game_number"] == 3)
+        assert g3["score"]["side_1_points"] == 3
+        assert g3["score"]["side_2_points"] == 11
+        # No result was minted, and the opponent's committed game 3 survives.
+        results = (await db_session.execute(select(MatchResult))).scalars().all()
+        assert results == []
+        g3_rows = (
+            (
+                await db_session.execute(
+                    select(MatchGameScore)
+                    .join(MatchGame)
+                    .where(MatchGame.game_number == 3)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(g3_rows) == 1
+        assert (g3_rows[0].side_1_points, g3_rows[0].side_2_points) == (3, 11)
+
+
+async def test_propose_first_post_allows_games_absent_from_scratchpad(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """The guard rejects only *disagreement* with a committed game — it allows
+    *additions*. A first proposal may carry games the scratchpad never held (the
+    poster typed the deciding games without saving them per-game), as long as
+    every committed-scored game appears unchanged."""
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "additions-rival") as (_opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=3)
+        # Only game 1 is committed to the scratchpad.
+        await api_client.post(
+            f"/v1/matches/{match['id']}/games/1/scores/new",
+            json={"side_1_points": 11, "side_2_points": 4},
+        )
+        # The proposal keeps game 1 unchanged and *adds* game 2 (never scratched).
+        response = await api_client.post(
+            f"/v1/matches/{match['id']}/results",
+            json={
+                "games": [
+                    {"game_number": 1, "side_1_points": 11, "side_2_points": 4},
+                    {"game_number": 2, "side_1_points": 11, "side_2_points": 7},
+                ]
+            },
+        )
+        assert response.status_code == 201
+
+
+async def test_propose_first_post_ignores_blank_committed_cell(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """A committed ``MatchGame`` whose score was cleared (a blank cell, score
+    ``None``) is not a divergence target — filling it in is a legit addition, so
+    the proposal posts."""
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "blank-cell-rival") as (_opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=3)
+        # Scratch game 1, then clear it — the MatchGame row lingers with no score.
+        await api_client.post(
+            f"/v1/matches/{match['id']}/games/1/scores/new",
+            json={"side_1_points": 11, "side_2_points": 4},
+        )
+        await api_client.delete(f"/v1/matches/{match['id']}/games/1/scores")
+        # The proposal fills game 1 (blank) with a *different* score — allowed,
+        # because there is no committed score to disagree with.
+        response = await api_client.post(
+            f"/v1/matches/{match['id']}/results",
+            json={
+                "games": [
+                    {"game_number": 1, "side_1_points": 11, "side_2_points": 9},
+                    {"game_number": 2, "side_1_points": 11, "side_2_points": 7},
+                ]
+            },
+        )
+        assert response.status_code == 201
 
 
 async def test_propose_undecided_board_is_422(
@@ -1715,6 +1846,78 @@ async def test_propose_counter_chain_across_sides(
         assert recounter["status"] == 201, recounter
         results = (await db_session.execute(select(MatchResult))).scalars().all()
         assert len(results) == 3
+
+
+async def _propose_board(
+    client: AsyncClient,
+    match_id: str,
+    games: list[tuple[int, int]],
+    *,
+    supersedes: str | None = None,
+) -> dict:
+    """Propose a multi-game board (list of ``(side_1, side_2)`` per game).
+    Returns the response body wrapper (``status`` + ``body``)."""
+    body: dict[str, object] = {
+        "games": [
+            {"game_number": i, "side_1_points": s1, "side_2_points": s2}
+            for i, (s1, s2) in enumerate(games, start=1)
+        ]
+    }
+    if supersedes is not None:
+        body["supersedes_result_id"] = supersedes
+    response = await client.post(f"/v1/matches/{match_id}/results", json=body)
+    return {"status": response.status_code, "body": response.json()}
+
+
+async def test_negotiation_diff_shows_removed_game_when_board_shortens(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """Regression: a correction that DROPS a game must surface in the diff.
+
+    Per CONTEXT.md "Correction" / ADR-0001 a correction may add, remove, or
+    change games. I propose a 3–1 board (four games); the opponent counters with
+    a 3–0 board (three games), which flips game 3's winner (so the board clinches
+    a game earlier) and drops game 4 entirely. From my view the diff must report
+    BOTH the game-3 change AND the game-4 removal (``new`` null), ordered by
+    game number — otherwise the accept decision is made on an understated diff."""
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "shorten-rival") as (opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=5)
+        # My board: S1 wins g1,g2,g4; S2 wins g3 → 3–1, decided at game 4.
+        mine = await _propose_board(
+            api_client,
+            match["id"],
+            [(11, 4), (11, 4), (4, 11), (11, 4)],
+        )
+        assert mine["status"] == 201, mine
+        mine_id = mine["body"]["negotiation"]["standing_result"]["id"]
+
+        # Opponent counters: S1 sweeps g1–g3 → 3–0, decided at game 3, game 4 gone.
+        counter = await _propose_board(
+            opp_client,
+            match["id"],
+            [(11, 4), (11, 4), (11, 4)],
+            supersedes=mine_id,
+        )
+        assert counter["status"] == 201, counter
+
+        my_neg = (await api_client.get(f"/v1/matches/{match['id']}")).json()[
+            "negotiation"
+        ]
+        assert my_neg["viewer_state"] == "corrected"
+        # Game 1/2 unchanged → skipped. Game 3 changed, game 4 removed, in order.
+        assert my_neg["diff"] == [
+            {
+                "game_number": 3,
+                "old": {"game_number": 3, "side_1_points": 4, "side_2_points": 11},
+                "new": {"game_number": 3, "side_1_points": 11, "side_2_points": 4},
+            },
+            {
+                "game_number": 4,
+                "old": {"game_number": 4, "side_1_points": 11, "side_2_points": 4},
+                "new": None,
+            },
+        ]
 
 
 # ----- negotiation BFF oracle (SPEC §4 worked cases) ----------------------
@@ -3230,8 +3433,8 @@ async def test_posting_result_enqueues_confirmation_for_opponent(
 ):
     """Posting a result on a two-human match enqueues one accept/counter
     delivery for the opponent — filed under the result-confirmation category,
-    deep-linked to the match, carrying the accept/counter push category + match
-    id, with recipient-framed copy. The poster gets nothing."""
+    deep-linked to the match, carrying the result-confirmation push category +
+    match id, with recipient-framed copy. The poster gets nothing."""
     me = await start_session(api_client, db_session)
     me.username = "poster"
     await db_session.commit()
@@ -3257,6 +3460,12 @@ async def test_posting_result_enqueues_confirmation_for_opponent(
     assert job.link == f"/matches/{match['id']}"
     assert job.push_category == MATCH_RESULT_CONFIRMATION_CATEGORY
     assert job.push_data == {"match_id": match["id"]}
+    # Propose/accept vocabulary, not the retired confirm/dispute model (#728).
+    # A first post's recipient sees Accept/Suggest-correction buttons (not
+    # Accept/Counter — that pair is reserved for the corrected-result case).
+    assert job.title == "Accept your match result"
+    assert "Accept or suggest a correction?" in job.body
+    assert "dispute" not in job.body.lower()
     # Recipient-framed games-won (poster won 2–1) and the per-game scores.
     assert "poster reported beating you 2–1" in job.body
     assert "11–7" in job.body
@@ -3293,6 +3502,73 @@ async def test_posting_losing_result_enqueues_confirmation_for_opponent(
     job = jobs[0]
     # Recipient-framed games-won (poster lost 0–2), phrased grammatically.
     assert "poster reported losing to you 2–0" in job.body
+
+
+async def test_posting_counter_enqueues_confirmation_with_counter_prompt(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    fake_notifications_queue: Queue,
+):
+    """Countering a standing result (``supersedes_result_id`` set) prompts the
+    recipient with "Accept or counter?" — the Accept/Counter button pair the
+    corrected-result callout actually renders — not the first-post's
+    Accept/Suggest-correction prompt (#728)."""
+    me = await start_session(api_client, db_session)
+    me.username = "proposer"
+    await db_session.commit()
+
+    async with opponent_session(db_session, "counterer") as (opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=1)
+        first = await _propose(api_client, match["id"], s1=11, s2=4)
+        assert first["status"] == 201
+        first_id = first["body"]["negotiation"]["standing_result"]["id"]
+
+        counter = await _propose(
+            opp_client, match["id"], s1=4, s2=11, supersedes=first_id
+        )
+        assert counter["status"] == 201, counter
+
+    jobs = enqueued_notification_jobs(fake_notifications_queue)
+    # The first post notifies the opponent; the counter notifies me back.
+    assert [job.user_id for job in jobs] == [opp.id, me.id]
+    counter_job = jobs[1]
+    assert "Accept or counter?" in counter_job.body
+    assert "suggest a correction" not in counter_job.body.lower()
+
+
+async def test_posting_self_edit_enqueues_first_post_prompt_not_counter(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    fake_notifications_queue: Queue,
+):
+    """A proposer correcting their own still-standing proposal (before the
+    opponent ever answers) sets ``supersedes_result_id``, but the opponent's
+    view stays the first-post ``review`` state (mirrors
+    ``test_propose_self_edit_chain_supersedes_own_proposal``) — so the
+    re-sent notification must keep the Accept/Suggest-correction prompt, not
+    switch to "Accept or counter?" just because a result was superseded."""
+    me = await start_session(api_client, db_session)
+    me.username = "proposer"
+    await db_session.commit()
+
+    async with opponent_session(db_session, "rival") as (_opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=1)
+        first = await _propose(api_client, match["id"], s1=11, s2=4)
+        assert first["status"] == 201
+        first_id = first["body"]["negotiation"]["standing_result"]["id"]
+
+        # Same proposer corrects their own board before the opponent responds.
+        second = await _propose(
+            api_client, match["id"], s1=11, s2=9, supersedes=first_id
+        )
+        assert second["status"] == 201, second
+
+    jobs = enqueued_notification_jobs(fake_notifications_queue)
+    # Both the first post and the self-edit notify the opponent (never me).
+    assert [job.user_id for job in jobs] == [opp.id, opp.id]
+    self_edit_job = jobs[1]
+    assert "Accept or suggest a correction?" in self_edit_job.body
+    assert "Accept or counter?" not in self_edit_job.body
 
 
 async def test_solo_result_enqueues_no_confirmation(

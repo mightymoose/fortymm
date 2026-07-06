@@ -68,11 +68,11 @@ describe("HeadToHeadDisplay", () => {
     expect(headToHeadDisplayPage.queryEmpty()).not.toBeInTheDocument();
     expect(headToHeadDisplayPage.getRows()).toHaveLength(2);
     // Wiring only: row content is pinned by the meeting-row tests.
-    expect(headToHeadDisplayPage.meeting(0).getResult()).toHaveTextContent(
-      /^L$/,
+    expect(headToHeadDisplayPage.meeting(0).getLeftScore()).not.toHaveClass(
+      "md-h2h__score-side--win",
     );
-    expect(headToHeadDisplayPage.meeting(1).getResult()).toHaveTextContent(
-      /^W$/,
+    expect(headToHeadDisplayPage.meeting(1).getLeftScore()).toHaveClass(
+      "md-h2h__score-side--win",
     );
   });
 

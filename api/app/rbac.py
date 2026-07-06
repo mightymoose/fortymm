@@ -479,5 +479,15 @@ async def delete_user(
         )
     user = await _get_user_or_404(db, user_id)
     await db.delete(user)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "This user has activity (matches, results, or tournaments) "
+                "and cannot be deleted."
+            ),
+        ) from None
     return Response(status_code=status.HTTP_204_NO_CONTENT)

@@ -421,6 +421,23 @@ async def test_authed_endpoint_with_merged_cookie_401s(
     # test_creates_new_session_when_cookie_invalid — only tombstones 401.)
 
 
+async def test_authed_endpoint_without_session_401s_session_ended(
+    api_client: AsyncClient,
+):
+    """An authed request whose session cookie no longer resolves to a user — the
+    holder signed out (the origin-shared cookie was dropped) or the session
+    expired — returns the structured `session_ended` 401 so the client redirects
+    to sign-in instead of silently minting a fresh guest in their place. Unlike
+    the merged case there is no owner email to prefill, and the dead cookie is
+    cleared so login can start a clean guest."""
+    response = await api_client.patch("/v1/me", json={"username": "nobody"})
+    assert response.status_code == 401
+    detail = response.json()["detail"]
+    assert detail["code"] == "session_ended"
+    assert "email" not in detail
+    assert "max-age=0" in response.headers.get("set-cookie", "").lower()
+
+
 # ----- CSRF double-submit guard ---------------------------------------------
 
 

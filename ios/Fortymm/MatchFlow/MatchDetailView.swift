@@ -256,10 +256,12 @@ struct MatchDetailView: View {
 
     // MARK: What changed (corrected-phase diff)
 
-    /// The server-computed per-game diff between the viewer's prior proposal
-    /// and the standing correction: old score struck through → new score, with
-    /// newly-added games flagged. Scores are canonical side-1–side-2, matching
-    /// the web's ScoreDiff.
+    /// The server-computed per-game diff between the viewer's prior proposal and
+    /// the standing correction. A correction may add, remove, or change games:
+    /// a changed game shows old struck through → new; an added game is flagged
+    /// "NEW GAME"; a removed game (`new == nil`) shows its old score struck
+    /// through and is flagged "REMOVED GAME". Scores are canonical
+    /// side-1–side-2, matching the web's ScoreDiff.
     private func whatChangedSection(_ diff: [ScoreDiffEntry]) -> some View {
         Section_("What changed") {
             VStack(spacing: 0) {
@@ -276,18 +278,27 @@ struct MatchDetailView: View {
                                 .font(FMFont.mono(15, weight: .semibold))
                                 .strikethrough()
                                 .foregroundStyle(FMColor.loss)
-                            Image(systemName: "arrow.right")
-                                .font(.system(size: 11, weight: .semibold))
-                                .foregroundStyle(FMColor.fgMuted)
+                        }
+                        if let new = entry.new {
+                            if entry.old != nil {
+                                Image(systemName: "arrow.right")
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundStyle(FMColor.fgMuted)
+                            } else {
+                                Text("NEW GAME")
+                                    .font(FMFont.ui(9, weight: .semibold))
+                                    .tracking(1.0)
+                                    .foregroundStyle(FMColor.fgMuted)
+                            }
+                            Text(new)
+                                .font(FMFont.mono(15, weight: .bold))
+                                .foregroundStyle(FMColor.serve500)
                         } else {
-                            Text("NEW GAME")
+                            Text("REMOVED GAME")
                                 .font(FMFont.ui(9, weight: .semibold))
                                 .tracking(1.0)
                                 .foregroundStyle(FMColor.fgMuted)
                         }
-                        Text(entry.new)
-                            .font(FMFont.mono(15, weight: .bold))
-                            .foregroundStyle(FMColor.serve500)
                     }
                     .padding(.horizontal, 16)
                     .padding(.vertical, 12)

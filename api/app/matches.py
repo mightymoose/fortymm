@@ -76,6 +76,7 @@ from app.schemas.match import (
     MatchListResponse,
     MatchListRow,
     MatchNegotiation,
+    MatchResultBoardConflict,
     MatchResultsGameWrite,
     MatchResultsWrite,
     NegotiationDiffEntry,
@@ -341,33 +342,39 @@ def _negotiation_diff(
     standing_games: list[dict[str, int]],
 ) -> list[NegotiationDiffEntry]:
     """Viewer-relative diff between the viewer's own last proposal (baseline)
-    and the standing proposal. Emits an entry only for games whose points
-    differ (or that the baseline lacks → ``old=None``), ordered by game number.
-    Computed purely from the two snapshots; the chain walk to pick the baseline
-    is what collapses the opponent's intermediate self-edits."""
-    by_number = {g["game_number"]: g for g in baseline_games}
+    and the standing proposal. Emits one entry per game that differs, ordered by
+    game number over the union of both boards. A correction may add, remove, or
+    change games (a decided board can shorten or lengthen — CONTEXT.md
+    "Correction", ADR-0001), so an entry is one of:
+
+    - **added** — the standing board has a game the baseline lacked (``old=None``);
+    - **removed** — the baseline had a game the standing board dropped (``new=None``);
+    - **changed** — both present, points differ.
+
+    Unchanged games are skipped. Computed purely from the two snapshots; the
+    chain walk to pick the baseline is what collapses the opponent's intermediate
+    self-edits."""
+    baseline_by_number = {g["game_number"]: g for g in baseline_games}
+    standing_by_number = {g["game_number"]: g for g in standing_games}
     entries: list[NegotiationDiffEntry] = []
-    for game in sorted(standing_games, key=lambda g: g["game_number"]):
-        old = by_number.get(game["game_number"])
-        if old is None:
-            entries.append(
-                NegotiationDiffEntry(
-                    game_number=game["game_number"],
-                    old=None,
-                    new=_negotiation_game(game),
-                )
-            )
-        elif (
-            old["side_1_points"] != game["side_1_points"]
-            or old["side_2_points"] != game["side_2_points"]
+    for number in sorted(baseline_by_number.keys() | standing_by_number.keys()):
+        old = baseline_by_number.get(number)
+        new = standing_by_number.get(number)
+        if (
+            old is not None
+            and new is not None
+            and old["side_1_points"] == new["side_1_points"]
+            and old["side_2_points"] == new["side_2_points"]
         ):
-            entries.append(
-                NegotiationDiffEntry(
-                    game_number=game["game_number"],
-                    old=_negotiation_game(old),
-                    new=_negotiation_game(game),
-                )
+            continue  # unchanged — omit
+        # ``old``/``new`` null encode removed/added; both-present is a change.
+        entries.append(
+            NegotiationDiffEntry(
+                game_number=number,
+                old=_negotiation_game(old) if old is not None else None,
+                new=_negotiation_game(new) if new is not None else None,
             )
+        )
     return entries
 
 
@@ -1175,10 +1182,21 @@ def _game_scores_text(match: Match, poster_side_number: int) -> str:
 
 
 def _result_confirmation_copy(
-    match: Match, poster_id: uuid.UUID
+    match: Match, poster_id: uuid.UUID, *, is_counter: bool
 ) -> tuple[str, str] | None:
-    """Title + body for the "accept or counter the result your opponent
-    posted" push, framed for the *recipient* (the side that didn't post).
+    """Title + body for the "accept or suggest a correction to the result your
+    opponent posted" push, framed for the *recipient* (the side that didn't
+    post).
+
+    ``is_counter`` picks the closing prompt to match the actual button pair
+    the recipient's in-app callout renders: a first-post shows Accept /
+    Suggest correction (``confirmation-callout-display.tsx``'s ``"review"``
+    case), while a counter shows Accept / Counter (its ``"corrected"`` case,
+    #728). The native iOS push notification itself only ever offers a single,
+    static Approve/Suggest-correction action pair (``PushNotificationManager
+    .swift``) — it doesn't yet grow a counter-specific action — so this body
+    text is the only place a tapped-through counter reads "Counter" until the
+    push actions themselves are split the same way.
 
     The headline carries the games-won score and, where there's room, the
     body lists the individual game scores — both oriented so the poster's
@@ -1202,26 +1220,38 @@ def _result_confirmation_copy(
         phrase, hi, lo = "losing to you", recipient_games, poster_games
     headline = f"{poster_name} reported {phrase} {hi}{_SCORE_DASH}{lo}"
 
+    prompt = "Accept or counter?" if is_counter else "Accept or suggest a correction?"
     games = _game_scores_text(match, poster_side.side_number)
-    body = (
-        f"{headline}. Games: {games}. Accept or counter?"
-        if games
-        else f"{headline}. Accept or counter?"
-    )
+    body = f"{headline}. Games: {games}. {prompt}" if games else f"{headline}. {prompt}"
     return "Accept your match result", body
 
 
 async def _notify_result_posted(
     notifications: NotificationService, match: Match, poster_id: uuid.UUID
 ) -> None:
-    """Queue an accept/counter prompt to every player on the side that now owes
-    a response. Each enqueued job persists the in-app record (the bell feed) and
-    fans out push/email per the recipient's preferences in the worker. The APNs
-    ``category``/``data`` carry the accept/counter action group and the match
-    id so a tapped push deep-links to the right match."""
-    copy = _result_confirmation_copy(match, poster_id)
+    """Queue an accept/counter (or accept/suggest-correction) prompt to every
+    player on the side that now owes a response. Each enqueued job persists
+    the in-app record (the bell feed) and fans out push/email per the
+    recipient's preferences in the worker. The APNs ``category``/``data``
+    carry the action group and the match id so a tapped push deep-links to
+    the right match."""
     recipient_side = opponent_side(match, poster_id)
-    if copy is None or recipient_side is None:
+    if recipient_side is None or not recipient_side.players:
+        return
+    # Derive counter-vs-first-post from the same viewer-relative negotiation
+    # state the BFF/UI use (``_negotiation``'s ``"corrected"`` vs ``"review"``),
+    # rather than the raw ``supersedes_result_id is not None`` check — that
+    # naive check is wrong on a self-edit (poster corrects their own standing
+    # proposal before the recipient ever answers): it supersedes a result, but
+    # the recipient still lands on the first-post "review" view, not
+    # "corrected", so they must get the Accept/Suggest-correction prompt, not
+    # Accept/Counter.
+    is_counter = (
+        _negotiation(match, recipient_side.players[0].user_id).viewer_state
+        == "corrected"
+    )
+    copy = _result_confirmation_copy(match, poster_id, is_counter=is_counter)
+    if copy is None:
         return
     title, body = copy
     for player in recipient_side.players:
@@ -1319,7 +1349,7 @@ async def _load_recent_form(
             db, user_id, match.league_id, match.created_at
         )
         matches_before, wins_before = await _load_career_before(
-            db, user_id, match.id, match.created_at
+            db, user_id, match.created_at
         )
         result.append(
             MatchDetailsPlayerForm(
@@ -1368,11 +1398,13 @@ async def _load_pre_match_rating(
 async def _load_career_before(
     db: AsyncSession,
     user_id: uuid.UUID,
-    current_match_id: uuid.UUID,
     before: datetime,
 ) -> tuple[int, int]:
-    """Cross-league ``(matches, wins)``. Excludes ``current_match_id`` so a
-    just-completed match isn't double-counted into its own pre-match record."""
+    """Cross-league ``(matches, wins)`` completed strictly before ``before``
+    (the current match's ``created_at``). The current match is excluded by the
+    date filter alone: a completed match's ``completed_at`` is always ``>=`` its
+    own ``created_at``, so it can never satisfy ``completed_at < created_at``. No
+    separate ``id`` guard is needed (issue #202)."""
     side = aliased(MatchSide)
     player = aliased(MatchSidePlayer)
     row = (
@@ -1386,7 +1418,6 @@ async def _load_career_before(
             .where(
                 player.user_id == user_id,
                 Match.status == MatchStatus.completed,
-                Match.id != current_match_id,
                 Match.completed_at < before,
             )
         )
@@ -2169,10 +2200,48 @@ def _negotiation_conflict(match: Match, current_user_id: uuid.UUID) -> HTTPExcep
     )
 
 
+def _scratchpad_divergence(
+    match: Match, proposed_games: list[MatchResultsGameWrite]
+) -> list[int]:
+    """Game numbers where a first-post proposal disagrees with the committed
+    scratchpad — the board-level analogue of the per-game ``version`` guard.
+
+    "Post result" assembles its board client-side from a possibly-stale view;
+    if a concurrent participant committed a game this client never saw, the
+    proposal would silently overwrite it (issue D1). For every committed
+    scratchpad game that *has a score*, require the proposal to carry the same
+    number with identical points. A committed game the proposal **changes or
+    drops** diverges. *Additions* — a proposal game with no committed score yet
+    (an empty ``MatchGame`` cell, or a game the scratchpad never held) — are
+    fine: filling in the final games is the whole point of posting.
+
+    Compare the **raw** (pre-compaction) proposal: the client numbers its games
+    the way the scratchpad does, so the numbers line up before compaction
+    renumbers them. Only meaningful for a first post — once a result stands the
+    scratchpad is frozen. (A game the opponent *deleted* pre-post has no
+    committed score to compare, so a stale board resurrecting it reads as an
+    addition; that edge is out of scope, see
+    ``docs/adr/0003-first-post-propose-guards-scratchpad-divergence.md``.)"""
+    proposed_by_number = {g.game_number: g for g in proposed_games}
+    diverging: list[int] = []
+    for game in match.games:
+        if game.score is None:
+            continue
+        proposed = proposed_by_number.get(game.game_number)
+        if (
+            proposed is None
+            or proposed.side_1_points != game.score.side_1_points
+            or proposed.side_2_points != game.score.side_2_points
+        ):
+            diverging.append(game.game_number)
+    return diverging
+
+
 @router.post(
     "/matches/{match_id}/results",
     response_model=MatchDetails,
     status_code=status.HTTP_201_CREATED,
+    responses={409: {"model": MatchResultBoardConflict}},
 )
 async def post_match_result(
     match_id: uuid.UUID,
@@ -2227,6 +2296,11 @@ async def post_match_result(
     # supersedes an existing result — would 409 before it could supersede.
     # Propose has its OWN gates below (first-post vs counter) instead.
 
+    # The board as the client sent it, before compaction renumbers the games —
+    # the scratchpad-divergence check below compares against this, since the
+    # client numbers its games the way the committed scratchpad does.
+    raw_games = payload.games
+
     # Compact once, upstream of every consumer below (_validate_finalize_games,
     # _commit_canonical_games, and the immutable _result_games_snapshot), so the
     # minted board is contiguous (see `_compact_games`). Covers both the first
@@ -2247,6 +2321,34 @@ async def post_match_result(
         # first-post (or any existing chain) loses here with the current state.
         if match.results:
             raise _negotiation_conflict(match, current_user.id)
+        # No result yet, so the scratchpad is still the shared, editable board.
+        # Reject a proposal that would silently overwrite a game another
+        # participant committed to it that this (stale) client never saw — the
+        # board-level version guard (issue D1). Gated *behind* the results check
+        # so it only ever fires pre-result: once a result stands the negotiation
+        # conflict above owns the moved-on state, and we never undo a result.
+        diverging = _scratchpad_divergence(match, raw_games)
+        if diverging:
+            extras = await _load_view_extras(db, match)
+            log.info(
+                "Rejected a stale first-post proposal diverging from the "
+                "committed scratchpad",
+                extra={
+                    "match_id": str(match.id),
+                    "diverging_games": diverging,
+                },
+            )
+            raise HTTPException(
+                status_code=409,
+                detail=MatchResultBoardConflict(
+                    message=(
+                        "The score changed while you were entering it — a "
+                        "game was saved by someone else. Review the board "
+                        "before posting."
+                    ),
+                    committed_match=_serialize_details(match, current_user.id, extras),
+                ).model_dump(mode="json"),
+            )
     else:
         # Counter: must target the live standing proposal. If it was already
         # accepted or superseded by a concurrent counter, the id won't match —

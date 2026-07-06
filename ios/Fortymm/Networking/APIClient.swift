@@ -153,6 +153,67 @@ struct APIClient {
         query: [URLQueryItem] = [],
         body: (some Encodable)?
     ) async throws -> T {
+        let (data, http) = try await perform(method, path, query: query, body: body)
+        guard (200..<300).contains(http.statusCode) else {
+            throw APIError.http(status: http.statusCode, detail: Self.detail(from: data))
+        }
+        do {
+            return try decoder.decode(T.self, from: data)
+        } catch {
+            throw APIError.decoding(error)
+        }
+    }
+
+    /// Status-aware request that distinguishes a 2xx success body from a `409
+    /// Conflict` body, letting a caller read the structured conflict payload the
+    /// generic `send` path discards (it keeps only a humanized `detail` string).
+    ///
+    /// Used for the conditional score writes (create/update), where a `409`
+    /// carries a `GameScoreConflictDTO` with the row as it actually stands:
+    /// - `2xx` → decode `Success` → `.success`
+    /// - `409` → decode `Conflict` from the body → `.failure`
+    /// - any other non-2xx → throw the same `APIError` `send` would.
+    ///
+    /// Shares `perform` with `send`, so auth, cookie capture, the merged-session
+    /// 401, and the JSON decoder configuration are identical. `method` is a
+    /// parameter (not hardcoded) so it serves both `POST .../scores/new` and
+    /// `PUT .../games/{n}/scores`. The body is required (no defaulted opaque
+    /// body) since these callsites always send one.
+    func sendExpectingConflict<Success: Decodable, Conflict: Decodable>(
+        _ method: String,
+        _ path: String,
+        body: some Encodable
+    ) async throws -> Result<Success, Conflict> {
+        let (data, http) = try await perform(method, path, body: body)
+        if (200..<300).contains(http.statusCode) {
+            do {
+                return .success(try decoder.decode(Success.self, from: data))
+            } catch {
+                throw APIError.decoding(error)
+            }
+        }
+        if http.statusCode == 409 {
+            do {
+                return .failure(try decoder.decode(Conflict.self, from: data))
+            } catch {
+                throw APIError.decoding(error)
+            }
+        }
+        throw APIError.http(status: http.statusCode, detail: Self.detail(from: data))
+    }
+
+    /// Build, send, and post-process a request up to (but not including) the
+    /// 2xx/decoding step: attaches auth cookies + CSRF, encodes the optional JSON
+    /// body, handles the merged-session 401, and captures any rotated cookie.
+    /// Returns the raw `(Data, HTTPURLResponse)` so callers can branch on status
+    /// — `send` applies the 2xx guard + decode, `sendExpectingConflict` splits
+    /// success from a 409 body.
+    private func perform(
+        _ method: String,
+        _ path: String,
+        query: [URLQueryItem] = [],
+        body: (some Encodable)?
+    ) async throws -> (Data, HTTPURLResponse) {
         let base = APIClient.baseURL.appendingPathComponent(path)
         guard var components = URLComponents(url: base, resolvingAgainstBaseURL: false) else {
             throw APIError.invalidResponse
@@ -214,14 +275,7 @@ struct APIClient {
             throw APIError.http(status: http.statusCode, detail: Self.detail(from: data))
         }
         await captureSessionCookie(from: http, url: url, sentToken: sentToken)
-        guard (200..<300).contains(http.statusCode) else {
-            throw APIError.http(status: http.statusCode, detail: Self.detail(from: data))
-        }
-        do {
-            return try decoder.decode(T.self, from: data)
-        } catch {
-            throw APIError.decoding(error)
-        }
+        return (data, http)
     }
 
     /// FastAPI serialises datetimes as ISO-8601, usually with fractional

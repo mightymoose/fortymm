@@ -537,11 +537,15 @@ describe("MatchDetails — page wiring", () => {
     const counts = h2hCard.querySelectorAll(".md-h2h__count");
     expect(counts[0]).toHaveTextContent("2");
     expect(counts[1]).toHaveTextContent("1");
-    // Three rows, newest first; the loss row gets the L marker.
+    // Three rows, newest first; the loss row tints the opponent's (right)
+    // score, the win row tints mine (left).
     const rows = h2hCard.querySelectorAll(".md-h2h__row");
     expect(rows).toHaveLength(3);
-    expect(rows[0].querySelector(".md-h2h__result--l")).not.toBeNull();
-    expect(rows[1].querySelector(".md-h2h__result--w")).not.toBeNull();
+    const scoreSides = (row: Element) =>
+      row.querySelectorAll(".md-h2h__score-side");
+    expect(scoreSides(rows[0])[1]).toHaveClass("md-h2h__score-side--win");
+    expect(scoreSides(rows[0])[0]).not.toHaveClass("md-h2h__score-side--win");
+    expect(scoreSides(rows[1])[0]).toHaveClass("md-h2h__score-side--win");
   });
 
   it("shows the rating change card when ratings moved", async () => {

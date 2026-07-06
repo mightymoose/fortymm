@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useNavigate } from '@tanstack/react-router'
+import { useBlocker } from '@tanstack/react-router'
 import { ArrowRight } from 'lucide-react'
 
 import { deriveEmailStatus, useSession } from '@/api/session'
@@ -15,6 +15,7 @@ import { useStartMatch } from '@/components/matches/match-setup/use-start-match'
 import { Card } from '@/components/dashboard/your-game-row/card'
 import { C, MONO, UI } from '@/components/dashboard/dashboard-tokens'
 import { Overline } from '@/components/overline'
+import { DiscardMatchSetupDialog } from '@/components/matches/match-setup/discard-match-setup-dialog'
 import '@/components/matches/match-setup/match-setup.css'
 
 /**
@@ -28,7 +29,6 @@ import '@/components/matches/match-setup/match-setup.css'
  * pattern at the page level).
  */
 export const FirstMatchCard = () => {
-  const navigate = useNavigate()
   const { data: session } = useSession()
   const [opponent, setOpponent] = useState<Opponent | null>(null)
   const [bestOf, setBestOf] = useState(5)
@@ -36,8 +36,22 @@ export const FirstMatchCard = () => {
   // this hero requires an opponent before it is even submittable, so rated
   // defaults on the moment one is picked — matching the mock.
   const [rated, setRated] = useState(true)
-  const { submit, apiError, sessionExpired, submitting, submitted } =
+  const { submit, apiError, submitting, submitted, hasSucceeded } =
     useStartMatch()
+
+  // The only reachable dirty state is a picked opponent — best-of and rated
+  // are gated behind `opponent !== null`, so a null opponent means the hero is
+  // untouched. Leaving with an opponent picked would silently discard it, the
+  // same class of gap #75 closed on /matches/new; reuse that page's
+  // `useBlocker` + `AlertDialog` treatment here (#811). `hasSucceeded()` reads
+  // a ref so the post-create redirect isn't itself blocked.
+  const isDirty = opponent !== null
+  const shouldBlock = () => isDirty && !hasSucceeded()
+  const blocker = useBlocker({
+    shouldBlockFn: shouldBlock,
+    enableBeforeUnload: shouldBlock,
+    withResolver: true,
+  })
 
   const me = session?.data.user ?? null
   const isGuest =
@@ -62,7 +76,7 @@ export const FirstMatchCard = () => {
   const error = submitted ? apiError : null
 
   return (
-    <Card style={{ minWidth: 0 }}>
+    <Card style={{ minWidth: 0, overflow: 'visible' }}>
       <Overline style={{ color: C.ball400 }}>Your next match</Overline>
       <h2
         style={{
@@ -129,32 +143,16 @@ export const FirstMatchCard = () => {
             {summary}
           </div>
         )}
-        {error &&
-          (sessionExpired ? (
-            <div className="nm-recovery" role="alert">
-              <p className="nm-error">{error}</p>
-              <button
-                type="button"
-                className="nm-btn nm-btn-primary nm-recovery-btn"
-                onClick={() =>
-                  navigate({
-                    to: '/login',
-                    search: { email: undefined, error: undefined },
-                  })
-                }
-              >
-                Sign in again
-              </button>
-            </div>
-          ) : (
-            <p className="nm-error" role="alert">
-              {error}
-            </p>
-          ))}
+        {error && (
+          <p className="nm-error" role="alert">
+            {error}
+          </p>
+        )}
         <button
           type="button"
           className="nm-btn nm-btn-primary"
           disabled={!opponent || submitting}
+          aria-busy={submitting}
           onClick={() => submit({ opponent, bestOf, rated })}
         >
           {submitting ? 'Starting…' : 'Start scoring'}
@@ -172,6 +170,12 @@ export const FirstMatchCard = () => {
           </p>
         )}
       </div>
+
+      <DiscardMatchSetupDialog
+        open={blocker.status === 'blocked'}
+        onLeave={() => blocker.proceed?.()}
+        onStay={() => blocker.reset?.()}
+      />
     </Card>
   )
 }

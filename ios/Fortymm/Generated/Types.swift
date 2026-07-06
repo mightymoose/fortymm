@@ -79,12 +79,6 @@ internal protocol APIProtocol: Sendable {
     /// piece of mail either way — rather than the unknown case silently
     /// delivering nothing.
     ///
-    /// Accounts whose email hasn't been confirmed yet get the confirmation
-    /// link re-sent instead of a sign-in link. The login token would let
-    /// someone sign in without proving control of the inbox; the confirmation
-    /// link clears that hurdle and (per ``confirm_email``) rotates them into
-    /// a session anyway.
-    ///
     /// Records the requesting browser's guest on the token so the merge it drives
     /// is token-bound (follows the guest cross-device), mirroring the settings
     /// merge flow.
@@ -580,12 +574,6 @@ extension APIProtocol {
     /// indistinguishable from the outside — same status, same shape, and a
     /// piece of mail either way — rather than the unknown case silently
     /// delivering nothing.
-    ///
-    /// Accounts whose email hasn't been confirmed yet get the confirmation
-    /// link re-sent instead of a sign-in link. The login token would let
-    /// someone sign in without proving control of the inbox; the confirmation
-    /// link clears that hurdle and (per ``confirm_email``) rotates them into
-    /// a session anyway.
     ///
     /// Records the requesting browser's guest on the token so the merge it drives
     /// is token-bound (follows the guest cross-device), mirroring the settings
@@ -3133,6 +3121,44 @@ internal enum Components {
                 case diff
             }
         }
+        /// 409 body for a first-post proposal whose board disagrees with a game
+        /// already committed to the shared scratchpad — the board-level analogue of
+        /// ``MatchGameScoreConflict``'s per-game version guard (issue D1 / #747-B2).
+        ///
+        /// A pre-result "Post result" assembles its board client-side; if a concurrent
+        /// participant committed a game this client never saw, the payload would
+        /// silently overwrite it. The handler rejects that and returns the true board
+        /// in ``committed_match`` (the same ``MatchDetails`` shape the success path
+        /// returns) so the client re-syncs from the body — without a refetch — and the
+        /// poster re-decides against reality instead of clobbering a committed game.
+        ///
+        /// ``committed_match`` is the discriminator the client keys on to tell this
+        /// apart from the per-game ``committed_score`` conflict, the negotiation
+        /// conflict, and a plain-string 409 (a locked match).
+        ///
+        /// - Remark: Generated from `#/components/schemas/MatchResultBoardConflict`.
+        internal struct MatchResultBoardConflict: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/MatchResultBoardConflict/message`.
+            internal var message: Swift.String
+            /// - Remark: Generated from `#/components/schemas/MatchResultBoardConflict/committed_match`.
+            internal var committedMatch: Components.Schemas.AppSchemasMatchMatchDetails
+            /// Creates a new `MatchResultBoardConflict`.
+            ///
+            /// - Parameters:
+            ///   - message:
+            ///   - committedMatch:
+            internal init(
+                message: Swift.String,
+                committedMatch: Components.Schemas.AppSchemasMatchMatchDetails
+            ) {
+                self.message = message
+                self.committedMatch = committedMatch
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case message
+                case committedMatch = "committed_match"
+            }
+        }
         /// One game inside a finalize-the-match payload. Per-game point legality
         /// is checked here; cross-game checks (contiguous numbering, decided result,
         /// no scores past the decider) live in the handler against the full list.
@@ -3371,7 +3397,14 @@ internal enum Components {
             }
         }
         /// One game's difference between the prior and standing result, so the FE
-        /// can highlight what changed in a correction.
+        /// can highlight what changed in a correction. A correction may add, remove, or
+        /// change games (CONTEXT.md "Correction", ADR-0001), so an entry is one of:
+        ///
+        /// - **added** — ``old`` is ``None`` (the standing board gained this game);
+        /// - **removed** — ``new`` is ``None`` (the standing board dropped this game);
+        /// - **changed** — both present, points differ.
+        ///
+        /// At least one of ``old``/``new`` is always present.
         ///
         /// - Remark: Generated from `#/components/schemas/NegotiationDiffEntry`.
         internal struct NegotiationDiffEntry: Codable, Hashable, Sendable {
@@ -3398,7 +3431,25 @@ internal enum Components {
             /// - Remark: Generated from `#/components/schemas/NegotiationDiffEntry/old`.
             internal var old: Components.Schemas.NegotiationDiffEntry.OldPayload?
             /// - Remark: Generated from `#/components/schemas/NegotiationDiffEntry/new`.
-            internal var new: Components.Schemas.NegotiationGame
+            internal struct NewPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/NegotiationDiffEntry/new/value1`.
+                internal var value1: Components.Schemas.NegotiationGame
+                /// Creates a new `NewPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                internal init(value1: Components.Schemas.NegotiationGame) {
+                    self.value1 = value1
+                }
+                internal init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                internal func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/NegotiationDiffEntry/new`.
+            internal var new: Components.Schemas.NegotiationDiffEntry.NewPayload?
             /// Creates a new `NegotiationDiffEntry`.
             ///
             /// - Parameters:
@@ -3408,7 +3459,7 @@ internal enum Components {
             internal init(
                 gameNumber: Swift.Int,
                 old: Components.Schemas.NegotiationDiffEntry.OldPayload? = nil,
-                new: Components.Schemas.NegotiationGame
+                new: Components.Schemas.NegotiationDiffEntry.NewPayload? = nil
             ) {
                 self.gameNumber = gameNumber
                 self.old = old
@@ -7382,12 +7433,6 @@ internal enum Operations {
     /// indistinguishable from the outside — same status, same shape, and a
     /// piece of mail either way — rather than the unknown case silently
     /// delivering nothing.
-    ///
-    /// Accounts whose email hasn't been confirmed yet get the confirmation
-    /// link re-sent instead of a sign-in link. The login token would let
-    /// someone sign in without proving control of the inbox; the confirmation
-    /// link clears that hurdle and (per ``confirm_email``) rotates them into
-    /// a session anyway.
     ///
     /// Records the requesting browser's guest on the token so the merge it drives
     /// is token-bound (follows the guest cross-device), mirroring the settings
@@ -12084,6 +12129,57 @@ internal enum Operations {
                     default:
                         try throwUnexpectedResponseStatus(
                             expectedStatus: "created",
+                            response: self
+                        )
+                    }
+                }
+            }
+            internal struct Conflict: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/matches/{match_id}/results/POST/responses/409/content`.
+                internal enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/matches/{match_id}/results/POST/responses/409/content/application\/json`.
+                    case json(Components.Schemas.MatchResultBoardConflict)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    internal var json: Components.Schemas.MatchResultBoardConflict {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                internal var body: Operations.PostMatchResultV1MatchesMatchIdResultsPost.Output.Conflict.Body
+                /// Creates a new `Conflict`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                internal init(body: Operations.PostMatchResultV1MatchesMatchIdResultsPost.Output.Conflict.Body) {
+                    self.body = body
+                }
+            }
+            /// Conflict
+            ///
+            /// - Remark: Generated from `#/paths//v1/matches/{match_id}/results/post(post_match_result_v1_matches__match_id__results_post)/responses/409`.
+            ///
+            /// HTTP response code: `409 conflict`.
+            case conflict(Operations.PostMatchResultV1MatchesMatchIdResultsPost.Output.Conflict)
+            /// The associated value of the enum case if `self` is `.conflict`.
+            ///
+            /// - Throws: An error if `self` is not `.conflict`.
+            /// - SeeAlso: `.conflict`.
+            internal var conflict: Operations.PostMatchResultV1MatchesMatchIdResultsPost.Output.Conflict {
+                get throws {
+                    switch self {
+                    case let .conflict(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "conflict",
                             response: self
                         )
                     }

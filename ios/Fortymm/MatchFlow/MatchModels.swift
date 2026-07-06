@@ -84,16 +84,96 @@ struct Game: Hashable {
     var b: Int?
 }
 
+/// The server-sync status of a single game's entered points, relative to the
+/// shared scratchpad. Tracked alongside the points (see `ScoredGame`) rather
+/// than baked into `Game` so `MatchRules` stays purely score-based.
+enum SyncState: Hashable {
+    /// Entered on this device; never written to the server.
+    case localOnly
+    /// A write for these points is in flight. `committedVersion` is the version
+    /// the server already held for this game *before* this write (nil when this
+    /// is a first create), so the reducer can re-derive the verb and the clear
+    /// path can tell an in-flight create (no row yet) from an update over a
+    /// committed row.
+    case saving(committedVersion: Int?)
+    /// Committed server-side at this scratchpad version.
+    case saved(version: Int)
+    /// A write failed. `committedVersion` is the version committed before the
+    /// failed write (nil if the game was never committed), so a retry re-fires
+    /// as the correct verb — an `update` over an existing row, not a `create`
+    /// that would 409 against the game's own prior save. The entered points live
+    /// in `ScoredGame.points`, so they aren't duplicated here.
+    case failed(committedVersion: Int?)
+    /// A 409 conflict: carries the server's committed points and version, for
+    /// the keep-mine / use-theirs decision.
+    case conflict(committed: Game, version: Int)
+}
+
+/// A game's entered points paired with its scratchpad sync status. Wraps `Game`
+/// (rather than replacing it) so scoring logic in `MatchRules` keeps operating
+/// on plain `Game` values while the score-entry flow tracks per-game sync.
+struct ScoredGame: Hashable {
+    var points: Game
+    var sync: SyncState
+}
+
+/// The write a game's current sync state implies against the shared scratchpad:
+/// a first-time create, or a version-guarded update. Derived by
+/// `GameWriteIntent.forWrite(_:)`; consumed by the write path that calls
+/// `MatchService.createGameScore` / `updateGameScore(expectedVersion:)`.
+enum GameWriteIntent: Equatable {
+    /// POST a new game score — no prior committed version.
+    case create
+    /// PUT an existing game score, guarded by `expectedVersion` (the optimistic
+    /// concurrency token the server checks; a mismatch is a 409).
+    case update(expectedVersion: Int)
+
+    /// The write a `SyncState` implies, or `nil` when no write should be
+    /// derived right now.
+    ///
+    /// Returns an Optional so the mapping stays total *and* honest about
+    /// `.saving`: a write is already in flight, so deriving another intent
+    /// would double-fire it. Callers get `nil` and must not write.
+    ///
+    /// - `.localOnly` → `.create` (never written before).
+    /// - `.saved(v)`  → `.update(expectedVersion: v)`.
+    /// - `.conflict(_, v)` → `.update(expectedVersion: v)`: the "use-mine"
+    ///   overwrite re-fires the write with the *fresh* version the 409 carried.
+    /// - `.failed(committedVersion)` → `.update(expectedVersion:)` when the game
+    ///   was already committed before the failed write (so a retry re-fires the
+    ///   correct verb instead of a `.create` that would 409 against the game's
+    ///   own prior save), else `.create` for a never-committed first write.
+    /// - `.saving` → `nil` (a write is in flight — see above).
+    ///
+    /// Exhaustive with no `default`, so a new `SyncState` case is a compile
+    /// error until its intent is decided here.
+    static func forWrite(_ state: SyncState) -> GameWriteIntent? {
+        switch state {
+        case .localOnly:
+            return .create
+        case .saving:
+            return nil
+        case .saved(let version):
+            return .update(expectedVersion: version)
+        case .conflict(_, let version):
+            return .update(expectedVersion: version)
+        case .failed(let committedVersion):
+            return committedVersion.map { .update(expectedVersion: $0) } ?? .create
+        }
+    }
+}
+
 // MARK: - Result negotiation (view model)
 
-/// One changed game between the viewer's prior proposal and the standing
-/// correction, pre-formatted for display. Scores are canonical side-1–side-2,
-/// matching the web's `ScoreDiff` rendering.
+/// One game the standing correction added, removed, or changed relative to the
+/// viewer's prior proposal, pre-formatted for display. Scores are canonical
+/// side-1–side-2, matching the web's `ScoreDiff` rendering.
 struct ScoreDiffEntry: Identifiable {
     let gameNumber: Int
     /// "11–7" as previously proposed; nil when the correction added this game.
     let old: String?
-    let new: String
+    /// "11–7" as now proposed; nil when the correction removed this game.
+    let new: String?
     var id: Int { gameNumber }
 }
 
@@ -141,6 +221,11 @@ struct FinalMatch: Identifiable {
     /// the single source the derived flags below read, so they can't drift
     /// from it.
     var negotiation: MatchNegotiation? = nil
+    /// The same games as `games`, enriched with each committed game's scratchpad
+    /// version (`sync: .saved(version:)`). Kept parallel to `games` — which stays
+    /// a plain `[Game]` for `MatchRules`/display — so only the resume path pays
+    /// the widened shape. Defaulted empty for seed/local builders.
+    var scoredGames: [ScoredGame] = []
 
     /// True when a result has been posted but the match isn't decided yet — i.e.
     /// it's genuinely awaiting acceptance. Distinct from `!decided`, which is
@@ -203,7 +288,7 @@ struct FinalMatch: Identifiable {
         return ResumeScoring(
             matchId: uuid,
             config: MatchConfig(opponent: solo ? nil : opponent, bestOf: bestOf, rated: rated),
-            games: games,
+            games: scoredGames,
             yourSideNumber: yourSideNumber
         )
     }
@@ -223,7 +308,10 @@ struct FinalMatch: Identifiable {
         return ResumeScoring(
             matchId: uuid,
             config: MatchConfig(opponent: solo ? nil : opponent, bestOf: bestOf, rated: rated),
-            games: negotiation.standingGames,
+            // The standing board never per-game writes to the scratchpad — it's an
+            // immutable snapshot the correction is seeded from — so each game seeds
+            // as `.localOnly`.
+            games: negotiation.standingGames.map { ScoredGame(points: $0, sync: .localOnly) },
             yourSideNumber: yourSideNumber,
             supersedesResultId: standingId
         )
@@ -237,7 +325,11 @@ struct FinalMatch: Identifiable {
 struct ResumeScoring: Identifiable {
     let matchId: UUID
     let config: MatchConfig
-    let games: [Game]
+    /// The games already entered, each carrying its scratchpad sync state. The
+    /// score-entry screen currently reads only `.points` (via a down-adapter at
+    /// the call site), so today's board is identical; the `sync`/`version` ride
+    /// along for the per-game write path that will consume them.
+    let games: [ScoredGame]
     var yourSideNumber: Int = 1
     /// When set, this board is a *correction*: it was seeded from the standing
     /// proposal with this id, and posting supersedes that proposal (a counter,

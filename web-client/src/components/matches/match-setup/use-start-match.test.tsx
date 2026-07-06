@@ -112,12 +112,16 @@ describe('useStartMatch', () => {
     expect(postCount).toBe(1)
   })
 
-  it('surfaces a 401 as a session-expired recovery, not a bare error', async () => {
+  it('surfaces a server error through apiError', async () => {
+    // A lapsed session is a `session_ended` 401 that the global middleware
+    // catches and redirects to `/login` (covered in api/client.test.ts) — the
+    // hook has no session-specific branch of its own; every other failure just
+    // surfaces inline.
     server.use(
       http.post('*/v1/matches', () =>
         HttpResponse.json(
-          { detail: 'Your session has expired.' },
-          { status: 401 },
+          { detail: 'Could not start the match right now.' },
+          { status: 500 },
         ),
       ),
     )
@@ -129,7 +133,6 @@ describe('useStartMatch', () => {
     )
 
     const result = await hook.ready()
-    expect(result.sessionExpired).toBe(true)
-    expect(result.apiError).toBe('Your session has expired.')
+    expect(result.apiError).toBe('Could not start the match right now.')
   })
 })

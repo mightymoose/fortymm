@@ -139,12 +139,6 @@ export interface paths {
          *     piece of mail either way — rather than the unknown case silently
          *     delivering nothing.
          *
-         *     Accounts whose email hasn't been confirmed yet get the confirmation
-         *     link re-sent instead of a sign-in link. The login token would let
-         *     someone sign in without proving control of the inbox; the confirmation
-         *     link clears that hurdle and (per ``confirm_email``) rotates them into
-         *     a session anyway.
-         *
          *     Records the requesting browser's guest on the token so the merge it drives
          *     is token-bound (follows the guest cross-device), mirroring the settings
          *     merge flow.
@@ -1581,6 +1575,28 @@ export interface components {
             diff: components["schemas"]["NegotiationDiffEntry"][] | null;
         };
         /**
+         * MatchResultBoardConflict
+         * @description 409 body for a first-post proposal whose board disagrees with a game
+         *     already committed to the shared scratchpad — the board-level analogue of
+         *     ``MatchGameScoreConflict``'s per-game version guard (issue D1 / #747-B2).
+         *
+         *     A pre-result "Post result" assembles its board client-side; if a concurrent
+         *     participant committed a game this client never saw, the payload would
+         *     silently overwrite it. The handler rejects that and returns the true board
+         *     in ``committed_match`` (the same ``MatchDetails`` shape the success path
+         *     returns) so the client re-syncs from the body — without a refetch — and the
+         *     poster re-decides against reality instead of clobbering a committed game.
+         *
+         *     ``committed_match`` is the discriminator the client keys on to tell this
+         *     apart from the per-game ``committed_score`` conflict, the negotiation
+         *     conflict, and a plain-string 409 (a locked match).
+         */
+        MatchResultBoardConflict: {
+            /** Message */
+            message: string;
+            committed_match: components["schemas"]["app__schemas__match__MatchDetails"];
+        };
+        /**
          * MatchResultsGameWrite
          * @description One game inside a finalize-the-match payload. Per-game point legality
          *     is checked here; cross-game checks (contiguous numbering, decided result,
@@ -1665,13 +1681,20 @@ export interface components {
         /**
          * NegotiationDiffEntry
          * @description One game's difference between the prior and standing result, so the FE
-         *     can highlight what changed in a correction.
+         *     can highlight what changed in a correction. A correction may add, remove, or
+         *     change games (CONTEXT.md "Correction", ADR-0001), so an entry is one of:
+         *
+         *     - **added** — ``old`` is ``None`` (the standing board gained this game);
+         *     - **removed** — ``new`` is ``None`` (the standing board dropped this game);
+         *     - **changed** — both present, points differ.
+         *
+         *     At least one of ``old``/``new`` is always present.
          */
         NegotiationDiffEntry: {
             /** Game Number */
             game_number: number;
             old: components["schemas"]["NegotiationGame"] | null;
-            new: components["schemas"]["NegotiationGame"];
+            new: components["schemas"]["NegotiationGame"] | null;
         };
         /**
          * NegotiationGame
@@ -3737,6 +3760,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["app__schemas__match__MatchDetails"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MatchResultBoardConflict"];
                 };
             };
             /** @description Validation Error */

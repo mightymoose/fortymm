@@ -612,20 +612,6 @@
   line-height: 1.4;
   color: var(--loss, #ef4444);
 }
-.nm-recovery {
-  margin-top: 8px;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 8px;
-}
-.nm-recovery .nm-error {
-  margin-top: 0;
-}
-.nm-recovery-btn {
-  height: 40px;
-  padding: 0 16px;
-}
 
 /* --- Buttons --- */
 .nm-btn {
@@ -672,6 +658,15 @@
 .nm-btn:disabled {
   cursor: not-allowed;
   opacity: 0.55;
+}
+/* Some nm-btn-primary CTAs disable for two different reasons — a genuinely
+   blocked action (e.g. no opponent picked yet) or their own request being in
+   flight (label swaps to "Starting…"/"Posting…"/etc., `aria-busy` set). Only
+   the in-flight case gets a "wait" cursor instead of the generic
+   "not-allowed" (#77) — scope on `aria-busy` so a blocked-but-idle button
+   doesn't fire it too. */
+.nm-btn-primary:disabled[aria-busy='true'] {
+  cursor: wait;
 }
 .nm-btn-primary:disabled:hover {
   background: var(--ball-500);
