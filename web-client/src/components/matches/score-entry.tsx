@@ -167,9 +167,6 @@ function ScoreEntryInner({
     )
   }
 
-  const finalizeApiError =
-    finalizeMutation.error instanceof ApiError ? finalizeMutation.error : null
-
   // The scoring screen is participant-only; spectators bounce back to the
   // read-only details page. The opponent side is always present — a real
   // player, or the player-less placeholder for solo matches.
@@ -332,6 +329,8 @@ function ScoreEntryInner({
   const formatError = meMalformed || oppMalformed ? validation.error : null
   const localScoreError = validation.error
   const inputsValid = validation.valid
+  const finalizeApiError =
+    finalizeMutation.error instanceof ApiError ? finalizeMutation.error : null
 
   // Build the hypothetical full-match games list including the current input,
   // so we can ask the scoring lib whether saving this entry would make the
