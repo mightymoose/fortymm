@@ -1233,8 +1233,11 @@ async def _notify_result_posted(
     player on the side that now owes a response. Each enqueued job persists
     the in-app record (the bell feed) and fans out push/email per the
     recipient's preferences in the worker. The APNs ``category``/``data``
-    carry the action group and the match id so a tapped push deep-links to
-    the right match."""
+    carry the action group, the match id (so a tapped push deep-links to the
+    right match), and the standing result id (so a tapped Approve binds to the
+    exact result the push described, not whatever is standing at tap time — see
+    docs/adr/0007), plus a per-match ``collapse_id`` so a superseding push
+    replaces the stale one on the lock screen."""
     recipient_side = opponent_side(match, poster_id)
     if recipient_side is None or not recipient_side.players:
         return
