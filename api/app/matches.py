@@ -76,7 +76,6 @@ from app.schemas.match import (
     MatchListResponse,
     MatchListRow,
     MatchNegotiation,
-    MatchResultBoardConflict,
     MatchResultsGameWrite,
     MatchResultsWrite,
     NegotiationDiffEntry,
@@ -2208,48 +2207,10 @@ def _negotiation_conflict(match: Match, current_user_id: uuid.UUID) -> HTTPExcep
     )
 
 
-def _scratchpad_divergence(
-    match: Match, proposed_games: list[MatchResultsGameWrite]
-) -> list[int]:
-    """Game numbers where a first-post proposal disagrees with the committed
-    scratchpad — the board-level analogue of the per-game ``version`` guard.
-
-    "Post result" assembles its board client-side from a possibly-stale view;
-    if a concurrent participant committed a game this client never saw, the
-    proposal would silently overwrite it (issue D1). For every committed
-    scratchpad game that *has a score*, require the proposal to carry the same
-    number with identical points. A committed game the proposal **changes or
-    drops** diverges. *Additions* — a proposal game with no committed score yet
-    (an empty ``MatchGame`` cell, or a game the scratchpad never held) — are
-    fine: filling in the final games is the whole point of posting.
-
-    Compare the **raw** (pre-compaction) proposal: the client numbers its games
-    the way the scratchpad does, so the numbers line up before compaction
-    renumbers them. Only meaningful for a first post — once a result stands the
-    scratchpad is frozen. (A game the opponent *deleted* pre-post has no
-    committed score to compare, so a stale board resurrecting it reads as an
-    addition; that edge is out of scope, see
-    ``docs/adr/0003-first-post-propose-guards-scratchpad-divergence.md``.)"""
-    proposed_by_number = {g.game_number: g for g in proposed_games}
-    diverging: list[int] = []
-    for game in match.games:
-        if game.score is None:
-            continue
-        proposed = proposed_by_number.get(game.game_number)
-        if (
-            proposed is None
-            or proposed.side_1_points != game.score.side_1_points
-            or proposed.side_2_points != game.score.side_2_points
-        ):
-            diverging.append(game.game_number)
-    return diverging
-
-
 @router.post(
     "/matches/{match_id}/results",
     response_model=MatchDetails,
     status_code=status.HTTP_201_CREATED,
-    responses={409: {"model": MatchResultBoardConflict}},
 )
 async def post_match_result(
     match_id: uuid.UUID,
@@ -2304,11 +2265,6 @@ async def post_match_result(
     # supersedes an existing result — would 409 before it could supersede.
     # Propose has its OWN gates below (first-post vs counter) instead.
 
-    # The board as the client sent it, before compaction renumbers the games —
-    # the scratchpad-divergence check below compares against this, since the
-    # client numbers its games the way the committed scratchpad does.
-    raw_games = payload.games
-
     # Compact once, upstream of every consumer below (_validate_finalize_games,
     # _commit_canonical_games, and the immutable _result_games_snapshot), so the
     # minted board is contiguous (see `_compact_games`). Covers both the first
@@ -2329,34 +2285,6 @@ async def post_match_result(
         # first-post (or any existing chain) loses here with the current state.
         if match.results:
             raise _negotiation_conflict(match, current_user.id)
-        # No result yet, so the scratchpad is still the shared, editable board.
-        # Reject a proposal that would silently overwrite a game another
-        # participant committed to it that this (stale) client never saw — the
-        # board-level version guard (issue D1). Gated *behind* the results check
-        # so it only ever fires pre-result: once a result stands the negotiation
-        # conflict above owns the moved-on state, and we never undo a result.
-        diverging = _scratchpad_divergence(match, raw_games)
-        if diverging:
-            extras = await _load_view_extras(db, match)
-            log.info(
-                "Rejected a stale first-post proposal diverging from the "
-                "committed scratchpad",
-                extra={
-                    "match_id": str(match.id),
-                    "diverging_games": diverging,
-                },
-            )
-            raise HTTPException(
-                status_code=409,
-                detail=MatchResultBoardConflict(
-                    message=(
-                        "The score changed while you were entering it — a "
-                        "game was saved by someone else. Review the board "
-                        "before posting."
-                    ),
-                    committed_match=_serialize_details(match, current_user.id, extras),
-                ).model_dump(mode="json"),
-            )
     else:
         # Counter: must target the live standing proposal. If it was already
         # accepted or superseded by a concurrent counter, the id won't match —
