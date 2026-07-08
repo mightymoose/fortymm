@@ -28,7 +28,12 @@ from app.sessions import (
 from app.sessions import router as sessions_router
 from app.tournaments import router as tournaments_router
 
-log = logging.getLogger(__name__)
+# Log on uvicorn's own error logger (not __name__): the app configures no
+# logging, so a __name__ logger propagates to the root logger, which defaults
+# to WARNING with no handler — INFO lines would be silently dropped. uvicorn
+# configures "uvicorn.error" with a stdout handler at INFO, so the proxy-trust
+# line below surfaces alongside "Application startup complete" in every stack.
+log = logging.getLogger("uvicorn.error")
 
 
 @asynccontextmanager
@@ -42,6 +47,17 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         # the request proceeds; offline tooling (regen-api-types, ad-hoc
         # local runs) still needs /openapi.json and the unprotected routes.
         init_rate_limit_redis(connection)
+        forwarded_allow_ips = os.environ.get("FORWARDED_ALLOW_IPS")
+        if forwarded_allow_ips:
+            log.info("proxy trust: FORWARDED_ALLOW_IPS=%s", forwarded_allow_ips)
+        else:
+            log.warning(
+                "proxy trust: FORWARDED_ALLOW_IPS is unset — uvicorn's "
+                "ProxyHeadersMiddleware will not rewrite request.client, so "
+                "IP-keyed rate limiters bucket on the direct peer IP (the "
+                "#837 failure mode: behind a proxy every request shares one "
+                "peer IP)."
+            )
         yield
     finally:
         shutdown_rate_limit_redis()

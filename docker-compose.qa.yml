@@ -1,7 +1,7 @@
 # QA stack — built artifacts, no dev server, isolated volumes.
 #
-# A prod-like stack (same shape as docker-compose.uat.yml) that runs
-# alongside the dev and UAT stacks. Project name `fortymm-qa` keeps
+# A prod-like stack (same shape as the UAT Helm chart under deploy/uat/)
+# that runs alongside the dev and UAT stacks. Project name `fortymm-qa` keeps
 # networks, containers, and volumes namespaced. Only `nginx` (8085 — UAT
 # holds 8084) and `mailpit` (8087, the captured-email web UI) publish host
 # ports. Everything else is reachable only on the internal docker network;
@@ -82,6 +82,8 @@ services:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/fortymm
       REDIS_URL: redis://redis:6379/0
       SESSION_COOKIE_SECURE: "false"
+      # Real client IP for IP-keyed rate limiters behind the proxy — see docs/adr/0008-trust-client-ip-at-the-uvicorn-edge.md
+      FORWARDED_ALLOW_IPS: 10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.0/8
     depends_on:
       postgres:
         condition: service_healthy

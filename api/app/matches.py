@@ -1020,6 +1020,9 @@ async def _match_details_ip_key(request: Request) -> str:
     """Per-IP key for the public match-details endpoint — applies to both
     anonymous and signed-in callers so an open URL can't be scraped from a
     single source."""
+    # request.client.host is the true client IP only when FORWARDED_ALLOW_IPS is
+    # set at the uvicorn edge (docs/adr/0008-trust-client-ip-at-the-uvicorn-edge.md);
+    # otherwise it's the proxy peer and this collapses to one global bucket (#837).
     client = request.client
     ip = client.host if client else "unknown"
     return f"match-details-ip:{ip}"

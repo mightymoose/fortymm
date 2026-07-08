@@ -243,6 +243,9 @@ def _hash_cookie_for_key(cookie: str) -> str:
 
 
 def _client_ip(request: Request) -> str:
+    # request.client.host is the true client IP only when FORWARDED_ALLOW_IPS is
+    # set at the uvicorn edge (docs/adr/0008-trust-client-ip-at-the-uvicorn-edge.md);
+    # otherwise it's the proxy peer and these limiters become one global bucket (#837).
     client = request.client
     return client.host if client else "unknown"
 

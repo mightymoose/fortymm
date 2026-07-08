@@ -1,8 +1,8 @@
 apiVersion: v2
 name: fortymm-uat
 description: |
-  UAT stack for FortyMM on Kubernetes. Reproduces the docker-compose.uat.yml
-  topology (postgres, redis, api, worker, web-client, routing nginx) on a
+  UAT stack for FortyMM on Kubernetes. Runs the full topology
+  (postgres, redis, api, worker, web-client, routing nginx) on a
   single-node k3d cluster. Migrations + seeds run as a Helm pre-upgrade hook
   Job; the routing nginx is published on a NodePort that host Caddy fronts.
 type: application
