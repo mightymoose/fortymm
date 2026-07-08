@@ -1,4 +1,5 @@
 import { differenceInCalendarDays } from 'date-fns'
+import { z } from 'zod'
 
 import type { MatchListFilter, MatchListRow } from '@/api/matches'
 import type { components } from '@/api/schema'
@@ -12,6 +13,7 @@ import type {
 import type { FilterTabView } from './filter-row'
 
 type MatchListRowSide = components['schemas']['MatchDetailsSide']
+type MatchNegotiation = components['schemas']['MatchNegotiation']
 
 // The server-derived label for a posted-but-unaccepted result (an in_progress
 // match with a standing proposed result; see `_status_label` in the API). When
@@ -24,6 +26,40 @@ export const AWAITING_ACCEPTANCE_LABEL = 'Awaiting acceptance'
 export type AttentionKind = NonNullable<MatchListRow['attention']>
 // The subset where the user has a move to make — these get a row CTA.
 export type ActionableKind = 'review' | 'score'
+
+// The retirement deadline as it arrives on the negotiation block: an ISO
+// datetime string, null, or absent. Parsed at this projection boundary and
+// soft-failed to null (`.catch`) — a malformed deadline drops the countdown
+// rather than throwing and blanking the row. Mirrors `parseRetirementDeadline`
+// in the match-details confirmation-callout query.
+const retirementDeadlineSchema = z
+  .string()
+  .datetime({ offset: true })
+  .nullable()
+  .catch(null)
+
+const parseRetirementDeadline = (value: unknown): string | null =>
+  retirementDeadlineSchema.parse(value ?? null)
+
+// The negotiation states in which the viewer is the one who must respond before
+// the deadline — the only states where a "N left to respond" countdown is
+// truthful. The server stamps `retirement_deadline` on every state (including
+// `awaiting`, where the viewer already proposed and waits on the opponent), so
+// the row must gate the cue on whose turn it is, exactly as the match-details
+// confirmation-callout does (it only surfaces the deadline for review/corrected).
+const VIEWER_MUST_RESPOND_STATES = new Set<
+  MatchNegotiation['viewer_state']
+>(['review', 'corrected'])
+
+/** The retirement deadline to surface on a row: the parsed negotiation deadline
+ * when the viewer must respond (review/corrected), else null — so a row the
+ * viewer is merely waiting on never shows a "left to respond" countdown. */
+function projectRetirementDeadline(
+  negotiation: MatchNegotiation,
+): string | null {
+  if (!VIEWER_MUST_RESPOND_STATES.has(negotiation.viewer_state)) return null
+  return parseRetirementDeadline(negotiation.retirement_deadline)
+}
 
 const ACTIONABLE_KINDS = new Set<AttentionKind>(['review', 'score'])
 
@@ -198,6 +234,7 @@ export function projectMatchListRow(
     },
     time: { when: formatCreatedAt(row.created_at) },
     action: projectAction(row, primaryKind),
+    retirementDeadline: projectRetirementDeadline(row.negotiation),
   }
 }
 

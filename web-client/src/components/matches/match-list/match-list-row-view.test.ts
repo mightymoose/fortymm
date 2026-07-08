@@ -18,6 +18,21 @@ import {
 } from './match-list-row-view'
 
 type MatchListRowSide = components['schemas']['MatchDetailsSide']
+type MatchNegotiation = components['schemas']['MatchNegotiation']
+
+/** A live negotiation block carrying a given retirement deadline (or absent). */
+function negotiation(
+  overrides: Partial<MatchNegotiation> = {},
+): MatchNegotiation {
+  return {
+    viewer_state: 'review',
+    your_turn: true,
+    standing_result: null,
+    prior_result: null,
+    diff: null,
+    ...overrides,
+  }
+}
 
 /** A side with the given usernames; defaults to side 1, lost. */
 function side(
@@ -294,6 +309,74 @@ describe('projectMatchListRow', () => {
     expect(projectMatchListRow(row, 'score').action?.primary).toBe(true)
     expect(projectMatchListRow(row, 'review').action?.primary).toBe(false)
     expect(projectMatchListRow(row).action?.primary).toBe(false)
+  })
+
+  it('carries a parsed retirement deadline from the negotiation block', () => {
+    const deadline = '2026-07-09T12:00:00Z'
+    const row = matchListRow({
+      negotiation: negotiation({ retirement_deadline: deadline }),
+    })
+    expect(projectMatchListRow(row).retirementDeadline).toBe(deadline)
+  })
+
+  it('projects a null deadline when the negotiation carries none', () => {
+    const row = matchListRow({
+      negotiation: negotiation({ retirement_deadline: null }),
+    })
+    expect(projectMatchListRow(row).retirementDeadline).toBeNull()
+  })
+
+  it('treats an absent deadline field as null', () => {
+    // `retirement_deadline` is optional on the wire; `undefined` must map to
+    // null, not leak through.
+    const row = matchListRow({ negotiation: negotiation() })
+    expect(projectMatchListRow(row).retirementDeadline).toBeNull()
+  })
+
+  it('soft-fails a malformed deadline to null rather than throwing', () => {
+    const row = matchListRow({
+      negotiation: negotiation({
+        retirement_deadline: 'not-a-date' as unknown as string,
+      }),
+    })
+    expect(projectMatchListRow(row).retirementDeadline).toBeNull()
+  })
+
+  it('surfaces the deadline in the corrected state (viewer must respond)', () => {
+    const deadline = '2026-07-09T12:00:00Z'
+    const row = matchListRow({
+      negotiation: negotiation({
+        viewer_state: 'corrected',
+        retirement_deadline: deadline,
+      }),
+    })
+    expect(projectMatchListRow(row).retirementDeadline).toBe(deadline)
+  })
+
+  it('suppresses the deadline when the viewer is only waiting (awaiting)', () => {
+    // The server stamps `retirement_deadline` on every negotiation state,
+    // including `awaiting` (the viewer already proposed and waits on the
+    // opponent). A "N left to respond" countdown would be a lie there, so the
+    // row gates the cue on whose turn it is — mirroring the confirmation-callout.
+    const row = matchListRow({
+      negotiation: negotiation({
+        viewer_state: 'awaiting',
+        your_turn: false,
+        retirement_deadline: '2026-07-09T12:00:00Z',
+      }),
+    })
+    expect(projectMatchListRow(row).retirementDeadline).toBeNull()
+  })
+
+  it('suppresses the deadline for a live row with no proposal in play', () => {
+    const row = matchListRow({
+      negotiation: negotiation({
+        viewer_state: 'live',
+        your_turn: false,
+        retirement_deadline: '2026-07-09T12:00:00Z',
+      }),
+    })
+    expect(projectMatchListRow(row).retirementDeadline).toBeNull()
   })
 })
 

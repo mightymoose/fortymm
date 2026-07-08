@@ -1,4 +1,14 @@
+---
+status: superseded by ADR-0005
+---
+
 # A first-post proposal is rejected when it disagrees with the committed scratchpad
+
+> **Superseded by [ADR-0005](0005-drop-the-first-post-scratchpad-divergence-guard.md).**
+> The guard described below was removed: it only ever caught *accidental* stale
+> overwrites (a determined poster routes around it), and it false-rejected
+> legitimate out-of-order clinches (#825). Reconciliation now rests entirely on
+> propose/accept plus the per-game version guard. Kept for historical context.
 
 Before any result exists, the working board is a **shared scratchpad**
 (`match_games` + `match_game_scores`) that either participant edits one game at a

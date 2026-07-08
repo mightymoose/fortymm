@@ -300,7 +300,6 @@ function MatchesEmpty() {
       >
         No matches yet
       </div>
-      <div>This player hasn’t played any rated matches.</div>
     </div>
   )
 }

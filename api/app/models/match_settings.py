@@ -1,6 +1,6 @@
 import enum
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
 from sqlalchemy import (
@@ -8,6 +8,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     Enum,
+    Interval,
     SmallInteger,
     func,
     text,
@@ -33,7 +34,8 @@ class MatchSettings(Base):
 
     Each match owns its own row; rows are never shared between matches.
     Future templates (tournament events, club ladders) will hold their own
-    rows that get copied at match-creation time.
+    rows that get copied at match-creation time — including the
+    ``retirement_window`` copied from the template.
     """
 
     __tablename__ = "match_settings"
@@ -41,6 +43,10 @@ class MatchSettings(Base):
         CheckConstraint("team_size IN (1, 2)", name="ck_match_settings_team_size"),
         CheckConstraint(
             "best_of >= 1 AND best_of % 2 = 1", name="ck_match_settings_best_of"
+        ),
+        CheckConstraint(
+            "retirement_window IS NULL OR retirement_window > interval '0'",
+            name="ck_match_settings_retirement_window_positive",
         ),
     )
 
@@ -58,6 +64,9 @@ class MatchSettings(Base):
         Enum(VerificationPolicy, name="verification_policy"),
         nullable=False,
         server_default=VerificationPolicy.none.value,
+    )
+    retirement_window: Mapped[timedelta | None] = mapped_column(
+        Interval, nullable=True, server_default=text("'7 days'")
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

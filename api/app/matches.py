@@ -1,7 +1,6 @@
 import csv
 import io
 import logging
-import math
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -43,10 +42,7 @@ from app.models import (
     MatchSidePlayer,
     MatchStatus,
     RatingHistory,
-    RatingHistorySource,
-    RatingStrategy,
     User,
-    UserLeagueRating,
 )
 from app.notifications.apns import MATCH_RESULT_CONFIRMATION_CATEGORY
 from app.notifications.dependencies import get_notification_service
@@ -54,8 +50,20 @@ from app.notifications.service import NotificationService
 from app.notifications.taxonomy import NotificationCategory
 from app.players import escape_like
 from app.rate_limiting import RedisRateLimiter
-from app.ratings import get_calculator, state_rating_value, validate_state
+from app.result_acceptance import (
+    PostedGamesNotDecisiveError,
+    StandingResultConflictError,
+    _apply_rating_update,
+    _game_winner_side,
+    _games_to_win,
+    _set_side_won,
+    accept_standing_result,
+)
+from app.result_acceptance import (
+    side_win_counts as side_win_counts,  # noqa: PLC0414  (explicit re-export: app.dashboard imports it from here)
+)
 from app.result_chain import accepted_result, standing_result
+from app.retirement import retirement_deadline
 from app.schemas.match import (
     MatchCreate,
     MatchDetails,
@@ -76,7 +84,6 @@ from app.schemas.match import (
     MatchListResponse,
     MatchListRow,
     MatchNegotiation,
-    MatchResultBoardConflict,
     MatchResultsGameWrite,
     MatchResultsWrite,
     NegotiationDiffEntry,
@@ -216,15 +223,6 @@ def _status_label(match: Match) -> str:
             return "Voided"
 
 
-def _games_to_win(best_of: int) -> int:
-    return math.ceil(best_of / 2)
-
-
-def _game_winner_side(score: MatchGameScore) -> int:
-    # Ties are blocked by MatchGameScoreWrite; defensive fallback maps to side 2.
-    return 1 if score.side_1_points > score.side_2_points else 2
-
-
 def _score_view(score: MatchGameScore) -> MatchDetailsScore:
     return MatchDetailsScore(
         id=score.id,
@@ -269,16 +267,6 @@ async def _committed_score(
         return None
     game = next((g for g in reloaded.games if g.game_number == game_number), None)
     return _score_view(game.score) if game and game.score else None
-
-
-def side_win_counts(match: Match) -> dict[int, int]:
-    counts = {side.side_number: 0 for side in match.sides}
-    for game in match.games:
-        if game.score is None:
-            continue
-        winner = _game_winner_side(game.score)
-        counts[winner] = counts.get(winner, 0) + 1
-    return counts
 
 
 def current_game_number(match: Match) -> int | None:
@@ -398,6 +386,7 @@ def _negotiation(match: Match, current_user_id: uuid.UUID | None) -> MatchNegoti
             standing_result=_negotiation_result(accepted),
             prior_result=None,
             diff=None,
+            retirement_deadline=retirement_deadline(match),
         )
 
     standing = standing_result(match)
@@ -408,6 +397,7 @@ def _negotiation(match: Match, current_user_id: uuid.UUID | None) -> MatchNegoti
             standing_result=None,
             prior_result=None,
             diff=None,
+            retirement_deadline=retirement_deadline(match),
         )
 
     standing_view = _negotiation_result(standing)
@@ -423,6 +413,7 @@ def _negotiation(match: Match, current_user_id: uuid.UUID | None) -> MatchNegoti
             standing_result=standing_view,
             prior_result=None,
             diff=None,
+            retirement_deadline=retirement_deadline(match),
         )
 
     if _submitted_on_side(match, standing, viewer_side):
@@ -433,6 +424,7 @@ def _negotiation(match: Match, current_user_id: uuid.UUID | None) -> MatchNegoti
             standing_result=standing_view,
             prior_result=None,
             diff=None,
+            retirement_deadline=retirement_deadline(match),
         )
 
     # The opponent submitted the standing result → the viewer must act. Walk the
@@ -457,6 +449,7 @@ def _negotiation(match: Match, current_user_id: uuid.UUID | None) -> MatchNegoti
             standing_result=standing_view,
             prior_result=None,
             diff=None,
+            retirement_deadline=retirement_deadline(match),
         )
 
     return MatchNegotiation(
@@ -465,6 +458,7 @@ def _negotiation(match: Match, current_user_id: uuid.UUID | None) -> MatchNegoti
         standing_result=standing_view,
         prior_result=_negotiation_result(prior),
         diff=_negotiation_diff(prior.games, standing.games),
+        retirement_deadline=retirement_deadline(match),
     )
 
 
@@ -1539,133 +1533,6 @@ async def _load_view_extras(db: AsyncSession, match: Match) -> ViewExtras:
     )
 
 
-async def _get_or_create_user_league_rating(
-    db: AsyncSession,
-    league_id: uuid.UUID,
-    user_id: uuid.UUID,
-    strategy: RatingStrategy,
-) -> UserLeagueRating:
-    existing = (
-        await db.execute(
-            select(UserLeagueRating).where(
-                UserLeagueRating.league_id == league_id,
-                UserLeagueRating.user_id == user_id,
-            )
-        )
-    ).scalar_one_or_none()
-    if existing is not None:
-        return existing
-    rating = UserLeagueRating.seed_for_strategy(league_id, user_id, strategy)
-    db.add(rating)
-    await db.flush()
-    return rating
-
-
-async def _apply_rating_update(db: AsyncSession, match: Match) -> None:
-    """When ``match`` has just transitioned to completed and its league runs an
-    automatic rating strategy, compute the singles update and persist a
-    ``rating_history`` row + bump ``user_league_ratings`` for each side.
-
-    Idempotent on subsequent score edits: if any history row already exists for
-    this match, we skip. Re-applying ratings after a score correction is its own
-    feature (tied to void flows, which aren't wired up yet)."""
-    if match.status != MatchStatus.completed:
-        return
-    if not match.match_settings.affects_rating:
-        return
-
-    league = match.league
-    strategy = league.rating_strategy
-    if not strategy.is_automatic:
-        return
-    calculator = get_calculator(strategy.key)
-    if calculator is None:
-        return
-
-    # Doubles tripwire. This match would have received an automatic rating
-    # update (completed + rated + automatic strategy + calculator present) but
-    # the calculator only knows ``update_singles``. Fail loud rather than
-    # silently skip — a doubles match that completes without moving ratings is
-    # an easy bug to miss. Unreachable today (match creation hardcodes
-    # team_size=1), this trips the moment doubles support lands without a
-    # doubles-aware calculator. See https://github.com/mightymoose/fortymm/issues/183
-    if match.match_settings.team_size != 1:
-        raise NotImplementedError(
-            "Rating updates for doubles (team_size != 1) are not implemented; "
-            "add a doubles-aware calculator before enabling doubles matches "
-            "(see issue #183)."
-        )
-
-    already_applied = (
-        await db.execute(
-            select(RatingHistory.id).where(RatingHistory.match_id == match.id).limit(1)
-        )
-    ).scalar_one_or_none()
-    if already_applied is not None:
-        return
-
-    winning_side = next((s for s in match.sides if s.won is True), None)
-    losing_side = next((s for s in match.sides if s.won is False), None)
-    if winning_side is None or losing_side is None:
-        return
-    if not winning_side.players or not losing_side.players:
-        return
-
-    winner_player = winning_side.players[0]
-    loser_player = losing_side.players[0]
-
-    winner_rating = await _get_or_create_user_league_rating(
-        db, league.id, winner_player.user_id, strategy
-    )
-    loser_rating = await _get_or_create_user_league_rating(
-        db, league.id, loser_player.user_id, strategy
-    )
-    if winner_rating.rating_state is None or loser_rating.rating_state is None:
-        return
-
-    prev_winner_value = winner_rating.rating_value
-    prev_loser_value = loser_rating.rating_value
-
-    new_winner_state, new_loser_state = calculator.update_singles(
-        winner_rating.rating_state, loser_rating.rating_state
-    )
-    validate_state(new_winner_state, strategy)
-    validate_state(new_loser_state, strategy)
-
-    new_winner_value = state_rating_value(new_winner_state)
-    new_loser_value = state_rating_value(new_loser_state)
-
-    winner_rating.rating_state = new_winner_state
-    winner_rating.rating_value = new_winner_value
-    loser_rating.rating_state = new_loser_state
-    loser_rating.rating_value = new_loser_value
-
-    db.add(
-        RatingHistory(
-            league_id=league.id,
-            user_id=winner_player.user_id,
-            match_id=match.id,
-            rating_strategy_id=strategy.id,
-            rating_value=new_winner_value,
-            rating_state=new_winner_state,
-            previous_rating_value=prev_winner_value,
-            source=RatingHistorySource.match,
-        )
-    )
-    db.add(
-        RatingHistory(
-            league_id=league.id,
-            user_id=loser_player.user_id,
-            match_id=match.id,
-            rating_strategy_id=strategy.id,
-            rating_value=new_loser_value,
-            rating_state=new_loser_state,
-            previous_rating_value=prev_loser_value,
-            source=RatingHistorySource.match,
-        )
-    )
-
-
 # ----- finalize-payload validation + apply --------------------------------
 
 
@@ -1904,15 +1771,6 @@ async def _commit_canonical_games(
         side.score = new_wins.get(side.side_number, 0)
 
 
-def _set_side_won(match: Match, decided_side: int) -> None:
-    """Stamp the W/L outcome on each side. Called only at the moment a match
-    becomes ``completed`` — /results for matches that skip acceptance,
-    /results/{id}/acceptance for rated ones — so a profile never shows a
-    WIN/LOSS for a result the opponent hasn't accepted yet (issue #485)."""
-    for side in match.sides:
-        side.won = side.side_number == decided_side
-
-
 def _requires_confirmation(match: Match) -> bool:
     """Only rated matches go through the accept round-trip. Acceptance
     exists to protect ratings from one-sided claims; an unrated match has no
@@ -1920,20 +1778,6 @@ def _requires_confirmation(match: Match) -> bool:
     human to accept anyway (rated already implies a registered opponent at
     creation — the player check is defensive)."""
     return match.match_settings.affects_rating and _all_sides_have_players(match)
-
-
-def _posted_decided_side(match: Match) -> int:
-    """Winner side number per the committed canonical games. Only meaningful
-    once a result has been posted: /results validated the games as decided,
-    and ``_enforce_scorable`` freezes them while a result is pending, so exactly
-    one side has clinched by the time acceptance reads this."""
-    target = _games_to_win(match.match_settings.best_of)
-    for side_number, count in sorted(side_win_counts(match).items()):
-        if count >= target:
-            return side_number
-    raise HTTPException(
-        status_code=409, detail="The posted games no longer decide this match."
-    )
 
 
 # ----- scoring endpoints ---------------------------------------------------
@@ -2197,48 +2041,10 @@ def _negotiation_conflict(match: Match, current_user_id: uuid.UUID) -> HTTPExcep
     )
 
 
-def _scratchpad_divergence(
-    match: Match, proposed_games: list[MatchResultsGameWrite]
-) -> list[int]:
-    """Game numbers where a first-post proposal disagrees with the committed
-    scratchpad — the board-level analogue of the per-game ``version`` guard.
-
-    "Post result" assembles its board client-side from a possibly-stale view;
-    if a concurrent participant committed a game this client never saw, the
-    proposal would silently overwrite it (issue D1). For every committed
-    scratchpad game that *has a score*, require the proposal to carry the same
-    number with identical points. A committed game the proposal **changes or
-    drops** diverges. *Additions* — a proposal game with no committed score yet
-    (an empty ``MatchGame`` cell, or a game the scratchpad never held) — are
-    fine: filling in the final games is the whole point of posting.
-
-    Compare the **raw** (pre-compaction) proposal: the client numbers its games
-    the way the scratchpad does, so the numbers line up before compaction
-    renumbers them. Only meaningful for a first post — once a result stands the
-    scratchpad is frozen. (A game the opponent *deleted* pre-post has no
-    committed score to compare, so a stale board resurrecting it reads as an
-    addition; that edge is out of scope, see
-    ``docs/adr/0003-first-post-propose-guards-scratchpad-divergence.md``.)"""
-    proposed_by_number = {g.game_number: g for g in proposed_games}
-    diverging: list[int] = []
-    for game in match.games:
-        if game.score is None:
-            continue
-        proposed = proposed_by_number.get(game.game_number)
-        if (
-            proposed is None
-            or proposed.side_1_points != game.score.side_1_points
-            or proposed.side_2_points != game.score.side_2_points
-        ):
-            diverging.append(game.game_number)
-    return diverging
-
-
 @router.post(
     "/matches/{match_id}/results",
     response_model=MatchDetails,
     status_code=status.HTTP_201_CREATED,
-    responses={409: {"model": MatchResultBoardConflict}},
 )
 async def post_match_result(
     match_id: uuid.UUID,
@@ -2293,11 +2099,6 @@ async def post_match_result(
     # supersedes an existing result — would 409 before it could supersede.
     # Propose has its OWN gates below (first-post vs counter) instead.
 
-    # The board as the client sent it, before compaction renumbers the games —
-    # the scratchpad-divergence check below compares against this, since the
-    # client numbers its games the way the committed scratchpad does.
-    raw_games = payload.games
-
     # Compact once, upstream of every consumer below (_validate_finalize_games,
     # _commit_canonical_games, and the immutable _result_games_snapshot), so the
     # minted board is contiguous (see `_compact_games`). Covers both the first
@@ -2318,34 +2119,6 @@ async def post_match_result(
         # first-post (or any existing chain) loses here with the current state.
         if match.results:
             raise _negotiation_conflict(match, current_user.id)
-        # No result yet, so the scratchpad is still the shared, editable board.
-        # Reject a proposal that would silently overwrite a game another
-        # participant committed to it that this (stale) client never saw — the
-        # board-level version guard (issue D1). Gated *behind* the results check
-        # so it only ever fires pre-result: once a result stands the negotiation
-        # conflict above owns the moved-on state, and we never undo a result.
-        diverging = _scratchpad_divergence(match, raw_games)
-        if diverging:
-            extras = await _load_view_extras(db, match)
-            log.info(
-                "Rejected a stale first-post proposal diverging from the "
-                "committed scratchpad",
-                extra={
-                    "match_id": str(match.id),
-                    "diverging_games": diverging,
-                },
-            )
-            raise HTTPException(
-                status_code=409,
-                detail=MatchResultBoardConflict(
-                    message=(
-                        "The score changed while you were entering it — a "
-                        "game was saved by someone else. Review the board "
-                        "before posting."
-                    ),
-                    committed_match=_serialize_details(match, current_user.id, extras),
-                ).model_dump(mode="json"),
-            )
     else:
         # Counter: must target the live standing proposal. If it was already
         # accepted or superseded by a concurrent counter, the id won't match —
@@ -2444,30 +2217,40 @@ async def accept_match_result(
     the *opposing* side may accept."""
     match = await _load_match_for_scoring(db, match_id, current_user.id, lock=True)
 
-    # The path ``result_id`` must exist on this match at all (404), then it must
-    # be the live standing proposal (409 with the moved-on state otherwise).
+    # The path ``result_id`` must exist on this match at all (404); the live
+    # standing-proposal check (409 with the moved-on state) is owned by
+    # ``accept_standing_result`` so it runs identically from a worker.
     if not any(r.id == result_id for r in match.results):
         raise HTTPException(status_code=404, detail="Result not found.")
-    standing = standing_result(match)
-    if standing is None or standing.id != result_id:
-        raise _negotiation_conflict(match, current_user.id)
 
     # The proposing side already consented by proposing; only the opposing side
     # accepts. A participant on the submitter's side (in singles, the submitter
-    # themselves) can't accept their own proposal.
-    submitter_side = my_side(match, standing.submitted_by_user_id)
-    if submitter_side is not None and any(
-        p.user_id == current_user.id for p in submitter_side.players
-    ):
-        raise HTTPException(
-            status_code=409, detail="You can't accept your own proposal."
-        )
+    # themselves) can't accept their own proposal. Only meaningful while the
+    # targeted result is still standing — a superseded/absent one falls through
+    # to the core's conflict signal below.
+    standing = standing_result(match)
+    if standing is not None and standing.id == result_id:
+        submitter_side = my_side(match, standing.submitted_by_user_id)
+        if submitter_side is not None and any(
+            p.user_id == current_user.id for p in submitter_side.players
+        ):
+            raise HTTPException(
+                status_code=409, detail="You can't accept your own proposal."
+            )
 
-    standing.accepted_by_user_id = current_user.id
-    standing.accepted_at = datetime.now(UTC)
-    match.mark_completed()
-    _set_side_won(match, _posted_decided_side(match))
-    await _apply_rating_update(db, match)
+    try:
+        await accept_standing_result(
+            db,
+            match,
+            result_id=result_id,
+            accepted_by_user_id=current_user.id,
+        )
+    except StandingResultConflictError:
+        raise _negotiation_conflict(match, current_user.id) from None
+    except PostedGamesNotDecisiveError:
+        raise HTTPException(
+            status_code=409, detail="The posted games no longer decide this match."
+        ) from None
 
     await db.commit()
 

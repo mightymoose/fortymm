@@ -23,6 +23,7 @@ from app.models import (
     MatchGame,
     MatchGameScore,
     MatchResult,
+    MatchSettings,
     MatchSide,
     MatchStatus,
     RatingHistory,
@@ -1469,11 +1470,9 @@ async def test_propose_commits_canon_and_leaves_result_standing(
         match = await _create_match(api_client, opp.id, best_of=3)
 
         # Pre-propose, the FE has scratched game 1 into the shared scratchpad;
-        # the /results payload posts the *same* board (agreeing with the
-        # committed game and adding game 2). Propose obliterates the scratchpad
-        # and reinserts from the payload. (A payload that *disagreed* with a
-        # committed game would be rejected — see
-        # ``test_propose_first_post_409s_on_scratchpad_divergence``.)
+        # the /results payload posts a board built from it (adding game 2).
+        # Propose obliterates the scratchpad and reinserts from the payload —
+        # no board-level divergence guard runs (ADR-0005, #825).
         await api_client.post(
             f"/v1/matches/{match['id']}/games/1/scores/new",
             json={"side_1_points": 11, "side_2_points": 4},
@@ -1527,6 +1526,86 @@ async def test_propose_commits_canon_and_leaves_result_standing(
         assert results[0].supersedes_result_id is None
 
 
+async def test_details_negotiation_carries_retirement_deadline(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """A rated match with a standing (unaccepted) result exposes the absolute
+    retirement deadline on its negotiation block — the standing result's
+    ``submitted_at`` plus the settings' default seven-day window."""
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "rival") as (opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=1)
+        await _post_bo1_result(opp_client, match["id"])
+
+        neg = (await api_client.get(f"/v1/matches/{match['id']}")).json()["negotiation"]
+
+    submitted_at = datetime.fromisoformat(neg["standing_result"]["submitted_at"])
+    deadline = datetime.fromisoformat(neg["retirement_deadline"])
+    assert deadline == submitted_at + timedelta(days=7)
+
+
+async def test_details_negotiation_retirement_deadline_none_when_window_null(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """A standing result whose settings carry no retirement window (NULL) never
+    auto-finalizes, so the deadline is ``None`` even though a result stands."""
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "rival") as (opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=1)
+        await _post_bo1_result(opp_client, match["id"])
+
+        settings = (
+            await db_session.execute(
+                select(MatchSettings)
+                .join(Match, Match.match_settings_id == MatchSettings.id)
+                .where(Match.id == uuid.UUID(match["id"]))
+            )
+        ).scalar_one()
+        settings.retirement_window = None
+        await db_session.commit()
+
+        neg = (await api_client.get(f"/v1/matches/{match['id']}")).json()["negotiation"]
+
+    assert neg["standing_result"] is not None
+    assert neg["retirement_deadline"] is None
+
+
+async def test_details_negotiation_retirement_deadline_none_when_accepted(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """Once a result is accepted the head is no longer *standing*, so there is
+    nothing to retire — the deadline is ``None`` on the ``final`` block."""
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "rival") as (opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=1)
+        await _post_bo1_result(api_client, match["id"])
+        await accept_standing_result(opp_client, match["id"])
+
+        neg = (await api_client.get(f"/v1/matches/{match['id']}")).json()["negotiation"]
+
+    assert neg["viewer_state"] == "final"
+    assert neg["retirement_deadline"] is None
+
+
+async def test_list_row_negotiation_carries_retirement_deadline(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """The match-list row's negotiation block carries the same absolute
+    retirement deadline as match detail (both embed ``MatchNegotiation``)."""
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "rival") as (opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=1)
+        await _post_bo1_result(opp_client, match["id"])
+
+    listing = (await api_client.get("/v1/matches", params={"attention": "true"})).json()
+    row = next(r for r in listing["items"] if r["id"] == match["id"])
+    neg = row["negotiation"]
+
+    submitted_at = datetime.fromisoformat(neg["standing_result"]["submitted_at"])
+    deadline = datetime.fromisoformat(neg["retirement_deadline"])
+    assert deadline == submitted_at + timedelta(days=7)
+
+
 async def test_propose_first_post_requires_no_existing_result(
     api_client: AsyncClient, db_session: AsyncSession
 ):
@@ -1562,18 +1641,19 @@ async def test_propose_first_post_requires_no_existing_result(
         )
 
 
-async def test_propose_first_post_409s_on_scratchpad_divergence(
+async def test_propose_first_post_no_longer_guards_scratchpad_divergence(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    """The D1 guard: a first proposal whose board disagrees with a game a
-    concurrent participant committed to the shared scratchpad is rejected 409
-    (``MatchResultBoardConflict``) rather than silently overwriting it. The body
-    carries the true committed match so the client re-syncs from it.
+    """ADR-0005 / #825: the first post no longer inspects the committed
+    scratchpad. A board that overwrites a game a concurrent participant committed
+    is now accepted — it compacts, validates, and mints the standing result. The
+    poster's board wins; reconciliation is the opponent's acceptance review plus
+    the per-game version guard, not a pre-mint board-divergence 409.
 
-    Repro: the creator (side 1) commits games 1-2 in their own favor (2-0), the
-    opponent (side 2) commits game 3 in *theirs* (real board 2-1), then the
-    creator — stale, still seeing game 3 unplayed — posts a 3-0 board that
-    overwrites game 3. The committed game 3 must win."""
+    Repro (the old D1 case): the creator (side 1) commits games 1-2 in their own
+    favor, the opponent (side 2) commits game 3 in *theirs*, then the creator —
+    stale — posts a 3-0 board overwriting game 3. Previously a
+    ``MatchResultBoardConflict`` 409; now a 201 with the poster's board."""
     await start_session(api_client, db_session)
     async with opponent_session(db_session, "stale-poster-rival") as (
         opp_client,
@@ -1605,18 +1685,18 @@ async def test_propose_first_post_409s_on_scratchpad_divergence(
                 ]
             },
         )
-        assert response.status_code == 409
-        detail = response.json()["detail"]
-        # Board conflict, not the negotiation conflict: it carries the whole
-        # committed match so the client re-syncs without a refetch.
-        assert "committed_match" in detail
-        committed = detail["committed_match"]
-        g3 = next(g for g in committed["games"] if g["game_number"] == 3)
-        assert g3["score"]["side_1_points"] == 3
-        assert g3["score"]["side_2_points"] == 11
-        # No result was minted, and the opponent's committed game 3 survives.
+        # Accepted, not rejected: the poster's board is minted and stands for the
+        # opponent to accept/counter (rated two-human match).
+        assert response.status_code == 201
+        body = response.json()
+        assert body["status"] == "in_progress"
+        g3 = next(g for g in body["games"] if g["game_number"] == 3)
+        assert g3["score"]["side_1_points"] == 11
+        assert g3["score"]["side_2_points"] == 0
+        # The result row was minted (standing), and the canonical game 3 now
+        # carries the poster's overwrite.
         results = (await db_session.execute(select(MatchResult))).scalars().all()
-        assert results == []
+        assert len(results) == 1
         g3_rows = (
             (
                 await db_session.execute(
@@ -1629,64 +1709,7 @@ async def test_propose_first_post_409s_on_scratchpad_divergence(
             .all()
         )
         assert len(g3_rows) == 1
-        assert (g3_rows[0].side_1_points, g3_rows[0].side_2_points) == (3, 11)
-
-
-async def test_propose_first_post_allows_games_absent_from_scratchpad(
-    api_client: AsyncClient, db_session: AsyncSession
-):
-    """The guard rejects only *disagreement* with a committed game — it allows
-    *additions*. A first proposal may carry games the scratchpad never held (the
-    poster typed the deciding games without saving them per-game), as long as
-    every committed-scored game appears unchanged."""
-    await start_session(api_client, db_session)
-    async with opponent_session(db_session, "additions-rival") as (_opp_client, opp):
-        match = await _create_match(api_client, opp.id, best_of=3)
-        # Only game 1 is committed to the scratchpad.
-        await api_client.post(
-            f"/v1/matches/{match['id']}/games/1/scores/new",
-            json={"side_1_points": 11, "side_2_points": 4},
-        )
-        # The proposal keeps game 1 unchanged and *adds* game 2 (never scratched).
-        response = await api_client.post(
-            f"/v1/matches/{match['id']}/results",
-            json={
-                "games": [
-                    {"game_number": 1, "side_1_points": 11, "side_2_points": 4},
-                    {"game_number": 2, "side_1_points": 11, "side_2_points": 7},
-                ]
-            },
-        )
-        assert response.status_code == 201
-
-
-async def test_propose_first_post_ignores_blank_committed_cell(
-    api_client: AsyncClient, db_session: AsyncSession
-):
-    """A committed ``MatchGame`` whose score was cleared (a blank cell, score
-    ``None``) is not a divergence target — filling it in is a legit addition, so
-    the proposal posts."""
-    await start_session(api_client, db_session)
-    async with opponent_session(db_session, "blank-cell-rival") as (_opp_client, opp):
-        match = await _create_match(api_client, opp.id, best_of=3)
-        # Scratch game 1, then clear it — the MatchGame row lingers with no score.
-        await api_client.post(
-            f"/v1/matches/{match['id']}/games/1/scores/new",
-            json={"side_1_points": 11, "side_2_points": 4},
-        )
-        await api_client.delete(f"/v1/matches/{match['id']}/games/1/scores")
-        # The proposal fills game 1 (blank) with a *different* score — allowed,
-        # because there is no committed score to disagree with.
-        response = await api_client.post(
-            f"/v1/matches/{match['id']}/results",
-            json={
-                "games": [
-                    {"game_number": 1, "side_1_points": 11, "side_2_points": 9},
-                    {"game_number": 2, "side_1_points": 11, "side_2_points": 7},
-                ]
-            },
-        )
-        assert response.status_code == 201
+        assert (g3_rows[0].side_1_points, g3_rows[0].side_2_points) == (11, 0)
 
 
 async def test_propose_undecided_board_is_422(

@@ -16,6 +16,7 @@ export function buildAttentionRowView(
     actionLabel: 'Enter score',
     primary: true,
     route: scoringNewRoute('m-1', 1),
+    retirementDeadline: null,
     ...overrides,
   }
 }

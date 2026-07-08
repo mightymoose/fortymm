@@ -74,6 +74,12 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.Column(
+            "retirement_window",
+            sa.Interval(),
+            nullable=True,
+            server_default=sa.text("'7 days'"),
+        ),
+        sa.Column(
             "updated_at",
             sa.DateTime(timezone=True),
             server_default=sa.func.now(),
@@ -82,6 +88,10 @@ def upgrade() -> None:
         sa.CheckConstraint("team_size IN (1, 2)", name="ck_match_settings_team_size"),
         sa.CheckConstraint(
             "best_of >= 1 AND best_of % 2 = 1", name="ck_match_settings_best_of"
+        ),
+        sa.CheckConstraint(
+            "retirement_window IS NULL OR retirement_window > interval '0'",
+            name="ck_match_settings_retirement_window_positive",
         ),
     )
 
@@ -217,6 +227,14 @@ def upgrade() -> None:
         ),
         sa.Column(
             "accepted_at",
+            sa.DateTime(timezone=True),
+            nullable=True,
+        ),
+        # Dedupe marker for the deadline-nearing retirement reminder (task #6):
+        # stamped when the daily sweep sends the single ~24h-before reminder so a
+        # later tick doesn't re-send. NULL until sent. See app/retirement_jobs.py.
+        sa.Column(
+            "reminder_sent_at",
             sa.DateTime(timezone=True),
             nullable=True,
         ),

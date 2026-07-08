@@ -31,6 +31,12 @@ class DashboardAttentionItem(BaseModel):
     # (the FE routes to match detail to post the result instead), and always
     # ``None`` for ``review`` rows (which route to match detail).
     current_game_number: int | None
+    # The absolute instant the standing result auto-finalizes if the opponent
+    # never acts (``submitted_at`` + the settings' retirement window). ``None``
+    # when there's no standing result or the window is unset — so it's populated
+    # on ``review``/``dispute`` rows (a result is standing) and ``None`` on
+    # ``score`` rows (nothing posted yet). The FE shows a countdown when present.
+    retirement_deadline: datetime | None = None
 
 
 class DashboardRecentResult(BaseModel):
