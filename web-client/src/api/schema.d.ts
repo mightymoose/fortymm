@@ -2001,6 +2001,8 @@ export interface components {
              * @default
              */
             form: string;
+            /** Rank */
+            rank?: number | null;
             matches: components["schemas"]["PlayerMatchListResponse"];
         };
         /**
@@ -2136,6 +2138,8 @@ export interface components {
              * @default
              */
             form: string;
+            /** Rank */
+            rank?: number | null;
         };
         /**
          * Pool

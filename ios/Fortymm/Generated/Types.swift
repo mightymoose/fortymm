@@ -4152,6 +4152,8 @@ internal enum Components {
             internal var losses: Swift.Int?
             /// - Remark: Generated from `#/components/schemas/PlayerDetail/form`.
             internal var form: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/PlayerDetail/rank`.
+            internal var rank: Swift.Int?
             /// - Remark: Generated from `#/components/schemas/PlayerDetail/matches`.
             internal var matches: Components.Schemas.PlayerMatchListResponse
             /// Creates a new `PlayerDetail`.
@@ -4163,6 +4165,7 @@ internal enum Components {
             ///   - wins:
             ///   - losses:
             ///   - form:
+            ///   - rank:
             ///   - matches:
             internal init(
                 id: Swift.String,
@@ -4171,6 +4174,7 @@ internal enum Components {
                 wins: Swift.Int? = nil,
                 losses: Swift.Int? = nil,
                 form: Swift.String? = nil,
+                rank: Swift.Int? = nil,
                 matches: Components.Schemas.PlayerMatchListResponse
             ) {
                 self.id = id
@@ -4179,6 +4183,7 @@ internal enum Components {
                 self.wins = wins
                 self.losses = losses
                 self.form = form
+                self.rank = rank
                 self.matches = matches
             }
             internal enum CodingKeys: String, CodingKey {
@@ -4188,6 +4193,7 @@ internal enum Components {
                 case wins
                 case losses
                 case form
+                case rank
                 case matches
             }
         }
@@ -4436,6 +4442,8 @@ internal enum Components {
             internal var losses: Swift.Int?
             /// - Remark: Generated from `#/components/schemas/PlayerSummary/form`.
             internal var form: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/PlayerSummary/rank`.
+            internal var rank: Swift.Int?
             /// Creates a new `PlayerSummary`.
             ///
             /// - Parameters:
@@ -4445,13 +4453,15 @@ internal enum Components {
             ///   - wins:
             ///   - losses:
             ///   - form:
+            ///   - rank:
             internal init(
                 id: Swift.String,
                 username: Swift.String,
                 rating: Swift.Double? = nil,
                 wins: Swift.Int? = nil,
                 losses: Swift.Int? = nil,
-                form: Swift.String? = nil
+                form: Swift.String? = nil,
+                rank: Swift.Int? = nil
             ) {
                 self.id = id
                 self.username = username
@@ -4459,6 +4469,7 @@ internal enum Components {
                 self.wins = wins
                 self.losses = losses
                 self.form = form
+                self.rank = rank
             }
             internal enum CodingKeys: String, CodingKey {
                 case id
@@ -4467,6 +4478,7 @@ internal enum Components {
                 case wins
                 case losses
                 case form
+                case rank
             }
         }
         /// A slice of tables reserved for a window of time within an event.

@@ -38,6 +38,12 @@ class PlayerSummary(BaseModel):
     # Newest-first 0..5 character string of `W`/`L`. Empty when the player
     # has no completed matches yet.
     form: str = ""
+    # Global position on the league's rating ladder (rank 1 = highest-rated),
+    # by standard competition ranking — a *global* fact, invariant under the
+    # roster's search/pagination. `None` for a player with no rating (never
+    # finished a rated match): no rating, no rank. See CONTEXT.md ("Rank") and
+    # docs/adr/0008. Never the player's row index on the current page (#841).
+    rank: int | None = None
 
 
 class PlayerListResponse(BaseModel):
