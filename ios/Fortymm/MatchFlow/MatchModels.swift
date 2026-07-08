@@ -342,10 +342,11 @@ struct ResumeScoring: Identifiable {
 }
 
 /// A page of the match list plus the per-status counts that drive the filter
-/// tab badges. `statusCounts` is keyed by the raw API status string.
+/// tab badges. `statusCounts` reads its buckets by `APIMatchStatus`, not a raw
+/// string, so a tab can't mis-key the map.
 struct MatchListPage {
     let items: [FinalMatch]
-    let statusCounts: [String: Int]
+    let statusCounts: StatusCounts
 }
 
 /// Head-to-head summary from the detail BFF, framed from the current user's

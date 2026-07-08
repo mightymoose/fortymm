@@ -70,6 +70,14 @@ struct APIClient {
         self.session = session
         self.tokens = tokens
         let decoder = JSONDecoder()
+        // NB: on the objc-era Foundation (iOS 17, our minimum target)
+        // `.convertFromSnakeCase` also rewrites the keys *inside* a
+        // `[String: …]` dictionary (`in_progress` → `inProgress`);
+        // swift-foundation (iOS 18+) does not. So DTOs must not decode a raw
+        // `[String: …]` map keyed by a server string and then look it up by that
+        // string — it silently reads nil on iOS 17. Model such maps as a typed
+        // value that re-canonicalises keys at the boundary (see `StatusCounts`).
+        // Named struct fields are unaffected on either OS.
         decoder.keyDecodingStrategy = .convertFromSnakeCase
         decoder.dateDecodingStrategy = .custom(APIClient.decodeDate)
         self.decoder = decoder
