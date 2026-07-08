@@ -1,7 +1,7 @@
 # QA stack — built artifacts, no dev server, isolated volumes.
 #
-# A prod-like stack (same shape as docker-compose.uat.yml) that runs
-# alongside the dev and UAT stacks. Project name `fortymm-qa` keeps
+# A prod-like stack (same shape as the UAT Helm chart under deploy/uat/)
+# that runs alongside the dev and UAT stacks. Project name `fortymm-qa` keeps
 # networks, containers, and volumes namespaced. Only `nginx` (8085 — UAT
 # holds 8084) and `mailpit` (8087, the captured-email web UI) publish host
 # ports. Everything else is reachable only on the internal docker network;
