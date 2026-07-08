@@ -30,7 +30,6 @@ enum APIMatchStatus: String, LenientRawDecodable {
     case pending
     case inProgress = "in_progress"
     case completed
-    case disputed
     case voided
     case unknown
 }
