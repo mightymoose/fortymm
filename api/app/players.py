@@ -78,6 +78,51 @@ async def _load_player_ratings(
     return {user_id: rating for user_id, rating in rows}
 
 
+async def _load_player_ranks(
+    db: AsyncSession, league_id: uuid.UUID, user_ids: Iterable[uuid.UUID]
+) -> dict[uuid.UUID, int]:
+    """One round trip: returns ``user_id -> rank`` for the requested users.
+
+    ``rank`` is a player's GLOBAL position on the league's rating ladder by
+    STANDARD COMPETITION RANKING — ``rank = 1 + (# of players rated strictly
+    higher)``, so equal ratings share a rank and the next rank skips
+    (…, 7, 7, 9, …), exactly what SQL ``RANK()`` computes.
+
+    The window is evaluated over the ENTIRE non-merged, rated league population
+    and only THEN filtered to ``user_ids`` — never over ``user_ids`` alone — so
+    a player's rank is a global fact, invariant under the roster's search or
+    pagination (the #841 regression). Tombstoned (merged-away) users are
+    excluded from the population so a ghost never inflates a real rank.
+
+    Users with no rating in the league are absent from the result (so
+    ``.get()`` yields ``None``): no rating, no rank.
+    """
+    ids = list(user_ids)
+    if not ids:
+        return {}
+    ranked = (
+        select(
+            UserLeagueRating.user_id.label("user_id"),
+            func.rank()
+            .over(order_by=UserLeagueRating.rating_value.desc())
+            .label("rank"),
+        )
+        .join(User, User.id == UserLeagueRating.user_id)
+        .where(
+            UserLeagueRating.league_id == league_id,
+            User.merged_into_user_id.is_(None),
+            UserLeagueRating.rating_value.is_not(None),
+        )
+    ).subquery()
+
+    rows = (
+        await db.execute(
+            select(ranked.c.user_id, ranked.c.rank).where(ranked.c.user_id.in_(ids))
+        )
+    ).all()
+    return {user_id: int(rank) for user_id, rank in rows}
+
+
 def escape_like(term: str) -> str:
     """Escape LIKE wildcards so a query of ``%`` matches a literal percent
     sign rather than every username."""
@@ -273,14 +318,15 @@ async def _summarize_players(
     db: AsyncSession, users: list[User], league_id: uuid.UUID
 ) -> list[PlayerSummary]:
     """Hydrate a list of ``User``s into the ``PlayerSummary`` shape the
-    `/players` list + profile-page hero render. Three round trips total
-    (ratings, W-L, form) regardless of page size."""
+    `/players` list + profile-page hero render. Four round trips total
+    (ratings, W-L, form, ranks) regardless of page size."""
     if not users:
         return []
     user_ids = [user.id for user in users]
     ratings = await _load_player_ratings(db, league_id, user_ids)
     wl = await _load_wl_counts(db, user_ids)
     form = await _load_form(db, user_ids)
+    ranks = await _load_player_ranks(db, league_id, user_ids)
     return [
         PlayerSummary(
             id=user.id,
@@ -289,6 +335,7 @@ async def _summarize_players(
             wins=wl.get(user.id, (0, 0))[0],
             losses=wl.get(user.id, (0, 0))[1],
             form=form.get(user.id, ""),
+            rank=ranks.get(user.id),
         )
         for user in users
     ]

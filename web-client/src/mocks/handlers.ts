@@ -130,12 +130,41 @@ function djb2(s: string): number {
   return Math.abs(h)
 }
 
+/** Global rating rank (1 = highest) keyed by player id, derived from the whole
+ * mock roster. Rated players are sorted by rating descending and numbered
+ * 1-based; an unrated player (null rating, e.g. `park.j`) maps to `null`. This
+ * mirrors the real `rank` field the API projects, so the roster renders true
+ * ranks instead of page-index numbering (#841). Memoized — the roster is
+ * static. */
+let rankByIdCache: Map<string, number> | null = null
+function rosterRankById(): Map<string, number> {
+  if (rankByIdCache) return rankByIdCache
+  const map = new Map<string, number>()
+  // Standard competition ranking, mirroring the API's SQL `RANK()`: equal
+  // ratings share a rank and the next rank skips (…, 7, 7, 9, …). Unrated
+  // players are simply absent — callers read `.get(id) ?? null`.
+  let prevRating: number | null = null
+  let prevRank = 0
+  mockPlayerRoster()
+    .filter((p) => p.rating != null)
+    .sort((a, b) => (b.rating ?? 0) - (a.rating ?? 0))
+    .forEach((p, i) => {
+      const rank = p.rating === prevRating ? prevRank : i + 1
+      map.set(p.id, rank)
+      prevRating = p.rating ?? null
+      prevRank = rank
+    })
+  rankByIdCache = map
+  return map
+}
+
 function summarizePlayer(p: {
   id: string
   username: string
   rating?: number | null
 }): PlayerSummary {
   const rating = p.rating ?? null
+  const rank = rosterRankById().get(p.id) ?? null
   // The current user gets real W-L derived from `mockMatches` so the
   // self-profile feels live. Everyone else gets deterministic synthesis
   // seeded by username — stable across reloads.
@@ -171,6 +200,7 @@ function summarizePlayer(p: {
       id: p.id,
       username: p.username,
       rating,
+      rank,
       wins,
       losses,
       form: recent.join(''),
@@ -186,6 +216,7 @@ function summarizePlayer(p: {
     id: p.id,
     username: p.username,
     rating,
+    rank,
     wins,
     losses,
     form,
@@ -834,20 +865,6 @@ export const handlers = [
         body.supersedes_result_id ?? null,
       )
       if (error) {
-        // A board-level conflict (issue D1) carries the whole committed match so
-        // the client re-syncs from the body — mirror the server's
-        // `MatchResultBoardConflict` shape rather than the plain-string 409.
-        if (error.boardConflict) {
-          return HttpResponse.json(
-            {
-              detail: {
-                message: error.message,
-                committed_match: projectMatchDetails(seed),
-              },
-            },
-            { status: 409 },
-          )
-        }
         return detail(error.message, error.status)
       }
       return HttpResponse.json(projectMatchDetails(seed), { status: 201 })

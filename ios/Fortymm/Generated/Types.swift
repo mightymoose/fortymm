@@ -1791,6 +1791,8 @@ internal enum Components {
             internal var affectsRating: Swift.Bool
             /// - Remark: Generated from `#/components/schemas/DashboardAttentionItem/current_game_number`.
             internal var currentGameNumber: Swift.Int?
+            /// - Remark: Generated from `#/components/schemas/DashboardAttentionItem/retirement_deadline`.
+            internal var retirementDeadline: Foundation.Date?
             /// Creates a new `DashboardAttentionItem`.
             ///
             /// - Parameters:
@@ -1799,18 +1801,21 @@ internal enum Components {
             ///   - kind:
             ///   - affectsRating:
             ///   - currentGameNumber:
+            ///   - retirementDeadline:
             internal init(
                 matchId: Swift.String,
                 opponentUsername: Swift.String? = nil,
                 kind: Components.Schemas.DashboardAttentionItem.KindPayload,
                 affectsRating: Swift.Bool,
-                currentGameNumber: Swift.Int? = nil
+                currentGameNumber: Swift.Int? = nil,
+                retirementDeadline: Foundation.Date? = nil
             ) {
                 self.matchId = matchId
                 self.opponentUsername = opponentUsername
                 self.kind = kind
                 self.affectsRating = affectsRating
                 self.currentGameNumber = currentGameNumber
+                self.retirementDeadline = retirementDeadline
             }
             internal enum CodingKeys: String, CodingKey {
                 case matchId = "match_id"
@@ -1818,6 +1823,7 @@ internal enum Components {
                 case kind
                 case affectsRating = "affects_rating"
                 case currentGameNumber = "current_game_number"
+                case retirementDeadline = "retirement_deadline"
             }
         }
         /// Per-league rating snapshot for the dashboard RatingCard.
@@ -3092,6 +3098,8 @@ internal enum Components {
             internal var priorResult: Components.Schemas.MatchNegotiation.PriorResultPayload?
             /// - Remark: Generated from `#/components/schemas/MatchNegotiation/diff`.
             internal var diff: [Components.Schemas.NegotiationDiffEntry]?
+            /// - Remark: Generated from `#/components/schemas/MatchNegotiation/retirement_deadline`.
+            internal var retirementDeadline: Foundation.Date?
             /// Creates a new `MatchNegotiation`.
             ///
             /// - Parameters:
@@ -3100,18 +3108,21 @@ internal enum Components {
             ///   - standingResult:
             ///   - priorResult:
             ///   - diff:
+            ///   - retirementDeadline:
             internal init(
                 viewerState: Components.Schemas.MatchNegotiation.ViewerStatePayload,
                 yourTurn: Swift.Bool,
                 standingResult: Components.Schemas.MatchNegotiation.StandingResultPayload? = nil,
                 priorResult: Components.Schemas.MatchNegotiation.PriorResultPayload? = nil,
-                diff: [Components.Schemas.NegotiationDiffEntry]? = nil
+                diff: [Components.Schemas.NegotiationDiffEntry]? = nil,
+                retirementDeadline: Foundation.Date? = nil
             ) {
                 self.viewerState = viewerState
                 self.yourTurn = yourTurn
                 self.standingResult = standingResult
                 self.priorResult = priorResult
                 self.diff = diff
+                self.retirementDeadline = retirementDeadline
             }
             internal enum CodingKeys: String, CodingKey {
                 case viewerState = "viewer_state"
@@ -3119,44 +3130,7 @@ internal enum Components {
                 case standingResult = "standing_result"
                 case priorResult = "prior_result"
                 case diff
-            }
-        }
-        /// 409 body for a first-post proposal whose board disagrees with a game
-        /// already committed to the shared scratchpad — the board-level analogue of
-        /// ``MatchGameScoreConflict``'s per-game version guard (issue D1 / #747-B2).
-        ///
-        /// A pre-result "Post result" assembles its board client-side; if a concurrent
-        /// participant committed a game this client never saw, the payload would
-        /// silently overwrite it. The handler rejects that and returns the true board
-        /// in ``committed_match`` (the same ``MatchDetails`` shape the success path
-        /// returns) so the client re-syncs from the body — without a refetch — and the
-        /// poster re-decides against reality instead of clobbering a committed game.
-        ///
-        /// ``committed_match`` is the discriminator the client keys on to tell this
-        /// apart from the per-game ``committed_score`` conflict, the negotiation
-        /// conflict, and a plain-string 409 (a locked match).
-        ///
-        /// - Remark: Generated from `#/components/schemas/MatchResultBoardConflict`.
-        internal struct MatchResultBoardConflict: Codable, Hashable, Sendable {
-            /// - Remark: Generated from `#/components/schemas/MatchResultBoardConflict/message`.
-            internal var message: Swift.String
-            /// - Remark: Generated from `#/components/schemas/MatchResultBoardConflict/committed_match`.
-            internal var committedMatch: Components.Schemas.AppSchemasMatchMatchDetails
-            /// Creates a new `MatchResultBoardConflict`.
-            ///
-            /// - Parameters:
-            ///   - message:
-            ///   - committedMatch:
-            internal init(
-                message: Swift.String,
-                committedMatch: Components.Schemas.AppSchemasMatchMatchDetails
-            ) {
-                self.message = message
-                self.committedMatch = committedMatch
-            }
-            internal enum CodingKeys: String, CodingKey {
-                case message
-                case committedMatch = "committed_match"
+                case retirementDeadline = "retirement_deadline"
             }
         }
         /// One game inside a finalize-the-match payload. Per-game point legality
@@ -4152,6 +4126,8 @@ internal enum Components {
             internal var losses: Swift.Int?
             /// - Remark: Generated from `#/components/schemas/PlayerDetail/form`.
             internal var form: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/PlayerDetail/rank`.
+            internal var rank: Swift.Int?
             /// - Remark: Generated from `#/components/schemas/PlayerDetail/matches`.
             internal var matches: Components.Schemas.PlayerMatchListResponse
             /// Creates a new `PlayerDetail`.
@@ -4163,6 +4139,7 @@ internal enum Components {
             ///   - wins:
             ///   - losses:
             ///   - form:
+            ///   - rank:
             ///   - matches:
             internal init(
                 id: Swift.String,
@@ -4171,6 +4148,7 @@ internal enum Components {
                 wins: Swift.Int? = nil,
                 losses: Swift.Int? = nil,
                 form: Swift.String? = nil,
+                rank: Swift.Int? = nil,
                 matches: Components.Schemas.PlayerMatchListResponse
             ) {
                 self.id = id
@@ -4179,6 +4157,7 @@ internal enum Components {
                 self.wins = wins
                 self.losses = losses
                 self.form = form
+                self.rank = rank
                 self.matches = matches
             }
             internal enum CodingKeys: String, CodingKey {
@@ -4188,6 +4167,7 @@ internal enum Components {
                 case wins
                 case losses
                 case form
+                case rank
                 case matches
             }
         }
@@ -4436,6 +4416,8 @@ internal enum Components {
             internal var losses: Swift.Int?
             /// - Remark: Generated from `#/components/schemas/PlayerSummary/form`.
             internal var form: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/PlayerSummary/rank`.
+            internal var rank: Swift.Int?
             /// Creates a new `PlayerSummary`.
             ///
             /// - Parameters:
@@ -4445,13 +4427,15 @@ internal enum Components {
             ///   - wins:
             ///   - losses:
             ///   - form:
+            ///   - rank:
             internal init(
                 id: Swift.String,
                 username: Swift.String,
                 rating: Swift.Double? = nil,
                 wins: Swift.Int? = nil,
                 losses: Swift.Int? = nil,
-                form: Swift.String? = nil
+                form: Swift.String? = nil,
+                rank: Swift.Int? = nil
             ) {
                 self.id = id
                 self.username = username
@@ -4459,6 +4443,7 @@ internal enum Components {
                 self.wins = wins
                 self.losses = losses
                 self.form = form
+                self.rank = rank
             }
             internal enum CodingKeys: String, CodingKey {
                 case id
@@ -4467,6 +4452,7 @@ internal enum Components {
                 case wins
                 case losses
                 case form
+                case rank
             }
         }
         /// A slice of tables reserved for a window of time within an event.
@@ -12129,57 +12115,6 @@ internal enum Operations {
                     default:
                         try throwUnexpectedResponseStatus(
                             expectedStatus: "created",
-                            response: self
-                        )
-                    }
-                }
-            }
-            internal struct Conflict: Sendable, Hashable {
-                /// - Remark: Generated from `#/paths/v1/matches/{match_id}/results/POST/responses/409/content`.
-                internal enum Body: Sendable, Hashable {
-                    /// - Remark: Generated from `#/paths/v1/matches/{match_id}/results/POST/responses/409/content/application\/json`.
-                    case json(Components.Schemas.MatchResultBoardConflict)
-                    /// The associated value of the enum case if `self` is `.json`.
-                    ///
-                    /// - Throws: An error if `self` is not `.json`.
-                    /// - SeeAlso: `.json`.
-                    internal var json: Components.Schemas.MatchResultBoardConflict {
-                        get throws {
-                            switch self {
-                            case let .json(body):
-                                return body
-                            }
-                        }
-                    }
-                }
-                /// Received HTTP response body
-                internal var body: Operations.PostMatchResultV1MatchesMatchIdResultsPost.Output.Conflict.Body
-                /// Creates a new `Conflict`.
-                ///
-                /// - Parameters:
-                ///   - body: Received HTTP response body
-                internal init(body: Operations.PostMatchResultV1MatchesMatchIdResultsPost.Output.Conflict.Body) {
-                    self.body = body
-                }
-            }
-            /// Conflict
-            ///
-            /// - Remark: Generated from `#/paths//v1/matches/{match_id}/results/post(post_match_result_v1_matches__match_id__results_post)/responses/409`.
-            ///
-            /// HTTP response code: `409 conflict`.
-            case conflict(Operations.PostMatchResultV1MatchesMatchIdResultsPost.Output.Conflict)
-            /// The associated value of the enum case if `self` is `.conflict`.
-            ///
-            /// - Throws: An error if `self` is not `.conflict`.
-            /// - SeeAlso: `.conflict`.
-            internal var conflict: Operations.PostMatchResultV1MatchesMatchIdResultsPost.Output.Conflict {
-                get throws {
-                    switch self {
-                    case let .conflict(response):
-                        return response
-                    default:
-                        try throwUnexpectedResponseStatus(
-                            expectedStatus: "conflict",
                             response: self
                         )
                     }

@@ -6,6 +6,7 @@ import { waitFor } from "@/test/utilities";
 import {
   buildAwaitingAcceptanceView,
   buildCorrectedConfirmationView,
+  buildReviewConfirmationView,
 } from "./confirmation-callout-display.factory";
 import { confirmationCalloutDisplayPage } from "./confirmation-callout-display.page";
 
@@ -45,7 +46,12 @@ describe("ConfirmationCalloutDisplay", () => {
 
     it("shows the unrated stakes when the match doesn't affect ratings", async () => {
       confirmationCalloutDisplayPage.render({
-        view: { kind: "review", resultId: "r-1", rated: false },
+        view: {
+          kind: "review",
+          resultId: "r-1",
+          rated: false,
+          retirementDeadline: null,
+        },
       });
 
       const callout = await waitFor(() =>
@@ -101,6 +107,34 @@ describe("ConfirmationCalloutDisplay", () => {
       expect(onReload).toHaveBeenCalledTimes(1);
     });
 
+    it("shows the retirement countdown when the view carries a deadline", async () => {
+      confirmationCalloutDisplayPage.render({
+        view: buildReviewConfirmationView({
+          // 3 days + 1h of margin so the floor stays at 3 despite test elapsed time.
+          retirementDeadline: new Date(
+            Date.now() + 3 * 24 * 60 * 60 * 1000 + 60 * 60 * 1000,
+          ).toISOString(),
+        }),
+      });
+
+      await waitFor(() => confirmationCalloutDisplayPage.getCallout());
+      // Wiring only: the exact copy/tone is pinned by the retirement-countdown tests.
+      expect(
+        confirmationCalloutDisplayPage.getCountdown(),
+      ).toHaveTextContent("3 days left to respond");
+    });
+
+    it("renders no countdown when the view has no deadline", async () => {
+      confirmationCalloutDisplayPage.render({
+        view: buildReviewConfirmationView({ retirementDeadline: null }),
+      });
+
+      await waitFor(() => confirmationCalloutDisplayPage.getCallout());
+      expect(
+        confirmationCalloutDisplayPage.queryCountdown(),
+      ).not.toBeInTheDocument();
+    });
+
     it("hides the raw error message once a 409 is treated as a stale conflict", async () => {
       // The active wrapper nulls `errorMessage` on a 409, but assert the display
       // prefers the reload copy even if both were somehow set.
@@ -137,6 +171,23 @@ describe("ConfirmationCalloutDisplay", () => {
         "href",
         correctHref("m-1"),
       );
+    });
+
+    it("shows the retirement countdown when the corrected view carries a deadline", async () => {
+      confirmationCalloutDisplayPage.render({
+        view: buildCorrectedConfirmationView({
+          // 5h + 10m of margin so the floor stays at 5 despite test elapsed time.
+          retirementDeadline: new Date(
+            Date.now() + 5 * 60 * 60 * 1000 + 10 * 60 * 1000,
+          ).toISOString(),
+        }),
+      });
+
+      await waitFor(() => confirmationCalloutDisplayPage.getCallout());
+      // Wiring only: the exact copy/tone is pinned by the retirement-countdown tests.
+      expect(
+        confirmationCalloutDisplayPage.getCountdown(),
+      ).toHaveTextContent("5 hours left to respond");
     });
 
     it("swaps Accept for a reload prompt on a stale conflict, keeping Counter (#726)", async () => {

@@ -17,6 +17,26 @@ Production builds never load MSW.
 `window.location.origin`. In dev that means MSW handles everything; in the
 compose stack the web origin is also where nginx proxies the API.
 
+## Testing
+
+Two layers, mocked two different ways — don't confuse them:
+
+- **vitest** (`npm run test:run`, jsdom) mocks the network with **MSW**
+  (`onUnhandledRequest: 'error'`). This is the fast inner loop.
+- **`web-client/e2e/`** (`npm run test:e2e`, Playwright) runs with **MSW OFF**
+  and stubs the network via inline Playwright `page.route` interceptors. vitest
+  will NOT catch a mismatch here: when a BFF endpoint or the API schema changes,
+  you must update the affected `page.route` stubs and run the e2e suite, or it
+  goes green in vitest and breaks in e2e. (The **root `e2e/`** suite is a
+  separate, full-stack thing — not this one.)
+- **Screenshot baselines** are committed for both darwin and chromium-linux
+  (e.g. `*-chromium-linux.png`). Regenerate the linux baselines with the
+  `mcr.microsoft.com/playwright` docker image so CI (linux) doesn't churn.
+
+Reach for the `react-component` skill (component + page-object + factory + vitest
+quartet) and the `fetching-data` skill (TanStack Query `queryOptions` factories)
+for the file-layout conventions — they're not otherwise written down here.
+
 ## Conventions
 
 - Path alias: `@/*` → `src/*` (see `vite.config.ts`, `components.json`).

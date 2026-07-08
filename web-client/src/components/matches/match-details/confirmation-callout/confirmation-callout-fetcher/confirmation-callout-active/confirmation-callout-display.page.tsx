@@ -13,6 +13,7 @@ import {
   type ConfirmationCalloutDisplayProps,
 } from "./confirmation-callout-display";
 import { buildConfirmationCalloutDisplayProps } from "./confirmation-callout-display.factory";
+import { retirementCountdownPage } from "@/components/retirement-countdown/retirement-countdown.page";
 
 const scoped = (container: Container) => ({
   /** The callout `<section>` (any variant); absent when the view projected
@@ -58,6 +59,10 @@ const scoped = (container: Container) => ({
   queryError() {
     return container.queryByRole("alert");
   },
+  // The retirement countdown's own queries (`getCountdown` / `queryCountdown` /
+  // `getTone`), scoped to this callout — present only when the view carries a
+  // deadline on the review/corrected variants.
+  ...retirementCountdownPage.within(container),
 });
 
 /** Test page-object for the pure `ConfirmationCalloutDisplay`. The callout's

@@ -134,4 +134,28 @@ describe('MatchListRow', () => {
     await matchListRowPage.findRow()
     expect(matchListRowPage.queryActionLink('Enter score')).toBeNull()
   })
+
+  it('renders the retirement countdown cue when the row has a deadline', async () => {
+    // Wiring only: the countdown's copy/tone are pinned by
+    // retirement-countdown.test.tsx. Here we prove the row feeds it a deadline.
+    matchListRowPage.render({
+      row: buildMatchListRowView({
+        retirementDeadline: new Date(
+          Date.now() + 3 * 24 * 60 * 60 * 1000,
+        ).toISOString(),
+      }),
+    })
+
+    await matchListRowPage.findRow()
+    expect(matchListRowPage.queryCountdown()).toBeInTheDocument()
+  })
+
+  it('omits the retirement countdown cue when the row has no deadline', async () => {
+    matchListRowPage.render({
+      row: buildMatchListRowView({ retirementDeadline: null }),
+    })
+
+    await matchListRowPage.findRow()
+    expect(matchListRowPage.queryCountdown()).toBeNull()
+  })
 })

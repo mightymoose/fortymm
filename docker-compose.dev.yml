@@ -64,6 +64,30 @@ services:
       - ./api:/app
     command: rq worker --url redis://redis:6379/0 solver email ratings notifications
 
+  # Periodic retirement sweep (task #9 / ADR 0007 O8): auto-accepts lapsed
+  # standing results and sends due deadline-nearing reminders. The sweep runs
+  # inline (python -m app.retirement_sweep), not through the rq worker/queue, so
+  # this is a plain loop rather than a queue consumer. Hourly by default; must
+  # stay at least daily for the reminder's 24h-before guarantee. Override the
+  # interval (seconds) with RETIREMENT_SWEEP_INTERVAL.
+  retirement-sweep:
+    build:
+      context: ./api
+      dockerfile: Dockerfile.dev
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/fortymm
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./api:/app
+    command: >
+      sh -c "while true; do python -m app.retirement_sweep || true;
+             sleep ${RETIREMENT_SWEEP_INTERVAL:-3600}; done"
+
   web-client:
     build:
       context: ./web-client

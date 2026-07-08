@@ -128,6 +128,68 @@ describe('projectAttentionPanelView', () => {
     expect(view.rows[1].headline).toBe('No opponent')
   })
 
+  it('carries a parsed retirement deadline onto the row', () => {
+    const deadline = '2026-07-09T12:00:00Z'
+    const view = projectAttentionPanelView(
+      [dashboardAttentionItem({ retirement_deadline: deadline })],
+      0,
+    )
+
+    expect(view.rows[0].retirementDeadline).toBe(deadline)
+  })
+
+  it('projects a null deadline when the item carries none', () => {
+    const view = projectAttentionPanelView(
+      [dashboardAttentionItem({ retirement_deadline: null })],
+      0,
+    )
+
+    expect(view.rows[0].retirementDeadline).toBeNull()
+  })
+
+  it('treats an absent deadline field as null', () => {
+    // `retirement_deadline` is optional on the wire; `undefined` must map to
+    // null, not leak through.
+    const item = dashboardAttentionItem()
+    delete (item as { retirement_deadline?: string | null }).retirement_deadline
+    const view = projectAttentionPanelView([item], 0)
+
+    expect(view.rows[0].retirementDeadline).toBeNull()
+  })
+
+  it('soft-fails a malformed deadline to null rather than throwing', () => {
+    const view = projectAttentionPanelView(
+      [
+        dashboardAttentionItem({
+          retirement_deadline: 'not-a-date' as unknown as string,
+        }),
+      ],
+      0,
+    )
+
+    expect(view.rows[0].retirementDeadline).toBeNull()
+  })
+
+  it('preserves server order regardless of deadline (no deadline-based sort)', () => {
+    // P2-1 (deadline sorting) is deferred — the server order must be echoed
+    // as-is even when a later row has a sooner deadline.
+    const view = projectAttentionPanelView(
+      [
+        dashboardAttentionItem({
+          match_id: 'm-far',
+          retirement_deadline: '2026-07-20T12:00:00Z',
+        }),
+        dashboardAttentionItem({
+          match_id: 'm-soon',
+          retirement_deadline: '2026-07-09T12:00:00Z',
+        }),
+      ],
+      0,
+    )
+
+    expect(view.rows.map((r) => r.matchId)).toEqual(['m-far', 'm-soon'])
+  })
+
   it('passes through the waiting count and points "View all" at the Attention tab', () => {
     const view = projectAttentionPanelView([], 4)
 

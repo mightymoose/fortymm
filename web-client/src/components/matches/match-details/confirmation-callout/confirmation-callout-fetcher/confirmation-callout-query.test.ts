@@ -71,6 +71,7 @@ describe("confirmationCalloutQuery", () => {
       kind: "review",
       resultId: "r-1",
       rated: true,
+      retirementDeadline: null,
     });
   });
 
@@ -85,6 +86,7 @@ describe("confirmationCalloutQuery", () => {
       kind: "review",
       resultId: "r-1",
       rated: false,
+      retirementDeadline: null,
     });
   });
 
@@ -107,6 +109,7 @@ describe("confirmationCalloutQuery", () => {
       resultId: "r-2",
       rated: true,
       diff: [diffEntry],
+      retirementDeadline: null,
     });
   });
 
@@ -125,6 +128,36 @@ describe("confirmationCalloutQuery", () => {
     const result = await renderView();
 
     expect(result.current.data).toMatchObject({ kind: "corrected", diff: [] });
+  });
+
+  it("carries the retirement deadline through to the review view when set", async () => {
+    confirmationCalloutQueryPage.mockEndpoint(() =>
+      HttpResponse.json(
+        reviewMatch({ retirement_deadline: "2026-06-12T12:00:00Z" }),
+      ),
+    );
+
+    const result = await renderView();
+
+    expect(result.current.data).toMatchObject({
+      kind: "review",
+      retirementDeadline: "2026-06-12T12:00:00Z",
+    });
+  });
+
+  it("soft-fails a malformed retirement deadline to null rather than throwing", async () => {
+    confirmationCalloutQueryPage.mockEndpoint(() =>
+      HttpResponse.json(
+        reviewMatch({ retirement_deadline: "not-a-date" as unknown as string }),
+      ),
+    );
+
+    const result = await renderView();
+
+    expect(result.current.data).toMatchObject({
+      kind: "review",
+      retirementDeadline: null,
+    });
   });
 
   it("projects the awaiting state, naming the opponent, when the viewer's own side proposed", async () => {

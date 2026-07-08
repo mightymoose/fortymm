@@ -3,6 +3,7 @@ import { Link, useRouter } from '@tanstack/react-router'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { matchDetailRoute, scoringNewRoute } from '@/api/matches'
+import { RetirementCountdown } from '@/components/retirement-countdown/retirement-countdown'
 
 import { PlayerChip, type PlayerChipView } from './match-list-row/player-chip'
 import { ScoreCell, type ScoreCellView } from './match-list-row/score-cell'
@@ -44,6 +45,10 @@ export interface MatchListRowView {
   detailRoute: ReturnType<typeof matchDetailRoute>
   /** The trailing-cell action, or null for a passive row (no button). */
   action: RowActionView | null
+  /** Absolute retirement deadline (ISO datetime) by which the viewer must
+   * respond before the standing result auto-accepts, or null when the match
+   * carries no deadline. Drives the row's countdown cue. */
+  retirementDeadline: string | null
 }
 
 export interface MatchListRowProps {
@@ -93,6 +98,7 @@ export const MatchListRow = ({ row, navigate }: MatchListRowProps) => {
       </td>
       <td data-label="Status">
         <StatusBadge status={row.status} />
+        <RetirementCountdown deadline={row.retirementDeadline} />
       </td>
       <td data-label="Started">
         <TimeCell time={row.time} />

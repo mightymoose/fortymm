@@ -1,5 +1,21 @@
+import { z } from 'zod'
+
 import { matchDetailRoute, scoringNewRoute } from '@/api/matches'
 import type { DashboardAttentionItem } from '@/api/dashboard'
+
+// The retirement deadline as it arrives on the attention item: an ISO datetime
+// string, null, or absent. Parsed at this projection boundary and soft-failed
+// to null (`.catch`) — a malformed deadline drops the countdown rather than
+// throwing and blanking the whole panel. Mirrors `parseRetirementDeadline` in
+// the match-details confirmation-callout query.
+const retirementDeadlineSchema = z
+  .string()
+  .datetime({ offset: true })
+  .nullable()
+  .catch(null)
+
+const parseRetirementDeadline = (value: unknown): string | null =>
+  retirementDeadlineSchema.parse(value ?? null)
 
 // Used wherever an opponent slot has no registered player — matches the label
 // the rest of the dashboard uses for solo matches.
@@ -27,6 +43,10 @@ export interface AttentionRowView {
   /** Where the button routes: match detail for a review, the scoring
    * page for a score row (or match detail when the board is already decided). */
   route: RowRoute
+  /** Absolute retirement deadline (ISO datetime) by which the viewer must
+   * respond before the result auto-accepts, or null when the match carries no
+   * deadline. Drives the row's countdown cue. */
+  retirementDeadline: string | null
 }
 
 export interface AttentionPanelView {
@@ -113,6 +133,7 @@ export function projectAttentionPanelView(
       actionLabel: actionLabelOf(item.kind),
       primary: bucketKey(item) === topBucket,
       route: routeOf(item),
+      retirementDeadline: parseRetirementDeadline(item.retirement_deadline),
     })),
     overflowCount: Math.max(0, attentionTotalCount - ATTENTION_VISIBLE_LIMIT),
     waitingCount,

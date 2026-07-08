@@ -59,6 +59,14 @@ apnsKeyFile: apns_auth_key.p8
 worker:
   queues: solver email ratings notifications
 
+# Periodic retirement sweep CronJob (task #9 / ADR 0007 O8). Runs
+# `python -m app.retirement_sweep` on this schedule to auto-accept lapsed
+# standing results and send due deadline-nearing reminders. Hourly by default —
+# must stay at least daily for the reminder's 24h-before guarantee to hold.
+retirement:
+  enabled: true
+  schedule: "0 * * * *"
+
 # Routing nginx exposed on this NodePort; k3d maps host 8084 -> here and
 # host Caddy reverse-proxies 127.0.0.1:8084 to it.
 nginxNodePort: 30084
