@@ -35,6 +35,8 @@ config:
   DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/fortymm
   REDIS_URL: redis://redis:6379/0
   SESSION_COOKIE_SECURE: "true"
+  # Real client IP for IP-keyed rate limiters behind the proxy — see docs/adr/0008-trust-client-ip-at-the-uvicorn-edge.md
+  FORWARDED_ALLOW_IPS: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.0/8"
 
 postgres:
   user: postgres
