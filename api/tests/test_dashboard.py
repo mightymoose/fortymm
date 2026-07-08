@@ -1,5 +1,5 @@
 import uuid
-from datetime import UTC
+from datetime import UTC, datetime
 
 from httpx import AsyncClient
 from sqlalchemy import select, text
@@ -279,6 +279,54 @@ async def test_dashboard_caps_attention_rows_but_counts_them_all(
     assert len(body["attention"]) == ATTENTION_BANNERS_LIMIT
     assert body["attention_total_count"] == over_cap
     assert all(i["kind"] == "score" for i in body["attention"])
+
+
+async def test_attention_ranks_review_above_scores_beyond_eager_cap(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """#838: a top-priority ``review`` must surface even when it's the
+    most-recently-updated actionable match and there are more actionable matches
+    than the display cap.
+
+    The old panel eager-loaded ``ORDER BY updated_at ASC LIMIT
+    ATTENTION_BANNERS_LIMIT`` and ranked only that slice, so a freshly-bumped
+    ``review`` (opponent just proposed) sat at the *newest* end of the
+    updated_at axis and got dropped by the LIMIT before ranking ever saw it —
+    the panel showed stale lower-priority ``score`` rows. The fix loads every
+    actionable match, ranks in Python, then caps for display, so the review
+    both appears and outranks the scores.
+    """
+    from app.dashboard import ATTENTION_BANNERS_LIMIT
+
+    await start_session(api_client, db_session)
+    # More score matches than the display cap — enough that the old DB LIMIT
+    # would have no room left for the newest-updated row.
+    over_cap = ATTENTION_BANNERS_LIMIT + 2
+    for i in range(over_cap):
+        opp = await make_user(db_session, f"rival_{i}")
+        await _create_match(api_client, opp.id, best_of=5)
+
+    # One more match where the OPPONENT posts, so the current user owes a
+    # review (priority 1 — above every score).
+    async with opponent_session(db_session, "poster") as (opp_client, opp):
+        review_match = await _create_match(api_client, opp.id, best_of=1)
+        await _post_result(opp_client, review_match["id"], best_of=1)
+
+    # Make the review match the NEWEST-updated of them all, so the old
+    # ``ORDER BY updated_at ASC LIMIT`` would have excluded it before ranking.
+    review_db = await db_session.get(Match, uuid.UUID(review_match["id"]))
+    assert review_db is not None
+    review_db.updated_at = datetime.now(UTC)
+    await db_session.commit()
+
+    body = (await api_client.get("/v1/dashboard")).json()
+    # The review both survives the cap and outranks every score row.
+    assert body["attention"][0]["kind"] == "review"
+    assert body["attention"][0]["match_id"] == review_match["id"]
+    # Every actionable match is counted (all scores + the review)...
+    assert body["attention_total_count"] == ATTENTION_BANNERS_LIMIT + 3
+    # ...but the display list holds only the top cap.
+    assert len(body["attention"]) == ATTENTION_BANNERS_LIMIT
 
 
 async def test_dashboard_attention_priority_ranking(
