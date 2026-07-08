@@ -1055,6 +1055,71 @@ async def test_concurrent_score_create_returns_409_not_500(
             assert len(scores) == 1, scores
 
 
+def _install_scoring_load_barrier(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[asyncio.Event, asyncio.Event]:
+    """Barrier on the ``_load_match_for_scoring`` seam for a deterministic
+    first-propose race. The score path (which never passes ``nowait``) parks
+    after loading until ``settled`` is set; the propose (``nowait=True``) sails
+    through. Returns ``(loaded, settled)`` — the score racer sets ``loaded`` once
+    it has loaded, the propose sets ``settled`` once it has run, pinning
+    "scorer loads → proposer settles → scorer commits"."""
+    loaded = asyncio.Event()
+    settled = asyncio.Event()
+    real_loader = matches_mod._load_match_for_scoring
+
+    async def loader_with_barrier(
+        db: AsyncSession,
+        target_id: uuid.UUID,
+        current_user_id: uuid.UUID,
+        *,
+        lock: bool = False,
+        nowait: bool = False,
+    ) -> Match:
+        result = await real_loader(
+            db, target_id, current_user_id, lock=lock, nowait=nowait
+        )
+        if not nowait:
+            loaded.set()
+            await settled.wait()
+        return result
+
+    monkeypatch.setattr(matches_mod, "_load_match_for_scoring", loader_with_barrier)
+    return loaded, settled
+
+
+async def _first_propose_after_barrier(
+    make_session: async_sessionmaker[AsyncSession],
+    loaded: asyncio.Event,
+    settled: asyncio.Event,
+    match_id: uuid.UUID,
+    user_id: uuid.UUID,
+    games: list[MatchResultsGameWrite],
+) -> int:
+    """The proposer half of a barriered first-propose race (see
+    ``_install_scoring_load_barrier``): wait for the score racer to load, then
+    post a first result directly on its own real session, signalling ``settled``
+    when done so the parked racer can resume. Returns the result status."""
+    await loaded.wait()
+    async with make_session() as session:
+        user = (
+            await session.execute(select(User).where(User.id == user_id))
+        ).scalar_one()
+        try:
+            await post_match_result(
+                match_id,
+                MatchResultsWrite(games=games),
+                user,
+                session,
+                NotificationService(session, FakeSender()),
+            )
+            return 201
+        except HTTPException as exc:
+            return exc.status_code
+        finally:
+            settled.set()
+
+
 async def test_create_game_score_racing_first_propose_never_strays(
     api_client: AsyncClient,
     db_session: AsyncSession,
@@ -1101,29 +1166,7 @@ async def test_create_game_score_racing_first_propose_never_strays(
         )
 
         make_session = async_sessionmaker(engine, expire_on_commit=False)
-        scorer_loaded = asyncio.Event()
-        propose_settled = asyncio.Event()
-        real_loader = matches_mod._load_match_for_scoring
-
-        async def loader_with_barrier(
-            db: AsyncSession,
-            target_id: uuid.UUID,
-            current_user_id: uuid.UUID,
-            *,
-            lock: bool = False,
-            nowait: bool = False,
-        ) -> Match:
-            result = await real_loader(
-                db, target_id, current_user_id, lock=lock, nowait=nowait
-            )
-            # The score path never passes ``nowait`` (propose does): park it after
-            # the load so the proposer runs to completion first.
-            if not nowait:
-                scorer_loaded.set()
-                await propose_settled.wait()
-            return result
-
-        monkeypatch.setattr(matches_mod, "_load_match_for_scoring", loader_with_barrier)
+        loaded, settled = _install_scoring_load_barrier(monkeypatch)
 
         async def scorer() -> int:
             async with make_session() as session:
@@ -1137,33 +1180,19 @@ async def test_create_game_score_racing_first_propose_never_strays(
                 except HTTPException as exc:
                     return exc.status_code
 
-        async def proposer() -> int:
-            await scorer_loaded.wait()
-            async with make_session() as session:
-                user = (
-                    await session.execute(select(User).where(User.id == me_id))
-                ).scalar_one()
-                notifications = NotificationService(session, FakeSender())
-                # Decided 3-1, clinch at game 4, games 1&2 match the scratchpad.
-                payload = MatchResultsWrite(
-                    games=[
-                        _game(1, 11, 2),
-                        _game(2, 2, 11),
-                        _game(3, 11, 2),
-                        _game(4, 11, 2),
-                    ]
-                )
-                try:
-                    await post_match_result(
-                        match_id, payload, user, session, notifications
-                    )
-                    return 201
-                except HTTPException as exc:
-                    return exc.status_code
-                finally:
-                    propose_settled.set()
-
-        scorer_status, proposer_status = await asyncio.gather(scorer(), proposer())
+        # First-propose board: decided 3-1, clinch at game 4, games 1&2 match the
+        # scratchpad.
+        scorer_status, proposer_status = await asyncio.gather(
+            scorer(),
+            _first_propose_after_barrier(
+                make_session,
+                loaded,
+                settled,
+                match_id,
+                me_id,
+                [_game(1, 11, 2), _game(2, 2, 11), _game(3, 11, 2), _game(4, 11, 2)],
+            ),
+        )
 
         # The scorer holds the lock; the concurrent first-propose (NOWAIT) bounces.
         assert scorer_status == 201, scorer_status
@@ -1291,27 +1320,7 @@ async def test_update_game_score_racing_first_propose_never_500s(
         )
 
         make_session = async_sessionmaker(engine, expire_on_commit=False)
-        updater_loaded = asyncio.Event()
-        propose_settled = asyncio.Event()
-        real_loader = matches_mod._load_match_for_scoring
-
-        async def loader_with_barrier(
-            db: AsyncSession,
-            target_id: uuid.UUID,
-            current_user_id: uuid.UUID,
-            *,
-            lock: bool = False,
-            nowait: bool = False,
-        ) -> Match:
-            result = await real_loader(
-                db, target_id, current_user_id, lock=lock, nowait=nowait
-            )
-            if not nowait:
-                updater_loaded.set()
-                await propose_settled.wait()
-            return result
-
-        monkeypatch.setattr(matches_mod, "_load_match_for_scoring", loader_with_barrier)
+        loaded, settled = _install_scoring_load_barrier(monkeypatch)
 
         async def updater() -> int:
             async with make_session() as session:
@@ -1327,32 +1336,17 @@ async def test_update_game_score_racing_first_propose_never_500s(
                 except HTTPException as exc:
                     return exc.status_code
 
-        async def proposer() -> int:
-            await updater_loaded.wait()
-            async with make_session() as session:
-                user = (
-                    await session.execute(select(User).where(User.id == me_id))
-                ).scalar_one()
-                notifications = NotificationService(session, FakeSender())
-                payload = MatchResultsWrite(
-                    games=[
-                        _game(1, 11, 9),
-                        _game(2, 2, 11),
-                        _game(3, 11, 2),
-                        _game(4, 11, 2),
-                    ]
-                )
-                try:
-                    await post_match_result(
-                        match_id, payload, user, session, notifications
-                    )
-                    return 201
-                except HTTPException as exc:
-                    return exc.status_code
-                finally:
-                    propose_settled.set()
-
-        updater_status, proposer_status = await asyncio.gather(updater(), proposer())
+        updater_status, proposer_status = await asyncio.gather(
+            updater(),
+            _first_propose_after_barrier(
+                make_session,
+                loaded,
+                settled,
+                match_id,
+                me_id,
+                [_game(1, 11, 9), _game(2, 2, 11), _game(3, 11, 2), _game(4, 11, 2)],
+            ),
+        )
 
         # Clean serialized outcome: the updater never 500s / never leaks a raw
         # StaleDataError/InvalidRequestError; the first-propose is bounced.
