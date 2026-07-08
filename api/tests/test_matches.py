@@ -10,11 +10,14 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 
+from app import matches as matches_mod
 from app.matches import (
     _compact_games,
     accept_match_result,
     create_game_score,
+    delete_game_score,
     post_match_result,
+    update_game_score,
 )
 from app.models import (
     League,
@@ -32,6 +35,7 @@ from app.models import (
 from app.notifications.apns import MATCH_RESULT_CONFIRMATION_CATEGORY
 from app.notifications.service import NotificationService
 from app.schemas.match import (
+    MatchGameScoreUpdate,
     MatchGameScoreWrite,
     MatchResultsGameWrite,
     MatchResultsWrite,
@@ -1049,6 +1053,311 @@ async def test_concurrent_score_create_returns_409_not_500(
                 .all()
             )
             assert len(scores) == 1, scores
+
+
+async def test_create_game_score_racing_first_propose_never_strays(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    engine: AsyncEngine,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression for #835. A per-game score write must not commit *atop* a
+    result the concurrent first-propose already froze.
+
+    Before the fix the three score endpoints loaded the match *without* the row
+    lock and enforced ``_is_scorable`` on that lock-free snapshot. A scorer that
+    loaded before the freeze could commit after it — stranding a scratchpad game
+    on top of a minted result the frozen board never described.
+
+    Deterministic interleave via a barrier on the ``_load_match_for_scoring``
+    seam: the score path (no ``nowait``) parks after loading until the proposer
+    (which passes ``nowait=True``) has run to completion, pinning "scorer loads
+    → proposer settles → scorer commits".
+
+    Post-fix the scorer takes the *blocking* row lock on its load, so the
+    concurrent first-propose (which locks ``NOWAIT``) bounces with a 409, and
+    the scorer's own ``_enforce_scorable`` recheck runs under the lock on still
+    -unfrozen state: the write lands as a plain scratchpad edit (board
+    ``[1, 2, 5]``, no result) rather than a stray game atop a frozen result.
+
+    Pre-fix this is RED: both sides return ``(201, 201)`` and the committed match
+    carries a stray game 5 on top of a posted result.
+    """
+    me = await start_session(api_client, db_session)
+    async with opponent_session(db_session, "race-opp") as (_opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=5)
+        match_id = uuid.UUID(match["id"])
+        me_id = me.id
+
+        # Seed the shared scratchpad at 1-1 (game 1 to side 1, game 2 to side 2)
+        # BEFORE installing the barrier, so both racers see the same pre-image.
+        await api_client.post(
+            f"/v1/matches/{match['id']}/games/1/scores/new",
+            json={"side_1_points": 11, "side_2_points": 2},
+        )
+        await api_client.post(
+            f"/v1/matches/{match['id']}/games/2/scores/new",
+            json={"side_1_points": 2, "side_2_points": 11},
+        )
+
+        make_session = async_sessionmaker(engine, expire_on_commit=False)
+        scorer_loaded = asyncio.Event()
+        propose_settled = asyncio.Event()
+        real_loader = matches_mod._load_match_for_scoring
+
+        async def loader_with_barrier(
+            db: AsyncSession,
+            target_id: uuid.UUID,
+            current_user_id: uuid.UUID,
+            *,
+            lock: bool = False,
+            nowait: bool = False,
+        ) -> Match:
+            result = await real_loader(
+                db, target_id, current_user_id, lock=lock, nowait=nowait
+            )
+            # The score path never passes ``nowait`` (propose does): park it after
+            # the load so the proposer runs to completion first.
+            if not nowait:
+                scorer_loaded.set()
+                await propose_settled.wait()
+            return result
+
+        monkeypatch.setattr(matches_mod, "_load_match_for_scoring", loader_with_barrier)
+
+        async def scorer() -> int:
+            async with make_session() as session:
+                user = (
+                    await session.execute(select(User).where(User.id == me_id))
+                ).scalar_one()
+                payload = MatchGameScoreWrite(side_1_points=11, side_2_points=2)
+                try:
+                    await create_game_score(match_id, payload, 5, user, session)
+                    return 201
+                except HTTPException as exc:
+                    return exc.status_code
+
+        async def proposer() -> int:
+            await scorer_loaded.wait()
+            async with make_session() as session:
+                user = (
+                    await session.execute(select(User).where(User.id == me_id))
+                ).scalar_one()
+                notifications = NotificationService(session, FakeSender())
+                # Decided 3-1, clinch at game 4, games 1&2 match the scratchpad.
+                payload = MatchResultsWrite(
+                    games=[
+                        _game(1, 11, 2),
+                        _game(2, 2, 11),
+                        _game(3, 11, 2),
+                        _game(4, 11, 2),
+                    ]
+                )
+                try:
+                    await post_match_result(
+                        match_id, payload, user, session, notifications
+                    )
+                    return 201
+                except HTTPException as exc:
+                    return exc.status_code
+                finally:
+                    propose_settled.set()
+
+        scorer_status, proposer_status = await asyncio.gather(scorer(), proposer())
+
+        # The scorer holds the lock; the concurrent first-propose (NOWAIT) bounces.
+        assert scorer_status == 201, scorer_status
+        assert proposer_status == 409, proposer_status
+
+        async with make_session() as verify:
+            final = (
+                await verify.execute(
+                    select(Match)
+                    .where(Match.id == match_id)
+                    .options(
+                        selectinload(Match.results),
+                        selectinload(Match.games),
+                    )
+                )
+            ).scalar_one()
+            # No result was minted, and the board is a still-editable scratchpad —
+            # the #835 stray-atop-a-frozen-result is unreachable.
+            assert final.results == []
+            assert sorted(g.game_number for g in final.games) == [1, 2, 5]
+
+
+async def test_delete_game_score_double_clear_never_500s(
+    api_client: AsyncClient, db_session: AsyncSession, engine: AsyncEngine
+) -> None:
+    """Audit finding #8. Two participants clearing the same game's score at once
+    must serialize to one 200 (cleared) + one 404 (already gone), never a raw
+    error or a lying double-200.
+
+    Pre-fix both loads are lock-free, so both find the score, both null it, and
+    both commit — the loser's ``delete-orphan`` DELETE matches zero rows and only
+    emits a benign ``SAWarning`` (the models carry no ``version_id_col``, so it
+    does *not* raise ``StaleDataError``). That yields ``[200, 200]`` — a lying
+    success. The blocking lock makes the loser re-read the now-empty game and
+    return a truthful 404 instead.
+    """
+    me = await start_session(api_client, db_session)
+    async with opponent_session(db_session, "race-opp") as (_opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=5)
+        match_id = uuid.UUID(match["id"])
+        me_id = me.id
+
+        await api_client.post(
+            f"/v1/matches/{match['id']}/games/3/scores/new",
+            json={"side_1_points": 11, "side_2_points": 5},
+        )
+
+        make_session = async_sessionmaker(engine, expire_on_commit=False)
+
+        async def run() -> object:
+            async with make_session() as session:
+                user = (
+                    await session.execute(select(User).where(User.id == me_id))
+                ).scalar_one()
+                try:
+                    await delete_game_score(match_id, 3, user, session)
+                    return 200
+                except HTTPException as exc:
+                    return exc.status_code
+
+        outcomes = await asyncio.gather(run(), run())
+
+        # One truthful clear, one truthful "already gone" — never a 500, never a
+        # raw exception, never a double-200.
+        assert all(isinstance(o, int) for o in outcomes), outcomes
+        assert all(o != 500 for o in outcomes), outcomes
+        assert sorted(outcomes) == [200, 404], outcomes
+
+        async with make_session() as verify:
+            scores = (
+                (
+                    await verify.execute(
+                        select(MatchGameScore)
+                        .join(MatchGame, MatchGameScore.match_game_id == MatchGame.id)
+                        .where(MatchGame.match_id == match_id)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            assert scores == [], scores
+
+
+async def test_update_game_score_racing_first_propose_never_500s(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    engine: AsyncEngine,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A conditional update whose target score row a concurrent first-propose
+    deletes (via ``_commit_canonical_games``'s clear/reinsert) must not 500 on
+    the ``db.refresh(game.score)`` of a since-deleted row — that refresh is the
+    one genuine-500 candidate on the score path.
+
+    Same barrier technique as the #835 create test: the updater parks after its
+    lock-free load, the first-propose freezes the board (deleting the score row
+    the update targets), then the updater proceeds.
+
+    Pre-fix the update loads without the lock, so the propose freezes underneath
+    it: the conditional UPDATE matches zero rows (its target id was deleted) and
+    ``db.refresh`` is called on that deleted row — a raw
+    ``sqlalchemy.exc.InvalidRequestError`` (an uncaught 500), not an
+    ``HTTPException``, so it escapes the handler entirely.
+
+    Post-fix the updater takes the *blocking* lock first, so the first-propose
+    (NOWAIT) bounces with a 409 and the update runs under the lock against
+    still-unfrozen state — its target row still exists at version 1, so the
+    conditional UPDATE matches and it returns a clean 200. The proposer 409s.
+    """
+    me = await start_session(api_client, db_session)
+    async with opponent_session(db_session, "race-opp") as (_opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=5)
+        match_id = uuid.UUID(match["id"])
+        me_id = me.id
+
+        # Seed games 1 & 2 so the propose board's first two games match the
+        # scratchpad; the update targets game 1 (version 1).
+        await api_client.post(
+            f"/v1/matches/{match['id']}/games/1/scores/new",
+            json={"side_1_points": 11, "side_2_points": 9},
+        )
+        await api_client.post(
+            f"/v1/matches/{match['id']}/games/2/scores/new",
+            json={"side_1_points": 2, "side_2_points": 11},
+        )
+
+        make_session = async_sessionmaker(engine, expire_on_commit=False)
+        updater_loaded = asyncio.Event()
+        propose_settled = asyncio.Event()
+        real_loader = matches_mod._load_match_for_scoring
+
+        async def loader_with_barrier(
+            db: AsyncSession,
+            target_id: uuid.UUID,
+            current_user_id: uuid.UUID,
+            *,
+            lock: bool = False,
+            nowait: bool = False,
+        ) -> Match:
+            result = await real_loader(
+                db, target_id, current_user_id, lock=lock, nowait=nowait
+            )
+            if not nowait:
+                updater_loaded.set()
+                await propose_settled.wait()
+            return result
+
+        monkeypatch.setattr(matches_mod, "_load_match_for_scoring", loader_with_barrier)
+
+        async def updater() -> int:
+            async with make_session() as session:
+                user = (
+                    await session.execute(select(User).where(User.id == me_id))
+                ).scalar_one()
+                payload = MatchGameScoreUpdate(
+                    side_1_points=8, side_2_points=11, expected_version=1
+                )
+                try:
+                    await update_game_score(match_id, payload, 1, user, session)
+                    return 200
+                except HTTPException as exc:
+                    return exc.status_code
+
+        async def proposer() -> int:
+            await updater_loaded.wait()
+            async with make_session() as session:
+                user = (
+                    await session.execute(select(User).where(User.id == me_id))
+                ).scalar_one()
+                notifications = NotificationService(session, FakeSender())
+                payload = MatchResultsWrite(
+                    games=[
+                        _game(1, 11, 9),
+                        _game(2, 2, 11),
+                        _game(3, 11, 2),
+                        _game(4, 11, 2),
+                    ]
+                )
+                try:
+                    await post_match_result(
+                        match_id, payload, user, session, notifications
+                    )
+                    return 201
+                except HTTPException as exc:
+                    return exc.status_code
+                finally:
+                    propose_settled.set()
+
+        updater_status, proposer_status = await asyncio.gather(updater(), proposer())
+
+        # Clean serialized outcome: the updater never 500s / never leaks a raw
+        # StaleDataError/InvalidRequestError; the first-propose is bounced.
+        assert updater_status in (200, 409), updater_status
+        assert proposer_status == 409, proposer_status
 
 
 async def test_score_create_422_when_game_number_exceeds_best_of(
