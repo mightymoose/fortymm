@@ -90,6 +90,15 @@ and re-run alembic against a fresh database to test.
   create/drop/FK/index/constraint names, the migration filename and
   docstring, and any hardcoded references in app or test code.
 
+**Route/schema/docstring changes regenerate `openapi.json`.** A FastAPI route
+**docstring** becomes the OpenAPI description, so even a docstring edit drifts the
+generated clients. After changing any route, Pydantic request/response schema, or
+docstring, the generated types must be regenerated: `mise run regen-api-types`
+(`web-client/src/api/schema.d.ts`) and `mise run regen-ios-api-types`
+(`ios/Fortymm/Generated/Types.swift`), committed in the same change — the
+`openapi-schema` CI job fails on drift. (See the root `CLAUDE.md` for the full
+invariant.)
+
 ## Make illegal states unrepresentable
 
 The goal is that a value that compiles/validates cannot be in a contradictory
@@ -127,6 +136,12 @@ state. Reach for the type system before reaching for a runtime check.
   representable DB row that will `IndexError`. Either model the invariant
   (`SinglesSide` vs `DoublesSide`, or a non-empty list) or handle the empty
   case explicitly and return early.
+
+- **Solo matches carry a player-less sentinel side — never bulk-delete "empty"
+  sides.** A solo match's side 2 legitimately has zero `match_side_players`. A
+  cleanup like `delete(MatchSide).where(~MatchSide.players.any())` will wipe
+  every solo match's side 2 platform-wide. "Has no players" is a valid state,
+  not orphaned data — scope any such delete to the specific match/rows you mean.
 
 ## Type the I/O boundaries
 
