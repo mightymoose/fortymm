@@ -35,6 +35,13 @@ units (e.g. an API route + its web client), the main session coordinates the
 experts and does the regen itself. Destructive shared-cluster/stack ops stay with
 the operator — the `infra` expert flags them, it does not run them.
 
+**Sharding a plan across the experts:** `/to-chores` breaks an agreed plan into a
+gitignored `.claude/work-order.md` — a checkbox list of small, agent-tagged
+**chores** grouped under demoable **tracer-bullet** slices, with `[main]` steps at
+the cross-layer seams. `/do-chores` then drives it: dispatches each chore to its
+expert in dependency order, verifies, ticks it off, and commits per slice. Arc:
+`/grill-with-docs` → `/to-chores` → `/do-chores` → `/land-the-plane`.
+
 ## Common commands
 
 API (`cd api`, after `python -m venv .venv && source .venv/bin/activate && pip install -e '.[dev]'`):
