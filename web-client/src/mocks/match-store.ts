@@ -56,9 +56,6 @@ const STATUS_LABELS: Record<MatchStatus, string> = {
   pending: 'Scheduled',
   in_progress: 'Live',
   completed: 'Final',
-  // Dead status under propose/accept — never set — mirrors the server's
-  // neutral `_status_label` fallback, not the retired "Disputed".
-  disputed: 'In review',
   voided: 'Voided',
 }
 
@@ -66,7 +63,6 @@ const ALL_STATUSES: MatchStatus[] = [
   'pending',
   'in_progress',
   'completed',
-  'disputed',
   'voided',
 ]
 
@@ -300,7 +296,7 @@ export function negotiationOf(seed: SeedMatch): MatchNegotiation {
  * game in [1, best_of] is scored / the match isn't in progress. Mirrors the
  * server's ``current_game_number`` derivation in api/app/matches.py. */
 function currentGameNumber(seed: SeedMatch): number | null {
-  if (seed.status !== 'in_progress' && seed.status !== 'disputed') return null
+  if (seed.status !== 'in_progress') return null
   // Any posted result freezes the scratchpad — no game is "current" once the
   // first result lands (mirrors the server's ``match.results`` check).
   if (seed.results.length > 0) return null
@@ -338,7 +334,7 @@ function scorableSeed(seed: SeedMatch): boolean {
  * out-of-order clinch that left a hole (e.g. ``[1,2,3,5]``) is closed up
  * before validating, so it reports finalizable just like the API. */
 function canFinalizeSeed(seed: SeedMatch): boolean {
-  if (seed.status !== 'in_progress' && seed.status !== 'disputed') return false
+  if (seed.status !== 'in_progress') return false
   // Once any result is posted, accept/counter is the next action, not a first
   // propose. Mirrors the server's ``if match.results: return False``.
   if (seed.results.length > 0) return false
@@ -412,8 +408,8 @@ function seedStatusLabel(seed: SeedMatch): string {
 }
 
 // Mirrors the backend scoreboard-status mapping (app/mappers/match_details_mapper.py):
-// disputed and voided collapse to `final`, not `live`. Exported so the test
-// factories derive `data.scoreboard.status` the same way instead of re-inlining it.
+// voided collapses to `final`, not `live`. Exported so the test factories
+// derive `data.scoreboard.status` the same way instead of re-inlining it.
 export function seedScoreboardStatus(
   status: MatchStatus,
 ): components['schemas']['Status'] {
@@ -605,10 +601,6 @@ type ListAttentionKind = NonNullable<MatchListRow['attention']>
  * user's). */
 export function listAttentionKind(seed: SeedMatch): ListAttentionKind | null {
   switch (seed.status) {
-    case 'disputed':
-      // Dead status under propose/accept — never an attention row (mirrors
-      // the server's `disputed → None`).
-      return null
     case 'pending':
       return 'waiting_others'
     case 'in_progress': {

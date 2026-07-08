@@ -56,7 +56,6 @@ async function installListMock(page: Page, rows = SEED) {
         pending: rows.filter((r) => r.status === 'pending').length,
         in_progress: rows.filter((r) => r.status === 'in_progress').length,
         completed: rows.filter((r) => r.status === 'completed').length,
-        disputed: 0,
         voided: 0,
       }
       return route.fulfill({

@@ -48,15 +48,14 @@ export const TAB_TO_API: Record<StatusKey, MatchListFilter> = {
   awaiting: 'awaiting_acceptance',
   final: 'completed',
 }
-// Terminal statuses (disputed, voided) fall back to the `final` tone — they
-// share final's "no further action" semantics, not scheduled's pending one.
+// The terminal `voided` status falls back to the `final` tone — it shares
+// final's "no further action" semantics, not scheduled's pending one.
 // in_progress maps to the `live` tone; awaiting-acceptance rows (also
 // in_progress) are re-toned in `projectMatchListRow` from their `status_label`.
 export const API_TO_TONE: Record<MatchStatus, ToneKey> = {
   pending: 'scheduled',
   in_progress: 'live',
   completed: 'final',
-  disputed: 'final',
   voided: 'final',
 }
 
