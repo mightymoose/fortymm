@@ -231,6 +231,14 @@ def upgrade() -> None:
             sa.DateTime(timezone=True),
             nullable=True,
         ),
+        # Dedupe marker for the deadline-nearing retirement reminder (task #6):
+        # stamped when the daily sweep sends the single ~24h-before reminder so a
+        # later tick doesn't re-send. NULL until sent. See app/retirement_jobs.py.
+        sa.Column(
+            "reminder_sent_at",
+            sa.DateTime(timezone=True),
+            nullable=True,
+        ),
         sa.Column("games", postgresql.JSONB(), nullable=False),
         sa.UniqueConstraint(
             "supersedes_result_id",
