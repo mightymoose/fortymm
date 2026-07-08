@@ -13,7 +13,7 @@ import {
   type ConfirmationCalloutDisplayProps,
 } from "./confirmation-callout-display";
 import { buildConfirmationCalloutDisplayProps } from "./confirmation-callout-display.factory";
-import { retirementCountdownPage } from "./confirmation-callout-display/retirement-countdown.page";
+import { retirementCountdownPage } from "@/components/retirement-countdown/retirement-countdown.page";
 
 const scoped = (container: Container) => ({
   /** The callout `<section>` (any variant); absent when the view projected

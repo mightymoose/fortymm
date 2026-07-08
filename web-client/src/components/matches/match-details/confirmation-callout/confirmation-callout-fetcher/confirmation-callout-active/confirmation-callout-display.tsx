@@ -5,7 +5,7 @@ import { Overline } from "@/components/overline";
 
 import { ScoreDiff } from "../../../score-diff/score-diff";
 import type { ConfirmationCalloutView } from "../confirmation-callout-query";
-import { RetirementCountdown } from "./confirmation-callout-display/retirement-countdown";
+import { RetirementCountdown } from "@/components/retirement-countdown/retirement-countdown";
 
 export interface ConfirmationCalloutDisplayProps {
   view: ConfirmationCalloutView;
