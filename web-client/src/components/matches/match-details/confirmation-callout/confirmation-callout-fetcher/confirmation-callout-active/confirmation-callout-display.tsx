@@ -5,6 +5,7 @@ import { Overline } from "@/components/overline";
 
 import { ScoreDiff } from "../../../score-diff/score-diff";
 import type { ConfirmationCalloutView } from "../confirmation-callout-query";
+import { RetirementCountdown } from "./confirmation-callout-display/retirement-countdown";
 
 export interface ConfirmationCalloutDisplayProps {
   view: ConfirmationCalloutView;
@@ -159,6 +160,7 @@ export function ConfirmationCalloutDisplay({
             rated={view.rated}
             errorMessage={errorMessage}
           />
+          <RetirementCountdown deadline={view.retirementDeadline} />
         </div>
         <div className="md-confirm-callout__actions">
           <PrimaryAction
@@ -205,6 +207,7 @@ export function ConfirmationCalloutDisplay({
             rated={view.rated}
             errorMessage={errorMessage}
           />
+          <RetirementCountdown deadline={view.retirementDeadline} />
         </div>
         <div className="md-confirm-callout__actions">
           <PrimaryAction
