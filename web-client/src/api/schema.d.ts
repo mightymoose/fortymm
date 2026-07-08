@@ -1505,7 +1505,7 @@ export interface components {
          *     count (issue #381).
          * @enum {string}
          */
-        MatchListFilter: "pending" | "in_progress" | "awaiting_acceptance" | "completed" | "disputed" | "voided";
+        MatchListFilter: "pending" | "in_progress" | "awaiting_acceptance" | "completed" | "voided";
         /** MatchListResponse */
         MatchListResponse: {
             /** Items */
@@ -1639,7 +1639,7 @@ export interface components {
          * MatchStatus
          * @enum {string}
          */
-        MatchStatus: "pending" | "in_progress" | "completed" | "disputed" | "voided";
+        MatchStatus: "pending" | "in_progress" | "completed" | "voided";
         /**
          * MergePreview
          * @description Side-effect-free look at an emailed link before it's consumed, so the

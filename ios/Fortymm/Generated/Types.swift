@@ -2868,7 +2868,6 @@ internal enum Components {
             case inProgress = "in_progress"
             case awaitingAcceptance = "awaiting_acceptance"
             case completed = "completed"
-            case disputed = "disputed"
             case voided = "voided"
         }
         /// - Remark: Generated from `#/components/schemas/MatchListResponse`.
@@ -3306,7 +3305,6 @@ internal enum Components {
             case pending = "pending"
             case inProgress = "in_progress"
             case completed = "completed"
-            case disputed = "disputed"
             case voided = "voided"
         }
         /// Side-effect-free look at an emailed link before it's consumed, so the
