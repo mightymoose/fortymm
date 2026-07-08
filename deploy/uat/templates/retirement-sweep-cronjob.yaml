@@ -1,0 +1,50 @@
+{{- if .Values.retirement.enabled }}
+# Periodic retirement sweep (task #9 / ADR 0007 O8). Auto-accepts lapsed
+# standing results and sends due deadline-nearing reminders by running the sweep
+# inline (see api/app/retirement_sweep.py) once per tick. A CronJob runs exactly
+# one pod per schedule regardless of how many api replicas are up, so there is no
+# duplicate-execution race; concurrencyPolicy: Forbid additionally prevents a
+# slow sweep from overlapping the next tick.
+#
+# Hourly by default — comfortably under the reminder's 24h lead (which assumes
+# the sweep runs at least daily). Same image + env/secret wiring the api and
+# worker use, including the APNs key mount (the sweep sends push notifications).
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: retirement-sweep
+  labels:
+    {{- include "fortymm-uat.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.retirement.schedule | quote }}
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 300
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels:
+            {{- include "fortymm-uat.selector" (dict "component" "retirement-sweep") | nindent 12 }}
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: retirement-sweep
+              image: {{ include "fortymm-uat.apiImage" . }}
+              imagePullPolicy: {{ .Values.pullPolicy }}
+              command: ["python", "-m", "app.retirement_sweep"]
+              envFrom:
+                {{- include "fortymm-uat.appEnvFrom" . | nindent 16 }}
+              volumeMounts:
+                - name: apns-key
+                  mountPath: {{ .Values.apnsKeyPath }}
+                  subPath: {{ .Values.apnsKeyFile }}
+                  readOnly: true
+          volumes:
+            - name: apns-key
+              secret:
+                secretName: {{ .Values.secrets.apns }}
+{{- end }}

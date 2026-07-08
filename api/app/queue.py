@@ -7,6 +7,11 @@ SOLVER_QUEUE = "solver"
 EMAIL_QUEUE = "email"
 RATINGS_QUEUE = "ratings"
 NOTIFICATIONS_QUEUE = "notifications"
+# Reserved for a future enqueue-based retirement trigger. The current periodic
+# trigger (task #9 / ADR 0007 O8) runs the sweep *inline* via
+# ``python -m app.retirement_sweep`` on a schedule (Helm CronJob in UAT, a small
+# looping compose service in dev/qa/uat), so nothing is currently enqueued here
+# and no rq worker processes this queue.
 RETIREMENT_QUEUE = "retirement"
 
 
