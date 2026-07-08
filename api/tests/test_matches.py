@@ -996,17 +996,22 @@ async def test_concurrent_score_create_returns_409_not_500(
     api_client: AsyncClient, db_session: AsyncSession, engine: AsyncEngine
 ):
     """Regression for #362. Two participants sitting on the same
-    game-score-entry page who submit at the same instant both lazily insert
-    the same game row (``uq_match_games_match_id_game_number``); the loser of
-    the race trips the unique constraint at commit. Before the guard that
-    surfaced as a raw 500 — it must be the same clean 409 the sequential
-    already-scored path returns.
+    game-score-entry page who submit at the same instant must both get a clean
+    409, never a raw 500.
+
+    Since ADR-0009 the score path takes the blocking match row lock, so the two
+    creates *serialize*: the loser waits, re-reads the committed game under the
+    lock, and 409s via the ``game.score is not None`` pre-check rather than the
+    ``uq_match_games_match_id_game_number`` collision at commit. (The
+    ``except IntegrityError`` handler on the create path is retained as a
+    backstop for any residual same-game insert race, but the lock means this
+    test exercises the pre-check path.)
 
     Driven on two *separate* DB sessions (real distinct Postgres connections)
-    via ``asyncio.gather`` so the constraint actually arbitrates — the shared
-    ``db_session`` override can't surface the race. An un-mapped
-    ``IntegrityError`` would escape ``run``'s ``HTTPException``-only ``except``
-    and fail the test loudly, which is exactly the 500 we're guarding against.
+    via ``asyncio.gather`` — the shared ``db_session`` override can't surface
+    the race. An un-mapped exception would escape ``run``'s
+    ``HTTPException``-only ``except`` and fail the test loudly, which is exactly
+    the 500 we're guarding against.
     """
     me = await start_session(api_client, db_session)
     async with opponent_session(db_session, "race-opp") as (_opp_client, opp):
@@ -1348,9 +1353,11 @@ async def test_update_game_score_racing_first_propose_never_500s(
             ),
         )
 
-        # Clean serialized outcome: the updater never 500s / never leaks a raw
-        # StaleDataError/InvalidRequestError; the first-propose is bounced.
-        assert updater_status in (200, 409), updater_status
+        # Clean serialized outcome: the updater holds the lock, the first-propose
+        # (NOWAIT) is bounced, and the update runs under the lock against its
+        # still-unfrozen target row (version 1) — a deterministic 200, never a
+        # raw StaleDataError/InvalidRequestError.
+        assert updater_status == 200, updater_status
         assert proposer_status == 409, proposer_status
 
 

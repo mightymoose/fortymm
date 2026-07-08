@@ -1845,8 +1845,9 @@ async def _load_match_for_scoring(
     lock: bool = False,
     nowait: bool = False,
 ) -> Match:
-    # ``lock`` callers (the negotiation transitions) take the row lock *before*
-    # the eager load so the match state they read is the serialized one.
+    # ``lock`` callers (the negotiation transitions, and per ADR-0009 the score
+    # endpoints) take the row lock *before* the eager load so the match state
+    # they read is the serialized one.
     if lock:
         await _lock_match_row(db, match_id, nowait=nowait)
     match = await _load_match(db, match_id)
