@@ -57,10 +57,6 @@ def list_attention_kind(
         return None
 
     match match.status:
-        case MatchStatus.disputed:
-            # Dead status under the propose/accept model — nothing sets it — so
-            # it's never an attention row. (Follow-up: drop the enum value.)
-            return None
         case MatchStatus.pending:
             return "waiting_others"
         case MatchStatus.in_progress:

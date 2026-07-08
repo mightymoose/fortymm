@@ -212,11 +212,6 @@ def _status_label(match: Match) -> str:
             return "Live"
         case MatchStatus.completed:
             return "Final"
-        case MatchStatus.disputed:
-            # Dead: nothing sets MatchStatus.disputed under the propose/accept
-            # model (there is no dispute verb). Kept only to satisfy the
-            # exhaustive match; follow-up: drop the enum value entirely.
-            return "In review"
         case MatchStatus.voided:
             return "Voided"
 
@@ -289,7 +284,7 @@ def side_win_counts(match: Match) -> dict[int, int]:
 def current_game_number(match: Match) -> int | None:
     """The next un-scored game number for an open match. ``None`` when:
 
-    - the match is finalized / voided / pending (not in progress or disputed);
+    - the match is finalized / voided / pending (not in progress);
     - any result has been posted (the board is frozen — score writes are locked
       once a result exists);
     - the currently-saved games already decide the match — even if some game
@@ -301,7 +296,7 @@ def current_game_number(match: Match) -> int | None:
     Game rows are created lazily by the score-write endpoints, so the next
     game to score may not have a ``MatchGame`` row yet — this helper exposes
     the number rather than an object so deeplinks work either way."""
-    if match.status not in (MatchStatus.in_progress, MatchStatus.disputed):
+    if match.status != MatchStatus.in_progress:
         return None
     if match.results:
         return None
@@ -1096,12 +1091,6 @@ async def get_match(
 
 
 # A match that has reached one of these states is read-only — never scorable.
-# ``disputed`` is a dead status under the propose/accept model (nothing sets it;
-# corrections happen in the supersede chain, not by reopening the scratchpad).
-# It's omitted here only because the enum value is retained pending its removal
-# migration — its terminal classification is settled there. In practice a
-# disputed row is unreachable, and would carry a result anyway, so ``_is_scorable``
-# (which also gates on "no result exists") already treats it as non-scorable.
 _TERMINAL_STATUSES = {
     MatchStatus.completed,
     MatchStatus.voided,
@@ -1850,7 +1839,7 @@ def _can_finalize(match: Match) -> bool:
     ``can_finalize = true`` so the finalize-callout / SaveBanner offers "Post
     result" and the user self-heals with one tap — this also heals already-stuck
     matches with no migration."""
-    if match.status not in (MatchStatus.in_progress, MatchStatus.disputed):
+    if match.status != MatchStatus.in_progress:
         return False
     if match.results:
         return False

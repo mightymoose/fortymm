@@ -34,7 +34,6 @@ match_status_enum = postgresql.ENUM(
     "pending",
     "in_progress",
     "completed",
-    "disputed",
     "voided",
     name="match_status",
     create_type=False,
@@ -146,8 +145,8 @@ def upgrade() -> None:
         "matches",
         ["status", sa.text("created_at DESC")],
     )
-    # Supports the dashboard's open-match attention lists (in_progress /
-    # disputed), which order by updated_at (last activity). The completed-match
+    # Supports the dashboard's open-match attention lists (in_progress),
+    # which order by updated_at (last activity). The completed-match
     # views moved to ix_matches_status_completed_at.
     op.create_index(
         "ix_matches_status_updated_at",

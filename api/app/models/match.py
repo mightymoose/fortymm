@@ -23,7 +23,6 @@ class MatchStatus(enum.Enum):
     pending = "pending"
     in_progress = "in_progress"
     completed = "completed"
-    disputed = "disputed"
     voided = "voided"
 
 
@@ -92,7 +91,7 @@ class Match(Base):
     # Stamped once the match reaches ``completed`` and kept stable thereafter —
     # editing a completed match (which bumps ``updated_at``) must not move it in
     # or out of another match's historical window. Cleared back to NULL when a
-    # match is disputed (un-completed) and re-stamped on the next completion.
+    # match is un-completed and re-stamped on the next completion.
     # NULL for any match that hasn't completed. History/form/H2H queries anchor
     # on this, not on the mutable ``updated_at``.
     completed_at: Mapped[datetime | None] = mapped_column(
