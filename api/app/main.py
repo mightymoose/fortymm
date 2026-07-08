@@ -28,7 +28,12 @@ from app.sessions import (
 from app.sessions import router as sessions_router
 from app.tournaments import router as tournaments_router
 
-log = logging.getLogger(__name__)
+# Log on uvicorn's own error logger (not __name__): the app configures no
+# logging, so a __name__ logger propagates to the root logger, which defaults
+# to WARNING with no handler — INFO lines would be silently dropped. uvicorn
+# configures "uvicorn.error" with a stdout handler at INFO, so the proxy-trust
+# line below surfaces alongside "Application startup complete" in every stack.
+log = logging.getLogger("uvicorn.error")
 
 
 @asynccontextmanager
