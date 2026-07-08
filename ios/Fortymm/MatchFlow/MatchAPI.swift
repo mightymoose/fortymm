@@ -35,6 +35,77 @@ enum APIMatchStatus: String, LenientRawDecodable {
     case unknown
 }
 
+/// Per-status match counts behind the filter-tab badges, framed by the closed
+/// `APIMatchStatus` domain instead of raw strings.
+///
+/// The server sends `status_counts` as an *open* map keyed by the raw status
+/// string (`{"pending": …, "in_progress": …, "completed": …, …}` — see
+/// `MatchListResponse` in the OpenAPI schema; the count feed is dense, seeding
+/// every status to 0).
+///
+/// `APIClient`'s shared decoder uses `.convertFromSnakeCase` — and whether that
+/// strategy rewrites the keys *inside* a `[String: Int]` dictionary depends on
+/// the device's Foundation: the objc-era `JSONDecoder` (iOS 17, our minimum
+/// target) converts them (`in_progress` → `inProgress`), while swift-foundation
+/// (iOS 18+) leaves them alone. The old string-keyed lookup
+/// (`statusCounts["in_progress"]`) therefore read 0 on iOS 17 — the "Live badge
+/// always 0" bug — and worked on iOS 18. We re-canonicalise decoded keys back to
+/// snake_case at the boundary (idempotent on already-snake keys, so it's correct
+/// on both), and expose only enum-keyed accessors so no caller can mis-key the
+/// map again. Modelling the open dict (rather than a fixed field set) keeps the
+/// "All" total faithful to every bucket the feed can show — including `voided` /
+/// `disputed` / any status added server-side later.
+struct StatusCounts: Decodable, Equatable {
+    /// Counts keyed by canonical (snake_case) API status string.
+    private let byStatus: [String: Int]
+
+    /// Empty counts — the initial state before the first list fetch.
+    static let empty = StatusCounts([:] as [APIMatchStatus: Int])
+
+    /// Build directly from typed statuses (seed / preview / test construction).
+    init(_ counts: [APIMatchStatus: Int]) {
+        byStatus = Dictionary(
+            counts.map { ($0.key.rawValue, $0.value) },
+            uniquingKeysWith: { first, _ in first }
+        )
+    }
+
+    init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode([String: Int].self)
+        byStatus = Dictionary(
+            raw.map { (Self.canonicalKey($0.key), $0.value) },
+            uniquingKeysWith: { first, _ in first }
+        )
+    }
+
+    /// The count feeding a tab: a specific status's bucket, or — for the "All"
+    /// tab (`nil`) — the sum of *every* bucket the server sent, so voided /
+    /// disputed / any future status the unfiltered feed still shows are counted.
+    func count(for status: APIMatchStatus?) -> Int {
+        guard let status else { return total }
+        return byStatus[status.rawValue] ?? 0
+    }
+
+    /// Sum across every status bucket — the "All" badge.
+    var total: Int { byStatus.values.reduce(0, +) }
+
+    /// Invert `.convertFromSnakeCase` on a decoded key so it matches the
+    /// server's snake_case status string. Idempotent on already-snake keys, so
+    /// it's correct whether or not the decoder applied the strategy.
+    private static func canonicalKey(_ key: String) -> String {
+        var out = ""
+        for ch in key {
+            if ch.isUppercase {
+                out.append("_")
+                out.append(Character(ch.lowercased()))
+            } else {
+                out.append(ch)
+            }
+        }
+        return out
+    }
+}
+
 // MARK: - Shared nested types
 
 struct MatchLeagueDTO: Decodable {
@@ -226,7 +297,7 @@ struct MatchListResponseDTO: Decodable {
     /// Per-status totals for the filter tabs, keyed by the raw API status string
     /// ("pending", "in_progress", …). Honors the active `q` but not the status
     /// filter, so the counts stay stable as the user switches tabs.
-    let statusCounts: [String: Int]
+    let statusCounts: StatusCounts
 }
 
 // MARK: - Players (opponent picker)

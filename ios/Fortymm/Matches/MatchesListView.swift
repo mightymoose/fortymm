@@ -26,7 +26,7 @@ struct MatchesListView: View {
     @State private var resumeLoading = false
 
     @State private var matches: [FinalMatch] = []
-    @State private var statusCounts: [String: Int] = [:]
+    @State private var statusCounts: StatusCounts = .empty
     @State private var loading = true
     @State private var errorMessage: String?
     /// Coalesces overlapping fetches (tab switch racing a search) — each reload
@@ -144,8 +144,7 @@ struct MatchesListView: View {
     }
 
     private func count(for tab: StatusTab) -> Int {
-        guard let key = tab.countKey else { return statusCounts.values.reduce(0, +) }
-        return statusCounts[key] ?? 0
+        statusCounts.count(for: tab.apiStatus)
     }
 
     private var searchField: some View {
@@ -256,8 +255,8 @@ struct MatchesListView: View {
 }
 
 /// Lifecycle filter tabs, mirroring the web `/matches` status tabs. The
-/// `apiStatus` is sent as the `status` query param (nil = no filter); the
-/// `countKey` indexes the server's `status_counts` for the tab badge.
+/// `apiStatus` is sent as the `status` query param (nil = no filter) and also
+/// selects the tab's badge count from `StatusCounts` (nil = the "All" total).
 private enum StatusTab: CaseIterable, Identifiable {
     case all, live, upNext, final
 
@@ -286,11 +285,6 @@ private enum StatusTab: CaseIterable, Identifiable {
     static func tab(for status: APIMatchStatus?) -> StatusTab {
         allCases.first { $0.apiStatus == status } ?? .all
     }
-
-    /// `status_counts` key for this tab's badge — derived from `apiStatus` so the
-    /// filter value and the count lookup can't drift apart. Nil for "All", which
-    /// sums every status instead.
-    var countKey: String? { apiStatus?.rawValue }
 }
 
 private struct MatchRow: View {
