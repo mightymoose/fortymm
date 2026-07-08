@@ -136,18 +136,15 @@ function djb2(s: string): number {
  * mirrors the real `rank` field the API projects, so the roster renders true
  * ranks instead of page-index numbering (#841). Memoized — the roster is
  * static. */
-let rankByIdCache: Map<string, number | null> | null = null
-function rosterRankById(): Map<string, number | null> {
+let rankByIdCache: Map<string, number> | null = null
+function rosterRankById(): Map<string, number> {
   if (rankByIdCache) return rankByIdCache
-  const roster = mockPlayerRoster()
-  const map = new Map<string, number | null>()
-  roster
-    .filter((p) => (p.rating ?? null) !== null)
+  const map = new Map<string, number>()
+  mockPlayerRoster()
+    .filter((p) => p.rating != null)
     .sort((a, b) => (b.rating ?? 0) - (a.rating ?? 0))
     .forEach((p, i) => map.set(p.id, i + 1))
-  for (const p of roster) {
-    if (!map.has(p.id)) map.set(p.id, null)
-  }
+  // Unrated players are simply absent — callers read `.get(id) ?? null`.
   rankByIdCache = map
   return map
 }

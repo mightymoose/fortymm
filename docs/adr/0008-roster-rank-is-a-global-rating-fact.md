@@ -63,5 +63,3 @@ roster.
 - The next contributor who sees a whole-population count where `startIndex + i +
   1` "would do" should read this ADR before "simplifying" it: the cheap version
   is a lie under search and pagination.
-</content>
-</invoke>

@@ -291,10 +291,6 @@ function SkeletonRows() {
 
 function PlayerRow({ player }: { player: PlayerSummary }) {
   const navigate = useNavigate()
-  // `rank` is the player's true global rating rank (1 = highest); `null` means
-  // unrated. Guard the null explicitly — in JS `null <= 4` is `true`, so a bare
-  // `rank <= 4` would gild every unrated player gold (#841).
-  const rank = player.rank ?? null
   const open = () =>
     navigate({ to: '/players/$userId', params: { userId: player.id } })
   return (
@@ -312,14 +308,7 @@ function PlayerRow({ player }: { player: PlayerSummary }) {
       }}
     >
       <td>
-        <span
-          className={
-            'players-seed' +
-            (rank != null && rank <= 4 ? ' players-seed--top' : '')
-          }
-        >
-          {rank != null ? `#${rank}` : '—'}
-        </span>
+        <SeedCell rank={player.rank} />
       </td>
       <td>
         <div className="player">
@@ -340,6 +329,25 @@ function PlayerRow({ player }: { player: PlayerSummary }) {
         <FormDots form={player.form} />
       </td>
     </tr>
+  )
+}
+
+function SeedCell({ rank }: { rank: number | null | undefined }) {
+  // `rank` is the player's true global rating rank (1 = highest); `null` /
+  // undefined means unrated — render a dim em-dash, like the rating/form cells,
+  // rather than a number. Guard the null explicitly: in JS `null <= 4` is
+  // `true`, so a bare `rank <= 4` would gild every unrated player gold (#841).
+  if (rank === null || rank === undefined) {
+    return (
+      <span className="players-seed" style={{ color: 'var(--fg-3)' }}>
+        —
+      </span>
+    )
+  }
+  return (
+    <span className={'players-seed' + (rank <= 4 ? ' players-seed--top' : '')}>
+      #{rank}
+    </span>
   )
 }
 
