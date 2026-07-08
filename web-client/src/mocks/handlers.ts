@@ -140,11 +140,20 @@ let rankByIdCache: Map<string, number> | null = null
 function rosterRankById(): Map<string, number> {
   if (rankByIdCache) return rankByIdCache
   const map = new Map<string, number>()
+  // Standard competition ranking, mirroring the API's SQL `RANK()`: equal
+  // ratings share a rank and the next rank skips (…, 7, 7, 9, …). Unrated
+  // players are simply absent — callers read `.get(id) ?? null`.
+  let prevRating: number | null = null
+  let prevRank = 0
   mockPlayerRoster()
     .filter((p) => p.rating != null)
     .sort((a, b) => (b.rating ?? 0) - (a.rating ?? 0))
-    .forEach((p, i) => map.set(p.id, i + 1))
-  // Unrated players are simply absent — callers read `.get(id) ?? null`.
+    .forEach((p, i) => {
+      const rank = p.rating === prevRating ? prevRank : i + 1
+      map.set(p.id, rank)
+      prevRating = p.rating ?? null
+      prevRank = rank
+    })
   rankByIdCache = map
   return map
 }
