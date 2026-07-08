@@ -40,7 +40,12 @@ gitignored `.claude/work-order.md` — a checkbox list of small, agent-tagged
 **chores** grouped under demoable **tracer-bullet** slices, with `[main]` steps at
 the cross-layer seams. `/do-chores` then drives it: dispatches each chore to its
 expert in dependency order, verifies, ticks it off, and commits per slice. Arc:
-`/grill-with-docs` → `/to-chores` → `/do-chores` → `/land-the-plane`.
+`/grill-with-docs` → `/to-chores` → `/do-chores` → `/land-the-plane`. `/epic` is
+the gated conductor for that whole arc from one entry point — it sequences the
+four phases but stops at every human gate and never merges (run the individual
+skills when you only want one phase). A `check-main-freshness.sh` SessionStart
+hook warns when the local default branch is behind origin, since a stale checkout
+silently runs an old set of skills/agents (they register at launch).
 
 ## Common commands
 
