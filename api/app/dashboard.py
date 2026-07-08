@@ -31,6 +31,7 @@ from app.models import (
     User,
     UserLeagueRating,
 )
+from app.retirement import retirement_deadline
 from app.schemas.dashboard import (
     AttentionKind,
     DashboardAttentionItem,
@@ -253,6 +254,7 @@ def _attention_item(
         # Only ``score`` rows deep-link to the scoring page; review rows
         # route to match detail and carry no game number.
         current_game_number=current_game_number(match) if kind == "score" else None,
+        retirement_deadline=retirement_deadline(match),
     )
 
 

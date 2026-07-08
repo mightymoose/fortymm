@@ -1102,6 +1102,8 @@ export interface components {
             affects_rating: boolean;
             /** Current Game Number */
             current_game_number: number | null;
+            /** Retirement Deadline */
+            retirement_deadline?: string | null;
         };
         /**
          * DashboardRating
@@ -1573,6 +1575,8 @@ export interface components {
             prior_result: components["schemas"]["NegotiationResult"] | null;
             /** Diff */
             diff: components["schemas"]["NegotiationDiffEntry"][] | null;
+            /** Retirement Deadline */
+            retirement_deadline?: string | null;
         };
         /**
          * MatchResultBoardConflict

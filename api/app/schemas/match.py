@@ -233,6 +233,12 @@ class MatchNegotiation(BaseModel):
     standing_result: NegotiationResult | None
     prior_result: NegotiationResult | None
     diff: list[NegotiationDiffEntry] | None
+    # The absolute instant the standing result auto-finalizes if the opponent
+    # never acts (``submitted_at`` + the settings' retirement window). ``None``
+    # when there's no standing result or the window is unset — the FE shows a
+    # countdown only when this is present. Viewer-neutral (both sides see the
+    # same deadline).
+    retirement_deadline: datetime | None = None
 
 
 class MatchDetails(BaseModel):

@@ -1791,6 +1791,8 @@ internal enum Components {
             internal var affectsRating: Swift.Bool
             /// - Remark: Generated from `#/components/schemas/DashboardAttentionItem/current_game_number`.
             internal var currentGameNumber: Swift.Int?
+            /// - Remark: Generated from `#/components/schemas/DashboardAttentionItem/retirement_deadline`.
+            internal var retirementDeadline: Foundation.Date?
             /// Creates a new `DashboardAttentionItem`.
             ///
             /// - Parameters:
@@ -1799,18 +1801,21 @@ internal enum Components {
             ///   - kind:
             ///   - affectsRating:
             ///   - currentGameNumber:
+            ///   - retirementDeadline:
             internal init(
                 matchId: Swift.String,
                 opponentUsername: Swift.String? = nil,
                 kind: Components.Schemas.DashboardAttentionItem.KindPayload,
                 affectsRating: Swift.Bool,
-                currentGameNumber: Swift.Int? = nil
+                currentGameNumber: Swift.Int? = nil,
+                retirementDeadline: Foundation.Date? = nil
             ) {
                 self.matchId = matchId
                 self.opponentUsername = opponentUsername
                 self.kind = kind
                 self.affectsRating = affectsRating
                 self.currentGameNumber = currentGameNumber
+                self.retirementDeadline = retirementDeadline
             }
             internal enum CodingKeys: String, CodingKey {
                 case matchId = "match_id"
@@ -1818,6 +1823,7 @@ internal enum Components {
                 case kind
                 case affectsRating = "affects_rating"
                 case currentGameNumber = "current_game_number"
+                case retirementDeadline = "retirement_deadline"
             }
         }
         /// Per-league rating snapshot for the dashboard RatingCard.
@@ -3092,6 +3098,8 @@ internal enum Components {
             internal var priorResult: Components.Schemas.MatchNegotiation.PriorResultPayload?
             /// - Remark: Generated from `#/components/schemas/MatchNegotiation/diff`.
             internal var diff: [Components.Schemas.NegotiationDiffEntry]?
+            /// - Remark: Generated from `#/components/schemas/MatchNegotiation/retirement_deadline`.
+            internal var retirementDeadline: Foundation.Date?
             /// Creates a new `MatchNegotiation`.
             ///
             /// - Parameters:
@@ -3100,18 +3108,21 @@ internal enum Components {
             ///   - standingResult:
             ///   - priorResult:
             ///   - diff:
+            ///   - retirementDeadline:
             internal init(
                 viewerState: Components.Schemas.MatchNegotiation.ViewerStatePayload,
                 yourTurn: Swift.Bool,
                 standingResult: Components.Schemas.MatchNegotiation.StandingResultPayload? = nil,
                 priorResult: Components.Schemas.MatchNegotiation.PriorResultPayload? = nil,
-                diff: [Components.Schemas.NegotiationDiffEntry]? = nil
+                diff: [Components.Schemas.NegotiationDiffEntry]? = nil,
+                retirementDeadline: Foundation.Date? = nil
             ) {
                 self.viewerState = viewerState
                 self.yourTurn = yourTurn
                 self.standingResult = standingResult
                 self.priorResult = priorResult
                 self.diff = diff
+                self.retirementDeadline = retirementDeadline
             }
             internal enum CodingKeys: String, CodingKey {
                 case viewerState = "viewer_state"
@@ -3119,6 +3130,7 @@ internal enum Components {
                 case standingResult = "standing_result"
                 case priorResult = "prior_result"
                 case diff
+                case retirementDeadline = "retirement_deadline"
             }
         }
         /// 409 body for a first-post proposal whose board disagrees with a game

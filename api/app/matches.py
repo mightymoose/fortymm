@@ -63,6 +63,7 @@ from app.result_acceptance import (
     side_win_counts as side_win_counts,  # noqa: PLC0414  (explicit re-export: app.dashboard imports it from here)
 )
 from app.result_chain import accepted_result, standing_result
+from app.retirement import retirement_deadline
 from app.schemas.match import (
     MatchCreate,
     MatchDetails,
@@ -391,6 +392,7 @@ def _negotiation(match: Match, current_user_id: uuid.UUID | None) -> MatchNegoti
             standing_result=_negotiation_result(accepted),
             prior_result=None,
             diff=None,
+            retirement_deadline=retirement_deadline(match),
         )
 
     standing = standing_result(match)
@@ -401,6 +403,7 @@ def _negotiation(match: Match, current_user_id: uuid.UUID | None) -> MatchNegoti
             standing_result=None,
             prior_result=None,
             diff=None,
+            retirement_deadline=retirement_deadline(match),
         )
 
     standing_view = _negotiation_result(standing)
@@ -416,6 +419,7 @@ def _negotiation(match: Match, current_user_id: uuid.UUID | None) -> MatchNegoti
             standing_result=standing_view,
             prior_result=None,
             diff=None,
+            retirement_deadline=retirement_deadline(match),
         )
 
     if _submitted_on_side(match, standing, viewer_side):
@@ -426,6 +430,7 @@ def _negotiation(match: Match, current_user_id: uuid.UUID | None) -> MatchNegoti
             standing_result=standing_view,
             prior_result=None,
             diff=None,
+            retirement_deadline=retirement_deadline(match),
         )
 
     # The opponent submitted the standing result → the viewer must act. Walk the
@@ -450,6 +455,7 @@ def _negotiation(match: Match, current_user_id: uuid.UUID | None) -> MatchNegoti
             standing_result=standing_view,
             prior_result=None,
             diff=None,
+            retirement_deadline=retirement_deadline(match),
         )
 
     return MatchNegotiation(
@@ -458,6 +464,7 @@ def _negotiation(match: Match, current_user_id: uuid.UUID | None) -> MatchNegoti
         standing_result=standing_view,
         prior_result=_negotiation_result(prior),
         diff=_negotiation_diff(prior.games, standing.games),
+        retirement_deadline=retirement_deadline(match),
     )
 
 
