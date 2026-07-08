@@ -14,3 +14,6 @@ secrets
 # Helm chart dependencies are vendored at deploy time (helm dependency build
 # reads Chart.lock, which IS committed). Don't commit the downloaded tarballs.
 deploy/observability/charts/
+
+# Xcode-resolved SwiftPM pins (tooling-only, regenerated on build)
+ios/Fortymm.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
