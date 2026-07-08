@@ -3452,6 +3452,28 @@ async def test_accept_404_for_non_participant(
             assert resp.status_code == 404
 
 
+async def test_non_participant_cannot_counter_standing_result(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """Contesting/correcting a standing result is a counter-proposal
+    (``POST /results`` with ``supersedes_result_id``). A non-participant can't
+    counter — they're 404'd at the participation gate before the supersedes
+    logic runs, same as every other write path (no way to learn the match
+    exists). Server-side counterpart to hiding the callout from spectators
+    (#846 web, #836 iOS)."""
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "counter-np-opp") as (_opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=1)
+        posted = await _post_results(api_client, match["id"], best_of=1)
+        result_id = posted["negotiation"]["standing_result"]["id"]
+        async with make_client() as bystander_client:
+            await start_session(bystander_client, db_session)
+            counter = await _propose(
+                bystander_client, match["id"], s1=4, s2=11, supersedes=result_id
+            )
+            assert counter["status"] == 404, counter
+
+
 async def test_accept_409_when_no_result_posted(
     api_client: AsyncClient, db_session: AsyncSession
 ):
