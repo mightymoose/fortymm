@@ -12,6 +12,29 @@ Monorepo with three deployable/test units:
 
 Toolchain pinned in `mise.toml` (Node 26.1.0, Python 3.13). Run `mise install` once.
 
+## Domain-expert subagents — delegate layer-scoped work
+
+Each unit has a domain-expert subagent in `.claude/agents/`. When a task's
+implementation lives entirely inside one unit, **hand it off to that expert** (via
+the Agent tool) rather than editing inline — the expert runs in its own context,
+reads its unit's `CLAUDE.md`, and self-verifies with that layer's tests:
+
+| Expert | Owns | Anchor doc |
+| --- | --- | --- |
+| `api` | `api/` — FastAPI, SQLAlchemy/Alembic, RQ/ortools worker | `api/CLAUDE.md` |
+| `web-client` | `web-client/` — React/TanStack/Zod/Tailwind/MSW, **incl. `web-client/e2e/`** | `web-client/CLAUDE.md` |
+| `ios` | `ios/` — native Swift/SwiftUI app | `ios/CLAUDE.md` |
+| `infra` | `deploy/` + root `docker-compose.*.yml` + `.github/` + `mise.toml` + nginx | `deploy/CLAUDE.md` |
+| `e2e` | root `e2e/` — composed-stack Playwright (NOT `web-client/e2e/`) | `e2e/CLAUDE.md` |
+
+The experts **implement but do not ship**: they have no PR/merge authority and
+return a summary. **The main session owns everything cross-layer** — integration
+across units, the OpenAPI/type-regen dance (`mise run regen-api-types` +
+`mise run regen-ios-api-types`), and opening/merging the PR. When a change spans
+units (e.g. an API route + its web client), the main session coordinates the
+experts and does the regen itself. Destructive shared-cluster/stack ops stay with
+the operator — the `infra` expert flags them, it does not run them.
+
 ## Common commands
 
 API (`cd api`, after `python -m venv .venv && source .venv/bin/activate && pip install -e '.[dev]'`):
@@ -41,8 +64,8 @@ npm run test:e2e      # web-client Playwright (config spins its own dev server o
 Root e2e (`cd e2e`):
 
 ```bash
-npm run test          # Playwright against http://127.0.0.1:5173 (spawns web-client dev server unless E2E_BASE_URL set)
-E2E_BASE_URL=http://localhost:8080 npm run test     # against compose stack
+npm run test          # self-manages a docker compose stack (dev.yml + e2e.yml, --build) and tests it via nginx on :18080
+E2E_BASE_URL=http://localhost:8080 npm run test     # against an already-running stack (skips stack management)
 ```
 
 Full stack via Docker: `docker compose -f docker-compose.dev.yml up`. Nginx on **:8080** proxies `/api/*` → api, `/` → web-client. Use this URL when you want the web app to talk to the real API instead of MSW.
