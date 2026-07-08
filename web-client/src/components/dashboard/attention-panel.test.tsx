@@ -59,6 +59,44 @@ describe('AttentionPanel', () => {
     )
   })
 
+  it('renders the retirement countdown cue on a row with a deadline', async () => {
+    // Wiring only: the countdown's copy/tone are pinned by
+    // retirement-countdown.test.tsx. Here we prove the row feeds it a deadline.
+    page.render({
+      view: buildAttentionPanelView({
+        rows: [
+          buildAttentionRowView({
+            headline: 'vs nguyen.t',
+            retirementDeadline: new Date(
+              Date.now() + 3 * 24 * 60 * 60 * 1000,
+            ).toISOString(),
+          }),
+        ],
+      }),
+    })
+
+    await page.findPanel()
+    expect(page.rowCountdown('vs nguyen.t').queryCountdown()).toBeInTheDocument()
+  })
+
+  it('omits the countdown cue on a row without a deadline', async () => {
+    page.render({
+      view: buildAttentionPanelView({
+        rows: [
+          buildAttentionRowView({
+            headline: 'vs nguyen.t',
+            retirementDeadline: null,
+          }),
+        ],
+      }),
+    })
+
+    await page.findPanel()
+    expect(
+      page.rowCountdown('vs nguyen.t').queryCountdown(),
+    ).not.toBeInTheDocument()
+  })
+
   it('hides entirely when there is nothing to surface', async () => {
     page.render({
       view: buildAttentionPanelView({

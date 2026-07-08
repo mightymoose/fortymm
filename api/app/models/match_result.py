@@ -97,6 +97,15 @@ class MatchResult(Base):
     accepted_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Dedupe marker for the "your retirement deadline is nearing" reminder
+    # (task #6 / O7): stamped once the daily sweep sends the single ~24h-before
+    # reminder so a later tick doesn't re-send. NULL until sent. It lives on the
+    # standing result (not the match) so that a counter-proposal — a *new* result
+    # row with its own NULL marker — legitimately re-arms the reminder for the
+    # freshly-restarted retirement window. See app/retirement_jobs.py.
+    reminder_sent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     # Immutable snapshot of the claimed board, frozen at post time. A list of
     # ``{"game_number", "side_1_points", "side_2_points"}`` objects (decode into
     # a typed model at read time, per "parse, don't validate"). The working

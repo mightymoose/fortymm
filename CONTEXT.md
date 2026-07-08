@@ -74,6 +74,24 @@ decided board, not an edit of individual game cells. The corrector may add,
 remove, or change games, so long as the outcome is again a decided board.
 _Avoid_: dispute, edit, amendment.
 
+**Retirement**:
+The auto-acceptance of a **standing result** when the side that owes a response
+lets its **retirement window** lapse. Silence resolves the negotiation in favour
+of the standing result: it becomes accepted and the match completes, exactly as
+a manual **accept** would. Named for the racket-sport walkover — the
+non-responding side forfeits its turn by not taking it — and deliberately
+distinct from the injury sense of "retire" (a player stopping mid-play).
+_Avoid_: timeout, expiry, forfeit, walkover, auto-confirm.
+
+**Retirement window**:
+The span a side has to accept or counter the standing result before
+**retirement** auto-accepts it. Measured from the moment the standing result was
+proposed — a **correction** or any supersede starts a fresh window against
+whichever side then owes the review. Configured on the match's settings so a
+tournament or club template can shorten, lengthen, or disable it; a disabled
+window (none) restores the plain negotiation that never auto-resolves.
+_Avoid_: deadline, SLA, grace period, expiry.
+
 ## Match taxonomy
 
 **Rating**:

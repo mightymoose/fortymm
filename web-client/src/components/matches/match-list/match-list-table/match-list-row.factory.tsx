@@ -30,6 +30,7 @@ export function buildMatchListRowView(
     time: buildTimeCellView(),
     detailRoute: matchDetailRoute('m-1'),
     action: null,
+    retirementDeadline: null,
     ...overrides,
   }
 }

@@ -10,6 +10,7 @@ import { render, screen, within, type Container } from '@/test/utilities'
 
 import { AttentionPanel, type AttentionPanelProps } from './attention-panel'
 import { buildAttentionPanelProps } from './attention-panel.factory'
+import { retirementCountdownPage } from '@/components/retirement-countdown/retirement-countdown.page'
 
 const scoped = (container: Container) => ({
   /** The panel `<section>` (absent when there's nothing to surface — the panel
@@ -43,6 +44,15 @@ const scoped = (container: Container) => ({
   /** Footer summary line (overflow / waiting counts), or null when empty. */
   queryFooterText(pattern: RegExp) {
     return container.queryByText(pattern)
+  },
+  /** The retirement countdown accessors scoped to the row whose headline
+   * matches `headline` — reuses `RetirementCountdown`'s own page object, so the
+   * countdown's internals stay pinned by its tests. `queryCountdown()` is null
+   * when the row carries no deadline. */
+  rowCountdown(headline: string) {
+    const row = container.getByText(headline).closest('li')
+    if (!row) throw new Error(`No attention row for "${headline}"`)
+    return retirementCountdownPage.within(within(row as HTMLElement))
   },
 })
 

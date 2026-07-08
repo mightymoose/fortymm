@@ -13,6 +13,7 @@ import { buildMatchListRowProps } from './match-list-row.factory'
 import { scoreCellPage } from './match-list-row/score-cell.page'
 import { statusBadgePage } from './match-list-row/status-badge.page'
 import { timeCellPage } from './match-list-row/time-cell.page'
+import { retirementCountdownPage } from '@/components/retirement-countdown/retirement-countdown.page'
 
 const scoped = (container: Container) => ({
   /** The clickable row itself — a `role="link"` `<tr>` whose accessible name is
@@ -48,6 +49,10 @@ const scoped = (container: Container) => ({
   ...scoreCellPage.within(container),
   ...statusBadgePage.within(container),
   ...timeCellPage.within(container),
+  // The retirement countdown cue, scoped to the row — reuses its own page
+  // object so the countdown's copy/tone stay pinned by its tests.
+  // `queryCountdown()` is null when the row carries no deadline.
+  ...retirementCountdownPage.within(container),
 })
 
 /**

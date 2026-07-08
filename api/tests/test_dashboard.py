@@ -1,5 +1,5 @@
 import uuid
-from datetime import UTC
+from datetime import UTC, datetime, timedelta
 
 from httpx import AsyncClient
 from sqlalchemy import select, text
@@ -94,6 +94,8 @@ async def test_dashboard_returns_score_attention_for_in_progress_match(
     assert item["affects_rating"] is True
     # Game rows are created lazily; the dashboard deeplinks by game number.
     assert item["current_game_number"] == 2
+    # No result has been posted, so there's nothing to auto-retire.
+    assert item["retirement_deadline"] is None
     # Nothing is waiting on the opponent yet.
     assert body["waiting_count"] == 0
     assert body["attention_total_count"] == 1
@@ -243,6 +245,25 @@ async def test_dashboard_review_item_when_opponent_posted_result(
     # Review rows route to match detail, never deep-link to scoring.
     assert item["current_game_number"] is None
     assert body["waiting_count"] == 0
+
+
+async def test_dashboard_review_item_carries_retirement_deadline(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """A ``review`` row (opponent posted a standing result) carries the absolute
+    retirement deadline — the standing result's ``submitted_at`` plus the
+    settings' default seven-day window — so the panel can show a countdown."""
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "poster") as (opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=1)
+        await _post_result(opp_client, match["id"], best_of=1)
+
+    item = (await api_client.get("/v1/dashboard")).json()["attention"][0]
+    neg = (await api_client.get(f"/v1/matches/{match['id']}")).json()["negotiation"]
+
+    submitted_at = datetime.fromisoformat(neg["standing_result"]["submitted_at"])
+    deadline = datetime.fromisoformat(item["retirement_deadline"])
+    assert deadline == submitted_at + timedelta(days=7)
 
 
 async def test_dashboard_my_posted_result_counts_as_waiting(

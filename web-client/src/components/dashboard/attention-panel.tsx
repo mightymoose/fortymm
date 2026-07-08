@@ -3,6 +3,7 @@ import { ArrowRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { UserAvatar } from '@/components/ui/user-avatar'
+import { RetirementCountdown } from '@/components/retirement-countdown/retirement-countdown'
 import {
   isAttentionPanelEmpty,
   type AttentionPanelView,
@@ -44,9 +45,12 @@ export const AttentionPanel = ({ view }: AttentionPanelProps) => {
               className="flex items-center gap-3 border-t border-[color:var(--ink-700)] px-5 py-3"
             >
               <UserAvatar name={row.opponentName} size={40} />
-              <span className="min-w-0 flex-1 truncate text-[15px] font-semibold text-[color:var(--chalk-50)]">
-                {row.headline}
-              </span>
+              <div className="min-w-0 flex-1">
+                <span className="block truncate text-[15px] font-semibold text-[color:var(--chalk-50)]">
+                  {row.headline}
+                </span>
+                <RetirementCountdown deadline={row.retirementDeadline} />
+              </div>
               <Button
                 asChild
                 variant={row.primary ? 'default' : 'outline'}

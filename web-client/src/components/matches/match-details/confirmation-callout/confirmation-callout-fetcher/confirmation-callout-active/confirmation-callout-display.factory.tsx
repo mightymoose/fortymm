@@ -11,7 +11,13 @@ type NegotiationDiffEntry = components["schemas"]["NegotiationDiffEntry"];
 export function buildReviewConfirmationView(
   overrides: Partial<Extract<ConfirmationCalloutView, { kind: "review" }>> = {},
 ): ConfirmationCalloutView {
-  return { kind: "review", resultId: "r-1", rated: true, ...overrides };
+  return {
+    kind: "review",
+    resultId: "r-1",
+    rated: true,
+    retirementDeadline: null,
+    ...overrides,
+  };
 }
 
 /** A two-game diff (one changed game + one newly-added game), mirroring the
@@ -43,6 +49,7 @@ export function buildCorrectedConfirmationView(
     resultId: "r-2",
     rated: true,
     diff: buildCorrectionDiff(),
+    retirementDeadline: null,
     ...overrides,
   };
 }

@@ -7,6 +7,12 @@ SOLVER_QUEUE = "solver"
 EMAIL_QUEUE = "email"
 RATINGS_QUEUE = "ratings"
 NOTIFICATIONS_QUEUE = "notifications"
+# Reserved for a future enqueue-based retirement trigger. The current periodic
+# trigger (task #9 / ADR 0007 O8) runs the sweep *inline* via
+# ``python -m app.retirement_sweep`` on a schedule (Helm CronJob in UAT, a small
+# looping compose service in dev/qa/uat), so nothing is currently enqueued here
+# and no rq worker processes this queue.
+RETIREMENT_QUEUE = "retirement"
 
 
 def _connection() -> Redis:
@@ -28,3 +34,7 @@ def get_ratings_queue() -> Queue:
 
 def get_notifications_queue() -> Queue:
     return Queue(NOTIFICATIONS_QUEUE, connection=_connection())
+
+
+def get_retirement_queue() -> Queue:
+    return Queue(RETIREMENT_QUEUE, connection=_connection())

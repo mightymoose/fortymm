@@ -23,6 +23,7 @@ from app.models import (
     MatchGame,
     MatchGameScore,
     MatchResult,
+    MatchSettings,
     MatchSide,
     MatchStatus,
     RatingHistory,
@@ -1523,6 +1524,86 @@ async def test_propose_commits_canon_and_leaves_result_standing(
         assert len(results) == 1
         assert results[0].accepted_by_user_id is None
         assert results[0].supersedes_result_id is None
+
+
+async def test_details_negotiation_carries_retirement_deadline(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """A rated match with a standing (unaccepted) result exposes the absolute
+    retirement deadline on its negotiation block — the standing result's
+    ``submitted_at`` plus the settings' default seven-day window."""
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "rival") as (opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=1)
+        await _post_bo1_result(opp_client, match["id"])
+
+        neg = (await api_client.get(f"/v1/matches/{match['id']}")).json()["negotiation"]
+
+    submitted_at = datetime.fromisoformat(neg["standing_result"]["submitted_at"])
+    deadline = datetime.fromisoformat(neg["retirement_deadline"])
+    assert deadline == submitted_at + timedelta(days=7)
+
+
+async def test_details_negotiation_retirement_deadline_none_when_window_null(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """A standing result whose settings carry no retirement window (NULL) never
+    auto-finalizes, so the deadline is ``None`` even though a result stands."""
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "rival") as (opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=1)
+        await _post_bo1_result(opp_client, match["id"])
+
+        settings = (
+            await db_session.execute(
+                select(MatchSettings)
+                .join(Match, Match.match_settings_id == MatchSettings.id)
+                .where(Match.id == uuid.UUID(match["id"]))
+            )
+        ).scalar_one()
+        settings.retirement_window = None
+        await db_session.commit()
+
+        neg = (await api_client.get(f"/v1/matches/{match['id']}")).json()["negotiation"]
+
+    assert neg["standing_result"] is not None
+    assert neg["retirement_deadline"] is None
+
+
+async def test_details_negotiation_retirement_deadline_none_when_accepted(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """Once a result is accepted the head is no longer *standing*, so there is
+    nothing to retire — the deadline is ``None`` on the ``final`` block."""
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "rival") as (opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=1)
+        await _post_bo1_result(api_client, match["id"])
+        await accept_standing_result(opp_client, match["id"])
+
+        neg = (await api_client.get(f"/v1/matches/{match['id']}")).json()["negotiation"]
+
+    assert neg["viewer_state"] == "final"
+    assert neg["retirement_deadline"] is None
+
+
+async def test_list_row_negotiation_carries_retirement_deadline(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """The match-list row's negotiation block carries the same absolute
+    retirement deadline as match detail (both embed ``MatchNegotiation``)."""
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "rival") as (opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=1)
+        await _post_bo1_result(opp_client, match["id"])
+
+    listing = (await api_client.get("/v1/matches", params={"attention": "true"})).json()
+    row = next(r for r in listing["items"] if r["id"] == match["id"])
+    neg = row["negotiation"]
+
+    submitted_at = datetime.fromisoformat(neg["standing_result"]["submitted_at"])
+    deadline = datetime.fromisoformat(neg["retirement_deadline"])
+    assert deadline == submitted_at + timedelta(days=7)
 
 
 async def test_propose_first_post_requires_no_existing_result(
