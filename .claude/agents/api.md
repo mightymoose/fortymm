@@ -32,8 +32,8 @@ Run your own layer's checks from `api/` and get them green before declaring done
 2. `pytest` (needs Docker for testcontainers; set `TEST_DATABASE_URL` to reuse an
    existing Postgres). Run the narrowest relevant test during the loop, the full
    suite before reporting.
-3. If `ruff` is configured, `ruff check app tests` (auto-fix trivial with `--fix`)
-   and `ruff format app tests`.
+3. `ruff check app tests` and `ruff format app tests` — both are CI-gated in
+   `.github/workflows/api.yml` (auto-fix trivial findings with `--fix`).
 
 ## Flag cross-layer work — don't do it yourself
 

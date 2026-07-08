@@ -12,13 +12,16 @@ Infra has no single directory — it spans:
 
 - `deploy/uat/` — Helm chart for the prod-like **UAT** stack on a local **k3d**
   cluster (postgres, redis, api ×5, worker, web-client ×2, routing nginx,
-  optional tailscale proxy; migrate+seed as a post-upgrade hook Job).
+  optional tailscale proxy; migrate+seed as a `post-install,post-upgrade` hook Job).
 - `deploy/observability/` — umbrella chart (kube-prometheus-stack + loki-stack
   + tempo) in the `monitoring` namespace, tailnet-only.
 - `docker-compose.{dev,qa,e2e,uat}.yml` — compose stacks (UAT compose is a
   documented fallback; the live UAT is k3d/Helm, above).
 - `nginx/` — `dev.conf` (web upstream :5173) and `uat.conf` (web upstream :80);
-  `uat.conf` is shared by the QA compose stack and the k8s routing nginx.
+  `uat.conf` is mounted by the QA compose stack. The k8s routing nginx does NOT
+  read this file — it renders an **inline copy** in
+  `deploy/uat/templates/_helpers.tpl` (`fortymm-uat.nginxConf`, which also adds a
+  `/faro/` block). When you touch `uat.conf`, update the helper copy too.
 - `.github/workflows/*.yml` — CI (api, web-client, e2e, openapi-schema, ios, …).
 - `mise.toml` — toolchain pins + task runner (`redeploy-uat`, `regen-*-types`).
 

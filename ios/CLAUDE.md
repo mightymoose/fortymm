@@ -73,7 +73,9 @@ codebase; align with it, don't reinvent):
   `load(force: Bool = false)` method that skips the network when already loaded and, on
   `force`, refetches **in place** (keeps current content on screen, swaps on arrival, and
   does not blank good content on a transient background-refresh failure). See
-  `DashboardStore`, `SessionStore`.
+  `DashboardStore` — the full exemplar. (`SessionStore` shares the class shape but
+  deliberately blanks to `.loading`/`.failed` on refresh and adds a `signedOut` case —
+  it's the app-level session gate, not the pattern to copy for a screen.)
 - **Services map the wire to view models.** A `…Service` (e.g. `MatchService`) wraps
   `APIClient`, calls endpoints, and maps DTOs → view models. Keep decode-shaped `…DTO`
   types (`MatchAPI.swift`) separate from the UI-facing view models (`MatchModels.swift`).

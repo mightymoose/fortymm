@@ -27,8 +27,8 @@ tell the user to plan first (e.g. `/grill-with-docs`).
 
 ### 1. Gather
 
-Work from the plan in context. If the user passed a path (a PRD in `docs/prd/`, a
-plan doc, an issue ref), read it in full. Either way, scan the repo's durable
+Work from the plan in context. If the user passed a path (a PRD, a plan doc in
+`docs/designs/`, an issue ref), read it in full. Either way, scan the repo's durable
 decision docs — `CONTEXT.md` (glossary), `docs/adr/` (ADRs), `CONTEXT-MAP.md` if
 present — so chores can point at the decisions they depend on.
 

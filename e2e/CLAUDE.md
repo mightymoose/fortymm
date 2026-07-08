@@ -75,11 +75,12 @@ Chrome); `trace: 'on-first-retry'`. In CI: `retries: 2`, `forbidOnly: true`,
 ## Test organization
 
 Specs live in `tests/*.spec.ts`; page objects in `page-objects/`
-(`*.page.ts`, nested per-page helpers under `page-objects/<page>/`). Keep to the
-patterns already here:
+(`*.page.ts`, nested per-page helpers under `page-objects/<page>-page/`, e.g.
+`page-objects/dashboard-page/user-menu.page.ts`). Keep to the patterns already here:
 
 - **Page Object Model.** One class per surface exposing named `Locator`s (see
-  `landing.page.ts`, `dashboard.page.ts`). Navigation is a static
+  `landing.page.ts`; `dashboard.page.ts` shows the child-composition variant,
+  where the Locators live on the composed `UserMenuPage`). Navigation is a static
   `navigateTo(page)` factory that `goto`s and returns the instance. Compose child
   page objects (e.g. `DashboardPage.userMenu` → `UserMenuPage`) rather than growing
   one flat class. Keep raw selectors *inside* the page object; specs read
