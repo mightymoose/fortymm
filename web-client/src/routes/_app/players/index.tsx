@@ -142,10 +142,9 @@ function PlayersPage() {
   }, [isLoading, isFetching, page, totalPages, setPage])
 
   // The redirect runs in an effect, so an out-of-range page paints for one
-  // frame first. Clamp the page the footer + seed numbering render with so the
-  // range math never shows start > end during that frame.
+  // frame first. Clamp the page the footer renders with so the range math
+  // never shows start > end during that frame.
   const displayPage = Math.min(page, totalPages)
-  const startIndex = (displayPage - 1) * PAGE_SIZE
 
   return (
     <div className="match-list-page">
@@ -155,7 +154,6 @@ function PlayersPage() {
         <PlayerTable
           rows={items}
           isLoading={isLoading}
-          startIndex={startIndex}
           onClear={onClear}
         />
       </div>
@@ -221,12 +219,10 @@ function FilterRow({
 function PlayerTable({
   rows,
   isLoading,
-  startIndex,
   onClear,
 }: {
   rows: PlayerSummary[]
   isLoading: boolean
-  startIndex: number
   onClear: () => void
 }) {
   if (isLoading && rows.length === 0) {
@@ -260,8 +256,8 @@ function PlayerTable({
         </tr>
       </thead>
       <tbody>
-        {rows.map((p, i) => (
-          <PlayerRow key={p.id} player={p} seed={startIndex + i + 1} />
+        {rows.map((p) => (
+          <PlayerRow key={p.id} player={p} />
         ))}
       </tbody>
     </table>
@@ -293,8 +289,12 @@ function SkeletonRows() {
   )
 }
 
-function PlayerRow({ player, seed }: { player: PlayerSummary; seed: number }) {
+function PlayerRow({ player }: { player: PlayerSummary }) {
   const navigate = useNavigate()
+  // `rank` is the player's true global rating rank (1 = highest); `null` means
+  // unrated. Guard the null explicitly — in JS `null <= 4` is `true`, so a bare
+  // `rank <= 4` would gild every unrated player gold (#841).
+  const rank = player.rank ?? null
   const open = () =>
     navigate({ to: '/players/$userId', params: { userId: player.id } })
   return (
@@ -314,10 +314,11 @@ function PlayerRow({ player, seed }: { player: PlayerSummary; seed: number }) {
       <td>
         <span
           className={
-            'players-seed' + (seed <= 4 ? ' players-seed--top' : '')
+            'players-seed' +
+            (rank != null && rank <= 4 ? ' players-seed--top' : '')
           }
         >
-          #{seed}
+          {rank != null ? `#${rank}` : '—'}
         </span>
       </td>
       <td>
