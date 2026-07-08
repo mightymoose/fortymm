@@ -103,6 +103,21 @@ is to drop the stale identity and send the holder to sign in, never to quietly
 mint a fresh guest in their place.
 _Avoid_: logged out, expired, unauthenticated.
 
+## Players roster
+
+**Rank**:
+A player's position on a league's rating ladder — rank 1 is the highest-rated
+player in the league. It is a *global* fact about the player within a league:
+the same no matter how the roster is searched, sorted into pages, or otherwise
+windowed. Computed by standard competition ranking — your rank is one more than
+the number of players *strictly* above you by rating, so equal-rated players
+share a rank and the next rank skips (…, 7, 7, 9, …). A player with **no rating**
+(never finished a rated match) has **no rank** at all — not a large number at the
+bottom of the list.
+_Avoid_: seed, top seed, position, row number (the roster's leftmost column may
+be *styled* with tournament "seed" flavor, but the underlying concept is a
+rating rank, never the player's index on the current page).
+
 ## Dashboard
 
 **First-match**:
