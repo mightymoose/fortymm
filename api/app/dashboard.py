@@ -56,7 +56,7 @@ STREAK_SCAN_LIMIT = 100
 # ranking — the #838 bug was capping the DB read on ``updated_at``, an axis
 # unrelated to priority), then slice the ranked list to this many for display
 # and roll the rest into a "+N more" count. This is a post-ranking display cap,
-# not a DB/eager-load cap (see ADR 0009).
+# not a DB/eager-load cap (see ADR 0011).
 ATTENTION_BANNERS_LIMIT = 10
 # The open statuses an attention row can hold — the only ones where the user
 # still owes (or is owed) a move. Bounds the count scan to a handful of rows.
@@ -77,7 +77,7 @@ async def get_dashboard(
     # table. We load the whole actionable set — no DB cap — because ranking by
     # attention priority happens in Python (``_build_attention``); capping the
     # read first (the old ``ORDER BY updated_at ASC LIMIT``) drops the
-    # highest-priority row on an axis unrelated to priority (#838, ADR 0009).
+    # highest-priority row on an axis unrelated to priority (#838, ADR 0011).
     # We reuse the list Attention tab's own membership query so the panel and the
     # tab agree on exactly *who is actionable*; ``ATTENTION_BANNERS_LIMIT`` then
     # caps the ranked *display* list, and ``attention_total_count`` is that
@@ -150,7 +150,7 @@ async def get_dashboard(
 
     # Rank the *full* actionable set, then cap for display: the total is the
     # ranked list's length (the list tab's "its length IS the count" trick) and
-    # the panel shows the top ATTENTION_BANNERS_LIMIT (#838, ADR 0009).
+    # the panel shows the top ATTENTION_BANNERS_LIMIT (#838, ADR 0011).
     ranked_attention = _build_attention(actionable, current_user.id)
     attention_total_count = len(ranked_attention)
     attention = ranked_attention[:ATTENTION_BANNERS_LIMIT]
