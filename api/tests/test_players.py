@@ -398,6 +398,138 @@ async def _record_match_with_winner(
     return match
 
 
+async def _rate(
+    db_session: AsyncSession, user: User, rating_value: float | None
+) -> None:
+    """Attach a default-league ``UserLeagueRating`` to ``user``. A ``None``
+    ``rating_value`` models a player who has a rating row but has never
+    finished a rated match (unranked)."""
+    league = await get_default_league(db_session)
+    db_session.add(
+        UserLeagueRating(
+            league_id=league.id,
+            user_id=user.id,
+            rating_value=rating_value,
+        )
+    )
+    await db_session.commit()
+
+
+def _rank_for(items: list[dict], username: str):
+    for player in items:
+        if player["username"] == username:
+            return player["rank"]
+    raise KeyError(username)
+
+
+async def test_list_players_rank_is_none_for_unrated_player(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """A player with no rating (never finished a rated match) has no rank —
+    no rating, no ladder position."""
+    await start_session(api_client, db_session)
+    rated = await make_user(db_session, "rank.rated")
+    unrated = await make_user(db_session, "rank.unrated")
+    await _rate(db_session, rated, 1600.0)
+    # `unrated` gets no rating row at all → absent from the rank population.
+    assert unrated is not None
+
+    response = await api_client.get("/v1/players", params={"q": "rank."})
+    assert response.status_code == 200
+    items = response.json()["items"]
+    assert _rank_for(items, "rank.rated") == 1
+    assert _rank_for(items, "rank.unrated") is None
+
+
+async def test_list_players_rank_ties_share_and_next_rank_skips(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """Standard competition ranking: two players tied on rating share a rank
+    and the next-lower player's rank SKIPS the shared slot (…, 1, 1, 3)."""
+    await start_session(api_client, db_session)
+    top_a = await make_user(db_session, "tie.aaa")
+    top_b = await make_user(db_session, "tie.bbb")
+    lower = await make_user(db_session, "tie.ccc")
+    await _rate(db_session, top_a, 1800.0)
+    await _rate(db_session, top_b, 1800.0)
+    await _rate(db_session, lower, 1500.0)
+
+    response = await api_client.get("/v1/players", params={"q": "tie."})
+    assert response.status_code == 200
+    items = response.json()["items"]
+    assert _rank_for(items, "tie.aaa") == 1
+    assert _rank_for(items, "tie.bbb") == 1
+    # The tie consumes ranks 1 and 2, so the next player is rank 3, not 2.
+    assert _rank_for(items, "tie.ccc") == 3
+
+
+async def test_list_players_rank_is_global_across_filter_and_pagination(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """The #841 regression guard: a player's rank is a GLOBAL ladder fact,
+    identical whether the row is fetched unfiltered, under a ``q`` search that
+    hides higher-rated players, or on page 2 — never the row's index on the
+    current page."""
+    await start_session(api_client, db_session)
+    # A descending ladder; ``mid`` sits at global rank 3.
+    top = await make_user(db_session, "glob.top")
+    second = await make_user(db_session, "glob.second")
+    mid = await make_user(db_session, "glob.mid")
+    fourth = await make_user(db_session, "glob.fourth")
+    fifth = await make_user(db_session, "glob.fifth")
+    await _rate(db_session, top, 2000.0)
+    await _rate(db_session, second, 1900.0)
+    await _rate(db_session, mid, 1800.0)
+    await _rate(db_session, fourth, 1700.0)
+    await _rate(db_session, fifth, 1600.0)
+
+    # Unfiltered: mid is globally rank 3.
+    unfiltered = await api_client.get("/v1/players", params={"page_size": 100})
+    assert unfiltered.status_code == 200
+    assert _rank_for(unfiltered.json()["items"], "glob.mid") == 3
+
+    # Under a search filter that excludes the two higher-rated players, mid
+    # would be row 1 of the results — its rank must still be 3.
+    filtered = await api_client.get("/v1/players", params={"q": "glob.mid"})
+    assert _rank_for(filtered.json()["items"], "glob.mid") == 3
+
+    # On page 2 (page_size 1, ordered by rating desc), mid is the only row —
+    # its rank must be 3, not the page-relative index 1.
+    page3 = await api_client.get(
+        "/v1/players", params={"q": "glob.", "page": 3, "page_size": 1}
+    )
+    page3_items = page3.json()["items"]
+    assert len(page3_items) == 1
+    assert page3_items[0]["username"] == "glob.mid"
+    assert page3_items[0]["rank"] == 3
+
+
+async def test_list_players_rank_ignores_merged_ghost(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """A tombstoned (merged-away) high-rated user must NOT be part of the rank
+    population — otherwise it would push every real player one rank down."""
+    await start_session(api_client, db_session)
+    ghost = await make_user(db_session, "ghost.top")
+    survivor = await make_user(db_session, "ghost.survivor")
+    real_top = await make_user(db_session, "real.top")
+    real_second = await make_user(db_session, "real.second")
+    # The ghost outrates everyone, but it's a tombstone.
+    await _rate(db_session, ghost, 3000.0)
+    await _rate(db_session, real_top, 2000.0)
+    await _rate(db_session, real_second, 1500.0)
+
+    ghost.merged_into_user_id = survivor.id
+    await db_session.commit()
+
+    response = await api_client.get("/v1/players", params={"page_size": 100})
+    assert response.status_code == 200
+    items = response.json()["items"]
+    # The ghost is excluded, so the real top is rank 1 (not 2).
+    assert _rank_for(items, "real.top") == 1
+    assert _rank_for(items, "real.second") == 2
+
+
 async def test_list_players_requires_a_session(api_client: AsyncClient):
     async with make_client() as client:
         response = await client.get("/v1/players")
