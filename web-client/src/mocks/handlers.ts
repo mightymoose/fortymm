@@ -130,12 +130,35 @@ function djb2(s: string): number {
   return Math.abs(h)
 }
 
+/** Global rating rank (1 = highest) keyed by player id, derived from the whole
+ * mock roster. Rated players are sorted by rating descending and numbered
+ * 1-based; an unrated player (null rating, e.g. `park.j`) maps to `null`. This
+ * mirrors the real `rank` field the API projects, so the roster renders true
+ * ranks instead of page-index numbering (#841). Memoized — the roster is
+ * static. */
+let rankByIdCache: Map<string, number | null> | null = null
+function rosterRankById(): Map<string, number | null> {
+  if (rankByIdCache) return rankByIdCache
+  const roster = mockPlayerRoster()
+  const map = new Map<string, number | null>()
+  roster
+    .filter((p) => (p.rating ?? null) !== null)
+    .sort((a, b) => (b.rating ?? 0) - (a.rating ?? 0))
+    .forEach((p, i) => map.set(p.id, i + 1))
+  for (const p of roster) {
+    if (!map.has(p.id)) map.set(p.id, null)
+  }
+  rankByIdCache = map
+  return map
+}
+
 function summarizePlayer(p: {
   id: string
   username: string
   rating?: number | null
 }): PlayerSummary {
   const rating = p.rating ?? null
+  const rank = rosterRankById().get(p.id) ?? null
   // The current user gets real W-L derived from `mockMatches` so the
   // self-profile feels live. Everyone else gets deterministic synthesis
   // seeded by username — stable across reloads.
@@ -171,6 +194,7 @@ function summarizePlayer(p: {
       id: p.id,
       username: p.username,
       rating,
+      rank,
       wins,
       losses,
       form: recent.join(''),
@@ -186,6 +210,7 @@ function summarizePlayer(p: {
     id: p.id,
     username: p.username,
     rating,
+    rank,
     wins,
     losses,
     form,
