@@ -1845,8 +1845,9 @@ async def _load_match_for_scoring(
     lock: bool = False,
     nowait: bool = False,
 ) -> Match:
-    # ``lock`` callers (the negotiation transitions) take the row lock *before*
-    # the eager load so the match state they read is the serialized one.
+    # ``lock`` callers (the negotiation transitions, and per ADR-0009 the score
+    # endpoints) take the row lock *before* the eager load so the match state
+    # they read is the serialized one.
     if lock:
         await _lock_match_row(db, match_id, nowait=nowait)
     match = await _load_match(db, match_id)
@@ -1876,7 +1877,14 @@ async def create_game_score(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_session),
 ) -> MatchDetails:
-    match = await _load_match_for_scoring(db, match_id, current_user.id)
+    # Take the blocking match row lock so this score write serializes against a
+    # concurrent first ``post_match_result`` (which locks the same row NOWAIT).
+    # The lock is acquired *before* the eager load, so the ``_enforce_scorable``
+    # recheck below runs on the serialized (post-freeze) state — a score can no
+    # longer commit atop a result the propose already froze (#835, ADR-0009).
+    # Blocking (not NOWAIT): the common score-vs-score contention resolves via
+    # the uq_match_games / version guards and must not spuriously 409.
+    match = await _load_match_for_scoring(db, match_id, current_user.id, lock=True)
     _enforce_scorable(match)
     if game_number > match.match_settings.best_of:
         raise HTTPException(
@@ -1943,7 +1951,12 @@ async def update_game_score(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_session),
 ) -> MatchDetails:
-    match = await _load_match_for_scoring(db, match_id, current_user.id)
+    # Blocking match row lock (see ``create_game_score``): serializes this update
+    # against a concurrent first ``post_match_result`` so ``_enforce_scorable``
+    # rechecks the serialized state and the conditional UPDATE below can't race a
+    # board freeze that deletes the target score row (#835, ADR-0009). Blocking,
+    # not NOWAIT, so the common score-vs-score edit isn't spuriously 409'd.
+    match = await _load_match_for_scoring(db, match_id, current_user.id, lock=True)
     _enforce_scorable(match)
 
     game = next((g for g in match.games if g.game_number == game_number), None)
@@ -2012,7 +2025,12 @@ async def delete_game_score(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_session),
 ) -> MatchDetails:
-    match = await _load_match_for_scoring(db, match_id, current_user.id)
+    # Blocking match row lock (see ``create_game_score``): serializes this delete
+    # against a concurrent first ``post_match_result`` so ``_enforce_scorable``
+    # rechecks the serialized state, and two racing clears re-read under the lock
+    # — the loser sees the already-cleared score and 404s instead of a lying 200
+    # (#835, ADR-0009). Blocking, not NOWAIT, to match the other score paths.
+    match = await _load_match_for_scoring(db, match_id, current_user.id, lock=True)
     _enforce_scorable(match)
 
     game = next((g for g in match.games if g.game_number == game_number), None)
