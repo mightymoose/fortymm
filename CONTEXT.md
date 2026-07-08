@@ -74,6 +74,44 @@ decided board, not an edit of individual game cells. The corrector may add,
 remove, or change games, so long as the outcome is again a decided board.
 _Avoid_: dispute, edit, amendment.
 
+## Match taxonomy
+
+**Rating**:
+A player's skill number in a league, moved only by **rated matches**. A player who
+has never finished a rated match has no rating ("Unrated" on their profile). Copy
+about "no rated matches yet" is correct when it is talking about *rating* — never
+when it is talking about a player's **match history**, which counts every kind of
+match.
+_Avoid_: score, rank, ELO (the number is a rating).
+
+**Rated match**:
+A match played for rating: it moves both players' **rating** when it completes.
+Always has a real opponent (you cannot play a rated match against nobody), and it
+completes only once the opposing side **accepts** the result.
+_Avoid_: ranked match, competitive match.
+
+**Unrated match**:
+A match that does not touch anyone's **rating**. May still have a named opponent
+(a friendly), or none at all (a **solo match**). Completes as soon as a result is
+recorded — there is no second party whose sign-off is worth waiting on.
+_Avoid_: casual match, friendly (a friendly is one *kind* of unrated match, not a
+synonym).
+
+**Solo match**:
+An unrated match with no opponent — the player records their own games against a
+player-less second side. Rendered as "No opponent" in a match list, and always
+unrated (a rated match needs an opponent). Its empty second side is a structural
+sentinel, not an absence to be filtered away.
+_Avoid_: practice match, single-player match, self match.
+
+**Match history**:
+Every match a player was on a side of — regardless of rating, opponent, or
+outcome — newest first. It is *not* a rated-play record: it includes unrated,
+solo, and still-in-progress matches. Contrast with **rating**, which is
+rated-only. This distinction is the whole point of issue #845: a player with an
+empty history "has no matches yet", not "no *rated* matches yet".
+_Avoid_: results, rated history, match log.
+
 ## Session and identity
 
 **Guest**:
