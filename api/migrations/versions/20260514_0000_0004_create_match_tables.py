@@ -75,6 +75,12 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.Column(
+            "retirement_window",
+            sa.Interval(),
+            nullable=True,
+            server_default=sa.text("'7 days'"),
+        ),
+        sa.Column(
             "updated_at",
             sa.DateTime(timezone=True),
             server_default=sa.func.now(),
@@ -83,6 +89,10 @@ def upgrade() -> None:
         sa.CheckConstraint("team_size IN (1, 2)", name="ck_match_settings_team_size"),
         sa.CheckConstraint(
             "best_of >= 1 AND best_of % 2 = 1", name="ck_match_settings_best_of"
+        ),
+        sa.CheckConstraint(
+            "retirement_window IS NULL OR retirement_window > interval '0'",
+            name="ck_match_settings_retirement_window_positive",
         ),
     )
 
