@@ -188,7 +188,7 @@ export function matchDetails(
   const bestOf = overrides.best_of ?? 5
   const status = overrides.status ?? 'in_progress'
   // Derive `data.scoreboard.status` the same way the mock store (and backend
-  // mapper) do, so an overridden `status` stays in sync (disputed/voided → final).
+  // mapper) do, so an overridden `status` stays in sync (voided → final).
   const scoreboardStatus = seedScoreboardStatus(status)
   const { mySide, opponentSide } = defaultSides(
     faker.internet.username().toLowerCase(),
@@ -266,7 +266,6 @@ const ALL_STATUSES: MatchStatus[] = [
   'pending',
   'in_progress',
   'completed',
-  'disputed',
   'voided',
 ]
 

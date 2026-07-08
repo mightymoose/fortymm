@@ -460,7 +460,7 @@ function ResultChip({
       </span>
     )
   }
-  // Completed but undecided (disputed/voided/no-side-won). Neutral pill.
+  // Completed but undecided (voided/no-side-won). Neutral pill.
   return (
     <span className="player-profile__result-chip player-profile__result-chip--pending">
       {status.toUpperCase()}

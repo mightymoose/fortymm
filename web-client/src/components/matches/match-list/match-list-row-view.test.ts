@@ -7,12 +7,7 @@ import {
 } from '@/api/matches'
 import type { components } from '@/api/schema'
 import { matchListRow } from '@/test/factories'
-import {
-  API_TO_TONE,
-  STATUS_TABS,
-  STATUS_TONE,
-  TAB_TO_API,
-} from './match-list-status'
+import { STATUS_TABS, STATUS_TONE, TAB_TO_API } from './match-list-status'
 import {
   buildFilterTabs,
   formatCreatedAt,
@@ -172,14 +167,6 @@ describe('projectMatchListRow', () => {
     const solo = side(['alpha'], { side_number: 1, games_won: 2 })
     const row = matchListRow({ status: 'completed', sides: [solo] })
     expect(projectMatchListRow(row).score.games).toBeNull()
-  })
-
-  it('resolves the status tone from STATUS_TONE[API_TO_TONE[status]]', () => {
-    const row = matchListRow({ status: 'disputed', status_label: 'In review' })
-    const view = projectMatchListRow(row)
-    expect(view.status.toneClass).toBe(STATUS_TONE[API_TO_TONE.disputed])
-    expect(view.status.toneClass).toBe('status-tone-final')
-    expect(view.status.label).toBe('In review')
   })
 
   it('marks isLive only for in_progress', () => {

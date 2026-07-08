@@ -183,3 +183,20 @@ player with an unfinished match is not first-match, even at zero completed
 matches: that match's own dashboard treatment takes priority so it is never
 hidden behind a "log your first match" prompt.
 _Avoid_: zero state, empty dashboard, new user.
+
+**Actionable**:
+An open match that is waiting on *the current user's* own move, as opposed to
+one merely parked on someone else. There are two actionable buckets — **review**
+(the opponent proposed the standing result; the user must accept or counter) and
+**score** (an in-progress match with no standing result; the user can still
+enter games). The passive counterparts fold into a waiting count, never a row:
+**waiting-on-opponent** (the user proposed the standing result) and
+**waiting-on-others** (a pending/scheduled match). "Actionable" is
+current-user-relative: the proposer and the reviewer of the *same* result sit on
+opposite sides of it. Rank order is review-before-score, rated score before
+unrated, oldest-first within a bucket. The same definition backs the dashboard's
+"Needs your attention" panel and the match list's Attention tab, so they can
+never disagree.
+_Avoid_: dispute (there is no `disputed` status — a contested result is a
+**Correction**), needs-attention (that names the panel, not the per-match
+property).

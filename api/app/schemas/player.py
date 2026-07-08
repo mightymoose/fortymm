@@ -83,8 +83,8 @@ class PlayerMatchRow(BaseModel):
     # scored (e.g. status=pending).
     sets: list[PlayerMatchSet]
     # The headline player's outcome: ``W`` / ``L`` for decided matches,
-    # ``None`` while the match is still pending / in_progress / disputed /
-    # voided. The FE keys the WIN/LOSS/LIVE/UP NEXT chip off `status` + this.
+    # ``None`` while the match is still pending / in_progress / voided.
+    # The FE keys the WIN/LOSS/LIVE/UP NEXT chip off `status` + this.
     result: Literal["W", "L"] | None = None
     # True when a result has been proposed but not yet accepted by the
     # opponent — i.e. ``status`` is still ``in_progress`` *and* the match has a

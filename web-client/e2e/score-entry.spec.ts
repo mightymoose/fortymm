@@ -5,7 +5,7 @@ type Score = { id: string; side_1_points: number; side_2_points: number }
 type Game = { id: string; game_number: number; score: Score | null }
 type Seed = {
   id: string
-  status: 'pending' | 'in_progress' | 'completed' | 'disputed' | 'voided'
+  status: 'pending' | 'in_progress' | 'completed' | 'voided'
   best_of: number
   affects_rating: boolean
   opponent_username: string
@@ -118,7 +118,6 @@ function projectMatchDetails(seed: Seed) {
       in_progress: 'Live',
       pending: 'Scheduled',
       completed: 'Final',
-      disputed: 'In review',
       voided: 'Voided',
     }[seed.status],
     best_of: seed.best_of,

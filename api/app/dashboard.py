@@ -11,6 +11,7 @@ from sqlalchemy.orm import selectinload
 from app.attention import attention_priority, list_attention_kind
 from app.db import get_session
 from app.matches import (
+    _attention_matches_query,
     current_game_number,
     match_eager_options,
     my_standing_proposal_exists,
@@ -50,13 +51,12 @@ RECENT_RESULTS_LIMIT = 5
 SPARK_WINDOW_DAYS = 30
 SPARK_MAX_POINTS = 30
 STREAK_SCAN_LIMIT = 100
-# Most actionable attention rows we eager-load (and return) at once. A
-# tournament player can sit on dozens of simultaneous open matches (variant D:
-# back-to-back round-robin play), but the panel only renders a few rows and
-# rolls the rest into a "+N more" count — so loading every open match (each
-# fully eager-loaded: sides, players, games, scores) would cost O(matches ×
-# games) for no UX benefit. We cap the eager-load here and derive the exact
-# overflow/waiting totals from cheap COUNT(*) aggregates instead (#216).
+# Most attention rows the panel *displays* at once. We load and rank EVERY
+# actionable match (so the highest-priority row can never be dropped before
+# ranking — the #838 bug was capping the DB read on ``updated_at``, an axis
+# unrelated to priority), then slice the ranked list to this many for display
+# and roll the rest into a "+N more" count. This is a post-ranking display cap,
+# not a DB/eager-load cap (see ADR 0011).
 ATTENTION_BANNERS_LIMIT = 10
 # The open statuses an attention row can hold — the only ones where the user
 # still owes (or is owed) a move. Bounds the count scan to a handful of rows.
@@ -71,32 +71,28 @@ async def get_dashboard(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_session),
 ) -> DashboardResponse:
-    # Actionable open matches the user participates in are pulled in full
-    # (results + sides are needed to classify each into an attention bucket
-    # and to deep-link a "score" row); completed matches feed the recent-results
-    # table. The eager-loaded set is capped at ATTENTION_BANNERS_LIMIT — the
-    # panel only renders a few rows, and the exact total/waiting counts come from
-    # the cheap aggregates below — so an active tournament player doesn't pay to
-    # load every open match (#216).
+    # EVERY actionable open match the user participates in is pulled in full
+    # (results + sides are needed to classify each into an attention bucket and
+    # to deep-link a "score" row); completed matches feed the recent-results
+    # table. We load the whole actionable set — no DB cap — because ranking by
+    # attention priority happens in Python (``_build_attention``); capping the
+    # read first (the old ``ORDER BY updated_at ASC LIMIT``) drops the
+    # highest-priority row on an axis unrelated to priority (#838, ADR 0011).
+    # We reuse the list Attention tab's own membership query so the panel and the
+    # tab agree on exactly *who is actionable*; ``ATTENTION_BANNERS_LIMIT`` then
+    # caps the ranked *display* list, and ``attention_total_count`` is that
+    # ranked list's length.
     #
-    # An in_progress match where the current user proposed the *standing* result
-    # is "waiting on the opponent" to accept: it's never an attention row, only a
-    # waiting count, so we exclude it from the eager load entirely rather than
-    # load-then-discard it. The standing result is the unaccepted head of the
-    # supersede chain (nothing supersedes it); the current user owes a move on
-    # every other in_progress match — either no result yet ("score") or a
-    # standing result the *other* side proposed ("review"). The Python classifier
+    # ``_attention_matches_query``'s filter excludes the passive "waiting on the
+    # opponent" case (an in_progress match where the current user proposed the
+    # *standing* result — the unaccepted head of the supersede chain): those are
+    # never attention rows, only a waiting count. The current user owes a move on
+    # every actionable match — either no result yet ("score") or a standing
+    # result the *other* side proposed ("review"). The Python classifier
     # (``list_attention_kind``) refines which per row.
     my_standing_proposal = my_standing_proposal_exists(current_user.id)
-    in_progress_q = (
-        participant_filter(select(Match), current_user.id)
-        .where(
-            Match.status == MatchStatus.in_progress,
-            ~my_standing_proposal,
-        )
-        .options(*match_eager_options())
-        .order_by(Match.updated_at.asc())
-        .limit(ATTENTION_BANNERS_LIMIT)
+    actionable_q = _attention_matches_query(None, current_user.id).options(
+        *match_eager_options()
     )
     completed_q = (
         participant_filter(select(Match), current_user.id)
@@ -108,25 +104,18 @@ async def get_dashboard(
         .order_by(Match.completed_at.desc())
         .limit(RECENT_RESULTS_LIMIT)
     )
-    # Exact attention totals, independent of the eager-load cap above so the
-    # footer's "+N more" / "waiting on others" stay accurate past it. This split
-    # mirrors ``app.attention.list_attention_kind`` in SQL (COUNT can't run the
-    # Python classifier): actionable rows are every ``score``/``review``
-    # (in_progress where the user hasn't proposed the standing result); the
-    # passive ``waiting_opponent`` (in_progress where the user *has* a standing
-    # proposal awaiting acceptance) and ``waiting_others`` (pending/scheduled)
-    # fold into waiting. If that classifier's status routing ever changes, these
-    # filters must follow. Both counts ride one open-status scan (a handful of
-    # rows even for an active player) via FILTER, so the dashboard pays a single
-    # extra round-trip.
-    attention_counts_q = participant_filter(
+    # The passive "waiting" total feeds the footer's "waiting on others" line —
+    # matches the user can't act on yet, so they're never loaded above. This
+    # mirrors the passive half of ``app.attention.list_attention_kind`` in SQL
+    # (COUNT can't run the Python classifier): ``waiting_opponent`` (in_progress
+    # where the user *has* a standing proposal awaiting acceptance) plus
+    # ``waiting_others`` (pending/scheduled) fold into waiting. If that
+    # classifier's status routing ever changes, this filter must follow. The
+    # actionable total is no longer counted here — it's ``len`` of the ranked
+    # list below (every actionable match is loaded), so the panel and its "+N
+    # more" footer share one definition of who is actionable.
+    waiting_count_q = participant_filter(
         select(
-            func.count(Match.id).filter(
-                and_(
-                    Match.status == MatchStatus.in_progress,
-                    ~my_standing_proposal,
-                )
-            ),
             func.count(Match.id).filter(
                 or_(
                     Match.status == MatchStatus.pending,
@@ -140,11 +129,9 @@ async def get_dashboard(
         current_user.id,
     ).where(Match.status.in_(_OPEN_STATUSES))
 
-    in_progress = (await db.execute(in_progress_q)).scalars().all()
+    actionable = (await db.execute(actionable_q)).scalars().all()
     completed = (await db.execute(completed_q)).scalars().all()
-    attention_total, waiting = (await db.execute(attention_counts_q)).one()
-    attention_total_count = int(attention_total)
-    waiting_count = int(waiting)
+    waiting_count = int((await db.execute(waiting_count_q)).scalar_one())
 
     # When completed_q didn't hit its LIMIT, we already have the exact count
     # and can skip the extra round-trip; only the user-with-history case pays
@@ -161,7 +148,12 @@ async def get_dashboard(
         db, current_user.id, [m.id for m in completed]
     )
 
-    attention = _build_attention(in_progress, current_user.id)
+    # Rank the *full* actionable set, then cap for display: the total is the
+    # ranked list's length (the list tab's "its length IS the count" trick) and
+    # the panel shows the top ATTENTION_BANNERS_LIMIT (#838, ADR 0011).
+    ranked_attention = _build_attention(actionable, current_user.id)
+    attention_total_count = len(ranked_attention)
+    attention = ranked_attention[:ATTENTION_BANNERS_LIMIT]
     recent_results = [
         _build_recent_result(match, current_user.id, rating_changes.get(match.id))
         for match in completed
@@ -205,14 +197,17 @@ async def _load_my_rating_changes(
 
 
 def _build_attention(
-    in_progress: Sequence[Match],
+    actionable: Sequence[Match],
     current_user_id: uuid.UUID,
 ) -> list[DashboardAttentionItem]:
     """Rank the user's actionable open matches into priority-ordered attention
     rows.
 
-    The caller pre-filters to actionable matches — in_progress matches where the
-    user hasn't proposed the standing result — and bounds the count, so passive
+    The caller passes *every* actionable match — in_progress matches where the
+    user hasn't proposed the standing result — unbounded, so ranking sees the
+    full set and the highest-priority row can never be dropped before ranking
+    (#838). The caller slices the returned list to ``ATTENTION_BANNERS_LIMIT``
+    for display and takes its length as the exact actionable total. Passive
     "waiting" matches (our standing proposal awaiting acceptance,
     pending/scheduled) never reach here; they feed ``waiting_count`` via a
     separate aggregate. Classification + ranking come from the shared
@@ -223,7 +218,7 @@ def _build_attention(
     # long-stalled match floats to the top of its bucket.
     ranked: list[tuple[int, datetime, DashboardAttentionItem]] = []
 
-    for match in in_progress:
+    for match in actionable:
         kind = list_attention_kind(match, current_user_id)
         # Only actionable kinds become rows. The caller filters out the passive
         # "waiting" buckets, but we skip them (and the non-participant ``None``)

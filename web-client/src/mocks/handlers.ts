@@ -375,7 +375,6 @@ function detail(message: string, status = 422) {
 function enforceScorable(seed: SeedMatch): Response | null {
   if (
     seed.status === 'completed' ||
-    seed.status === 'disputed' ||
     seed.status === 'voided'
   ) {
     return detail('This match is no longer scorable.', 409)

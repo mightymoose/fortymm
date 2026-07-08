@@ -26,7 +26,6 @@ class MatchListFilter(enum.Enum):
     live = "in_progress"
     awaiting_acceptance = "awaiting_acceptance"
     completed = "completed"
-    disputed = "disputed"
     voided = "voided"
 
 

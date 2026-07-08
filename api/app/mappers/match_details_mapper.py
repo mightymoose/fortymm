@@ -15,13 +15,13 @@ def _scoreboard_status(status: MatchStatus) -> Status:
     # tri-state. Exhaustive (no catch-all) so a new MatchStatus member is a
     # type error here until it's mapped. The grouping mirrors the web client's
     # API_TO_TAB in web-client/src/routes/matches/index.tsx — in particular,
-    # disputed and voided are both terminal ("final"), not live.
+    # voided is terminal ("final"), not live.
     match status:
         case MatchStatus.pending:
             return Status.SCHEDULED
         case MatchStatus.in_progress:
             return Status.LIVE
-        case MatchStatus.completed | MatchStatus.disputed | MatchStatus.voided:
+        case MatchStatus.completed | MatchStatus.voided:
             return Status.FINAL
 
 

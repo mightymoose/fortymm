@@ -121,7 +121,7 @@ describe('TAB_TO_API', () => {
 
 describe('API_TO_TONE', () => {
   it('folds the terminal statuses to the final tone', () => {
-    const terminal: MatchStatus[] = ['disputed', 'voided']
+    const terminal: MatchStatus[] = ['voided']
     for (const status of terminal) {
       expect(API_TO_TONE[status]).toBe('final')
     }
