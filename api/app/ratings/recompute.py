@@ -86,8 +86,14 @@ async def recompute_league_ratings(
 
     Walks forward in time, propagating staleness through shared matches:
     once a user's rating is recomputed, every later match they played becomes
-    a recompute. Manual / non-automatic strategies are no-ops. No-op when
-    the seed users have no rated completed matches in this league.
+    a recompute. Manual / non-automatic strategies are no-ops.
+
+    When the seed users have no completed rated match in this league their
+    timeline is *empty*, and an empty timeline resolves to the strategy's
+    initial state: each seed user's ``UserLeagueRating`` is reset to that
+    baseline and their stale match-sourced ``rating_history`` rows are dropped
+    (see ``_reset_users_to_initial_state``). This is what makes the module's
+    "rewrites state deterministically" invariant hold for the empty input too.
 
     Runs inside the caller's transaction — does not commit.
     """
@@ -139,6 +145,15 @@ async def recompute_league_ratings(
         )
     ).scalar_one_or_none()
     if t_start is None:
+        # No completed rated singles match remains for the seed users in this
+        # league (e.g. their only rated match was just voided). Their rating
+        # timeline is *empty*, so their state is the strategy's initial state —
+        # not the stale value a since-voided match left on the row. The
+        # recompute owns this: returning here (the old behaviour) stranded the
+        # inflated rating, falsifying the module's "rewrites state
+        # deterministically" claim for the one input — the empty timeline —
+        # that could break it.
+        await _reset_users_to_initial_state(db, league_id, seed_user_ids, strategy)
         return
 
     matches = (
@@ -291,6 +306,63 @@ async def recompute_league_ratings(
             )
             rating_by_user[user_id].rating_state = new_state
             rating_by_user[user_id].rating_value = new_value
+
+    await db.flush()
+
+
+async def _reset_users_to_initial_state(
+    db: AsyncSession,
+    league_id: uuid.UUID,
+    user_ids: set[uuid.UUID],
+    strategy: RatingStrategy,
+) -> None:
+    """Reset each of ``user_ids`` in ``league_id`` to ``strategy``'s initial
+    state — the resolution of an *empty* rating timeline.
+
+    Deletes their match-sourced ``rating_history`` rows. A match row is only
+    ever written for a completed, rated, ``team_size == 1`` match, and an empty
+    timeline (the ``t_start is None`` caller) means no such match exists for
+    these users here — so every surviving match row is necessarily stale (e.g.
+    a since-voided match). The voiding path already deletes a voided match's
+    rows, so in the canonical flow this is a no-op; it stands as the
+    deterministic backstop that makes "empty timeline ⟹ zero match-sourced
+    rows" true regardless of what upstream did.
+
+    The non-match rows — ``initial`` (written by ``seed_user_league_rating``
+    when the user joined), ``manual``, ``import`` — are the empty timeline
+    itself and stay untouched; no new event is appended. The
+    ``UserLeagueRating`` row is reset in place, never deleted: every member
+    keeps exactly one from seeding.
+
+    Runs inside the caller's transaction — does not commit.
+    """
+    if not user_ids:
+        return
+
+    await db.execute(
+        delete(RatingHistory).where(
+            RatingHistory.league_id == league_id,
+            RatingHistory.user_id.in_(user_ids),
+            RatingHistory.source == RatingHistorySource.match,
+        )
+    )
+
+    ratings = (
+        (
+            await db.execute(
+                select(UserLeagueRating).where(
+                    UserLeagueRating.league_id == league_id,
+                    UserLeagueRating.user_id.in_(user_ids),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    initial_state = strategy.initial_state
+    for ulr in ratings:
+        ulr.rating_state = dict(initial_state) if initial_state is not None else None
+        ulr.rating_value = strategy.initial_rating_value
 
     await db.flush()
 

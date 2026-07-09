@@ -4,6 +4,7 @@ algorithm that rebuilds ratings after a merge moves matches onto a user."""
 import uuid
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
@@ -21,8 +22,10 @@ from app.models import (
     RatingHistory,
     RatingHistorySource,
     RatingStrategy,
+    User,
     UserLeagueRating,
 )
+from app.ratings import jobs as ratings_jobs
 from app.ratings.base import state_rating_value
 from app.ratings.recompute import _league_lock_key, recompute_league_ratings
 from app.ratings.registry import get_calculator
@@ -841,3 +844,358 @@ async def test_recompute_after_merge_rebuilds_each_league_independently(
     }
     assert a_match_ids == {match_a.id}
     assert b_match_ids == {match_b.id}
+
+
+# ----- empty-timeline reset (ADR-0013) ------------------------------------
+
+# A rating clearly distinct from the strategy initial (1500), so a reset to the
+# baseline is observable and cannot be mistaken for a no-op.
+_STALE_RATING = 1600.0
+
+
+async def _seed_stale_empty_timeline(
+    db: AsyncSession,
+    league: League,
+    strategy: RatingStrategy,
+    username: str,
+) -> tuple[User, Match]:
+    """Build a user whose rating timeline is *empty* yet whose row still carries
+    a stale, inflated rating — the shape a self-play void leaves behind.
+
+    Concretely, mirroring real data:
+      * a live ``UserLeagueRating`` row bumped to ``_STALE_RATING`` (1600),
+      * the ``initial`` history event at the strategy baseline, exactly as
+        ``seed_user_league_rating`` writes it on join,
+      * a now-**voided** match, and
+      * a stale *match-sourced* history row for that voided match — the winning
+        row a void should have swept.
+
+    No completed rated singles match survives for the user, so
+    ``recompute_league_ratings`` computes ``t_start is None``: the empty-timeline
+    branch under test."""
+    me = await make_user(db, username)
+    opp = await make_user(db, f"{username}-opp")
+
+    # A match, then voided: it must NOT count as a completed rated match, so the
+    # user's timeline reads empty.
+    match = await _build_completed_match(
+        db, league, me, opp, datetime(2026, 5, 1, tzinfo=UTC)
+    )
+    match.status = MatchStatus.voided
+    await db.commit()
+
+    # The live rating row, seeded then inflated to the stale value.
+    rating = UserLeagueRating.seed_for_strategy(league.id, me.id, strategy)
+    rating.rating_value = _STALE_RATING
+    rating.rating_state = {"rating": _STALE_RATING, "rd": 200.0, "volatility": 0.06}
+    db.add(rating)
+    # The `initial` baseline event every member gets on join.
+    db.add(
+        RatingHistory(
+            league_id=league.id,
+            user_id=me.id,
+            match_id=None,
+            rating_strategy_id=strategy.id,
+            rating_value=strategy.initial_rating_value,
+            rating_state=dict(strategy.initial_state),
+            previous_rating_value=None,
+            source=RatingHistorySource.initial,
+        )
+    )
+    # The stale match-sourced row the void left orphaned on the timeline.
+    db.add(
+        RatingHistory(
+            league_id=league.id,
+            user_id=me.id,
+            match_id=match.id,
+            rating_strategy_id=strategy.id,
+            rating_value=_STALE_RATING,
+            rating_state={"rating": _STALE_RATING, "rd": 200.0, "volatility": 0.06},
+            previous_rating_value=strategy.initial_rating_value,
+            source=RatingHistorySource.match,
+        )
+    )
+    await db.commit()
+    return me, match
+
+
+async def test_recompute_empty_timeline_resets_user_to_initial_state(
+    db_session: AsyncSession,
+    rating_strategies: dict[str, RatingStrategy],
+):
+    """An empty rating timeline resolves to the strategy's initial state. A user
+    whose only rated match was voided keeps a live ``UserLeagueRating`` row and
+    an ``initial`` event but no completed rated match, so ``t_start is None``.
+
+    The recompute must reset the row to the strategy baseline (not leave the
+    inflated 1600 stranded) and drop the stale match-sourced history row, while
+    keeping the ``initial`` event — that event *is* the empty timeline. On the
+    pre-chore code the cascade returned at ``t_start is None`` and this fails:
+    the row stays at 1600 and the stale match row survives."""
+    league = await get_default_league(db_session)
+    assert league is not None
+    strategy = rating_strategies["glicko2"]
+    initial_value = strategy.initial_rating_value
+    initial_state = dict(strategy.initial_state)
+    assert _STALE_RATING != initial_value
+
+    me, _voided = await _seed_stale_empty_timeline(
+        db_session, league, strategy, "stale"
+    )
+    me_id = me.id
+
+    # Precondition: the row is genuinely stale and the match-sourced row exists.
+    before = (
+        await db_session.execute(
+            select(UserLeagueRating).where(UserLeagueRating.user_id == me_id)
+        )
+    ).scalar_one()
+    assert before.rating_value == _STALE_RATING
+    stale_match_rows = (
+        (
+            await db_session.execute(
+                select(RatingHistory).where(
+                    RatingHistory.user_id == me_id,
+                    RatingHistory.source == RatingHistorySource.match,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(stale_match_rows) == 1
+
+    await recompute_league_ratings(db_session, league.id, {me_id})
+    await db_session.commit()
+    db_session.expire_all()
+
+    # The row is reset to the strategy's initial state.
+    reset = (
+        await db_session.execute(
+            select(UserLeagueRating).where(UserLeagueRating.user_id == me_id)
+        )
+    ).scalar_one()
+    assert reset.rating_value == initial_value
+    assert reset.rating_state == initial_state
+
+    # The stale match-sourced row is gone; the `initial` event remains.
+    remaining = (
+        (
+            await db_session.execute(
+                select(RatingHistory).where(RatingHistory.user_id == me_id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert [r.source for r in remaining] == [RatingHistorySource.initial]
+
+
+async def test_recompute_after_merge_reaches_empty_timeline_league(
+    db_session: AsyncSession,
+    engine: AsyncEngine,
+    monkeypatch: pytest.MonkeyPatch,
+    rating_strategies: dict[str, RatingStrategy],
+):
+    """The post-merge job must reach a league whose only rated match the merge
+    just voided. Discovery keys off the rating row, not "has a completed rated
+    match", so the empty-timeline league is found and reset.
+
+    Drives the real ``_recompute_after_merge`` — including its league-discovery
+    query, the guard this chore widens — with the job's engine pointed at the
+    test container. On the pre-chore code the match-based discovery finds no
+    league, the job returns before the cascade runs, and the stale 1600
+    survives; this assertion fails."""
+    league = await get_default_league(db_session)
+    assert league is not None
+    strategy = rating_strategies["glicko2"]
+    initial_value = strategy.initial_rating_value
+    initial_state = dict(strategy.initial_state)
+
+    me, _voided = await _seed_stale_empty_timeline(
+        db_session, league, strategy, "merged"
+    )
+    me_id = me.id
+
+    # Point the job's own engine (opened via ``get_engine()``) at the test
+    # container so its committed reset is visible to ``db_session``.
+    monkeypatch.setattr(ratings_jobs, "get_engine", lambda: engine)
+    await ratings_jobs._recompute_after_merge(me_id)
+
+    db_session.expire_all()
+    reset = (
+        await db_session.execute(
+            select(UserLeagueRating).where(UserLeagueRating.user_id == me_id)
+        )
+    ).scalar_one()
+    assert reset.rating_value == initial_value
+    assert reset.rating_state == initial_state
+
+
+# ----- manual strategy, empty timeline: NEVER reset -----------------------
+
+# An externally-supplied ("hand-set") rating, distinct from any automatic
+# baseline. A manual strategy's ``initial_rating_value`` and ``initial_state``
+# are both None, so a wrongly-fired empty-timeline reset would BLANK this row to
+# None — silent loss of imported data. The value therefore doubles as the
+# discriminator: "unchanged" (1725.0) vs "reset" (None) is unambiguous.
+_MANUAL_RATING = 1725.0
+_MANUAL_STATE = {"rating": 1725.0}
+
+
+async def _seed_manual_hand_set_rating(
+    db: AsyncSession,
+    league: League,
+    strategy: RatingStrategy,
+    username: str,
+) -> User:
+    """Stand up a user in a MANUAL-strategy league with an externally-supplied
+    rating and NO completed rated match, so ``recompute_league_ratings`` computes
+    ``t_start is None`` — the empty-timeline input that, absent the guards, would
+    enter the reset branch.
+
+    Also writes ``manual`` and ``import`` history rows: the externally-supplied
+    timeline that must survive untouched. (Note these are *not* ``match``-sourced,
+    so ``_reset_users_to_initial_state`` would leave them alone even on a wrongful
+    reset — they document the invariant; the load-bearing discriminator is the
+    ``UserLeagueRating`` row's value/state, which a reset blanks to None.)"""
+    me = await make_user(db, username)
+
+    # The row is built directly, not via ``seed_for_strategy`` — that would copy
+    # the strategy's None baseline, which is exactly the value a reset produces.
+    db.add(
+        UserLeagueRating(
+            league_id=league.id,
+            user_id=me.id,
+            rating_value=_MANUAL_RATING,
+            rating_state=dict(_MANUAL_STATE),
+        )
+    )
+    for source in (RatingHistorySource.manual, RatingHistorySource.import_):
+        db.add(
+            RatingHistory(
+                league_id=league.id,
+                user_id=me.id,
+                match_id=None,
+                rating_strategy_id=strategy.id,
+                rating_value=_MANUAL_RATING,
+                rating_state=dict(_MANUAL_STATE),
+                previous_rating_value=None,
+                source=source,
+            )
+        )
+    await db.commit()
+    return me
+
+
+async def _make_default_league_manual(
+    db: AsyncSession,
+    rating_strategies: dict[str, RatingStrategy],
+) -> tuple[League, RatingStrategy]:
+    """Repoint the default league at the manual strategy and return both."""
+    league = await get_default_league(db)
+    assert league is not None
+    strategy = rating_strategies["manual"]
+    league.rating_strategy_id = strategy.id
+    await db.commit()
+    await db.refresh(league)
+    # ``commit`` expired the strategy; reload it so later attribute reads
+    # (``initial_state`` etc.) don't trigger a sync lazy-load in the test body.
+    await db.refresh(strategy)
+    return league, strategy
+
+
+async def test_recompute_manual_strategy_empty_timeline_preserves_rating(
+    db_session: AsyncSession,
+    rating_strategies: dict[str, RatingStrategy],
+):
+    """A MANUAL-strategy league whose seed user has an EMPTY rating timeline
+    (no completed rated match → ``t_start is None``) must keep its
+    externally-supplied rating COMPLETELY untouched — not None, not an initial
+    value, exactly the hand-set 1725.
+
+    Chore 3b regression: 3a widened ``_recompute_after_merge``'s discovery to
+    "leagues where the user has a rating row", so the post-merge job now reaches
+    manual leagues, and 3a made ``t_start is None`` reset the row + drop match
+    rows. Manual ratings are imported, so a reset here is silent data loss. The
+    ``is_automatic`` guard (and, redundantly, the calculator-None guard) return
+    before the reset branch. A manual strategy's initial state is None, so a
+    wrongful reset would blank this row to None — the assertions below flip red
+    if the reset branch is ever reached for a manual league.
+
+    The existing ``test_recompute_manual_strategy_is_noop`` gives the user a
+    completed match, so ``t_start`` is never None and it never exercises this
+    branch; this fills that gap."""
+    league, strategy = await _make_default_league_manual(db_session, rating_strategies)
+    # The trap the guards defend against: a reset reads these as the new state.
+    assert strategy.initial_rating_value is None
+    assert strategy.initial_state is None
+
+    me = await _seed_manual_hand_set_rating(db_session, league, strategy, "manual-me")
+    me_id = me.id
+
+    await recompute_league_ratings(db_session, league.id, {me_id})
+    await db_session.commit()
+    db_session.expire_all()
+
+    rating = (
+        await db_session.execute(
+            select(UserLeagueRating).where(UserLeagueRating.user_id == me_id)
+        )
+    ).scalar_one()
+    # Load-bearing: exactly the hand-set value/state, explicitly NOT reset to None.
+    assert rating.rating_value is not None
+    assert rating.rating_value == _MANUAL_RATING
+    assert rating.rating_state == _MANUAL_STATE
+
+    # The externally-supplied (manual + import) history rows survive untouched.
+    rows = (
+        (
+            await db_session.execute(
+                select(RatingHistory).where(RatingHistory.user_id == me_id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert {r.source for r in rows} == {
+        RatingHistorySource.manual,
+        RatingHistorySource.import_,
+    }
+    assert all(r.rating_value == _MANUAL_RATING for r in rows)
+
+
+async def test_recompute_after_merge_manual_strategy_empty_timeline_preserved(
+    db_session: AsyncSession,
+    engine: AsyncEngine,
+    monkeypatch: pytest.MonkeyPatch,
+    rating_strategies: dict[str, RatingStrategy],
+):
+    """The post-merge job discovers leagues by rating row (chore 3a), so it now
+    reaches a MANUAL-strategy league it never touched before. Drive the real
+    ``_recompute_after_merge`` — its widened discovery query included — with the
+    job's own engine pointed at the test container, and assert the guards spare
+    the externally-supplied rating from the empty-timeline reset.
+
+    Without the guards the job would blank the row to None; this exercises the
+    exact code path (job discovery → per-league recompute) the widening opened."""
+    league, strategy = await _make_default_league_manual(db_session, rating_strategies)
+    me = await _seed_manual_hand_set_rating(
+        db_session, league, strategy, "manual-merged"
+    )
+    me_id = me.id
+
+    # Point the job's engine (opened via ``get_engine()``) at the test container
+    # so its committed state is visible to ``db_session``.
+    monkeypatch.setattr(ratings_jobs, "get_engine", lambda: engine)
+    await ratings_jobs._recompute_after_merge(me_id)
+
+    db_session.expire_all()
+    rating = (
+        await db_session.execute(
+            select(UserLeagueRating).where(UserLeagueRating.user_id == me_id)
+        )
+    ).scalar_one()
+    assert rating.rating_value is not None
+    assert rating.rating_value == _MANUAL_RATING
+    assert rating.rating_state == _MANUAL_STATE
