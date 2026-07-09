@@ -2068,6 +2068,239 @@ describe('ScoreEntry — unsaved-input guard', () => {
     await screen.findByRole('heading', { name: /enter game 4 score/i })
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
   })
+
+  it('does not prompt after finalize succeeds and hops to the match page (#818)', async () => {
+    // Happy-path guard: the dirty deciding score would trip the blocker, but
+    // finalize's onSuccess hop opts out via `ignoreBlocker` — we must land on
+    // the match page with no leave prompt. Passes before and after the fix; it
+    // catches an `ignoreBlocker` dropped from the finalize hop (ADR 0014).
+    const user = userEvent.setup()
+    server.use(
+      http.get('*/v1/matches/m-1', () =>
+        HttpResponse.json(
+          inProgressMatch({
+            sides: participantSides({ meWins: 2, oppWins: 0 }),
+            games: [
+              { id: 'g-1', game_number: 1, score: score('s-1', 11, 4) },
+              { id: 'g-2', game_number: 2, score: score('s-2', 11, 6) },
+            ],
+            current_game: { game_number: 3 },
+          }),
+        ),
+      ),
+      http.post('*/v1/matches/m-1/results', () =>
+        HttpResponse.json(
+          matchDetails({
+            id: 'm-1',
+            status: 'completed',
+            status_label: 'Final',
+            best_of: 5,
+            games_to_win: 3,
+            sides: participantSides({ meWins: 3, oppWins: 0, meWon: true }),
+            current_game: null,
+            can_score: false,
+            can_finalize: false,
+          }),
+          { status: 201 },
+        ),
+      ),
+    )
+
+    renderScoreEntry({ kind: 'create', matchId: 'm-1', gameNumber: 3 })
+    const meInput = await screen.findByRole('textbox', {
+      name: 'rita.kovac score',
+    })
+    await user.type(meInput, '11')
+    await user.type(screen.getByRole('textbox', { name: 'nguyen.t score' }), '3')
+
+    await user.click(screen.getByRole('button', { name: /post result/i }))
+    await waitFor(() =>
+      expect(screen.getByText('match-page m-1')).toBeInTheDocument(),
+    )
+    expect(screen.queryByText(/leave without saving/i)).not.toBeInTheDocument()
+  })
+
+  it('does not prompt after clearing a dirty edit and hopping to the empty entry (#818)', async () => {
+    // Happy-path guard for the clear-then-recreate hop. The form is dirty when
+    // Clear fires, so without `ignoreBlocker` the edit→new hop would be caught.
+    // Passes before and after the fix (the old latch armed this path too); the
+    // pre-existing clear test never typed a change, so `isDirty` was false and
+    // it never exercised the bypass.
+    const user = userEvent.setup()
+    server.use(
+      http.get('*/v1/matches/m-1', () => HttpResponse.json(inProgressMatch())),
+      http.delete('*/v1/matches/m-1/games/1/scores', () =>
+        HttpResponse.json(inProgressMatch()),
+      ),
+    )
+
+    renderScoreEntry({ kind: 'edit', matchId: 'm-1', gameNumber: 1 })
+    const meInput = await screen.findByRole('textbox', {
+      name: 'rita.kovac score',
+    })
+    await waitFor(() => expect(meInput).toHaveValue('11'))
+
+    // Make the form dirty, then clear.
+    await user.clear(meInput)
+    await user.type(meInput, '12')
+    await user.click(screen.getByRole('button', { name: /^clear$/i }))
+    await screen.findByRole('alertdialog')
+    await user.click(screen.getByRole('button', { name: /clear game/i }))
+
+    await waitFor(() =>
+      expect(screen.getByText('scoring-new m-1 1')).toBeInTheDocument(),
+    )
+    expect(screen.queryByText(/leave without saving/i)).not.toBeInTheDocument()
+  })
+
+  it('regression: an offline deciding-game save, then a further edit + in-app nav, still warns (#818)', async () => {
+    // The #818 repro. Offline the deciding game stores as a failed scratch save
+    // and we stay put (finalize banner). A further edit keeps the form dirty, so
+    // tapping another game in the scoreline MUST warn. The old always-armed
+    // latch — armed by `onSubmit` before the offline branch and never cleared —
+    // silently waved this through, discarding the deciding score. Fails against
+    // the pre-fix component.
+    const user = userEvent.setup()
+    server.use(
+      http.get('*/v1/matches/m-1', () =>
+        HttpResponse.json(
+          inProgressMatch({
+            sides: participantSides({ meWins: 2, oppWins: 0 }),
+            games: [
+              { id: 'g-1', game_number: 1, score: score('s-1', 11, 4) },
+              { id: 'g-2', game_number: 2, score: score('s-2', 11, 6) },
+            ],
+            current_game: { game_number: 3 },
+          }),
+        ),
+      ),
+      // Offline → the deciding-game scratchpad save rejects with a network error.
+      http.post('*/v1/matches/m-1/games/3/scores/new', () =>
+        HttpResponse.error(),
+      ),
+    )
+
+    renderScoringApp('/matches/m-1/games/3/scores/new')
+    await screen.findByRole('heading', { name: /enter game 3 score/i })
+    onlineManager.setOnline(false)
+
+    const meInput = screen.getByRole('textbox', { name: 'rita.kovac score' })
+    const oppInput = screen.getByRole('textbox', { name: 'nguyen.t score' })
+    await user.type(meInput, '11')
+    await user.type(oppInput, '3')
+
+    // Deciding game offline → stored as a failed scratch save; we stay on game 3
+    // with the finalize banner.
+    await user.click(screen.getByRole('button', { name: /post result/i }))
+    const banner = await screen.findByRole('alert')
+    expect(banner).toHaveTextContent('These scores finish the match.')
+
+    // A further edit over the failed score keeps the form dirty.
+    await user.clear(oppInput)
+    await user.type(oppInput, '5')
+
+    // Leaving in-app (tapping another saved game) must warn.
+    await user.click(screen.getByRole('link', { name: /game 1, saved/i }))
+    const dialog = await screen.findByRole('alertdialog')
+    expect(dialog).toHaveTextContent(/leave without saving/i)
+  })
+
+  it('regression: after "Replace with my score", a further edit + in-app nav still warns (#818)', async () => {
+    // The second dead-guard path. `overwriteWithMyScore` never navigates, yet
+    // the pre-fix code armed the latch inside it — from then on the guard was
+    // dead for this component instance. A further edit here is genuinely unsaved,
+    // so an in-app navigation MUST warn. Fails against the pre-fix component.
+    const user = userEvent.setup()
+    const putBodies: Array<Record<string, number>> = []
+    let committedVersion = 1
+    server.use(
+      http.get('*/v1/matches/m-1', () =>
+        HttpResponse.json(
+          inProgressMatch({
+            games: [
+              {
+                id: 'g-1',
+                game_number: 1,
+                score: {
+                  id: 's-1',
+                  side_1_points: 11,
+                  side_2_points: 5,
+                  winner_side_number: 1,
+                  version: committedVersion,
+                },
+              },
+              { id: 'g-2', game_number: 2, score: score('s-2', 9, 11) },
+            ],
+          }),
+        ),
+      ),
+      http.put('*/v1/matches/m-1/games/1/scores', async ({ request }) => {
+        const body = (await request.json()) as Record<string, number>
+        putBodies.push(body)
+        // First write loses the version race and 409s with the committed score;
+        // the replace re-fires with the fresh version and succeeds.
+        if (putBodies.length === 1) {
+          committedVersion = 2
+          return HttpResponse.json(
+            {
+              detail: {
+                message: 'This game was saved by someone else.',
+                committed_score: {
+                  id: 's-1',
+                  side_1_points: 11,
+                  side_2_points: 5,
+                  winner_side_number: 1,
+                  version: 2,
+                },
+              },
+            },
+            { status: 409 },
+          )
+        }
+        return HttpResponse.json(inProgressMatch())
+      }),
+    )
+
+    renderScoringApp('/matches/m-1/games/1/scores/edit')
+    const meInput = await screen.findByRole('textbox', {
+      name: 'rita.kovac score',
+    })
+    await waitFor(() => expect(meInput).toHaveValue('11'))
+    await user.clear(meInput)
+    await user.type(meInput, '12')
+    const oppInput = screen.getByRole('textbox', { name: 'nguyen.t score' })
+    await user.clear(oppInput)
+    await user.type(oppInput, '10')
+    await user.click(screen.getByRole('button', { name: /save changes/i }))
+
+    // The 409 advances us fire-and-forget; open the conflict to review it.
+    await screen.findByRole('heading', { name: /enter game 3 score/i })
+    await user.click(
+      await screen.findByRole('button', { name: /review game 1/i }),
+    )
+    await screen.findByRole('heading', { name: /edit game 1 score/i })
+
+    // Replace re-fires with the fresh version, succeeds, and clears the conflict
+    // — this path does NOT navigate.
+    await user.click(
+      screen.getByRole('button', { name: /replace with my score/i }),
+    )
+    await waitFor(() => expect(putBodies).toHaveLength(2))
+    await waitFor(() =>
+      expect(
+        screen.queryByText(/this game was saved by someone else/i),
+      ).not.toBeInTheDocument(),
+    )
+
+    // A further edit keeps the form dirty; leaving in-app must still warn.
+    const meAfter = screen.getByRole('textbox', { name: 'rita.kovac score' })
+    await user.clear(meAfter)
+    await user.type(meAfter, '9')
+
+    await user.click(screen.getByRole('link', { name: /game 2, saved/i }))
+    const dialog = await screen.findByRole('alertdialog')
+    expect(dialog).toHaveTextContent(/leave without saving/i)
+  })
 })
 
 describe('ScoreEntry — conflicts', () => {

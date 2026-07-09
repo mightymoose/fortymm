@@ -42,7 +42,6 @@ import {
   isDecidedMatch,
   overrunDecider,
 } from '@/lib/scoring'
-import { useNavigationOverrideRef } from '@/lib/use-navigation-override-ref'
 import { reconstructBoard, scoredGamePoints } from './reconstruct-board'
 import {
   isScoreConflict,
@@ -136,11 +135,22 @@ function ScoreEntryInner({
   // Guard against losing un-submitted typing on refresh/close or an in-app
   // navigation (#441). `isDirty` is driven by the score change handlers as the
   // user types (set below, once `data`-derived baselines are in scope) — the
-  // blocker only reads it. `navOverride` is armed just before the
-  // fire-and-forget Save (or an explicit Clear) navigates so that intentional
-  // hop is never blocked.
+  // blocker only reads it. The app's own navigations (Save's next-game hop,
+  // finalize's success hop, the clear-then-recreate hop) bypass the guard by
+  // passing `ignoreBlocker: true` on the navigation itself — a per-hop argument
+  // rather than a stored latch (ADR 0014, #818).
+  //
+  // `isDirty` stays stored state (not derived per-render from `computeDirty`)
+  // on purpose (ADR 0014). The dirty baseline folds in a failed save
+  // (`baselineMe = failedMe != null ? String(failedMe) : persistedMe…`), so a
+  // derived `isDirty` would compute `false` the instant an offline deciding-game
+  // save fails; `enableBeforeUnload` would then return `false` and closing the
+  // tab would silently discard that deciding score — it was never on the server,
+  // and the mutation cache holding it is in-memory only (no `persistQueryClient`).
+  // Deriving `isDirty` trades a stale boolean for silent data loss; leave it
+  // stored. This comment exists to stop a future `/simplify` proposing exactly
+  // that change.
   const [isDirty, setIsDirty] = useState(false)
-  const navOverride = useNavigationOverrideRef()
   // Synchronous finalize-in-flight guard. `finalizeMutation.isPending` is a
   // render snapshot that only flips on the next commit, so a fast double-click
   // on "Finalize result" lands a second tap before React re-renders — firing
@@ -154,8 +164,10 @@ function ScoreEntryInner({
   const { status, proceed, reset } = useBlocker({
     // Blocks browser refresh/close (beforeunload) only while genuinely dirty.
     enableBeforeUnload: () => isDirty,
-    // Blocks in-app route changes the same way — but never the Save hop.
-    shouldBlockFn: () => isDirty && !navOverride.isArmed(),
+    // Blocks in-app route changes the same way. The app's own hops opt out per
+    // navigation via `ignoreBlocker: true`, so there's nothing to check here but
+    // the dirty flag (ADR 0014, #818).
+    shouldBlockFn: () => isDirty,
     withResolver: true,
   })
 
@@ -449,9 +461,9 @@ function ScoreEntryInner({
     // two concurrent ones that wedge the backend.
     if (finalizeMutation.isPending || finalizingRef.current) return
     // This is the sanctioned write path: any navigation it triggers (the
-    // synchronous next-game hop, or finalize's onSuccess to the match page)
-    // is intentional, so wave the unsaved-input blocker through it (#441).
-    navOverride.arm()
+    // synchronous next-game hop, or finalize's onSuccess to the match page) is
+    // intentional, so each `navigate()` below passes `ignoreBlocker: true` to
+    // wave the unsaved-input blocker through that one hop (ADR 0014, #818).
     // Finalizing posts the canonical result — but that's the one write that
     // can't be faked offline. When offline we instead fall through to the
     // scratchpad save below, which stores the deciding game's score in the
@@ -462,7 +474,8 @@ function ScoreEntryInner({
       finalizeMutation.mutate(
         { games: compactedGames },
         {
-          onSuccess: () => navigate(matchDetailRoute(matchId)),
+          onSuccess: () =>
+            navigate({ ...matchDetailRoute(matchId), ignoreBlocker: true }),
           onError: () => {
             finalizingRef.current = false
           },
@@ -493,7 +506,7 @@ function ScoreEntryInner({
     // tap that triggered it, so deferring to onSettled dropped focus and closed
     // the keyboard between games (#567).
     saveMutation.mutate(args)
-    navigate(next)
+    navigate({ ...next, ignoreBlocker: true })
   }
 
   // After any clear, drop focus into the first input that's still empty so
@@ -520,16 +533,17 @@ function ScoreEntryInner({
       if (mode.kind !== 'edit') return
       // Clearing is an explicit discard — drop any failed-save leftovers too,
       // so a stale failure doesn't outlive the score it referred to. The
-      // edit→new hop it triggers is intentional, so the unsaved-input blocker
-      // stays out (#441).
-      navOverride.arm()
+      // edit→new hop it triggers is intentional, so its `navigate()` passes
+      // `ignoreBlocker: true` to keep the unsaved-input blocker out of it
+      // (ADR 0014, #818).
       forgetScoreSaves(queryClient, matchId, gameNumber)
       deleteMutation.mutate(undefined, {
         // After clearing, land back on this game's create route so the user
         // can re-enter — same page, just with empty inputs and create-mode
         // semantics. The remount's autoFocus puts focus on the me-input,
         // which is the first empty input.
-        onSettled: () => navigate(scoringNewRoute(matchId, gameNumber)),
+        onSettled: () =>
+          navigate({ ...scoringNewRoute(matchId, gameNumber), ignoreBlocker: true }),
       })
       return
     }
@@ -567,8 +581,10 @@ function ScoreEntryInner({
     // Re-fire the save. The cache now holds the committed score (and its newer
     // version), so the mutation PUTs with that fresh version and overwrites
     // deliberately — no longer a blind last-write-wins, but a choice made
-    // against the value we just showed them.
-    navOverride.arm()
+    // against the value we just showed them. This path never navigates, so
+    // there is nothing for the unsaved-input blocker to bypass here (ADR 0014,
+    // #818): a later user-initiated navigation while still dirty must stay
+    // blocked, which the old always-armed latch wrongly waved through.
     saveMutation.mutate(failedEntry)
   }
 
