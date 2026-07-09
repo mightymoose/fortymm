@@ -50,6 +50,24 @@ This establishes a domain rule beyond the merge path: **voiding a match deletes 
 rating history.** A voided match is *absent* from the rating timeline, not merely
 skipped by it.
 
+### The discriminator is `affects_rating`, not `completed`
+
+Implementation refined this. The collision is voided when the match is **rated**,
+regardless of whether it has completed. Requiring `completed AND rated` would leave a
+rated *pending / in-progress* collision to fall through to the prune and be
+half-deleted — the identical defect, one status earlier.
+
+Voiding an un-completed match is already a first-class state in this codebase, not a
+novelty: `matches.py` guards the propose path with "a match voided *before* any result
+was posted has no results to gate on — so guard the status explicitly here, or a
+first-post would silently un-void it." `void_match` leaves `completed_at` NULL, and
+nothing assumes `voided ⟹ previously completed`: every `assert completed_at is not
+None` sits behind a `status == completed` filter.
+
+A completed-but-**unrated** collision keeps the old prune. Voiding is the remedy for a
+match that *counted*; an unrated match never did, it holds no rating history, and the
+prune correctly strips its "vs Guest" empty side from history.
+
 ## The empty-timeline reset
 
 Voiding can remove a user's **only** rated match. Two guards then conspire to strand

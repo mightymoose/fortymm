@@ -1,11 +1,13 @@
 """Unit tests for the ephemeral→verified merge primitive in app.account_merge."""
 
 import hashlib
+import uuid
 from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.account_merge import merge_user
 from app.leagues import add_user_to_default_league, get_default_league
@@ -68,6 +70,52 @@ async def _record_match(db: AsyncSession, creator: User, *players: User) -> Matc
     await db.commit()
     await db.refresh(match)
     return match
+
+
+async def _record_rated_match(db: AsyncSession, creator: User, *players: User) -> Match:
+    """A completed, rating-affecting match (``affects_rating=True``). Mirrors
+    ``_record_match`` but rated, so a self-play collision on it exercises the
+    void path rather than the unrated prune."""
+    league = await get_default_league(db)
+    settings = MatchSettings(team_size=1, best_of=5, affects_rating=True)
+    match = Match(
+        match_settings=settings,
+        league=league,
+        created_by_user_id=creator.id,
+        status=MatchStatus.completed,
+    )
+    for side_number, player in enumerate(players, start=1):
+        side = MatchSide(match=match, side_number=side_number)
+        side.players.append(MatchSidePlayer(match=match, user=player))
+    db.add(match)
+    await db.commit()
+    await db.refresh(match)
+    return match
+
+
+async def _seed_match_rating_row(
+    db: AsyncSession,
+    *,
+    match: Match,
+    user: User,
+    rating_strategy_id: uuid.UUID,
+) -> None:
+    """Append a match-sourced ``RatingHistory`` row for ``user`` on ``match`` —
+    the kind of row a completed rated match produces, and the one a self-play
+    collision must delete (the survivor's, which otherwise strands an inflated
+    rating)."""
+    db.add(
+        RatingHistory(
+            league_id=match.league_id,
+            user_id=user.id,
+            match_id=match.id,
+            rating_strategy_id=rating_strategy_id,
+            rating_value=1500.0,
+            rating_state={"rating": 1500.0, "rd": 350.0, "volatility": 0.06},
+            source=RatingHistorySource.match,
+        )
+    )
+    await db.commit()
 
 
 async def _record_solo_match(db: AsyncSession, creator: User) -> Match:
@@ -606,3 +654,205 @@ async def test_merge_self_play_drops_orphaned_match_side(db_session: AsyncSessio
     assert len(solo_sides) == 2, (
         f"unrelated solo match lost a side after merge, got {len(solo_sides)}"
     )
+
+
+async def test_merge_rated_self_play_collision_voids_match(
+    db_session: AsyncSession,
+    rating_strategies: dict,
+):
+    """A guest merging into a claimed account they had already PLAYED on a
+    *rated* match (self-play collision, ADR-0013): the match must be VOIDED, its
+    emptied side left player-less (not pruned), and its rating_history deleted
+    for BOTH users — so it contributes nothing to the survivor's rating.
+
+    This is the #750 fix. Pre-chore the emptied side is pruned (half-delete): the
+    match stays ``completed`` with one side while the survivor's rating_history
+    row survives, permanently inflating their rating. This test FAILS on the
+    pre-chore code (side count 1, status completed, orphaned rating row).
+    """
+    # Same real person on two guest devices, later signing into one account.
+    guest_a = await _make_ephemeral(db_session, "ghost-device-a")
+    guest_b = await _make_ephemeral(db_session, "ghost-device-b")
+    verified = await _make_verified(db_session, "rita@example.com")
+
+    # A rated match guest_a vs guest_b on OPPOSITE sides.
+    match = await _record_rated_match(db_session, guest_a, guest_a, guest_b)
+
+    # guest_b merges first: side 2 now belongs to verified.
+    await merge_user(db_session, from_user_id=guest_b.id, to_user_id=verified.id)
+    await db_session.commit()
+
+    # The completed rated match produced a rating_history row for each
+    # participant — now guest_a (side 1) and verified (side 2, ex-guest_b).
+    await _seed_match_rating_row(
+        db_session,
+        match=match,
+        user=guest_a,
+        rating_strategy_id=rating_strategies["glicko2"].id,
+    )
+    await _seed_match_rating_row(
+        db_session,
+        match=match,
+        user=verified,
+        rating_strategy_id=rating_strategies["glicko2"].id,
+    )
+
+    # guest_a merges: verified is already on the match → self-play collision.
+    summary = await merge_user(
+        db_session, from_user_id=guest_a.id, to_user_id=verified.id
+    )
+    await db_session.commit()
+
+    # Still counted as a match the guest brought across (#235).
+    assert summary.matches_moved == 1
+
+    await db_session.refresh(match)
+    # Voided, not left completed.
+    assert match.status == MatchStatus.voided, (
+        f"expected voided, got {match.status} — half-deleted rather than voided?"
+    )
+
+    # Both sides survive; the guest's side is player-less (the solo-sentinel
+    # shape), NOT pruned away.
+    sides = (
+        (
+            await db_session.execute(
+                select(MatchSide)
+                .where(MatchSide.match_id == match.id)
+                .options(selectinload(MatchSide.players))
+                .order_by(MatchSide.side_number)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(sides) == 2, (
+        f"expected 2 sides (emptied side left player-less), got {len(sides)}"
+    )
+    player_counts = [len(s.players) for s in sides]
+    assert sorted(player_counts) == [0, 1], (
+        f"expected one player-less side and one with the survivor, got {player_counts}"
+    )
+    # The surviving player on the populated side is the survivor.
+    populated = next(s for s in sides if s.players)
+    assert populated.players[0].user_id == verified.id
+
+    # No rating_history for this match survives, for EITHER user — the void
+    # deleted them (the survivor's row is the one the pre-chore cascade orphaned).
+    rating_rows = (
+        (
+            await db_session.execute(
+                select(RatingHistory).where(RatingHistory.match_id == match.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert rating_rows == [], (
+        f"voided match must leave no rating_history, found {len(rating_rows)}"
+    )
+
+
+async def test_merge_no_collision_when_account_never_played(
+    db_session: AsyncSession,
+    rating_strategies: dict,
+):
+    """A guest merging into an account they NEVER played: nothing is voided and
+    every match moves across intact. Guards against over-voiding — the void is
+    strictly the opposite-sides collision case."""
+    guest = await _make_ephemeral(db_session, "wandering-heron")
+    verified = await _make_verified(db_session, "rita@example.com")
+    opponent = await _make_ephemeral(db_session, "genuine-opponent")
+
+    # A rated match the guest played against a real, unrelated opponent — the
+    # verified account was never a participant. Seed the OPPONENT's rating row:
+    # they are neither merge party, so nothing (least of all a void) should
+    # touch it. A void would delete it by match_id — its survival proves no void.
+    match = await _record_rated_match(db_session, guest, guest, opponent)
+    await _seed_match_rating_row(
+        db_session,
+        match=match,
+        user=opponent,
+        rating_strategy_id=rating_strategies["glicko2"].id,
+    )
+
+    summary = await merge_user(
+        db_session, from_user_id=guest.id, to_user_id=verified.id
+    )
+    await db_session.commit()
+
+    assert summary.matches_moved == 1
+
+    await db_session.refresh(match)
+    # Not voided — this is not a self-play collision.
+    assert match.status == MatchStatus.completed
+
+    # The match moved wholly to the survivor: both sides intact, the guest's
+    # side re-pointed onto verified, the opponent untouched.
+    sides = (
+        (
+            await db_session.execute(
+                select(MatchSide)
+                .where(MatchSide.match_id == match.id)
+                .options(selectinload(MatchSide.players))
+                .order_by(MatchSide.side_number)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(sides) == 2
+    user_ids = {s.players[0].user_id for s in sides}
+    assert user_ids == {verified.id, opponent.id}
+
+    # The uninvolved opponent's rating_history row for the match survives — no
+    # void ran (a void deletes by match_id, which would have taken it).
+    rating_rows = (
+        (
+            await db_session.execute(
+                select(RatingHistory).where(RatingHistory.match_id == match.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert [r.user_id for r in rating_rows] == [opponent.id]
+
+
+async def test_merge_solo_match_survives_with_sentinel_side(
+    db_session: AsyncSession,
+):
+    """A SOLO match owned by the guest is not a self-play collision (the survivor
+    is not a participant — the sentinel side is player-less). It must move across
+    with both sides intact: side 1 re-pointed onto the survivor, side 2 still the
+    player-less sentinel. Proves collision detection can't mistake a solo match
+    for a collision and void it."""
+    guest = await _make_ephemeral(db_session, "solo-wanderer")
+    verified = await _make_verified(db_session, "rita@example.com")
+
+    solo_match = await _record_solo_match(db_session, guest)
+
+    await merge_user(db_session, from_user_id=guest.id, to_user_id=verified.id)
+    await db_session.commit()
+
+    await db_session.refresh(solo_match)
+    # Not voided — a solo match is not a collision.
+    assert solo_match.status == MatchStatus.in_progress
+
+    sides = (
+        (
+            await db_session.execute(
+                select(MatchSide)
+                .where(MatchSide.match_id == solo_match.id)
+                .options(selectinload(MatchSide.players))
+                .order_by(MatchSide.side_number)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(sides) == 2, f"solo match should keep both sides, got {len(sides)}"
+    # Side 1 re-pointed onto the survivor; side 2 is still the player-less
+    # sentinel (untouched by any prune or void).
+    assert [len(s.players) for s in sides] == [1, 0]
+    assert sides[0].players[0].user_id == verified.id

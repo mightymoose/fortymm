@@ -23,6 +23,7 @@ from typing import Any, cast
 from sqlalchemy import CursorResult, delete, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.match_voiding import void_match
 from app.models import (
     DeviceToken,
     LeagueMembership,
@@ -45,6 +46,20 @@ from app.models import (
 # circular import (sessions imports this module). Session tokens are KEPT on the
 # tombstoned guest so its cookie still resolves; every other token is dropped.
 _SESSION_TOKEN_CONTEXT = "session"
+
+
+@dataclass(frozen=True)
+class _SelfPlayCollision:
+    """The rated self-play collisions found for one merge (see ADR-0013).
+
+    ``match_ids`` are the rated matches on which the ephemeral and verified
+    users sat on opposite sides — the matches to void. ``from_side_ids`` are the
+    ephemeral user's sides on those matches — the sides to *exclude* from the
+    prune so they survive player-less rather than being half-deleted.
+    """
+
+    match_ids: frozenset[uuid.UUID]
+    from_side_ids: frozenset[uuid.UUID]
 
 
 @dataclass(frozen=True)
@@ -75,6 +90,16 @@ async def merge_user(
         # DELETE would destroy the surviving account. Refuse loudly rather
         # than silently lose the user.
         raise ValueError("merge_user: from_user_id must not equal to_user_id")
+
+    # A *self-play collision* is a rated match on which the guest and the
+    # verified user sat on OPPOSITE sides — the merge is the moment we learn it
+    # was always one person playing themselves (ADR-0013). Detect it up front,
+    # before any re-point/delete has disturbed the side rows. The remedy (void
+    # the match, keep the emptied side player-less) diverges from the ordinary
+    # prune below; see there.
+    collision = await _self_play_collision(
+        db, from_user_id=from_user_id, to_user_id=to_user_id
+    )
 
     matches_moved = await _repoint_match_side_players(
         db, from_user_id=from_user_id, to_user_id=to_user_id
@@ -204,18 +229,49 @@ async def merge_user(
     # the same match were the same real person). The NOT EXISTS guard skipped
     # re-pointing the ephemeral side because the verified user was already
     # there; the DELETE above then removed that MatchSidePlayer, leaving a
-    # playerless MatchSide. Prune those now-empty sides so they don't surface
-    # as "No opponent" / "vs Guest" in match history. Scope the prune to the
-    # sides the ephemeral user actually sat on — a global ``no players`` filter
-    # would also wipe the intentional player-less "sentinel" side that every
-    # opponent-less (solo) match carries by design.
-    if ephemeral_side_ids:
+    # playerless MatchSide.
+    #
+    # For an UNRATED collided match we prune that now-empty side, so it doesn't
+    # surface as "No opponent" / "vs Guest" in match history — the match never
+    # counted, so there is nothing to preserve. For a RATED collided match we
+    # must NOT prune: pruning half-deletes it (the match keeps
+    # ``status == completed`` + ``affects_rating`` but loses a side, and the
+    # rating cascade then skips it, stranding the survivor's inflated rating
+    # history — issue #750). Instead we leave the side player-less — the same
+    # structural shape a solo match's sentinel side already has — and void the
+    # match below. So exclude the rated-collided sides from the prune.
+    #
+    # Scope the prune to the sides the ephemeral user actually sat on — a global
+    # ``no players`` filter would also wipe the intentional player-less
+    # "sentinel" side that every opponent-less (solo) match carries by design.
+    prunable_side_ids = [
+        side_id
+        for side_id in ephemeral_side_ids
+        if side_id not in collision.from_side_ids
+    ]
+    if prunable_side_ids:
         await db.execute(
             delete(MatchSide).where(
-                MatchSide.id.in_(ephemeral_side_ids),
+                MatchSide.id.in_(prunable_side_ids),
                 ~MatchSide.players.any(),
             )
         )
+    # Void the rated collided matches: transfer them wholly to the survivor
+    # (already done — the survivor's MatchSidePlayer, creator/result/tournament
+    # authorship, and rating_history authorship all re-point above), then mark
+    # them ``voided`` and delete their rating_history for BOTH users. The
+    # survivor's own rating_history row for a collided match survives every
+    # DELETE above (it is keyed on ``user_id == to_user_id``, and the cascade
+    # skips a one-sided match), so ``void_match``'s by-``match_id`` delete is the
+    # only thing that removes it. ``void_match`` does not commit.
+    if collision.match_ids:
+        collided_matches = (
+            (await db.execute(select(Match).where(Match.id.in_(collision.match_ids))))
+            .scalars()
+            .all()
+        )
+        for match in collided_matches:
+            await void_match(db, match)
     # We tombstone rather than DELETE the user, so the rows that used to ride
     # ``ON DELETE CASCADE`` must be dropped explicitly. Order doesn't matter —
     # none of these reference each other. Keep the guest's *session* tokens so
@@ -259,6 +315,53 @@ async def merge_user(
     await db.flush()
 
     return MergeSummary(matches_moved=matches_moved)
+
+
+async def _self_play_collision(
+    db: AsyncSession,
+    *,
+    from_user_id: uuid.UUID,
+    to_user_id: uuid.UUID,
+) -> _SelfPlayCollision:
+    """Find the *rated* matches on which ``from_user_id`` and ``to_user_id`` sat
+    on OPPOSITE sides (see ADR-0013).
+
+    ``match_side_id <> match_side_id`` is what makes this "opposite sides", and
+    it is the discriminator that excludes a solo match: a solo match's second
+    side is player-less, so the verified user is never a participant and never
+    joins. ``affects_rating`` is the discriminator against a completed-but-
+    unrated collision — an unrated match never counted, so it keeps the ordinary
+    prune (nothing to void). Doubles teammates (same side) are excluded too:
+    dropping one leaves the side non-empty, so there is no half-delete to fix.
+
+    Must run before any re-point/delete, while the ephemeral user's side rows
+    are still intact.
+    """
+    rows = (
+        await db.execute(
+            text(
+                """
+                SELECT msp_from.match_side_id AS from_side_id,
+                       msp_from.match_id AS match_id
+                FROM match_side_players AS msp_from
+                JOIN matches AS m ON m.id = msp_from.match_id
+                JOIN match_settings AS ms
+                  ON ms.id = m.match_settings_id
+                 AND ms.affects_rating = true
+                JOIN match_side_players AS msp_to
+                  ON msp_to.match_id = msp_from.match_id
+                 AND msp_to.user_id = :to_id
+                 AND msp_to.match_side_id <> msp_from.match_side_id
+                WHERE msp_from.user_id = :from_id
+                """
+            ),
+            {"from_id": from_user_id, "to_id": to_user_id},
+        )
+    ).all()
+    return _SelfPlayCollision(
+        match_ids=frozenset(row.match_id for row in rows),
+        from_side_ids=frozenset(row.from_side_id for row in rows),
+    )
 
 
 async def _repoint_match_side_players(

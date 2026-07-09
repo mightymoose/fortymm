@@ -1,6 +1,6 @@
 import asyncio
 import uuid
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi import HTTPException
@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 
 from app import matches as matches_mod
+from app.match_voiding import void_match
 from app.matches import (
     _compact_games,
     accept_match_result,
@@ -28,8 +29,11 @@ from app.models import (
     MatchResult,
     MatchSettings,
     MatchSide,
+    MatchSidePlayer,
     MatchStatus,
     RatingHistory,
+    RatingHistorySource,
+    RatingStrategy,
     User,
 )
 from app.notifications.apns import MATCH_RESULT_CONFIRMATION_CATEGORY
@@ -3959,3 +3963,136 @@ async def test_unrated_result_enqueues_no_confirmation(
         assert response.status_code == 201
 
     assert enqueued_notification_jobs(fake_notifications_queue) == []
+
+
+# ----- voiding a match (#750, ADR 0013) -----------------------------------
+
+
+async def _completed_rated_match(
+    db: AsyncSession,
+    league: League,
+    winner: User,
+    loser: User,
+) -> Match:
+    """Persist a completed, rated singles match: two sides, one player each, a
+    single decided game."""
+    settings = MatchSettings(team_size=1, best_of=1, affects_rating=True)
+    match = Match(
+        match_settings=settings,
+        league=league,
+        created_by_user_id=winner.id,
+        status=MatchStatus.completed,
+        completed_at=datetime(2026, 5, 1, tzinfo=UTC),
+    )
+    side1 = MatchSide(match=match, side_number=1, won=True, score=1)
+    side1.players.append(MatchSidePlayer(match=match, user=winner))
+    side2 = MatchSide(match=match, side_number=2, won=False, score=0)
+    side2.players.append(MatchSidePlayer(match=match, user=loser))
+    game = MatchGame(match=match, game_number=1)
+    game.score = MatchGameScore(side_1_points=11, side_2_points=4)
+    db.add(match)
+    await db.commit()
+    await db.refresh(match)
+    return match
+
+
+def _match_history_row(
+    league: League,
+    user: User,
+    match: Match | None,
+    strategy: RatingStrategy,
+    source: RatingHistorySource,
+) -> RatingHistory:
+    return RatingHistory(
+        league_id=league.id,
+        user_id=user.id,
+        match_id=match.id if match is not None else None,
+        rating_strategy_id=strategy.id,
+        rating_value=1500.0,
+        rating_state={"rating": 1500.0, "rd": 350.0, "volatility": 0.06},
+        source=source,
+    )
+
+
+async def test_void_sets_status_and_deletes_all_rating_history(
+    db_session: AsyncSession,
+    default_league: League,
+    rating_strategies: dict[str, RatingStrategy],
+):
+    """Voiding a completed rated match flips it to ``voided`` and drops the
+    ``rating_history`` rows for *both* participants — but only for this match.
+    A participant's ``initial`` seed row (and any other match's row) survives:
+    the delete is scoped by ``match_id``, never by ``user_id``."""
+    strategy = rating_strategies["glicko2"]
+    winner = await make_user(db_session, "voidwinner")
+    loser = await make_user(db_session, "voidloser")
+    match = await _completed_rated_match(db_session, default_league, winner, loser)
+
+    # Both participants have a rating-history row for this match...
+    db_session.add(
+        _match_history_row(
+            default_league, winner, match, strategy, RatingHistorySource.match
+        )
+    )
+    db_session.add(
+        _match_history_row(
+            default_league, loser, match, strategy, RatingHistorySource.match
+        )
+    )
+    # ...and the winner also carries an ``initial`` seed row (match_id NULL)
+    # that a by-user delete would wrongly wipe.
+    db_session.add(
+        _match_history_row(
+            default_league, winner, None, strategy, RatingHistorySource.initial
+        )
+    )
+    await db_session.commit()
+
+    await void_match(db_session, match)
+    await db_session.commit()
+    await db_session.refresh(match)
+
+    assert match.status == MatchStatus.voided
+
+    remaining = (await db_session.execute(select(RatingHistory))).scalars().all()
+    # Only the winner's initial seed row is left; both match rows are gone.
+    assert [(r.user_id, r.match_id, r.source) for r in remaining] == [
+        (winner.id, None, RatingHistorySource.initial)
+    ]
+
+
+async def test_void_leaves_sides_and_players_intact(
+    db_session: AsyncSession,
+    default_league: League,
+    rating_strategies: dict[str, RatingStrategy],
+):
+    """Voiding is deliberately narrow: it does not prune sides or players.
+    Both sides and both side-players survive the void unchanged."""
+    winner = await make_user(db_session, "voidkeepwinner")
+    loser = await make_user(db_session, "voidkeeploser")
+    match = await _completed_rated_match(db_session, default_league, winner, loser)
+
+    await void_match(db_session, match)
+    await db_session.commit()
+
+    sides = (
+        (
+            await db_session.execute(
+                select(MatchSide).where(MatchSide.match_id == match.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert {s.side_number for s in sides} == {1, 2}
+
+    players = (
+        (
+            await db_session.execute(
+                select(MatchSidePlayer).where(MatchSidePlayer.match_id == match.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert {p.user_id for p in players} == {winner.id, loser.id}
