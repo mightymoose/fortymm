@@ -244,11 +244,7 @@ async def merge_user(
     # Scope the prune to the sides the ephemeral user actually sat on — a global
     # ``no players`` filter would also wipe the intentional player-less
     # "sentinel" side that every opponent-less (solo) match carries by design.
-    prunable_side_ids = [
-        side_id
-        for side_id in ephemeral_side_ids
-        if side_id not in collision.from_side_ids
-    ]
+    prunable_side_ids = set(ephemeral_side_ids) - collision.from_side_ids
     if prunable_side_ids:
         await db.execute(
             delete(MatchSide).where(

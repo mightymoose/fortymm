@@ -186,7 +186,7 @@ async def recompute_league_ratings(
     # state as of *their own* first affected match, not the global ``t_start``,
     # or a non-affected match they played in between is neither replayed nor
     # reflected in their seed.
-    first_affected_at: dict[uuid.UUID, datetime] = {}
+    cutoffs: dict[uuid.UUID, datetime] = {}
     for match in matches:
         decided = _decided_sides(match)
         if decided is None:
@@ -202,18 +202,10 @@ async def recompute_league_ratings(
             # Loaded under status == completed, so completed_at is non-null.
             assert match.completed_at is not None
             for user_id in participants:
-                first_affected_at.setdefault(user_id, match.completed_at)
+                cutoffs.setdefault(user_id, match.completed_at)
 
     if not affected_matches:
         return
-
-    # A seed user with no affected match of their own (e.g. seeded alongside a
-    # peer who does have matches) has no recorded first-affected instant; fall
-    # back to the global ``t_start``, which for seed users is equivalent to
-    # their earliest match at/after ``t_start`` anyway.
-    cutoffs = {
-        user_id: first_affected_at.get(user_id, t_start) for user_id in affected_users
-    }
 
     affected_match_ids = [m.id for m in affected_matches]
     await db.execute(
@@ -397,7 +389,7 @@ async def _seed_states(
         column("user_id", UUID(as_uuid=True)),
         column("cutoff", DateTime(timezone=True)),
         name="cutoffs",
-    ).data([(user_id, cutoff) for user_id, cutoff in cutoffs.items()])
+    ).data(list(cutoffs.items()))
     row_number = func.row_number().over(
         partition_by=RatingHistory.user_id,
         order_by=RatingHistory.created_at.desc(),

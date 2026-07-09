@@ -54,9 +54,16 @@ async def _make_verified(db: AsyncSession, email: str) -> User:
     return user
 
 
-async def _record_match(db: AsyncSession, creator: User, *players: User) -> Match:
+async def _record_match(
+    db: AsyncSession,
+    creator: User,
+    *players: User,
+    affects_rating: bool = False,
+) -> Match:
+    """A completed match. ``affects_rating=True`` makes it rated, so a self-play
+    collision on it exercises the void path rather than the unrated prune."""
     league = await get_default_league(db)
-    settings = MatchSettings(team_size=1, best_of=5, affects_rating=False)
+    settings = MatchSettings(team_size=1, best_of=5, affects_rating=affects_rating)
     match = Match(
         match_settings=settings,
         league=league,
@@ -73,24 +80,7 @@ async def _record_match(db: AsyncSession, creator: User, *players: User) -> Matc
 
 
 async def _record_rated_match(db: AsyncSession, creator: User, *players: User) -> Match:
-    """A completed, rating-affecting match (``affects_rating=True``). Mirrors
-    ``_record_match`` but rated, so a self-play collision on it exercises the
-    void path rather than the unrated prune."""
-    league = await get_default_league(db)
-    settings = MatchSettings(team_size=1, best_of=5, affects_rating=True)
-    match = Match(
-        match_settings=settings,
-        league=league,
-        created_by_user_id=creator.id,
-        status=MatchStatus.completed,
-    )
-    for side_number, player in enumerate(players, start=1):
-        side = MatchSide(match=match, side_number=side_number)
-        side.players.append(MatchSidePlayer(match=match, user=player))
-    db.add(match)
-    await db.commit()
-    await db.refresh(match)
-    return match
+    return await _record_match(db, creator, *players, affects_rating=True)
 
 
 async def _seed_match_rating_row(
