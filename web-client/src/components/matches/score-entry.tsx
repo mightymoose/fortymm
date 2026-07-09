@@ -148,8 +148,7 @@ function ScoreEntryInner({
   // tab would silently discard that deciding score — it was never on the server,
   // and the mutation cache holding it is in-memory only (no `persistQueryClient`).
   // Deriving `isDirty` trades a stale boolean for silent data loss; leave it
-  // stored. This comment exists to stop a future `/simplify` proposing exactly
-  // that change.
+  // stored.
   const [isDirty, setIsDirty] = useState(false)
   // Synchronous finalize-in-flight guard. `finalizeMutation.isPending` is a
   // render snapshot that only flips on the next commit, so a fast double-click

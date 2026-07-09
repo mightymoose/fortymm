@@ -453,16 +453,7 @@ describe('ScoreEntry — create', () => {
     let finalizedBody: unknown = null
     server.use(
       http.get('*/v1/matches/m-1', () =>
-        HttpResponse.json(
-          inProgressMatch({
-            sides: participantSides({ meWins: 2, oppWins: 0 }),
-            games: [
-              { id: 'g-1', game_number: 1, score: score('s-1', 11, 4) },
-              { id: 'g-2', game_number: 2, score: score('s-2', 11, 6) },
-            ],
-            current_game: { game_number: 3 },
-          }),
-        ),
+        HttpResponse.json(decidingGameMatch()),
       ),
       http.post('*/v1/matches/m-1/results', async ({ request }) => {
         finalizedBody = await request.json()
@@ -700,16 +691,7 @@ describe('ScoreEntry — create', () => {
     let requests = 0
     server.use(
       http.get('*/v1/matches/m-1', () =>
-        HttpResponse.json(
-          inProgressMatch({
-            sides: participantSides({ meWins: 2, oppWins: 0 }),
-            games: [
-              { id: 'g-1', game_number: 1, score: score('s-1', 11, 4) },
-              { id: 'g-2', game_number: 2, score: score('s-2', 11, 6) },
-            ],
-            current_game: { game_number: 3 },
-          }),
-        ),
+        HttpResponse.json(decidingGameMatch()),
       ),
       // Never resolves — keeps the finalize in flight so the test can count the
       // POSTs the double-click produced.
@@ -930,16 +912,7 @@ describe('ScoreEntry — create', () => {
     const user = userEvent.setup()
     server.use(
       http.get('*/v1/matches/m-1', () =>
-        HttpResponse.json(
-          inProgressMatch({
-            sides: participantSides({ meWins: 2, oppWins: 0 }),
-            games: [
-              { id: 'g-1', game_number: 1, score: score('s-1', 11, 4) },
-              { id: 'g-2', game_number: 2, score: score('s-2', 11, 6) },
-            ],
-            current_game: { game_number: 3 },
-          }),
-        ),
+        HttpResponse.json(decidingGameMatch()),
       ),
       http.post('*/v1/matches/m-1/results', () =>
         HttpResponse.json(
@@ -1266,6 +1239,104 @@ function renderScoringApp(initialPath: string) {
       <RouterProvider router={router} />
     </QueryClientProvider>,
   )
+}
+
+// A match sitting on the deciding game: 2–0 with games 1 and 2 scored, so the
+// next entry (game 3) can finish the match.
+function decidingGameMatch() {
+  return inProgressMatch({
+    sides: participantSides({ meWins: 2, oppWins: 0 }),
+    games: [
+      { id: 'g-1', game_number: 1, score: score('s-1', 11, 4) },
+      { id: 'g-2', game_number: 2, score: score('s-2', 11, 6) },
+    ],
+    current_game: { game_number: 3 },
+  })
+}
+
+// Drives an edit whose first save loses the version race and 409s, opens the
+// conflict, and taps "Replace with my score" — the re-fire lands on the fresh
+// version and clears the conflict without navigating. Returns the harness so
+// each caller can assert on its own distinct tail.
+async function renderReplaceConflict() {
+  const user = userEvent.setup()
+  const putBodies: Array<Record<string, number>> = []
+  let committedVersion = 1
+  server.use(
+    http.get('*/v1/matches/m-1', () =>
+      HttpResponse.json(
+        inProgressMatch({
+          games: [
+            {
+              id: 'g-1',
+              game_number: 1,
+              score: {
+                id: 's-1',
+                side_1_points: 11,
+                side_2_points: 5,
+                winner_side_number: 1,
+                version: committedVersion,
+              },
+            },
+            { id: 'g-2', game_number: 2, score: score('s-2', 9, 11) },
+          ],
+        }),
+      ),
+    ),
+    http.put('*/v1/matches/m-1/games/1/scores', async ({ request }) => {
+      const body = (await request.json()) as Record<string, number>
+      putBodies.push(body)
+      // First write claims version 1 and loses; the committed row is now at
+      // version 2. The 409 carries that committed score so the client can
+      // re-decide and re-fire with the fresh version.
+      if (putBodies.length === 1) {
+        committedVersion = 2
+        return HttpResponse.json(
+          {
+            detail: {
+              message: 'This game was saved by someone else.',
+              committed_score: {
+                id: 's-1',
+                side_1_points: 11,
+                side_2_points: 5,
+                winner_side_number: 1,
+                version: 2,
+              },
+            },
+          },
+          { status: 409 },
+        )
+      }
+      return HttpResponse.json(inProgressMatch())
+    }),
+  )
+
+  renderScoringApp('/matches/m-1/games/1/scores/edit')
+  const meInput = await screen.findByRole('textbox', {
+    name: 'rita.kovac score',
+  })
+  await waitFor(() => expect(meInput).toHaveValue('11'))
+  await user.clear(meInput)
+  await user.type(meInput, '12')
+  const oppInput = screen.getByRole('textbox', { name: 'nguyen.t score' })
+  await user.clear(oppInput)
+  await user.type(oppInput, '10')
+  await user.click(screen.getByRole('button', { name: /save changes/i }))
+
+  // The 409 advances us fire-and-forget; open the conflict to review it.
+  await screen.findByRole('heading', { name: /enter game 3 score/i })
+  await user.click(
+    await screen.findByRole('button', { name: /review game 1/i }),
+  )
+  await screen.findByRole('heading', { name: /edit game 1 score/i })
+
+  // Replace re-fires with the fresh version — this path does NOT navigate.
+  await user.click(
+    screen.getByRole('button', { name: /replace with my score/i }),
+  )
+  await waitFor(() => expect(putBodies).toHaveLength(2))
+
+  return { user, putBodies }
 }
 
 describe('ScoreEntry — failed saves', () => {
@@ -1659,16 +1730,7 @@ describe('ScoreEntry — failed saves', () => {
     let scoreSaveCalls = 0
     server.use(
       http.get('*/v1/matches/m-1', () =>
-        HttpResponse.json(
-          inProgressMatch({
-            sides: participantSides({ meWins: 2, oppWins: 0 }),
-            games: [
-              { id: 'g-1', game_number: 1, score: score('s-1', 11, 4) },
-              { id: 'g-2', game_number: 2, score: score('s-2', 11, 6) },
-            ],
-            current_game: { game_number: 3 },
-          }),
-        ),
+        HttpResponse.json(decidingGameMatch()),
       ),
       http.post('*/v1/matches/m-1/games/3/scores/new', () => {
         scoreSaveCalls += 1
@@ -1738,16 +1800,7 @@ describe('ScoreEntry — failed saves', () => {
     let scoreSaveCalls = 0
     server.use(
       http.get('*/v1/matches/m-1', () =>
-        HttpResponse.json(
-          inProgressMatch({
-            sides: participantSides({ meWins: 2, oppWins: 0 }),
-            games: [
-              { id: 'g-1', game_number: 1, score: score('s-1', 11, 4) },
-              { id: 'g-2', game_number: 2, score: score('s-2', 11, 6) },
-            ],
-            current_game: { game_number: 3 },
-          }),
-        ),
+        HttpResponse.json(decidingGameMatch()),
       ),
       http.post('*/v1/matches/m-1/games/3/scores/new', () => {
         scoreSaveCalls += 1
@@ -1789,16 +1842,7 @@ describe('ScoreEntry — failed saves', () => {
     const user = userEvent.setup()
     server.use(
       http.get('*/v1/matches/m-1', () =>
-        HttpResponse.json(
-          inProgressMatch({
-            sides: participantSides({ meWins: 2, oppWins: 0 }),
-            games: [
-              { id: 'g-1', game_number: 1, score: score('s-1', 11, 4) },
-              { id: 'g-2', game_number: 2, score: score('s-2', 11, 6) },
-            ],
-            current_game: { game_number: 3 },
-          }),
-        ),
+        HttpResponse.json(decidingGameMatch()),
       ),
       http.post('*/v1/matches/m-1/games/3/scores/new', () =>
         HttpResponse.error(),
@@ -2077,16 +2121,7 @@ describe('ScoreEntry — unsaved-input guard', () => {
     const user = userEvent.setup()
     server.use(
       http.get('*/v1/matches/m-1', () =>
-        HttpResponse.json(
-          inProgressMatch({
-            sides: participantSides({ meWins: 2, oppWins: 0 }),
-            games: [
-              { id: 'g-1', game_number: 1, score: score('s-1', 11, 4) },
-              { id: 'g-2', game_number: 2, score: score('s-2', 11, 6) },
-            ],
-            current_game: { game_number: 3 },
-          }),
-        ),
+        HttpResponse.json(decidingGameMatch()),
       ),
       http.post('*/v1/matches/m-1/results', () =>
         HttpResponse.json(
@@ -2163,16 +2198,7 @@ describe('ScoreEntry — unsaved-input guard', () => {
     const user = userEvent.setup()
     server.use(
       http.get('*/v1/matches/m-1', () =>
-        HttpResponse.json(
-          inProgressMatch({
-            sides: participantSides({ meWins: 2, oppWins: 0 }),
-            games: [
-              { id: 'g-1', game_number: 1, score: score('s-1', 11, 4) },
-              { id: 'g-2', game_number: 2, score: score('s-2', 11, 6) },
-            ],
-            current_game: { game_number: 3 },
-          }),
-        ),
+        HttpResponse.json(decidingGameMatch()),
       ),
       // Offline → the deciding-game scratchpad save rejects with a network error.
       http.post('*/v1/matches/m-1/games/3/scores/new', () =>
@@ -2210,82 +2236,9 @@ describe('ScoreEntry — unsaved-input guard', () => {
     // the pre-fix code armed the latch inside it — from then on the guard was
     // dead for this component instance. A further edit here is genuinely unsaved,
     // so an in-app navigation MUST warn. Fails against the pre-fix component.
-    const user = userEvent.setup()
-    const putBodies: Array<Record<string, number>> = []
-    let committedVersion = 1
-    server.use(
-      http.get('*/v1/matches/m-1', () =>
-        HttpResponse.json(
-          inProgressMatch({
-            games: [
-              {
-                id: 'g-1',
-                game_number: 1,
-                score: {
-                  id: 's-1',
-                  side_1_points: 11,
-                  side_2_points: 5,
-                  winner_side_number: 1,
-                  version: committedVersion,
-                },
-              },
-              { id: 'g-2', game_number: 2, score: score('s-2', 9, 11) },
-            ],
-          }),
-        ),
-      ),
-      http.put('*/v1/matches/m-1/games/1/scores', async ({ request }) => {
-        const body = (await request.json()) as Record<string, number>
-        putBodies.push(body)
-        // First write loses the version race and 409s with the committed score;
-        // the replace re-fires with the fresh version and succeeds.
-        if (putBodies.length === 1) {
-          committedVersion = 2
-          return HttpResponse.json(
-            {
-              detail: {
-                message: 'This game was saved by someone else.',
-                committed_score: {
-                  id: 's-1',
-                  side_1_points: 11,
-                  side_2_points: 5,
-                  winner_side_number: 1,
-                  version: 2,
-                },
-              },
-            },
-            { status: 409 },
-          )
-        }
-        return HttpResponse.json(inProgressMatch())
-      }),
-    )
+    const { user } = await renderReplaceConflict()
 
-    renderScoringApp('/matches/m-1/games/1/scores/edit')
-    const meInput = await screen.findByRole('textbox', {
-      name: 'rita.kovac score',
-    })
-    await waitFor(() => expect(meInput).toHaveValue('11'))
-    await user.clear(meInput)
-    await user.type(meInput, '12')
-    const oppInput = screen.getByRole('textbox', { name: 'nguyen.t score' })
-    await user.clear(oppInput)
-    await user.type(oppInput, '10')
-    await user.click(screen.getByRole('button', { name: /save changes/i }))
-
-    // The 409 advances us fire-and-forget; open the conflict to review it.
-    await screen.findByRole('heading', { name: /enter game 3 score/i })
-    await user.click(
-      await screen.findByRole('button', { name: /review game 1/i }),
-    )
-    await screen.findByRole('heading', { name: /edit game 1 score/i })
-
-    // Replace re-fires with the fresh version, succeeds, and clears the conflict
-    // — this path does NOT navigate.
-    await user.click(
-      screen.getByRole('button', { name: /replace with my score/i }),
-    )
-    await waitFor(() => expect(putBodies).toHaveLength(2))
+    // The replace succeeds and clears the conflict without navigating.
     await waitFor(() =>
       expect(
         screen.queryByText(/this game was saved by someone else/i),
@@ -2399,81 +2352,7 @@ describe('ScoreEntry — conflicts', () => {
   })
 
   it('overwrites with my score when I choose to replace, using the version from the conflict body', async () => {
-    const user = userEvent.setup()
-    const putBodies: Array<Record<string, number>> = []
-    // The committed row sits at version 1 until our stale write loses the race;
-    // the opponent's winning write has bumped it to 2. A refetch reflects that.
-    let committedVersion = 1
-    server.use(
-      http.get('*/v1/matches/m-1', () =>
-        HttpResponse.json(
-          inProgressMatch({
-            games: [
-              {
-                id: 'g-1',
-                game_number: 1,
-                score: {
-                  id: 's-1',
-                  side_1_points: 11,
-                  side_2_points: 5,
-                  winner_side_number: 1,
-                  version: committedVersion,
-                },
-              },
-              { id: 'g-2', game_number: 2, score: score('s-2', 9, 11) },
-            ],
-          }),
-        ),
-      ),
-      http.put('*/v1/matches/m-1/games/1/scores', async ({ request }) => {
-        const body = (await request.json()) as Record<string, number>
-        putBodies.push(body)
-        // First write claims version 1 and loses; the committed row is now at
-        // version 2. The 409 carries that committed score so the client can
-        // re-decide and re-fire with the fresh version.
-        if (putBodies.length === 1) {
-          committedVersion = 2
-          return HttpResponse.json(
-            {
-              detail: {
-                message: 'This game was saved by someone else.',
-                committed_score: {
-                  id: 's-1',
-                  side_1_points: 11,
-                  side_2_points: 5,
-                  winner_side_number: 1,
-                  version: 2,
-                },
-              },
-            },
-            { status: 409 },
-          )
-        }
-        return HttpResponse.json(inProgressMatch())
-      }),
-    )
-
-    renderScoringApp('/matches/m-1/games/1/scores/edit')
-
-    const meInput = await screen.findByRole('textbox', {
-      name: 'rita.kovac score',
-    })
-    await waitFor(() => expect(meInput).toHaveValue('11'))
-    await user.clear(meInput)
-    await user.type(meInput, '12')
-    const oppInput = screen.getByRole('textbox', { name: 'nguyen.t score' })
-    await user.clear(oppInput)
-    await user.type(oppInput, '10')
-    await user.click(screen.getByRole('button', { name: /save changes/i }))
-
-    await screen.findByRole('heading', { name: /enter game 3 score/i })
-    await user.click(
-      await screen.findByRole('button', { name: /review game 1/i }),
-    )
-    await screen.findByRole('heading', { name: /edit game 1 score/i })
-    await user.click(
-      screen.getByRole('button', { name: /replace with my score/i }),
-    )
+    const { putBodies } = await renderReplaceConflict()
 
     // The replace re-fires the write — a deliberate overwrite against the
     // version we just showed the user. The first attempt claimed the stale
