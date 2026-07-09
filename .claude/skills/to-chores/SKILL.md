@@ -68,11 +68,12 @@ Every chore must pass the **four-part gate** — split it until all four hold:
 2. **One surface, no "and"** — the "what to build" line names a single
    behavior/surface without conjoining two.
 3. **Independently verifiable** — has a concrete `Verify` command that goes green
-   when the chore is done, **and** a `Proves` line naming the observable claim that
-   green command establishes. If you cannot write a falsifiable `Proves` sentence,
-   the chore isn't a chore yet — it has no definition of done. "The tests pass" is
-   not a claim; "a late-joining cascade user's replayed rating matches a
-   from-scratch replay" is.
+   when the chore is done, a `Proves` line naming the observable claim that green
+   command establishes, **and** a `Demo` showing how to watch it work. If you cannot
+   write a falsifiable `Proves` sentence, the chore isn't a chore yet — it has no
+   definition of done. "The tests pass" is not a claim; "a late-joining cascade
+   user's replayed rating matches a from-scratch replay" is. A chore with no `Demo`
+   is usually a fragment: fold it into the chore that makes it observable.
 4. **Fits one context window** — if the agent would have to read a large slice of
    the codebase to do it, it's too big; split it, or point it at an ADR that
    already carries the decision.

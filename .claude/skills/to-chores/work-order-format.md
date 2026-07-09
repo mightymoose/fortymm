@@ -73,9 +73,17 @@ adversarial exploration — they are a floor, never a ceiling.
 - **Proves** — one line naming *the observable claim that command establishes*.
   Required. `Verify` is the command; `Proves` is what a green command means. A
   command can pass for the wrong reason (the test didn't exercise the new path, the
-  suite was already green before the change) — `/do-chores` re-runs `Verify` itself
-  and rejects the chore if the claim in `Proves` isn't actually established. Write it
-  as a falsifiable sentence about behavior, not "tests pass".
+  suite was already green before the change) — `/do-chores` dispatches a fresh
+  `verifier` agent that rejects the chore if the claim in `Proves` isn't actually
+  established. Write it as a falsifiable sentence about behavior, not "tests pass".
+- **Demo** — required. How to *observe* the chore's behavior end to end, as a caller
+  or user would: a command to run, a page to open, a job to invoke, a REPL snippet.
+  The `verifier` agent runs it at the end of every chore. A unit test is not a demo —
+  the demo is what convinces someone the thing actually works. When a chore genuinely
+  has no observable surface (a pure internal helper), write `Demo: none — observable
+  only via <the chore that consumes it>` and consider whether the two should be one
+  chore. Every *slice* must end in a demoable increment even when a chore inside it
+  does not.
 
 ## Testing notes
 
