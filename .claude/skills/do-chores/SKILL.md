@@ -40,13 +40,27 @@ Repeat until every chore is ticked or every remaining chore is blocked:
      one batch). **Serialize across every `[main]` seam** — never start a chore
      whose `depends-on` includes an unfinished `[main]` chore (this is what keeps
      the OpenAPI regen ahead of the web/iOS chores that consume the new types).
-3. **Verify + tick** — when an agent reports success, confirm its **Verify**
-   command was run and green, then tick the chore's box in the file. If you're the
-   `[main]` owner, run the Verify yourself before ticking.
+3. **Verify + tick** — an agent's report is a claim, not evidence. **Re-run the
+   chore's `Verify` command yourself** and read the output, for every chore,
+   including ones a subagent reported green. Then check it against the chore's
+   **`Proves`** line: a green command is necessary, not sufficient — ask *did this
+   run actually establish that claim?* Reject and re-dispatch when:
+   - the command passed but the chore's new test never ran (wrong path, wrong `-k`
+     filter, file not collected);
+   - the command was **already green before the chore** — it proves nothing about
+     the change (when the chore's own new test is what makes `Verify` meaningful,
+     confirm that test exists and exercises the new path);
+   - the agent edited the test to fit the code rather than the code to fit the claim.
+
+   Only then tick the chore's box. Never tick a box on a report you did not
+   independently reproduce.
 4. **Close the slice** — when every chore in a slice is ticked, run the slice's
    **demoable outcome** as a final check, then **commit the slice** (a working,
    demoable increment; message names the slice). Do not squash slices into one
    commit — per-slice commits are the audit trail.
+
+The `## Testing notes` section is **not** this skill's job — it belongs to
+`/qa-review` and `/epic`'s final gate. Don't try to satisfy it here; don't delete it.
 
 ## On failure — stop the slice
 

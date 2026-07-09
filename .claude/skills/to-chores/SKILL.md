@@ -68,30 +68,58 @@ Every chore must pass the **four-part gate** — split it until all four hold:
 2. **One surface, no "and"** — the "what to build" line names a single
    behavior/surface without conjoining two.
 3. **Independently verifiable** — has a concrete `Verify` command that goes green
-   when the chore is done.
+   when the chore is done, **and** a `Proves` line naming the observable claim that
+   green command establishes. If you cannot write a falsifiable `Proves` sentence,
+   the chore isn't a chore yet — it has no definition of done. "The tests pass" is
+   not a claim; "a late-joining cascade user's replayed rating matches a
+   from-scratch replay" is.
 4. **Fits one context window** — if the agent would have to read a large slice of
    the codebase to do it, it's too big; split it, or point it at an ADR that
    already carries the decision.
+
+Prefer a `Verify` that *fails before the chore and passes after*. A command that was
+already green tells you nothing — say so in `Proves` when the chore adds the very
+test that makes it meaningful.
 
 Describe each chore as **behavior + surface, never hard file paths** (they go
 stale; the agent is a domain expert and auto-loads its unit `CLAUDE.md`). Inline a
 snippet only when it encodes a decision prose can't (a type shape, a schema).
 
-### 6. Flag undocumented decisions
+### 6. Write the testing notes
+
+Draft a `## Testing notes` section for the whole plan: the **black-box, user-observable
+scenarios** a tester must confirm against the running app. Group them as happy path,
+edge cases, regression risks, and *not observable in the UI*. Written in the domain's
+language (see `CONTEXT.md`) — never file paths or function names, because the QA agent
+never reads the source.
+
+These are the acceptance criteria for the arc, not a restatement of the chores. A chore's
+`Proves` line is checked by a command; a testing note is checked by a human or by Quinn
+driving a browser. `/qa-review` receives them as **must-cover scenarios** *in addition to*
+its own adversarial exploration, and `/epic` checks them off at the very end.
+
+If the plan's whole surface is invisible from the UI (an internal refactor, a background
+job), say so explicitly under *not observable in the UI* rather than inventing UI
+scenarios — that tells `/epic` to skip the browser pass instead of running a hollow one.
+
+### 7. Flag undocumented decisions
 
 If a chore depends on a decision that isn't captured anywhere (the plan assumes
 it, but no ADR/`CONTEXT.md`/plan text pins it down), **stop and ask the user** what
 to do — inline it into the chore, go capture it (`/grill-with-docs`), or confirm it
 needs no doc. Do not invent the decision, and do not silently write an ADR.
 
-### 7. Quiz the user, then write
+### 8. Quiz the user, then write
 
 Present the breakdown as a numbered list: each slice with its demoable outcome,
-and its chores with agent tag + one-line description + depends-on. Ask:
+and its chores with agent tag + one-line description + depends-on. Then the
+testing notes. Ask:
 
 - Granularity right? (too coarse / too fine)
 - Dependencies and `[main]` seams correct?
 - Any chore that fails the four-part gate?
+- Do the testing notes cover what you'd actually want a QA pass to try — and is
+  anything listed as *not observable in the UI* that you think should be?
 
 Iterate until the user approves. Then write the work order to
 **`.claude/work-order.md`** (gitignored; override with a path argument if given),
@@ -100,6 +128,7 @@ telling the user the work order is ready and to run `/do-chores`.
 
 ## Completion criterion
 
-The work order is written, every chore passes the four-part gate, every
-cross-layer seam has a `[main]` chore, every `depends-on` references a real chore
-ID, and the user has approved the breakdown.
+The work order is written, every chore passes the four-part gate (including a
+falsifiable `Proves` line), every cross-layer seam has a `[main]` chore, every
+`depends-on` references a real chore ID, the `## Testing notes` section is present,
+and the user has approved the breakdown.
