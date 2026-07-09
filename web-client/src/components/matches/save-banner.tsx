@@ -194,7 +194,15 @@ function FailedSaveBanner({
     if (wouldFinalize && onlineManager.isOnline()) {
       finalizeMutation.mutate(
         { games: mergedGames },
-        { onSuccess: () => navigate(matchDetailRoute(matchId)) },
+        {
+          // App-initiated hop inside score-entry's blocker scope: the result has
+          // already posted server-side, so prompting "Leave without saving?"
+          // would be wrong. Bypass the dirty-form guard on this one navigation
+          // (ADR 0014, #818) — the banner lives inside ScoreEntryInner, so its
+          // navigations are caught by that component's still-armed blocker.
+          onSuccess: () =>
+            navigate({ ...matchDetailRoute(matchId), ignoreBlocker: true }),
+        },
       )
       return
     }
@@ -298,6 +306,10 @@ function ConflictReviewBanner({ matchId, activeGameNumber }: SaveBannerProps) {
               size="sm"
               className="border-[color:var(--loss)]/50 text-[color:var(--loss)] hover:bg-[color:var(--loss)]/10 hover:text-[color:var(--loss)]"
               onClick={() =>
+                // User-initiated hop, NOT the app's — the same gesture as the
+                // scoreline <Link>, so it deliberately does NOT bypass the
+                // dirty-form guard (ADR 0014, #818). The user chose to jump to
+                // another game; if they typed into the active one, warn them.
                 navigate(scoringEditRoute(matchId, entry.gameNumber))
               }
             >

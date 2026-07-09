@@ -2254,6 +2254,233 @@ describe('ScoreEntry — unsaved-input guard', () => {
     const dialog = await screen.findByRole('alertdialog')
     expect(dialog).toHaveTextContent(/leave without saving/i)
   })
+
+  it('regression: posting the result from the save banner after a multi-game offline failure does not warn (#818)', async () => {
+    // The child-navigation path the #818 audit missed (ADR 0014). The audit
+    // patched the three navigate() calls in score-entry.tsx but SaveBanner —
+    // rendered *inside* ScoreEntryInner — has two of its own, guarded by the
+    // same still-mounted blocker. The prior #818 tests all used a SINGLE failed
+    // decider game, where `otherFailed` is empty, `decidedHere` is true, and the
+    // banner's own "Post result" button never renders (the main button owns
+    // finalizing) — so this path shipped untested and broken.
+    //
+    // Here games 1 AND 2 also fail offline, so `otherFailed` is non-empty,
+    // `decidedHere` is false, and the banner renders its OWN "Post result"
+    // button. Clicking it finalizes and hops to the match page — an
+    // app-initiated navigation that must bypass the still-dirty unsaved-input
+    // guard. Fails against the pre-fix save-banner (the hop had no
+    // `ignoreBlocker`, so the guard caught it).
+    const user = userEvent.setup()
+    const cleanMatch = inProgressMatch({
+      best_of: 5,
+      games_to_win: 3,
+      affects_rating: true,
+      sides: participantSides({ meWins: 0, oppWins: 0 }),
+      games: [],
+      current_game: { game_number: 1 },
+    })
+    server.use(
+      http.get('*/v1/matches/m-1', () => HttpResponse.json(cleanMatch)),
+      // Offline → every scratch save rejects with a network error.
+      http.post('*/v1/matches/m-1/games/:n/scores/new', () =>
+        HttpResponse.error(),
+      ),
+      http.post('*/v1/matches/m-1/results', () =>
+        HttpResponse.json(
+          matchDetails({
+            id: 'm-1',
+            status: 'completed',
+            status_label: 'Final',
+            best_of: 5,
+            games_to_win: 3,
+            sides: participantSides({ meWins: 3, oppWins: 0, meWon: true }),
+            current_game: null,
+            can_score: false,
+            can_finalize: false,
+          }),
+          { status: 201 },
+        ),
+      ),
+    )
+
+    renderScoringApp('/matches/m-1/games/1/scores/new')
+    await screen.findByRole('heading', { name: /enter game 1 score/i })
+    onlineManager.setOnline(false)
+
+    // Game 1 offline (my win) → fails, advances to game 2.
+    await user.type(
+      screen.getByRole('textbox', { name: 'rita.kovac score' }),
+      '11',
+    )
+    await user.type(screen.getByRole('textbox', { name: 'nguyen.t score' }), '9')
+    await user.click(screen.getByRole('button', { name: /save game & next/i }))
+    await screen.findByRole('heading', { name: /enter game 2 score/i })
+
+    // Game 2 offline (my win) → still 2-0, undecided in Bo5, advances to game 3.
+    await user.type(
+      screen.getByRole('textbox', { name: 'rita.kovac score' }),
+      '11',
+    )
+    await user.type(screen.getByRole('textbox', { name: 'nguyen.t score' }), '9')
+    await user.click(screen.getByRole('button', { name: /save game & next/i }))
+    await screen.findByRole('heading', { name: /enter game 3 score/i })
+
+    // Game 3 is the decider (2-0 on the recorded board). Typing the clinching
+    // win makes isDirty true. Still offline, the main "Post result" stores a
+    // scratch save and keeps us on game 3 (the `wouldFinalize` early return);
+    // isDirty stays stored-true (a folded-baseline derivation would read false —
+    // ADR 0014).
+    const meInput = screen.getByRole('textbox', { name: 'rita.kovac score' })
+    const oppInput = screen.getByRole('textbox', { name: 'nguyen.t score' })
+    await user.type(meInput, '11')
+    await user.type(oppInput, '9')
+    await user.click(screen.getByRole('button', { name: /post result/i }))
+
+    // All three games now sit as failed scratch saves deciding a 3-0 board, and
+    // because games 1 & 2 also failed (`otherFailed` non-empty) the banner is
+    // NOT `decidedHere`: it renders its OWN "Post result" button. Reaching this
+    // proves we hit the previously-uncovered path.
+    const banner = await screen.findByRole('alert')
+    expect(banner).toHaveTextContent('These scores finish the match.')
+    const bannerPost = within(banner).getByRole('button', {
+      name: /post result/i,
+    })
+    expect(bannerPost).toBeInTheDocument()
+
+    // Back online, post the result from the banner. Its onSuccess hop to the
+    // match page is app-initiated, so it must bypass the still-dirty guard (ADR
+    // 0014) — land on the match page with no "leave without saving" prompt.
+    onlineManager.setOnline(true)
+    // fireEvent (not user.click): against the pre-fix banner this hop is blocked,
+    // and the blocked finalize + completed-redirect `<Navigate>` busy-loops —
+    // which would leave user-event's `act()` waiting forever and hang the test.
+    // fireEvent returns synchronously, so the assertion below is what surfaces
+    // the regression (it lands on the match page only once the hop bypasses the
+    // guard).
+    fireEvent.click(bannerPost)
+
+    await waitFor(() =>
+      expect(screen.getByText('match-page')).toBeInTheDocument(),
+    )
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    expect(screen.queryByText(/leave without saving/i)).not.toBeInTheDocument()
+  })
+
+  it('regression: clicking "Review game N" in the conflict banner with unsaved typing still warns (#818)', async () => {
+    // The positive control the audit lacked. ConflictReviewBanner's "Review
+    // game N" button is a USER-initiated hop — the same gesture as tapping a
+    // scoreline <Link> — so it must NOT bypass the dirty-form guard (ADR 0014).
+    // The banner renders inside ScoreEntryInner, whose still-mounted blocker
+    // catches this navigation. A prior misdiagnosis added `ignoreBlocker: true`
+    // here, which silently discarded typed input.
+    //
+    // Harness: a REAL /scores/new route (the active game) but a STUB /scores/edit
+    // route — the review destination. Game 3's create save 409s as a conflict;
+    // fire-and-forget advances to game 4, where the ConflictReviewBanner renders
+    // "Review game 3". Stubbing the edit route is deliberate: against the pre-fix
+    // banner the bypass navigates there, and a stub lands inert so
+    // `findByRole('alertdialog')` cleanly rejects (no dialog — we navigated)
+    // instead of busy-looping on a real edit screen.
+    const user = userEvent.setup()
+    server.use(
+      http.get('*/v1/matches/m-1', () => HttpResponse.json(inProgressMatch())),
+      http.post('*/v1/matches/m-1/games/3/scores/new', () =>
+        HttpResponse.json(
+          {
+            detail: {
+              message:
+                'This game was saved by someone else while you were editing.',
+              committed_score: null,
+            },
+          },
+          { status: 409 },
+        ),
+      ),
+    )
+
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    const rootRoute = createRootRoute()
+    const scoringNew = createRoute({
+      getParentRoute: () => rootRoute,
+      path: '/matches/$matchId/games/$gameNumber/scores/new',
+      component: function NewEntry() {
+        const params = useParams({ strict: false })
+        return (
+          <ScoreEntry
+            matchId={params.matchId!}
+            gameNumber={Number(params.gameNumber)}
+            mode={{ kind: 'create' }}
+          />
+        )
+      },
+    })
+    // Stub edit route so the pre-fix bypass lands inert (no redirect/loop).
+    const scoringEdit = createRoute({
+      getParentRoute: () => rootRoute,
+      path: '/matches/$matchId/games/$gameNumber/scores/edit',
+      component: () => <div>scoring-edit</div>,
+    })
+    const matchPage = createRoute({
+      getParentRoute: () => rootRoute,
+      path: '/matches/$matchId',
+      component: () => <div>match-page</div>,
+    })
+    const router = createRouter({
+      routeTree: rootRoute.addChildren([scoringNew, scoringEdit, matchPage]),
+      history: createMemoryHistory({
+        initialEntries: ['/matches/m-1/games/3/scores/new'],
+      }),
+    })
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    )
+
+    await screen.findByRole('heading', { name: /enter game 3 score/i })
+    await user.type(
+      screen.getByRole('textbox', { name: 'rita.kovac score' }),
+      '11',
+    )
+    await user.type(screen.getByRole('textbox', { name: 'nguyen.t score' }), '4')
+    await user.click(screen.getByRole('button', { name: /save game & next/i }))
+
+    // Fire-and-forget advances to game 4; game 3's rejected save surfaces as a
+    // conflict to review (the active game 4 is excluded from the banner).
+    await screen.findByRole('heading', { name: /enter game 4 score/i })
+    const reviewBtn = await screen.findByRole('button', {
+      name: /review game 3/i,
+    })
+
+    // Dirty the ACTIVE game (4) with FRESH typing — game 4 has no failed save of
+    // its own (the conflict is on game 3), so its dirty baseline starts clean
+    // and this input is unambiguously user-caused, not stale-true.
+    await user.type(
+      screen.getByRole('textbox', { name: 'rita.kovac score' }),
+      '11',
+    )
+
+    // Clicking Review is a user-initiated hop — it must warn, not silently leave.
+    // fireEvent (not user.click): the two outcomes are mutually exclusive — the
+    // fixed banner blocks (dialog appears, we stay put) while the pre-fix banner
+    // bypasses (navigates to the stub edit route, no dialog). Wait for whichever
+    // resolves, then discriminate: the fixed banner shows the dialog and does NOT
+    // reach "scoring-edit"; the pre-fix banner reaches "scoring-edit" and getByRole
+    // below fails with a fast, clean "no alertdialog".
+    fireEvent.click(reviewBtn)
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('alertdialog') ?? screen.queryByText('scoring-edit'),
+      ).not.toBeNull(),
+    )
+    expect(screen.getByRole('alertdialog')).toHaveTextContent(
+      /leave without saving/i,
+    )
+    // The guard held — we did NOT navigate to game 3's (stub) edit screen.
+    expect(screen.queryByText('scoring-edit')).not.toBeInTheDocument()
+  })
 })
 
 describe('ScoreEntry — conflicts', () => {

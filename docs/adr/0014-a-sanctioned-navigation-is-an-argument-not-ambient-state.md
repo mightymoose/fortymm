@@ -27,6 +27,36 @@ prompt.
 
 **The app's own navigations bypass the guard; the user's navigations do not.**
 
+**The axis is what triggered the navigation, not which file it lives in.** A
+navigation fired from a mutation's success callback is the app's; a navigation fired
+from an `onClick` or a `<Link>` is the user's — even though both are "app code", and
+even though both may run while the form is dirty.
+
+This matters because `useBlocker` guards every navigation attempted while its
+component is mounted, *including those fired by that component's children*. The scope
+is the blocker's subtree, and a subtree can hold both categories.
+
+`SaveBanner` is exactly that case. It renders inside `ScoreEntryInner` and fires two
+`navigate()` calls, which fall on opposite sides of the rule:
+
+- `retry()`'s `finalizeMutation.mutate(…, { onSuccess: () => navigate(…) })` — the app
+  navigating as a consequence of a write the user already committed. The result has
+  posted; `isDirty` is merely stale. **Bypass.**
+- `ConflictReviewBanner`'s "Review game N" `onClick={() => navigate(…)}` — the user
+  choosing to jump to another game, the same gesture as the scoreline `<Link>`.
+  **Block**, and warn them about the input they typed.
+
+Deleting the always-armed latch uncovered both, because the latch had been suppressing
+the guard for the whole subtree, indiscriminately, for the life of the component. The
+finalize hop needed the bypass restored. The Review button did not: it had been
+silently discarding typed input for as long as the latch existed, and the guard firing
+there is the fix working, not a regression.
+
+Do not reach for "would data actually be lost?" as the test. A failed save survives an
+in-app hop in the mutation cache, so often nothing is lost — yet the user still asked
+to leave a form they had typed into, and still deserves the prompt. The rule is
+categorical: **who initiated this navigation?**
+
 Express that by passing `ignoreBlocker: true` **to the navigation being performed** —
 never by setting a flag that the blocker later reads:
 
