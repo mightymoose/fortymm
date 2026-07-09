@@ -199,7 +199,7 @@ function FailedSaveBanner({
           // already posted server-side, so prompting "Leave without saving?"
           // would be wrong. Bypass the dirty-form guard on this one navigation
           // (ADR 0014, #818) — the banner lives inside ScoreEntryInner, so its
-          // navigations are caught by that component's still-armed blocker.
+          // navigations are caught by that component's still-mounted blocker.
           onSuccess: () =>
             navigate({ ...matchDetailRoute(matchId), ignoreBlocker: true }),
         },

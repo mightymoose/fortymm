@@ -1190,7 +1190,10 @@ describe('ScoreEntry — edit', () => {
 // post-navigation screen is the actual next-game page rather than a stub.
 // ---------------------------------------------------------------------------
 
-function renderScoringApp(initialPath: string) {
+function renderScoringApp(
+  initialPath: string,
+  { stubEditRoute = false }: { stubEditRoute?: boolean } = {},
+) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
@@ -1212,16 +1215,22 @@ function renderScoringApp(initialPath: string) {
   const scoringEdit = createRoute({
     getParentRoute: () => rootRoute,
     path: '/matches/$matchId/games/$gameNumber/scores/edit',
-    component: function EditEntry() {
-      const params = useParams({ strict: false })
-      return (
-        <ScoreEntry
-          matchId={params.matchId!}
-          gameNumber={Number(params.gameNumber)}
-          mode={{ kind: 'edit' }}
-        />
-      )
-    },
+    // `stubEditRoute` lands the edit route inert (no redirect/loop) instead of
+    // mounting the real edit ScoreEntry: a test whose pre-fix bypass navigates
+    // here can then cleanly assert we did NOT arrive, rather than busy-looping
+    // against a real edit screen that bypasses the same banner.
+    component: stubEditRoute
+      ? () => <div>scoring-edit</div>
+      : function EditEntry() {
+          const params = useParams({ strict: false })
+          return (
+            <ScoreEntry
+              matchId={params.matchId!}
+              gameNumber={Number(params.gameNumber)}
+              mode={{ kind: 'edit' }}
+            />
+          )
+        },
   })
   const matchPage = createRoute({
     getParentRoute: () => rootRoute,
@@ -1251,6 +1260,22 @@ function decidingGameMatch() {
       { id: 'g-2', game_number: 2, score: score('s-2', 11, 6) },
     ],
     current_game: { game_number: 3 },
+  })
+}
+
+// The finalized MatchDetails a successful POST /results returns: a completed
+// best-of-5 the current user swept 3–0.
+function completedMatch() {
+  return matchDetails({
+    id: 'm-1',
+    status: 'completed',
+    status_label: 'Final',
+    best_of: 5,
+    games_to_win: 3,
+    sides: participantSides({ meWins: 3, oppWins: 0, meWon: true }),
+    current_game: null,
+    can_score: false,
+    can_finalize: false,
   })
 }
 
@@ -1658,17 +1683,8 @@ describe('ScoreEntry — failed saves', () => {
     let scoreCalls = 0
     server.use(
       http.get('*/v1/matches/m-1', () =>
-        HttpResponse.json(
-          inProgressMatch({
-            // Bo5, 2-0 on the board — an 11-3 win in game 3 clinches at 3-0.
-            sides: participantSides({ meWins: 2, oppWins: 0 }),
-            games: [
-              { id: 'g-1', game_number: 1, score: score('s-1', 11, 4) },
-              { id: 'g-2', game_number: 2, score: score('s-2', 11, 6) },
-            ],
-            current_game: { game_number: 3 },
-          }),
-        ),
+        // Bo5, 2-0 on the board — an 11-3 win in game 3 clinches at 3-0.
+        HttpResponse.json(decidingGameMatch()),
       ),
       http.post('*/v1/matches/m-1/results', () => {
         resultsCalls += 1
@@ -1738,20 +1754,7 @@ describe('ScoreEntry — failed saves', () => {
       }),
       http.post('*/v1/matches/m-1/results', async ({ request }) => {
         resultsBody = await request.json()
-        return HttpResponse.json(
-          matchDetails({
-            id: 'm-1',
-            status: 'completed',
-            status_label: 'Final',
-            best_of: 5,
-            games_to_win: 3,
-            sides: participantSides({ meWins: 3, oppWins: 0, meWon: true }),
-            current_game: null,
-            can_score: false,
-            can_finalize: false,
-          }),
-          { status: 201 },
-        )
+        return HttpResponse.json(completedMatch(), { status: 201 })
       }),
     )
 
@@ -2124,20 +2127,7 @@ describe('ScoreEntry — unsaved-input guard', () => {
         HttpResponse.json(decidingGameMatch()),
       ),
       http.post('*/v1/matches/m-1/results', () =>
-        HttpResponse.json(
-          matchDetails({
-            id: 'm-1',
-            status: 'completed',
-            status_label: 'Final',
-            best_of: 5,
-            games_to_win: 3,
-            sides: participantSides({ meWins: 3, oppWins: 0, meWon: true }),
-            current_game: null,
-            can_score: false,
-            can_finalize: false,
-          }),
-          { status: 201 },
-        ),
+        HttpResponse.json(completedMatch(), { status: 201 }),
       ),
     )
 
@@ -2286,20 +2276,7 @@ describe('ScoreEntry — unsaved-input guard', () => {
         HttpResponse.error(),
       ),
       http.post('*/v1/matches/m-1/results', () =>
-        HttpResponse.json(
-          matchDetails({
-            id: 'm-1',
-            status: 'completed',
-            status_label: 'Final',
-            best_of: 5,
-            games_to_win: 3,
-            sides: participantSides({ meWins: 3, oppWins: 0, meWon: true }),
-            current_game: null,
-            can_score: false,
-            can_finalize: false,
-          }),
-          { status: 201 },
-        ),
+        HttpResponse.json(completedMatch(), { status: 201 }),
       ),
     )
 
@@ -2398,46 +2375,9 @@ describe('ScoreEntry — unsaved-input guard', () => {
       ),
     )
 
-    const queryClient = new QueryClient({
-      defaultOptions: { queries: { retry: false } },
-    })
-    const rootRoute = createRootRoute()
-    const scoringNew = createRoute({
-      getParentRoute: () => rootRoute,
-      path: '/matches/$matchId/games/$gameNumber/scores/new',
-      component: function NewEntry() {
-        const params = useParams({ strict: false })
-        return (
-          <ScoreEntry
-            matchId={params.matchId!}
-            gameNumber={Number(params.gameNumber)}
-            mode={{ kind: 'create' }}
-          />
-        )
-      },
-    })
-    // Stub edit route so the pre-fix bypass lands inert (no redirect/loop).
-    const scoringEdit = createRoute({
-      getParentRoute: () => rootRoute,
-      path: '/matches/$matchId/games/$gameNumber/scores/edit',
-      component: () => <div>scoring-edit</div>,
-    })
-    const matchPage = createRoute({
-      getParentRoute: () => rootRoute,
-      path: '/matches/$matchId',
-      component: () => <div>match-page</div>,
-    })
-    const router = createRouter({
-      routeTree: rootRoute.addChildren([scoringNew, scoringEdit, matchPage]),
-      history: createMemoryHistory({
-        initialEntries: ['/matches/m-1/games/3/scores/new'],
-      }),
-    })
-    render(
-      <QueryClientProvider client={queryClient}>
-        <RouterProvider router={router} />
-      </QueryClientProvider>,
-    )
+    // Stub edit route (the review destination) so the pre-fix bypass lands
+    // inert (no redirect/loop) — see `renderScoringApp`'s `stubEditRoute`.
+    renderScoringApp('/matches/m-1/games/3/scores/new', { stubEditRoute: true })
 
     await screen.findByRole('heading', { name: /enter game 3 score/i })
     await user.type(
