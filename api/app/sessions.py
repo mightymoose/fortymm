@@ -215,7 +215,7 @@ async def _sign_in_after_merge(
     merged: MergeSummary | None,
 ) -> SessionResponse:
     """Mint a fresh session for ``user``, commit the pending transaction, fire
-    the rating recompute when matches moved, rotate the cookie, and return the
+    the rating recompute when a merge happened, rotate the cookie, and return the
     session. The shared tail of the token-bound merge sign-in paths
     (``consume_login_token`` and ``_confirm_account_merge``): the caller stages
     the token deletion + merge, this finalizes."""
@@ -228,7 +228,17 @@ async def _sign_in_after_merge(
         )
     )
     await db.commit()
-    if merged is not None and merged.matches_moved > 0:
+    # Enqueue on ANY merge, not only when matches_moved > 0. Two reasons the old
+    # `> 0` gate was too narrow: (1) a self-play collision VOIDS the guest's only
+    # rated match, so matches_moved is 0 yet the survivor's rating is still
+    # inflated by it and must be recomputed (ADR-0013); (2) even a zero-match
+    # merge can leave a stale survivor rating that the empty-timeline reset must
+    # rewrite. `merged is not None` is also the only gate expressible here: this
+    # `merged` is the response `MergeSummary`, which deliberately has no
+    # matches_voided count (adding one would drift the OpenAPI clients), so no
+    # void-aware condition is available at this layer. The recompute is a
+    # deterministic rewrite — enqueuing it on a true no-op merge is harmless.
+    if merged is not None:
         _enqueue_rating_recompute_after_merge(user.id)
     _set_session_cookie(response, raw_session)
     return await _build_session_response(db, user, merged=merged)
@@ -1082,7 +1092,11 @@ async def confirm_email(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="That confirmation link is invalid or expired.",
         ) from None
-    if merged is not None and merged.matches_moved > 0:
+    # Enqueue on ANY merge — see the same gate in `_sign_in_after_merge` for why
+    # `matches_moved > 0` is too narrow (voided collisions and the empty-timeline
+    # reset both need a recompute at matches_moved == 0), and why this is the only
+    # gate expressible without drifting the response schema.
+    if merged is not None:
         _enqueue_rating_recompute_after_merge(user.id)
     _set_session_cookie(response, raw_session)
     return await _build_session_response(db, user, merged=merged)

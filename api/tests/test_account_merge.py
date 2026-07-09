@@ -620,8 +620,10 @@ async def test_merge_self_play_drops_orphaned_match_side(db_session: AsyncSessio
 
     # guest_a played this one match — the NOT EXISTS guard skipping the
     # re-point (because verified was already on the match) must not make the
-    # summary under-report it as zero matches moved (#235).
+    # summary under-report it as zero matches moved (#235). An UNRATED collision
+    # is not voided, so it stays a moved match and nothing is voided.
     assert summary.matches_moved == 1
+    assert summary.matches_voided == 0
 
     result = await db_session.execute(
         select(MatchSide).where(MatchSide.match_id == match.id)
@@ -693,8 +695,13 @@ async def test_merge_rated_self_play_collision_voids_match(
     )
     await db_session.commit()
 
-    # Still counted as a match the guest brought across (#235).
-    assert summary.matches_moved == 1
+    # A VOIDED rated collision does NOT count toward the "we brought your N
+    # matches" toast — it transferred to the survivor but no longer counts, so
+    # matches_moved excludes it and matches_voided records it. (Contrast the
+    # UNRATED self-play test above, which still reports matches_moved == 1: an
+    # unrated collision isn't voided, so it stays a moved match — #235.)
+    assert summary.matches_moved == 0
+    assert summary.matches_voided == 1
 
     await db_session.refresh(match)
     # Voided, not left completed.

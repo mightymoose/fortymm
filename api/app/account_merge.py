@@ -65,9 +65,19 @@ class _SelfPlayCollision:
 @dataclass(frozen=True)
 class MergeSummary:
     #: Distinct matches the ephemeral user played that now belong to the
-    #: survivor — both cleanly re-pointed rows and ones dropped by the
-    #: belt-and-braces delete because the survivor already sat on that match.
+    #: survivor AND still count — both cleanly re-pointed rows and ones dropped
+    #: by the belt-and-braces delete because the survivor already sat on that
+    #: match. EXCLUDES self-play collisions that were voided (see
+    #: ``matches_voided``): those transferred to the survivor but no longer
+    #: count, so counting them would make the "we brought your N matches with
+    #: you" toast claim a match that was just voided.
     matches_moved: int
+    #: Rated self-play collisions voided by this merge (ADR-0013). Internal to
+    #: the merge primitive — the caller uses it to keep ``matches_moved``
+    #: honest, and it is deliberately NOT surfaced on the ``MergeSummary`` the
+    #: session response exposes (``app.schemas.session``), to avoid drifting the
+    #: generated OpenAPI clients for a number the FE doesn't render.
+    matches_voided: int
 
 
 async def merge_user(
@@ -223,7 +233,8 @@ async def merge_user(
     # ephemeral user played, now solely under the verified account — it counts
     # as moved just like the rows the UPDATE re-pointed above. Without this,
     # `matches_moved` (and the "we brought your matches with you" toast)
-    # silently under-reports for that collision case.
+    # silently under-reports for that collision case. The rated collisions we
+    # VOID below are the exception — they are subtracted back out at the return.
     matches_moved += cast(CursorResult[Any], dropped_side_players).rowcount or 0
     # The collision case is self-play across two guest sessions (both sides of
     # the same match were the same real person). The NOT EXISTS guard skipped
@@ -310,7 +321,17 @@ async def merge_user(
     )
     await db.flush()
 
-    return MergeSummary(matches_moved=matches_moved)
+    # A voided rated collision was dropped by the belt-and-braces delete above
+    # (its guest MatchSidePlayer was never re-pointed), so it got added into
+    # `matches_moved`. But we just voided it — it no longer counts. Subtract the
+    # voided collisions so `matches_moved` reflects only matches that carried
+    # over and still count. Every collided match's guest side is dropped by that
+    # delete exactly once (UNIQUE(match_id, user_id)), so `len(match_ids)` is the
+    # exact overcount.
+    matches_voided = len(collision.match_ids)
+    matches_moved -= matches_voided
+
+    return MergeSummary(matches_moved=matches_moved, matches_voided=matches_voided)
 
 
 async def _self_play_collision(
