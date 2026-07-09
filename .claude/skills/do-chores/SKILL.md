@@ -40,13 +40,38 @@ Repeat until every chore is ticked or every remaining chore is blocked:
      one batch). **Serialize across every `[main]` seam** — never start a chore
      whose `depends-on` includes an unfinished `[main]` chore (this is what keeps
      the OpenAPI regen ahead of the web/iOS chores that consume the new types).
-3. **Verify + tick** — when an agent reports success, confirm its **Verify**
-   command was run and green, then tick the chore's box in the file. If you're the
-   `[main]` owner, run the Verify yourself before ticking.
+3. **Verify — with a fresh agent, every chore, no exceptions.** An implementing
+   agent's report is a *claim*, not evidence, and it is the last party who should
+   grade it. You are the second-worst: you watched it happen and you want it to
+   pass. So dispatch the **`verifier`** subagent (Agent tool, `subagent_type:
+   "verifier"`) with the chore's *what to build*, `Scope`, `Verify`, `Proves`, and
+   `Demo`, plus the implementer's summary marked explicitly as an unverified claim.
+
+   The verifier has **no edit tools**. It re-runs `Verify`, adversarially checks the
+   `Proves` claim (did the new test actually get collected? was the command already
+   green before the chore? does the test assert behavior or was it weakened to fit
+   the code? is there a discriminating assertion?), **runs the `Demo`**, and checks
+   the chore stayed inside its `Scope`. It returns `PASS`, `FAIL`, or `INCONCLUSIVE`.
+
+   - **PASS** → tick the box.
+   - **FAIL** → treat exactly like a chore failure (see below). Mark `⚠ BLOCKED`.
+   - **INCONCLUSIVE** → *not* a pass. Resolve what it couldn't establish, or block.
+
+   Never tick a box on a report you did not have independently reproduced. Never
+   verify a chore with the agent that implemented it, and never let a `[main]` chore
+   grade itself either — dispatch the verifier for those too.
 4. **Close the slice** — when every chore in a slice is ticked, run the slice's
-   **demoable outcome** as a final check, then **commit the slice** (a working,
-   demoable increment; message names the slice). Do not squash slices into one
-   commit — per-slice commits are the audit trail.
+   **demoable outcome** end-to-end as a final check, then **commit the slice** (a
+   working, demoable increment; message names the slice). Do not squash slices into
+   one commit — per-slice commits are the audit trail.
+
+Every chore ends in a demo, and every slice ends in a demoable increment. If a chore
+has no `Demo` — nothing observable, even at a REPL or a job invocation — that is a
+signal the chore is a fragment rather than a unit of work; consider merging it into
+the chore that makes it observable.
+
+The `## Testing notes` section is **not** this skill's job — it belongs to
+`/qa-review` and `/epic`'s final gate. Don't try to satisfy it here; don't delete it.
 
 ## On failure — stop the slice
 

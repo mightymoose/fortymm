@@ -65,7 +65,10 @@ decisions and confirm before continuing.
 
 Breaks the plan into `.claude/work-order.md`: tracer-bullet slices of small,
 agent-tagged chores, with `[main]` steps at every cross-layer seam (OpenAPI
-regen especially). Decompose-only.
+regen especially). Each chore carries a `Verify` command **and** a `Proves` line
+naming the observable claim that command establishes. The work order ends with a
+`## Testing notes` section — the black-box, user-observable acceptance scenarios
+for the whole arc. Decompose-only.
 
 **Gate:** `/to-chores` already quizzes the user on granularity and requires
 approval before it writes the file. Relay that approval step — do not fabricate
@@ -75,9 +78,11 @@ single-tree change is one slice / one or two chores, not a manufactured epic.
 
 ### 3. `/do-chores` — drive the work order to green
 
-Dispatches each chore to its domain-expert subagent in dependency order, verifies
-with the chore's own command, ticks the checkbox, and commits **per slice**.
-Serialises across every `[main]` seam; parallelises independent trees.
+Dispatches each chore to its domain-expert subagent in dependency order, **re-runs
+the chore's `Verify` command itself** (a subagent's "all green" is a claim, not
+evidence), checks the result against the chore's `Proves` line, ticks the checkbox,
+and commits **per slice**. Serialises across every `[main]` seam; parallelises
+independent trees.
 
 **Gate:** on a chore failure, `/do-chores` marks it `⚠ BLOCKED` and stops that
 slice — surface the blocker to the user and stop; don't retry-thrash. Only when
@@ -90,10 +95,27 @@ Runs `/simplify`, all applicable test suites, commits + pushes, opens the PR, th
 (browser for `web-client/**`, Simulator for `ios/**`, skip when neither was
 touched). Its review depth should track the change's risk, not a fixed ceremony.
 
+**Feed the QA pass the work order's `## Testing notes`.** Pass them to `/qa-review`
+as **must-cover scenarios** — the QA agent covers them *in addition to* its own
+adversarial edge-case exploration, never instead of it. When the notes say the
+change is *not observable in the UI*, skip the browser pass rather than run a
+hollow one, and say so.
+
 **Gate:** it stops at any surfaced code-review issue, security finding, or QA bug
 — raise them to the user, don't auto-fix. And it stops **before merge**: this is
 an agent-authored branch, self-merge is blocked (two-party review), so the merge
-is always the user's. `/epic` ends here — report the PR and hand off.
+is always the user's.
+
+### 5. Check the testing notes — the arc's acceptance gate
+
+Before handing off, walk the work order's `## Testing notes` one by one and state,
+for each, **how it was confirmed**: covered by Quinn's QA pass (name the flow), by
+a named test, by you driving the app, or **not confirmed**. A note nobody checked
+is an unmet acceptance criterion — surface it, don't quietly drop it. "The suite is
+green" does not discharge a testing note; the notes exist precisely because a green
+suite and a working product are different claims.
+
+`/epic` ends here — report the PR, the testing-notes ledger, and hand off.
 
 ## Invariants (hold these across every phase)
 
@@ -101,9 +123,13 @@ is always the user's. `/epic` ends here — report the PR and hand off.
 - **Never skip a gate**, even for a "small" change — right-size the *work*, not the
   checkpoints.
 - **Carry the artifact chain**: the agreed plan (+ ADRs) → `.claude/work-order.md`
-  → the branch/PR. Each phase consumes the previous phase's artifact; don't
-  re-establish context the artifact already holds.
+  (chores + `Proves` + `## Testing notes`) → the branch/PR → the testing-notes
+  ledger. Each phase consumes the previous phase's artifact; don't re-establish
+  context the artifact already holds.
 - **A failure stops its phase**, surfaced to the user — not a silent workaround.
+- **Verify, don't trust.** Every claim of green — a subagent's, a prior phase's,
+  an issue's "still open" status — gets independently reproduced before it's built
+  on. A stale premise caught at a gate is the point of the gates.
 
 ## Resumability
 

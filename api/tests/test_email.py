@@ -20,12 +20,13 @@ from app.models import (
     User,
     UserToken,
 )
+from app.ratings.jobs import RECOMPUTE_AFTER_MERGE_JOB
 from app.sessions import (
     EMAIL_CHANGE_CONTEXT_PREFIX,
     EMAIL_MERGE_CONTEXT_PREFIX,
     _pending_email_token_clause,
 )
-from tests._helpers import CSRF_EVENT_HOOKS, start_session
+from tests._helpers import CSRF_EVENT_HOOKS, make_client, start_session
 
 
 @pytest_asyncio.fixture
@@ -67,10 +68,15 @@ def _finished_send_jobs(fake_email_queue) -> list:
     return jobs
 
 
-async def _record_match(db: AsyncSession, creator: User, *players: User) -> Match:
+async def _record_match(
+    db: AsyncSession,
+    creator: User,
+    *players: User,
+    affects_rating: bool = False,
+) -> Match:
     """Minimal completed match so a merge has something to move."""
     league = await get_default_league(db)
-    settings = MatchSettings(team_size=1, best_of=5, affects_rating=False)
+    settings = MatchSettings(team_size=1, best_of=5, affects_rating=affects_rating)
     match = Match(
         match_settings=settings,
         league=league,
@@ -745,6 +751,84 @@ async def test_token_is_stored_hashed_not_plaintext(
     ).scalar_one()
     assert token_row.token == hashlib.sha256(raw_token.encode("utf-8")).digest()
     assert token_row.token != raw_token.encode("utf-8")
+
+
+# ---- confirm: rating recompute enqueue on prior-session fold --------------
+
+
+async def test_confirm_email_enqueues_recompute_for_voided_self_play_collision(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    fake_email_queue,
+    fake_ratings_queue,
+):
+    """Confirming an email folds the clicking browser's ephemeral guest into the
+    token owner (``_maybe_merge_prior_session``). When the guest's ONLY rated
+    match is a self-play collision against that owner (ADR-0013), the merge VOIDS
+    it, so ``matches_moved`` reports 0 — yet the owner's rating was inflated by
+    that voided match and the recompute MUST still be enqueued to strip it. This
+    is the confirm-path twin of ``test_login`` 's collision regression: the old
+    ``matches_moved > 0`` gate silently dropped this enqueue."""
+    # The token owner (survivor) sets a first-time email on their own browser.
+    owner = await start_session(api_client, db_session)
+    raw_token = await _capture_raw_token(api_client, db_session, fake_email_queue)
+
+    # A DIFFERENT browser holds an ephemeral guest that played a RATED match
+    # against the owner — a self-play collision the confirm-time fold will void.
+    guest_client = make_client()
+    async with guest_client:
+        guest = await start_session(guest_client, db_session)
+        match = await _record_match(
+            db_session, guest, guest, owner, affects_rating=True
+        )
+
+        response = await guest_client.post(
+            "/v1/me/email/confirm", json={"token": raw_token}
+        )
+    assert response.status_code == 200
+    # The voided collision is NOT reported as a moved match.
+    assert response.json()["merged"] == {"matches_moved": 0}
+
+    # The match was voided, confirming this exercised the collision path.
+    voided_status = (
+        await db_session.execute(select(Match.status).where(Match.id == match.id))
+    ).scalar_one()
+    assert voided_status == MatchStatus.voided
+
+    # The recompute is STILL enqueued despite matches_moved == 0, carrying the
+    # survivor (token owner) id.
+    jobs = fake_ratings_queue.get_jobs()
+    assert len(jobs) == 1
+    assert jobs[0].func_name == RECOMPUTE_AFTER_MERGE_JOB
+    assert jobs[0].args == (str(owner.id),)
+
+
+async def test_confirm_email_enqueues_recompute_even_when_no_matches_moved(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    fake_email_queue,
+    fake_ratings_queue,
+):
+    """A confirm-time fold with zero matches moved STILL enqueues the recompute:
+    the survivor may hold a stale rating the empty-timeline reset must rewrite
+    (ADR-0013). The gate fires on any merge, not only ``matches_moved > 0``."""
+    owner = await start_session(api_client, db_session)
+    raw_token = await _capture_raw_token(api_client, db_session, fake_email_queue)
+
+    # A DIFFERENT browser with an ephemeral guest that never played anything.
+    guest_client = make_client()
+    async with guest_client:
+        await start_session(guest_client, db_session)
+        response = await guest_client.post(
+            "/v1/me/email/confirm", json={"token": raw_token}
+        )
+    assert response.status_code == 200
+    assert response.json()["merged"] == {"matches_moved": 0}
+
+    jobs = fake_ratings_queue.get_jobs()
+    assert len(jobs) == 1
+    assert jobs[0].func_name == RECOMPUTE_AFTER_MERGE_JOB
+    assert jobs[0].args == (str(owner.id),)
 
 
 # ---- confirm: merge into an existing account ------------------------------

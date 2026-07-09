@@ -130,6 +130,64 @@ rated-only. This distinction is the whole point of issue #845: a player with an
 empty history "has no matches yet", not "no *rated* matches yet".
 _Avoid_: results, rated history, match log.
 
+**Voided match**:
+A match that was played and is still remembered, but which no longer counts: it
+is terminal, closed to new proposals, shown as "Voided", and contributes nothing
+to anyone's **rating**. Voiding a match deletes its rating history — a voided
+match is absent from the **rating timeline**, not merely skipped by it. Distinct
+from an **unrated match**, which never counted in the first place, and from a
+deleted match, which is not remembered at all.
+_Avoid_: cancelled match, annulled match, disputed match (that status is retired).
+
+## Rating recompute
+
+**Rating timeline**:
+The ordered sequence of a league's completed **rated matches**, against which
+every player's **rating** is a pure function. Ordered by each match's *completion*
+instant — stable, stamped once, and never moved by a later edit — not by when its
+rows were last written. A player's rating is whatever replaying the timeline from
+their initial state produces; a player whose timeline is empty sits at the
+strategy's initial state.
+_Avoid_: rating log, history (that is the audit table, `rating_history`).
+
+**Recompute**:
+Rebuilding a league's rating state from the **rating timeline** after something
+upstream disturbs it (an account **merge**, a **voided match**). Deterministic and
+idempotent: it reads current state and rewrites it, so a retry lands on the same
+answer. Runs one league at a time, in the background.
+_Avoid_: recalculation, rating rebuild, backfill.
+
+**Cascade**:
+The forward propagation of staleness through the **rating timeline**. If a
+player's rating changes at match M, every later match they played is stale too,
+and so is everyone they played in those matches. The cascade walks forward
+chronologically, growing the set of **affected users** as it discovers them.
+_Avoid_: ripple, fan-out, propagation.
+
+**Affected user / affected match**:
+A user whose rating the **cascade** has determined must be replayed, and a match
+that must be replayed because at least one of its participants was already
+affected when the cascade reached it. A match whose participants were *both*
+unaffected is not affected — its stored rating history is already exactly what a
+replay would produce, so replaying it is redundant.
+
+**Seed**:
+The rating state an **affected user** is replayed *from*: their state as of the
+instant just before **their own** first affected match — not before some global
+cutoff. Seeding every user from one shared cutoff is what issue #749 describes:
+a user who joins the **cascade** late loses any intervening match that the
+cascade never replayed.
+_Avoid_: baseline, starting rating, initial state (that is the strategy's, and
+is what a player with an empty timeline seeds to).
+
+**Self-play collision**:
+The discovery, at **merge** time, that the **guest** and the **claimed account**
+they are merging into sat on *opposite sides of the same match* — proving both
+sides were always the same person. The match is transferred wholly to the claimed
+account and then **voided**: it is kept as a record but stops counting. Not an
+error, and never a reason to refuse the merge.
+_Avoid_: duplicate player, self match (a **solo match** is a different thing).
+
 ## Session and identity
 
 **Guest**:

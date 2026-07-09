@@ -486,9 +486,11 @@ async def test_consume_rejects_link_after_user_changed_email(
 # ---- merge of ephemeral session on consume -------------------------------
 
 
-async def _record_singles_match(db_session: AsyncSession, *players: User) -> Match:
+async def _record_singles_match(
+    db_session: AsyncSession, *players: User, affects_rating: bool = False
+) -> Match:
     league = await get_default_league(db_session)
-    settings = MatchSettings(team_size=1, best_of=5, affects_rating=False)
+    settings = MatchSettings(team_size=1, best_of=5, affects_rating=affects_rating)
     match = Match(
         match_settings=settings,
         league=league,
@@ -649,10 +651,13 @@ async def test_consume_enqueues_rating_recompute_when_matches_moved(
     assert job.args == (str(rita.id),)
 
 
-async def test_consume_skips_recompute_when_no_matches_moved(
+async def test_consume_enqueues_recompute_even_when_no_matches_moved(
     api_client: AsyncClient, db_session: AsyncSession, fake_ratings_queue
 ):
-    """No matches → no work to do. Don't burn an RQ slot."""
+    """A merge with zero matches moved STILL has rating work to reconcile: the
+    survivor may hold a stale rating that the empty-timeline reset resets to the
+    strategy's initial state (ADR-0013). The enqueue gate fires on any merge,
+    not only when matches_moved > 0 — that old gate was too narrow."""
     rita = await _make_confirmed_user(db_session, "rita@example.com")
     raw = "raw-login-token-no-matches"
     await _issue_login_token(db_session, rita, raw)
@@ -663,7 +668,48 @@ async def test_consume_skips_recompute_when_no_matches_moved(
     response = await api_client.post("/v1/login/consume", json={"token": raw})
     assert response.status_code == 200
     assert response.json()["merged"] == {"matches_moved": 0}
-    assert fake_ratings_queue.get_jobs() == []
+
+    jobs = fake_ratings_queue.get_jobs()
+    assert len(jobs) == 1
+    assert jobs[0].func_name == RECOMPUTE_AFTER_MERGE_JOB
+    assert jobs[0].args == (str(rita.id),)
+
+
+async def test_consume_enqueues_recompute_for_voided_self_play_collision(
+    api_client: AsyncClient, db_session: AsyncSession, fake_ratings_queue
+):
+    """A guest whose ONLY rated match is a self-play collision against the
+    account they sign into (ADR-0013): the merge VOIDS that match, so
+    matches_moved reports 0 (the toast must not claim a match that was just
+    voided) — but the survivor's rating was inflated by that voided match, so
+    the recompute MUST still be enqueued to strip it. This is the regression the
+    old ``matches_moved > 0`` gate silently dropped."""
+    rita = await _make_confirmed_user(db_session, "rita@example.com")
+    raw = "raw-login-token-collision"
+    await _issue_login_token(db_session, rita, raw)
+
+    guest = await start_session(api_client, db_session)
+    # A RATED match the guest played against rita herself — after the merge the
+    # guest and rita sit on opposite sides of the same match: a self-play
+    # collision the merge voids.
+    match = await _record_singles_match(db_session, guest, rita, affects_rating=True)
+
+    response = await api_client.post("/v1/login/consume", json={"token": raw})
+    assert response.status_code == 200
+    # The voided collision is NOT reported as a moved match.
+    assert response.json()["merged"] == {"matches_moved": 0}
+
+    # The match was voided, confirming this exercised the collision path.
+    voided_status = (
+        await db_session.execute(select(Match.status).where(Match.id == match.id))
+    ).scalar_one()
+    assert voided_status == MatchStatus.voided
+
+    # The recompute is STILL enqueued despite matches_moved == 0.
+    jobs = fake_ratings_queue.get_jobs()
+    assert len(jobs) == 1
+    assert jobs[0].func_name == RECOMPUTE_AFTER_MERGE_JOB
+    assert jobs[0].args == (str(rita.id),)
 
 
 async def test_consume_skips_recompute_when_no_prior_session(
