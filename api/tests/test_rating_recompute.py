@@ -54,9 +54,11 @@ async def _build_completed_match(
     affects_rating: bool = True,
 ) -> Match:
     """Persist a singles match with a single 11-4 game and a fixed
-    completion timestamp. ``updated_at`` is what ``recompute_league_ratings``
+    completion timestamp. ``completed_at`` is what ``recompute_league_ratings``
     orders by, so we overwrite it via raw SQL to control the chronology
-    without sleeping in tests."""
+    without sleeping in tests. We stamp ``updated_at`` to the same instant so a
+    freshly-built match starts on a single axis; tests that need the two to
+    diverge bump ``updated_at`` afterwards."""
     settings = MatchSettings(team_size=1, best_of=1, affects_rating=affects_rating)
     match = Match(
         match_settings=settings,
@@ -75,7 +77,10 @@ async def _build_completed_match(
     await db.refresh(match)
 
     await db.execute(
-        text("UPDATE matches SET created_at = :ts, updated_at = :ts WHERE id = :id"),
+        text(
+            "UPDATE matches SET created_at = :ts, updated_at = :ts, "
+            "completed_at = :ts WHERE id = :id"
+        ),
         {"ts": completed_at, "id": match.id},
     )
     await db.commit()
@@ -168,7 +173,7 @@ async def test_recompute_cascade_propagates_through_shared_matches(
 
     by_match = {m.id: m for m in (m1, m2, m3)}
     for row in rows:
-        assert row.created_at == by_match[row.match_id].updated_at
+        assert row.created_at == by_match[row.match_id].completed_at
 
     a_rating = (
         await db_session.execute(
@@ -343,7 +348,10 @@ async def test_recompute_skips_matches_without_a_decided_outcome(
     await db_session.commit()
     await db_session.refresh(undecided)
     await db_session.execute(
-        text("UPDATE matches SET created_at = :ts, updated_at = :ts WHERE id = :id"),
+        text(
+            "UPDATE matches SET created_at = :ts, updated_at = :ts, "
+            "completed_at = :ts WHERE id = :id"
+        ),
         {"ts": base + timedelta(hours=1), "id": undecided.id},
     )
     await db_session.commit()
@@ -402,7 +410,10 @@ async def test_recompute_skips_decided_match_with_a_player_less_side(
     await db_session.commit()
     await db_session.refresh(player_less)
     await db_session.execute(
-        text("UPDATE matches SET created_at = :ts, updated_at = :ts WHERE id = :id"),
+        text(
+            "UPDATE matches SET created_at = :ts, updated_at = :ts, "
+            "completed_at = :ts WHERE id = :id"
+        ),
         {"ts": base + timedelta(hours=1), "id": player_less.id},
     )
     await db_session.commit()
@@ -470,6 +481,101 @@ async def test_recompute_is_idempotent(
         .all()
     )
     assert len(rows) == 1
+
+
+# ----- timeline anchored on completed_at, not updated_at -------------------
+
+
+async def test_recompute_ignores_updated_at_bump_after_completion(
+    db_session: AsyncSession,
+    rating_strategies: dict[str, RatingStrategy],
+):
+    """The replay is anchored on the stable ``completed_at``, never the mutable
+    ``updated_at``. A, B play three times in a fixed completion order whose
+    outcomes alternate, so the Glicko-2 sequence is order-sensitive: replaying
+    them in a different order lands on different ratings and a different
+    ``created_at``/``previous_rating_value`` chain.
+
+    We recompute, snapshot the result, then bump the *first* match's
+    ``updated_at`` to after the *last* match's — the kind of touch an edit to an
+    old completed match produces — and recompute again. Ordering by
+    ``updated_at`` would now replay [m2, m3, m1] and produce different numbers;
+    ordering by ``completed_at`` is immune. The snapshot must be identical.
+
+    Regression guard for ADR-0012: on the old ``updated_at``-anchored code this
+    assertion fails."""
+    league = await get_default_league(db_session)
+    strategy = rating_strategies["glicko2"]
+    a = await make_user(db_session, "alpha")
+    b = await make_user(db_session, "bravo")
+    for user in (a, b):
+        await _seed_rating(db_session, league, user.id, strategy)
+
+    base = datetime(2026, 5, 1, tzinfo=UTC)
+    # Alternating outcomes → the replay is order-sensitive.
+    m1 = await _build_completed_match(db_session, league, a, b, base)
+    m2 = await _build_completed_match(
+        db_session, league, b, a, base + timedelta(hours=1)
+    )
+    m3 = await _build_completed_match(
+        db_session, league, a, b, base + timedelta(hours=2)
+    )
+
+    async def snapshot() -> tuple[
+        dict[uuid.UUID, float | None],
+        list[tuple[uuid.UUID, datetime, float, float | None]],
+    ]:
+        """Final ratings plus the full history chain, ordered on the axis the
+        recompute claims to use — ``created_at``. If the replay reordered, both
+        the numbers and this ordered chain move."""
+        ratings = {
+            r.user_id: r.rating_value
+            for r in (await db_session.execute(select(UserLeagueRating)))
+            .scalars()
+            .all()
+        }
+        history = [
+            (row.user_id, row.created_at, row.rating_value, row.previous_rating_value)
+            for row in (
+                await db_session.execute(
+                    select(RatingHistory)
+                    .where(RatingHistory.match_id.in_([m1.id, m2.id, m3.id]))
+                    .order_by(
+                        RatingHistory.created_at.asc(), RatingHistory.user_id.asc()
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        ]
+        return ratings, history
+
+    await recompute_league_ratings(db_session, league.id, {a.id})
+    await db_session.commit()
+    before = await snapshot()
+
+    # The chain must actually be order-sensitive, or the test proves nothing:
+    # the three matches sit at three distinct completion instants, so a reorder
+    # is observable. (created_at == each match's completed_at.)
+    assert {row[1] for row in before[1]} == {
+        m1.completed_at,
+        m2.completed_at,
+        m3.completed_at,
+    }
+
+    # Touch the earliest match well after the latest one — as editing an old
+    # completed match would. updated_at moves; completed_at does not.
+    await db_session.execute(
+        text("UPDATE matches SET updated_at = :ts WHERE id = :id"),
+        {"ts": base + timedelta(hours=3), "id": m1.id},
+    )
+    await db_session.commit()
+
+    await recompute_league_ratings(db_session, league.id, {a.id})
+    await db_session.commit()
+    after = await snapshot()
+
+    assert after == before
 
 
 # ----- advisory lock -------------------------------------------------------

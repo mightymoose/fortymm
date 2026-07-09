@@ -115,11 +115,15 @@ async def recompute_league_ratings(
         {"key": _league_lock_key(league_id)},
     )
 
-    # updated_at is set when the match completes, which is the moment
-    # ratings move — and what we order the replay by.
+    # completed_at is stamped once when the match completes and kept stable
+    # thereafter — the moment ratings move, and the axis the rest of the
+    # codebase (history/form/H2H) anchors on. We order the replay by it, not by
+    # the mutable updated_at, so editing an old completed match can't silently
+    # reorder the timeline. Every query here filters status == completed, so
+    # completed_at is non-null in practice (see the narrowing asserts below).
     t_start = (
         await db.execute(
-            select(Match.updated_at)
+            select(Match.completed_at)
             .join(MatchSidePlayer, MatchSidePlayer.match_id == Match.id)
             .join(MatchSettings, MatchSettings.id == Match.match_settings_id)
             .where(
@@ -129,7 +133,7 @@ async def recompute_league_ratings(
                 MatchSettings.team_size == 1,
                 MatchSidePlayer.user_id.in_(seed_user_ids),
             )
-            .order_by(Match.updated_at.asc())
+            .order_by(Match.completed_at.asc())
             .limit(1)
         )
     ).scalar_one_or_none()
@@ -144,12 +148,12 @@ async def recompute_league_ratings(
                 .where(
                     Match.league_id == league_id,
                     Match.status == MatchStatus.completed,
-                    Match.updated_at >= t_start,
+                    Match.completed_at >= t_start,
                     MatchSettings.affects_rating.is_(True),
                     MatchSettings.team_size == 1,
                 )
                 .options(selectinload(Match.sides).selectinload(MatchSide.players))
-                .order_by(Match.updated_at.asc(), Match.id.asc())
+                .order_by(Match.completed_at.asc(), Match.id.asc())
             )
         )
         .scalars()
@@ -229,6 +233,12 @@ async def recompute_league_ratings(
         if winner_id not in states_by_user or loser_id not in states_by_user:
             continue
 
+        # Every match here was loaded under status == completed, so completed_at
+        # is non-null — narrow it for the created_at stamp below. It is the
+        # stable axis the live path already writes (its func.now() default lands
+        # in the same transaction as mark_completed()).
+        assert match.completed_at is not None
+
         prev_winner_value = state_rating_value(states_by_user[winner_id])
         prev_loser_value = state_rating_value(states_by_user[loser_id])
 
@@ -256,7 +266,7 @@ async def recompute_league_ratings(
                     rating_state=new_state,
                     previous_rating_value=prev_value,
                     source=RatingHistorySource.match,
-                    created_at=match.updated_at,
+                    created_at=match.completed_at,
                 )
             )
             rating_by_user[user_id].rating_state = new_state
