@@ -72,7 +72,12 @@ const selectConfirmationCallout = (
 
   switch (negotiation.viewer_state) {
     case "review": {
-      // The opponent posted the first result; the viewer must act.
+      // The opponent posted the first result; the viewer must act. The BFF's
+      // negotiation block is viewer-relative: it sets `your_turn=false` for a
+      // spectator (signed-in third party or anonymous share-URL viewer), who
+      // has no legitimate acceptance to make — so suppress the actionable
+      // callout entirely rather than offer an Accept button they can't action.
+      if (!negotiation.your_turn) return null;
       if (!negotiation.standing_result) return null;
       return {
         kind: "review",
@@ -86,6 +91,9 @@ const selectConfirmationCallout = (
 
     case "corrected": {
       // The opponent countered the viewer's own prior proposal; show the diff.
+      // As with `review`, a spectator gets `your_turn=false` from the BFF and
+      // has nothing to accept — suppress the actionable callout for them.
+      if (!negotiation.your_turn) return null;
       if (!negotiation.standing_result) return null;
       return {
         kind: "corrected",

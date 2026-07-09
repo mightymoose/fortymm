@@ -179,6 +179,40 @@ describe("confirmationCalloutQuery", () => {
     });
   });
 
+  it("projects null for a spectator in the review state (your_turn=false), hiding the Accept callout", async () => {
+    confirmationCalloutQueryPage.mockEndpoint(() =>
+      HttpResponse.json(
+        reviewMatch({
+          viewer_state: "review",
+          your_turn: false,
+          standing_result: standingResult(),
+        }),
+      ),
+    );
+
+    const result = await renderView();
+
+    expect(result.current.data).toBeNull();
+  });
+
+  it("projects null for a spectator in the corrected state (your_turn=false), hiding the Accept callout", async () => {
+    confirmationCalloutQueryPage.mockEndpoint(() =>
+      HttpResponse.json(
+        reviewMatch({
+          viewer_state: "corrected",
+          your_turn: false,
+          standing_result: standingResult("r-2"),
+          prior_result: standingResult("r-0"),
+          diff: [diffEntry],
+        }),
+      ),
+    );
+
+    const result = await renderView();
+
+    expect(result.current.data).toBeNull();
+  });
+
   it("projects null once the match is settled (final) — the callout is gone", async () => {
     confirmationCalloutQueryPage.mockEndpoint(() =>
       HttpResponse.json(

@@ -231,7 +231,7 @@ struct FinalMatch: Identifiable {
     /// it's genuinely awaiting acceptance. Distinct from `!decided`, which is
     /// also true for a freshly-created *live* match that has no posted result.
     var awaitingAcceptance: Bool {
-        inProgress && negotiation?.viewerState.hasStandingProposal == true
+        viewerIsParticipant && inProgress && negotiation?.viewerState.hasStandingProposal == true
     }
     /// The current user owes an accept-or-correct on the standing proposal
     /// (negotiation `review` or `corrected` — the states where the opponent
