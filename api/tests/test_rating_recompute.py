@@ -23,7 +23,9 @@ from app.models import (
     RatingStrategy,
     UserLeagueRating,
 )
+from app.ratings.base import state_rating_value
 from app.ratings.recompute import _league_lock_key, recompute_league_ratings
+from app.ratings.registry import get_calculator
 from tests._helpers import make_user
 
 # ----- fixtures + helpers -------------------------------------------------
@@ -309,6 +311,138 @@ async def test_recompute_restores_user_to_last_pre_window_rating(
         )
     ).scalar_one()
     assert opp_row.previous_rating_value == 1550.0
+
+
+async def test_recompute_seeds_late_joiner_from_own_first_affected_match(
+    db_session: AsyncSession,
+    rating_strategies: dict[str, RatingStrategy],
+):
+    """#749: a user who joins the cascade *late* — via a later match against an
+    already-affected user — must be seeded from the state as of THEIR OWN first
+    affected match, not the global ``t_start``.
+
+    Timeline (all rated singles in the default league):
+      M1  @ t_start      A beats X     (A is the seed → M1 is affected)
+      M_b @ t_start+1h   B beats Y     (B, Y not yet affected → NON-affected)
+      M2  @ t_start+2h   A beats B     (affected via A → B joins the cascade)
+
+    B played the non-affected ``M_b`` between ``t_start`` and their own first
+    affected match ``M2``. ``M_b`` is neither replayed (not affected) nor — on
+    the buggy global-cutoff seed — reflected in B's seed, because its
+    ``rating_history`` row postdates ``t_start``. So the old code seeds B from
+    the strategy initial (1500) and B's recomputed rating and its
+    ``previous_rating_value`` chain are silently wrong.
+
+    The fix seeds B from ``M_b``'s stored row (1600). We prove B's replayed
+    winner/loser numbers AND ``previous_rating_value`` chain match a from-scratch
+    ``update_singles`` of B's true sequence, and that the discriminator (1600) is
+    genuinely distinct from the strategy initial so this fails pre-chore."""
+    league = await get_default_league(db_session)
+    strategy = rating_strategies["glicko2"]
+    calculator = get_calculator(strategy.key)
+    assert calculator is not None
+    initial_rating = state_rating_value(strategy.initial_state)
+
+    a = await make_user(db_session, "alpha")
+    x = await make_user(db_session, "xray")
+    b = await make_user(db_session, "bravo")
+    y = await make_user(db_session, "yankee")
+    for user in (a, x, b, y):
+        await _seed_rating(db_session, league, user.id, strategy)
+
+    base = datetime(2026, 5, 1, tzinfo=UTC)
+    m1 = await _build_completed_match(db_session, league, a, x, base)
+    m_b = await _build_completed_match(
+        db_session, league, b, y, base + timedelta(hours=1)
+    )
+    m2 = await _build_completed_match(
+        db_session, league, a, b, base + timedelta(hours=2)
+    )
+
+    # B's only pre-M2 history is the NON-affected M_b row, sitting at 1600 —
+    # distinct from the strategy initial so the seed source is observable. There
+    # is deliberately NO B row before t_start, so the buggy global cutoff falls
+    # all the way back to the initial state.
+    b_seed_state = {"rating": 1600.0, "rd": 200.0, "volatility": 0.06}
+    assert b_seed_state["rating"] != initial_rating
+    db_session.add(
+        RatingHistory(
+            league_id=league.id,
+            user_id=b.id,
+            match_id=m_b.id,
+            rating_strategy_id=strategy.id,
+            rating_value=1600.0,
+            rating_state=b_seed_state,
+            source=RatingHistorySource.match,
+            previous_rating_value=initial_rating,
+        )
+    )
+    await db_session.commit()
+    await db_session.execute(
+        text("UPDATE rating_history SET created_at = :ts WHERE match_id = :id"),
+        {"ts": m_b.completed_at, "id": m_b.id},
+    )
+    await db_session.commit()
+
+    await recompute_league_ratings(db_session, league.id, {a.id})
+    await db_session.commit()
+
+    # M_b was non-affected: its row is left in place, untouched.
+    m_b_rows = (
+        (
+            await db_session.execute(
+                select(RatingHistory).where(RatingHistory.match_id == m_b.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert {row.user_id for row in m_b_rows} == {b.id}
+    assert m_b_rows[0].rating_value == 1600.0
+
+    # A's post-M1 state is the winner input to M2; B's seed is M_b's stored row.
+    a_after_m1 = (
+        await db_session.execute(
+            select(RatingHistory.rating_state).where(
+                RatingHistory.match_id == m1.id, RatingHistory.user_id == a.id
+            )
+        )
+    ).scalar_one()
+
+    # From-scratch replay of B's true sequence: A(post-M1) beats B(seeded 1600).
+    expected_a, expected_b = calculator.update_singles(
+        dict(a_after_m1), dict(b_seed_state)
+    )
+
+    m2_a = (
+        await db_session.execute(
+            select(RatingHistory).where(
+                RatingHistory.match_id == m2.id, RatingHistory.user_id == a.id
+            )
+        )
+    ).scalar_one()
+    m2_b = (
+        await db_session.execute(
+            select(RatingHistory).where(
+                RatingHistory.match_id == m2.id, RatingHistory.user_id == b.id
+            )
+        )
+    ).scalar_one()
+
+    # The load-bearing #749 assertion: B is seeded from M_b (1600), not initial.
+    assert m2_b.previous_rating_value == 1600.0
+    assert m2_a.previous_rating_value == state_rating_value(a_after_m1)
+
+    # And the full replayed numbers match a from-scratch update_singles.
+    assert m2_a.rating_value == state_rating_value(expected_a)
+    assert m2_b.rating_value == state_rating_value(expected_b)
+
+    b_rating = (
+        await db_session.execute(
+            select(UserLeagueRating).where(UserLeagueRating.user_id == b.id)
+        )
+    ).scalar_one()
+    assert b_rating.rating_value == m2_b.rating_value
 
 
 # ----- non-binary outcomes ------------------------------------------------

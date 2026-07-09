@@ -24,7 +24,8 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import delete, func, select, text
+from sqlalchemy import DateTime, column, delete, func, select, text, values
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -162,6 +163,15 @@ async def recompute_league_ratings(
 
     affected_users: set[uuid.UUID] = set(seed_user_ids)
     affected_matches: list[Match] = []
+    # The completion instant of the FIRST affected match each user joins the
+    # cascade through. Matches are walked in ``completed_at`` order, so the
+    # first ``setdefault`` for a user records their earliest affected match —
+    # the per-user cutoff we seed them from (#749). A user who joins late (via
+    # a later match against an already-affected user) must be seeded from the
+    # state as of *their own* first affected match, not the global ``t_start``,
+    # or a non-affected match they played in between is neither replayed nor
+    # reflected in their seed.
+    first_affected_at: dict[uuid.UUID, datetime] = {}
     for match in matches:
         decided = _decided_sides(match)
         if decided is None:
@@ -174,9 +184,21 @@ async def recompute_league_ratings(
         if affected_users & participants:
             affected_users |= participants
             affected_matches.append(match)
+            # Loaded under status == completed, so completed_at is non-null.
+            assert match.completed_at is not None
+            for user_id in participants:
+                first_affected_at.setdefault(user_id, match.completed_at)
 
     if not affected_matches:
         return
+
+    # A seed user with no affected match of their own (e.g. seeded alongside a
+    # peer who does have matches) has no recorded first-affected instant; fall
+    # back to the global ``t_start``, which for seed users is equivalent to
+    # their earliest match at/after ``t_start`` anyway.
+    cutoffs = {
+        user_id: first_affected_at.get(user_id, t_start) for user_id in affected_users
+    }
 
     affected_match_ids = [m.id for m in affected_matches]
     await db.execute(
@@ -186,9 +208,7 @@ async def recompute_league_ratings(
         )
     )
 
-    states_by_user = await _seed_states(
-        db, league_id, affected_users, t_start, strategy
-    )
+    states_by_user = await _seed_states(db, league_id, cutoffs, strategy)
 
     ratings = (
         (
@@ -278,17 +298,34 @@ async def recompute_league_ratings(
 async def _seed_states(
     db: AsyncSession,
     league_id: uuid.UUID,
-    user_ids: set[uuid.UUID],
-    t_start: datetime,
+    cutoffs: dict[uuid.UUID, datetime],
     strategy: RatingStrategy,
 ) -> dict[uuid.UUID, dict[str, Any]]:
-    """Per-user rating state as of the moment just before ``t_start``: the
-    user's most recent ``rating_history`` row in this league, or the
-    strategy's initial state if they have none. Users with no history and no
-    initial state (e.g. manual strategy with no seed) are omitted.
+    """Per-user rating state as of the moment just before that user's own
+    cutoff: their most recent ``rating_history`` row in this league strictly
+    before ``cutoffs[user_id]``, or the strategy's initial state if they have
+    none. Users with no history and no initial state (e.g. manual strategy with
+    no seed) are omitted.
 
-    A window function gets all users in one round trip — N affected users
+    Each affected user seeds from the state as of *their own* first affected
+    match, not one global cutoff (#749). Reading a non-affected match's stored
+    row as the seed is sound: both its participants were at unchanged incoming
+    ratings, so the row is already bit-for-bit what a replay would produce.
+
+    Manual / import / initial rows carry no ``match_id`` and keep their
+    wall-clock ``created_at``, which shares an axis with the (immutable,
+    wall-clock) ``completed_at`` the cutoffs are drawn from — so they stay
+    selectable as seeds.
+
+    A per-user VALUES join keeps this to one round trip — N affected users
     would otherwise be N queries."""
+    if not cutoffs:
+        return {}
+    cutoff_values = values(
+        column("user_id", UUID(as_uuid=True)),
+        column("cutoff", DateTime(timezone=True)),
+        name="cutoffs",
+    ).data([(user_id, cutoff) for user_id, cutoff in cutoffs.items()])
     row_number = func.row_number().over(
         partition_by=RatingHistory.user_id,
         order_by=RatingHistory.created_at.desc(),
@@ -299,10 +336,13 @@ async def _seed_states(
             RatingHistory.rating_state,
             row_number.label("rn"),
         )
+        .join(
+            cutoff_values,
+            cutoff_values.c.user_id == RatingHistory.user_id,
+        )
         .where(
             RatingHistory.league_id == league_id,
-            RatingHistory.user_id.in_(user_ids),
-            RatingHistory.created_at < t_start,
+            RatingHistory.created_at < cutoff_values.c.cutoff,
         )
         .subquery()
     )
@@ -314,6 +354,6 @@ async def _seed_states(
         user_id: dict(state) for user_id, state in latest_per_user.all()
     }
     if strategy.initial_state is not None:
-        for user_id in user_ids:
+        for user_id in cutoffs:
             states.setdefault(user_id, dict(strategy.initial_state))
     return states
