@@ -45,7 +45,10 @@ Repeat until every chore is ticked or every remaining chore is blocked:
    grade it. You are the second-worst: you watched it happen and you want it to
    pass. So dispatch the **`verifier`** subagent (Agent tool, `subagent_type:
    "verifier"`) with the chore's *what to build*, `Scope`, `Verify`, `Proves`, and
-   `Demo`, plus the implementer's summary marked explicitly as an unverified claim.
+   `Demo`, plus the implementer's summary marked explicitly as an unverified claim,
+   plus the **base SHA** for the scope check — the commit the slice builds on
+   (`git rev-parse HEAD` before the slice's first chore; record it when you start
+   the slice). Without it the verifier has no defined ref to diff against.
 
    The verifier has **no edit tools**. It re-runs `Verify`, adversarially checks the
    `Proves` claim (did the new test actually get collected? was the command already

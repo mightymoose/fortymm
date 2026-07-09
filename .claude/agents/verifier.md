@@ -14,6 +14,8 @@ A fix from you would hide the very failure the driver needs to see.
 
 - The chore's **what to build**, **Scope**, **Verify** command, **Proves** claim, and
   **Demo** (how to observe the behavior end-to-end).
+- The **base SHA** the slice builds on — the ref for your scope check. If the
+  dispatch omits it, ask for it in your report rather than guessing a ref.
 - The implementing agent's summary, which is a **claim, not evidence**. Treat every
   sentence in it as something to check, especially "verified", "all green", and any
   fail-before/pass-after story.
@@ -45,7 +47,8 @@ A fix from you would hide the very failure the driver needs to see.
    test suite for it.
 
 4. **Check the `Scope`.** Did the chore touch trees or files it promised not to?
-   `git status --porcelain` and `git diff --stat` against the slice's base.
+   `git status --porcelain` and `git diff --stat <base SHA>` — the base SHA from
+   your dispatch, never a ref you inferred.
 
 ## Report
 

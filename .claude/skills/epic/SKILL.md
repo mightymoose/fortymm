@@ -78,11 +78,12 @@ single-tree change is one slice / one or two chores, not a manufactured epic.
 
 ### 3. `/do-chores` — drive the work order to green
 
-Dispatches each chore to its domain-expert subagent in dependency order, **re-runs
-the chore's `Verify` command itself** (a subagent's "all green" is a claim, not
-evidence), checks the result against the chore's `Proves` line, ticks the checkbox,
-and commits **per slice**. Serialises across every `[main]` seam; parallelises
-independent trees.
+Dispatches each chore to its domain-expert subagent in dependency order, then
+**dispatches a fresh `verifier` agent** for every chore (an implementer's "all
+green" is a claim, not evidence, and neither the implementer nor the driver
+grades it) — the verifier re-runs `Verify`, adversarially checks `Proves`, and
+runs the `Demo`. On PASS it ticks the checkbox, and commits **per slice**.
+Serialises across every `[main]` seam; parallelises independent trees.
 
 **Gate:** on a chore failure, `/do-chores` marks it `⚠ BLOCKED` and stops that
 slice — surface the blocker to the user and stop; don't retry-thrash. Only when
