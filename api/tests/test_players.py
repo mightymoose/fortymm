@@ -663,6 +663,48 @@ async def test_get_player_returns_summary_with_embedded_matches(
     assert body["matches"]["items"][1]["result"] == "W"
 
 
+async def test_get_player_voided_match_reports_no_result(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """A voided match "contributes nothing" (ADR-0013 / the "Voided match"
+    glossary entry): the profile match table must show NO win and NO loss for
+    it, agreeing with the hero's career W-L.
+
+    Regression for the self-play-collision void that flipped ``Match.status`` to
+    ``voided`` but left ``MatchSide.won`` stamped. The status-gated hero read
+    "W-L 0-0" while the ungated match table derived a phantom LOSS from
+    ``won is False`` — the page contradicted itself. Voiding now clears the
+    decision, so the table shows the match (kept as a record) with ``result:
+    null``. FAILS before ``void_match`` nulls ``won`` (the item reports "L")."""
+    from app.match_voiding import void_match
+
+    await start_session(api_client, db_session)
+    survivor = await make_user(db_session, "survivor")
+    ghost = await make_user(db_session, "ghost")
+    # A completed match the survivor LOST — the shape a rated self-play collision
+    # carries before it is voided (won stamped on both sides).
+    match = await _record_match_with_winner(
+        db_session, ghost, survivor, created_at=BASE_TIME
+    )
+
+    # Void it — the operation the self-play-collision merge performs.
+    await void_match(db_session, match)
+    await db_session.commit()
+
+    response = await api_client.get(f"/v1/players/{survivor.id}")
+    assert response.status_code == 200
+    body = response.json()
+    # The voided match is kept as a record — it still appears in history.
+    items = body["matches"]["items"]
+    assert len(items) == 1
+    assert items[0]["status"] == "voided"
+    # No phantom W/L: the pre-fix code reported "L" here.
+    assert items[0]["result"] is None
+    # And the hero agrees — a voided match counts toward neither.
+    assert body["wins"] == 0
+    assert body["losses"] == 0
+
+
 async def test_get_player_requires_a_session(
     api_client: AsyncClient, db_session: AsyncSession
 ):

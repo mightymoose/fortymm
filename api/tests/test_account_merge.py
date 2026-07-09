@@ -5,12 +5,14 @@ import uuid
 from datetime import UTC, datetime
 
 import pytest
+from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.account_merge import merge_user
 from app.leagues import add_user_to_default_league, get_default_league
+from app.match_voiding import void_match
 from app.models import (
     DrawType,
     EventFormat,
@@ -30,6 +32,7 @@ from app.models import (
     UserToken,
 )
 from app.sessions import SESSION_TOKEN_CONTEXT
+from tests._helpers import start_session
 
 
 async def _make_ephemeral(db: AsyncSession, username: str) -> User:
@@ -748,6 +751,130 @@ async def test_merge_rated_self_play_collision_voids_match(
     assert rating_rows == [], (
         f"voided match must leave no rating_history, found {len(rating_rows)}"
     )
+
+
+async def test_void_match_clears_won_and_keeps_sides_intact(
+    db_session: AsyncSession,
+):
+    """``void_match`` clears the decision on BOTH sides — ``won is None`` — while
+    leaving the sides and their players intact.
+
+    "Voided ⟹ no winner, no rating history" is one indivisible fact: any surface
+    that derives a result from ``MatchSide.won`` (the profile match table) must
+    see no winner. The sides/players themselves are kept — the match is a record,
+    not a deletion (ADR-0013)."""
+    creator = await _make_ephemeral(db_session, "creator")
+    opponent = await _make_ephemeral(db_session, "opponent")
+    match = await _record_rated_match(db_session, creator, creator, opponent)
+
+    # Stamp the decision the way a completed match does (creator won, opp lost).
+    sides = (
+        (
+            await db_session.execute(
+                select(MatchSide)
+                .where(MatchSide.match_id == match.id)
+                .order_by(MatchSide.side_number)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    sides[0].won = True
+    sides[1].won = False
+    await db_session.commit()
+
+    match_id = match.id
+    creator_id = creator.id
+    opponent_id = opponent.id
+    await void_match(db_session, match)
+    await db_session.commit()
+
+    # The Core UPDATE won't refresh already-loaded ORM objects — re-query.
+    db_session.expire_all()
+    reloaded = (
+        (
+            await db_session.execute(
+                select(MatchSide)
+                .where(MatchSide.match_id == match_id)
+                .options(selectinload(MatchSide.players))
+                .order_by(MatchSide.side_number)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    await db_session.refresh(match)
+    assert match.status == MatchStatus.voided
+    # Both sides survive, decision cleared on both.
+    assert len(reloaded) == 2
+    assert [side.won for side in reloaded] == [None, None]
+    # Players untouched — the match is kept as a record, not half-deleted.
+    assert [len(side.players) for side in reloaded] == [1, 1]
+    assert reloaded[0].players[0].user_id == creator_id
+    assert reloaded[1].players[0].user_id == opponent_id
+
+
+async def test_merge_self_play_collision_shows_no_result_on_survivor_profile(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    rating_strategies: dict,
+):
+    """End-to-end regression for the P1: after a merge voids a self-play
+    collision, the survivor's profile match table must report NO win and NO loss
+    for that match, agreeing with the hero's career W-L.
+
+    The bug: the void flipped ``Match.status`` to ``voided`` but left
+    ``MatchSide.won`` stamped, so the status-gated hero read "W-L 0-0" while the
+    ungated profile match table derived a phantom LOSS from ``won is False`` — the
+    page contradicted itself. Guards the whole merge → ``void_match`` → profile
+    chain, not just the pieces. FAILS before ``void_match`` clears ``won`` (the
+    survivor's row reports "L")."""
+    guest_a = await _make_ephemeral(db_session, "ghost-device-a")
+    guest_b = await _make_ephemeral(db_session, "ghost-device-b")
+    verified = await _make_verified(db_session, "rita@example.com")
+
+    # A completed rated match guest_a (side 1, won) vs guest_b (side 2, lost) —
+    # ``won`` stamped on both sides the way a real completed match is (#485).
+    match = await _record_rated_match(db_session, guest_a, guest_a, guest_b)
+    sides = (
+        (
+            await db_session.execute(
+                select(MatchSide)
+                .where(MatchSide.match_id == match.id)
+                .order_by(MatchSide.side_number)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    sides[0].won = True
+    sides[1].won = False
+    await db_session.commit()
+
+    # guest_b merges first: side 2 (the loser) now belongs to verified.
+    await merge_user(db_session, from_user_id=guest_b.id, to_user_id=verified.id)
+    await db_session.commit()
+    # guest_a merges: verified is already on the match → self-play collision, voided.
+    summary = await merge_user(
+        db_session, from_user_id=guest_a.id, to_user_id=verified.id
+    )
+    await db_session.commit()
+    assert summary.matches_voided == 1
+
+    # A viewer loads the survivor's profile bundle.
+    await start_session(api_client, db_session)
+    response = await api_client.get(f"/v1/players/{verified.id}")
+    assert response.status_code == 200
+    body = response.json()
+    # The voided match is kept as a record — still in history — but shows no W/L.
+    items = body["matches"]["items"]
+    assert len(items) == 1
+    assert items[0]["status"] == "voided"
+    assert items[0]["result"] is None
+    # The hero agrees: the voided match counts toward neither.
+    assert body["wins"] == 0
+    assert body["losses"] == 0
 
 
 async def test_merge_no_collision_when_account_never_played(
