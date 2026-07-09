@@ -57,19 +57,28 @@ async def _build_completed_match(
     loser,
     completed_at: datetime,
     affects_rating: bool = True,
+    match_id: uuid.UUID | None = None,
 ) -> Match:
     """Persist a singles match with a single 11-4 game and a fixed
     completion timestamp. ``completed_at`` is what ``recompute_league_ratings``
     orders by, so we overwrite it via raw SQL to control the chronology
     without sleeping in tests. We stamp ``updated_at`` to the same instant so a
     freshly-built match starts on a single axis; tests that need the two to
-    diverge bump ``updated_at`` afterwards."""
+    diverge bump ``updated_at`` afterwards.
+
+    ``match_id`` lets a test pin the primary key when it needs to control the
+    replay's ``(completed_at, id)`` tiebreak — e.g. forcing a non-affected match
+    to sort before an affected one that shares its instant. Left ``None``, the
+    ``gen_random_uuid()`` server default assigns it (passing ``id=None`` would
+    emit ``INSERT ... id=NULL`` and violate the NOT NULL PK)."""
     settings = MatchSettings(team_size=1, best_of=1, affects_rating=affects_rating)
+    match_kwargs = {} if match_id is None else {"id": match_id}
     match = Match(
         match_settings=settings,
         league=league,
         created_by_user_id=winner.id,
         status=MatchStatus.completed,
+        **match_kwargs,
     )
     side1 = MatchSide(match=match, side_number=1, won=True, score=1)
     side1.players.append(MatchSidePlayer(match=match, user=winner))
@@ -446,6 +455,227 @@ async def test_recompute_seeds_late_joiner_from_own_first_affected_match(
         )
     ).scalar_one()
     assert b_rating.rating_value == m2_b.rating_value
+
+
+async def test_recompute_seeds_across_completed_at_tie_by_match_id(
+    db_session: AsyncSession,
+    rating_strategies: dict[str, RatingStrategy],
+):
+    """Regression for the cutoff-tie bug: a user's NON-affected match that shares
+    a ``completed_at`` exactly with their first affected match must still seed
+    them, because it sorts *before* that affected match under the replay's
+    ``(completed_at, id)`` order.
+
+    Two matches can share a ``completed_at`` byte-for-byte — Postgres ``now()`` is
+    the transaction timestamp, so any two matches completed in one transaction tie
+    exactly. The replay tiebreaks on ``id``; the seed must agree.
+
+    Timeline (all rated singles in the default league):
+      M1  @ base        A beats X   (A is the seed → affected)
+      M_b @ base+1h     B beats Y   (NON-affected; id pinned to sort FIRST)
+      M2  @ base+1h     A beats B   (SAME instant as M_b; affected via A → B joins)
+
+    ``M_b`` and ``M2`` share ``completed_at`` exactly, and ``M_b.id`` is pinned
+    below ``M2.id`` so the walk reaches ``M_b`` while B is still un-affected (if
+    ``M2`` sorted first B would already be affected and ``M_b`` would be replayed,
+    not seeded-from). B's cutoff is thus ``(base+1h, M2.id)`` and B's only pre-cutoff
+    row is ``M_b`` at ``(base+1h, M_b.id)``.
+
+    On the buggy ``created_at < cutoff`` seed, ``M_b``'s ``created_at`` equals the
+    cutoff instant, so the strict ``<`` drops it — B is seeded from the strategy
+    initial (1500), and ``M_b`` is never replayed either. The lexicographic
+    ``(created_at, match_id) < (cutoff_completed_at, cutoff_match_id)`` seed
+    includes it (``M_b.id < M2.id``), seeding B from ``M_b``'s stored 1600."""
+    league = await get_default_league(db_session)
+    strategy = rating_strategies["glicko2"]
+    calculator = get_calculator(strategy.key)
+    assert calculator is not None
+    initial_rating = state_rating_value(strategy.initial_state)
+
+    a = await make_user(db_session, "alpha")
+    x = await make_user(db_session, "xray")
+    b = await make_user(db_session, "bravo")
+    y = await make_user(db_session, "yankee")
+    for user in (a, x, b, y):
+        await _seed_rating(db_session, league, user.id, strategy)
+
+    base = datetime(2026, 5, 1, tzinfo=UTC)
+    tie = base + timedelta(hours=1)  # M_b and M2 share this instant exactly.
+    # Pin ids so the NON-affected M_b sorts before the affected M2 on the tie.
+    m_b_id = uuid.UUID(int=1)
+    m2_id = uuid.UUID(int=2)
+    assert m_b_id < m2_id
+
+    m1 = await _build_completed_match(db_session, league, a, x, base)
+    m_b = await _build_completed_match(db_session, league, b, y, tie, match_id=m_b_id)
+    m2 = await _build_completed_match(db_session, league, a, b, tie, match_id=m2_id)
+    # Byte-identical completion instant is the whole point — prove it.
+    assert m_b.completed_at == m2.completed_at
+
+    # B's only pre-M2 history is the NON-affected M_b row at 1600, distinct from
+    # the strategy initial so the seed source is observable. No B row precedes the
+    # tie instant, so the buggy strict-``<`` cutoff falls all the way to initial.
+    b_seed_state = {"rating": 1600.0, "rd": 200.0, "volatility": 0.06}
+    assert b_seed_state["rating"] != initial_rating
+    db_session.add(
+        RatingHistory(
+            league_id=league.id,
+            user_id=b.id,
+            match_id=m_b.id,
+            rating_strategy_id=strategy.id,
+            rating_value=1600.0,
+            rating_state=b_seed_state,
+            source=RatingHistorySource.match,
+            previous_rating_value=initial_rating,
+        )
+    )
+    await db_session.commit()
+    await db_session.execute(
+        text("UPDATE rating_history SET created_at = :ts WHERE match_id = :id"),
+        {"ts": m_b.completed_at, "id": m_b.id},
+    )
+    await db_session.commit()
+
+    await recompute_league_ratings(db_session, league.id, {a.id})
+    await db_session.commit()
+
+    # M_b was non-affected: its row is left in place, untouched.
+    m_b_rows = (
+        (
+            await db_session.execute(
+                select(RatingHistory).where(RatingHistory.match_id == m_b.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert {row.user_id for row in m_b_rows} == {b.id}
+    assert m_b_rows[0].rating_value == 1600.0
+
+    # A's post-M1 state is the winner input to M2; B's seed is M_b's stored row.
+    a_after_m1 = (
+        await db_session.execute(
+            select(RatingHistory.rating_state).where(
+                RatingHistory.match_id == m1.id, RatingHistory.user_id == a.id
+            )
+        )
+    ).scalar_one()
+    expected_a, expected_b = calculator.update_singles(
+        dict(a_after_m1), dict(b_seed_state)
+    )
+
+    m2_b = (
+        await db_session.execute(
+            select(RatingHistory).where(
+                RatingHistory.match_id == m2.id, RatingHistory.user_id == b.id
+            )
+        )
+    ).scalar_one()
+    m2_a = (
+        await db_session.execute(
+            select(RatingHistory).where(
+                RatingHistory.match_id == m2.id, RatingHistory.user_id == a.id
+            )
+        )
+    ).scalar_one()
+
+    # Load-bearing: B is seeded from the tie-instant M_b row (1600), not initial.
+    assert m2_b.previous_rating_value == 1600.0
+    assert m2_a.previous_rating_value == state_rating_value(a_after_m1)
+    assert m2_a.rating_value == state_rating_value(expected_a)
+    assert m2_b.rating_value == state_rating_value(expected_b)
+
+
+async def test_recompute_seed_is_deterministic_on_created_at_tie(
+    db_session: AsyncSession,
+    rating_strategies: dict[str, RatingStrategy],
+):
+    """The seed's ``row_number`` window must tiebreak on ``match_id`` so a user
+    with two candidate rows at byte-identical ``created_at`` seeds deterministically
+    — the module's "rewrites state deterministically" invariant.
+
+    U plays two NON-affected matches P1, P2 completed at the *same* instant (ids
+    pinned P1 < P2), each leaving a distinct stored rating state, then joins the
+    cascade later via M2 against the already-affected A. Both P-rows precede U's
+    cutoff and both qualify as seeds. With no tiebreak the window picks between the
+    two tied rows arbitrarily; the fixed ``(created_at DESC, match_id DESC)`` order
+    deterministically picks the higher-``match_id`` row (P2 → 1700)."""
+    league = await get_default_league(db_session)
+    strategy = rating_strategies["glicko2"]
+    calculator = get_calculator(strategy.key)
+    assert calculator is not None
+    initial_rating = state_rating_value(strategy.initial_state)
+
+    a = await make_user(db_session, "alpha")
+    x = await make_user(db_session, "xray")
+    u = await make_user(db_session, "uniform")
+    z1 = await make_user(db_session, "zulu-one")
+    z2 = await make_user(db_session, "zulu-two")
+    for user in (a, x, u, z1, z2):
+        await _seed_rating(db_session, league, user.id, strategy)
+
+    base = datetime(2026, 5, 1, tzinfo=UTC)
+    tie = base + timedelta(hours=1)  # P1 and P2 share this instant exactly.
+    p1_id = uuid.UUID(int=1)
+    p2_id = uuid.UUID(int=2)
+    assert p1_id < p2_id
+
+    m1 = await _build_completed_match(db_session, league, a, x, base)
+    p1 = await _build_completed_match(db_session, league, u, z1, tie, match_id=p1_id)
+    p2 = await _build_completed_match(db_session, league, u, z2, tie, match_id=p2_id)
+    m2 = await _build_completed_match(
+        db_session, league, a, u, base + timedelta(hours=2)
+    )
+    assert p1.completed_at == p2.completed_at
+
+    # Two candidate seed rows for U at the SAME created_at, distinct states. The
+    # window must deterministically prefer the higher match_id (P2 → 1700).
+    lower_state = {"rating": 1600.0, "rd": 200.0, "volatility": 0.06}
+    higher_state = {"rating": 1700.0, "rd": 180.0, "volatility": 0.055}
+    for match, state in ((p1, lower_state), (p2, higher_state)):
+        db_session.add(
+            RatingHistory(
+                league_id=league.id,
+                user_id=u.id,
+                match_id=match.id,
+                rating_strategy_id=strategy.id,
+                rating_value=state["rating"],
+                rating_state=state,
+                source=RatingHistorySource.match,
+                previous_rating_value=initial_rating,
+            )
+        )
+    await db_session.commit()
+    await db_session.execute(
+        text("UPDATE rating_history SET created_at = :ts WHERE match_id IN (:p1, :p2)"),
+        {"ts": tie, "p1": p1.id, "p2": p2.id},
+    )
+    await db_session.commit()
+
+    await recompute_league_ratings(db_session, league.id, {a.id})
+    await db_session.commit()
+
+    a_after_m1 = (
+        await db_session.execute(
+            select(RatingHistory.rating_state).where(
+                RatingHistory.match_id == m1.id, RatingHistory.user_id == a.id
+            )
+        )
+    ).scalar_one()
+    _expected_a, expected_u = calculator.update_singles(
+        dict(a_after_m1), dict(higher_state)
+    )
+
+    m2_u = (
+        await db_session.execute(
+            select(RatingHistory).where(
+                RatingHistory.match_id == m2.id, RatingHistory.user_id == u.id
+            )
+        )
+    ).scalar_one()
+    # Deterministic: seeded from the higher-match-id row (1700), never 1600/initial.
+    assert m2_u.previous_rating_value == 1700.0
+    assert m2_u.rating_value == state_rating_value(expected_u)
 
 
 # ----- non-binary outcomes ------------------------------------------------

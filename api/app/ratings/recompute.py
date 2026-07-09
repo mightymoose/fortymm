@@ -24,7 +24,17 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import DateTime, column, delete, func, select, text, values
+from sqlalchemy import (
+    DateTime,
+    column,
+    delete,
+    func,
+    literal,
+    select,
+    text,
+    tuple_,
+    values,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -44,6 +54,16 @@ from app.models import (
 from app.ratings.base import state_rating_value
 from app.ratings.registry import get_calculator
 from app.ratings.validation import validate_state
+
+# Sentinel ordering key for a NULL ``match_id``. Non-match history rows
+# (``initial`` / ``manual`` / ``import``) carry ``match_id IS NULL``, and a NULL
+# inside a row-wise ``(a, b) < (c, d)`` comparison poisons the whole comparison
+# to NULL (excluding the row). We coalesce a NULL ``match_id`` to the all-zeros
+# UUID so it participates in the ordering, and — since a real match id is a
+# ``gen_random_uuid()`` value that is never all-zeros — it sorts *before* any
+# match sharing its instant. That is the intended semantics: a seeding/import
+# event at instant T precedes any match played at T (ADR-0012).
+_NULL_MATCH_SORT_KEY = uuid.UUID(int=0)
 
 
 def _league_lock_key(league_id: uuid.UUID) -> int:
@@ -178,15 +198,24 @@ async def recompute_league_ratings(
 
     affected_users: set[uuid.UUID] = set(seed_user_ids)
     affected_matches: list[Match] = []
-    # The completion instant of the FIRST affected match each user joins the
-    # cascade through. Matches are walked in ``completed_at`` order, so the
-    # first ``setdefault`` for a user records their earliest affected match —
-    # the per-user cutoff we seed them from (#749). A user who joins late (via
-    # a later match against an already-affected user) must be seeded from the
-    # state as of *their own* first affected match, not the global ``t_start``,
-    # or a non-affected match they played in between is neither replayed nor
-    # reflected in their seed.
-    cutoffs: dict[uuid.UUID, datetime] = {}
+    # The FIRST affected match each user joins the cascade through, keyed as the
+    # ``(completed_at, match_id)`` pair the replay orders by. Matches are walked
+    # in that same order, so the first ``setdefault`` for a user records their
+    # earliest affected match — the per-user cutoff we seed them from (#749). A
+    # user who joins late (via a later match against an already-affected user)
+    # must be seeded from the state as of *their own* first affected match, not
+    # the global ``t_start``, or a non-affected match they played in between is
+    # neither replayed nor reflected in their seed.
+    #
+    # The cutoff carries ``match_id`` alongside ``completed_at`` because two
+    # matches can share a ``completed_at`` exactly (Postgres ``now()`` is the
+    # transaction timestamp, so any two matches completed in one transaction tie)
+    # and the replay tiebreaks on ``id``. Seeding on ``completed_at`` alone with a
+    # strict ``<`` would drop a non-affected match that ties the cutoff's instant
+    # but sorts before it — un-replayed *and* un-seeded. ``_seed_states`` compares
+    # ``(created_at, match_id)`` lexicographically against this pair to agree with
+    # the replay ordering exactly.
+    cutoffs: dict[uuid.UUID, tuple[datetime, uuid.UUID]] = {}
     for match in matches:
         decided = _decided_sides(match)
         if decided is None:
@@ -202,7 +231,7 @@ async def recompute_league_ratings(
             # Loaded under status == completed, so completed_at is non-null.
             assert match.completed_at is not None
             for user_id in participants:
-                cutoffs.setdefault(user_id, match.completed_at)
+                cutoffs.setdefault(user_id, (match.completed_at, match.id))
 
     if not affected_matches:
         return
@@ -362,24 +391,36 @@ async def _reset_users_to_initial_state(
 async def _seed_states(
     db: AsyncSession,
     league_id: uuid.UUID,
-    cutoffs: dict[uuid.UUID, datetime],
+    cutoffs: dict[uuid.UUID, tuple[datetime, uuid.UUID]],
     strategy: RatingStrategy,
 ) -> dict[uuid.UUID, dict[str, Any]]:
     """Per-user rating state as of the moment just before that user's own
-    cutoff: their most recent ``rating_history`` row in this league strictly
-    before ``cutoffs[user_id]``, or the strategy's initial state if they have
-    none. Users with no history and no initial state (e.g. manual strategy with
-    no seed) are omitted.
+    cutoff: their most recent ``rating_history`` row in this league that
+    precedes ``cutoffs[user_id]`` in the replay's ``(completed_at, match_id)``
+    order, or the strategy's initial state if they have none. Users with no
+    history and no initial state (e.g. manual strategy with no seed) are omitted.
 
     Each affected user seeds from the state as of *their own* first affected
     match, not one global cutoff (#749). Reading a non-affected match's stored
     row as the seed is sound: both its participants were at unchanged incoming
     ratings, so the row is already bit-for-bit what a replay would produce.
 
+    The cutoff is a ``(completed_at, match_id)`` pair, compared lexicographically
+    against each row's ``(created_at, match_id)`` so the seed boundary agrees with
+    the replay's ``(completed_at, id)`` ordering *exactly*. A plain ``created_at <
+    cutoff`` would mis-handle a tie: two matches can share a ``completed_at``
+    (Postgres ``now()`` ties within a transaction), and a non-affected match that
+    ties the cutoff instant but sorts before it under ``id`` would be dropped from
+    the seed yet never replayed. Both the qualifying filter and the
+    ``row_number`` window use this same ordering, so the seed is deterministic.
+
     Manual / import / initial rows carry no ``match_id`` and keep their
     wall-clock ``created_at``, which shares an axis with the (immutable,
     wall-clock) ``completed_at`` the cutoffs are drawn from — so they stay
-    selectable as seeds.
+    selectable as seeds. Their NULL ``match_id`` is coalesced to
+    ``_NULL_MATCH_SORT_KEY`` (all-zeros UUID) so it orders *before* any match at
+    the same instant — a seeding event precedes play at that instant — instead of
+    poisoning the row comparison to NULL.
 
     A per-user VALUES join keeps this to one round trip — N affected users
     would otherwise be N queries."""
@@ -387,12 +428,24 @@ async def _seed_states(
         return {}
     cutoff_values = values(
         column("user_id", UUID(as_uuid=True)),
-        column("cutoff", DateTime(timezone=True)),
+        column("cutoff_completed_at", DateTime(timezone=True)),
+        column("cutoff_match_id", UUID(as_uuid=True)),
         name="cutoffs",
-    ).data(list(cutoffs.items()))
+    ).data(
+        [
+            (uid, completed_at, match_id)
+            for uid, (completed_at, match_id) in cutoffs.items()
+        ]
+    )
+    # NULL match_id → all-zeros sort key so non-match rows order before any match
+    # sharing their instant and don't NULL-poison the row comparison.
+    match_sort_key = func.coalesce(
+        RatingHistory.match_id,
+        literal(_NULL_MATCH_SORT_KEY, UUID(as_uuid=True)),
+    )
     row_number = func.row_number().over(
         partition_by=RatingHistory.user_id,
-        order_by=RatingHistory.created_at.desc(),
+        order_by=(RatingHistory.created_at.desc(), match_sort_key.desc()),
     )
     subq = (
         select(
@@ -406,7 +459,11 @@ async def _seed_states(
         )
         .where(
             RatingHistory.league_id == league_id,
-            RatingHistory.created_at < cutoff_values.c.cutoff,
+            tuple_(RatingHistory.created_at, match_sort_key)
+            < tuple_(
+                cutoff_values.c.cutoff_completed_at,
+                cutoff_values.c.cutoff_match_id,
+            ),
         )
         .subquery()
     )
