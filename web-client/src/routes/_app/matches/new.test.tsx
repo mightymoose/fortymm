@@ -437,6 +437,67 @@ describe('NewMatchPage', () => {
     )
   })
 
+  it('confirms on Cancel when only Best-of was changed (#75)', async () => {
+    const user = userEvent.setup()
+    server.use(http.get('*/v1/players/recent', () => HttpResponse.json([])))
+    renderNewMatch()
+
+    // No opponent — the sole dirtying edit is the match length, which isolates
+    // the `bestOf !== DEFAULT_BEST_OF` arm of `isDirty`. The default is 5
+    // ('Std'), so pick 7 ('Long').
+    await user.click(await screen.findByRole('radio', { name: /7\s*long/i }))
+    await user.click(screen.getByRole('button', { name: /^cancel$/i }))
+
+    expect(
+      await screen.findByRole('alertdialog', { name: /discard changes/i }),
+    ).toBeInTheDocument()
+    expect(screen.queryByText('Dashboard route')).not.toBeInTheDocument()
+
+    await user.click(
+      await screen.findByRole('button', { name: /discard.*leave/i }),
+    )
+    await waitFor(() =>
+      expect(screen.getByText('Dashboard route')).toBeInTheDocument(),
+    )
+  })
+
+  it("confirms on Cancel after the issue's full repro: opponent + Best-of + Rated (#75)", async () => {
+    const user = userEvent.setup()
+    server.use(
+      http.get('*/v1/players/recent', () =>
+        HttpResponse.json([{ id: 'pl-1', username: 'ada.lovelace' }]),
+      ),
+    )
+    renderNewMatch()
+
+    // #75's repro dirties all three fields. There is deliberately no
+    // "Rated-only" sibling to this test: the Rated switch is
+    // `disabled={!ratable}` (RatedField) and clearing the opponent resets
+    // `rated` to false, so `rated !== DEFAULT_RATED` can never be the *only*
+    // reason `isDirty` is true. That arm of the predicate is defense-in-depth,
+    // and Rated is only reachable — hence only testable — alongside an opponent.
+    await user.click(
+      await screen.findByRole('button', { name: /ada\.lovelace/i }),
+    )
+    await user.click(screen.getByRole('radio', { name: /7\s*long/i }))
+    await user.click(screen.getByRole('switch', { name: /rated match/i }))
+    expect(screen.getByRole('switch', { name: /rated match/i })).toBeChecked()
+
+    await user.click(screen.getByRole('button', { name: /^cancel$/i }))
+
+    expect(
+      await screen.findByRole('alertdialog', { name: /discard changes/i }),
+    ).toBeInTheDocument()
+    expect(screen.queryByText('Dashboard route')).not.toBeInTheDocument()
+
+    await user.click(
+      await screen.findByRole('button', { name: /discard.*leave/i }),
+    )
+    await waitFor(() =>
+      expect(screen.getByText('Dashboard route')).toBeInTheDocument(),
+    )
+  })
+
   it('does not block the post-create redirect for a dirty (rated, opponent-picked) form', async () => {
     // Regression: the dirty-form blocker's `shouldBlockFn` must not catch the
     // in-app navigate() a successful Start match fires — the form is still
