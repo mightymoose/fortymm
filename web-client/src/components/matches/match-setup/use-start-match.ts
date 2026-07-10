@@ -73,8 +73,14 @@ export function useStartMatch(): UseStartMatchResult {
 
   // Tracks whether this hook's component is still mounted, so the async success
   // branch below can tell a still-open form from one the user has already left.
+  // Set true in the body (not just false in cleanup): under React StrictMode the
+  // effect is mount→cleanup→remount, so a cleanup-only ref would latch false on
+  // the first simulated unmount and never recover, permanently suppressing the
+  // redirect in dev. Re-asserting true on (re)mount is the canonical is-mounted
+  // pattern.
   const mountedRef = useRef(true)
   useEffect(() => {
+    mountedRef.current = true
     return () => {
       mountedRef.current = false
     }

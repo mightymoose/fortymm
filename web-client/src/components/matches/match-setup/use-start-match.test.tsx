@@ -1,3 +1,4 @@
+import { StrictMode } from 'react'
 import { act, render, waitFor } from '@testing-library/react'
 import {
   RouterProvider,
@@ -53,10 +54,16 @@ function renderStartMatch() {
     ]),
     history: createMemoryHistory({ initialEntries: ['/'] }),
   })
+  // Mount under StrictMode so the effect double-invoke (mount→cleanup→remount)
+  // the real app (src/main.tsx) exercises is reproduced here — a cleanup-only
+  // mounted-ref would latch false and permanently suppress the redirect, and
+  // this harness is where that must be caught (#810).
   render(
-    <QueryClientProvider client={queryClient}>
-      <RouterProvider router={router} />
-    </QueryClientProvider>,
+    <StrictMode>
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>
+    </StrictMode>,
   )
   return {
     async ready() {
