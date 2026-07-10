@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import {
   RouterProvider,
@@ -529,6 +529,62 @@ describe('NewMatchPage', () => {
     expect(
       screen.queryByRole('alertdialog', { name: /discard changes/i }),
     ).not.toBeInTheDocument()
+  })
+
+  it('does not redirect to scoring when a dirty form is discarded-and-left mid-create (#810)', async () => {
+    const user = userEvent.setup()
+    // Hold the create open so the user can leave while it is still in flight.
+    let releasePost: () => void = () => {}
+    const postReleased = new Promise<void>((resolve) => {
+      releasePost = resolve
+    })
+    server.use(
+      http.get('*/v1/players/recent', () =>
+        HttpResponse.json([{ id: 'pl-1', username: 'ada.lovelace' }]),
+      ),
+      http.post('*/v1/matches', async () => {
+        await postReleased
+        return HttpResponse.json(pendingMatch(), { status: 201 })
+      }),
+    )
+    const { router } = renderNewMatch()
+
+    // Dirty the form (pick an opponent), then start the match — the POST hangs.
+    await user.click(
+      await screen.findByRole('button', { name: /ada\.lovelace/i }),
+    )
+    await user.click(screen.getByRole('button', { name: /start match/i }))
+
+    // Leave mid-create. Cancel is disabled while submitting, so drive the exact
+    // navigation Cancel fires (to /dashboard) directly. The form is still dirty
+    // and the create hasn't succeeded (`hasSucceeded()` is false mid-flight), so
+    // the blocker catches it and pops the discard dialog.
+    act(() => {
+      void router.navigate({ to: '/dashboard' })
+    })
+    await user.click(
+      await screen.findByRole('button', { name: /discard.*leave/i }),
+    )
+    await waitFor(() =>
+      expect(screen.getByText('Dashboard route')).toBeInTheDocument(),
+    )
+
+    // Let the held create resolve and settle; the pre-fix hook fires its
+    // unconditional redirect here (two macrotask ticks so the create's promise
+    // chain and any resulting navigation flush before we assert).
+    await act(async () => {
+      releasePost()
+      await new Promise((r) => setTimeout(r, 0))
+      await new Promise((r) => setTimeout(r, 0))
+    })
+
+    // The user's choice to leave stands — no yank back to scoring. Assert
+    // synchronously (not via waitFor) so a pre-fix redirect surfaces as a clean
+    // "still on scoring" failure rather than an opaque timeout.
+    expect(
+      screen.queryByText('Scoring route m-test game 1'),
+    ).not.toBeInTheDocument()
+    expect(screen.getByText('Dashboard route')).toBeInTheDocument()
   })
 
   it('shows a wait cursor on the Start match button while submitting (#77)', async () => {
