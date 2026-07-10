@@ -19,6 +19,39 @@ async function retype(input: HTMLInputElement, value: string) {
   if (value !== "") await userEvent.type(input, value);
 }
 
+/**
+ * Wait on the mutation *settling*, not on the alert — the button returning from
+ * "Sending…" to enabled happens in BOTH the fixed and broken states, so this
+ * resolves in ~milliseconds either way. If we waited on the alert itself, a
+ * regression (no alert) would red as an opaque 5s timeout (`asyncUtilTimeout` ==
+ * `testTimeout` == 5000, so a missing signal is indistinguishable from a hang).
+ * Settling first, then asserting the alert synchronously, makes a missing alert
+ * fail fast with a crisp query error.
+ */
+async function settleToRetryable() {
+  await waitFor(() => {
+    expect(correctionEntryPage.getSubmit()).toBeEnabled();
+    expect(correctionEntryPage.getSubmit()).toHaveTextContent(
+      "Send corrected score",
+    );
+  });
+}
+
+/**
+ * Whether the #839 connection alert is currently in the DOM. It renders in the
+ * same commit the mutation error settles, so callers assert this synchronously
+ * after `settleToRetryable()` rather than waiting on it.
+ */
+function hasConnectionAlert() {
+  return correctionEntryPage
+    .queryAlerts()
+    .some((a: HTMLElement) =>
+      /Couldn't send your corrected score .* check your connection and try again/i.test(
+        a.textContent ?? "",
+      ),
+    );
+}
+
 describe("CorrectionEntry", () => {
   it("opens game 1 pre-filled from the standing-result snapshot, viewer-left", async () => {
     // The seed's standing result is the opponent's 3–0 board (11–8, 11–6,
@@ -200,6 +233,114 @@ describe("CorrectionEntry", () => {
       ).toBe(true),
     );
     expect(correctionEntryPage.queryMatchLanding()).not.toBeInTheDocument();
+  });
+
+  it("surfaces a transport-level failure inline and leaves Send retryable, on a valid decided board (#839)", async () => {
+    // `useProposeResult` runs `networkMode: 'always'`, so an offline submit
+    // fires the POST and `fetch` rejects with a plain `TypeError` — NOT an
+    // `ApiError`. On a valid, decided board (no `boardHint`) the old code
+    // rendered nothing here, leaving the user with zero feedback. The board
+    // below is the seed's untouched decided 3–0, so only the connection alert
+    // can explain the failure.
+    correctionEntryPage.mockMatch(() =>
+      HttpResponse.json(buildCorrectableMatch()),
+    );
+    correctionEntryPage.mockPropose(() => HttpResponse.error());
+    correctionEntryPage.render();
+
+    await waitFor(() => correctionEntryPage.getInput("rita.kovac"));
+    await userEvent.click(correctionEntryPage.getSubmit());
+
+    await settleToRetryable();
+
+    expect(hasConnectionAlert()).toBe(true);
+    // The board never left, so no navigation — and the re-enabled button above
+    // means the user can retry (not stuck on "Sending…").
+    expect(correctionEntryPage.queryMatchLanding()).not.toBeInTheDocument();
+  });
+
+  it("re-fires the POST when Send is clicked again while still offline (#839 retry)", async () => {
+    // After a transport-level failure, `onError` resets the synchronous
+    // `submittingRef` guard, so a second Send must actually re-fire the mutation
+    // — it must not be dead-locked by a ref that never cleared. Both submits
+    // fail (still offline), so counting the POSTs in the handler proves the
+    // retry left the boundary rather than being swallowed client-side.
+    let requests = 0;
+    correctionEntryPage.mockMatch(() =>
+      HttpResponse.json(buildCorrectableMatch()),
+    );
+    correctionEntryPage.mockPropose(() => {
+      requests += 1;
+      return HttpResponse.error();
+    });
+    correctionEntryPage.render();
+
+    await waitFor(() => correctionEntryPage.getInput("rita.kovac"));
+
+    // First send fails at the transport level → the connection alert renders and
+    // the button settles back from "Sending…" to enabled.
+    await userEvent.click(correctionEntryPage.getSubmit());
+    await settleToRetryable();
+    expect(hasConnectionAlert()).toBe(true);
+
+    // Retry: click Send again. In the working case the button goes disabled
+    // ("Sending…") then re-enables when the second failure settles, so
+    // `settleToRetryable()` genuinely waits for that round-trip and `requests`
+    // is already 2 by the time it resolves. If the retry were dead-locked by a
+    // stuck `submittingRef`, the button never leaves "Send corrected score" and
+    // the synchronous `requests` assertion fails with "expected 1 to be 2" —
+    // not a timeout.
+    await userEvent.click(correctionEntryPage.getSubmit());
+    await settleToRetryable();
+    expect(requests).toBe(2);
+
+    // The alert is still up, nothing is stuck on "Sending…", and the board
+    // never navigated away.
+    expect(hasConnectionAlert()).toBe(true);
+    expect(correctionEntryPage.queryMatchLanding()).not.toBeInTheDocument();
+  });
+
+  it("recovers on retry after reconnecting: a second Send succeeds and navigates (#839 reconnect)", async () => {
+    // First submit fails at the transport level (offline), rendering the
+    // connection alert. Once the endpoint recovers, a second Send must succeed
+    // and navigate to the match-detail landing — the failure must not leave the
+    // flow wedged. The success also resets the mutation error, so the stale
+    // connection alert must not linger.
+    correctionEntryPage.mockMatch(() =>
+      HttpResponse.json(buildCorrectableMatch()),
+    );
+    correctionEntryPage.mockPropose(() => HttpResponse.error());
+    correctionEntryPage.render();
+
+    await waitFor(() => correctionEntryPage.getInput("rita.kovac"));
+
+    // First send fails offline: settle back to enabled, then assert the alert
+    // synchronously (crisp fail if it never rendered).
+    await userEvent.click(correctionEntryPage.getSubmit());
+    await settleToRetryable();
+    expect(hasConnectionAlert()).toBe(true);
+
+    // Reconnect: the endpoint now succeeds. `server.use` prepends, so this
+    // handler wins for the retry.
+    correctionEntryPage.mockPropose(() =>
+      HttpResponse.json(buildMatchDetails(), { status: 201 }),
+    );
+
+    // Retry → success navigates to the match-detail landing (same pattern the
+    // success test above asserts).
+    await userEvent.click(correctionEntryPage.getSubmit());
+    await waitFor(() =>
+      expect(correctionEntryPage.queryMatchLanding()).toBeInTheDocument(),
+    );
+
+    // The success path does not keep showing the stale connection alert.
+    expect(
+      correctionEntryPage
+        .queryAlerts()
+        .some((a: HTMLElement) =>
+          /check your connection/i.test(a.textContent ?? ""),
+        ),
+    ).toBe(false);
   });
 
   it("redirects to match details instead of rendering when the match is already settled (#730)", async () => {

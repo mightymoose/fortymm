@@ -22,6 +22,18 @@ import { CorrectionScoreline } from "./correction-scoreline";
 // scratchpad entry screen so the correction board reads the same.
 const NO_OPPONENT_LABEL = "No opponent";
 
+/** The one inline red error line this screen uses for its several mutually-
+ * exclusive messages (API error, connection failure, board hint) — one place to
+ * change the role/styling for all of them. Field-level error copy, so it's this
+ * bespoke line rather than the card-shaped design-system `Alert`. */
+function InlineAlert({ children }: { children: React.ReactNode }) {
+  return (
+    <p role="alert" className="mt-1.5 text-xs text-[color:var(--loss)]">
+      {children}
+    </p>
+  );
+}
+
 type StandingGame = NonNullable<
   MatchDetails["negotiation"]["standing_result"]
 >["games"][number];
@@ -232,6 +244,14 @@ export function CorrectionEntry({ matchId }: { matchId: string }) {
   const apiError =
     proposeMutation.error instanceof ApiError ? proposeMutation.error : null;
 
+  // A non-ApiError needs its own branch: `useProposeResult` runs
+  // `networkMode: 'always'`, so an offline submit fires the POST anyway and
+  // `fetch` rejects at the transport level with a plain `TypeError` — never an
+  // `ApiError`. Without this, an offline send would re-enable the button with
+  // no feedback at all (#839). Mutually exclusive with `apiError` by
+  // construction (the error is one or the other, never both).
+  const networkError = proposeMutation.error !== null && apiError === null;
+
   const inputsLocked = proposeMutation.isPending;
 
   // The per-game verdicts and the scoreline view-model both derive from the
@@ -313,18 +333,21 @@ export function CorrectionEntry({ matchId }: { matchId: string }) {
       </div>
 
       {apiError !== null && (
-        <p role="alert" className="mt-1.5 text-xs text-[color:var(--loss)]">
+        <InlineAlert>
           {apiError.status === 409
             ? "This proposal has moved on — reload the match to see the latest score."
             : (apiError.detail ?? apiError.message)}
-        </p>
+        </InlineAlert>
       )}
 
-      {boardHint !== null && (
-        <p role="alert" className="mt-1.5 text-xs text-[color:var(--loss)]">
-          {boardHint}
-        </p>
+      {networkError && (
+        <InlineAlert>
+          Couldn't send your corrected score — check your connection and try
+          again.
+        </InlineAlert>
       )}
+
+      {boardHint !== null && <InlineAlert>{boardHint}</InlineAlert>}
 
       <ScorePad
         // Remount on game switch so the inputs re-seed and the me-field
