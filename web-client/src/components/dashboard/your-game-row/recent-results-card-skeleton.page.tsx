@@ -12,6 +12,26 @@ const scoped = (container: Container) => ({
   queryStatus() {
     return container.queryByRole('status', { name: /loading recent matches/i })
   },
+  /** The skeleton's `<table>` — it mirrors the loaded card's table so column
+   * widths derive from the same layout. Queried by test id because the
+   * decorative inner tree is `aria-hidden`, so `getByRole('table')` can't
+   * reach it. */
+  getTable() {
+    return container.getByTestId('dashboard-recent-results-skeleton')
+  },
+  /** Every placeholder `<tbody>` row (excludes the header row). */
+  getRows() {
+    return container.queryAllByTestId('dashboard-recent-results-skeleton-row')
+  },
+  /** Each row's collapsing opponent cell (`maxWidth:0; width:100%`). */
+  getOpponentCells() {
+    return container.queryAllByTestId('dashboard-recent-results-skeleton-opponent')
+  },
+  /** Each row's win/loss dot placeholder — the marker the old flex skeleton
+   * omitted, causing the avatar-shift the rebuild fixes. */
+  getDots() {
+    return container.queryAllByTestId('dashboard-recent-results-skeleton-dot')
+  },
   // Count the shimmer bars so a dropped header cell or row column is caught.
   ...shimmerPage.within(container),
 })
