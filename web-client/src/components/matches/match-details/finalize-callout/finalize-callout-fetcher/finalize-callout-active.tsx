@@ -11,6 +11,13 @@ export interface FinalizeCalloutActiveProps {
   matchId: string;
 }
 
+// Last-resort copy for an `ApiError` whose `detail` AND `message` are both
+// empty. Guarantees the invariant: whenever the mutation is in an error state,
+// some non-empty copy renders — never a dead button (#867).
+const API_FALLBACK = "Couldn't post the result — try again.";
+const CONNECTION_COPY =
+  "Couldn't post the result — check your connection and try again.";
+
 /** Wires the post-result mutation onto the pure display: posting the view's
  * canonical games, surfacing pending state, and keeping failures visible inline
  * — both API rejections (without throwOnError a 409 — opponent confirmed first,
@@ -50,9 +57,15 @@ export function FinalizeCalloutActive({
       pending={finalizeMutation.isPending}
       errorMessage={
         apiError
-          ? (apiError.detail ?? apiError.message)
+          ? // `||`, NOT `??`: an empty-string `detail` is falsy, and the display
+            // gates the alert on `{errorMessage && …}`, so a `??` fallback would
+            // pass `""` through and silently suppress the alert — the button
+            // returns to "Post result" with zero feedback, reintroducing #867 on
+            // the API branch. `||` skips over an empty `detail`/`message` to a
+            // guaranteed non-empty fallback.
+            (apiError.detail || apiError.message || API_FALLBACK)
           : networkError
-            ? "Couldn't post the result — check your connection and try again."
+            ? CONNECTION_COPY
             : null
       }
       onPost={() => {

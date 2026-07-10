@@ -137,6 +137,27 @@ describe("FinalizeCalloutActive", () => {
     );
   });
 
+  it("renders a non-empty fallback alert when the 409 detail is empty (#867 API branch)", async () => {
+    // A 409 whose body is `{"detail": ""}`. The component must use `||` (not
+    // `??`) so the empty-string detail is skipped for a non-empty fallback: the
+    // display gates the alert on `{errorMessage && …}`, so passing `""` through
+    // would suppress the alert entirely and leave a dead button (#867). This
+    // reds fast (crisp assertion, not a 5s timeout) if `||` reverts to `??`.
+    finalizeCalloutActivePage.mockResultsEndpoint(() =>
+      HttpResponse.json({ detail: "" }, { status: 409 }),
+    );
+    finalizeCalloutActivePage.render();
+
+    await userEvent.click(finalizeCalloutActivePage.getPostButton());
+
+    // Settle back to enabled first, THEN assert synchronously — a suppressed
+    // alert fails as a crisp assertion in ms, not an opaque 5s timeout.
+    await settleToRetryable();
+    const alerts = finalizeCalloutActivePage.queryAllErrors();
+    expect(alerts).not.toHaveLength(0);
+    expect(alerts[0]).toHaveTextContent(/Couldn't post the result — try again\./);
+  });
+
   it("clears a previous failure when the post is retried", async () => {
     let attempts = 0;
     finalizeCalloutActivePage.mockResultsEndpoint(() => {
