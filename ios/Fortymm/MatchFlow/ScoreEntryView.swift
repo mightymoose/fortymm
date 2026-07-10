@@ -311,11 +311,11 @@ struct ScoreEntryView: View {
         } else if editing {
             HStack(spacing: 10) {
                 clearButton
-                PrimaryAction(title: "Save changes", filled: currentValid, enabled: currentValid, action: saveEdit)
+                PrimaryAction(title: "Save changes", filled: currentValid, enabled: currentValid, action: saveActiveGame)
             }
         } else {
             // Neutral "save & next" — raised dark surface, not the hero gradient.
-            Button(action: saveNext) {
+            Button(action: saveActiveGame) {
                 HStack(spacing: 8) {
                     Text("Save game & next").font(FMFont.ui(16, weight: .bold))
                     Image(systemName: "arrow.right").font(.system(size: 16, weight: .bold))
@@ -434,12 +434,21 @@ struct ScoreEntryView: View {
         DispatchQueue.main.async { focus = .you }
     }
 
-    private func saveNext() {
+    /// Commit the active slot — the single save path shared by both action-row
+    /// buttons ("Save game & next" in live entry, "Save changes" in edit mode).
+    /// It's lock-aware: `nextIncompleteIndex()` skips slots locked past the
+    /// decider, so a save never lands the entry cursor on a locked slot (ADR-0006,
+    /// issue #840). When the board is fully scored/decided it stays put — the
+    /// action row then offers Post rather than advancing into a locked slot.
+    /// Keeping edit and live entry on ONE path is deliberate: their old divergence
+    /// (an edit-only `active = games.count - 1` fallback that ignored the lock) is
+    /// exactly what dropped the cursor onto a locked overrun slot.
+    private func saveActiveGame() {
         guard currentValid else { return }
         // The slot just saved — captured before we advance `active` off it.
         let saved = active
-        // Advance to the next still-incomplete game (wrapping); stay put if the
-        // match is fully scored.
+        // Advance to the next still-incomplete game (wrapping), skipping slots
+        // locked past the decider; stay put if the match is fully scored.
         if let next = nextIncompleteIndex() { active = next }
         editing = false
         // Fire the optimistic scratchpad write for the game we just left; the
@@ -545,21 +554,6 @@ struct ScoreEntryView: View {
         }
         clearLocally(i)
         clearing = nil
-    }
-
-    private func saveEdit() {
-        guard currentValid else { return }
-        // The slot just edited — captured before we move `active` off it.
-        let saved = active
-        editing = false
-        // Return to the first still-incomplete game, else stay on the last.
-        if let firstIncomplete = games.indices.first(where: { $0 != active && !MatchRules.gameComplete(games[$0].points) }) {
-            active = firstIncomplete
-        } else {
-            active = games.count - 1
-        }
-        // Persist the edit to the shared scratchpad (fire-and-forget).
-        fireWrite(for: saved)
     }
 
     // MARK: Per-game scratchpad writes (fire-and-forget)
