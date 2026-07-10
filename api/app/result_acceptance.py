@@ -40,7 +40,12 @@ from app.models import (
     RatingStrategy,
     UserLeagueRating,
 )
-from app.ratings import get_calculator, state_rating_value, validate_state
+from app.ratings import (
+    get_calculator,
+    parse_strategy_key,
+    state_rating_value,
+    validate_state,
+)
 from app.result_chain import standing_result
 
 
@@ -138,7 +143,10 @@ async def _apply_rating_update(db: AsyncSession, match: Match) -> None:
     strategy = league.rating_strategy
     if not strategy.is_automatic:
         return
-    calculator = get_calculator(strategy.key)
+    strategy_key = parse_strategy_key(strategy.key)
+    if strategy_key is None:
+        return
+    calculator = get_calculator(strategy_key)
     if calculator is None:
         return
 

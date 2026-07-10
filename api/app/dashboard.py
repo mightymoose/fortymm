@@ -32,6 +32,7 @@ from app.models import (
     User,
     UserLeagueRating,
 )
+from app.ratings import RatingStrategyKey
 from app.retirement import retirement_deadline
 from app.schemas.dashboard import (
     AttentionKind,
@@ -488,7 +489,7 @@ def _strategy_stats(
     Keeps the API contract generic — the frontend renders whatever labels
     come back without needing to know which fields a given strategy carries.
     """
-    if strategy_key == "glicko2":
+    if strategy_key == RatingStrategyKey.glicko2:
         rd = _as_float(state.get("rd"))
         volatility = _as_float(state.get("volatility"))
         return [

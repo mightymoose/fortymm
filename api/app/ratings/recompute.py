@@ -52,7 +52,7 @@ from app.models import (
     UserLeagueRating,
 )
 from app.ratings.base import state_rating_value
-from app.ratings.registry import get_calculator
+from app.ratings.registry import get_calculator, parse_strategy_key
 from app.ratings.validation import validate_state
 
 # Sentinel ordering key for a NULL ``match_id``. Non-match history rows
@@ -129,7 +129,10 @@ async def recompute_league_ratings(
     strategy = league.rating_strategy
     if not strategy.is_automatic:
         return
-    calculator = get_calculator(strategy.key)
+    strategy_key = parse_strategy_key(strategy.key)
+    if strategy_key is None:
+        return
+    calculator = get_calculator(strategy_key)
     if calculator is None:
         return
 

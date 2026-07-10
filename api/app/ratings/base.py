@@ -1,4 +1,23 @@
+import enum
 from typing import Any, Protocol
+
+
+class RatingStrategyKey(enum.StrEnum):
+    """The closed set of rating-strategy keys the codebase knows by name.
+
+    One definition shared by every in-code site that names a strategy — the
+    registry, the league seeder, and the dashboard's stats branch — so a typo
+    in any one is a type error, not a silent no-op. Members are ``str`` (via
+    ``StrEnum``), so equality and dict lookup against the plain ``str`` stored
+    in ``RatingStrategy.key`` keep working.
+
+    ``manual`` is a real seeded strategy row but intentionally has no registry
+    entry: callers short-circuit on ``strategy.is_automatic`` before ever
+    reaching ``get_calculator``, so it never needs a calculator.
+    """
+
+    glicko2 = "glicko2"
+    manual = "manual"
 
 
 class RatingCalculator(Protocol):
@@ -11,7 +30,7 @@ class RatingCalculator(Protocol):
     when that opens up.
     """
 
-    key: str
+    key: RatingStrategyKey
 
     def update_singles(
         self,
