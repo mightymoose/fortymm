@@ -36,6 +36,13 @@ spec:
               image: {{ include "fortymm-uat.apiImage" . }}
               imagePullPolicy: {{ .Values.pullPolicy }}
               command: ["python", "-m", "app.retirement_sweep"]
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 128Mi
+                limits:
+                  cpu: 1000m
+                  memory: 512Mi
               envFrom:
                 {{- include "fortymm-uat.appEnvFrom" . | nindent 16 }}
               volumeMounts:

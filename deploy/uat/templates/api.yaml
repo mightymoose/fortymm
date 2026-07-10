@@ -25,6 +25,13 @@ spec:
           imagePullPolicy: {{ .Values.pullPolicy }}
           # Migrations + seeds run in the migrate Job, not here.
           command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 1000m
+              memory: 512Mi
           envFrom:
             {{- include "fortymm-uat.appEnvFrom" . | nindent 12 }}
           ports:

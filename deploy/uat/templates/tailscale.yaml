@@ -86,6 +86,13 @@ spec:
         - name: tailscale
           image: {{ .Values.tailscale.image }}
           imagePullPolicy: {{ .Values.pullPolicy }}
+          resources:
+            requests:
+              cpu: 10m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
           env:
             - name: TS_KUBE_SECRET
               value: {{ .Values.tailscale.stateSecret | quote }}

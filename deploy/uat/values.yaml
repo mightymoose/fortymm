@@ -19,11 +19,14 @@ pullPolicy: IfNotPresent
 # Stateless request-serving tiers scale horizontally with a zero-downtime
 # RollingUpdate. maxUnavailable: 0 keeps full capacity during a rollout (new
 # pods must go Ready before old ones are torn down); maxSurge adds headroom.
+# On a single-node cluster replicas buy no real availability (one failure
+# domain) — 2 replicas + maxSurge 1 is the minimum that still rolls without
+# dropping capacity, at far less memory pressure than a larger pod count.
 api:
-  replicas: 5
+  replicas: 2
   rollingUpdate:
     maxUnavailable: 0
-    maxSurge: 2
+    maxSurge: 1
 web:
   replicas: 2
   rollingUpdate:
