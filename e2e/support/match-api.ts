@@ -68,6 +68,9 @@ export async function findUserId(
   const res = await searcher.ctx.get(`${API}/players/search`, {
     params: { q: username },
   })
+  if (!res.ok()) {
+    throw new Error(`player search failed: ${res.status()} ${await res.text()}`)
+  }
   const players = (await res.json()) as ReadonlyArray<{
     id: string
     username: string
