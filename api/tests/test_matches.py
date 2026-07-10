@@ -1722,6 +1722,30 @@ async def test_score_delete_404_when_no_saved_score(
     assert response.status_code == 404
 
 
+async def test_logged_out_cannot_score(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    # Auth is enforced before participant/existence checks: a real, valid match
+    # (seeded by a genuinely authenticated client) still 401s a cookieless caller.
+    async with make_client() as owner_client:
+        owner = await start_session(owner_client, db_session)
+        opp = await make_user(db_session, "rival")
+        del owner
+        match = await _create_match(owner_client, opp.id, best_of=5)
+
+    # ``api_client`` never called ``/v1/session``, so it carries no session cookie.
+    post = await api_client.post(
+        f"/v1/matches/{match['id']}/games/1/scores/new",
+        json={"side_1_points": 11, "side_2_points": 4},
+    )
+    assert post.status_code == 401
+    put = await api_client.put(
+        f"/v1/matches/{match['id']}/games/1/scores",
+        json={"side_1_points": 11, "side_2_points": 4, "expected_version": 1},
+    )
+    assert put.status_code == 401
+
+
 async def test_non_participant_cannot_score(
     api_client: AsyncClient, db_session: AsyncSession
 ):
