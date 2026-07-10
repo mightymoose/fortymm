@@ -386,9 +386,15 @@ async def _reset_users_to_initial_state(
 
     The non-match rows — ``initial`` (written by ``seed_user_league_rating``
     when the user joined), ``manual``, ``import`` — are the empty timeline
-    itself and stay untouched; no new event is appended. The
-    ``UserLeagueRating`` row is reset in place, never deleted: every member
-    keeps exactly one from seeding.
+    itself and stay untouched; no new event is appended. These rows can be
+    strategy-*stale* — this function re-stamps the ``UserLeagueRating`` snapshot
+    to the current ``strategy`` but leaves the history rows carrying whatever
+    ``rating_strategy_id`` they were written under. That is safe: ``_seed_states``
+    filters a seed to ``rating_strategy_id == strategy.id`` (issue #184), so a
+    row written under a superseded strategy is simply never selectable as a seed
+    under a different one — it stays as an audit-trail record and cannot be
+    replayed through the wrong calculator. The ``UserLeagueRating`` row is reset
+    in place, never deleted: every member keeps exactly one from seeding.
 
     Runs inside the caller's transaction — does not commit.
     """
@@ -465,6 +471,20 @@ async def _seed_states(
     the same instant — a seeding event precedes play at that instant — instead of
     poisoning the row comparison to NULL.
 
+    A seed row must also have been written under the league's CURRENT strategy
+    (issue #184): the subquery filters ``rating_strategy_id == strategy.id``.
+    ``rating_history`` snapshots that column per row, and a row from a superseded
+    strategy holds ``rating_state`` in that strategy's shape — the current
+    calculator/JSON Schema would misread it (a ``KeyError`` from the replay, or
+    silent corruption if the two shapes' keys overlap). Rows from a superseded
+    strategy are therefore ignored; a user whose only history rows were written
+    under a different strategy has no qualifying seed and falls through to the
+    ``initial_state`` fallback — under the new strategy their timeline correctly
+    starts at the new strategy's initial state. This is a no-op for today's data
+    (every history row in a league shares that league's strategy, there being no
+    strategy-mutation flow), and guards the same future #184 guards on the
+    ``user_league_ratings`` snapshot.
+
     A per-user VALUES join keeps this to one round trip — N affected users
     would otherwise be N queries."""
     if not cutoffs:
@@ -502,6 +522,15 @@ async def _seed_states(
         )
         .where(
             RatingHistory.league_id == league_id,
+            # Only a row written under the CURRENT strategy is a valid seed
+            # (issue #184). ``rating_history`` snapshots ``rating_strategy_id``
+            # per row; a row from a superseded strategy holds ``rating_state`` in
+            # that strategy's shape, which the current calculator would misread
+            # (KeyError, or silent corruption on overlapping keys). Filtering it
+            # out drops the user through to the ``initial_state`` fallback below —
+            # the correct semantics: under the new strategy their timeline starts
+            # at the new strategy's initial state.
+            RatingHistory.rating_strategy_id == strategy.id,
             tuple_(RatingHistory.created_at, match_sort_key)
             < tuple_(
                 cutoff_values.c.cutoff_completed_at,

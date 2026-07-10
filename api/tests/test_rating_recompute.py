@@ -1705,3 +1705,175 @@ async def test_reset_to_initial_state_heals_and_restamps_a_mismatched_row(
     assert rating.rating_strategy_id == glicko2.id
     assert rating.rating_state == glicko2.initial_state
     assert rating.rating_value == glicko2.initial_rating_value
+
+
+async def test_recompute_ignores_seed_row_written_under_a_superseded_strategy(
+    db_session: AsyncSession,
+    rating_strategies: dict[str, RatingStrategy],
+):
+    """A ``rating_history`` seed row written under a *superseded* strategy must
+    NOT be selected as the replay's starting state (issue #184, the seed side of
+    the same guard).
+
+    The hole this closes: a league switches from automatic strategy A to
+    automatic strategy B. ``_reset_users_to_initial_state`` heals the user's
+    ``user_league_ratings`` row (re-stamps it to B, overwrites the state), so the
+    #184 snapshot guard on THAT row will not fire. But the user's older history
+    rows, written under A, survive with A-shaped ``rating_state``. Without a
+    strategy filter on the seed query, ``_seed_states`` would select that
+    A-shaped row and feed it to B's calculator — a ``KeyError`` here (A's
+    ``{"score": ...}`` shape has no ``"rating"`` key), or silent corruption if
+    the shapes' keys overlapped.
+
+    Setup mirrors that post-switch state:
+      * league runs glicko2 (B, the one strategy with a calculator);
+      * ``me``'s ``user_league_ratings`` row is already stamped B with B-shaped
+        state (what the heal leaves behind), so the row-snapshot guard is quiet;
+      * ``me``'s only pre-match history is an ``initial`` row stamped A with
+        A-shaped ``{"score": 1000.0}`` state, dated before the match;
+      * a completed rated singles match ``me`` beats ``opp`` triggers a recompute.
+
+    The replay must seed ``me`` from B's ``initial_state``, not the stale A-shaped
+    row: no ``KeyError``, and ``me``'s produced state is B-shaped. Pre-fix the
+    A-shaped row is selected and the recompute raises ``KeyError``."""
+    league = await get_default_league(db_session)
+    glicko2 = rating_strategies["glicko2"]
+    other = await _make_second_automatic_strategy(db_session)
+    assert league.rating_strategy_id == glicko2.id
+    initial_value = glicko2.initial_rating_value
+
+    me = await make_user(db_session, "superseded-me")
+    opp = await make_user(db_session, "superseded-opp")
+    # Both live rating rows are already stamped under the CURRENT strategy (B) —
+    # ``me``'s is exactly the row ``_reset_users_to_initial_state`` heals to after
+    # a switch, so the #184 row-snapshot guard stays quiet and the seed side is
+    # what's under test.
+    await _seed_rating(db_session, league, me.id, glicko2)
+    await _seed_rating(db_session, league, opp.id, glicko2)
+
+    base = datetime(2026, 5, 1, tzinfo=UTC)
+    # ``me``'s only pre-match history: an ``initial`` row written under the OLD
+    # strategy A, holding A-shaped state glicko2 cannot read. Dated before the
+    # match so it precedes ``me``'s cutoff and WOULD qualify as a seed but for the
+    # strategy filter.
+    stale_state = {"score": 1000.0}
+    assert "rating" not in stale_state  # glicko2 would KeyError on this shape.
+    db_session.add(
+        RatingHistory(
+            league_id=league.id,
+            user_id=me.id,
+            match_id=None,
+            rating_strategy_id=other.id,
+            rating_value=1000.0,
+            rating_state=dict(stale_state),
+            previous_rating_value=None,
+            source=RatingHistorySource.initial,
+            created_at=base - timedelta(days=1),
+        )
+    )
+    await db_session.commit()
+
+    match = await _build_completed_match(db_session, league, me, opp, base)
+
+    # Must not raise KeyError: the A-shaped row is filtered out, ``me`` seeds from
+    # glicko2's initial state.
+    await recompute_league_ratings(db_session, league.id, {me.id})
+    await db_session.commit()
+
+    me_match_row = (
+        await db_session.execute(
+            select(RatingHistory).where(
+                RatingHistory.match_id == match.id,
+                RatingHistory.user_id == me.id,
+            )
+        )
+    ).scalar_one()
+    # The replay seeded ``me`` from B's initial (1500), NOT the stale A row (1000).
+    assert me_match_row.previous_rating_value == initial_value
+    # ``me``'s produced state is B-shaped (glicko2 keys), never A-shaped.
+    assert set(me_match_row.rating_state) == {"rating", "rd", "volatility"}
+    assert "score" not in me_match_row.rating_state
+    assert me_match_row.rating_strategy_id == glicko2.id
+
+    # ``me`` won, so the healed live row moved above the glicko2 initial and stays
+    # stamped under the current strategy.
+    me_rating = (
+        await db_session.execute(
+            select(UserLeagueRating).where(UserLeagueRating.user_id == me.id)
+        )
+    ).scalar_one()
+    assert me_rating.rating_strategy_id == glicko2.id
+    assert me_rating.rating_value is not None and me_rating.rating_value > initial_value
+
+    # The superseded-strategy row is left in place untouched — an audit record,
+    # simply never selectable as a seed under a different strategy.
+    stale_row = (
+        await db_session.execute(
+            select(RatingHistory).where(
+                RatingHistory.user_id == me.id,
+                RatingHistory.source == RatingHistorySource.initial,
+            )
+        )
+    ).scalar_one()
+    assert stale_row.rating_strategy_id == other.id
+    assert stale_row.rating_state == stale_state
+
+
+async def test_recompute_seeds_from_same_strategy_history_row(
+    db_session: AsyncSession,
+    rating_strategies: dict[str, RatingStrategy],
+):
+    """Regression net for the seed strategy filter: the ORDINARY same-strategy
+    case must still seed from history. A user with a pre-window history row
+    written under the league's CURRENT strategy seeds from that row, not from the
+    strategy initial — the filter added for #184 must not break normal seeding.
+
+    ``opp`` carries a pre-window glicko2 row at 1550 (distinct from the 1500
+    initial so the seed source is observable), then ``me`` beats ``opp`` in the
+    window. The recompute must seed ``opp`` from 1550."""
+    league = await get_default_league(db_session)
+    strategy = rating_strategies["glicko2"]
+    me = await make_user(db_session, "same-me")
+    opp = await make_user(db_session, "same-opp")
+    later_opp = await make_user(db_session, "same-later-opp")
+    for user in (me, opp, later_opp):
+        await _seed_rating(db_session, league, user.id, strategy)
+
+    base = datetime(2026, 5, 1, tzinfo=UTC)
+    pre_match = await _build_completed_match(
+        db_session, league, opp, later_opp, base - timedelta(days=30)
+    )
+    db_session.add(
+        RatingHistory(
+            league_id=league.id,
+            user_id=opp.id,
+            match_id=pre_match.id,
+            rating_strategy_id=strategy.id,
+            rating_value=1550.0,
+            rating_state={"rating": 1550.0, "rd": 300.0, "volatility": 0.06},
+            source=RatingHistorySource.match,
+            previous_rating_value=1500.0,
+        )
+    )
+    await db_session.commit()
+    await db_session.execute(
+        text("UPDATE rating_history SET created_at = :ts WHERE match_id = :id"),
+        {"ts": base - timedelta(days=30), "id": pre_match.id},
+    )
+    await db_session.commit()
+
+    in_window = await _build_completed_match(db_session, league, me, opp, base)
+
+    await recompute_league_ratings(db_session, league.id, {me.id})
+    await db_session.commit()
+
+    opp_row = (
+        await db_session.execute(
+            select(RatingHistory).where(
+                RatingHistory.match_id == in_window.id,
+                RatingHistory.user_id == opp.id,
+            )
+        )
+    ).scalar_one()
+    # Seeded from the same-strategy history row (1550), not the strategy initial.
+    assert opp_row.previous_rating_value == 1550.0
