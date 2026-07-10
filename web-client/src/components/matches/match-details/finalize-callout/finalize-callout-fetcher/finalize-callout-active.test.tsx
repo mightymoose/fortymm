@@ -243,9 +243,11 @@ describe("FinalizeCalloutActive", () => {
   it("renders non-empty copy when the server rejects with a blank detail", async () => {
     // `detail: ""` is falsy, and the display gates its alert on
     // `{errorMessage && …}`. Deriving the copy with `??` would pass the empty
-    // string straight through and render NO alert — the same silent dead button
-    // #867 fixed on the transport branch, surviving on the API branch. `||`
-    // skips the blank `detail` to a guaranteed non-empty fallback.
+    // string straight through and render NO alert — a silent dead button. No
+    // results-path error emits an empty detail today, so this pins the
+    // defence-in-depth invariant (an error state always renders some copy)
+    // rather than a reachable server response; `||` skips the blank `detail` to
+    // a guaranteed non-empty fallback.
     finalizeCalloutActivePage.mockResultsEndpoint(() =>
       HttpResponse.json({ detail: "" }, { status: 409 }),
     );
