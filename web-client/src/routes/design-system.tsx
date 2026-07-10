@@ -1,6 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { format } from 'date-fns'
+import { useEffect, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { toast } from 'sonner'
 import { z } from 'zod'
@@ -42,6 +43,7 @@ import {
 } from '@/components/ui/card'
 import {
   Carousel,
+  type CarouselApi,
   CarouselContent,
   CarouselItem,
   CarouselNext,
@@ -140,7 +142,7 @@ const DEMO_AVATAR_SRC =
 
 /** Selected day for the Date Picker showcase (matches the trigger label). */
 const SHOWCASE_DAY = new Date(2026, 3, 12)
-const formatWeekdayNameShort = (date: Date) => format(date, 'EEE')
+const formatWeekdayNameShort = (date: Date) => format(date, 'EEEEE')
 const CALENDAR_FORMATTERS = { formatWeekdayName: formatWeekdayNameShort }
 const noop = () => {}
 
@@ -198,7 +200,7 @@ function DesignSystemPage() {
   return (
     <TooltipProvider>
       <div className="dark fortymm-theme min-h-screen">
-        <div className="mx-auto max-w-[1200px] px-12 pt-16 pb-32">
+        <div className="mx-auto max-w-[1200px] px-4 pt-16 pb-32 sm:px-12">
           <header className="mb-14 flex items-baseline gap-4 border-b border-[color:var(--border-subtle)] pb-6">
             <h1 className="font-display m-0 text-[56px] leading-none">
               SHADCN/UI · FORTYMM
@@ -515,7 +517,7 @@ function FormsSection() {
       <Showcase title="Select" tag="compact">
         <div className="flex flex-wrap items-center gap-3">
           <Select defaultValue="singles">
-            <SelectTrigger size="sm" className="w-[140px]">
+            <SelectTrigger size="sm" className="w-full max-w-[140px]">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -525,7 +527,7 @@ function FormsSection() {
             </SelectContent>
           </Select>
           <Select defaultValue="bo5">
-            <SelectTrigger size="sm" className="w-[180px]">
+            <SelectTrigger size="sm" className="w-full max-w-[180px]">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -538,7 +540,7 @@ function FormsSection() {
       </Showcase>
 
       <Showcase title="Combobox · Command" tag="searchable select · open">
-        <Command className="w-[340px] border border-[color:var(--border-subtle)]">
+        <Command className="w-full max-w-[340px] border border-[color:var(--border-subtle)]">
           <CommandInput placeholder="Find a player…" />
           <CommandList>
             <CommandEmpty>No player found.</CommandEmpty>
@@ -566,7 +568,7 @@ function FormsSection() {
             <Label className="mb-1.5 block text-sm">Match date</Label>
             <Popover>
               <PopoverTrigger asChild>
-                <Button variant="outline" className="w-[220px] justify-start gap-2">
+                <Button variant="outline" className="w-full max-w-[220px] justify-start gap-2">
                   <CalendarIcon className="size-4" />
                   April 12, 2026
                 </Button>
@@ -1023,10 +1025,10 @@ function NavigationSection() {
             </div>
           </div>
           <div
-            className="mt-2 w-fit rounded-md border border-[color:var(--border-subtle)] bg-popover text-popover-foreground"
+            className="mt-2 w-full max-w-[480px] rounded-md border border-[color:var(--border-subtle)] bg-popover text-popover-foreground"
             style={{ boxShadow: 'var(--shadow-lg)' }}
           >
-            <ul className="grid w-[480px] grid-cols-2 gap-2 p-3">
+            <ul className="grid w-full grid-cols-1 gap-2 p-3 sm:grid-cols-2">
               <li>
                 <a className="block rounded-md p-2.5 hover:bg-[color:var(--bg-hover)]">
                   <p className="text-sm font-medium">Match recorder</p>
@@ -1068,8 +1070,8 @@ function NavigationSection() {
         {/* Static inline facsimile with the File menu open and active — the real
             MenubarContent portals and floats, colliding with the Navigation Menu
             card above, so the open state is rendered inline (#271). */}
-        <div className="w-fit">
-          <div className="flex items-center gap-0.5 rounded-md border border-[color:var(--border-subtle)] bg-[color:var(--bg-card)] p-1">
+        <div className="w-full max-w-fit">
+          <div className="flex flex-wrap items-center gap-0.5 rounded-md border border-[color:var(--border-subtle)] bg-[color:var(--bg-card)] p-1">
             <div className="rounded-sm bg-[color:var(--bg-hover)] px-3 py-1 text-sm font-medium">
               File
             </div>
@@ -1087,7 +1089,7 @@ function NavigationSection() {
             </div>
           </div>
           <div
-            className="mt-1 w-[200px] rounded-md border border-[color:var(--border-subtle)] bg-popover p-1 text-popover-foreground"
+            className="mt-1 w-full max-w-[200px] rounded-md border border-[color:var(--border-subtle)] bg-popover p-1 text-popover-foreground"
             style={{ boxShadow: 'var(--shadow-lg)' }}
           >
             <div className="rounded-sm px-2 py-1.5 text-sm hover:bg-[color:var(--bg-hover)]">
@@ -1157,7 +1159,7 @@ function OverlaysSection() {
       <Showcase title="Sheet" tag="side panel · open">
         <div className="flex justify-end">
           <div
-            className="w-[320px] rounded-lg border border-[color:var(--border-subtle)] bg-[color:var(--bg-card)] p-6"
+            className="w-full max-w-[320px] rounded-lg border border-[color:var(--border-subtle)] bg-[color:var(--bg-card)] p-6"
             style={{ boxShadow: 'var(--shadow-lg)' }}
           >
             <h3 className="text-lg font-semibold">Filters</h3>
@@ -1229,7 +1231,13 @@ function OverlaysSection() {
             the bubbles, matching the kit reference — a hover-only demo shows a
             bare button + badge with nothing to see (#256). `sideOffset` lifts
             them clear of the trigger. */}
-        <div className="flex items-center gap-16 pt-12">
+        {/* Stack the two anchors vertically (own row each) AND centre them
+            horizontally: side-by-side, Radix centres both top-side bubbles over
+            their triggers and they overlap, clipping the first mid-word (#832).
+            Centring the triggers keeps each centred bubble inside the card
+            rather than spilling off its left edge, and holds at mobile width
+            without adding horizontal overflow (#833). */}
+        <div className="flex flex-col items-center gap-16 pt-12">
           <Tooltip open>
             <TooltipTrigger asChild>
               <Button variant="outline" size="icon" aria-label="Refresh">
@@ -1256,7 +1264,7 @@ function OverlaysSection() {
         <div className="flex flex-col items-start gap-2">
           <Button variant="link">@nguyen.t</Button>
           <div
-            className="w-[280px] rounded-md border border-[color:var(--border-subtle)] bg-popover p-4 text-popover-foreground"
+            className="w-full max-w-[280px] rounded-md border border-[color:var(--border-subtle)] bg-popover p-4 text-popover-foreground"
             style={{ boxShadow: 'var(--shadow-lg)' }}
           >
             <div className="mb-3 flex items-center gap-3">
@@ -1348,7 +1356,7 @@ function OverlaysSection() {
       </Showcase>
 
       <Showcase title="Command" tag="cmd+k palette">
-        <Command className="w-[480px] border border-[color:var(--border-subtle)]">
+        <Command className="w-full max-w-[480px] border border-[color:var(--border-subtle)]">
           <CommandInput placeholder="Type a command or search…" />
           <CommandList>
             <CommandEmpty>No results.</CommandEmpty>
@@ -1519,7 +1527,7 @@ function ToastCard({
       : 'var(--info)'
   return (
     <div
-      className={`sonner sonner-${tone} flex w-[360px] items-start gap-3 rounded-[10px] border border-[color:var(--border-subtle)] bg-[color:var(--bg-card)] px-4 py-3.5`}
+      className={`sonner sonner-${tone} flex w-full max-w-[360px] items-start gap-3 rounded-[10px] border border-[color:var(--border-subtle)] bg-[color:var(--bg-card)] px-4 py-3.5`}
       style={{ borderLeft: `3px solid ${accent}`, boxShadow: 'var(--shadow-lg)' }}
     >
       <div className="flex flex-col gap-0.5">
@@ -1527,6 +1535,87 @@ function ToastCard({
         <p className="text-xs text-[color:var(--fg-3)]">{body}</p>
       </div>
     </div>
+  )
+}
+
+/** Kit sizing is fixed-width 200px slides. Measured, the kit's own five 200px
+ * slides overflow the ~1038px showcase card by only ~12px, so a live embla
+ * exposes just two reachable snaps — the selection can move exactly once
+ * (01→02) and then freezes, which is the frozen-counter bug #831 was filed
+ * against. We therefore carry a few slides past the kit's five (same 200px
+ * size) so the strip genuinely scrolls; the counter denominator tracks the
+ * real total. Deliberate, documented deviation from the kit's literal count. */
+const CAROUSEL_SLIDES = [1, 2, 3, 4, 5, 6, 7, 8]
+
+/** Its own component so the embla hook state lives outside the route's render
+ * map (a component can't call hooks inside a `.map`). Highlight + counter are
+ * driven off the real embla API (#268 / #831): we subscribe to `select` and
+ * `reInit` and derive both from `selectedScrollSnap()`. */
+function CarouselShowcase() {
+  const [api, setApi] = useState<CarouselApi>()
+  const [selectedIndex, setSelectedIndex] = useState(0)
+  const [snapCount, setSnapCount] = useState(CAROUSEL_SLIDES.length)
+
+  useEffect(() => {
+    if (!api) return
+    const onSelect = () => {
+      setSelectedIndex(api.selectedScrollSnap())
+      // Snaps, not slides: with fixed-width slides embla trims the snaps that
+      // would overscroll the end, so the reachable count depends on how many
+      // slides fit. Using the slide count here would strand the counter at
+      // `05 / 08` — the numerator can never reach it.
+      setSnapCount(api.scrollSnapList().length)
+    }
+    onSelect()
+    api.on('select', onSelect)
+    api.on('reInit', onSelect)
+    return () => {
+      api.off('select', onSelect)
+      api.off('reInit', onSelect)
+    }
+  }, [api])
+
+  const counter = `${String(selectedIndex + 1).padStart(2, '0')} / ${String(
+    snapCount,
+  ).padStart(2, '0')}`
+
+  return (
+    <Carousel className="w-full" setApi={setApi} opts={{ align: 'start' }}>
+      {/* Kit gap between slides is 12px (shadcn's default is 16px / `-ml-4`). */}
+      <CarouselContent className="-ml-3">
+        {CAROUSEL_SLIDES.map((n, index) => {
+          const selected = index === selectedIndex
+          return (
+            <CarouselItem key={n} className="basis-auto pl-3">
+              {/* Kit `.slide`: fixed 200×140, ink-700; `.slide.on`: ink-600 +
+                  2px ball-500 border (no ring/glow — matches the reference). */}
+              <div
+                className={cn(
+                  'font-display flex h-[140px] w-[200px] items-center justify-center rounded-lg text-2xl font-semibold tracking-[0.04em] text-[color:var(--fg-1)]',
+                  selected
+                    ? 'border-2 border-[color:var(--ball-500)] bg-[color:var(--ink-600)]'
+                    : 'border border-[color:var(--border-subtle)] bg-[color:var(--ink-700)]',
+                )}
+              >
+                {String(n).padStart(2, '0')}
+              </div>
+            </CarouselItem>
+          )
+        })}
+      </CarouselContent>
+      {/* Kit footer row: counter bottom-left, nav buttons bottom-right — the
+          buttons default to absolute negative offsets (clipped at the card
+          edge), so reset them into normal flow here. */}
+      <div className="mt-4 flex items-center justify-between">
+        <span className="font-mono text-xs tracking-[0.1em] text-[color:var(--fg-3)]">
+          {counter}
+        </span>
+        <div className="flex items-center gap-2">
+          <CarouselPrevious className="static top-auto left-auto translate-y-0" />
+          <CarouselNext className="static top-auto right-auto translate-y-0" />
+        </div>
+      </div>
+    </Carousel>
   )
 }
 
@@ -1556,7 +1645,10 @@ function LayoutSection() {
             <span>4 of 12 players</span>
             <CollapsibleTrigger asChild>
               <Button variant="ghost" size="sm">
-                Show all <ChevronDown className="ml-1 size-3.5" />
+                Show all{' '}
+                <span aria-hidden="true" className="ml-1">
+                  ↓
+                </span>
               </Button>
             </CollapsibleTrigger>
           </div>
@@ -1615,33 +1707,7 @@ function LayoutSection() {
       </Showcase>
 
       <Showcase title="Carousel" tag="slider">
-        <Carousel className="w-full">
-          <CarouselContent>
-            {[1, 2, 3, 4, 5].map((n) => {
-              const selected = n === 1
-              return (
-                <CarouselItem key={n} className="basis-1/3">
-                  <div
-                    className={cn(
-                      'font-display flex h-32 items-center justify-center rounded-lg bg-[color:var(--ink-700)] tracking-[0.04em] text-[color:var(--fg-1)]',
-                      selected
-                        ? 'border border-[color:var(--ball-500)] text-3xl font-semibold ring-2 ring-[color:var(--ball-500)]'
-                        : 'border border-[color:var(--border-subtle)] text-2xl',
-                    )}
-                    style={selected ? { boxShadow: 'var(--shadow-glow)' } : undefined}
-                  >
-                    {String(n).padStart(2, '0')}
-                  </div>
-                </CarouselItem>
-              )
-            })}
-          </CarouselContent>
-          <CarouselPrevious />
-          <CarouselNext />
-        </Carousel>
-        <div className="mt-4 text-center font-mono text-xs tracking-[0.1em] text-[color:var(--fg-3)]">
-          01 / 05
-        </div>
+        <CarouselShowcase />
       </Showcase>
     </Section>
   )
