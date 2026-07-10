@@ -76,7 +76,9 @@ Chrome); `trace: 'on-first-retry'`. In CI: `retries: 2`, `forbidOnly: true`,
 
 Specs live in `tests/*.spec.ts`; page objects in `page-objects/`
 (`*.page.ts`, nested per-page helpers under `page-objects/<page>-page/`, e.g.
-`page-objects/dashboard-page/user-menu.page.ts`). Keep to the patterns already here:
+`page-objects/dashboard-page/user-menu.page.ts`); non-page-object test infra
+(e.g. API-seed helpers that provision state over the real API, no `Page`) in
+`support/*.ts` (e.g. `support/match-api.ts`). Keep to the patterns already here:
 
 - **Page Object Model.** One class per surface exposing named `Locator`s (see
   `landing.page.ts`; `dashboard.page.ts` shows the child-composition variant,

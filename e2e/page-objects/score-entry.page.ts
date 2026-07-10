@@ -27,9 +27,10 @@ export class ScoreEntryPage {
     return this.page.getByLabel(`${username} score`)
   }
 
-  /** The primary submit button on the edit screen ("Save changes →"). */
+  /** The primary submit button on the edit screen ("Save changes →"). Matched
+   * loosely so a cosmetic tweak to the arrow doesn't red the test. */
   get saveButton(): Locator {
-    return this.page.getByRole('button', { name: 'Save changes →' })
+    return this.page.getByRole('button', { name: /Save changes/ })
   }
 
   /** The in-page conflict notice raised when this game's save 409'd because a
@@ -60,10 +61,5 @@ export class ScoreEntryPage {
    * deliberately overwriting the committed score. */
   get replaceButton(): Locator {
     return this.page.getByRole('button', { name: 'Replace with my score' })
-  }
-
-  /** "Keep saved score" — discards the rejected entry, clearing the notice. */
-  get keepSavedButton(): Locator {
-    return this.page.getByRole('button', { name: 'Keep saved score' })
   }
 }

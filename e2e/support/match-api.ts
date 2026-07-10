@@ -36,16 +36,26 @@ async function csrfToken(ctx: APIRequestContext): Promise<string> {
   return cookie.value
 }
 
-/** Mint a fresh ephemeral guest: `GET /v1/session` creates a User + issues the
- * session and csrf cookies into a brand-new request context. */
-export async function mintGuest(baseURL: string): Promise<Guest> {
-  const ctx = await request.newContext({ baseURL })
+/** Build a Guest from an already-authenticated request context: reads its
+ * username (`GET /v1/session`) and the CSRF token it was issued. Shared by
+ * `mintGuest` (a fresh context) and specs that adopt the browser's own
+ * `page.request` context, so page navigations run as that guest. */
+export async function guestFromContext(ctx: APIRequestContext): Promise<Guest> {
   const res = await ctx.get(`${API}/session`)
   if (!res.ok()) {
     throw new Error(`session mint failed: ${res.status()} ${await res.text()}`)
   }
-  const body = (await res.json()) as { data: { user: { username: string } } }
-  return { ctx, username: body.data.user.username, csrf: await csrfToken(ctx) }
+  return {
+    ctx,
+    username: usernameFrom(await res.json()),
+    csrf: await csrfToken(ctx),
+  }
+}
+
+/** Mint a fresh ephemeral guest: `GET /v1/session` creates a User + issues the
+ * session and csrf cookies into a brand-new request context. */
+export async function mintGuest(baseURL: string): Promise<Guest> {
+  return guestFromContext(await request.newContext({ baseURL }))
 }
 
 /** Resolve a user's id via the opponent typeahead. Ephemeral guests are
@@ -131,6 +141,11 @@ export async function editGameScore(
       },
     },
   )
+}
+
+function usernameFrom(sessionJson: unknown): string {
+  return (sessionJson as { data: { user: { username: string } } }).data.user
+    .username
 }
 
 function versionOf(details: unknown, gameNumber: number): number {

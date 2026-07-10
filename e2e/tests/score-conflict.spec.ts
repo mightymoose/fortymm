@@ -6,8 +6,8 @@ import {
   createMatch,
   editGameScore,
   findUserId,
+  guestFromContext,
   mintGuest,
-  type Guest,
 } from '../support/match-api'
 
 /**
@@ -30,23 +30,13 @@ import {
 test.describe('Score entry — 409 conflict flow', () => {
   test('the loser sees the committed score and "Replace with my score" then succeeds first try', async ({
     page,
-    context,
     baseURL,
   }) => {
     expect(baseURL, 'baseURL must be set for the API seed').toBeTruthy()
 
-    // Guest A is the browser's own session, so the page navigates authenticated
-    // as A. `page.request` shares this context's cookie jar.
-    const aSession = await page.request.get('/api/v1/session')
-    expect(aSession.ok()).toBeTruthy()
-    const aUsername = (
-      (await aSession.json()) as { data: { user: { username: string } } }
-    ).data.user.username
-    const aCsrf = (await context.cookies()).find(
-      (c) => c.name === 'csrf_token',
-    )?.value
-    expect(aCsrf, 'A must be issued a csrf_token').toBeTruthy()
-    const a: Guest = { ctx: page.request, username: aUsername, csrf: aCsrf! }
+    // Guest A is the browser's own session (`page.request` shares the page
+    // context's cookie jar), so page navigations run authenticated as A.
+    const a = await guestFromContext(page.request)
 
     // Guest B is a wholly separate session (its own cookie jar) — the concurrent
     // participant who writes the same game out from under A.
