@@ -11,6 +11,12 @@ export interface FinalizeCalloutActiveProps {
   matchId: string;
 }
 
+const CONNECTION_COPY =
+  "Couldn't post the result — check your connection and try again.";
+// Last-resort copy for an `ApiError` carrying an empty `detail` AND `message`,
+// so an error state can never render as a silent, dead button.
+const API_FALLBACK = "Couldn't post the result — try again.";
+
 /** Wires the post-result mutation onto the pure display: posting the view's
  * canonical games, surfacing pending state, and keeping API failures visible
  * inline (without throwOnError a 409 — opponent confirmed first, double-click,
@@ -33,10 +39,20 @@ export function FinalizeCalloutActive({
   // exclusive with `apiError` by construction (the error is one or the other,
   // never both).
   const networkError = finalizeMutation.error !== null && apiError === null;
+  // `||`, NOT `??`: the display gates the alert on `{errorMessage && …}`, so any
+  // falsy string renders nothing. `extractDetail` passes a server `detail`
+  // through verbatim, and `ApiError`'s `super(detail ?? …)` leaves `message`
+  // empty too when `detail` is `""` — so a `{"detail": ""}` rejection would
+  // reduce to `""` under `??` and re-enable the button with no feedback, the
+  // same dead-button shape #867 was about. No results-path error emits an empty
+  // detail today, so this is defence-in-depth rather than a live bug; `||` skips
+  // an empty `detail`/`message` to a guaranteed non-empty fallback and makes the
+  // invariant local — an error state always renders some copy — instead of
+  // resting on every server message staying non-empty forever.
   const errorMessage = networkError
-    ? "Couldn't post the result — check your connection and try again."
+    ? CONNECTION_COPY
     : apiError
-      ? (apiError.detail ?? apiError.message)
+      ? (apiError.detail || apiError.message || API_FALLBACK)
       : null;
   // Synchronous double-submit guard. `disabled={pending}` only takes effect on
   // the next render, so a fast double-click lands a second tap before React

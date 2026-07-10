@@ -208,4 +208,61 @@ describe("FinalizeCalloutActive", () => {
       expect(finalizeCalloutActivePage.queryError()).not.toBeInTheDocument(),
     );
   });
+
+  it("re-fires the POST when clicked again while the connection is still down", async () => {
+    // `onError` resets the synchronous `inFlightRef` double-submit guard, so a
+    // second click after a failed send must actually reach the network again. If
+    // that reset ever regresses, the button silently dead-locks: enabled, styled
+    // as retryable, and inert. Counting POSTs at the MSW boundary is what proves
+    // the retry left the client — a rendered alert would not.
+    let requests = 0;
+    finalizeCalloutActivePage.mockResultsEndpoint(() => {
+      requests += 1;
+      return HttpResponse.error();
+    });
+    finalizeCalloutActivePage.render();
+
+    // Anchor each wait on the request count — the observable that actually
+    // advances. After a failure the button is already enabled reading "Post
+    // result", so `settleToRetryable()` alone could resolve against the
+    // pre-click render, before the POST had left the boundary.
+    await userEvent.click(finalizeCalloutActivePage.getPostButton());
+    await waitFor(() => expect(requests).toBe(1));
+    await settleToRetryable();
+    expect(hasConnectionAlert()).toBe(true);
+
+    // The short timeout keeps a dead-locked guard reding as a crisp
+    // "expected 1 to be 2" rather than masquerading as the suite's 5s
+    // `asyncUtilTimeout`.
+    await userEvent.click(finalizeCalloutActivePage.getPostButton());
+    await waitFor(() => expect(requests).toBe(2), { timeout: 1000 });
+    await settleToRetryable();
+    expect(hasConnectionAlert()).toBe(true);
+  });
+
+  it("renders non-empty copy when the server rejects with a blank detail", async () => {
+    // `detail: ""` is falsy, and the display gates its alert on
+    // `{errorMessage && …}`. Deriving the copy with `??` would pass the empty
+    // string straight through and render NO alert — a silent dead button. No
+    // results-path error emits an empty detail today, so this pins the
+    // defence-in-depth invariant (an error state always renders some copy)
+    // rather than a reachable server response; `||` skips the blank `detail` to
+    // a guaranteed non-empty fallback.
+    finalizeCalloutActivePage.mockResultsEndpoint(() =>
+      HttpResponse.json({ detail: "" }, { status: 409 }),
+    );
+    finalizeCalloutActivePage.render();
+
+    await userEvent.click(finalizeCalloutActivePage.getPostButton());
+    await settleToRetryable();
+
+    // Assert on the rendered text, not merely on the element: an alert whose
+    // textContent is "" would satisfy `toBeInTheDocument` while showing the user
+    // nothing at all.
+    const alert = finalizeCalloutActivePage.queryError();
+    expect(alert).toBeInTheDocument();
+    expect(alert?.textContent?.trim()).toBe(
+      "Couldn't post the result — try again.",
+    );
+  });
 });
