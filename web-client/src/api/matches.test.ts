@@ -501,6 +501,59 @@ it('upserts only the written game into a present match cache (#870 warm path)', 
 })
 
 /**
+ * Regression for #872: `applyGameWriteCache` folds a save's response into the
+ * cache by upserting the row for the game it just wrote. That row is present
+ * today by an API-side invariant nothing on the client enforces (a save always
+ * returns the game's row; DELETE nulls the score but keeps the row). If the
+ * response ever omits that row the upsert silently no-ops and the UI shows the
+ * pre-write value until the refetch heals it, with nothing to point at. Make
+ * the boundary violation loud: `console.error` at its source. We still leave
+ * the cache untouched (no throw) so a live scoring screen survives the glitch.
+ */
+it('logs loudly and leaves the cache untouched when the save response omits the written game (#872)', async () => {
+  const matchId = 'm-872'
+  const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+  const game1Present: Game = {
+    id: 'g-1',
+    game_number: 1,
+    score: {
+      id: 's-1',
+      side_1_points: 11,
+      side_2_points: 8,
+      winner_side_number: 1,
+      version: 1,
+    },
+  }
+  // Warm cache holds game 1's pre-write value.
+  queryClient.setQueryData(
+    matchQueryKey(matchId),
+    matchDetails({ id: matchId, games: [game1Present] }),
+  )
+
+  // Boundary violation: the save's response omits the row for game 1 entirely.
+  // Game 1 already has a cached score, so this save takes the edit (PUT) path.
+  const saveResponse: MatchDetails = matchDetails({ id: matchId, games: [] })
+  server.use(
+    http.put('*/v1/matches/:matchId/games/:gameNumber/scores', () =>
+      HttpResponse.json(saveResponse),
+    ),
+  )
+
+  await fireScoreSave(queryClient, matchId, 1, {
+    side_1_points: 11,
+    side_2_points: 8,
+  })
+
+  // Loud: the invariant violation surfaced at its source.
+  expect(consoleError).toHaveBeenCalledTimes(1)
+  expect(consoleError.mock.calls[0][0]).toContain('applyGameWriteCache')
+  // Safe: the cache was left as-is (not clobbered), so the refetch can heal it.
+  const cached = queryClient.getQueryData<MatchDetails>(matchQueryKey(matchId))
+  expect(cached?.games.find((g) => g.game_number === 1)?.score?.side_1_points).toBe(11)
+})
+
+/**
  * Evidence for #843's *accepted residual* (work-order chore C3, option B).
  *
  * The C2 fix's success path fires `invalidateQueries(matchQueryKey)`, which — when
