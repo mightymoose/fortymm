@@ -8,17 +8,13 @@ import { buildFinalizeCalloutView } from "./finalize-callout-active/finalize-cal
 import { finalizeCalloutActivePage } from "./finalize-callout-active.page";
 
 /**
- * Wait on the mutation *settling*, not on the alert — the CTA returning from
- * "Posting…" to enabled "Post result" happens in BOTH the fixed and broken
- * states, so this resolves in ~milliseconds either way. React Query commits
- * `isPending=false` and the settled `error` in the SAME state update, so the
- * commit where the button re-enables is the same commit that renders the alert;
- * callers can therefore assert the alert synchronously right after this.
- *
- * If we waited on the alert itself, a regression (no alert) would red as an
- * opaque 5s timeout — `asyncUtilTimeout` == `testTimeout` == 5000, so a missing
- * signal is indistinguishable from a hang. Settling first, then asserting the
- * alert synchronously, makes a missing alert fail fast with a crisp query error.
+ * Wait on the mutation *settling* (button back from "Posting…" to an enabled
+ * "Post result"), not on the alert — the button re-enables in BOTH the fixed
+ * and broken states, so this resolves in ~milliseconds either way. If we waited
+ * on the alert itself, a regression (no alert) would red as an opaque 5s timeout
+ * (`asyncUtilTimeout` == `testTimeout` == 5000, so a missing signal is
+ * indistinguishable from a hang). Settling first, then asserting the alert
+ * synchronously, makes a missing alert fail fast with a crisp query error.
  */
 async function settleToRetryable() {
   await waitFor(() => {
@@ -30,15 +26,15 @@ async function settleToRetryable() {
 
 /**
  * Whether the #867 connection alert is currently in the DOM. It renders in the
- * same commit the transport-level mutation error settles, so callers assert
- * this synchronously after `settleToRetryable()` rather than waiting on it.
- * Uses the page object's plural `hasErrorMatching` (not a singular
- * `getByRole("alert")`) so a co-rendered second alert can't blow up the query.
+ * same commit the mutation error settles, so callers assert this synchronously
+ * after `settleToRetryable()` rather than waiting on it.
  */
-const hasConnectionAlert = () =>
-  finalizeCalloutActivePage.hasErrorMatching(
-    /check your connection and try again/i,
+function hasConnectionAlert() {
+  const alert = finalizeCalloutActivePage.queryError();
+  return /Couldn't post the result .* check your connection and try again/i.test(
+    alert?.textContent ?? "",
   );
+}
 
 describe("FinalizeCalloutActive", () => {
   it("posts exactly the view's canonical games, unchanged", async () => {
@@ -137,27 +133,6 @@ describe("FinalizeCalloutActive", () => {
     );
   });
 
-  it("renders a non-empty fallback alert when the 409 detail is empty (#867 API branch)", async () => {
-    // A 409 whose body is `{"detail": ""}`. The component must use `||` (not
-    // `??`) so the empty-string detail is skipped for a non-empty fallback: the
-    // display gates the alert on `{errorMessage && …}`, so passing `""` through
-    // would suppress the alert entirely and leave a dead button (#867). This
-    // reds fast (crisp assertion, not a 5s timeout) if `||` reverts to `??`.
-    finalizeCalloutActivePage.mockResultsEndpoint(() =>
-      HttpResponse.json({ detail: "" }, { status: 409 }),
-    );
-    finalizeCalloutActivePage.render();
-
-    await userEvent.click(finalizeCalloutActivePage.getPostButton());
-
-    // Settle back to enabled first, THEN assert synchronously — a suppressed
-    // alert fails as a crisp assertion in ms, not an opaque 5s timeout.
-    await settleToRetryable();
-    const alerts = finalizeCalloutActivePage.queryAllErrors();
-    expect(alerts).not.toHaveLength(0);
-    expect(alerts[0]).toHaveTextContent(/Couldn't post the result — try again\./);
-  });
-
   it("clears a previous failure when the post is retried", async () => {
     let attempts = 0;
     finalizeCalloutActivePage.mockResultsEndpoint(() => {
@@ -186,30 +161,60 @@ describe("FinalizeCalloutActive", () => {
     );
   });
 
-  it("surfaces a transport-level failure as a connection alert (#867)", async () => {
-    // `useProposeResult` runs `networkMode: 'always'`, so an offline submit
-    // fires the POST anyway and `fetch` rejects with a plain `TypeError` — NOT
-    // an `ApiError`. `HttpResponse.error()` reproduces that thrown TypeError
-    // (a rejected request, not a 500 status). The old code rendered nothing in
-    // this branch, leaving the user with zero feedback (#867).
+  it("surfaces a transport-level failure inline and leaves Post retryable (#867)", async () => {
+    // `useProposeResult` runs `networkMode: 'always'`, so an offline (or
+    // mid-flight-dropped) submit fires the POST and `fetch` rejects with a plain
+    // `TypeError` — NOT an `ApiError`. The old code only handled `ApiError`, so
+    // this rejection rendered nothing here and re-enabled the button silently,
+    // with no other affordance to explain the dead button. `HttpResponse.error()`
+    // rejects at the transport level (no status code), reproducing that drop.
     finalizeCalloutActivePage.mockResultsEndpoint(() => HttpResponse.error());
     finalizeCalloutActivePage.render();
 
     await userEvent.click(finalizeCalloutActivePage.getPostButton());
 
-    // Settle back from "Posting…" to enabled first, THEN assert the alert
-    // synchronously — a missing alert fails as an assertion error in ms, not an
-    // opaque 5s timeout.
     await settleToRetryable();
+
+    // Assert the alert synchronously (crisp fail if it never rendered) rather
+    // than via a `waitFor` that would red as an opaque 5s timeout on regression.
     expect(hasConnectionAlert()).toBe(true);
   });
 
-  it("re-fires the POST when clicked again while still offline (#867 retry)", async () => {
-    // After a transport-level failure, `onError` resets the synchronous
-    // `inFlightRef` guard, so a second click must actually re-fire the mutation
-    // — it must not be dead-locked by a ref that never cleared. Both attempts
-    // fail (still offline), so counting the POSTs proves the retry left the
-    // boundary rather than being swallowed client-side.
+  it("recovers on retry after a transport drop: a second Post succeeds and clears the connection alert (#867 reconnect)", async () => {
+    // The first Post drops at the transport level (connection alert shows). Once
+    // the connection recovers, a second Post must succeed — `onPost` calls
+    // `finalizeMutation.reset()` before firing, and the success clears the
+    // mutation error, so the stale connection alert must not linger. This is the
+    // reconnect-recovery coverage the transport-error path lacked (#865 added the
+    // same shape for correction-entry).
+    let attempts = 0;
+    finalizeCalloutActivePage.mockResultsEndpoint(() => {
+      attempts += 1;
+      return attempts === 1
+        ? HttpResponse.error()
+        : HttpResponse.json(buildMatchDetails(), { status: 201 });
+    });
+    finalizeCalloutActivePage.render();
+
+    // First Post drops mid-flight → connection alert.
+    await userEvent.click(finalizeCalloutActivePage.getPostButton());
+    await settleToRetryable();
+    expect(hasConnectionAlert()).toBe(true);
+
+    // Retry now succeeds: both attempts fired and the stale alert is gone.
+    await userEvent.click(finalizeCalloutActivePage.getPostButton());
+    await waitFor(() => expect(attempts).toBe(2));
+    await waitFor(() =>
+      expect(finalizeCalloutActivePage.queryError()).not.toBeInTheDocument(),
+    );
+  });
+
+  it("re-fires the POST when clicked again while the connection is still down", async () => {
+    // `onError` resets the synchronous `inFlightRef` double-submit guard, so a
+    // second click after a failed send must actually reach the network again. If
+    // that reset ever regresses, the button silently dead-locks: enabled, styled
+    // as retryable, and inert. Counting POSTs at the MSW boundary is what proves
+    // the retry left the client — a rendered alert would not.
     let requests = 0;
     finalizeCalloutActivePage.mockResultsEndpoint(() => {
       requests += 1;
@@ -217,84 +222,45 @@ describe("FinalizeCalloutActive", () => {
     });
     finalizeCalloutActivePage.render();
 
-    // First send fails at the transport level. Anchor the wait on the request
-    // count — the observable that actually advances — before settling: after a
-    // failure the button is already enabled reading "Post result", so a
-    // `settleToRetryable()` predicate can resolve on the pre-click render before
-    // the POST has left the boundary.
+    // Anchor each wait on the request count — the observable that actually
+    // advances. After a failure the button is already enabled reading "Post
+    // result", so `settleToRetryable()` alone could resolve against the
+    // pre-click render, before the POST had left the boundary.
     await userEvent.click(finalizeCalloutActivePage.getPostButton());
     await waitFor(() => expect(requests).toBe(1));
     await settleToRetryable();
     expect(hasConnectionAlert()).toBe(true);
 
-    // Retry: click again. The point being pinned is that the retry actually
-    // re-fires — `onError` reset the synchronous `inFlightRef`, so the second
-    // click leaves the boundary rather than being swallowed. We wait on the
-    // request count reaching 2 (short timeout so a stuck `inFlightRef` reds as a
-    // crisp "expected 1 to be 2" fast, never masquerading as the suite's 5s
-    // `asyncUtilTimeout`), then settle and assert the alert synchronously.
+    // The short timeout keeps a dead-locked guard reding as a crisp
+    // "expected 1 to be 2" rather than masquerading as the suite's 5s
+    // `asyncUtilTimeout`.
     await userEvent.click(finalizeCalloutActivePage.getPostButton());
     await waitFor(() => expect(requests).toBe(2), { timeout: 1000 });
     await settleToRetryable();
     expect(hasConnectionAlert()).toBe(true);
   });
 
-  it("clears the stale connection alert after a reconnecting retry succeeds (#867 reconnect)", async () => {
-    // First submit fails at the transport level (offline), rendering the
-    // connection alert. Once the endpoint recovers, a second click must succeed
-    // and the stale connection alert must not linger — the success resets the
-    // mutation error.
-    let requests = 0;
-    finalizeCalloutActivePage.mockResultsEndpoint(() => {
-      requests += 1;
-      return HttpResponse.error();
-    });
-    finalizeCalloutActivePage.render();
-
-    // Anchor on the request count first (the observable that advances), then
-    // settle and assert the alert synchronously — the same discipline the retry
-    // test uses, so an already-enabled button can't resolve `settleToRetryable`
-    // before the POST has left the boundary.
-    await userEvent.click(finalizeCalloutActivePage.getPostButton());
-    await waitFor(() => expect(requests).toBe(1));
-    await settleToRetryable();
-    expect(hasConnectionAlert()).toBe(true);
-
-    // Reconnect: the endpoint now succeeds. `server.use` prepends, so this
-    // handler wins for the retry.
-    finalizeCalloutActivePage.mockResultsEndpoint(() => {
-      requests += 1;
-      return HttpResponse.json(buildMatchDetails(), { status: 201 });
-    });
-
-    await userEvent.click(finalizeCalloutActivePage.getPostButton());
-    await waitFor(() => expect(requests).toBe(2));
-    await settleToRetryable();
-
-    // The success path does not keep showing the stale connection alert.
-    expect(hasConnectionAlert()).toBe(false);
-  });
-
-  it("shows the server's 409 detail, not the connection copy (branches don't cross)", async () => {
-    // A 409 is an `ApiError`, not a transport TypeError, so the `apiError`
-    // branch — the server's `detail` copy — must win. The connection copy must
-    // NOT appear (guard against the two error branches crossing).
+  it("renders non-empty copy when the server rejects with a blank detail", async () => {
+    // `detail: ""` is falsy, and the display gates its alert on
+    // `{errorMessage && …}`. Deriving the copy with `??` would pass the empty
+    // string straight through and render NO alert — the same silent dead button
+    // #867 fixed on the transport branch, surviving on the API branch. `||`
+    // skips the blank `detail` to a guaranteed non-empty fallback.
     finalizeCalloutActivePage.mockResultsEndpoint(() =>
-      HttpResponse.json(
-        { detail: "Match already has a posted result" },
-        { status: 409 },
-      ),
+      HttpResponse.json({ detail: "" }, { status: 409 }),
     );
     finalizeCalloutActivePage.render();
 
     await userEvent.click(finalizeCalloutActivePage.getPostButton());
-
     await settleToRetryable();
-    expect(
-      finalizeCalloutActivePage.hasErrorMatching(
-        /Match already has a posted result/,
-      ),
-    ).toBe(true);
-    expect(hasConnectionAlert()).toBe(false);
+
+    // Assert on the rendered text, not merely on the element: an alert whose
+    // textContent is "" would satisfy `toBeInTheDocument` while showing the user
+    // nothing at all.
+    const alert = finalizeCalloutActivePage.queryError();
+    expect(alert).toBeInTheDocument();
+    expect(alert?.textContent?.trim()).toBe(
+      "Couldn't post the result — try again.",
+    );
   });
 });

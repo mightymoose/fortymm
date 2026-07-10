@@ -352,6 +352,19 @@ function ScoreEntryInner({
   const inputsValid = validation.valid
   const finalizeApiError =
     finalizeMutation.error instanceof ApiError ? finalizeMutation.error : null
+  // A finalize error that ISN'T an `ApiError` is a transport-level drop:
+  // `useProposeResult` runs `networkMode: 'always'`, so a finalize whose
+  // connection dies mid-flight still fires the POST and `fetch` rejects with a
+  // plain `TypeError` — never an `ApiError` (#868). The at-submit offline guard
+  // below (`wouldFinalize && onlineManager.isOnline()`) diverts a *known*-offline
+  // deciding game to the scratchpad, but it can't catch a connection that dies
+  // AFTER it passes — that rejection lands here. Mutually exclusive with
+  // `finalizeApiError` by construction (the error is one or the other, never
+  // both). Mirrors correction-entry's `networkError` (#839): error-driven, not a
+  // `navigator.onLine` pre-check, on purpose — the pre-check races the actual
+  // request, so we branch on the rejection that really happened.
+  const finalizeNetworkError =
+    finalizeMutation.error !== null && finalizeApiError === null
 
   // Build the hypothetical full-match games list including the current input,
   // so we can ask the scoring lib whether saving this entry would make the
@@ -398,17 +411,24 @@ function ScoreEntryInner({
   // so a 409 "already posted" / 500 must be visible here rather than swallowed.
   // The score *inputs* are only invalid for genuine validation problems (local
   // illegal score, or a 422 drift the server rejected) — a 409/500 means the
-  // entered score is fine, so don't paint the fields red for those.
+  // entered score is fine, so don't paint the fields red for those. A
+  // transport-level drop (`finalizeNetworkError`) is the same story: the entered
+  // score is perfectly valid, the POST just never reached the server, so the
+  // fields stay clean and only the message line explains the failure (#868).
   const inputsInvalid =
     localScoreError !== null || finalizeApiError?.status === 422
-  // The message line, though, surfaces every finalize error (409/500 included)
-  // and the cross-game overrun block (a legal score that the board can't take).
+  // The message line, though, surfaces every finalize error (409/500 included),
+  // a transport-level drop, and the cross-game overrun block (a legal score that
+  // the board can't take).
   const overrunError =
     overrunAt !== null
       ? `The match is already decided at game ${overrunAt} — clear the games after it before saving this score.`
       : null
   const showScoreError =
-    inputsInvalid || overrunError !== null || finalizeApiError !== null
+    inputsInvalid ||
+    overrunError !== null ||
+    finalizeApiError !== null ||
+    finalizeNetworkError
   // The "both scores required" hint is its own, lower-severity line — shown only
   // when exactly one field is filled and there's no harder error to surface.
   const showBothRequired = oneSideFilled && !showScoreError
@@ -499,6 +519,12 @@ function ScoreEntryInner({
     // finish the match." / "Post result"), which posts the canonical result once
     // back online.
     if (wouldFinalize) {
+      // We're abandoning the finalize attempt in favour of a scratch save, so any
+      // finalize error still on screen (e.g. a prior mid-flight transport drop's
+      // connection copy, #868) is stale by definition — nothing in this branch
+      // re-runs the finalize mutation to clear it, so reset it here before the
+      // scratch save's SaveBanner takes over.
+      finalizeMutation.reset()
       saveMutation.mutate(args)
       return
     }
@@ -703,15 +729,21 @@ function ScoreEntryInner({
           }}
           gamesTally={bestOf > 1 ? `${meWins} – ${oppWins}` : null}
           // The scratchpad surfaces the local validation error, the cross-game
-          // overrun block, and a finalize API rejection (409/500 too) here;
-          // `showScoreError` gates when any of them shows, in that precedence.
+          // overrun block, a finalize API rejection (409/500 too), and — last in
+          // precedence — a transport-level drop's connection copy here;
+          // `showScoreError` gates when any of them shows, in that order. The
+          // connection copy is last because an `ApiError` (a real server verdict)
+          // is always the more specific thing to say; a bare transport failure is
+          // the fallback when the POST never reached the server at all (#868).
           scoreError={
             showScoreError
               ? (localScoreError ??
                 overrunError ??
                 finalizeApiError?.detail ??
                 finalizeApiError?.message ??
-                null)
+                (finalizeNetworkError
+                  ? "Couldn't post the result — check your connection and try again."
+                  : null))
               : null
           }
           showBothRequired={showBothRequired}

@@ -22,21 +22,6 @@ const scoped = (container: Container) => ({
   queryError() {
     return container.queryByRole("alert");
   },
-  /**
-   * All alerts in scope. Plural (vs `queryError`'s singular) because a second
-   * co-rendered alert would make the singular `getByRole("alert")` throw; the
-   * offline-retry tests need to assert against whichever alert is present
-   * without that ambiguity blowing up.
-   */
-  queryAllErrors() {
-    return container.queryAllByRole("alert");
-  },
-  /** True iff some alert's `textContent` matches `pattern`. */
-  hasErrorMatching(pattern: RegExp) {
-    return container
-      .queryAllByRole("alert")
-      .some((a: HTMLElement) => pattern.test(a.textContent ?? ""));
-  },
 });
 
 /** Test page-object for the pure `FinalizeCalloutDisplay` — props in, DOM
