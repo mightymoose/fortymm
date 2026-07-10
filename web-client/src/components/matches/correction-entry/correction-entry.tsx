@@ -22,6 +22,18 @@ import { CorrectionScoreline } from "./correction-scoreline";
 // scratchpad entry screen so the correction board reads the same.
 const NO_OPPONENT_LABEL = "No opponent";
 
+/** The one inline red error line this screen uses for its several mutually-
+ * exclusive messages (API error, connection failure, board hint) — one place to
+ * change the role/styling for all of them. Field-level error copy, so it's this
+ * bespoke line rather than the card-shaped design-system `Alert`. */
+function InlineAlert({ children }: { children: React.ReactNode }) {
+  return (
+    <p role="alert" className="mt-1.5 text-xs text-[color:var(--loss)]">
+      {children}
+    </p>
+  );
+}
+
 type StandingGame = NonNullable<
   MatchDetails["negotiation"]["standing_result"]
 >["games"][number];
@@ -321,25 +333,21 @@ export function CorrectionEntry({ matchId }: { matchId: string }) {
       </div>
 
       {apiError !== null && (
-        <p role="alert" className="mt-1.5 text-xs text-[color:var(--loss)]">
+        <InlineAlert>
           {apiError.status === 409
             ? "This proposal has moved on — reload the match to see the latest score."
             : (apiError.detail ?? apiError.message)}
-        </p>
+        </InlineAlert>
       )}
 
       {networkError && (
-        <p role="alert" className="mt-1.5 text-xs text-[color:var(--loss)]">
+        <InlineAlert>
           Couldn't send your corrected score — check your connection and try
           again.
-        </p>
+        </InlineAlert>
       )}
 
-      {boardHint !== null && (
-        <p role="alert" className="mt-1.5 text-xs text-[color:var(--loss)]">
-          {boardHint}
-        </p>
-      )}
+      {boardHint !== null && <InlineAlert>{boardHint}</InlineAlert>}
 
       <ScorePad
         // Remount on game switch so the inputs re-seed and the me-field

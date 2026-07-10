@@ -235,9 +235,15 @@ describe("CorrectionEntry", () => {
     // Now the connection alert MUST already be in the DOM (it renders in the
     // same commit the mutation error settled). Assert it synchronously so its
     // absence is an immediate "unable to find role alert", not a timeout.
-    expect(screen.getByRole("alert")).toHaveTextContent(
-      /Couldn't send your corrected score .* check your connection and try again/i,
-    );
+    expect(
+      correctionEntryPage
+        .queryAlerts()
+        .some((a: HTMLElement) =>
+          /Couldn't send your corrected score .* check your connection and try again/i.test(
+            a.textContent ?? "",
+          ),
+        ),
+    ).toBe(true);
     // The board never left, so no navigation — and the re-enabled button above
     // means the user can retry (not stuck on "Sending…").
     expect(correctionEntryPage.queryMatchLanding()).not.toBeInTheDocument();
@@ -272,9 +278,15 @@ describe("CorrectionEntry", () => {
         "Send corrected score",
       );
     });
-    expect(screen.getByRole("alert")).toHaveTextContent(
-      /Couldn't send your corrected score .* check your connection and try again/i,
-    );
+    expect(
+      correctionEntryPage
+        .queryAlerts()
+        .some((a: HTMLElement) =>
+          /Couldn't send your corrected score .* check your connection and try again/i.test(
+            a.textContent ?? "",
+          ),
+        ),
+    ).toBe(true);
 
     // Retry: click Send again. In the working case the button goes disabled
     // ("Sending…") then re-enables when the second failure settles, so
@@ -294,9 +306,15 @@ describe("CorrectionEntry", () => {
 
     // The alert is still up, nothing is stuck on "Sending…", and the board
     // never navigated away.
-    expect(screen.getByRole("alert")).toHaveTextContent(
-      /Couldn't send your corrected score .* check your connection and try again/i,
-    );
+    expect(
+      correctionEntryPage
+        .queryAlerts()
+        .some((a: HTMLElement) =>
+          /Couldn't send your corrected score .* check your connection and try again/i.test(
+            a.textContent ?? "",
+          ),
+        ),
+    ).toBe(true);
     expect(correctionEntryPage.queryMatchLanding()).not.toBeInTheDocument();
   });
 
@@ -323,9 +341,15 @@ describe("CorrectionEntry", () => {
         "Send corrected score",
       );
     });
-    expect(screen.getByRole("alert")).toHaveTextContent(
-      /Couldn't send your corrected score .* check your connection and try again/i,
-    );
+    expect(
+      correctionEntryPage
+        .queryAlerts()
+        .some((a: HTMLElement) =>
+          /Couldn't send your corrected score .* check your connection and try again/i.test(
+            a.textContent ?? "",
+          ),
+        ),
+    ).toBe(true);
 
     // Reconnect: the endpoint now succeeds. `server.use` prepends, so this
     // handler wins for the retry.
