@@ -12,7 +12,23 @@ const scoped = (container: Container) => ({
   queryStatus() {
     return container.queryByRole('status', { name: /loading recent matches/i })
   },
-  // Count the shimmer bars so a dropped header cell or row column is caught.
+  /** The skeleton's `<table>` — it mirrors the loaded card's table so column
+   * widths derive from the same layout. Queried by test id because the
+   * decorative inner tree is `aria-hidden`, so `getByRole('table')` can't
+   * reach it. */
+  getTable() {
+    return container.getByTestId('dashboard-recent-results-skeleton')
+  },
+  /** Every placeholder `<tbody>` row (excludes the header row). */
+  getRows() {
+    return container.queryAllByTestId('dashboard-recent-results-skeleton-row')
+  },
+  /** Each row's collapsing opponent cell (`maxWidth:0; width:100%`) — the test
+   * reads the win/loss dot placeholder from within each of these. */
+  getOpponentCells() {
+    return container.queryAllByTestId('dashboard-recent-results-skeleton-opponent')
+  },
+  // Expose the shimmer-bar queries so owners (YourGameRow) can read them.
   ...shimmerPage.within(container),
 })
 

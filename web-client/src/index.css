@@ -1638,8 +1638,7 @@ body.dark.fortymm-theme {
   text-transform: uppercase;
   color: var(--fg-1);
   margin: 0;
-  flex: 1;
-  min-width: 0;
+  flex: 0 0 auto;
 }
 .fortymm-theme .entry-head .hint {
   font: 500 12px/1.5 var(--font-mono);
@@ -1647,6 +1646,8 @@ body.dark.fortymm-theme {
   color: var(--fg-3);
   text-align: right;
   text-transform: uppercase;
+  flex: 1 1 0;
+  min-width: 0;
 }
 .fortymm-theme .entry-head .hint kbd {
   display: inline-block;
