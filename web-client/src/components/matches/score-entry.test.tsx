@@ -2833,6 +2833,156 @@ describe('ScoreEntry — games past the decider', () => {
   })
 })
 
+describe('ScoreEntry — finalize connection drop (#868)', () => {
+  // The at-submit offline guard (`wouldFinalize && onlineManager.isOnline()`)
+  // only diverts a drop we ALREADY know about to the scratchpad. When we're
+  // online at submit the guard passes and the POST /results fires — but
+  // `useProposeResult` runs `networkMode: 'always'`, so a connection that dies
+  // mid-flight rejects at the transport level with a plain `TypeError`, never an
+  // `ApiError`. Pre-fix that produced NO error at all (the button just settled),
+  // and — since there were no failed scratch saves — the SaveBanner didn't help
+  // either. These tests leave `onlineManager` online (the default) so the guard
+  // passes and the finalize path genuinely fires.
+
+  // Wait on the finalize mutation *settling* — the button returning from
+  // "Posting result…" to enabled "Post result" happens in BOTH the fixed and
+  // broken states, so this resolves in ~ms either way. Asserting the alert
+  // synchronously afterwards makes a missing alert fail with a crisp query error
+  // instead of an opaque 5s `waitFor` timeout (asyncUtilTimeout == testTimeout).
+  async function settleToPostable() {
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: /post result/i }),
+      ).toBeEnabled(),
+    )
+  }
+
+  function hasConnectionAlert() {
+    return screen
+      .queryAllByRole('alert')
+      .some((a) =>
+        /Couldn't post the result .* check your connection and try again/i.test(
+          a.textContent ?? '',
+        ),
+      )
+  }
+
+  it('surfaces connection copy when the finalize POST drops mid-flight while online', async () => {
+    // Online at submit (default) so the divert guard PASSES and the POST /results
+    // actually fires — the crux of the repro. The POST then rejects at the
+    // transport level (no status code), the way a mid-flight connection drop does.
+    const user = userEvent.setup()
+    let resultsCalls = 0
+    server.use(
+      http.get('*/v1/matches/m-1', () => HttpResponse.json(decidingGameMatch())),
+      http.post('*/v1/matches/m-1/results', () => {
+        resultsCalls += 1
+        return HttpResponse.error()
+      }),
+    )
+
+    renderScoreEntry({ kind: 'create', matchId: 'm-1', gameNumber: 3 })
+    const meInput = await screen.findByRole('textbox', {
+      name: 'rita.kovac score',
+    })
+    const oppInput = screen.getByRole('textbox', { name: 'nguyen.t score' })
+    await user.type(meInput, '11')
+    await user.type(oppInput, '3')
+
+    await user.click(screen.getByRole('button', { name: /post result/i }))
+    await settleToPostable()
+
+    // The POST really left the boundary (the finalize path fired, not the
+    // scratchpad divert), and the connection copy explains the otherwise-silent
+    // drop.
+    expect(resultsCalls).toBe(1)
+    expect(hasConnectionAlert()).toBe(true)
+    // Still on the deciding game — the drop didn't navigate anywhere.
+    expect(
+      screen.getByRole('heading', { name: /enter game 3 score/i }),
+    ).toBeInTheDocument()
+  })
+
+  it('does NOT mark the valid score inputs invalid on a transport drop', async () => {
+    // The entered score is perfectly legal; a transport drop means the POST never
+    // reached the server, so painting the fields red would be wrong. Pins the
+    // `inputsInvalid` exclusion (same reason 409/500 are excluded).
+    const user = userEvent.setup()
+    server.use(
+      http.get('*/v1/matches/m-1', () => HttpResponse.json(decidingGameMatch())),
+      http.post('*/v1/matches/m-1/results', () => HttpResponse.error()),
+    )
+
+    renderScoreEntry({ kind: 'create', matchId: 'm-1', gameNumber: 3 })
+    const meInput = await screen.findByRole('textbox', {
+      name: 'rita.kovac score',
+    })
+    const oppInput = screen.getByRole('textbox', { name: 'nguyen.t score' })
+    await user.type(meInput, '11')
+    await user.type(oppInput, '3')
+
+    await user.click(screen.getByRole('button', { name: /post result/i }))
+    await settleToPostable()
+
+    expect(hasConnectionAlert()).toBe(true)
+    // The valid score stays clean — no red fields for a transport failure.
+    expect(meInput).not.toHaveAttribute('aria-invalid', 'true')
+    expect(oppInput).not.toHaveAttribute('aria-invalid', 'true')
+  })
+
+  it('still reds the inputs on a 422 and shows a 409 detail — the ApiError branches do not regress', async () => {
+    // Guard against the new transport branch swallowing the ApiError branches: a
+    // 422 (validation drift) must still red the fields, and a 409 must still show
+    // the server's detail copy (and, like a transport drop, must NOT red the
+    // fields — the entered score is fine).
+    const user = userEvent.setup()
+    let status = 422
+    server.use(
+      http.get('*/v1/matches/m-1', () => HttpResponse.json(decidingGameMatch())),
+      http.post('*/v1/matches/m-1/results', () =>
+        status === 422
+          ? HttpResponse.json(
+              { detail: 'This payload was rejected by the server.' },
+              { status: 422 },
+            )
+          : HttpResponse.json(
+              { detail: 'This match already has a posted result.' },
+              { status: 409 },
+            ),
+      ),
+    )
+
+    renderScoreEntry({ kind: 'create', matchId: 'm-1', gameNumber: 3 })
+    const meInput = await screen.findByRole('textbox', {
+      name: 'rita.kovac score',
+    })
+    const oppInput = screen.getByRole('textbox', { name: 'nguyen.t score' })
+    await user.type(meInput, '11')
+    await user.type(oppInput, '3')
+
+    // 422: the server rejected the board — the fields go red and the message shows.
+    await user.click(screen.getByRole('button', { name: /post result/i }))
+    const alert422 = await screen.findByRole('alert')
+    expect(alert422).toHaveTextContent(/rejected by the server/i)
+    expect(meInput).toHaveAttribute('aria-invalid', 'true')
+    expect(oppInput).toHaveAttribute('aria-invalid', 'true')
+
+    // Re-type to clear the error (which resets the mutation), swing the endpoint
+    // to a 409, and re-submit the same valid board.
+    status = 409
+    await user.clear(oppInput)
+    await user.type(oppInput, '3')
+    await user.click(screen.getByRole('button', { name: /post result/i }))
+
+    expect(
+      await screen.findByText(/already has a posted result/i),
+    ).toBeInTheDocument()
+    // A 409 means the entered score is fine — fields NOT red (like a transport drop).
+    expect(meInput).not.toHaveAttribute('aria-invalid', 'true')
+    expect(oppInput).not.toHaveAttribute('aria-invalid', 'true')
+  })
+})
+
 afterEach(() => {
   // Restore connectivity so the offline test doesn't leak into others.
   onlineManager.setOnline(true)
