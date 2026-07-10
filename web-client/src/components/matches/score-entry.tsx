@@ -178,13 +178,19 @@ function ScoreEntryInner({
     )
   }
 
+  // The five `<Navigate>` guard redirects below are all app-initiated: each is
+  // computed purely from server data with no user gesture, so each bypasses the
+  // unsaved-input blocker via `ignoreBlocker`. Foot-gun: omitting it doesn't
+  // merely prompt — a blocked `<Navigate>` re-fires and wedges the screen. See
+  // ADR 0014 (#818) for the spin mechanism.
+
   // The scoring screen is participant-only; spectators bounce back to the
   // read-only details page. The opponent side is always present — a real
   // player, or the player-less placeholder for solo matches.
   const mySide = data.sides.find((s) => s.is_current_user_side) ?? null
   const oppSide = data.sides.find((s) => !s.is_current_user_side) ?? null
   if (!mySide || !oppSide) {
-    return <Navigate {...matchDetailRoute(matchId)} />
+    return <Navigate {...matchDetailRoute(matchId)} ignoreBlocker />
   }
 
   // Once a match is finalized every write path 409s — there's nothing to do
@@ -194,7 +200,7 @@ function ScoreEntryInner({
     data.status === 'completed' ||
     data.negotiation.standing_result !== null
   ) {
-    return <Navigate {...matchDetailRoute(matchId)} />
+    return <Navigate {...matchDetailRoute(matchId)} ignoreBlocker />
   }
   // The game number past which no more games can be played: once a side has
   // clinched (gap-tolerant), the trailing games are unplayable. Drives the nav
@@ -214,7 +220,7 @@ function ScoreEntryInner({
     gameNumber > data.best_of ||
     (decider !== null && gameNumber > decider && !isScored(gameNumber))
   ) {
-    return <Navigate {...matchDetailRoute(matchId)} />
+    return <Navigate {...matchDetailRoute(matchId)} ignoreBlocker />
   }
 
   const game = data.games.find((g) => g.game_number === gameNumber) ?? null
@@ -227,10 +233,14 @@ function ScoreEntryInner({
   // write makes the score "exist" a beat before onSettled navigates to the
   // next game, and this redirect must not outrun that navigation.
   if (mode.kind === 'create' && persistedScore && !saveMutation.isSuccess) {
-    return <Navigate {...scoringEditRoute(matchId, gameNumber)} replace />
+    return (
+      <Navigate {...scoringEditRoute(matchId, gameNumber)} replace ignoreBlocker />
+    )
   }
   if (mode.kind === 'edit' && !persistedScore) {
-    return <Navigate {...scoringNewRoute(matchId, gameNumber)} replace />
+    return (
+      <Navigate {...scoringNewRoute(matchId, gameNumber)} replace ignoreBlocker />
+    )
   }
 
   const mySideNumber: 1 | 2 = mySide.side_number === 2 ? 2 : 1

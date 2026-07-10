@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import {
@@ -144,17 +145,19 @@ function renderScoreEntry(spec: RouteSpec, options: { path?: string } = {}) {
   )
 }
 
-// Like `renderScoreEntry`, but also mounts a sibling button that imperatively
-// fails `failGameNumber`'s scratch save via `fireScoreSave` — the same call the
-// real fire-and-forget save makes — so a failed save for a NON-active game lands
-// in the shared mutation cache without unmounting the entry screen. Used to
-// reproduce #747-F2: the finalize board must fold that failed game in.
-function renderEntryWithFailedSibling({
+// Like `renderScoreEntry`, but also mounts a caller-supplied sibling control
+// alongside `ScoreEntry` in the same QueryClient + router. The sibling receives
+// the shared QueryClient so it can poke the shared mutation/query cache without
+// unmounting the entry screen — e.g. imperatively fail a non-active game's
+// scratch save via `fireScoreSave` (the same call the real fire-and-forget save
+// makes; #747-F2, the finalize board must fold that failed game in), or
+// invalidate/refetch the match underneath a dirty form (#818).
+function renderEntryWithSibling({
   gameNumber,
-  failGameNumber,
+  sibling,
 }: {
   gameNumber: number
-  failGameNumber: number
+  sibling: (queryClient: QueryClient) => ReactNode
 }) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -167,17 +170,7 @@ function renderEntryWithFailedSibling({
       const qc = useQueryClient()
       return (
         <>
-          <button
-            type="button"
-            onClick={() =>
-              fireScoreSave(qc, 'm-1', failGameNumber, {
-                side_1_points: 9,
-                side_2_points: 11,
-              })
-            }
-          >
-            fail game {failGameNumber}
-          </button>
+          {sibling(qc)}
           <ScoreEntry
             matchId="m-1"
             gameNumber={gameNumber}
@@ -571,7 +564,22 @@ describe('ScoreEntry — create', () => {
       }),
     )
 
-    renderEntryWithFailedSibling({ gameNumber: 3, failGameNumber: 2 })
+    renderEntryWithSibling({
+      gameNumber: 3,
+      sibling: (qc) => (
+        <button
+          type="button"
+          onClick={() =>
+            fireScoreSave(qc, 'm-1', 2, {
+              side_1_points: 9,
+              side_2_points: 11,
+            })
+          }
+        >
+          fail game 2
+        </button>
+      ),
+    })
 
     // Seed the failed G2 save into the shared mutation cache.
     await user.click(await screen.findByRole('button', { name: 'fail game 2' }))
@@ -1279,6 +1287,11 @@ function completedMatch() {
   })
 }
 
+// Like `renderScoreEntry`, but mounts a sibling "refetch match" button that
+// invalidates the match query — so a test can make the server's answer change
+// underneath a mounted, dirty score-entry (e.g. the match completes while the
+// user is typing) and drive the resulting refetch, then assert on the
+// declarative `<Navigate>` guard redirect that fires from the fresh data.
 // Drives an edit whose first save loses the version race and 409s, opens the
 // conflict, and taps "Replace with my score" — the re-fire lands on the fresh
 // version and clears the conflict without navigating. Returns the harness so
@@ -2336,8 +2349,15 @@ describe('ScoreEntry — unsaved-input guard', () => {
     // guard).
     fireEvent.click(bannerPost)
 
-    await waitFor(() =>
-      expect(screen.getByText('match-page')).toBeInTheDocument(),
+    // Explicit timeout: setup.ts sets `asyncUtilTimeout: 5000`, which equals
+    // vitest's default `testTimeout: 5000`, so a bare waitFor here shares the
+    // test's whole budget. `fireEvent` returns synchronously, so the async
+    // finalize → onSuccess navigate chain runs inside this window; when it
+    // flushes slowly the two timers fire at the same boundary and the test dies
+    // with an opaque "Test timed out" instead of a diagnosable "match-page".
+    await waitFor(
+      () => expect(screen.getByText('match-page')).toBeInTheDocument(),
+      { timeout: 2000 },
     )
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
     expect(screen.queryByText(/leave without saving/i)).not.toBeInTheDocument()
@@ -2420,6 +2440,63 @@ describe('ScoreEntry — unsaved-input guard', () => {
     )
     // The guard held — we did NOT navigate to game 3's (stub) edit screen.
     expect(screen.queryByText('scoring-edit')).not.toBeInTheDocument()
+  })
+
+  it('regression: a match completed underneath a dirty form bounces to match detail without warning (#818)', async () => {
+    // The declarative-redirect arm of #818. The user is typing a score when the
+    // match completes on the server (opponent finalized, a late refetch, etc.).
+    // The next `useMatch` refetch returns `completed`, so score-entry's
+    // `<Navigate>` guard bounces to the read-only match page. That redirect is
+    // app-initiated (computed from server data, no user gesture), so it must
+    // bypass the dirty-form guard via `ignoreBlocker`; omitting it doesn't just
+    // prompt — a blocked `<Navigate>` re-fires and wedges the screen (ADR 0014).
+    const user = userEvent.setup()
+    server.use(
+      http.get('*/v1/matches/m-1', () => HttpResponse.json(inProgressMatch())),
+    )
+
+    renderEntryWithSibling({
+      gameNumber: 3,
+      sibling: (qc) => (
+        <button type="button" onClick={() => qc.invalidateQueries()}>
+          refetch match
+        </button>
+      ),
+    })
+    await screen.findByRole('heading', { name: /enter game 3 score/i })
+
+    // Fresh user typing — genuinely dirties the form (game 3 is unscored, so
+    // the baseline is empty and this diverges from it). Not a stale-true
+    // isDirty from a failed save.
+    await user.type(
+      screen.getByRole('textbox', { name: 'rita.kovac score' }),
+      '11',
+    )
+
+    // The match completes on the server underneath the dirty form.
+    server.use(
+      http.get('*/v1/matches/m-1', () => HttpResponse.json(completedMatch())),
+    )
+
+    // fireEvent (not user.click): against the pre-fix component the completed
+    // `<Navigate>` is blocked and busy-loops, which would leave user-event's
+    // `act()` waiting forever and hang the test. fireEvent returns synchronously,
+    // so the `waitFor` below governs the bound and surfaces the regression.
+    fireEvent.click(screen.getByRole('button', { name: /refetch match/i }))
+
+    // The redirect lands us on the read-only match page — no leave prompt.
+    // Explicit timeout: setup.ts sets `asyncUtilTimeout: 5000`, which equals
+    // vitest's default `testTimeout: 5000`, so a bare waitFor here shares the
+    // test's whole budget. `fireEvent` returns synchronously, so the async
+    // invalidate → refetch → <Navigate> chain runs inside this window; when it
+    // flushes slowly the two timers fire at the same boundary and the test dies
+    // with an opaque "Test timed out" instead of a diagnosable "match-page m-1".
+    await waitFor(
+      () => expect(screen.getByText('match-page m-1')).toBeInTheDocument(),
+      { timeout: 2000 },
+    )
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    expect(screen.queryByText(/leave without saving/i)).not.toBeInTheDocument()
   })
 })
 

@@ -57,6 +57,38 @@ in-app hop in the mutation cache, so often nothing is lost — yet the user stil
 to leave a form they had typed into, and still deserves the prompt. The rule is
 categorical: **who initiated this navigation?**
 
+The same question settles the declarative redirects. `score-entry.tsx` returns
+`<Navigate …/>` from render in five guard cases: the spectator bounce, the
+completed-or-standing-result bounce, the clinch bounce off an unplayable game past the
+decider, and the two create/edit URL alignments. Every one is computed from server
+data and route params with no user gesture anywhere, so every one bypasses.
+`<Navigate>` forwards its props to `navigate()`, so it takes `ignoreBlocker` like any
+other navigation.
+
+Getting these wrong is not merely annoying, which is worth stating because the
+fail-safe argument above does not cover it. `<Navigate>` calls `navigate(props)` from
+a `useLayoutEffect` guarded on `previousPropsRef.current !== props`, and the props are
+a fresh object literal each render. So a *blocked* redirect flips the blocker's state,
+which re-renders, which mints a new props identity, which navigates again. It spins
+rather than prompting once. A guard that catches an app-initiated `<Navigate>` doesn't
+inconvenience the user; it wedges the screen.
+
+## Why the rule is easy to get wrong
+
+Three times while implementing this, the scope was drawn around a *file* instead of
+around the *trigger*:
+
+1. The first pass audited only the three `navigate()` calls in `score-entry.tsx` and
+   missed `SaveBanner`'s two, because they live in another file.
+2. The correction then added the bypass to *both* of `SaveBanner`'s, because they live
+   in the same file — when one is a user's click and must block.
+3. The five `<Navigate>` redirects were missed twice, because they don't look like
+   `navigate()` calls at all.
+
+The blocker's scope is its **subtree**, and the categories are mixed within it. Grep
+for `navigate(`, `<Navigate`, and `<Link` beneath any component that declares a
+`useBlocker`, and answer the question one hop at a time.
+
 Express that by passing `ignoreBlocker: true` **to the navigation being performed** —
 never by setting a flag that the blocker later reads:
 
