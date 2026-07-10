@@ -160,6 +160,16 @@ function ScoreEntryInner({
   // success — clearing on settle would reopen it a beat before the navigation
   // lands, leaving a window for a duplicate. Error clears it so a retry works.
   const finalizingRef = useRef(false)
+  // Synchronous clear-in-flight guard (#869). The confirm dialog's `open` is
+  // driven by `pendingClear !== null` — a render snapshot — so the confirm
+  // button stays mounted and clickable until React re-renders. Two clicks
+  // delivered synchronously in one frame both close over the same captured
+  // `target`, both clear `pendingClear`, and both reach `.mutate` before the
+  // re-render — firing two DELETE .../scores requests. Like `finalizingRef`,
+  // this ref flips inside the click gesture, so the second tap is rejected
+  // regardless of render timing. Reset in each mutation's `onSettled` so a
+  // later clear of a *different* game works normally.
+  const clearingRef = useRef(false)
   const { status, proceed, reset } = useBlocker({
     // Blocks browser refresh/close (beforeunload) only while genuinely dirty.
     enableBeforeUnload: () => isDirty,
@@ -564,6 +574,11 @@ function ScoreEntryInner({
     const target = pendingClear
     setPendingClear(null)
     if (target === null) return
+    // Reject a second synchronous confirm click while a clear is already in
+    // flight (#869) — the ref is set right before each `.mutate` below and
+    // cleared in that mutation's `onSettled`, so a legitimate later clear of a
+    // different game still fires normally.
+    if (clearingRef.current) return
     if (target === 'active') {
       if (mode.kind !== 'edit') return
       // Clearing is an explicit discard — drop any failed-save leftovers too,
@@ -572,13 +587,16 @@ function ScoreEntryInner({
       // `ignoreBlocker: true` to keep the unsaved-input blocker out of it
       // (ADR 0014, #818).
       forgetScoreSaves(queryClient, matchId, gameNumber)
+      clearingRef.current = true
       deleteMutation.mutate(undefined, {
         // After clearing, land back on this game's create route so the user
         // can re-enter — same page, just with empty inputs and create-mode
         // semantics. The remount's autoFocus puts focus on the me-input,
         // which is the first empty input.
-        onSettled: () =>
-          navigate({ ...scoringNewRoute(matchId, gameNumber), ignoreBlocker: true }),
+        onSettled: () => {
+          clearingRef.current = false
+          navigate({ ...scoringNewRoute(matchId, gameNumber), ignoreBlocker: true })
+        },
       })
       return
     }
@@ -586,7 +604,12 @@ function ScoreEntryInner({
     // strip. We refocus the first empty input on the current page so the user
     // can keep typing (deferred to the dialog's close-focus hook).
     forgetScoreSaves(queryClient, matchId, target)
-    cellDeleteMutation.mutate(target)
+    clearingRef.current = true
+    cellDeleteMutation.mutate(target, {
+      onSettled: () => {
+        clearingRef.current = false
+      },
+    })
     refocusAfterCloseRef.current = true
   }
 

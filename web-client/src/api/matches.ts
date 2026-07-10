@@ -375,7 +375,15 @@ function applyGameWriteCache(
 ) {
   const written = data.games.find((g) => g.game_number === gameNumber)
   queryClient.setQueryData<MatchDetails>(matchQueryKey(matchId), (prev) => {
-    if (!prev) return data
+    // Cold cache (garbage-collected after `gcTime`, no observer): do NOT seed
+    // from `data`. `data` is this one save's whole-match snapshot, built from
+    // the DB at its own commit time, so it can omit a concurrent cross-game
+    // save's row — wholesale-seeding it would clobber that game exactly like
+    // #843 (here through a GC'd cache, #870). Leave the entry unseeded and let
+    // the `invalidateMatchViews` refetch below repopulate it from a fresh GET.
+    // Seeding narrowly from `written` alone isn't viable — a valid
+    // `MatchDetails` needs side/status fields a single game row doesn't carry.
+    if (!prev) return prev
     // No row for this game in the response (shouldn't happen) — leave the cache
     // as-is rather than guessing.
     if (!written) return prev

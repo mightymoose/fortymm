@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import {
   RouterProvider,
@@ -1089,6 +1089,46 @@ describe('ScoreEntry — edit', () => {
       expect(screen.getByText('scoring-new m-1 1')).toBeInTheDocument(),
     )
     expect(deleted).toBe(true)
+  })
+
+  it('fires a single DELETE when the clear confirm is double-clicked in one frame (#869)', async () => {
+    // The confirm dialog's `open` is driven by `pendingClear !== null` — a
+    // render snapshot — so the confirm button stays mounted until React
+    // re-renders. Two clicks delivered synchronously in one frame both close
+    // over the same captured target and both reach `.mutate`, firing two
+    // DELETEs. The synchronous `clearingRef` must swallow the second.
+    //
+    // Both raw `.click()`s run inside ONE `act` (no flush between them) to
+    // reproduce the same-frame race — `fireEvent`/awaited `user.click` each
+    // flush their own `act`, which would unmount the button after the first
+    // click and hide the regression.
+    const user = userEvent.setup()
+    let deletes = 0
+    server.use(
+      http.get('*/v1/matches/m-1', () => HttpResponse.json(inProgressMatch())),
+      http.delete('*/v1/matches/m-1/games/1/scores', () => {
+        deletes += 1
+        return HttpResponse.json(inProgressMatch())
+      }),
+    )
+
+    renderScoreEntry({ kind: 'edit', matchId: 'm-1', gameNumber: 1 })
+
+    await screen.findByRole('textbox', { name: 'rita.kovac score' })
+    await user.click(screen.getByRole('button', { name: /^clear$/i }))
+
+    const dialog = await screen.findByRole('alertdialog')
+    const confirm = within(dialog).getByRole('button', { name: /clear game/i })
+    act(() => {
+      confirm.click()
+      confirm.click()
+    })
+
+    await waitFor(() =>
+      expect(screen.getByText('scoring-new m-1 1')).toBeInTheDocument(),
+    )
+    // Exactly one DELETE — the second same-frame click was swallowed.
+    expect(deletes).toBe(1)
   })
 
   it('cancelling the clear confirmation keeps the saved score (#387)', async () => {
