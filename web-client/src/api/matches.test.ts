@@ -276,7 +276,17 @@ it('does not drop a concurrently-saved game when an older save response settles 
     ),
   )
 
-  // Both fire against the empty cache, so each takes the POST (create) path.
+  // Warm the cache with an observer-free empty snapshot. The scoring screen
+  // always has a mounted `useMatch`, so the match cache is warm during play;
+  // since #870 a cold cache is left unseeded (the wholesale `return data` seed
+  // that would clobber a concurrent game is gone), so this composition test must
+  // seed a present `prev` to exercise the narrow-upsert path it's about. It
+  // stays observer-free so no refetch fires — the refetch-heal path is covered
+  // separately (#843 refetch race).
+  queryClient.setQueryData(matchQueryKey(matchId), matchDetails({ id: matchId, games: [] }))
+
+  // Both fire against the (empty-`games`) cache; the row is absent so each takes
+  // the POST (create) path.
   const p1 = fireScoreSave(queryClient, matchId, 1, {
     side_1_points: 11,
     side_2_points: 5,
@@ -355,6 +365,12 @@ it('does not drop a concurrently-saved game when a delete response settles last 
     createElement(QueryClientProvider, { client: queryClient }, children)
   const { result } = renderHook(() => useDeleteScore(matchId, 1), { wrapper })
 
+  // Warm the cache (empty `games`) so both per-game writes take the
+  // upsert-on-present path — since #870 a cold cache is left unseeded, so this
+  // composition test seeds a present `prev` (matching the always-warm scoring
+  // screen). Observer-free: no refetch fires here.
+  queryClient.setQueryData(matchQueryKey(matchId), matchDetails({ id: matchId, games: [] }))
+
   const savePromise = fireScoreSave(queryClient, matchId, 2, {
     side_1_points: 5,
     side_2_points: 11,
@@ -371,6 +387,117 @@ it('does not drop a concurrently-saved game when a delete response settles last 
   const g2 = cached?.games.find((g) => g.game_number === 2)
   expect(g2).toBeDefined()
   expect(g2?.score?.side_2_points).toBe(11)
+})
+
+/**
+ * Regression for #870: the match query has the default 5-minute `gcTime` and is
+ * dropped once it has no observer. If it's been garbage-collected and a per-game
+ * save then settles, the write must NOT wholesale-seed the cold cache from its
+ * own whole-match snapshot — that snapshot is built from the DB at *this* save's
+ * commit time and can omit a concurrent cross-game save's row, reintroducing the
+ * #843 clobber through a GC'd cache. The cold-cache branch leaves the entry
+ * unseeded (a valid `MatchDetails` can't be reconstructed from a lone game row);
+ * `invalidateMatchViews` runs after, and once an observer remounts its refetch
+ * repopulates from a fresh GET. With no observer here, `invalidateQueries`
+ * (default `refetchType: 'active'`) fires nothing, so the entry stays undefined.
+ */
+it('does not wholesale-seed a garbage-collected match cache from a stale save snapshot (#870)', async () => {
+  const matchId = 'm-870'
+
+  const game1: Game = {
+    id: 'g-1',
+    game_number: 1,
+    score: {
+      id: 's-1',
+      side_1_points: 11,
+      side_2_points: 5,
+      winner_side_number: 1,
+      version: 1,
+    },
+  }
+  // This save's whole-match snapshot — as if built before a concurrent game 2
+  // save committed, so it omits game 2. Seeding it wholesale would drop game 2.
+  const saveResponse: MatchDetails = matchDetails({ id: matchId, games: [game1] })
+
+  server.use(
+    http.post('*/v1/matches/:matchId/games/:gameNumber/scores/new', () =>
+      HttpResponse.json(saveResponse),
+    ),
+  )
+
+  // Cold cache: no `matchQueryKey` entry (GC'd), and no observer — exactly the
+  // #870 scenario. `getQueryData` is undefined before the save.
+  expect(queryClient.getQueryData(matchQueryKey(matchId))).toBeUndefined()
+
+  await fireScoreSave(queryClient, matchId, 1, {
+    side_1_points: 11,
+    side_2_points: 5,
+  })
+
+  // The stale whole-match snapshot was NOT installed — the cold cache stays
+  // unseeded rather than clobbering with a snapshot that could omit a concurrent
+  // game. It self-heals from a fresh GET once an observer remounts.
+  expect(queryClient.getQueryData(matchQueryKey(matchId))).toBeUndefined()
+})
+
+/**
+ * The complement of the #870 cold-cache case: when the match cache *is* present,
+ * a per-game save still upserts just its own game row (composing with concurrent
+ * cross-game writes) rather than replacing the whole snapshot. This is the path
+ * the fix leaves untouched.
+ */
+it('upserts only the written game into a present match cache (#870 warm path)', async () => {
+  const matchId = 'm-870-warm'
+
+  const game1Present: Game = {
+    id: 'g-1',
+    game_number: 1,
+    score: {
+      id: 's-1',
+      side_1_points: 11,
+      side_2_points: 8,
+      winner_side_number: 1,
+      version: 1,
+    },
+  }
+  const game2Existing: Game = {
+    id: 'g-2',
+    game_number: 2,
+    score: {
+      id: 's-2',
+      side_1_points: 4,
+      side_2_points: 11,
+      winner_side_number: 2,
+      version: 1,
+    },
+  }
+  // Warm cache already holds game 2 (e.g. a concurrent save landed it).
+  queryClient.setQueryData(
+    matchQueryKey(matchId),
+    matchDetails({ id: matchId, games: [game2Existing] }),
+  )
+
+  // Game 1's save response is a stale whole-match snapshot that omits game 2.
+  const saveResponse: MatchDetails = matchDetails({
+    id: matchId,
+    games: [game1Present],
+  })
+  server.use(
+    http.post('*/v1/matches/:matchId/games/:gameNumber/scores/new', () =>
+      HttpResponse.json(saveResponse),
+    ),
+  )
+
+  await fireScoreSave(queryClient, matchId, 1, {
+    side_1_points: 11,
+    side_2_points: 8,
+  })
+
+  // Only game 1 was upserted; game 2 survived (the write did not wholesale
+  // replace with the snapshot that omits it).
+  const cached = queryClient.getQueryData<MatchDetails>(matchQueryKey(matchId))
+  expect(cached?.games.find((g) => g.game_number === 1)?.score?.side_1_points).toBe(11)
+  expect(cached?.games.find((g) => g.game_number === 2)?.score?.side_2_points).toBe(11)
 })
 
 /**
