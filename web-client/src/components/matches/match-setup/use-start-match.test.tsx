@@ -158,12 +158,9 @@ describe('useStartMatch', () => {
     })
 
     // (a) No forced redirect back to scoring — the user's navigation stands.
-    expect(hook.router.state.location.pathname).not.toMatch(
-      /\/games\/1\/scores\/new$/,
-    )
-    expect(hook.router.state.location.pathname).toBe(
-      '/matches/somewhere-else',
-    )
+    // The exact-match is strictly stronger than "not the scoring route": on the
+    // pre-fix hook this is the scoring path, so this assertion is the red signal.
+    expect(hook.router.state.location.pathname).toBe('/matches/somewhere-else')
     // (b) The create still ran to completion (background-complete, not aborted).
     expect(postCount).toBe(1)
   })
