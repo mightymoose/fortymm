@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from '@tanstack/react-router'
 import { z } from 'zod'
 
@@ -71,6 +71,15 @@ export function useStartMatch(): UseStartMatchResult {
   // is not a `navigate()` call, so no navigation option can reach that path.
   const submitState = useRef<'idle' | 'submitting' | 'done'>('idle')
 
+  // Tracks whether this hook's component is still mounted, so the async success
+  // branch below can tell a still-open form from one the user has already left.
+  const mountedRef = useRef(true)
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
+
   async function submit({ opponent, bestOf, rated }: StartMatchInput) {
     setSubmitted(true)
     const validation = matchFormSchema.safeParse({
@@ -97,12 +106,26 @@ export function useStartMatch(): UseStartMatchResult {
         best_of: bestOf,
         rated: opponent !== null && rated,
       })
+      // Latch the #81 duplicate-create guard BEFORE the mount gate so
+      // `hasSucceeded()` and the "this form is spent" contract are unchanged
+      // whether or not we still redirect.
       submitState.current = 'done'
-      // Replace, don't push: the new-match form is a one-shot step, so the
-      // history stack shouldn't keep it. Otherwise browser/mobile Back from
-      // score entry re-opens the creation form for a match that already
-      // exists, instead of returning to wherever the user came from (#441).
-      navigate({ ...nextScoringDestination(created), replace: true })
+      // Gate the redirect on the form still being mounted:
+      //   (1) A user who navigated away mid-request must not be yanked back to
+      //       the new match's scoring page against their choice to leave (#810).
+      //   (2) Background-complete, not abort: the create above already finished,
+      //       so the match lands in their list via the `['matches','list']`
+      //       invalidation — we only suppress the redirect, never cancel the POST.
+      //   (3) bfcache doesn't confound the unmount signal: a page with an
+      //       in-flight `fetch` is bfcache-ineligible, so a mid-request Back is a
+      //       real React unmount that flips `mountedRef`, not a frozen page.
+      if (mountedRef.current) {
+        // Replace, don't push: the new-match form is a one-shot step, so the
+        // history stack shouldn't keep it. Otherwise browser/mobile Back from
+        // score entry re-opens the creation form for a match that already
+        // exists, instead of returning to wherever the user came from (#441).
+        navigate({ ...nextScoringDestination(created), replace: true })
+      }
     } catch (err) {
       // Let the user try again — only a *successful* create latches the guard.
       submitState.current = 'idle'

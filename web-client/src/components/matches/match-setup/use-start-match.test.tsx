@@ -10,6 +10,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { http, HttpResponse } from 'msw'
 
 import { server } from '@/mocks/server'
+import { newMatchSeed, projectMatchDetails } from '@/mocks/match-store'
 
 import { useStartMatch } from './use-start-match'
 import { buildOpponent } from './selected-opponent.factory'
@@ -109,6 +110,61 @@ describe('useStartMatch', () => {
       await new Promise((r) => setTimeout(r, 0))
     })
 
+    expect(postCount).toBe(1)
+  })
+
+  it('does not redirect to scoring if the user navigated away mid-create', async () => {
+    // Hold the POST open so the create is still in flight when the user leaves.
+    let postCount = 0
+    let releasePost: () => void = () => {}
+    const postReleased = new Promise<void>((resolve) => {
+      releasePost = resolve
+    })
+    server.use(
+      http.post('*/v1/matches', async () => {
+        postCount += 1
+        // Hold the create open so the component can unmount mid-flight, then
+        // return a *fully valid* MatchDetails payload (built with the same mock
+        // helpers the default handler uses) so it passes the network Zod parse
+        // and the pre-fix hook actually reaches its unconditional redirect —
+        // otherwise the create would reject and mask the bug this test guards.
+        await postReleased
+        const seed = newMatchSeed({ bestOf: 5, rated: false, opponent: null })
+        return HttpResponse.json(projectMatchDetails(seed), { status: 201 })
+      }),
+    )
+    const hook = renderStartMatch()
+    const { submit } = await hook.ready()
+
+    // Fire the create (capture its promise so we can await the full success
+    // branch, incl. the redirect the pre-fix hook would fire), then navigate
+    // away (unmounting the Probe/hook) before the create resolves.
+    let submitPromise: unknown
+    act(() => {
+      submitPromise = submit({ opponent: null, bestOf: 5, rated: false })
+    })
+    await act(async () => {
+      await hook.router.navigate({
+        to: '/matches/$matchId',
+        params: { matchId: 'somewhere-else' },
+      })
+    })
+
+    // Now let the in-flight create resolve and drain the success branch.
+    await act(async () => {
+      releasePost()
+      await submitPromise
+      await new Promise((r) => setTimeout(r, 0))
+    })
+
+    // (a) No forced redirect back to scoring — the user's navigation stands.
+    expect(hook.router.state.location.pathname).not.toMatch(
+      /\/games\/1\/scores\/new$/,
+    )
+    expect(hook.router.state.location.pathname).toBe(
+      '/matches/somewhere-else',
+    )
+    // (b) The create still ran to completion (background-complete, not aborted).
     expect(postCount).toBe(1)
   })
 
