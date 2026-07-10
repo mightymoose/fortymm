@@ -97,24 +97,34 @@ export const RecentResultsCard = ({ rows }: RecentResultsCardProps) => {
                   key={r.match_id}
                   style={{ borderTop: i === 0 ? 'none' : `1px solid ${C.ink700}` }}
                 >
-                  <td style={{ padding: '11px 18px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  {/* maxWidth:0 + width:100% is what actually caps this cell:
+                      in an auto-layout table the opponent column otherwise
+                      claims min-content width and pushes the trailing columns
+                      past the card, so text-overflow:ellipsis never engages
+                      until the cell is forced to collapse to the table width. */}
+                  <td style={{ padding: '11px 18px', maxWidth: 0, width: '100%' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
                       <span
                         style={{
                           width: 6,
                           height: 6,
                           borderRadius: '50%',
+                          flexShrink: 0,
                           background: r.is_win ? C.serve500 : C.loss,
                           boxShadow: `0 0 6px ${r.is_win ? 'rgba(0,226,154,0.5)' : 'rgba(255,77,109,0.5)'}`,
                         }}
                       />
                       <UserAvatar name={opponent} size={24} />
                       <span
+                        title={opponentLabel}
                         style={{
                           color: opponent ? C.chalk50 : C.chalk500,
                           fontStyle: opponent ? 'normal' : 'italic',
                           fontWeight: 500,
                           whiteSpace: 'nowrap',
+                          minWidth: 0,
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
                         }}
                       >
                         {opponentLabel}

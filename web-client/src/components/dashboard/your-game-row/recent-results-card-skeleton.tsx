@@ -45,12 +45,13 @@ export const RecentResultsCardSkeleton = () => (
             display: 'flex',
             alignItems: 'center',
             gap: 10,
+            minWidth: 0,
             padding: '11px 18px',
             borderTop: i === 0 ? 'none' : `1px solid ${C.ink700}`,
           }}
         >
           <Shimmer width={24} height={24} radius={12} />
-          <Shimmer height={14} style={{ flex: 1, maxWidth: 140 }} />
+          <Shimmer height={14} style={{ flex: 1, minWidth: 0, maxWidth: 140 }} />
           <Shimmer width={36} height={13} />
           <Shimmer width={28} height={12} />
           <Shimmer width={44} height={11} />
