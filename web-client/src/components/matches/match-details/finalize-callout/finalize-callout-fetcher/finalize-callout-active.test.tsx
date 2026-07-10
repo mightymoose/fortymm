@@ -31,7 +31,7 @@ async function settleToRetryable() {
  */
 function hasConnectionAlert() {
   const alert = finalizeCalloutActivePage.queryError();
-  return /Couldn't post this result .* check your connection and try again/i.test(
+  return /Couldn't post the result .* check your connection and try again/i.test(
     alert?.textContent ?? "",
   );
 }
@@ -178,5 +178,34 @@ describe("FinalizeCalloutActive", () => {
     // Assert the alert synchronously (crisp fail if it never rendered) rather
     // than via a `waitFor` that would red as an opaque 5s timeout on regression.
     expect(hasConnectionAlert()).toBe(true);
+  });
+
+  it("recovers on retry after a transport drop: a second Post succeeds and clears the connection alert (#867 reconnect)", async () => {
+    // The first Post drops at the transport level (connection alert shows). Once
+    // the connection recovers, a second Post must succeed — `onPost` calls
+    // `finalizeMutation.reset()` before firing, and the success clears the
+    // mutation error, so the stale connection alert must not linger. This is the
+    // reconnect-recovery coverage the transport-error path lacked (#865 added the
+    // same shape for correction-entry).
+    let attempts = 0;
+    finalizeCalloutActivePage.mockResultsEndpoint(() => {
+      attempts += 1;
+      return attempts === 1
+        ? HttpResponse.error()
+        : HttpResponse.json(buildMatchDetails(), { status: 201 });
+    });
+    finalizeCalloutActivePage.render();
+
+    // First Post drops mid-flight → connection alert.
+    await userEvent.click(finalizeCalloutActivePage.getPostButton());
+    await settleToRetryable();
+    expect(hasConnectionAlert()).toBe(true);
+
+    // Retry now succeeds: both attempts fired and the stale alert is gone.
+    await userEvent.click(finalizeCalloutActivePage.getPostButton());
+    await waitFor(() => expect(attempts).toBe(2));
+    await waitFor(() =>
+      expect(finalizeCalloutActivePage.queryError()).not.toBeInTheDocument(),
+    );
   });
 });

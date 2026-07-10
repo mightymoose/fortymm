@@ -34,7 +34,7 @@ export function FinalizeCalloutActive({
   // never both).
   const networkError = finalizeMutation.error !== null && apiError === null;
   const errorMessage = networkError
-    ? "Couldn't post this result — check your connection and try again."
+    ? "Couldn't post the result — check your connection and try again."
     : apiError
       ? (apiError.detail ?? apiError.message)
       : null;

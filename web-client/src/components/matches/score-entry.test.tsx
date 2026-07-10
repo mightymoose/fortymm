@@ -2981,6 +2981,116 @@ describe('ScoreEntry — finalize connection drop (#868)', () => {
     expect(meInput).not.toHaveAttribute('aria-invalid', 'true')
     expect(oppInput).not.toHaveAttribute('aria-invalid', 'true')
   })
+
+  it('clears the stale finalize connection copy when a re-tap while offline diverts to a scratch save (#868)', async () => {
+    // A finalize drops mid-flight while online → the connection copy shows. The
+    // user then goes genuinely offline and taps "Post result" again: now the
+    // at-submit guard (`wouldFinalize && onlineManager.isOnline()`) FAILS, so
+    // control falls through to the scratchpad divert — the scratch save fires
+    // (fails offline) and the SaveBanner surfaces. Without resetting the
+    // abandoned finalize error in that branch, the stale connection line lingers
+    // underneath, describing a request that is no longer in flight.
+    const user = userEvent.setup()
+    let scoreCalls = 0
+    server.use(
+      http.get('*/v1/matches/m-1', () => HttpResponse.json(decidingGameMatch())),
+      // Online finalize: rejects at the transport level (mid-flight drop).
+      http.post('*/v1/matches/m-1/results', () => HttpResponse.error()),
+      // The offline scratch-save divert targets this per-game endpoint.
+      http.post('*/v1/matches/m-1/games/3/scores/new', () => {
+        scoreCalls += 1
+        return HttpResponse.error()
+      }),
+    )
+
+    renderScoreEntry({ kind: 'create', matchId: 'm-1', gameNumber: 3 })
+    const meInput = await screen.findByRole('textbox', {
+      name: 'rita.kovac score',
+    })
+    const oppInput = screen.getByRole('textbox', { name: 'nguyen.t score' })
+    await user.type(meInput, '11')
+    await user.type(oppInput, '3')
+
+    // Online at submit → the finalize POST fires and drops mid-flight.
+    await user.click(screen.getByRole('button', { name: /post result/i }))
+    await settleToPostable()
+    expect(hasConnectionAlert()).toBe(true)
+
+    // Now genuinely offline: the re-tap diverts to the scratchpad instead of
+    // re-firing finalize (the guard fails), and the divert resets the finalize
+    // error it's abandoning.
+    onlineManager.setOnline(false)
+    await user.click(screen.getByRole('button', { name: /post result/i }))
+
+    // The divert ran (the scratch save left the boundary) — this is the
+    // load-bearing "we fell through to the scratchpad" pin.
+    await waitFor(() => expect(scoreCalls).toBe(1))
+    // The scratch save's SaveBanner surfaced in place of the finalize attempt.
+    expect(
+      await screen.findByText(/these scores finish the match/i),
+    ).toBeInTheDocument()
+    // …and the stale finalize connection copy is gone (reset in the divert).
+    expect(hasConnectionAlert()).toBe(false)
+  })
+
+  it('recovers on retry after a transport drop: a second Post succeeds and navigates, no stale copy (#868 reconnect)', async () => {
+    // First finalize POST drops at the transport level (connection copy shows).
+    // Once the connection recovers, a second Post must succeed and navigate to
+    // the match-detail landing — the drop must not leave the flow wedged, and the
+    // success (which resets the mutation error) must not leave the stale
+    // connection copy lingering. Mirrors correction-entry's #839 reconnect test.
+    const user = userEvent.setup()
+    let resultsCalls = 0
+    server.use(
+      http.get('*/v1/matches/m-1', () => HttpResponse.json(decidingGameMatch())),
+      http.post('*/v1/matches/m-1/results', () => {
+        resultsCalls += 1
+        return resultsCalls === 1
+          ? HttpResponse.error()
+          : HttpResponse.json(
+              matchDetails({
+                id: 'm-1',
+                status: 'completed',
+                status_label: 'Final',
+                best_of: 5,
+                games_to_win: 3,
+                sides: participantSides({ meWins: 3, oppWins: 0, meWon: true }),
+                games: [
+                  { id: 'g-1', game_number: 1, score: score('s-1', 11, 4) },
+                  { id: 'g-2', game_number: 2, score: score('s-2', 11, 6) },
+                  { id: 'g-3', game_number: 3, score: score('s-3', 11, 3) },
+                ],
+                current_game: null,
+                can_score: false,
+                can_finalize: false,
+              }),
+              { status: 201 },
+            )
+      }),
+    )
+
+    renderScoreEntry({ kind: 'create', matchId: 'm-1', gameNumber: 3 })
+    const meInput = await screen.findByRole('textbox', {
+      name: 'rita.kovac score',
+    })
+    const oppInput = screen.getByRole('textbox', { name: 'nguyen.t score' })
+    await user.type(meInput, '11')
+    await user.type(oppInput, '3')
+
+    // First Post drops mid-flight → connection copy, still on the deciding game.
+    await user.click(screen.getByRole('button', { name: /post result/i }))
+    await settleToPostable()
+    expect(hasConnectionAlert()).toBe(true)
+
+    // Retry: the connection recovered, so the second Post succeeds and navigates.
+    await user.click(screen.getByRole('button', { name: /post result/i }))
+    await waitFor(() =>
+      expect(screen.getByText('match-page m-1')).toBeInTheDocument(),
+    )
+    expect(resultsCalls).toBe(2)
+    // No stale connection copy survives the successful resend.
+    expect(hasConnectionAlert()).toBe(false)
+  })
 })
 
 afterEach(() => {

@@ -519,6 +519,12 @@ function ScoreEntryInner({
     // finish the match." / "Post result"), which posts the canonical result once
     // back online.
     if (wouldFinalize) {
+      // We're abandoning the finalize attempt in favour of a scratch save, so any
+      // finalize error still on screen (e.g. a prior mid-flight transport drop's
+      // connection copy, #868) is stale by definition — nothing in this branch
+      // re-runs the finalize mutation to clear it, so reset it here before the
+      // scratch save's SaveBanner takes over.
+      finalizeMutation.reset()
       saveMutation.mutate(args)
       return
     }
