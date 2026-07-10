@@ -172,6 +172,71 @@ describe('useStartMatch', () => {
     expect(postCount).toBe(1)
   })
 
+  it('leaves a spent instance behind: an old in-flight create resolving after the user left does not redirect, and a freshly-mounted form still creates + redirects', async () => {
+    // One handler serves both hooks (server.use is reset per test): the FIRST
+    // create (instance 1) is held open so the user can leave mid-flight; the
+    // SECOND (instance 2, the fresh form) resolves immediately so it can prove
+    // it still redirects. Both return a fully valid MatchDetails so each passes
+    // the network Zod parse and reaches the (gated) redirect branch.
+    let postCount = 0
+    let releasePost: () => void = () => {}
+    const postReleased = new Promise<void>((resolve) => {
+      releasePost = resolve
+    })
+    server.use(
+      http.post('*/v1/matches', async () => {
+        postCount += 1
+        if (postCount === 1) await postReleased
+        const seed = newMatchSeed({ bestOf: 5, rated: false, opponent: null })
+        return HttpResponse.json(projectMatchDetails(seed), { status: 201 })
+      }),
+    )
+
+    // Instance 1: fire the create (holding its promise so we can drain the full
+    // success branch later), then navigate away — unmounting the Probe/hook —
+    // while the POST is still in flight.
+    const hook1 = renderStartMatch()
+    const { submit: submit1 } = await hook1.ready()
+    let submit1Promise: unknown
+    act(() => {
+      submit1Promise = submit1({ opponent: null, bestOf: 5, rated: false })
+    })
+    await act(async () => {
+      await hook1.router.navigate({
+        to: '/matches/$matchId',
+        params: { matchId: 'left-behind' },
+      })
+    })
+    // Pin the ordering: instance 1's request must be the held call #1 before
+    // instance 2 submits, so its own (immediate) create is call #2.
+    await waitFor(() => expect(postCount).toBe(1))
+
+    // Instance 2: an independent, freshly-mounted form. Its create resolves
+    // immediately and MUST redirect to scoring — proving the fresh instance is
+    // not latched by anything the spent instance 1 left behind.
+    const hook2 = renderStartMatch()
+    const { submit: submit2 } = await hook2.ready()
+    await act(() => submit2({ opponent: null, bestOf: 5, rated: false }))
+    expect(hook2.router.state.location.pathname).toMatch(
+      /^\/matches\/.+\/games\/1\/scores\/new$/,
+    )
+
+    // Now release instance 1's stale create and drain its success branch.
+    await act(async () => {
+      releasePost()
+      await submit1Promise
+      await new Promise((r) => setTimeout(r, 0))
+    })
+
+    // Instance 1's router stayed exactly where the user left it — releasing the
+    // stale create did not yank it to the new match's scoring page. On the
+    // pre-fix hook this pathname is the scoring route, so the exact-match is the
+    // red signal (strictly stronger than "not scoring").
+    expect(hook1.router.state.location.pathname).toBe('/matches/left-behind')
+    // Both creates ran to completion — background-complete, never aborted.
+    expect(postCount).toBe(2)
+  })
+
   it('surfaces a server error through apiError', async () => {
     // A lapsed session is a `session_ended` 401 that the global middleware
     // catches and redirects to `/login` (covered in api/client.test.ts) — the
