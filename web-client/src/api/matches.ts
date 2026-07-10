@@ -374,6 +374,21 @@ function applyGameWriteCache(
   gameNumber: number,
 ) {
   const written = data.games.find((g) => g.game_number === gameNumber)
+  if (!written) {
+    // Boundary invariant: a save's response always carries a row for the game
+    // it just wrote — a real save creates/returns the `MatchGame`, and DELETE
+    // nulls the score but keeps the row (api/app/matches.py). If that ever
+    // stops holding, the upsert below silently no-ops and the UI shows a stale
+    // value until the `invalidateMatchViews` refetch resolves, with nothing to
+    // point at. Fail loudly at the boundary instead (.claude/rules/parse-at-
+    // boundaries.md) so the violation surfaces at its source. We don't throw:
+    // this is a success-path cache tap and a throw would eject the user from a
+    // live scoring screen over a non-fatal glitch the refetch already heals.
+    console.error(
+      `applyGameWriteCache: save response for match ${matchId} is missing game ${gameNumber}; ` +
+        `cache left stale until refetch (API game-row invariant violated)`,
+    )
+  }
   queryClient.setQueryData<MatchDetails>(matchQueryKey(matchId), (prev) => {
     // Cold cache (garbage-collected after `gcTime`, no observer): do NOT seed
     // from `data`. `data` is this one save's whole-match snapshot, built from
@@ -384,8 +399,8 @@ function applyGameWriteCache(
     // Seeding narrowly from `written` alone isn't viable — a valid
     // `MatchDetails` needs side/status fields a single game row doesn't carry.
     if (!prev) return prev
-    // No row for this game in the response (shouldn't happen) — leave the cache
-    // as-is rather than guessing.
+    // No row for this game in the response (shouldn't happen — logged loudly
+    // above) — leave the cache as-is rather than guessing; the refetch heals it.
     if (!written) return prev
     return withGameUpserted(prev, written)
   })
