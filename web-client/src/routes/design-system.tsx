@@ -46,8 +46,6 @@ import {
   type CarouselApi,
   CarouselContent,
   CarouselItem,
-  CarouselNext,
-  CarouselPrevious,
 } from '@/components/ui/carousel'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
@@ -1538,45 +1536,48 @@ function ToastCard({
   )
 }
 
-/** Kit sizing is fixed-width 200px slides. Measured, the kit's own five 200px
- * slides overflow the ~1038px showcase card by only ~12px, so a live embla
- * exposes just two reachable snaps — the selection can move exactly once
- * (01→02) and then freezes, which is the frozen-counter bug #831 was filed
- * against. We therefore carry a few slides past the kit's five (same 200px
- * size) so the strip genuinely scrolls; the counter denominator tracks the
- * real total. Deliberate, documented deviation from the kit's literal count. */
-const CAROUSEL_SLIDES = [1, 2, 3, 4, 5, 6, 7, 8]
+/** The kit's five fixed 200×140 slides. */
+const CAROUSEL_SLIDES = [1, 2, 3, 4, 5]
 
 /** Its own component so the embla hook state lives outside the route's render
- * map (a component can't call hooks inside a `.map`). Highlight + counter are
- * driven off the real embla API (#268 / #831): we subscribe to `select` and
- * `reInit` and derive both from `selectedScrollSnap()`. */
+ * map (a component can't call hooks inside a `.map`).
+ *
+ * The kit models `.slide.on` as a *selected card* and its `1 / 5` counter as
+ * "card 1 of 5" — the arrows page the selection, they don't page a viewport.
+ * That distinction matters: all five 200px slides fit the ~1038px showcase
+ * card, so embla has only two reachable snaps and `selectedScrollSnap()` can
+ * never exceed 1. Deriving the highlight from it would freeze the counter at
+ * `02 / 05` — the very bug #831 was filed against, just one click later.
+ *
+ * So selection is our own state (never hardcoded, per #831): the arrows move
+ * it, and `scrollTo` keeps the selected card in view. That is a no-op at
+ * desktop where everything already fits, and a real scroll at narrow widths
+ * where it doesn't. A drag re-syncs selection from embla. */
 function CarouselShowcase() {
   const [api, setApi] = useState<CarouselApi>()
   const [selectedIndex, setSelectedIndex] = useState(0)
-  const [snapCount, setSnapCount] = useState(CAROUSEL_SLIDES.length)
+  const lastIndex = CAROUSEL_SLIDES.length - 1
 
   useEffect(() => {
     if (!api) return
-    const onSelect = () => {
-      setSelectedIndex(api.selectedScrollSnap())
-      // Snaps, not slides: with fixed-width slides embla trims the snaps that
-      // would overscroll the end, so the reachable count depends on how many
-      // slides fit. Using the slide count here would strand the counter at
-      // `05 / 08` — the numerator can never reach it.
-      setSnapCount(api.scrollSnapList().length)
-    }
-    onSelect()
-    api.on('select', onSelect)
-    api.on('reInit', onSelect)
+    // Only a user drag re-syncs from embla. A programmatic `scrollTo` past the
+    // last reachable snap gets clamped, and syncing on every `select` would
+    // let that clamp overwrite the selection the arrows just set.
+    const onPointerUp = () => setSelectedIndex(api.selectedScrollSnap())
+    api.on('pointerUp', onPointerUp)
     return () => {
-      api.off('select', onSelect)
-      api.off('reInit', onSelect)
+      api.off('pointerUp', onPointerUp)
     }
   }, [api])
 
+  const select = (index: number) => {
+    const next = Math.min(Math.max(index, 0), lastIndex)
+    setSelectedIndex(next)
+    api?.scrollTo(next)
+  }
+
   const counter = `${String(selectedIndex + 1).padStart(2, '0')} / ${String(
-    snapCount,
+    CAROUSEL_SLIDES.length,
   ).padStart(2, '0')}`
 
   return (
@@ -1603,16 +1604,34 @@ function CarouselShowcase() {
           )
         })}
       </CarouselContent>
-      {/* Kit footer row: counter bottom-left, nav buttons bottom-right — the
-          buttons default to absolute negative offsets (clipped at the card
-          edge), so reset them into normal flow here. */}
+      {/* Kit footer row: counter bottom-left, `‹ ›` bottom-right. Plain buttons
+          rather than CarouselPrevious/Next, which page embla's viewport — here
+          they page the selection (see the note above). */}
       <div className="mt-4 flex items-center justify-between">
         <span className="font-mono text-xs tracking-[0.1em] text-[color:var(--fg-3)]">
           {counter}
         </span>
         <div className="flex items-center gap-2">
-          <CarouselPrevious className="static top-auto left-auto translate-y-0" />
-          <CarouselNext className="static top-auto right-auto translate-y-0" />
+          <Button
+            variant="outline"
+            size="icon"
+            className="size-8"
+            aria-label="Previous slide"
+            disabled={selectedIndex === 0}
+            onClick={() => select(selectedIndex - 1)}
+          >
+            <ChevronLeft className="size-4" />
+          </Button>
+          <Button
+            variant="outline"
+            size="icon"
+            className="size-8"
+            aria-label="Next slide"
+            disabled={selectedIndex === lastIndex}
+            onClick={() => select(selectedIndex + 1)}
+          >
+            <ChevronRight className="size-4" />
+          </Button>
         </div>
       </div>
     </Carousel>
