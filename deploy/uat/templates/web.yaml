@@ -23,6 +23,13 @@ spec:
         - name: web-client
           image: {{ include "fortymm-uat.webImage" . }}
           imagePullPolicy: {{ .Values.pullPolicy }}
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
           ports:
             - containerPort: 80
           readinessProbe:

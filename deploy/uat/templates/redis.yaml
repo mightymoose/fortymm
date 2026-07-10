@@ -18,6 +18,15 @@ spec:
         - name: redis
           image: {{ .Values.images.redis }}
           imagePullPolicy: {{ .Values.pullPolicy }}
+          # requests==limits → Guaranteed QoS, so the kubelet/kernel evict the
+          # burstable app pods before this data tier under memory pressure (#763).
+          resources:
+            requests:
+              cpu: 250m
+              memory: 128Mi
+            limits:
+              cpu: 250m
+              memory: 128Mi
           ports:
             - containerPort: 6379
           readinessProbe:

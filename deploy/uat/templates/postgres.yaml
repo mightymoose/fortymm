@@ -34,6 +34,15 @@ spec:
         - name: postgres
           image: {{ .Values.images.postgres }}
           imagePullPolicy: {{ .Values.pullPolicy }}
+          # requests==limits → Guaranteed QoS, so the kubelet/kernel evict the
+          # burstable app pods before this data tier under memory pressure (#763).
+          resources:
+            requests:
+              cpu: 500m
+              memory: 512Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
           env:
             - name: POSTGRES_USER
               value: {{ .Values.postgres.user | quote }}

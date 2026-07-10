@@ -19,6 +19,13 @@ spec:
           image: {{ include "fortymm-uat.apiImage" . }}
           imagePullPolicy: {{ .Values.pullPolicy }}
           command: ["rq", "worker", "--url", "{{ .Values.config.REDIS_URL }}", {{ range $i, $q := splitList " " .Values.worker.queues }}{{ if $i }}, {{ end }}{{ $q | quote }}{{ end }}]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 2000m
+              memory: 1Gi
           envFrom:
             {{- include "fortymm-uat.appEnvFrom" . | nindent 12 }}
           volumeMounts:
