@@ -309,15 +309,65 @@ function withGameScore(
   }
 }
 
-/** Cache work shared by both score mutations: prime the detail cache from the
- * mutation response and invalidate the list / dashboard so they re-read the
- * derived status, scoreboard, and next-up state. */
+/** Return `prev` with `game` upserted by `game_number` — replacing that row if
+ * present, otherwise inserting it and keeping `games` sorted by `game_number`. */
+function withGameUpserted(
+  prev: MatchDetails,
+  game: MatchDetails['games'][number],
+): MatchDetails {
+  const has = prev.games.some((g) => g.game_number === game.game_number)
+  const games = has
+    ? prev.games.map((g) =>
+        g.game_number === game.game_number ? game : g,
+      )
+    : [...prev.games, game].sort((a, b) => a.game_number - b.game_number)
+  return { ...prev, games }
+}
+
+/** Cache work shared by the score mutations: fold the write into the cached
+ * match, then invalidate the list / dashboard / hero so they re-read the
+ * derived status, scoreboard, and next-up state.
+ *
+ * `gameNumber` is the per-game write's own game — a save or a clear touches
+ * exactly that one row, so we upsert only it. The whole-board result verbs
+ * (`useProposeResult` / `useAcceptResult`) omit it: their POST obliterates and
+ * replaces every scratch score server-side, so the response *is* the canonical
+ * board and wholesale-seeding the cache from it is correct there. */
 function applyScoreMutationCache(
   queryClient: ReturnType<typeof useQueryClient>,
   matchId: string,
   data: MatchDetails,
+  gameNumber?: number,
 ) {
-  queryClient.setQueryData<MatchDetails>(matchQueryKey(matchId), data)
+  // Write only *this* save's game into the cache, not the whole response.
+  // Concurrent per-game saves touch disjoint games, so response arrival order
+  // must not matter — a per-game upsert composes where a whole-match snapshot
+  // clobbers, dropping a game a later-submitted-but-earlier-committed save
+  // already landed (#843). Submit-order sequencing would be the wrong fix:
+  // client submit order is not server commit order. Same-game concurrency can't
+  // smuggle two winners in — since #835 the create path takes a blocking
+  // `SELECT … FOR UPDATE` on the match row and the loser gets a clean 409, and
+  // the edit path asserts `expected_version`. The delete path's response
+  // carries the game with `score: null` (the server nulls the score, never
+  // deletes the row — api/app/matches.py:2043), so the same upsert handles it.
+  const written =
+    gameNumber == null
+      ? undefined
+      : data.games.find((g) => g.game_number === gameNumber)
+  queryClient.setQueryData<MatchDetails>(matchQueryKey(matchId), (prev) => {
+    // No prior cache (first write of the session) or a whole-board result verb:
+    // seed straight from the canonical response.
+    if (!prev || gameNumber == null) return data
+    // No row for this game in the response (shouldn't happen) — leave the cache
+    // as-is rather than guessing.
+    if (!written) return prev
+    return withGameUpserted(prev, written)
+  })
+  // The response's derived side fields (`games_won`, `won`, `status`) are as
+  // stale as its `games` list, so the narrow upsert above leaves them behind.
+  // Invalidate the canonical match query to re-read them — without it the
+  // "Games won" counter on the entry screen lags, which is exactly #564.
+  queryClient.invalidateQueries({ queryKey: matchQueryKey(matchId) })
   // The scoreboard reads a *different* cache key (`matchDetailsQuery`) off the
   // same endpoint, so priming `matchQueryKey` above doesn't refresh the hero.
   // Invalidate it so the scoreboard re-derives won/outcome — e.g. after a
@@ -399,7 +449,7 @@ export function scoreSaveMutationOptions(
       )
     },
     onSuccess: (data: MatchDetails) =>
-      applyScoreMutationCache(queryClient, matchId, data),
+      applyScoreMutationCache(queryClient, matchId, data, gameNumber),
     // Re-sync server truth whenever a save settles in error. A per-game write
     // can lose a server-side race to a concurrent conflicting write (e.g. the
     // opponent saved game 1 the other way first), so the server rejects ours
@@ -545,7 +595,8 @@ export function useDeleteScore(matchId: string, gameNumber: number) {
           },
         ),
       ),
-    onSuccess: (data) => applyScoreMutationCache(queryClient, matchId, data),
+    onSuccess: (data) =>
+      applyScoreMutationCache(queryClient, matchId, data, gameNumber),
   })
 }
 
@@ -571,7 +622,8 @@ export function useDeleteScoreForMatch(matchId: string) {
           },
         ),
       ),
-    onSuccess: (data) => applyScoreMutationCache(queryClient, matchId, data),
+    onSuccess: (data, gameNumber) =>
+      applyScoreMutationCache(queryClient, matchId, data, gameNumber),
   })
 }
 
