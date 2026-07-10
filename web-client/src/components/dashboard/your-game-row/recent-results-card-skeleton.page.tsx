@@ -23,16 +23,12 @@ const scoped = (container: Container) => ({
   getRows() {
     return container.queryAllByTestId('dashboard-recent-results-skeleton-row')
   },
-  /** Each row's collapsing opponent cell (`maxWidth:0; width:100%`). */
+  /** Each row's collapsing opponent cell (`maxWidth:0; width:100%`) — the test
+   * reads the win/loss dot placeholder from within each of these. */
   getOpponentCells() {
     return container.queryAllByTestId('dashboard-recent-results-skeleton-opponent')
   },
-  /** Each row's win/loss dot placeholder — the marker the old flex skeleton
-   * omitted, causing the avatar-shift the rebuild fixes. */
-  getDots() {
-    return container.queryAllByTestId('dashboard-recent-results-skeleton-dot')
-  },
-  // Count the shimmer bars so a dropped header cell or row column is caught.
+  // Expose the shimmer-bar queries so owners (YourGameRow) can read them.
   ...shimmerPage.within(container),
 })
 

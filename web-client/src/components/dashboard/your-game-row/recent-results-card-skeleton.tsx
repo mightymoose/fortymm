@@ -5,8 +5,14 @@ import { Card } from './card'
 
 // Three placeholder result rows — a representative slice of the last-N table.
 // Row count only affects this card's height; nothing below it depends on the
-// exact number, so a small fixed count keeps the reserved box stable.
-const ROWS = 3
+// exact number, so a small fixed count keeps the reserved box stable. Exported
+// so the test asserts the same count instead of duplicating the literal.
+export const ROWS = 3
+
+// The header and trailing (score/Δ/when) cells drop their shimmer in as an
+// inline-block so it respects the cell's text-align; the opponent-cell
+// shimmers are flex children and set their own display, so they don't use this.
+const cellBar = { display: 'inline-block' } as const
 
 /**
  * Loading placeholder for the {@link RecentResultsCard}, shown by `YourGameRow`
@@ -47,16 +53,16 @@ export const RecentResultsCardSkeleton = () => (
         <thead>
           <tr>
             <th style={{ textAlign: 'left', padding: '10px 18px 8px' }}>
-              <Shimmer width={62} height={8} style={{ display: 'inline-block' }} />
+              <Shimmer width={62} height={8} style={cellBar} />
             </th>
             <th style={{ textAlign: 'right', padding: '10px 8px 8px' }}>
-              <Shimmer width={34} height={8} style={{ display: 'inline-block' }} />
+              <Shimmer width={34} height={8} style={cellBar} />
             </th>
             <th style={{ textAlign: 'right', padding: '10px 8px 8px' }}>
-              <Shimmer width={10} height={8} style={{ display: 'inline-block' }} />
+              <Shimmer width={10} height={8} style={cellBar} />
             </th>
             <th style={{ textAlign: 'right', padding: '10px 18px 8px' }}>
-              <Shimmer width={30} height={8} style={{ display: 'inline-block' }} />
+              <Shimmer width={30} height={8} style={cellBar} />
             </th>
           </tr>
         </thead>
@@ -87,13 +93,13 @@ export const RecentResultsCardSkeleton = () => (
                 </div>
               </td>
               <td style={{ padding: '11px 8px', textAlign: 'right' }}>
-                <Shimmer width={36} height={13} style={{ display: 'inline-block' }} />
+                <Shimmer width={36} height={13} style={cellBar} />
               </td>
               <td style={{ padding: '11px 8px', textAlign: 'right' }}>
-                <Shimmer width={28} height={12} style={{ display: 'inline-block' }} />
+                <Shimmer width={28} height={12} style={cellBar} />
               </td>
               <td style={{ padding: '11px 18px', textAlign: 'right' }}>
-                <Shimmer width={44} height={11} style={{ display: 'inline-block' }} />
+                <Shimmer width={44} height={11} style={cellBar} />
               </td>
             </tr>
           ))}

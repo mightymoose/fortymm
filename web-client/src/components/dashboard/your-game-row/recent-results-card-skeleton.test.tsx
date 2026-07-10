@@ -1,9 +1,7 @@
 import { within } from '@/test/utilities'
 
+import { ROWS } from './recent-results-card-skeleton'
 import { recentResultsCardSkeletonPage } from './recent-results-card-skeleton.page'
-
-// Keep in sync with the ROWS constant in the component.
-const ROWS = 3
 
 describe('RecentResultsCardSkeleton', () => {
   it('announces the load through a busy status region', () => {
@@ -46,10 +44,9 @@ describe('RecentResultsCardSkeleton', () => {
     for (const cell of cells) {
       expect(cell.tagName).toBe('TD')
       expect(cell).toHaveStyle({ maxWidth: '0px', width: '100%' })
-      // The win/loss dot placeholder the loaded row renders.
+      // The win/loss dot placeholder the loaded row renders. `getByTestId`
+      // (singular) also fails if a row somehow renders more than one dot.
       expect(within(cell).getByTestId('dashboard-recent-results-skeleton-dot')).toBeInTheDocument()
     }
-
-    expect(recentResultsCardSkeletonPage.getDots()).toHaveLength(ROWS)
   })
 })
