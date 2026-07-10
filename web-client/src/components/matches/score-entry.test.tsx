@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import {
@@ -144,17 +145,19 @@ function renderScoreEntry(spec: RouteSpec, options: { path?: string } = {}) {
   )
 }
 
-// Like `renderScoreEntry`, but also mounts a sibling button that imperatively
-// fails `failGameNumber`'s scratch save via `fireScoreSave` — the same call the
-// real fire-and-forget save makes — so a failed save for a NON-active game lands
-// in the shared mutation cache without unmounting the entry screen. Used to
-// reproduce #747-F2: the finalize board must fold that failed game in.
-function renderEntryWithFailedSibling({
+// Like `renderScoreEntry`, but also mounts a caller-supplied sibling control
+// alongside `ScoreEntry` in the same QueryClient + router. The sibling receives
+// the shared QueryClient so it can poke the shared mutation/query cache without
+// unmounting the entry screen — e.g. imperatively fail a non-active game's
+// scratch save via `fireScoreSave` (the same call the real fire-and-forget save
+// makes; #747-F2, the finalize board must fold that failed game in), or
+// invalidate/refetch the match underneath a dirty form (#818).
+function renderEntryWithSibling({
   gameNumber,
-  failGameNumber,
+  sibling,
 }: {
   gameNumber: number
-  failGameNumber: number
+  sibling: (queryClient: QueryClient) => ReactNode
 }) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -167,17 +170,7 @@ function renderEntryWithFailedSibling({
       const qc = useQueryClient()
       return (
         <>
-          <button
-            type="button"
-            onClick={() =>
-              fireScoreSave(qc, 'm-1', failGameNumber, {
-                side_1_points: 9,
-                side_2_points: 11,
-              })
-            }
-          >
-            fail game {failGameNumber}
-          </button>
+          {sibling(qc)}
           <ScoreEntry
             matchId="m-1"
             gameNumber={gameNumber}
@@ -453,16 +446,7 @@ describe('ScoreEntry — create', () => {
     let finalizedBody: unknown = null
     server.use(
       http.get('*/v1/matches/m-1', () =>
-        HttpResponse.json(
-          inProgressMatch({
-            sides: participantSides({ meWins: 2, oppWins: 0 }),
-            games: [
-              { id: 'g-1', game_number: 1, score: score('s-1', 11, 4) },
-              { id: 'g-2', game_number: 2, score: score('s-2', 11, 6) },
-            ],
-            current_game: { game_number: 3 },
-          }),
-        ),
+        HttpResponse.json(decidingGameMatch()),
       ),
       http.post('*/v1/matches/m-1/results', async ({ request }) => {
         finalizedBody = await request.json()
@@ -580,7 +564,22 @@ describe('ScoreEntry — create', () => {
       }),
     )
 
-    renderEntryWithFailedSibling({ gameNumber: 3, failGameNumber: 2 })
+    renderEntryWithSibling({
+      gameNumber: 3,
+      sibling: (qc) => (
+        <button
+          type="button"
+          onClick={() =>
+            fireScoreSave(qc, 'm-1', 2, {
+              side_1_points: 9,
+              side_2_points: 11,
+            })
+          }
+        >
+          fail game 2
+        </button>
+      ),
+    })
 
     // Seed the failed G2 save into the shared mutation cache.
     await user.click(await screen.findByRole('button', { name: 'fail game 2' }))
@@ -700,16 +699,7 @@ describe('ScoreEntry — create', () => {
     let requests = 0
     server.use(
       http.get('*/v1/matches/m-1', () =>
-        HttpResponse.json(
-          inProgressMatch({
-            sides: participantSides({ meWins: 2, oppWins: 0 }),
-            games: [
-              { id: 'g-1', game_number: 1, score: score('s-1', 11, 4) },
-              { id: 'g-2', game_number: 2, score: score('s-2', 11, 6) },
-            ],
-            current_game: { game_number: 3 },
-          }),
-        ),
+        HttpResponse.json(decidingGameMatch()),
       ),
       // Never resolves — keeps the finalize in flight so the test can count the
       // POSTs the double-click produced.
@@ -930,16 +920,7 @@ describe('ScoreEntry — create', () => {
     const user = userEvent.setup()
     server.use(
       http.get('*/v1/matches/m-1', () =>
-        HttpResponse.json(
-          inProgressMatch({
-            sides: participantSides({ meWins: 2, oppWins: 0 }),
-            games: [
-              { id: 'g-1', game_number: 1, score: score('s-1', 11, 4) },
-              { id: 'g-2', game_number: 2, score: score('s-2', 11, 6) },
-            ],
-            current_game: { game_number: 3 },
-          }),
-        ),
+        HttpResponse.json(decidingGameMatch()),
       ),
       http.post('*/v1/matches/m-1/results', () =>
         HttpResponse.json(
@@ -1217,7 +1198,10 @@ describe('ScoreEntry — edit', () => {
 // post-navigation screen is the actual next-game page rather than a stub.
 // ---------------------------------------------------------------------------
 
-function renderScoringApp(initialPath: string) {
+function renderScoringApp(
+  initialPath: string,
+  { stubEditRoute = false }: { stubEditRoute?: boolean } = {},
+) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
@@ -1239,16 +1223,22 @@ function renderScoringApp(initialPath: string) {
   const scoringEdit = createRoute({
     getParentRoute: () => rootRoute,
     path: '/matches/$matchId/games/$gameNumber/scores/edit',
-    component: function EditEntry() {
-      const params = useParams({ strict: false })
-      return (
-        <ScoreEntry
-          matchId={params.matchId!}
-          gameNumber={Number(params.gameNumber)}
-          mode={{ kind: 'edit' }}
-        />
-      )
-    },
+    // `stubEditRoute` lands the edit route inert (no redirect/loop) instead of
+    // mounting the real edit ScoreEntry: a test whose pre-fix bypass navigates
+    // here can then cleanly assert we did NOT arrive, rather than busy-looping
+    // against a real edit screen that bypasses the same banner.
+    component: stubEditRoute
+      ? () => <div>scoring-edit</div>
+      : function EditEntry() {
+          const params = useParams({ strict: false })
+          return (
+            <ScoreEntry
+              matchId={params.matchId!}
+              gameNumber={Number(params.gameNumber)}
+              mode={{ kind: 'edit' }}
+            />
+          )
+        },
   })
   const matchPage = createRoute({
     getParentRoute: () => rootRoute,
@@ -1266,6 +1256,125 @@ function renderScoringApp(initialPath: string) {
       <RouterProvider router={router} />
     </QueryClientProvider>,
   )
+}
+
+// A match sitting on the deciding game: 2–0 with games 1 and 2 scored, so the
+// next entry (game 3) can finish the match.
+function decidingGameMatch() {
+  return inProgressMatch({
+    sides: participantSides({ meWins: 2, oppWins: 0 }),
+    games: [
+      { id: 'g-1', game_number: 1, score: score('s-1', 11, 4) },
+      { id: 'g-2', game_number: 2, score: score('s-2', 11, 6) },
+    ],
+    current_game: { game_number: 3 },
+  })
+}
+
+// The finalized MatchDetails a successful POST /results returns: a completed
+// best-of-5 the current user swept 3–0.
+function completedMatch() {
+  return matchDetails({
+    id: 'm-1',
+    status: 'completed',
+    status_label: 'Final',
+    best_of: 5,
+    games_to_win: 3,
+    sides: participantSides({ meWins: 3, oppWins: 0, meWon: true }),
+    current_game: null,
+    can_score: false,
+    can_finalize: false,
+  })
+}
+
+// Like `renderScoreEntry`, but mounts a sibling "refetch match" button that
+// invalidates the match query — so a test can make the server's answer change
+// underneath a mounted, dirty score-entry (e.g. the match completes while the
+// user is typing) and drive the resulting refetch, then assert on the
+// declarative `<Navigate>` guard redirect that fires from the fresh data.
+// Drives an edit whose first save loses the version race and 409s, opens the
+// conflict, and taps "Replace with my score" — the re-fire lands on the fresh
+// version and clears the conflict without navigating. Returns the harness so
+// each caller can assert on its own distinct tail.
+async function renderReplaceConflict() {
+  const user = userEvent.setup()
+  const putBodies: Array<Record<string, number>> = []
+  let committedVersion = 1
+  server.use(
+    http.get('*/v1/matches/m-1', () =>
+      HttpResponse.json(
+        inProgressMatch({
+          games: [
+            {
+              id: 'g-1',
+              game_number: 1,
+              score: {
+                id: 's-1',
+                side_1_points: 11,
+                side_2_points: 5,
+                winner_side_number: 1,
+                version: committedVersion,
+              },
+            },
+            { id: 'g-2', game_number: 2, score: score('s-2', 9, 11) },
+          ],
+        }),
+      ),
+    ),
+    http.put('*/v1/matches/m-1/games/1/scores', async ({ request }) => {
+      const body = (await request.json()) as Record<string, number>
+      putBodies.push(body)
+      // First write claims version 1 and loses; the committed row is now at
+      // version 2. The 409 carries that committed score so the client can
+      // re-decide and re-fire with the fresh version.
+      if (putBodies.length === 1) {
+        committedVersion = 2
+        return HttpResponse.json(
+          {
+            detail: {
+              message: 'This game was saved by someone else.',
+              committed_score: {
+                id: 's-1',
+                side_1_points: 11,
+                side_2_points: 5,
+                winner_side_number: 1,
+                version: 2,
+              },
+            },
+          },
+          { status: 409 },
+        )
+      }
+      return HttpResponse.json(inProgressMatch())
+    }),
+  )
+
+  renderScoringApp('/matches/m-1/games/1/scores/edit')
+  const meInput = await screen.findByRole('textbox', {
+    name: 'rita.kovac score',
+  })
+  await waitFor(() => expect(meInput).toHaveValue('11'))
+  await user.clear(meInput)
+  await user.type(meInput, '12')
+  const oppInput = screen.getByRole('textbox', { name: 'nguyen.t score' })
+  await user.clear(oppInput)
+  await user.type(oppInput, '10')
+  await user.click(screen.getByRole('button', { name: /save changes/i }))
+
+  // The 409 advances us fire-and-forget; open the conflict to review it.
+  await screen.findByRole('heading', { name: /enter game 3 score/i })
+  await user.click(
+    await screen.findByRole('button', { name: /review game 1/i }),
+  )
+  await screen.findByRole('heading', { name: /edit game 1 score/i })
+
+  // Replace re-fires with the fresh version — this path does NOT navigate.
+  await user.click(
+    screen.getByRole('button', { name: /replace with my score/i }),
+  )
+  await waitFor(() => expect(putBodies).toHaveLength(2))
+
+  return { user, putBodies }
 }
 
 describe('ScoreEntry — failed saves', () => {
@@ -1587,17 +1696,8 @@ describe('ScoreEntry — failed saves', () => {
     let scoreCalls = 0
     server.use(
       http.get('*/v1/matches/m-1', () =>
-        HttpResponse.json(
-          inProgressMatch({
-            // Bo5, 2-0 on the board — an 11-3 win in game 3 clinches at 3-0.
-            sides: participantSides({ meWins: 2, oppWins: 0 }),
-            games: [
-              { id: 'g-1', game_number: 1, score: score('s-1', 11, 4) },
-              { id: 'g-2', game_number: 2, score: score('s-2', 11, 6) },
-            ],
-            current_game: { game_number: 3 },
-          }),
-        ),
+        // Bo5, 2-0 on the board — an 11-3 win in game 3 clinches at 3-0.
+        HttpResponse.json(decidingGameMatch()),
       ),
       http.post('*/v1/matches/m-1/results', () => {
         resultsCalls += 1
@@ -1659,16 +1759,7 @@ describe('ScoreEntry — failed saves', () => {
     let scoreSaveCalls = 0
     server.use(
       http.get('*/v1/matches/m-1', () =>
-        HttpResponse.json(
-          inProgressMatch({
-            sides: participantSides({ meWins: 2, oppWins: 0 }),
-            games: [
-              { id: 'g-1', game_number: 1, score: score('s-1', 11, 4) },
-              { id: 'g-2', game_number: 2, score: score('s-2', 11, 6) },
-            ],
-            current_game: { game_number: 3 },
-          }),
-        ),
+        HttpResponse.json(decidingGameMatch()),
       ),
       http.post('*/v1/matches/m-1/games/3/scores/new', () => {
         scoreSaveCalls += 1
@@ -1676,20 +1767,7 @@ describe('ScoreEntry — failed saves', () => {
       }),
       http.post('*/v1/matches/m-1/results', async ({ request }) => {
         resultsBody = await request.json()
-        return HttpResponse.json(
-          matchDetails({
-            id: 'm-1',
-            status: 'completed',
-            status_label: 'Final',
-            best_of: 5,
-            games_to_win: 3,
-            sides: participantSides({ meWins: 3, oppWins: 0, meWon: true }),
-            current_game: null,
-            can_score: false,
-            can_finalize: false,
-          }),
-          { status: 201 },
-        )
+        return HttpResponse.json(completedMatch(), { status: 201 })
       }),
     )
 
@@ -1738,16 +1816,7 @@ describe('ScoreEntry — failed saves', () => {
     let scoreSaveCalls = 0
     server.use(
       http.get('*/v1/matches/m-1', () =>
-        HttpResponse.json(
-          inProgressMatch({
-            sides: participantSides({ meWins: 2, oppWins: 0 }),
-            games: [
-              { id: 'g-1', game_number: 1, score: score('s-1', 11, 4) },
-              { id: 'g-2', game_number: 2, score: score('s-2', 11, 6) },
-            ],
-            current_game: { game_number: 3 },
-          }),
-        ),
+        HttpResponse.json(decidingGameMatch()),
       ),
       http.post('*/v1/matches/m-1/games/3/scores/new', () => {
         scoreSaveCalls += 1
@@ -1789,16 +1858,7 @@ describe('ScoreEntry — failed saves', () => {
     const user = userEvent.setup()
     server.use(
       http.get('*/v1/matches/m-1', () =>
-        HttpResponse.json(
-          inProgressMatch({
-            sides: participantSides({ meWins: 2, oppWins: 0 }),
-            games: [
-              { id: 'g-1', game_number: 1, score: score('s-1', 11, 4) },
-              { id: 'g-2', game_number: 2, score: score('s-2', 11, 6) },
-            ],
-            current_game: { game_number: 3 },
-          }),
-        ),
+        HttpResponse.json(decidingGameMatch()),
       ),
       http.post('*/v1/matches/m-1/games/3/scores/new', () =>
         HttpResponse.error(),
@@ -2068,6 +2128,376 @@ describe('ScoreEntry — unsaved-input guard', () => {
     await screen.findByRole('heading', { name: /enter game 4 score/i })
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
   })
+
+  it('does not prompt after finalize succeeds and hops to the match page (#818)', async () => {
+    // Happy-path guard: the dirty deciding score would trip the blocker, but
+    // finalize's onSuccess hop opts out via `ignoreBlocker` — we must land on
+    // the match page with no leave prompt. Passes before and after the fix; it
+    // catches an `ignoreBlocker` dropped from the finalize hop (ADR 0014).
+    const user = userEvent.setup()
+    server.use(
+      http.get('*/v1/matches/m-1', () =>
+        HttpResponse.json(decidingGameMatch()),
+      ),
+      http.post('*/v1/matches/m-1/results', () =>
+        HttpResponse.json(completedMatch(), { status: 201 }),
+      ),
+    )
+
+    renderScoreEntry({ kind: 'create', matchId: 'm-1', gameNumber: 3 })
+    const meInput = await screen.findByRole('textbox', {
+      name: 'rita.kovac score',
+    })
+    await user.type(meInput, '11')
+    await user.type(screen.getByRole('textbox', { name: 'nguyen.t score' }), '3')
+
+    await user.click(screen.getByRole('button', { name: /post result/i }))
+    await waitFor(() =>
+      expect(screen.getByText('match-page m-1')).toBeInTheDocument(),
+    )
+    expect(screen.queryByText(/leave without saving/i)).not.toBeInTheDocument()
+  })
+
+  it('does not prompt after clearing a dirty edit and hopping to the empty entry (#818)', async () => {
+    // Happy-path guard for the clear-then-recreate hop. The form is dirty when
+    // Clear fires, so without `ignoreBlocker` the edit→new hop would be caught.
+    // Passes before and after the fix (the old latch armed this path too); the
+    // pre-existing clear test never typed a change, so `isDirty` was false and
+    // it never exercised the bypass.
+    const user = userEvent.setup()
+    server.use(
+      http.get('*/v1/matches/m-1', () => HttpResponse.json(inProgressMatch())),
+      http.delete('*/v1/matches/m-1/games/1/scores', () =>
+        HttpResponse.json(inProgressMatch()),
+      ),
+    )
+
+    renderScoreEntry({ kind: 'edit', matchId: 'm-1', gameNumber: 1 })
+    const meInput = await screen.findByRole('textbox', {
+      name: 'rita.kovac score',
+    })
+    await waitFor(() => expect(meInput).toHaveValue('11'))
+
+    // Make the form dirty, then clear.
+    await user.clear(meInput)
+    await user.type(meInput, '12')
+    await user.click(screen.getByRole('button', { name: /^clear$/i }))
+    await screen.findByRole('alertdialog')
+    await user.click(screen.getByRole('button', { name: /clear game/i }))
+
+    await waitFor(() =>
+      expect(screen.getByText('scoring-new m-1 1')).toBeInTheDocument(),
+    )
+    expect(screen.queryByText(/leave without saving/i)).not.toBeInTheDocument()
+  })
+
+  it('regression: an offline deciding-game save, then a further edit + in-app nav, still warns (#818)', async () => {
+    // The #818 repro. Offline the deciding game stores as a failed scratch save
+    // and we stay put (finalize banner). A further edit keeps the form dirty, so
+    // tapping another game in the scoreline MUST warn. The old always-armed
+    // latch — armed by `onSubmit` before the offline branch and never cleared —
+    // silently waved this through, discarding the deciding score. Fails against
+    // the pre-fix component.
+    const user = userEvent.setup()
+    server.use(
+      http.get('*/v1/matches/m-1', () =>
+        HttpResponse.json(decidingGameMatch()),
+      ),
+      // Offline → the deciding-game scratchpad save rejects with a network error.
+      http.post('*/v1/matches/m-1/games/3/scores/new', () =>
+        HttpResponse.error(),
+      ),
+    )
+
+    renderScoringApp('/matches/m-1/games/3/scores/new')
+    await screen.findByRole('heading', { name: /enter game 3 score/i })
+    onlineManager.setOnline(false)
+
+    const meInput = screen.getByRole('textbox', { name: 'rita.kovac score' })
+    const oppInput = screen.getByRole('textbox', { name: 'nguyen.t score' })
+    await user.type(meInput, '11')
+    await user.type(oppInput, '3')
+
+    // Deciding game offline → stored as a failed scratch save; we stay on game 3
+    // with the finalize banner.
+    await user.click(screen.getByRole('button', { name: /post result/i }))
+    const banner = await screen.findByRole('alert')
+    expect(banner).toHaveTextContent('These scores finish the match.')
+
+    // A further edit over the failed score keeps the form dirty.
+    await user.clear(oppInput)
+    await user.type(oppInput, '5')
+
+    // Leaving in-app (tapping another saved game) must warn.
+    await user.click(screen.getByRole('link', { name: /game 1, saved/i }))
+    const dialog = await screen.findByRole('alertdialog')
+    expect(dialog).toHaveTextContent(/leave without saving/i)
+  })
+
+  it('regression: after "Replace with my score", a further edit + in-app nav still warns (#818)', async () => {
+    // The second dead-guard path. `overwriteWithMyScore` never navigates, yet
+    // the pre-fix code armed the latch inside it — from then on the guard was
+    // dead for this component instance. A further edit here is genuinely unsaved,
+    // so an in-app navigation MUST warn. Fails against the pre-fix component.
+    const { user } = await renderReplaceConflict()
+
+    // The replace succeeds and clears the conflict without navigating.
+    await waitFor(() =>
+      expect(
+        screen.queryByText(/this game was saved by someone else/i),
+      ).not.toBeInTheDocument(),
+    )
+
+    // A further edit keeps the form dirty; leaving in-app must still warn.
+    const meAfter = screen.getByRole('textbox', { name: 'rita.kovac score' })
+    await user.clear(meAfter)
+    await user.type(meAfter, '9')
+
+    await user.click(screen.getByRole('link', { name: /game 2, saved/i }))
+    const dialog = await screen.findByRole('alertdialog')
+    expect(dialog).toHaveTextContent(/leave without saving/i)
+  })
+
+  it('regression: posting the result from the save banner after a multi-game offline failure does not warn (#818)', async () => {
+    // The child-navigation path the #818 audit missed (ADR 0014). The audit
+    // patched the three navigate() calls in score-entry.tsx but SaveBanner —
+    // rendered *inside* ScoreEntryInner — has two of its own, guarded by the
+    // same still-mounted blocker. The prior #818 tests all used a SINGLE failed
+    // decider game, where `otherFailed` is empty, `decidedHere` is true, and the
+    // banner's own "Post result" button never renders (the main button owns
+    // finalizing) — so this path shipped untested and broken.
+    //
+    // Here games 1 AND 2 also fail offline, so `otherFailed` is non-empty,
+    // `decidedHere` is false, and the banner renders its OWN "Post result"
+    // button. Clicking it finalizes and hops to the match page — an
+    // app-initiated navigation that must bypass the still-dirty unsaved-input
+    // guard. Fails against the pre-fix save-banner (the hop had no
+    // `ignoreBlocker`, so the guard caught it).
+    const user = userEvent.setup()
+    const cleanMatch = inProgressMatch({
+      best_of: 5,
+      games_to_win: 3,
+      affects_rating: true,
+      sides: participantSides({ meWins: 0, oppWins: 0 }),
+      games: [],
+      current_game: { game_number: 1 },
+    })
+    server.use(
+      http.get('*/v1/matches/m-1', () => HttpResponse.json(cleanMatch)),
+      // Offline → every scratch save rejects with a network error.
+      http.post('*/v1/matches/m-1/games/:n/scores/new', () =>
+        HttpResponse.error(),
+      ),
+      http.post('*/v1/matches/m-1/results', () =>
+        HttpResponse.json(completedMatch(), { status: 201 }),
+      ),
+    )
+
+    renderScoringApp('/matches/m-1/games/1/scores/new')
+    await screen.findByRole('heading', { name: /enter game 1 score/i })
+    onlineManager.setOnline(false)
+
+    // Game 1 offline (my win) → fails, advances to game 2.
+    await user.type(
+      screen.getByRole('textbox', { name: 'rita.kovac score' }),
+      '11',
+    )
+    await user.type(screen.getByRole('textbox', { name: 'nguyen.t score' }), '9')
+    await user.click(screen.getByRole('button', { name: /save game & next/i }))
+    await screen.findByRole('heading', { name: /enter game 2 score/i })
+
+    // Game 2 offline (my win) → still 2-0, undecided in Bo5, advances to game 3.
+    await user.type(
+      screen.getByRole('textbox', { name: 'rita.kovac score' }),
+      '11',
+    )
+    await user.type(screen.getByRole('textbox', { name: 'nguyen.t score' }), '9')
+    await user.click(screen.getByRole('button', { name: /save game & next/i }))
+    await screen.findByRole('heading', { name: /enter game 3 score/i })
+
+    // Game 3 is the decider (2-0 on the recorded board). Typing the clinching
+    // win makes isDirty true. Still offline, the main "Post result" stores a
+    // scratch save and keeps us on game 3 (the `wouldFinalize` early return);
+    // isDirty stays stored-true (a folded-baseline derivation would read false —
+    // ADR 0014).
+    const meInput = screen.getByRole('textbox', { name: 'rita.kovac score' })
+    const oppInput = screen.getByRole('textbox', { name: 'nguyen.t score' })
+    await user.type(meInput, '11')
+    await user.type(oppInput, '9')
+    await user.click(screen.getByRole('button', { name: /post result/i }))
+
+    // All three games now sit as failed scratch saves deciding a 3-0 board, and
+    // because games 1 & 2 also failed (`otherFailed` non-empty) the banner is
+    // NOT `decidedHere`: it renders its OWN "Post result" button. Reaching this
+    // proves we hit the previously-uncovered path.
+    const banner = await screen.findByRole('alert')
+    expect(banner).toHaveTextContent('These scores finish the match.')
+    const bannerPost = within(banner).getByRole('button', {
+      name: /post result/i,
+    })
+    expect(bannerPost).toBeInTheDocument()
+
+    // Back online, post the result from the banner. Its onSuccess hop to the
+    // match page is app-initiated, so it must bypass the still-dirty guard (ADR
+    // 0014) — land on the match page with no "leave without saving" prompt.
+    onlineManager.setOnline(true)
+    // fireEvent (not user.click): against the pre-fix banner this hop is blocked,
+    // and the blocked finalize + completed-redirect `<Navigate>` busy-loops —
+    // which would leave user-event's `act()` waiting forever and hang the test.
+    // fireEvent returns synchronously, so the assertion below is what surfaces
+    // the regression (it lands on the match page only once the hop bypasses the
+    // guard).
+    fireEvent.click(bannerPost)
+
+    // Explicit timeout: setup.ts sets `asyncUtilTimeout: 5000`, which equals
+    // vitest's default `testTimeout: 5000`, so a bare waitFor here shares the
+    // test's whole budget. `fireEvent` returns synchronously, so the async
+    // finalize → onSuccess navigate chain runs inside this window; when it
+    // flushes slowly the two timers fire at the same boundary and the test dies
+    // with an opaque "Test timed out" instead of a diagnosable "match-page".
+    await waitFor(
+      () => expect(screen.getByText('match-page')).toBeInTheDocument(),
+      { timeout: 2000 },
+    )
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    expect(screen.queryByText(/leave without saving/i)).not.toBeInTheDocument()
+  })
+
+  it('regression: clicking "Review game N" in the conflict banner with unsaved typing still warns (#818)', async () => {
+    // The positive control the audit lacked. ConflictReviewBanner's "Review
+    // game N" button is a USER-initiated hop — the same gesture as tapping a
+    // scoreline <Link> — so it must NOT bypass the dirty-form guard (ADR 0014).
+    // The banner renders inside ScoreEntryInner, whose still-mounted blocker
+    // catches this navigation. A prior misdiagnosis added `ignoreBlocker: true`
+    // here, which silently discarded typed input.
+    //
+    // Harness: a REAL /scores/new route (the active game) but a STUB /scores/edit
+    // route — the review destination. Game 3's create save 409s as a conflict;
+    // fire-and-forget advances to game 4, where the ConflictReviewBanner renders
+    // "Review game 3". Stubbing the edit route is deliberate: against the pre-fix
+    // banner the bypass navigates there, and a stub lands inert so
+    // `findByRole('alertdialog')` cleanly rejects (no dialog — we navigated)
+    // instead of busy-looping on a real edit screen.
+    const user = userEvent.setup()
+    server.use(
+      http.get('*/v1/matches/m-1', () => HttpResponse.json(inProgressMatch())),
+      http.post('*/v1/matches/m-1/games/3/scores/new', () =>
+        HttpResponse.json(
+          {
+            detail: {
+              message:
+                'This game was saved by someone else while you were editing.',
+              committed_score: null,
+            },
+          },
+          { status: 409 },
+        ),
+      ),
+    )
+
+    // Stub edit route (the review destination) so the pre-fix bypass lands
+    // inert (no redirect/loop) — see `renderScoringApp`'s `stubEditRoute`.
+    renderScoringApp('/matches/m-1/games/3/scores/new', { stubEditRoute: true })
+
+    await screen.findByRole('heading', { name: /enter game 3 score/i })
+    await user.type(
+      screen.getByRole('textbox', { name: 'rita.kovac score' }),
+      '11',
+    )
+    await user.type(screen.getByRole('textbox', { name: 'nguyen.t score' }), '4')
+    await user.click(screen.getByRole('button', { name: /save game & next/i }))
+
+    // Fire-and-forget advances to game 4; game 3's rejected save surfaces as a
+    // conflict to review (the active game 4 is excluded from the banner).
+    await screen.findByRole('heading', { name: /enter game 4 score/i })
+    const reviewBtn = await screen.findByRole('button', {
+      name: /review game 3/i,
+    })
+
+    // Dirty the ACTIVE game (4) with FRESH typing — game 4 has no failed save of
+    // its own (the conflict is on game 3), so its dirty baseline starts clean
+    // and this input is unambiguously user-caused, not stale-true.
+    await user.type(
+      screen.getByRole('textbox', { name: 'rita.kovac score' }),
+      '11',
+    )
+
+    // Clicking Review is a user-initiated hop — it must warn, not silently leave.
+    // fireEvent (not user.click): the two outcomes are mutually exclusive — the
+    // fixed banner blocks (dialog appears, we stay put) while the pre-fix banner
+    // bypasses (navigates to the stub edit route, no dialog). Wait for whichever
+    // resolves, then discriminate: the fixed banner shows the dialog and does NOT
+    // reach "scoring-edit"; the pre-fix banner reaches "scoring-edit" and getByRole
+    // below fails with a fast, clean "no alertdialog".
+    fireEvent.click(reviewBtn)
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('alertdialog') ?? screen.queryByText('scoring-edit'),
+      ).not.toBeNull(),
+    )
+    expect(screen.getByRole('alertdialog')).toHaveTextContent(
+      /leave without saving/i,
+    )
+    // The guard held — we did NOT navigate to game 3's (stub) edit screen.
+    expect(screen.queryByText('scoring-edit')).not.toBeInTheDocument()
+  })
+
+  it('regression: a match completed underneath a dirty form bounces to match detail without warning (#818)', async () => {
+    // The declarative-redirect arm of #818. The user is typing a score when the
+    // match completes on the server (opponent finalized, a late refetch, etc.).
+    // The next `useMatch` refetch returns `completed`, so score-entry's
+    // `<Navigate>` guard bounces to the read-only match page. That redirect is
+    // app-initiated (computed from server data, no user gesture), so it must
+    // bypass the dirty-form guard via `ignoreBlocker`; omitting it doesn't just
+    // prompt — a blocked `<Navigate>` re-fires and wedges the screen (ADR 0014).
+    const user = userEvent.setup()
+    server.use(
+      http.get('*/v1/matches/m-1', () => HttpResponse.json(inProgressMatch())),
+    )
+
+    renderEntryWithSibling({
+      gameNumber: 3,
+      sibling: (qc) => (
+        <button type="button" onClick={() => qc.invalidateQueries()}>
+          refetch match
+        </button>
+      ),
+    })
+    await screen.findByRole('heading', { name: /enter game 3 score/i })
+
+    // Fresh user typing — genuinely dirties the form (game 3 is unscored, so
+    // the baseline is empty and this diverges from it). Not a stale-true
+    // isDirty from a failed save.
+    await user.type(
+      screen.getByRole('textbox', { name: 'rita.kovac score' }),
+      '11',
+    )
+
+    // The match completes on the server underneath the dirty form.
+    server.use(
+      http.get('*/v1/matches/m-1', () => HttpResponse.json(completedMatch())),
+    )
+
+    // fireEvent (not user.click): against the pre-fix component the completed
+    // `<Navigate>` is blocked and busy-loops, which would leave user-event's
+    // `act()` waiting forever and hang the test. fireEvent returns synchronously,
+    // so the `waitFor` below governs the bound and surfaces the regression.
+    fireEvent.click(screen.getByRole('button', { name: /refetch match/i }))
+
+    // The redirect lands us on the read-only match page — no leave prompt.
+    // Explicit timeout: setup.ts sets `asyncUtilTimeout: 5000`, which equals
+    // vitest's default `testTimeout: 5000`, so a bare waitFor here shares the
+    // test's whole budget. `fireEvent` returns synchronously, so the async
+    // invalidate → refetch → <Navigate> chain runs inside this window; when it
+    // flushes slowly the two timers fire at the same boundary and the test dies
+    // with an opaque "Test timed out" instead of a diagnosable "match-page m-1".
+    await waitFor(
+      () => expect(screen.getByText('match-page m-1')).toBeInTheDocument(),
+      { timeout: 2000 },
+    )
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    expect(screen.queryByText(/leave without saving/i)).not.toBeInTheDocument()
+  })
 })
 
 describe('ScoreEntry — conflicts', () => {
@@ -2166,81 +2596,7 @@ describe('ScoreEntry — conflicts', () => {
   })
 
   it('overwrites with my score when I choose to replace, using the version from the conflict body', async () => {
-    const user = userEvent.setup()
-    const putBodies: Array<Record<string, number>> = []
-    // The committed row sits at version 1 until our stale write loses the race;
-    // the opponent's winning write has bumped it to 2. A refetch reflects that.
-    let committedVersion = 1
-    server.use(
-      http.get('*/v1/matches/m-1', () =>
-        HttpResponse.json(
-          inProgressMatch({
-            games: [
-              {
-                id: 'g-1',
-                game_number: 1,
-                score: {
-                  id: 's-1',
-                  side_1_points: 11,
-                  side_2_points: 5,
-                  winner_side_number: 1,
-                  version: committedVersion,
-                },
-              },
-              { id: 'g-2', game_number: 2, score: score('s-2', 9, 11) },
-            ],
-          }),
-        ),
-      ),
-      http.put('*/v1/matches/m-1/games/1/scores', async ({ request }) => {
-        const body = (await request.json()) as Record<string, number>
-        putBodies.push(body)
-        // First write claims version 1 and loses; the committed row is now at
-        // version 2. The 409 carries that committed score so the client can
-        // re-decide and re-fire with the fresh version.
-        if (putBodies.length === 1) {
-          committedVersion = 2
-          return HttpResponse.json(
-            {
-              detail: {
-                message: 'This game was saved by someone else.',
-                committed_score: {
-                  id: 's-1',
-                  side_1_points: 11,
-                  side_2_points: 5,
-                  winner_side_number: 1,
-                  version: 2,
-                },
-              },
-            },
-            { status: 409 },
-          )
-        }
-        return HttpResponse.json(inProgressMatch())
-      }),
-    )
-
-    renderScoringApp('/matches/m-1/games/1/scores/edit')
-
-    const meInput = await screen.findByRole('textbox', {
-      name: 'rita.kovac score',
-    })
-    await waitFor(() => expect(meInput).toHaveValue('11'))
-    await user.clear(meInput)
-    await user.type(meInput, '12')
-    const oppInput = screen.getByRole('textbox', { name: 'nguyen.t score' })
-    await user.clear(oppInput)
-    await user.type(oppInput, '10')
-    await user.click(screen.getByRole('button', { name: /save changes/i }))
-
-    await screen.findByRole('heading', { name: /enter game 3 score/i })
-    await user.click(
-      await screen.findByRole('button', { name: /review game 1/i }),
-    )
-    await screen.findByRole('heading', { name: /edit game 1 score/i })
-    await user.click(
-      screen.getByRole('button', { name: /replace with my score/i }),
-    )
+    const { putBodies } = await renderReplaceConflict()
 
     // The replace re-fires the write — a deliberate overwrite against the
     // version we just showed the user. The first attempt claimed the stale

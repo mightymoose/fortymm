@@ -61,6 +61,14 @@ export function useStartMatch(): UseStartMatchResult {
   // which also doubles as the dirty-form blocker's escape hatch (#75):
   // `hasSucceeded()` below reads this same ref, so a retry-after-error
   // correctly re-arms the blocker instead of leaving it permanently bypassed.
+  //
+  // Deliberately NOT migrated to `ignoreBlocker` like score entry was (ADR
+  // 0014, #818). This is a terminal state — "this form has been spent" — that
+  // is permanent by design (it must outlive its navigation to stop a
+  // bfcache-restored form from creating a second match, #81), not a
+  // one-hop-sanctioned permission. And `ignoreBlocker` could not replace it
+  // anyway: `hasSucceeded()` is read by `enableBeforeUnload`, and closing a tab
+  // is not a `navigate()` call, so no navigation option can reach that path.
   const submitState = useRef<'idle' | 'submitting' | 'done'>('idle')
 
   async function submit({ opponent, bestOf, rated }: StartMatchInput) {
