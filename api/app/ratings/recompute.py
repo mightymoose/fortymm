@@ -14,9 +14,22 @@ Concurrent safety: two workers recomputing the same league would interleave
 DELETE/INSERT under READ COMMITTED and produce a corrupt final row.
 ``recompute_league_ratings`` acquires a per-league ``pg_advisory_xact_lock``
 before touching any data; the lock is held for the life of the caller's
-transaction and released on commit or rollback.  The caller must not commit
-mid-loop across multiple leagues, or locks for earlier leagues are released
-before later ones are acquired (see ``app.ratings.jobs``).
+transaction and released on commit or rollback.
+
+Leagues are independent, and a caller processing several of them commits after
+each one. Every query here is scoped to a single ``league_id`` — the match
+lookups, the ``rating_history`` delete, the ``user_league_ratings`` select,
+``_seed_states``, and ``_reset_users_to_initial_state`` all filter (or stamp) on
+it — so no league's recompute reads or writes another league's state. A caller
+that loops over multiple leagues therefore commits per league (see
+``app.ratings.jobs``): each league's advisory lock is held for exactly its own
+transaction, and a failure in one league leaves the leagues already committed
+before it intact. Releasing an earlier league's lock before acquiring a later
+one is harmless because there is no cross-league invariant for it to protect;
+holding at most one lock at a time also makes cross-job deadlock impossible
+rather than merely ordered-away. The only thing a per-league commit gives up is a
+single cross-league point-in-time snapshot, and no reader consumes ratings across
+leagues atomically (every read is league-scoped), so nothing depends on it.
 """
 
 import struct

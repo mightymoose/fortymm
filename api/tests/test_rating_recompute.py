@@ -1081,6 +1081,143 @@ async def test_recompute_after_merge_rebuilds_each_league_independently(
     assert b_match_ids == {match_b.id}
 
 
+# ----- per-league commit in the after-merge job (issue #248) --------------
+
+
+async def _two_league_setup(
+    db_session: AsyncSession,
+    strategy: RatingStrategy,
+) -> tuple[uuid.UUID, uuid.UUID, uuid.UUID]:
+    """Stand up a user with a rated singles win in each of two leagues, plus a
+    rating row in both (so ``_recompute_after_merge``'s league discovery reaches
+    each). Returns plain ids — ``(user_id, first_processed_id,
+    second_processed_id)`` — sorted the way the job walks ``sorted(league_ids)``,
+    so the caller knows which league the loop reaches first. Ids (not ORM
+    objects) so a later ``expire_all`` can't trigger a sync lazy-load."""
+    league_a = await get_default_league(db_session)
+    league_b = League(
+        name="Second League",
+        description="A second glicko-2 league.",
+        visibility=LeagueVisibility.public,
+        is_default=False,
+        rating_strategy_id=strategy.id,
+    )
+    db_session.add(league_b)
+    await db_session.commit()
+    await db_session.refresh(league_b)
+
+    me = await make_user(db_session, "merged-multi")
+    opp_a = await make_user(db_session, "rival-a")
+    opp_b = await make_user(db_session, "rival-b")
+    await _seed_rating(db_session, league_a, me.id, strategy)
+    await _seed_rating(db_session, league_a, opp_a.id, strategy)
+    await _seed_rating(db_session, league_b, me.id, strategy)
+    await _seed_rating(db_session, league_b, opp_b.id, strategy)
+
+    base = datetime(2026, 5, 1, tzinfo=UTC)
+    # A win in each league, so a committed recompute moves the rating above the
+    # 1500 initial and a rolled-back one leaves it exactly at the seeded initial.
+    await _build_completed_match(db_session, league_a, me, opp_a, base)
+    await _build_completed_match(db_session, league_b, me, opp_b, base)
+
+    # The job processes leagues in ``sorted(league_ids)`` order.
+    first_id, second_id = sorted((league_a.id, league_b.id))
+    return me.id, first_id, second_id
+
+
+async def _rating_value(
+    db_session: AsyncSession, user_id: uuid.UUID, league_id: uuid.UUID
+) -> float | None:
+    row = (
+        await db_session.execute(
+            select(UserLeagueRating).where(
+                UserLeagueRating.user_id == user_id,
+                UserLeagueRating.league_id == league_id,
+            )
+        )
+    ).scalar_one()
+    return row.rating_value
+
+
+async def test_recompute_after_merge_commits_each_league_before_the_next(
+    db_session: AsyncSession,
+    engine: AsyncEngine,
+    monkeypatch: pytest.MonkeyPatch,
+    rating_strategies: dict[str, RatingStrategy],
+):
+    """Issue #248: the after-merge job commits each league independently, so a
+    league that raises mid-loop does NOT take its already-processed predecessors
+    down with it.
+
+    The user has a rated win in two leagues. We wrap ``recompute_league_ratings``
+    so the SECOND call (the second league in ``sorted`` order) runs its real
+    recompute and then raises — the failure lands after the work but before the
+    job's per-league commit. The job must propagate the error, yet the FIRST
+    league's recompute must already be committed while the second is rolled back.
+
+    Pre-chore (a single commit after the whole loop) this fails: the raise
+    unwinds the ``async with`` and rolls back BOTH leagues, so the first league's
+    rating is left at the seeded initial too."""
+    strategy = rating_strategies["glicko2"]
+    me_id, first_id, second_id = await _two_league_setup(db_session, strategy)
+
+    real_recompute = ratings_jobs.recompute_league_ratings
+    calls = {"n": 0}
+
+    async def flaky(
+        session: AsyncSession,
+        league_id: uuid.UUID,
+        seed_user_ids: set[uuid.UUID],
+    ) -> None:
+        calls["n"] += 1
+        # Do the real work in the session, then blow up on the 2nd league only —
+        # after its writes are flushed but before the job commits them.
+        await real_recompute(session, league_id, seed_user_ids)
+        if calls["n"] == 2:
+            raise RuntimeError("boom recomputing the second league")
+
+    monkeypatch.setattr(ratings_jobs, "recompute_league_ratings", flaky)
+    # Point the job's own engine (opened via ``get_engine()``) at the test
+    # container so its committed work is visible to ``db_session``.
+    monkeypatch.setattr(ratings_jobs, "get_engine", lambda: engine)
+
+    with pytest.raises(RuntimeError, match="second league"):
+        await ratings_jobs._recompute_after_merge(me_id)
+
+    assert calls["n"] == 2
+
+    # Fresh read: the first league committed (rating moved above initial); the
+    # second rolled back with the raising transaction (still at the seeded 1500).
+    db_session.expire_all()
+    first_value = await _rating_value(db_session, me_id, first_id)
+    second_value = await _rating_value(db_session, me_id, second_id)
+    assert first_value is not None and first_value > 1500.0
+    assert second_value == 1500.0
+
+
+async def test_recompute_after_merge_settles_every_league_on_the_happy_path(
+    db_session: AsyncSession,
+    engine: AsyncEngine,
+    monkeypatch: pytest.MonkeyPatch,
+    rating_strategies: dict[str, RatingStrategy],
+):
+    """When nothing raises, the per-league-commit job still settles every league:
+    the real ``_recompute_after_merge`` over two leagues commits both. Guards the
+    per-league commit boundary against a regression that drops later leaders."""
+    strategy = rating_strategies["glicko2"]
+    me_id, first_id, second_id = await _two_league_setup(db_session, strategy)
+
+    monkeypatch.setattr(ratings_jobs, "get_engine", lambda: engine)
+    await ratings_jobs._recompute_after_merge(me_id)
+
+    db_session.expire_all()
+    first_value = await _rating_value(db_session, me_id, first_id)
+    second_value = await _rating_value(db_session, me_id, second_id)
+    # A win in each league → both ratings moved above the initial and persisted.
+    assert first_value is not None and first_value > 1500.0
+    assert second_value is not None and second_value > 1500.0
+
+
 # ----- empty-timeline reset (ADR-0013) ------------------------------------
 
 # A rating clearly distinct from the strategy initial (1500), so a reset to the
