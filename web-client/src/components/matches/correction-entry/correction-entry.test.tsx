@@ -202,6 +202,47 @@ describe("CorrectionEntry", () => {
     expect(correctionEntryPage.queryMatchLanding()).not.toBeInTheDocument();
   });
 
+  it("surfaces a transport-level failure inline and leaves Send retryable, on a valid decided board (#839)", async () => {
+    // `useProposeResult` runs `networkMode: 'always'`, so an offline submit
+    // fires the POST and `fetch` rejects with a plain `TypeError` — NOT an
+    // `ApiError`. On a valid, decided board (no `boardHint`) the old code
+    // rendered nothing here, leaving the user with zero feedback. The board
+    // below is the seed's untouched decided 3–0, so only the connection alert
+    // can explain the failure.
+    correctionEntryPage.mockMatch(() =>
+      HttpResponse.json(buildCorrectableMatch()),
+    );
+    correctionEntryPage.mockPropose(() => HttpResponse.error());
+    correctionEntryPage.render();
+
+    await waitFor(() => correctionEntryPage.getInput("rita.kovac"));
+    await userEvent.click(correctionEntryPage.getSubmit());
+
+    // Wait on the mutation *settling*, not on the alert — the button returning
+    // from "Sending…" to enabled happens in BOTH the fixed and broken states,
+    // so this resolves in ~milliseconds either way. If we waited on the alert
+    // itself, a regression (no alert) would red as an opaque 5s timeout
+    // (`asyncUtilTimeout` == `testTimeout` == 5000, so a missing signal is
+    // indistinguishable from a hang). Settling first, then asserting the alert
+    // synchronously, makes a missing alert fail fast with a crisp query error.
+    await waitFor(() => {
+      expect(correctionEntryPage.getSubmit()).toBeEnabled();
+      expect(correctionEntryPage.getSubmit()).toHaveTextContent(
+        "Send corrected score",
+      );
+    });
+
+    // Now the connection alert MUST already be in the DOM (it renders in the
+    // same commit the mutation error settled). Assert it synchronously so its
+    // absence is an immediate "unable to find role alert", not a timeout.
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      /Couldn't send your corrected score .* check your connection and try again/i,
+    );
+    // The board never left, so no navigation — and the re-enabled button above
+    // means the user can retry (not stuck on "Sending…").
+    expect(correctionEntryPage.queryMatchLanding()).not.toBeInTheDocument();
+  });
+
   it("redirects to match details instead of rendering when the match is already settled (#730)", async () => {
     // A finalized match still carries a `standing_result` (the settled score),
     // so the redirect must key off `viewer_state`, not just the presence of a

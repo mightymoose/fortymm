@@ -232,6 +232,14 @@ export function CorrectionEntry({ matchId }: { matchId: string }) {
   const apiError =
     proposeMutation.error instanceof ApiError ? proposeMutation.error : null;
 
+  // A non-ApiError needs its own branch: `useProposeResult` runs
+  // `networkMode: 'always'`, so an offline submit fires the POST anyway and
+  // `fetch` rejects at the transport level with a plain `TypeError` — never an
+  // `ApiError`. Without this, an offline send would re-enable the button with
+  // no feedback at all (#839). Mutually exclusive with `apiError` by
+  // construction (the error is one or the other, never both).
+  const networkError = proposeMutation.error !== null && apiError === null;
+
   const inputsLocked = proposeMutation.isPending;
 
   // The per-game verdicts and the scoreline view-model both derive from the
@@ -317,6 +325,13 @@ export function CorrectionEntry({ matchId }: { matchId: string }) {
           {apiError.status === 409
             ? "This proposal has moved on — reload the match to see the latest score."
             : (apiError.detail ?? apiError.message)}
+        </p>
+      )}
+
+      {networkError && (
+        <p role="alert" className="mt-1.5 text-xs text-[color:var(--loss)]">
+          Couldn't send your corrected score — check your connection and try
+          again.
         </p>
       )}
 
