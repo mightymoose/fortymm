@@ -2,10 +2,46 @@ import { HttpResponse } from "msw";
 import userEvent from "@testing-library/user-event";
 
 import { buildMatchDetails } from "@/mocks/factories/matches/match-details.factory";
-import { fireEvent, waitFor } from "@/test/utilities";
+import { fireEvent, screen, waitFor } from "@/test/utilities";
 
 import { buildFinalizeCalloutView } from "./finalize-callout-active/finalize-callout-display.factory";
 import { finalizeCalloutActivePage } from "./finalize-callout-active.page";
+
+/**
+ * Wait on the mutation *settling*, not on the alert — the CTA returning from
+ * "Posting…" to enabled "Post result" happens in BOTH the fixed and broken
+ * states, so this resolves in ~milliseconds either way. React Query commits
+ * `isPending=false` and the settled `error` in the SAME state update, so the
+ * commit where the button re-enables is the same commit that renders the alert;
+ * callers can therefore assert the alert synchronously right after this.
+ *
+ * If we waited on the alert itself, a regression (no alert) would red as an
+ * opaque 5s timeout — `asyncUtilTimeout` == `testTimeout` == 5000, so a missing
+ * signal is indistinguishable from a hang. Settling first, then asserting the
+ * alert synchronously, makes a missing alert fail fast with a crisp query error.
+ */
+async function settleToRetryable() {
+  await waitFor(() => {
+    const button = finalizeCalloutActivePage.getPostButton();
+    expect(button).toBeEnabled();
+    expect(button).toHaveTextContent("Post result");
+  });
+}
+
+/**
+ * Whether the #867 connection alert is currently in the DOM. It renders in the
+ * same commit the transport-level mutation error settles, so callers assert
+ * this synchronously after `settleToRetryable()` rather than waiting on it.
+ * Scoped with `.some(...)` so a co-rendered alert can't blow up a singular
+ * `getByRole("alert")`.
+ */
+function hasConnectionAlert() {
+  return screen
+    .queryAllByRole("alert")
+    .some((a: HTMLElement) =>
+      /check your connection and try again/i.test(a.textContent ?? ""),
+    );
+}
 
 describe("FinalizeCalloutActive", () => {
   it("posts exactly the view's canonical games, unchanged", async () => {
@@ -130,5 +166,111 @@ describe("FinalizeCalloutActive", () => {
     await waitFor(() =>
       expect(finalizeCalloutActivePage.queryError()).not.toBeInTheDocument(),
     );
+  });
+
+  it("surfaces a transport-level failure as a connection alert (#867)", async () => {
+    // `useProposeResult` runs `networkMode: 'always'`, so an offline submit
+    // fires the POST anyway and `fetch` rejects with a plain `TypeError` — NOT
+    // an `ApiError`. `HttpResponse.error()` reproduces that thrown TypeError
+    // (a rejected request, not a 500 status). The old code rendered nothing in
+    // this branch, leaving the user with zero feedback (#867).
+    finalizeCalloutActivePage.mockResultsEndpoint(() => HttpResponse.error());
+    finalizeCalloutActivePage.render();
+
+    await userEvent.click(finalizeCalloutActivePage.getPostButton());
+
+    // Settle back from "Posting…" to enabled first, THEN assert the alert
+    // synchronously — a missing alert fails as an assertion error in ms, not an
+    // opaque 5s timeout.
+    await settleToRetryable();
+    expect(hasConnectionAlert()).toBe(true);
+  });
+
+  it("re-fires the POST when clicked again while still offline (#867 retry)", async () => {
+    // After a transport-level failure, `onError` resets the synchronous
+    // `inFlightRef` guard, so a second click must actually re-fire the mutation
+    // — it must not be dead-locked by a ref that never cleared. Both attempts
+    // fail (still offline), so counting the POSTs proves the retry left the
+    // boundary rather than being swallowed client-side.
+    let requests = 0;
+    finalizeCalloutActivePage.mockResultsEndpoint(() => {
+      requests += 1;
+      return HttpResponse.error();
+    });
+    finalizeCalloutActivePage.render();
+
+    // First send fails at the transport level → the connection alert renders and
+    // the button settles back from "Posting…" to enabled.
+    await userEvent.click(finalizeCalloutActivePage.getPostButton());
+    await settleToRetryable();
+    expect(requests).toBe(1);
+    expect(hasConnectionAlert()).toBe(true);
+
+    // Retry: click again. The awaited click commits the pending/disabled render,
+    // so `settleToRetryable()` genuinely waits for the second round-trip and
+    // `requests` is already 2 by the time it resolves. If the retry were
+    // dead-locked by a stuck `inFlightRef`, the button never leaves "Post result"
+    // and the synchronous `requests` assertion fails "expected 1 to be 2" — not
+    // a timeout.
+    await userEvent.click(finalizeCalloutActivePage.getPostButton());
+    await settleToRetryable();
+    expect(requests).toBe(2);
+    expect(hasConnectionAlert()).toBe(true);
+  });
+
+  it("clears the stale connection alert after a reconnecting retry succeeds (#867 reconnect)", async () => {
+    // First submit fails at the transport level (offline), rendering the
+    // connection alert. Once the endpoint recovers, a second click must succeed
+    // and the stale connection alert must not linger — the success resets the
+    // mutation error.
+    let requests = 0;
+    finalizeCalloutActivePage.mockResultsEndpoint(() => {
+      requests += 1;
+      return HttpResponse.error();
+    });
+    finalizeCalloutActivePage.render();
+
+    await userEvent.click(finalizeCalloutActivePage.getPostButton());
+    await settleToRetryable();
+    expect(hasConnectionAlert()).toBe(true);
+
+    // Reconnect: the endpoint now succeeds. `server.use` prepends, so this
+    // handler wins for the retry.
+    finalizeCalloutActivePage.mockResultsEndpoint(() => {
+      requests += 1;
+      return HttpResponse.json(buildMatchDetails(), { status: 201 });
+    });
+
+    await userEvent.click(finalizeCalloutActivePage.getPostButton());
+    await waitFor(() => expect(requests).toBe(2));
+    await settleToRetryable();
+
+    // The success path does not keep showing the stale connection alert.
+    expect(hasConnectionAlert()).toBe(false);
+  });
+
+  it("shows the server's 409 detail, not the connection copy (branches don't cross)", async () => {
+    // A 409 is an `ApiError`, not a transport TypeError, so the `apiError`
+    // branch — the server's `detail` copy — must win. The connection copy must
+    // NOT appear (guard against the two error branches crossing).
+    finalizeCalloutActivePage.mockResultsEndpoint(() =>
+      HttpResponse.json(
+        { detail: "Match already has a posted result" },
+        { status: 409 },
+      ),
+    );
+    finalizeCalloutActivePage.render();
+
+    await userEvent.click(finalizeCalloutActivePage.getPostButton());
+
+    await settleToRetryable();
+    expect(
+      screen
+        .queryAllByRole("alert")
+        .some((a: HTMLElement) =>
+          /Match already has a posted result/.test(a.textContent ?? ""),
+        ),
+    ).toBe(true);
+    expect(hasConnectionAlert()).toBe(false);
   });
 });

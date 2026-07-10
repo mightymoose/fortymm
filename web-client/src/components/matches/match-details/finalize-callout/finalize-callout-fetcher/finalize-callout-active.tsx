@@ -12,16 +12,25 @@ export interface FinalizeCalloutActiveProps {
 }
 
 /** Wires the post-result mutation onto the pure display: posting the view's
- * canonical games, surfacing pending state, and keeping API failures visible
- * inline (without throwOnError a 409 — opponent confirmed first, double-click,
- * etc. — would otherwise vanish and the button would appear inert). */
+ * canonical games, surfacing pending state, and keeping failures visible inline
+ * — both API rejections (without throwOnError a 409 — opponent confirmed first,
+ * double-click, etc. — would otherwise vanish and the button would appear
+ * inert) and transport-level ones (an offline send, #867). */
 export function FinalizeCalloutActive({
   view,
   matchId,
 }: FinalizeCalloutActiveProps) {
   const finalizeMutation = useProposeResult(matchId);
-  const error =
+  const apiError =
     finalizeMutation.error instanceof ApiError ? finalizeMutation.error : null;
+
+  // A non-ApiError needs its own branch: `useProposeResult` runs
+  // `networkMode: 'always'`, so an offline submit fires the POST anyway and
+  // `fetch` rejects at the transport level with a plain `TypeError` — never an
+  // `ApiError`. Without this, an offline send would re-enable the button with
+  // no feedback at all (#867). Mutually exclusive with `apiError` by
+  // construction (the error is one or the other, never both).
+  const networkError = finalizeMutation.error !== null && apiError === null;
   // Synchronous double-submit guard. `disabled={pending}` only takes effect on
   // the next render, so a fast double-click lands a second tap before React
   // commits the disable — firing two concurrent POST /results that pile up on
@@ -39,7 +48,13 @@ export function FinalizeCalloutActive({
   return (
     <FinalizeCalloutDisplay
       pending={finalizeMutation.isPending}
-      errorMessage={error ? (error.detail ?? error.message) : null}
+      errorMessage={
+        apiError
+          ? (apiError.detail ?? apiError.message)
+          : networkError
+            ? "Couldn't post the result — check your connection and try again."
+            : null
+      }
       onPost={() => {
         if (inFlightRef.current) return;
         inFlightRef.current = true;
