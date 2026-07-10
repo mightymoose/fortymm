@@ -7,6 +7,8 @@ mapping that produces an update on every result.
 import math
 from typing import Any
 
+from app.ratings.base import RatingStrategyKey
+
 TAU = 0.5  # system constant, dampens volatility changes
 SCALE = 173.7178  # Glicko-2 conversion factor
 EPSILON = 1e-6
@@ -81,7 +83,7 @@ def _update_one(
 
 
 class Glicko2Calculator:
-    key = "glicko2"
+    key: RatingStrategyKey = RatingStrategyKey.glicko2
 
     def update_singles(
         self,

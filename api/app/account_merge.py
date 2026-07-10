@@ -6,9 +6,10 @@ the browser arrived with a different ephemeral session than the target account.
 The ephemeral row is kept (``merged_into_user_id`` set) rather than dropped so
 its session token still resolves and the auth layer can tell the holder their
 session was merged instead of silently minting a fresh guest. Because we no
-longer rely on ``ON DELETE CASCADE``, the ephemeral user's owned rows
-(roles, leftover league rows, rating history, non-session tokens) are cleaned up
-explicitly here.
+longer rely on ``ON DELETE CASCADE``, the ephemeral user's owned rows are handled
+explicitly here: grants worth keeping (roles) are re-pointed onto the survivor,
+and the rest (leftover league rows, rating history, non-session tokens) are
+cleaned up.
 
 Leaves the verified user's ``user_league_ratings`` and ``rating_history``
 stale relative to the freshly-moved matches — the caller enqueues the
@@ -279,10 +280,35 @@ async def merge_user(
         )
         for match in collided_matches:
             await void_match(db, match)
+    # Carry the guest's granted roles onto the survivor rather than dropping
+    # them: a role a moderator handed the ephemeral session (or that the guest
+    # earned) is a real grant we must not silently lose when the guest signs in.
+    # ``user_roles`` PKs on (user_id, role_id), so re-point only the roles the
+    # survivor doesn't already hold — a role BOTH users have would collide on
+    # that key. The leftover (already-held) ephemeral rows are dropped by the
+    # tombstone cleanup below.
+    await db.execute(
+        text(
+            """
+            UPDATE user_roles AS ur
+            SET user_id = :to_id
+            WHERE ur.user_id = :from_id
+              AND NOT EXISTS (
+                SELECT 1 FROM user_roles other
+                WHERE other.user_id = :to_id
+                  AND other.role_id = ur.role_id
+              )
+            """
+        ),
+        {"from_id": from_user_id, "to_id": to_user_id},
+    )
+
     # We tombstone rather than DELETE the user, so the rows that used to ride
     # ``ON DELETE CASCADE`` must be dropped explicitly. Order doesn't matter —
     # none of these reference each other. Keep the guest's *session* tokens so
-    # its cookie still resolves to this (now-tombstoned) row.
+    # its cookie still resolves to this (now-tombstoned) row. The role re-point
+    # above already moved every grant the survivor lacked; this clears any that
+    # stayed behind as duplicates so the tombstone ends with no roles.
     await db.execute(delete(UserRole).where(UserRole.user_id == from_user_id))
     await db.execute(delete(DeviceToken).where(DeviceToken.user_id == from_user_id))
     # A guest's in-app notifications and preference overrides are throwaway —

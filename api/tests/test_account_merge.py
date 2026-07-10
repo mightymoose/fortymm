@@ -25,10 +25,12 @@ from app.models import (
     MatchStatus,
     RatingHistory,
     RatingHistorySource,
+    Role,
     Tournament,
     TournamentEvent,
     User,
     UserLeagueRating,
+    UserRole,
     UserToken,
 )
 from app.sessions import SESSION_TOKEN_CONTEXT
@@ -474,6 +476,97 @@ async def test_merge_repoints_match_result_submitted_by(db_session: AsyncSession
 
     await db_session.refresh(result)
     assert result.submitted_by_user_id == verified.id
+
+
+# ----- roles --------------------------------------------------------------
+
+
+async def test_merge_carries_role_the_survivor_lacks(db_session: AsyncSession):
+    """A role granted to the ephemeral session must ride onto the survivor —
+    dropping it would silently revoke a grant the moment the guest signs in.
+    ``user_roles`` PKs on (user_id, role_id) with no ON DELETE CASCADE firing on
+    a tombstone, so the merge re-points the grant explicitly."""
+    ephemeral = await _make_ephemeral(db_session, "drifting-grouse")
+    verified = await _make_verified(db_session, "rita@example.com")
+
+    role = Role(name="tournament-director")
+    db_session.add(role)
+    await db_session.commit()
+    db_session.add(UserRole(user_id=ephemeral.id, role_id=role.id))
+    await db_session.commit()
+
+    await merge_user(db_session, from_user_id=ephemeral.id, to_user_id=verified.id)
+    await db_session.commit()
+
+    survivor_role_ids = (
+        (
+            await db_session.execute(
+                select(UserRole.role_id).where(UserRole.user_id == verified.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert survivor_role_ids == [role.id]
+
+    # The tombstoned ephemeral user ends with no roles.
+    ephemeral_role_ids = (
+        (
+            await db_session.execute(
+                select(UserRole.role_id).where(UserRole.user_id == ephemeral.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert ephemeral_role_ids == []
+
+
+async def test_merge_role_held_by_both_does_not_collide(db_session: AsyncSession):
+    """When both users already hold the same role, the (user_id, role_id) PK
+    would collide on a naïve re-point. The NOT EXISTS guard skips it; the merge
+    does not raise and the survivor keeps the role exactly once, while the
+    ephemeral duplicate is cleared by the tombstone cleanup."""
+    ephemeral = await _make_ephemeral(db_session, "drifting-grouse")
+    verified = await _make_verified(db_session, "rita@example.com")
+
+    role = Role(name="tournament-director")
+    db_session.add(role)
+    await db_session.commit()
+    db_session.add_all(
+        [
+            UserRole(user_id=ephemeral.id, role_id=role.id),
+            UserRole(user_id=verified.id, role_id=role.id),
+        ]
+    )
+    await db_session.commit()
+
+    # Must not raise on the composite PK.
+    await merge_user(db_session, from_user_id=ephemeral.id, to_user_id=verified.id)
+    await db_session.commit()
+
+    survivor_role_ids = (
+        (
+            await db_session.execute(
+                select(UserRole.role_id).where(UserRole.user_id == verified.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    # Held exactly once — no duplicate row.
+    assert survivor_role_ids == [role.id]
+
+    ephemeral_role_ids = (
+        (
+            await db_session.execute(
+                select(UserRole.role_id).where(UserRole.user_id == ephemeral.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert ephemeral_role_ids == []
 
 
 # ----- counts -------------------------------------------------------------

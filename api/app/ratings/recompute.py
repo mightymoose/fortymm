@@ -14,9 +14,22 @@ Concurrent safety: two workers recomputing the same league would interleave
 DELETE/INSERT under READ COMMITTED and produce a corrupt final row.
 ``recompute_league_ratings`` acquires a per-league ``pg_advisory_xact_lock``
 before touching any data; the lock is held for the life of the caller's
-transaction and released on commit or rollback.  The caller must not commit
-mid-loop across multiple leagues, or locks for earlier leagues are released
-before later ones are acquired (see ``app.ratings.jobs``).
+transaction and released on commit or rollback.
+
+Leagues are independent, and a caller processing several of them commits after
+each one. Every query here is scoped to a single ``league_id`` — the match
+lookups, the ``rating_history`` delete, the ``user_league_ratings`` select,
+``_seed_states``, and ``_reset_users_to_initial_state`` all filter (or stamp) on
+it — so no league's recompute reads or writes another league's state. A caller
+that loops over multiple leagues therefore commits per league (see
+``app.ratings.jobs``): each league's advisory lock is held for exactly its own
+transaction, and a failure in one league leaves the leagues already committed
+before it intact. Releasing an earlier league's lock before acquiring a later
+one is harmless because there is no cross-league invariant for it to protect;
+holding at most one lock at a time also makes cross-job deadlock impossible
+rather than merely ordered-away. The only thing a per-league commit gives up is a
+single cross-league point-in-time snapshot, and no reader consumes ratings across
+leagues atomically (every read is league-scoped), so nothing depends on it.
 """
 
 import struct
@@ -52,8 +65,8 @@ from app.models import (
     UserLeagueRating,
 )
 from app.ratings.base import state_rating_value
-from app.ratings.registry import get_calculator
-from app.ratings.validation import validate_state
+from app.ratings.registry import get_calculator, parse_strategy_key
+from app.ratings.validation import RatingStrategyMismatchError, validate_state
 
 # Sentinel ordering key for a NULL ``match_id``. Non-match history rows
 # (``initial`` / ``manual`` / ``import``) carry ``match_id IS NULL``, and a NULL
@@ -129,7 +142,10 @@ async def recompute_league_ratings(
     strategy = league.rating_strategy
     if not strategy.is_automatic:
         return
-    calculator = get_calculator(strategy.key)
+    strategy_key = parse_strategy_key(strategy.key)
+    if strategy_key is None:
+        return
+    calculator = get_calculator(strategy_key)
     if calculator is None:
         return
 
@@ -270,12 +286,31 @@ async def recompute_league_ratings(
             ulr = UserLeagueRating(
                 league_id=league_id,
                 user_id=user_id,
+                rating_strategy_id=strategy.id,
                 rating_state=state,
                 rating_value=value,
             )
             db.add(ulr)
             rating_by_user[user_id] = ulr
         else:
+            # Snapshot guard (issue #184). ``ulr`` pre-existed this recompute and
+            # holds ``rating_state`` in the shape of the strategy it was
+            # snapshotted under. If the league has since switched strategies,
+            # overwriting it from a replay run under the new strategy would leave
+            # the row's snapshot lying about its state — refuse loudly instead.
+            # Reached only for an ``is_automatic`` league (guarded above), so it
+            # fires on automatic->automatic switches; a switch to manual
+            # early-returns and those rows freeze at their last automatic value
+            # (accepted; #184). Freshly-created rows take the ``ulr is None``
+            # branch above and are stamped with the current ``strategy.id``, so
+            # the guard is scoped to existing rows only.
+            if ulr.rating_strategy_id != strategy.id:
+                raise RatingStrategyMismatchError(
+                    league_id=league_id,
+                    user_id=user_id,
+                    row_strategy_id=ulr.rating_strategy_id,
+                    league_strategy_id=strategy.id,
+                )
             ulr.rating_state = state
             ulr.rating_value = value
 
@@ -351,9 +386,15 @@ async def _reset_users_to_initial_state(
 
     The non-match rows — ``initial`` (written by ``seed_user_league_rating``
     when the user joined), ``manual``, ``import`` — are the empty timeline
-    itself and stay untouched; no new event is appended. The
-    ``UserLeagueRating`` row is reset in place, never deleted: every member
-    keeps exactly one from seeding.
+    itself and stay untouched; no new event is appended. These rows can be
+    strategy-*stale* — this function re-stamps the ``UserLeagueRating`` snapshot
+    to the current ``strategy`` but leaves the history rows carrying whatever
+    ``rating_strategy_id`` they were written under. That is safe: ``_seed_states``
+    filters a seed to ``rating_strategy_id == strategy.id`` (issue #184), so a
+    row written under a superseded strategy is simply never selectable as a seed
+    under a different one — it stays as an audit-trail record and cannot be
+    replayed through the wrong calculator. The ``UserLeagueRating`` row is reset
+    in place, never deleted: every member keeps exactly one from seeding.
 
     Runs inside the caller's transaction — does not commit.
     """
@@ -384,6 +425,14 @@ async def _reset_users_to_initial_state(
     for ulr in ratings:
         ulr.rating_state = dict(initial_state) if initial_state is not None else None
         ulr.rating_value = strategy.initial_rating_value
+        # Re-stamp the strategy snapshot (issue #184). This function is the ONE
+        # write that legitimately re-stamps ``rating_strategy_id``: it overwrites
+        # ``rating_state`` wholesale from the *current* strategy's
+        # ``initial_state`` and never reads the old state, so a stale snapshot is
+        # safe here — this is the reset/heal path. Every other write instead
+        # *refuses* on a snapshot mismatch (``RatingStrategyMismatchError``);
+        # here we heal it by aligning the snapshot to the state we just wrote.
+        ulr.rating_strategy_id = strategy.id
 
     await db.flush()
 
@@ -422,6 +471,20 @@ async def _seed_states(
     the same instant — a seeding event precedes play at that instant — instead of
     poisoning the row comparison to NULL.
 
+    A seed row must also have been written under the league's CURRENT strategy
+    (issue #184): the subquery filters ``rating_strategy_id == strategy.id``.
+    ``rating_history`` snapshots that column per row, and a row from a superseded
+    strategy holds ``rating_state`` in that strategy's shape — the current
+    calculator/JSON Schema would misread it (a ``KeyError`` from the replay, or
+    silent corruption if the two shapes' keys overlap). Rows from a superseded
+    strategy are therefore ignored; a user whose only history rows were written
+    under a different strategy has no qualifying seed and falls through to the
+    ``initial_state`` fallback — under the new strategy their timeline correctly
+    starts at the new strategy's initial state. This is a no-op for today's data
+    (every history row in a league shares that league's strategy, there being no
+    strategy-mutation flow), and guards the same future #184 guards on the
+    ``user_league_ratings`` snapshot.
+
     A per-user VALUES join keeps this to one round trip — N affected users
     would otherwise be N queries."""
     if not cutoffs:
@@ -459,6 +522,15 @@ async def _seed_states(
         )
         .where(
             RatingHistory.league_id == league_id,
+            # Only a row written under the CURRENT strategy is a valid seed
+            # (issue #184). ``rating_history`` snapshots ``rating_strategy_id``
+            # per row; a row from a superseded strategy holds ``rating_state`` in
+            # that strategy's shape, which the current calculator would misread
+            # (KeyError, or silent corruption on overlapping keys). Filtering it
+            # out drops the user through to the ``initial_state`` fallback below —
+            # the correct semantics: under the new strategy their timeline starts
+            # at the new strategy's initial state.
+            RatingHistory.rating_strategy_id == strategy.id,
             tuple_(RatingHistory.created_at, match_sort_key)
             < tuple_(
                 cutoff_values.c.cutoff_completed_at,

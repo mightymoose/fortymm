@@ -33,6 +33,25 @@ def recompute_after_merge(user_id: str) -> None:
 
 
 async def _recompute_after_merge(user_id: uuid.UUID) -> None:
+    """Re-run and commit each affected league's rating cascade independently.
+
+    Every query in ``recompute_league_ratings`` is scoped to a single
+    ``league_id``, so leagues are independent — one league's recompute neither
+    reads nor writes another's state. We therefore commit after each league
+    rather than once at the end: partial progress survives, so a persistent
+    error in one league no longer discards the leagues already settled before it
+    (issue #248).
+
+    Failure policy: if a league's recompute raises, the leagues committed before
+    it stay committed and the exception propagates. RQ then marks the job failed
+    and a retry replays every league — harmless for the already-settled ones
+    because the recompute is idempotent (it rewrites state deterministically), so
+    only the previously-failing league has real work left to do. Letting it
+    propagate (rather than log-and-continue) keeps RQ's failed-job registry
+    meaningful. The failing league's own uncommitted work is rolled back when the
+    ``async with`` session context exits on the propagating exception, so the
+    session is never reused after a partial statement.
+    """
     sessionmaker = async_sessionmaker(get_engine(), expire_on_commit=False)
     async with sessionmaker() as session:
         # Discover leagues by rating row, not by "has a completed rated match".
@@ -56,8 +75,11 @@ async def _recompute_after_merge(user_id: uuid.UUID) -> None:
         )
         if not league_ids:
             return
-        # Consistent acquisition order prevents deadlocks when two concurrent
-        # jobs for different users share overlapping league sets.
+        # Commit per league so partial progress survives a mid-loop failure.
+        # A stable acquisition order is belt-and-braces now: with a per-league
+        # commit the job holds exactly one transaction-scoped advisory lock at a
+        # time, so cross-job deadlock is impossible rather than merely
+        # ordered-away. Kept for a deterministic, easy-to-reason-about order.
         for league_id in sorted(league_ids):
             await recompute_league_ratings(session, league_id, {user_id})
-        await session.commit()
+            await session.commit()

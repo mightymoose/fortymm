@@ -145,12 +145,31 @@ def _side_schema(
 # pulled up front. The posted results (the propose/accept chain) are needed
 # wherever ``can_finalize`` / the awaiting-acceptance status label / the
 # derived ``negotiation`` block are computed.
+#
+# ``Match.league`` is eager (serializers read ``league.id``/``league.name``) but
+# its nested ``rating_strategy`` is NOT — only the score-write finalize paths
+# read it (inside ``_apply_rating_update``), and they load it explicitly via
+# ``match_rating_eager_options`` so the list / detail / dashboard reads don't pay
+# an extra ``selectinload`` on the strategy row (issue #182).
 def match_eager_options() -> tuple[ExecutableOption, ...]:
     return (
         selectinload(Match.match_settings),
-        selectinload(Match.league).selectinload(League.rating_strategy),
+        selectinload(Match.league),
         selectinload(Match.results),
         *_match_history_options(),
+    )
+
+
+# The finalize/score-write superset: everything a read needs, plus the league's
+# rating strategy that ``_apply_rating_update`` reads when a completing match
+# applies ratings. Under async SQLAlchemy a lazy access on the unloaded
+# ``league.rating_strategy`` would raise ``MissingGreenlet`` mid-request, so the
+# two paths that finalize a match must load it up front rather than rely on the
+# shared read chain.
+def match_rating_eager_options() -> tuple[ExecutableOption, ...]:
+    return (
+        *match_eager_options(),
+        selectinload(Match.league).selectinload(League.rating_strategy),
     )
 
 
@@ -165,9 +184,16 @@ def _match_history_options() -> tuple[ExecutableOption, ...]:
     )
 
 
-async def _load_match(db: AsyncSession, match_id: uuid.UUID) -> Match | None:
+async def _load_match(
+    db: AsyncSession,
+    match_id: uuid.UUID,
+    *,
+    options: tuple[ExecutableOption, ...] | None = None,
+) -> Match | None:
     result = await db.execute(
-        select(Match).where(Match.id == match_id).options(*match_eager_options())
+        select(Match)
+        .where(Match.id == match_id)
+        .options(*(options if options is not None else match_eager_options()))
     )
     return result.scalar_one_or_none()
 
@@ -1844,13 +1870,19 @@ async def _load_match_for_scoring(
     *,
     lock: bool = False,
     nowait: bool = False,
+    options: tuple[ExecutableOption, ...] | None = None,
 ) -> Match:
     # ``lock`` callers (the negotiation transitions, and per ADR-0009 the score
     # endpoints) take the row lock *before* the eager load so the match state
     # they read is the serialized one.
+    #
+    # The finalize paths (``post_match_result`` self-accept, ``accept_match_result``)
+    # pass ``options=match_rating_eager_options()`` so ``_apply_rating_update`` can
+    # read ``league.rating_strategy`` without a mid-request lazy load; the scratchpad
+    # score endpoints never finalize, so they take the default read chain.
     if lock:
         await _lock_match_row(db, match_id, nowait=nowait)
-    match = await _load_match(db, match_id)
+    match = await _load_match(db, match_id, options=options)
     if match is None or not _is_participant(match, current_user_id):
         raise HTTPException(status_code=404, detail="Match not found.")
     return match
@@ -2091,7 +2123,12 @@ async def post_match_result(
     ``POST /results/{result_id}/acceptance``."""
     try:
         match = await _load_match_for_scoring(
-            db, match_id, current_user.id, lock=True, nowait=True
+            db,
+            match_id,
+            current_user.id,
+            lock=True,
+            nowait=True,
+            options=match_rating_eager_options(),
         )
     except MatchLockUnavailable as exc:
         # A concurrent propose is mid-flight (a double-tapped submit). Bail out
@@ -2236,7 +2273,13 @@ async def accept_match_result(
     negotiation state (or a 404 if no result with that id exists on the match).
     The proposing side already consented by proposing, so only a participant on
     the *opposing* side may accept."""
-    match = await _load_match_for_scoring(db, match_id, current_user.id, lock=True)
+    match = await _load_match_for_scoring(
+        db,
+        match_id,
+        current_user.id,
+        lock=True,
+        options=match_rating_eager_options(),
+    )
 
     # The path ``result_id`` must exist on this match at all (404); the live
     # standing-proposal check (409 with the moved-on state) is owned by

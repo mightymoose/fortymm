@@ -26,7 +26,9 @@ can't live on the router the worker would otherwise have to import. The
 
 import math
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -34,13 +36,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import (
     Match,
     MatchGameScore,
+    MatchSidePlayer,
     MatchStatus,
     RatingHistory,
     RatingHistorySource,
     RatingStrategy,
     UserLeagueRating,
 )
-from app.ratings import get_calculator, state_rating_value, validate_state
+from app.ratings import (
+    RatingCalculator,
+    RatingStrategyMismatchError,
+    get_calculator,
+    parse_strategy_key,
+    state_rating_value,
+    validate_state,
+)
 from app.result_chain import standing_result
 
 
@@ -114,11 +124,121 @@ async def _get_or_create_user_league_rating(
         )
     ).scalar_one_or_none()
     if existing is not None:
+        # Snapshot guard (issue #184). A row that pre-existed this call holds
+        # ``rating_state`` in the shape of the strategy it was snapshotted under.
+        # If the league has since switched strategies, that state must not be
+        # reinterpreted under the new one — refuse loudly rather than corrupt it.
+        # The caller (``_apply_rating_update``) only reaches here for an
+        # ``is_automatic`` league, so this fires on automatic->automatic switches;
+        # a switch to a manual strategy early-returns before the rating hook and
+        # its rows simply freeze at their last automatic value (accepted; #184).
+        # A freshly-seeded row (the branch below) can't mismatch — it's stamped
+        # with the current ``strategy.id`` — so the guard is scoped to existing
+        # rows only.
+        if existing.rating_strategy_id != strategy.id:
+            raise RatingStrategyMismatchError(
+                league_id=league_id,
+                user_id=user_id,
+                row_strategy_id=existing.rating_strategy_id,
+                league_strategy_id=strategy.id,
+            )
         return existing
     rating = UserLeagueRating.seed_for_strategy(league_id, user_id, strategy)
     db.add(rating)
     await db.flush()
     return rating
+
+
+def _resolve_completion_sides(
+    match: Match,
+) -> tuple[MatchSidePlayer, MatchSidePlayer] | None:
+    """Return ``(winner_player, loser_player)`` for a decided binary singles
+    result, or ``None`` when there is no clear winner/loser or a decided side
+    has no players.
+
+    Mirrors ``_decided_sides`` in ``app.ratings.recompute``: a
+    forfeit/void/partial write leaves ``MatchSide.won`` as ``None`` and never
+    produced a rating delta, so we skip rather than crash on the lookup. A
+    decided side with no players — the solo-match sentinel side, or a forfeit
+    that stamped ``won`` on a player-less side — would otherwise ``IndexError``
+    on the ``players[0]`` lookup below, so it also resolves to ``None``."""
+    winning_side = next((s for s in match.sides if s.won is True), None)
+    losing_side = next((s for s in match.sides if s.won is False), None)
+    if winning_side is None or losing_side is None:
+        return None
+    if not winning_side.players or not losing_side.players:
+        return None
+    return winning_side.players[0], losing_side.players[0]
+
+
+def _calculator_for(match: Match) -> RatingCalculator | None:
+    """The automatic-rating gate: the calculator for ``match``'s league
+    strategy, or ``None`` when the league runs a non-automatic strategy (a
+    ``manual`` league freezes its rating rows and never reaches a calculator)
+    or its key has no registered calculator. Callers short-circuit on ``None``
+    before doing any rating work — in particular before the doubles tripwire,
+    so that only a match that would otherwise be rated can trip it."""
+    strategy = match.league.rating_strategy
+    if not strategy.is_automatic:
+        return None
+    strategy_key = parse_strategy_key(strategy.key)
+    if strategy_key is None:
+        return None
+    return get_calculator(strategy_key)
+
+
+@dataclass(frozen=True)
+class _SideRatingUpdate:
+    """One side's computed singles move: the ``user_league_ratings`` row to bump
+    and the values to write into it and record in ``rating_history``."""
+
+    rating: UserLeagueRating
+    user_id: uuid.UUID
+    new_state: dict[str, Any]
+    new_value: float
+    previous_value: float | None
+
+
+def _write_match_rating_history(
+    db: AsyncSession,
+    *,
+    league_id: uuid.UUID,
+    match_id: uuid.UUID,
+    strategy: RatingStrategy,
+    winner: _SideRatingUpdate,
+    loser: _SideRatingUpdate,
+) -> None:
+    """Persist the computed singles update: bump each side's
+    ``user_league_ratings`` row to its new state/value, then append the two
+    ``rating_history`` rows (winner then loser) recording the move."""
+    for update in (winner, loser):
+        update.rating.rating_state = update.new_state
+        update.rating.rating_value = update.new_value
+
+    db.add(
+        RatingHistory(
+            league_id=league_id,
+            user_id=winner.user_id,
+            match_id=match_id,
+            rating_strategy_id=strategy.id,
+            rating_value=winner.new_value,
+            rating_state=winner.new_state,
+            previous_rating_value=winner.previous_value,
+            source=RatingHistorySource.match,
+        )
+    )
+    db.add(
+        RatingHistory(
+            league_id=league_id,
+            user_id=loser.user_id,
+            match_id=match_id,
+            rating_strategy_id=strategy.id,
+            rating_value=loser.new_value,
+            rating_state=loser.new_state,
+            previous_rating_value=loser.previous_value,
+            source=RatingHistorySource.match,
+        )
+    )
 
 
 async def _apply_rating_update(db: AsyncSession, match: Match) -> None:
@@ -134,11 +254,7 @@ async def _apply_rating_update(db: AsyncSession, match: Match) -> None:
     if not match.match_settings.affects_rating:
         return
 
-    league = match.league
-    strategy = league.rating_strategy
-    if not strategy.is_automatic:
-        return
-    calculator = get_calculator(strategy.key)
+    calculator = _calculator_for(match)
     if calculator is None:
         return
 
@@ -164,15 +280,13 @@ async def _apply_rating_update(db: AsyncSession, match: Match) -> None:
     if already_applied is not None:
         return
 
-    winning_side = next((s for s in match.sides if s.won is True), None)
-    losing_side = next((s for s in match.sides if s.won is False), None)
-    if winning_side is None or losing_side is None:
+    sides = _resolve_completion_sides(match)
+    if sides is None:
         return
-    if not winning_side.players or not losing_side.players:
-        return
+    winner_player, loser_player = sides
 
-    winner_player = winning_side.players[0]
-    loser_player = losing_side.players[0]
+    league = match.league
+    strategy = league.rating_strategy
 
     winner_rating = await _get_or_create_user_league_rating(
         db, league.id, winner_player.user_id, strategy
@@ -192,37 +306,25 @@ async def _apply_rating_update(db: AsyncSession, match: Match) -> None:
     validate_state(new_winner_state, strategy)
     validate_state(new_loser_state, strategy)
 
-    new_winner_value = state_rating_value(new_winner_state)
-    new_loser_value = state_rating_value(new_loser_state)
-
-    winner_rating.rating_state = new_winner_state
-    winner_rating.rating_value = new_winner_value
-    loser_rating.rating_state = new_loser_state
-    loser_rating.rating_value = new_loser_value
-
-    db.add(
-        RatingHistory(
-            league_id=league.id,
+    _write_match_rating_history(
+        db,
+        league_id=league.id,
+        match_id=match.id,
+        strategy=strategy,
+        winner=_SideRatingUpdate(
+            rating=winner_rating,
             user_id=winner_player.user_id,
-            match_id=match.id,
-            rating_strategy_id=strategy.id,
-            rating_value=new_winner_value,
-            rating_state=new_winner_state,
-            previous_rating_value=prev_winner_value,
-            source=RatingHistorySource.match,
-        )
-    )
-    db.add(
-        RatingHistory(
-            league_id=league.id,
+            new_state=new_winner_state,
+            new_value=state_rating_value(new_winner_state),
+            previous_value=prev_winner_value,
+        ),
+        loser=_SideRatingUpdate(
+            rating=loser_rating,
             user_id=loser_player.user_id,
-            match_id=match.id,
-            rating_strategy_id=strategy.id,
-            rating_value=new_loser_value,
-            rating_state=new_loser_state,
-            previous_rating_value=prev_loser_value,
-            source=RatingHistorySource.match,
-        )
+            new_state=new_loser_state,
+            new_value=state_rating_value(new_loser_state),
+            previous_value=prev_loser_value,
+        ),
     )
 
 

@@ -54,6 +54,12 @@ def upgrade() -> None:
             sa.ForeignKey("users.id", ondelete="CASCADE"),
             nullable=False,
         ),
+        sa.Column(
+            "rating_strategy_id",
+            postgresql.UUID(as_uuid=True),
+            sa.ForeignKey("rating_strategies.id", ondelete="RESTRICT"),
+            nullable=False,
+        ),
         sa.Column("rating_value", sa.Float(), nullable=True),
         sa.Column(
             "rating_state",

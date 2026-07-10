@@ -9,6 +9,7 @@ from rq import Queue
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
+from sqlalchemy.sql.base import ExecutableOption
 
 from app import matches as matches_mod
 from app.match_voiding import void_match
@@ -1084,9 +1085,15 @@ def _install_scoring_load_barrier(
         *,
         lock: bool = False,
         nowait: bool = False,
+        options: tuple[ExecutableOption, ...] | None = None,
     ) -> Match:
         result = await real_loader(
-            db, target_id, current_user_id, lock=lock, nowait=nowait
+            db,
+            target_id,
+            current_user_id,
+            lock=lock,
+            nowait=nowait,
+            options=options,
         )
         if not nowait:
             loaded.set()

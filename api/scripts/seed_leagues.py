@@ -14,12 +14,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.db import get_engine
 from app.leagues import get_default_league
 from app.models import League, LeagueVisibility, RatingStrategy
-
+from app.ratings import RatingStrategyKey
 
 DEFAULT_LEAGUE_NAME = "FortyMM"
 DEFAULT_LEAGUE_DESCRIPTION = "The headline FortyMM league."
 DEFAULT_LEAGUE_VISIBILITY = LeagueVisibility.public
-DEFAULT_LEAGUE_RATING_STRATEGY_KEY = "glicko2"
+DEFAULT_LEAGUE_RATING_STRATEGY_KEY = RatingStrategyKey.glicko2
 
 
 async def upsert_default_league(db: AsyncSession) -> str:

@@ -5,7 +5,7 @@ from httpx import AsyncClient
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.dashboard import _league_percentile
+from app.dashboard import _league_percentile, _strategy_stats
 from app.models import (
     League,
     LeagueMembership,
@@ -36,6 +36,24 @@ async def _create_match(client: AsyncClient, opponent_id, best_of: int = 5) -> d
     )
     assert response.status_code == 201
     return response.json()
+
+
+def test_strategy_stats_glicko2_returns_rd_and_volatility_tiles():
+    # ``strategy_key`` arrives as a raw ``str`` off ``RatingStrategy.key`` and is
+    # parsed to the closed enum at the boundary — a recognised ``glicko2`` key
+    # yields the RD + Volatility tiles.
+    stats = _strategy_stats("glicko2", {"rd": 200.0, "volatility": 0.06})
+    assert [(s.label, s.value) for s in stats] == [
+        ("RD", "200"),
+        ("Volatility", "0.060"),
+    ]
+
+
+def test_strategy_stats_unknown_key_returns_no_tiles():
+    # An unrecognised key parses to ``None`` at the boundary and yields no
+    # strategy tiles, rather than silently missing an ``==`` comparison.
+    assert _strategy_stats("elo", {"rd": 200.0, "volatility": 0.06}) == []
+    assert _strategy_stats("", {}) == []
 
 
 async def test_dashboard_requires_a_session(api_client: AsyncClient):
@@ -489,6 +507,7 @@ async def _seed_rated_peers(db_session: AsyncSession) -> League:
             UserLeagueRating(
                 league_id=default_league.id,
                 user_id=peer.id,
+                rating_strategy_id=default_league.rating_strategy_id,
                 rating_value=value,
                 rating_state={"rating": value, "rd": 200.0, "volatility": 0.06},
             )

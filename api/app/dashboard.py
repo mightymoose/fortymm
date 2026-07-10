@@ -32,6 +32,7 @@ from app.models import (
     User,
     UserLeagueRating,
 )
+from app.ratings import RatingStrategyKey, parse_strategy_key
 from app.retirement import retirement_deadline
 from app.schemas.dashboard import (
     AttentionKind,
@@ -487,8 +488,12 @@ def _strategy_stats(
 
     Keeps the API contract generic — the frontend renders whatever labels
     come back without needing to know which fields a given strategy carries.
+
+    ``strategy_key`` arrives as a raw ``str`` off ``RatingStrategy.key``, so it
+    is parsed to the closed enum at this boundary — an unrecognised key parses
+    to ``None`` and yields no tiles, rather than silently missing an ``==``.
     """
-    if strategy_key == "glicko2":
+    if parse_strategy_key(strategy_key) is RatingStrategyKey.glicko2:
         rd = _as_float(state.get("rd"))
         volatility = _as_float(state.get("volatility"))
         return [

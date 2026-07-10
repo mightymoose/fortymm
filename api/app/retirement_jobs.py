@@ -98,10 +98,17 @@ class RetirementOutcome(enum.Enum):
 
 
 def _eager_options() -> tuple[ExecutableOption, ...]:
-    """Reproduce the router's ``match_eager_options`` chain. Async SQLAlchemy
-    can't lazy-load mid-transaction, so every collection ``accept_standing_result``
-    and the owing-side resolution touch — match_settings, league→rating_strategy,
-    results, sides→players, games→score — is pulled up front."""
+    """The eager-load chain for the auto-acceptance path. Async SQLAlchemy can't
+    lazy-load mid-transaction, so every collection ``accept_standing_result`` and
+    the owing-side resolution touch — match_settings, league→rating_strategy,
+    results, sides→players, games→score — is pulled up front.
+
+    Note the ``league→rating_strategy`` leg: this carries its own strategy load
+    because the router's shared ``match_eager_options`` no longer does (issue
+    #182 — the read paths dropped it, and the router's finalize handlers load it
+    explicitly via ``match_rating_eager_options``). ``_apply_rating_update`` reads
+    ``league.rating_strategy``, so this worker path must load it itself or a lazy
+    access here would raise ``MissingGreenlet``."""
     return (
         selectinload(Match.match_settings),
         selectinload(Match.league).selectinload(League.rating_strategy),
