@@ -20,8 +20,24 @@ export function FinalizeCalloutActive({
   matchId,
 }: FinalizeCalloutActiveProps) {
   const finalizeMutation = useProposeResult(matchId);
-  const error =
+  // A 409 (opponent confirmed first, double-click, etc.) or any other server
+  // rejection arrives as an `ApiError` carrying the server's `detail` copy.
+  const apiError =
     finalizeMutation.error instanceof ApiError ? finalizeMutation.error : null;
+  // A non-ApiError needs its own branch: `useProposeResult` runs
+  // `networkMode: 'always'`, so an offline (or mid-flight-dropped) submit fires
+  // the POST anyway and `fetch` rejects at the transport level with a plain
+  // `TypeError` — never an `ApiError`. Without this, a dropped send would just
+  // re-enable the button with no feedback at all, and there's no other
+  // affordance on this callout to explain the dead button (#867). Mutually
+  // exclusive with `apiError` by construction (the error is one or the other,
+  // never both).
+  const networkError = finalizeMutation.error !== null && apiError === null;
+  const errorMessage = networkError
+    ? "Couldn't post the result — check your connection and try again."
+    : apiError
+      ? (apiError.detail ?? apiError.message)
+      : null;
   // Synchronous double-submit guard. `disabled={pending}` only takes effect on
   // the next render, so a fast double-click lands a second tap before React
   // commits the disable — firing two concurrent POST /results that pile up on
@@ -39,7 +55,7 @@ export function FinalizeCalloutActive({
   return (
     <FinalizeCalloutDisplay
       pending={finalizeMutation.isPending}
-      errorMessage={error ? (error.detail ?? error.message) : null}
+      errorMessage={errorMessage}
       onPost={() => {
         if (inFlightRef.current) return;
         inFlightRef.current = true;

@@ -7,6 +7,35 @@ import { fireEvent, waitFor } from "@/test/utilities";
 import { buildFinalizeCalloutView } from "./finalize-callout-active/finalize-callout-display.factory";
 import { finalizeCalloutActivePage } from "./finalize-callout-active.page";
 
+/**
+ * Wait on the mutation *settling* (button back from "Posting…" to an enabled
+ * "Post result"), not on the alert — the button re-enables in BOTH the fixed
+ * and broken states, so this resolves in ~milliseconds either way. If we waited
+ * on the alert itself, a regression (no alert) would red as an opaque 5s timeout
+ * (`asyncUtilTimeout` == `testTimeout` == 5000, so a missing signal is
+ * indistinguishable from a hang). Settling first, then asserting the alert
+ * synchronously, makes a missing alert fail fast with a crisp query error.
+ */
+async function settleToRetryable() {
+  await waitFor(() => {
+    const button = finalizeCalloutActivePage.getPostButton();
+    expect(button).toBeEnabled();
+    expect(button).toHaveTextContent("Post result");
+  });
+}
+
+/**
+ * Whether the #867 connection alert is currently in the DOM. It renders in the
+ * same commit the mutation error settles, so callers assert this synchronously
+ * after `settleToRetryable()` rather than waiting on it.
+ */
+function hasConnectionAlert() {
+  const alert = finalizeCalloutActivePage.queryError();
+  return /Couldn't post the result .* check your connection and try again/i.test(
+    alert?.textContent ?? "",
+  );
+}
+
 describe("FinalizeCalloutActive", () => {
   it("posts exactly the view's canonical games, unchanged", async () => {
     let postedBody: unknown = null;
@@ -127,6 +156,54 @@ describe("FinalizeCalloutActive", () => {
 
     await userEvent.click(finalizeCalloutActivePage.getPostButton());
 
+    await waitFor(() =>
+      expect(finalizeCalloutActivePage.queryError()).not.toBeInTheDocument(),
+    );
+  });
+
+  it("surfaces a transport-level failure inline and leaves Post retryable (#867)", async () => {
+    // `useProposeResult` runs `networkMode: 'always'`, so an offline (or
+    // mid-flight-dropped) submit fires the POST and `fetch` rejects with a plain
+    // `TypeError` — NOT an `ApiError`. The old code only handled `ApiError`, so
+    // this rejection rendered nothing here and re-enabled the button silently,
+    // with no other affordance to explain the dead button. `HttpResponse.error()`
+    // rejects at the transport level (no status code), reproducing that drop.
+    finalizeCalloutActivePage.mockResultsEndpoint(() => HttpResponse.error());
+    finalizeCalloutActivePage.render();
+
+    await userEvent.click(finalizeCalloutActivePage.getPostButton());
+
+    await settleToRetryable();
+
+    // Assert the alert synchronously (crisp fail if it never rendered) rather
+    // than via a `waitFor` that would red as an opaque 5s timeout on regression.
+    expect(hasConnectionAlert()).toBe(true);
+  });
+
+  it("recovers on retry after a transport drop: a second Post succeeds and clears the connection alert (#867 reconnect)", async () => {
+    // The first Post drops at the transport level (connection alert shows). Once
+    // the connection recovers, a second Post must succeed — `onPost` calls
+    // `finalizeMutation.reset()` before firing, and the success clears the
+    // mutation error, so the stale connection alert must not linger. This is the
+    // reconnect-recovery coverage the transport-error path lacked (#865 added the
+    // same shape for correction-entry).
+    let attempts = 0;
+    finalizeCalloutActivePage.mockResultsEndpoint(() => {
+      attempts += 1;
+      return attempts === 1
+        ? HttpResponse.error()
+        : HttpResponse.json(buildMatchDetails(), { status: 201 });
+    });
+    finalizeCalloutActivePage.render();
+
+    // First Post drops mid-flight → connection alert.
+    await userEvent.click(finalizeCalloutActivePage.getPostButton());
+    await settleToRetryable();
+    expect(hasConnectionAlert()).toBe(true);
+
+    // Retry now succeeds: both attempts fired and the stale alert is gone.
+    await userEvent.click(finalizeCalloutActivePage.getPostButton());
+    await waitFor(() => expect(attempts).toBe(2));
     await waitFor(() =>
       expect(finalizeCalloutActivePage.queryError()).not.toBeInTheDocument(),
     );
