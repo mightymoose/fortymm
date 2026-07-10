@@ -284,11 +284,20 @@ export function matchQueryOptions(matchId: string) {
         }),
       ),
     retry: false,
-    throwOnError: true,
+    // Throw only when there is no data to render. An initial-load failure (no
+    // cached data) surfaces to the boundary for a retry; a *background* refetch
+    // failure over already-rendered data must not — since #843 the success path
+    // invalidates this query, so a save that succeeded now fires a refetch, and
+    // a bare `true` would throw the user out of a live scoring screen if that
+    // refetch failed. Stale data stays; the next good refetch heals it.
+    throwOnError: (_error, query) => query.state.data === undefined,
   })
 }
 
-/** Throws on failure so the surrounding boundary can render a retry. */
+/** Surfaces an initial-load failure (no cached data) to the surrounding boundary
+ * for a retry; a background-refetch failure over already-rendered data keeps the
+ * last-good match on screen instead of throwing (#843 — the success path now
+ * refetches this query). */
 export function useMatch(matchId: string) {
   return useQuery(matchQueryOptions(matchId))
 }

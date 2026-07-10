@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { http, HttpResponse } from 'msw'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { renderHook, waitFor } from '@testing-library/react'
-import { createElement, type ReactNode } from 'react'
+import { act, render, renderHook, screen, waitFor } from '@testing-library/react'
+import { Component, createElement, type ReactNode } from 'react'
 
 import { server } from '@/mocks/server'
 import { matchDetails } from '@/test/factories'
@@ -564,6 +564,105 @@ it('self-heals when a stale invalidate refetch races the second save (#843 refet
   // writer and the stale one was discarded — the residual is self-healing here.
   expect(cached?.sides.find((s) => s.side_number === 1)?.games_won).toBe(1)
   expect(cached?.sides.find((s) => s.side_number === 2)?.games_won).toBe(1)
+})
+
+/** Catches whatever `useMatch` throws during render so a test can assert on the
+ * boundary instead of an uncaught render throw. */
+class RenderBoundary extends Component<
+  { children: ReactNode },
+  { caught: boolean }
+> {
+  state = { caught: false }
+  static getDerivedStateFromError() {
+    return { caught: true }
+  }
+  render() {
+    return this.state.caught
+      ? createElement('div', null, 'BOUNDARY')
+      : this.props.children
+  }
+}
+
+/** Reads exactly what `score-entry.tsx` reads off `useMatch` (`data`,
+ * `isLoading`) so the throw-vs-keep behaviour under test is the one the real
+ * scoring screen sees. */
+function MatchView({ matchId }: { matchId: string }) {
+  const { data } = useMatch(matchId)
+  return createElement('div', null, data ? `games:${data.games.length}` : 'PENDING')
+}
+
+const matchTree = (matchId: string) =>
+  createElement(
+    QueryClientProvider,
+    { client: queryClient },
+    createElement(RenderBoundary, null, createElement(MatchView, { matchId })),
+  )
+
+/**
+ * Regression for the #843 success-path refetch: `applyGameWriteCache` now
+ * invalidates `matchQueryKey`, so a *successful* per-game save triggers a
+ * background `GET /v1/matches/{id}` refetch of `useMatch`. `throwOnError` is
+ * re-evaluated on every render of the scoring screen (the save mutation's own
+ * state settling re-renders it), so if that background refetch fails, a plain
+ * `throwOnError: true` would throw the user out of a mid-match screen right
+ * after a save that actually succeeded. It must only throw when there's no data
+ * to fall back on — the last-good board stays and the next good refetch heals it.
+ */
+it('keeps last-good data on screen when a background refetch fails (#843)', async () => {
+  const matchId = 'm-bg-refetch'
+  const seeded: MatchDetails = matchDetails({
+    id: matchId,
+    games: [{ id: 'g-1', game_number: 1, score: null }],
+  })
+  // staleTime: Infinity + data present → the mount fires no fetch, so the only
+  // refetch is the explicit invalidate below.
+  queryClient.setQueryData(matchQueryKey(matchId), seeded)
+
+  const { rerender } = render(matchTree(matchId))
+  // The seeded data renders — no boundary, no pending.
+  expect(screen.getByText('games:1')).toBeTruthy()
+
+  server.use(
+    http.get('*/v1/matches/:matchId', () =>
+      HttpResponse.json({ detail: 'boom' }, { status: 500 }),
+    ),
+  )
+
+  // A background refetch (exactly what `invalidateMatchViews` fires) that fails.
+  await act(async () => {
+    await queryClient
+      .invalidateQueries({ queryKey: matchQueryKey(matchId) })
+      .catch(() => undefined)
+  })
+  // The errored refetch leaves `data`/`isLoading` unchanged, so it alone doesn't
+  // re-render this observer — but the scoring screen re-renders for other
+  // reasons after a save. Force that next render: it re-evaluates `throwOnError`
+  // against the now-errored query, which is where a bare `true` throws.
+  rerender(matchTree(matchId))
+
+  // The background error did NOT nuke the screen: last-good data still readable.
+  expect(screen.queryByText('BOUNDARY')).toBeNull()
+  expect(screen.getByText('games:1')).toBeTruthy()
+  expect(
+    queryClient.getQueryData<MatchDetails>(matchQueryKey(matchId))?.games,
+  ).toHaveLength(1)
+})
+
+/**
+ * The other half of the distinction: an *initial* load with no cached data to
+ * fall back on must still throw so the surrounding boundary can render a retry.
+ */
+it('throws to the boundary when the initial match load fails', async () => {
+  const matchId = 'm-initial-fail'
+  server.use(
+    http.get('*/v1/matches/:matchId', () =>
+      HttpResponse.json({ detail: 'boom' }, { status: 500 }),
+    ),
+  )
+
+  render(matchTree(matchId))
+
+  await waitFor(() => expect(screen.getByText('BOUNDARY')).toBeTruthy())
 })
 
 describe('useCreateMatch', () => {
