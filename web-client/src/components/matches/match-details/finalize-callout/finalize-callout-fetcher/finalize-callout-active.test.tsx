@@ -2,7 +2,7 @@ import { HttpResponse } from "msw";
 import userEvent from "@testing-library/user-event";
 
 import { buildMatchDetails } from "@/mocks/factories/matches/match-details.factory";
-import { fireEvent, screen, waitFor } from "@/test/utilities";
+import { fireEvent, waitFor } from "@/test/utilities";
 
 import { buildFinalizeCalloutView } from "./finalize-callout-active/finalize-callout-display.factory";
 import { finalizeCalloutActivePage } from "./finalize-callout-active.page";
@@ -32,16 +32,13 @@ async function settleToRetryable() {
  * Whether the #867 connection alert is currently in the DOM. It renders in the
  * same commit the transport-level mutation error settles, so callers assert
  * this synchronously after `settleToRetryable()` rather than waiting on it.
- * Scoped with `.some(...)` so a co-rendered alert can't blow up a singular
- * `getByRole("alert")`.
+ * Uses the page object's plural `hasErrorMatching` (not a singular
+ * `getByRole("alert")`) so a co-rendered second alert can't blow up the query.
  */
-function hasConnectionAlert() {
-  return screen
-    .queryAllByRole("alert")
-    .some((a: HTMLElement) =>
-      /check your connection and try again/i.test(a.textContent ?? ""),
-    );
-}
+const hasConnectionAlert = () =>
+  finalizeCalloutActivePage.hasErrorMatching(
+    /check your connection and try again/i,
+  );
 
 describe("FinalizeCalloutActive", () => {
   it("posts exactly the view's canonical games, unchanged", async () => {
@@ -199,22 +196,25 @@ describe("FinalizeCalloutActive", () => {
     });
     finalizeCalloutActivePage.render();
 
-    // First send fails at the transport level → the connection alert renders and
-    // the button settles back from "Posting…" to enabled.
+    // First send fails at the transport level. Anchor the wait on the request
+    // count — the observable that actually advances — before settling: after a
+    // failure the button is already enabled reading "Post result", so a
+    // `settleToRetryable()` predicate can resolve on the pre-click render before
+    // the POST has left the boundary.
     await userEvent.click(finalizeCalloutActivePage.getPostButton());
+    await waitFor(() => expect(requests).toBe(1));
     await settleToRetryable();
-    expect(requests).toBe(1);
     expect(hasConnectionAlert()).toBe(true);
 
-    // Retry: click again. The awaited click commits the pending/disabled render,
-    // so `settleToRetryable()` genuinely waits for the second round-trip and
-    // `requests` is already 2 by the time it resolves. If the retry were
-    // dead-locked by a stuck `inFlightRef`, the button never leaves "Post result"
-    // and the synchronous `requests` assertion fails "expected 1 to be 2" — not
-    // a timeout.
+    // Retry: click again. The point being pinned is that the retry actually
+    // re-fires — `onError` reset the synchronous `inFlightRef`, so the second
+    // click leaves the boundary rather than being swallowed. We wait on the
+    // request count reaching 2 (short timeout so a stuck `inFlightRef` reds as a
+    // crisp "expected 1 to be 2" fast, never masquerading as the suite's 5s
+    // `asyncUtilTimeout`), then settle and assert the alert synchronously.
     await userEvent.click(finalizeCalloutActivePage.getPostButton());
+    await waitFor(() => expect(requests).toBe(2), { timeout: 1000 });
     await settleToRetryable();
-    expect(requests).toBe(2);
     expect(hasConnectionAlert()).toBe(true);
   });
 
@@ -230,7 +230,12 @@ describe("FinalizeCalloutActive", () => {
     });
     finalizeCalloutActivePage.render();
 
+    // Anchor on the request count first (the observable that advances), then
+    // settle and assert the alert synchronously — the same discipline the retry
+    // test uses, so an already-enabled button can't resolve `settleToRetryable`
+    // before the POST has left the boundary.
     await userEvent.click(finalizeCalloutActivePage.getPostButton());
+    await waitFor(() => expect(requests).toBe(1));
     await settleToRetryable();
     expect(hasConnectionAlert()).toBe(true);
 
@@ -265,11 +270,9 @@ describe("FinalizeCalloutActive", () => {
 
     await settleToRetryable();
     expect(
-      screen
-        .queryAllByRole("alert")
-        .some((a: HTMLElement) =>
-          /Match already has a posted result/.test(a.textContent ?? ""),
-        ),
+      finalizeCalloutActivePage.hasErrorMatching(
+        /Match already has a posted result/,
+      ),
     ).toBe(true);
     expect(hasConnectionAlert()).toBe(false);
   });
