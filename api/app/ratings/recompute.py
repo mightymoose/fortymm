@@ -53,7 +53,7 @@ from app.models import (
 )
 from app.ratings.base import state_rating_value
 from app.ratings.registry import get_calculator, parse_strategy_key
-from app.ratings.validation import validate_state
+from app.ratings.validation import RatingStrategyMismatchError, validate_state
 
 # Sentinel ordering key for a NULL ``match_id``. Non-match history rows
 # (``initial`` / ``manual`` / ``import``) carry ``match_id IS NULL``, and a NULL
@@ -273,12 +273,31 @@ async def recompute_league_ratings(
             ulr = UserLeagueRating(
                 league_id=league_id,
                 user_id=user_id,
+                rating_strategy_id=strategy.id,
                 rating_state=state,
                 rating_value=value,
             )
             db.add(ulr)
             rating_by_user[user_id] = ulr
         else:
+            # Snapshot guard (issue #184). ``ulr`` pre-existed this recompute and
+            # holds ``rating_state`` in the shape of the strategy it was
+            # snapshotted under. If the league has since switched strategies,
+            # overwriting it from a replay run under the new strategy would leave
+            # the row's snapshot lying about its state — refuse loudly instead.
+            # Reached only for an ``is_automatic`` league (guarded above), so it
+            # fires on automatic->automatic switches; a switch to manual
+            # early-returns and those rows freeze at their last automatic value
+            # (accepted; #184). Freshly-created rows take the ``ulr is None``
+            # branch above and are stamped with the current ``strategy.id``, so
+            # the guard is scoped to existing rows only.
+            if ulr.rating_strategy_id != strategy.id:
+                raise RatingStrategyMismatchError(
+                    league_id=league_id,
+                    user_id=user_id,
+                    row_strategy_id=ulr.rating_strategy_id,
+                    league_strategy_id=strategy.id,
+                )
             ulr.rating_state = state
             ulr.rating_value = value
 
@@ -387,6 +406,14 @@ async def _reset_users_to_initial_state(
     for ulr in ratings:
         ulr.rating_state = dict(initial_state) if initial_state is not None else None
         ulr.rating_value = strategy.initial_rating_value
+        # Re-stamp the strategy snapshot (issue #184). This function is the ONE
+        # write that legitimately re-stamps ``rating_strategy_id``: it overwrites
+        # ``rating_state`` wholesale from the *current* strategy's
+        # ``initial_state`` and never reads the old state, so a stale snapshot is
+        # safe here — this is the reset/heal path. Every other write instead
+        # *refuses* on a snapshot mismatch (``RatingStrategyMismatchError``);
+        # here we heal it by aligning the snapshot to the state we just wrote.
+        ulr.rating_strategy_id = strategy.id
 
     await db.flush()
 

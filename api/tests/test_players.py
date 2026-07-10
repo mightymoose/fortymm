@@ -337,6 +337,7 @@ async def test_search_includes_rating_for_default_league(
         UserLeagueRating(
             league_id=league.id,
             user_id=rival.id,
+            rating_strategy_id=league.rating_strategy_id,
             rating_value=1750.0,
             rating_state={"rating": 1750.0, "rd": 200.0, "volatility": 0.06},
         )
@@ -409,6 +410,7 @@ async def _rate(
         UserLeagueRating(
             league_id=league.id,
             user_id=user.id,
+            rating_strategy_id=league.rating_strategy_id,
             rating_value=rating_value,
         )
     )
@@ -593,11 +595,13 @@ async def test_list_players_sorts_by_rating_descending_with_nulls_last(
             UserLeagueRating(
                 league_id=league.id,
                 user_id=high.id,
+                rating_strategy_id=league.rating_strategy_id,
                 rating_value=2000.0,
             ),
             UserLeagueRating(
                 league_id=league.id,
                 user_id=low.id,
+                rating_strategy_id=league.rating_strategy_id,
                 rating_value=1500.0,
             ),
         ]

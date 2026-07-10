@@ -489,6 +489,7 @@ async def _seed_rated_peers(db_session: AsyncSession) -> League:
             UserLeagueRating(
                 league_id=default_league.id,
                 user_id=peer.id,
+                rating_strategy_id=default_league.rating_strategy_id,
                 rating_value=value,
                 rating_state={"rating": value, "rd": 200.0, "volatility": 0.06},
             )

@@ -41,6 +41,7 @@ from app.models import (
     UserLeagueRating,
 )
 from app.ratings import (
+    RatingStrategyMismatchError,
     get_calculator,
     parse_strategy_key,
     state_rating_value,
@@ -119,6 +120,24 @@ async def _get_or_create_user_league_rating(
         )
     ).scalar_one_or_none()
     if existing is not None:
+        # Snapshot guard (issue #184). A row that pre-existed this call holds
+        # ``rating_state`` in the shape of the strategy it was snapshotted under.
+        # If the league has since switched strategies, that state must not be
+        # reinterpreted under the new one — refuse loudly rather than corrupt it.
+        # The caller (``_apply_rating_update``) only reaches here for an
+        # ``is_automatic`` league, so this fires on automatic->automatic switches;
+        # a switch to a manual strategy early-returns before the rating hook and
+        # its rows simply freeze at their last automatic value (accepted; #184).
+        # A freshly-seeded row (the branch below) can't mismatch — it's stamped
+        # with the current ``strategy.id`` — so the guard is scoped to existing
+        # rows only.
+        if existing.rating_strategy_id != strategy.id:
+            raise RatingStrategyMismatchError(
+                league_id=league_id,
+                user_id=user_id,
+                row_strategy_id=existing.rating_strategy_id,
+                league_strategy_id=strategy.id,
+            )
         return existing
     rating = UserLeagueRating.seed_for_strategy(league_id, user_id, strategy)
     db.add(rating)

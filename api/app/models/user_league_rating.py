@@ -45,6 +45,11 @@ class UserLeagueRating(Base):
         ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
     )
+    rating_strategy_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("rating_strategies.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
     rating_value: Mapped[float | None] = mapped_column(Float, nullable=True)
     rating_state: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -59,6 +64,7 @@ class UserLeagueRating(Base):
 
     league: Mapped["League"] = relationship()
     user: Mapped["User"] = relationship()
+    rating_strategy: Mapped["RatingStrategy"] = relationship()
 
     @classmethod
     def seed_for_strategy(
@@ -70,6 +76,7 @@ class UserLeagueRating(Base):
         return cls(
             league_id=league_id,
             user_id=user_id,
+            rating_strategy_id=strategy.id,
             rating_value=strategy.initial_rating_value,
             rating_state=(
                 dict(strategy.initial_state)

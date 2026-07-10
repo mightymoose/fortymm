@@ -21,10 +21,12 @@ from app.models import (
     RatingHistory,
     RatingHistorySource,
     RatingStrategy,
+    User,
     UserLeagueRating,
 )
 from app.ratings import (
     STRATEGIES,
+    RatingStrategyMismatchError,
     get_calculator,
     state_rating_value,
     validate_state,
@@ -172,6 +174,156 @@ async def test_doubles_match_rating_update_raises_not_implemented(
         .all()
     )
     assert rows == []
+
+
+# ----- hook: strategy-snapshot mismatch guard (issue #184) -----------------
+
+
+async def _make_second_automatic_strategy(db_session: AsyncSession) -> RatingStrategy:
+    """A second ``is_automatic`` strategy with its own incompatible state shape.
+    Only glicko2 has a registered calculator, so this stands in as the *old*
+    strategy a ``user_league_ratings`` row was snapshotted under; the league still
+    runs glicko2 (the live calculator), whose schema the old state would violate.
+    The guard fires on this automatic->automatic difference (see #184)."""
+    strategy = RatingStrategy(
+        key="glicko2_experimental",
+        name="Experimental (test only)",
+        description="Second automatic strategy with an incompatible state shape.",
+        state_schema={
+            "type": "object",
+            "required": ["score"],
+            "properties": {"score": {"type": "number"}},
+            "additionalProperties": False,
+        },
+        initial_state={"score": 1000.0},
+        initial_rating_value=1000.0,
+        is_automatic=True,
+    )
+    db_session.add(strategy)
+    await db_session.commit()
+    await db_session.refresh(strategy)
+    return strategy
+
+
+async def _build_completed_singles_match(
+    db_session: AsyncSession,
+    league: League,
+    winner: User,
+    loser: User,
+) -> Match:
+    settings = MatchSettings(team_size=1, best_of=1, affects_rating=True)
+    match = Match(
+        match_settings=settings,
+        league=league,
+        created_by_user_id=winner.id,
+        status=MatchStatus.completed,
+    )
+    side1 = MatchSide(match=match, side_number=1, won=True, score=1)
+    side1.players.append(MatchSidePlayer(match=match, user=winner))
+    side2 = MatchSide(match=match, side_number=2, won=False, score=0)
+    side2.players.append(MatchSidePlayer(match=match, user=loser))
+    db_session.add(match)
+    await db_session.commit()
+    return match
+
+
+async def test_rating_hook_refuses_row_snapshotted_under_a_different_strategy(
+    db_session: AsyncSession,
+    default_league: League,
+    rating_strategies: dict[str, RatingStrategy],
+):
+    """When a player's rating row was snapshotted under a *different* automatic
+    strategy than the league now runs, the live rating hook must raise
+    ``RatingStrategyMismatchError`` — not a jsonschema ``ValidationError``, and
+    not a silent write reinterpreting the old state under the new schema (#184)."""
+    glicko2 = rating_strategies["glicko2"]
+    other = await _make_second_automatic_strategy(db_session)
+    assert default_league.rating_strategy_id == glicko2.id
+
+    winner = await make_user(db_session, "hook-mismatch-w")
+    loser = await make_user(db_session, "hook-mismatch-l")
+    # Snapshot both rows under the OTHER strategy — a league that switched away
+    # from it to glicko2 after these rows were written.
+    for user in (winner, loser):
+        db_session.add(
+            UserLeagueRating.seed_for_strategy(default_league.id, user.id, other)
+        )
+    await db_session.commit()
+
+    match = await _build_completed_singles_match(
+        db_session, default_league, winner, loser
+    )
+    loaded = await _load_match(db_session, match.id)
+    assert loaded is not None
+
+    with pytest.raises(RatingStrategyMismatchError) as exc_info:
+        await _apply_rating_update(db_session, loaded)
+
+    err = exc_info.value
+    assert err.league_id == default_league.id
+    assert err.user_id in {winner.id, loser.id}
+    assert err.row_strategy_id == other.id
+    assert err.league_strategy_id == glicko2.id
+
+    # Nothing was written — the guard fires before any history row.
+    rows = (
+        (
+            await db_session.execute(
+                select(RatingHistory).where(RatingHistory.match_id == match.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert rows == []
+
+
+async def test_rating_hook_freshly_seeded_row_does_not_raise(
+    db_session: AsyncSession,
+    default_league: League,
+    rating_strategies: dict[str, RatingStrategy],
+):
+    """A row this hook *creates* is stamped with the league's current strategy,
+    so it can never mismatch — the guard must not fire on it (#184, subtlety a).
+    Neither player has a pre-existing rating row here, so both are freshly seeded
+    under glicko2 and the update applies normally."""
+    glicko2 = rating_strategies["glicko2"]
+    await _make_second_automatic_strategy(db_session)
+
+    winner = await make_user(db_session, "hook-fresh-w")
+    loser = await make_user(db_session, "hook-fresh-l")
+    match = await _build_completed_singles_match(
+        db_session, default_league, winner, loser
+    )
+    loaded = await _load_match(db_session, match.id)
+    assert loaded is not None
+
+    await _apply_rating_update(db_session, loaded)
+    await db_session.commit()
+
+    ratings = (
+        (
+            await db_session.execute(
+                select(UserLeagueRating).where(
+                    UserLeagueRating.user_id.in_([winner.id, loser.id])
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(ratings) == 2
+    assert {r.rating_strategy_id for r in ratings} == {glicko2.id}
+    rows = (
+        (
+            await db_session.execute(
+                select(RatingHistory).where(RatingHistory.match_id == match.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(rows) == 2
 
 
 # ----- hook: end-to-end through the score endpoint -------------------------
