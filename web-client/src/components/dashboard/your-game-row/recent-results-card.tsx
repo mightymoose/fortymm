@@ -115,8 +115,11 @@ export const RecentResultsCard = ({ rows }: RecentResultsCardProps) => {
                         }}
                       />
                       <UserAvatar name={opponent} size={24} />
+                      {/* Only a real username needs the tooltip: the
+                          `No opponent` placeholder would just echo its own
+                          visible text on hover. */}
                       <span
-                        title={opponentLabel}
+                        title={opponent ?? undefined}
                         style={{
                           color: opponent ? C.chalk50 : C.chalk500,
                           fontStyle: opponent ? 'normal' : 'italic',

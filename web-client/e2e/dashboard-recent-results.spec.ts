@@ -14,6 +14,7 @@
  * `VITE_ENABLE_MSW: 'false'`), so the API is stubbed via `page.route`.
  */
 import { expect, test, type Page, type Route } from '@playwright/test'
+import type { components } from '../src/api/schema'
 import { sessionResponse } from '../src/test/factories'
 
 const SESSION = sessionResponse({ user: { username: 'rita.kovac' } })
@@ -23,6 +24,10 @@ const SESSION = sessionResponse({ user: { username: 'rita.kovac' } })
 // and `title`-attribute assertions can compare against the exact string.
 const LONG_OPPONENT = 'bartholomew.vandersteen.mcallister.iii'
 
+// `satisfies` (not `:`) so tsc fails if the OpenAPI schema drifts away from
+// this stub. The e2e suite runs MSW-off, so nothing else would catch it — see
+// web-client/CLAUDE.md on page.route stubs going green in vitest and breaking
+// here.
 const DASHBOARD = {
   attention: [],
   attention_total_count: 0,
@@ -49,7 +54,7 @@ const DASHBOARD = {
       my_rating_change: { before: 1512, after: 1504, delta: -8 },
     },
   ],
-}
+} satisfies components['schemas']['DashboardResponse']
 
 async function installDashboardMock(page: Page) {
   await page.route('**/api/v1/**', (route: Route) => {
@@ -85,7 +90,7 @@ test.describe('Dashboard recent-results card (#844)', () => {
     await page.goto('/dashboard')
     await page.locator('[data-testid="dashboard-recent-results"]').waitFor()
 
-    const m = await page.evaluate(async (longName: string) => {
+    const m = await page.evaluate(async () => {
       // Text metrics are what we assert on — wait for the web font so the
       // measured widths reflect the rendered glyphs, not a fallback face.
       await document.fonts.ready
@@ -116,6 +121,7 @@ test.describe('Dashboard recent-results card (#844)', () => {
       const shortRowText = shortCells.map((c) => (c.textContent ?? '').trim())
 
       return {
+        rowCount: rows.length,
         maxCellOverflow: Math.max(...cellOverflows),
         nameScrollWidth: nameSpan.scrollWidth,
         nameClientWidth: nameSpan.clientWidth,
@@ -123,9 +129,14 @@ test.describe('Dashboard recent-results card (#844)', () => {
         scoreText: shortRowText[1],
         deltaText: shortRowText[2],
         whenText: shortRowText[3],
-        longName,
       }
-    }, LONG_OPPONENT)
+    })
+
+    // 0. Both rows rendered. Guards the next assertion against passing
+    //    vacuously: `Math.max(...[])` is `-Infinity`, which would satisfy it.
+    expect(m.rowCount, 'recent-results rows rendered').toBe(
+      DASHBOARD.recent_results.length,
+    )
 
     // 1. No cell of any row spills past the right edge of the card. This is the
     //    core #844 probe: the card is pinned to the column width (`minWidth: 0`),
@@ -147,8 +158,10 @@ test.describe('Dashboard recent-results card (#844)', () => {
       LONG_OPPONENT,
     )
 
-    // 4. The short-named row's Score / Δ / When are actually rendered and
-    //    non-empty — a clipped row would drop them off-card.
+    // 4. The short-named row rendered with real content. These are render
+    //    smoke-checks, NOT clipping checks — `overflow: hidden` only hides
+    //    pixels, so a fully-clipped cell still reports its textContent.
+    //    Assertion 1 is the only thing that proves the columns are on-card.
     expect(m.scoreText, 'short row score cell').toBe('1-3')
     expect(m.deltaText, 'short row rating-delta cell').toBe('-8')
     expect(m.whenText, 'short row when cell').not.toBe('')
