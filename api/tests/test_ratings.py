@@ -6,11 +6,16 @@ import uuid
 import jsonschema
 import pytest
 from httpx import AsyncClient
-from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import event, select
+from sqlalchemy.exc import IntegrityError, MissingGreenlet
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from app.matches import _apply_rating_update, _load_match
+from app.matches import (
+    _apply_rating_update,
+    _load_match,
+    match_eager_options,
+    match_rating_eager_options,
+)
 from app.models import (
     League,
     Match,
@@ -704,6 +709,71 @@ async def test_rating_history_rejects_duplicate_match_user_row(
     db_session.add(dup)
     with pytest.raises(IntegrityError):
         await db_session.flush()
+
+
+async def test_match_rating_eager_options_loads_the_strategy_write_paths_need(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    default_league: League,
+    engine: AsyncEngine,
+):
+    """Guards the explicit ``League.rating_strategy`` load on the score-write
+    finalize paths (issue #182). The shared ``match_eager_options()`` read chain
+    deliberately does NOT eager-load the strategy — only ``_apply_rating_update``
+    reads it — so the two finalize handlers load it via
+    ``match_rating_eager_options()``. Under async SQLAlchemy a lazy access on the
+    unloaded ``league.rating_strategy`` raises ``MissingGreenlet`` at runtime, a
+    production 500 that mypy and a naive test can't catch.
+
+    THIS TEST OPENS ITS OWN FRESH ``async_sessionmaker(engine)`` SESSION ON
+    PURPOSE. The ``api_client`` shares the per-test ``db_session`` (whose
+    ``expire_on_commit=False`` keeps loaded relationships resident), so match
+    creation's ``resolve_league`` already populates ``league.rating_strategy`` in
+    that session's identity map — masking the bug entirely. A real HTTP request
+    gets a fresh session with an empty identity map, which is what this fresh
+    sessionmaker reproduces. Without it, dropping the load from
+    ``match_rating_eager_options()`` would leave every test green while score
+    submission 500s in production."""
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "rival") as (opp_client, opp):
+        body = await _score_to_completion(api_client, opp_client, opp.id)
+    match_id = uuid.UUID(body["id"])
+
+    fresh_session = async_sessionmaker(engine)  # default: empty identity map
+
+    # (i) The shared read chain must NOT emit a rating_strategies SELECT; the
+    # write chain must emit exactly one.
+    async def strategy_selects(options: object) -> int:
+        seen: list[str] = []
+
+        def before(conn: object, cursor: object, statement: str, *args: object) -> None:
+            if "rating_strategies" in statement:
+                seen.append(statement)
+
+        event.listen(engine.sync_engine, "before_cursor_execute", before)
+        try:
+            async with fresh_session() as s:
+                await _load_match(s, match_id, options=options)  # type: ignore[arg-type]
+        finally:
+            event.remove(engine.sync_engine, "before_cursor_execute", before)
+        return len(seen)
+
+    assert await strategy_selects(match_eager_options()) == 0
+    assert await strategy_selects(match_rating_eager_options()) == 1
+
+    # (ii) The read chain leaves the strategy unloaded → lazy access blows up.
+    async with fresh_session() as s:
+        read_only = await _load_match(s, match_id, options=match_eager_options())
+        assert read_only is not None
+        with pytest.raises(MissingGreenlet):
+            _ = read_only.league.rating_strategy.is_automatic
+
+    # (ii) The write chain has it loaded → _apply_rating_update runs clean.
+    async with fresh_session() as s:
+        ready = await _load_match(s, match_id, options=match_rating_eager_options())
+        assert ready is not None
+        assert ready.league.rating_strategy.is_automatic is True
+        await _apply_rating_update(s, ready)  # idempotent no-op; touches strategy
 
 
 async def test_rating_history_allows_many_null_match_rows_per_user(
