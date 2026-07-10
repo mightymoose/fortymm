@@ -299,8 +299,8 @@ it('does not drop a concurrently-saved game when an older save response settles 
 })
 
 /**
- * Regression for #843 (delete path): `useDeleteScore` runs the same wholesale
- * `applyScoreMutationCache`. A clear of game 1 whose response predates a
+ * Regression for #843 (delete path): `useDeleteScore` is a per-game write too.
+ * A clear of game 1 whose response predates a
  * concurrent save of game 2 (so its snapshot omits game 2's row) must not wipe
  * game 2 from the cache when it settles last.
  */
