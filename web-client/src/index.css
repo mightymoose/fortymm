@@ -887,7 +887,6 @@ body.dark.fortymm-theme {
   gap: 2px;
 }
 .app-shell__nav-link {
-  position: relative;
   display: flex;
   align-items: center;
   gap: 12px;

@@ -188,7 +188,7 @@ function isUnder(pathname: string, to: string) {
 
 function renderNavItem(item: NavItem, pathname: string, closeOnMobile: () => void) {
   const childActive = item.children?.some((c) => pathname === c.to) ?? false
-  const isActive = isUnder(pathname, item.to) || childActive
+  const isActive = isUnder(pathname, item.to)
   return (
     <li key={item.label}>
       <Link

@@ -5,7 +5,10 @@ import {
   createRoute,
   createRouter,
 } from '@tanstack/react-router'
+import { http, HttpResponse } from 'msw'
 
+import { mockSession } from '@/mocks/handlers'
+import { server } from '@/mocks/server'
 import { render, screen, within, type Container } from '@/test/utilities'
 
 import { AppShell, type AppShellProps } from './app-shell'
@@ -44,9 +47,6 @@ const scoped = (container: Container) => {
     )
 
   return {
-    /** The sidebar itself. */
-    getSidebar: sidebar,
-
     /**
      * Any nav link in the sidebar by its label — top-level ("Matches") or
      * sub-nav ("Preferences"); the labels are unique across both levels.
@@ -105,6 +105,11 @@ const scoped = (container: Container) => {
  */
 export const appShellPage = {
   render(pathname: string, overrides: Partial<AppShellProps> = {}) {
+    // The default handler sleeps 600ms to make the dev UI's loading states
+    // visible. The permission-gated items (Tournaments, Administration) can't
+    // render until this resolves, so tests would pay it as real wall clock.
+    server.use(http.get('*/v1/session', () => HttpResponse.json(mockSession)))
+
     const props = buildAppShellProps(overrides)
     const rootRoute = createRootRoute({ component: () => <AppShell {...props} /> })
     const routes = NAV_LINK_PATHS.map((path) =>
