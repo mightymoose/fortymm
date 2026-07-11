@@ -15,6 +15,10 @@ export interface EventCardProps {
   /** When false (a non-owner), the card opens a read-only editor — the
    * affordance reads "View" instead of "Edit". */
   canEdit: boolean
+  /** The signed-in player's username, handed to the roster so it can pin their
+   * own chip into the visible slice (#781). Absent when signed out, or while
+   * the session is still in flight. */
+  username?: string | null
   onOpen: () => void
   /**
    * The card's own interactive control (e.g. Enter / Withdraw), rendered in the
@@ -38,11 +42,12 @@ export interface EventCardProps {
 export const EventCard = ({
   event: ev,
   canEdit,
+  username,
   onOpen,
   action,
 }: EventCardProps) => {
   const fillPct = ev.maxPlayers
-    ? Math.min(100, Math.round(((ev.entered || 0) / ev.maxPlayers) * 100))
+    ? Math.min(100, Math.round((ev.entered / ev.maxPlayers) * 100))
     : 0
   const isFull = ev.entered >= ev.maxPlayers
   const formatLabel =
@@ -121,7 +126,7 @@ export const EventCard = ({
                   isFull ? 'text-[color:var(--warn)]' : 'text-[color:var(--fg-1)]',
                 )}
               >
-                {ev.entered || 0}
+                {ev.entered}
               </span>
               <span className="font-mono text-[13px] text-[color:var(--fg-3)]">
                 / {ev.maxPlayers}
@@ -159,9 +164,11 @@ export const EventCard = ({
         </div>
 
         {/* Who is actually in this event — the roster behind the `entered`
-            numeral above. Inert (no controls of its own), so it sits happily
-            under the stretched open target. */}
-        <EntrantsList event={ev} />
+            numeral above. It takes the viewer's username so an entered player
+            always sees their own chip, however long the roster is (#781). Inert
+            (no controls of its own), so it sits happily under the stretched open
+            target. */}
+        <EntrantsList event={ev} username={username} />
       </Card>
 
       {/* Full-card open target: a sibling of the card, sitting beneath the

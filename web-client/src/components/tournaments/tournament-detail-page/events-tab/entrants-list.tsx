@@ -1,5 +1,7 @@
 import { Badge } from '@/components/ui/badge'
+import { cn } from '@/lib/utils'
 
+import { myEntrant } from '../../data/helpers'
 import { FORMAT_OPTIONS } from '../../data/options'
 import type { Entrant, TournamentEvent } from '../../data/types'
 
@@ -40,20 +42,49 @@ const MAX_VISIBLE = 8
  * silently wrong sentence.
  */
 type RosterState =
-  | { kind: 'listed'; visible: Entrant[]; hidden: number }
+  | {
+      kind: 'listed'
+      visible: Entrant[]
+      hidden: number
+      /** The signed-in player's own entry id, when they are one of the entrants
+       * — the chip to mark as theirs. `null` for a signed-out viewer, or one who
+       * is not in this event. */
+      myEntryId: string | null
+    }
   | { kind: 'empty' }
   | { kind: 'entry-closed'; formatLabel: string }
 
-function rosterState(event: TournamentEvent): RosterState {
+function rosterState(
+  event: TournamentEvent,
+  username: string | null | undefined,
+): RosterState {
   // Entrants first, whatever the format: the roster renders what the server gives
   // it. A non-singles event cannot accrue entrants *today*, but if director-entry
   // (#784) ever puts people in one, listing them beats insisting it is closed.
   if (event.entrants.length > 0) {
-    const visible = event.entrants.slice(0, MAX_VISIBLE)
+    const mine = myEntrant(event, username)
+    // The signed-in player's own chip is PINNED to the front of the visible slice
+    // (#781). The server lists entrants oldest-entry-first, so entering an event
+    // that already has `MAX_VISIBLE` people appends you past the truncation
+    // cut-off: the count ticked up, the control flipped to Withdraw — and a plain
+    // `slice(0, MAX_VISIBLE)` then showed you a roster you were not in. Being told
+    // you are in and shown a list you are not in is the one thing this component
+    // must never do.
+    //
+    // Hoisting REORDERS the roster; it adds nobody and drops nobody (self is
+    // deduped by entry id), so everyone else stays oldest-first behind you.
+    const ordered = mine
+      ? [mine, ...event.entrants.filter((e) => e.id !== mine.id)]
+      : event.entrants
+    const visible = ordered.slice(0, MAX_VISIBLE)
     return {
       kind: 'listed',
       visible,
+      // Derived from what is actually SHOWN, never from `MAX_VISIBLE`: that is
+      // what keeps the tail exact whether or not self was pulled out of it, with
+      // no off-by-one to get wrong.
       hidden: event.entrants.length - visible.length,
+      myEntryId: mine?.id ?? null,
     }
   }
   if (event.format !== 'singles') {
@@ -66,15 +97,25 @@ function rosterState(event: TournamentEvent): RosterState {
 
 export interface EntrantsListProps {
   event: TournamentEvent
+  /**
+   * The signed-in player's username — the join key for "which of these entrants
+   * is me" (`myEntrant`: the session carries a username but no user id). Absent
+   * for a signed-out viewer, or while the session is still in flight; then the
+   * roster is simply the server's order, with nobody marked.
+   */
+  username?: string | null
 }
 
 /**
  * The roster on an event card: who is *actually* in this event.
  *
- * The list is exactly `event.entrants`. Withdrawn players are already absent from
- * it — the server derives both the list and the `entered` count from the ACTIVE
- * entries only (ADR-0016) — so there is nothing to filter here, and filtering
- * would be a second, drift-prone copy of that rule.
+ * The list is exactly the people in `event.entrants` — nobody added, nobody
+ * dropped; only the ORDER is the component's own (see `rosterState`: the
+ * signed-in player's chip is pinned to the front, so a truncated roster can
+ * never hide you from yourself). Withdrawn players are already absent from the
+ * payload — the server derives both the list and the `entered` count from the
+ * ACTIVE entries only (ADR-0016) — so there is nothing to filter here, and
+ * filtering would be a second, drift-prone copy of that rule.
  *
  * Having no entrants is a **data state, not a gap**: it renders designed copy
  * rather than an empty `<ul>` — and *which* copy depends on whether the event can
@@ -90,8 +131,8 @@ export interface EntrantsListProps {
  * Seeds (`Entrant.seed`) are not shown: nothing assigns them until draw
  * generation (#785), so today they are uniformly `null`.
  */
-export const EntrantsList = ({ event }: EntrantsListProps) => {
-  const state = rosterState(event)
+export const EntrantsList = ({ event, username }: EntrantsListProps) => {
+  const state = rosterState(event, username)
 
   return (
     <div className="border-t border-[color:var(--border-subtle)] px-[18px] py-3">
@@ -120,18 +161,33 @@ const RosterBody = ({
           aria-label={`Entrants in ${eventName}`}
           className="mt-2 flex flex-wrap items-center gap-1.5"
         >
-          {state.visible.map((entrant) => (
-            <Badge
-              key={entrant.id}
-              asChild
-              variant="ghost"
-              className="border-[color:var(--border-subtle)]"
-            >
-              {/* Rendered as the <li> itself (`asChild`), so the list stays a
-                  list: <ul> may only parent <li>. */}
-              <li>{entrant.username}</li>
-            </Badge>
-          ))}
+          {state.visible.map((entrant) => {
+            const isMe = entrant.id === state.myEntryId
+            return (
+              <Badge
+                key={entrant.id}
+                asChild
+                variant="ghost"
+                className={cn(
+                  'border-[color:var(--border-subtle)]',
+                  // Your own chip carries the accent treatment the card uses for
+                  // its "Rated" badge — the pinned chip is a *reorder*, so it has
+                  // to say why it jumped the queue.
+                  isMe &&
+                    'border-[color:rgba(255,122,26,0.3)] bg-[color:var(--bg-accent-soft)] text-[color:var(--ball-500)]',
+                )}
+              >
+                {/* Rendered as the <li> itself (`asChild`), so the list stays a
+                    list: <ul> may only parent <li>. The username is its own
+                    element, so the "(you)" tag reads as a separate word to a
+                    screen reader instead of fusing into the name. */}
+                <li>
+                  <span>{entrant.username}</span>
+                  {isMe && <span className="opacity-80">(you)</span>}
+                </li>
+              </Badge>
+            )
+          })}
           {state.hidden > 0 && (
             <li className="text-[12px] text-[color:var(--fg-3)]">
               +{state.hidden} more

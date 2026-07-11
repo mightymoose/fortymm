@@ -49,7 +49,7 @@ async def active_entrants_by_event(
             )
             .join(User, User.id == TournamentEntry.user_id)
             .where(
-                TournamentEntry.event_id.in_(entrants),
+                TournamentEntry.event_id.in_(entrants.keys()),
                 TournamentEntry.status == TournamentEntryStatus.entered,
             )
             # Oldest entry first, matching the event's ``entries`` relationship,

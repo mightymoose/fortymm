@@ -54,6 +54,20 @@ export class TournamentDetailPage {
     return this.page.getByRole('list', { name: `Entrants in ${eventName}` })
   }
 
+  /** The roster's rows, in the order the card shows them — the entrant chips,
+   * then the `+N more` tail when it is truncating. Order is the point: the
+   * signed-in player's own chip is pinned to the front (#781), so `.first()` is
+   * where an entered player must be able to find themselves. */
+  entrantItems(eventName: string): Locator {
+    return this.entrantsList(eventName).getByRole('listitem')
+  }
+
+  /** The `+N more` tail — how many entrants the card is *not* showing. Text, not
+   * a control: the card's stretched overlay owns the only click here. */
+  truncationTail(eventName: string): Locator {
+    return this.entrantsList(eventName).getByText(/^\+\d+ more$/)
+  }
+
   /** The full-card overlay that opens the editor. Its accessible name is
    * `Edit {event}` for an owner, `View {event}` otherwise. */
   openEditorOverlay(eventName: string): Locator {

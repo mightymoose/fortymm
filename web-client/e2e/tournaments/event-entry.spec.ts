@@ -165,6 +165,62 @@ test.describe('Tournaments · entering an event', () => {
     await pom.expectEntryCount(EVENT.EMPTY, 1, 48)
   })
 
+  test('entering a BUSY event still shows me my own name — the roster cannot truncate me away', async ({
+    page,
+  }) => {
+    // #781's acceptance criterion, in the only witness that counts: the server
+    // lists entrants oldest-entry-first, so entering an event that already holds
+    // more people than the card lists appends me PAST the cut-off. The first-8
+    // slice told me I was in (count up, Withdraw offered) and showed me a roster
+    // I was not in.
+    const { pom, store } = await TournamentDetailPage.navigateTo(page, {
+      crowded: true,
+    })
+
+    // --- before: twelve strangers, the oldest eight shown, four hidden -------
+    await expect(pom.entrantsList(EVENT.CROWDED)).toContainText('player.1')
+    await expect(pom.entrantsList(EVENT.CROWDED)).not.toContainText(ME.username)
+    await expect(pom.truncationTail(EVENT.CROWDED)).toHaveText('+4 more')
+    await pom.expectEntryCount(EVENT.CROWDED, 12, 64)
+
+    // --- enter ---------------------------------------------------------------
+    await pom.enterButton(EVENT.CROWDED).click()
+
+    await expect(pom.withdrawButton(EVENT.CROWDED)).toBeVisible()
+    await pom.expectEntryCount(EVENT.CROWDED, 13, 64)
+
+    // THE assertion: I am thirteenth of thirteen, and on screen anyway — pinned
+    // to the front of the roster, and marked, because a chip that jumps the queue
+    // has to say why.
+    await expect(pom.entrantsList(EVENT.CROWDED)).toContainText(ME.username)
+    await expect(pom.entrantItems(EVENT.CROWDED).first()).toContainText(
+      ME.username,
+    )
+    await expect(pom.entrantItems(EVENT.CROWDED).first()).toContainText('(you)')
+
+    // …and the tail stays honest: 13 entrants, 8 chips (me + the 7 oldest) → 5
+    // hidden. Pinning me REORDERS the roster; it does not drop `player.8` out of
+    // the count, nor count me among the hidden.
+    await expect(pom.truncationTail(EVENT.CROWDED)).toHaveText('+5 more')
+    await expect(pom.entrantsList(EVENT.CROWDED)).toContainText('player.7')
+
+    // The server agrees I really am in it — and that it appended me last, which
+    // is precisely what made the bug invisible to the count-only assertions.
+    expect(store.entrantsOf(EVENT.CROWDED)).toHaveLength(13)
+    expect(store.entrantsOf(EVENT.CROWDED).at(-1)?.username).toBe(ME.username)
+    await expect(pom.toasts).toHaveCount(0)
+
+    // --- and back out --------------------------------------------------------
+    // Withdrawing takes my chip (and its tag) away again: the pin follows my
+    // ENTRY, it is not a sticky decoration.
+    await pom.withdrawButton(EVENT.CROWDED).click()
+
+    await expect(pom.enterButton(EVENT.CROWDED)).toBeVisible()
+    await expect(pom.entrantsList(EVENT.CROWDED)).not.toContainText(ME.username)
+    await expect(pom.entrantItems(EVENT.CROWDED).first()).toContainText('player.1')
+    await expect(pom.truncationTail(EVENT.CROWDED)).toHaveText('+4 more')
+  })
+
   test('a doubles event offers no Enter control, and says why instead of lying about it', async ({
     page,
   }) => {
@@ -239,5 +295,22 @@ test.describe('Tournaments · entering an event · accessibility', () => {
     await expect(pom.entrantsList(EVENT.JOURNEY)).toContainText(ME.username)
 
     await expectAxeClean(page, 'events tab after entering')
+  })
+
+  test('is axe-clean with a TRUNCATED roster — my pinned chip and the "+N more" tail', async ({
+    page,
+  }) => {
+    // The fourth roster state (#781): my own chip, marked and hoisted, next to a
+    // tail that is text rather than a control. Both are new markup inside the
+    // list — and both sit under the card's stretched overlay.
+    const { pom } = await TournamentDetailPage.navigateTo(page, { crowded: true })
+    await pom.enterButton(EVENT.CROWDED).click()
+
+    await expect(pom.entrantItems(EVENT.CROWDED).first()).toContainText(
+      ME.username,
+    )
+    await expect(pom.truncationTail(EVENT.CROWDED)).toBeVisible()
+
+    await expectAxeClean(page, 'events tab with a truncated roster')
   })
 })

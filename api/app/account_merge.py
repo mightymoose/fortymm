@@ -37,6 +37,7 @@ from app.models import (
     NotificationPreference,
     RatingHistory,
     Tournament,
+    TournamentEntryStatus,
     User,
     UserLeagueRating,
     UserRole,
@@ -47,6 +48,16 @@ from app.models import (
 # circular import (sessions imports this module). Session tokens are KEPT on the
 # tombstoned guest so its cookie still resolves; every other token is dropped.
 _SESSION_TOKEN_CONTEXT = "session"
+
+# The stored value of an *active* tournament entry, sourced from the enum rather
+# than written into the SQL below as a literal. The model, the routes and the
+# partial unique index all derive "active" from ``TournamentEntryStatus``; a
+# hardcoded ``'entered'`` here would silently stop matching if that value were
+# ever renamed, and the failure mode is nasty rather than obvious — the dedup's
+# EXISTS would find nothing, delete nothing, and the unconditional re-point that
+# follows would then collide with the partial unique index, raising
+# IntegrityError and failing the whole sign-in merge. Bind it, don't spell it.
+_ACTIVE_ENTRY_STATUS: str = TournamentEntryStatus.entered.value
 
 
 @dataclass(frozen=True)
@@ -163,22 +174,27 @@ async def merge_user(
     # The predicate tests ``status``, not the (event, user) pair alone, because
     # two *withdrawn* rows for the same pair are legal — soft-deleted history the
     # partial index deliberately permits. Deleting those would destroy withdrawal
-    # history the index exists to keep.
+    # history the index exists to keep. "Active" is bound as ``:active`` from
+    # ``_ACTIVE_ENTRY_STATUS`` (see above) so this SQL cannot drift from the enum.
     await db.execute(
         text(
             """
             DELETE FROM tournament_entries AS te
             WHERE te.user_id = :from_id
-              AND te.status = 'entered'
+              AND te.status = :active
               AND EXISTS (
                 SELECT 1 FROM tournament_entries other
                 WHERE other.user_id = :to_id
                   AND other.event_id = te.event_id
-                  AND other.status = 'entered'
+                  AND other.status = :active
               )
             """
         ),
-        {"from_id": from_user_id, "to_id": to_user_id},
+        {
+            "from_id": from_user_id,
+            "to_id": to_user_id,
+            "active": _ACTIVE_ENTRY_STATUS,
+        },
     )
     # Nothing left can collide, so the re-point is unconditional and total: every
     # remaining guest entry — active or withdrawn — moves onto the survivor, and

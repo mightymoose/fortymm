@@ -175,4 +175,120 @@ describe('EntrantsList', () => {
       expect(page.queryTruncationTail(EVENT)).toBeNull()
     })
   })
+
+  /**
+   * #781's acceptance criterion, verbatim: "a signed-in player can enter an event
+   * and **see themselves listed**."
+   *
+   * The server lists entrants oldest-entry-first, so entering an event that
+   * already holds `MAX_VISIBLE` people appends you to the END of the roster —
+   * past the truncation cut-off. Under a plain `slice(0, MAX_VISIBLE)` the count
+   * ticked up and the control flipped to Withdraw, but your name was nowhere in
+   * the list: you were told you were in, and shown a list you were not in.
+   *
+   * Every earlier test missed it because the only ones that asserted "my name is
+   * in the roster" ran against an event with ZERO entrants — where the cut-off
+   * cannot bite. So these all run against a BUSY event, on purpose.
+   */
+  describe('the signed-in player, in an event busier than the card can show', () => {
+    const ME = 'rita.kovac'
+    const myEntry = buildEntrant({
+      id: 'entry-me',
+      userId: 'u-me',
+      username: ME,
+    })
+
+    /** The seeded 52-entrant Open Singles, the moment I enter it: I am the 53rd
+     * and newest entry, so the server hands me back LAST. */
+    const busyEventIAmIn = () =>
+      buildEvent({ name: EVENT, entrants: [...buildEntrants(52), myEntry] })
+
+    it('sees their own name, however many people entered ahead of them', () => {
+      page.render({ event: busyEventIAmIn(), username: ME })
+
+      expect(page.queryEntrant(EVENT, ME)).toBeInTheDocument()
+    })
+
+    it('sees it FIRST, with everyone else still oldest-entry-first behind it', () => {
+      page.render({ event: busyEventIAmIn(), username: ME })
+
+      expect(page.getEntrantNames(EVENT)).toEqual([
+        ME,
+        'player.1',
+        'player.2',
+        'player.3',
+        'player.4',
+        'player.5',
+        'player.6',
+        'player.7',
+      ])
+    })
+
+    it('marks the chip as theirs — a chip that jumped the queue says why', () => {
+      page.render({ event: busyEventIAmIn(), username: ME })
+
+      expect(page.queryYouTag(EVENT)).toBeInTheDocument()
+    })
+
+    it('still counts the hidden entrants exactly, with self hoisted out of them', () => {
+      // 53 entrants, 8 chips shown (me + the 7 oldest) → 45 hidden. Pinning me is
+      // a REORDER: it must neither drop `player.8` from the count (44) nor count
+      // me among the hidden (46).
+      page.render({ event: busyEventIAmIn(), username: ME })
+
+      // 8 chips + the tail.
+      expect(page.getEntrantItems(EVENT)).toHaveLength(9)
+      expect(page.queryTruncationTail(EVENT)).toHaveTextContent('+45 more')
+    })
+
+    it('keeps the roster inert — the card still owns the only click', () => {
+      page.render({ event: busyEventIAmIn(), username: ME })
+
+      expect(page.queryAllButtons()).toHaveLength(0)
+    })
+  })
+
+  describe('a roster with nobody of mine in it', () => {
+    it('is untouched for a signed-in player who has not entered', () => {
+      // Nothing to pin, so nothing moves: the oldest 8, the honest tail (52 - 8),
+      // and no chip claimed as anyone's.
+      page.render({
+        event: buildEvent({ name: EVENT, entrants: buildEntrants(52) }),
+        username: 'rita.kovac',
+      })
+
+      expect(page.getEntrantNames(EVENT)[0]).toBe('player.1')
+      expect(page.queryEntrant(EVENT, 'player.8')).toBeInTheDocument()
+      expect(page.queryTruncationTail(EVENT)).toHaveTextContent('+44 more')
+      expect(page.queryYouTag(EVENT)).toBeNull()
+    })
+
+    it('is untouched for a signed-out viewer, who is nobody', () => {
+      page.render({
+        event: buildEvent({ name: EVENT, entrants: buildEntrants(52) }),
+        username: null,
+      })
+
+      expect(page.getEntrantNames(EVENT)[0]).toBe('player.1')
+      expect(page.queryTruncationTail(EVENT)).toHaveTextContent('+44 more')
+      expect(page.queryYouTag(EVENT)).toBeNull()
+    })
+  })
+
+  it('marks my chip in a small event too — where nothing needed hoisting', () => {
+    // Three entrants, all visible either way. The pin is not *load-bearing* here,
+    // but the mark still is: one rule, not two.
+    const me = buildEntrant({ id: 'entry-me', userId: 'u-me', username: 'rita.kovac' })
+    page.render({
+      event: buildEvent({
+        name: EVENT,
+        entrants: [buildEntrant({ id: 'e-1', username: 'player.1' }), me],
+      }),
+      username: 'rita.kovac',
+    })
+
+    expect(page.getEntrantNames(EVENT)).toEqual(['rita.kovac', 'player.1'])
+    expect(page.queryYouTag(EVENT)).toBeInTheDocument()
+    expect(page.queryTruncationTail(EVENT)).toBeNull()
+  })
 })

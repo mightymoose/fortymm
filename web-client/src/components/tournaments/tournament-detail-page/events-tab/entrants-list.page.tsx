@@ -20,6 +20,14 @@ export const ENTRY_CLOSED_COPY = {
   teams: "Teams events can't be entered yet.",
 } as const
 
+/** The tag on the signed-in player's own chip. Spelled out here rather than
+ * imported, for the same reason as the copy above. */
+export const YOU_TAG = '(you)'
+
+/** The `+N more` tail's shape. Anchored, so `+4 more` cannot satisfy an
+ * assertion about `+44 more`. */
+const TAIL_PATTERN = /^\+\d+ more$/
+
 const scoped = (container: Container) => {
   /** The roster for `eventName`. A real `list`, named per event because a tab
    * shows many cards at once. Absent when the event has no entrants: that case
@@ -48,9 +56,24 @@ const scoped = (container: Container) => {
     findEntrant(eventName: string, username: string) {
       return within(getEntrantsList(eventName)).findByText(username)
     },
+    /** The usernames the roster actually SHOWS, in the order it shows them (the
+     * `+N more` tail is not one of them). Order is the assertion: the signed-in
+     * player's own chip is pinned to the front, and everyone else stays
+     * oldest-entry-first behind it. */
+    getEntrantNames(eventName: string): string[] {
+      return within(getEntrantsList(eventName))
+        .getAllByRole('listitem')
+        .filter((li) => !TAIL_PATTERN.test(li.textContent ?? ''))
+        .map((li) => li.firstElementChild?.textContent ?? li.textContent ?? '')
+    },
+    /** The `(you)` tag marking the signed-in player's own chip — `null` when the
+     * viewer is signed out or is not in this event. */
+    queryYouTag(eventName: string) {
+      return within(getEntrantsList(eventName)).queryByText(YOU_TAG)
+    },
     /** The `+N more` tail shown when the roster is longer than the card lists. */
     queryTruncationTail(eventName: string) {
-      return within(getEntrantsList(eventName)).queryByText(/^\+\d+ more$/)
+      return within(getEntrantsList(eventName)).queryByText(TAIL_PATTERN)
     },
     /** Every button in the roster — always none. The list is inert: the card's
      * stretched open target is the only thing here that takes a click. */

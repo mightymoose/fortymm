@@ -6,7 +6,12 @@ import { buildTournamentEntrantRead } from '@/mocks/factories/tournaments/tourna
 import { server } from '@/mocks/server'
 import { waitFor } from '@/test/utilities'
 
-import { buildTournament, buildEvent } from '../data/seed.factory'
+import {
+  buildTournament,
+  buildEntrant,
+  buildEntrants,
+  buildEvent,
+} from '../data/seed.factory'
 import { eventsTabPage } from './events-tab.page'
 
 describe('EventsTab', () => {
@@ -106,5 +111,38 @@ describe('EventsTab', () => {
       // stretched open-overlay is only truly asserted in the browser (2e).
       expect(onOpenEvent).not.toHaveBeenCalled()
     })
+  })
+
+  // The tab is where the session is READ (one query, every card): the roster's
+  // "which entrant is me" join is only as good as the username that reaches it.
+  it('tells every card who the viewer is, so they see themselves in a busy roster', async () => {
+    // The 52-entrant Open Singles with the default MSW session's player
+    // (`rita.kovac`) entered LAST — the exact shape of #781, where the card
+    // showed the first 8 and left her looking for herself in vain.
+    eventsTabPage.render({
+      tournament: buildTournament({
+        events: [
+          buildEvent({
+            name: 'Open Singles',
+            entrants: [
+              ...buildEntrants(52),
+              buildEntrant({
+                id: 'entry-me',
+                userId: 'u-me',
+                username: 'rita.kovac',
+              }),
+            ],
+          }),
+        ],
+      }),
+    })
+
+    // `find`, not `query`: the username arrives with the session.
+    expect(
+      await eventsTabPage.findEntrant('Open Singles', 'rita.kovac'),
+    ).toBeInTheDocument()
+    expect(
+      eventsTabPage.queryTruncationTail('Open Singles'),
+    ).toHaveTextContent('+45 more')
   })
 })

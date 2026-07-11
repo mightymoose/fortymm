@@ -146,6 +146,31 @@ describe('EventCard', () => {
       expect(eventCardPage.queryEntrantsList('U1500 Singles')).toBeNull()
     })
 
+    // The seam: the card is where the viewer's username reaches the roster. Drop
+    // the prop and the roster silently forgets who is looking at it — which is
+    // exactly the state #781 shipped in.
+    it('hands the roster the viewer, so an entered player sees themselves in a busy event', () => {
+      eventCardPage.render({
+        event: buildEvent({
+          name: 'Open Singles',
+          entrants: [
+            ...buildEntrants(52),
+            buildEntrant({ id: 'entry-me', userId: 'u-me', username: 'rita.kovac' }),
+          ],
+        }),
+        username: 'rita.kovac',
+      })
+
+      // 53rd of 53, and still on screen — because the card told the roster who
+      // "me" is.
+      expect(
+        eventCardPage.queryEntrant('Open Singles', 'rita.kovac'),
+      ).toBeInTheDocument()
+      expect(
+        eventCardPage.queryTruncationTail('Open Singles'),
+      ).toHaveTextContent('+45 more')
+    })
+
     it('tells a doubles card entry is not open, rather than "be the first"', () => {
       // A doubles card offers no Enter control (2c) because the API refuses
       // entry — so its roster must not imply the player could be the first in.

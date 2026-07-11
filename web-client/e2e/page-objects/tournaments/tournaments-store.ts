@@ -41,8 +41,8 @@ const UNREAD_COUNT: UnreadCountResponse = { unread_count: 0 }
 
 export const TOURNAMENT_ID = 'bay-area-open-2026'
 
-/** The three events the spec drives, named so the specs never hard-code strings
- * that must agree with the seed below. */
+/** The events the specs drive, named so the specs never hard-code strings that
+ * must agree with the seed below. */
 export const EVENT = {
   /** Singles, 2 existing entrants, 64 slots — the enter/withdraw/re-enter one. */
   JOURNEY: 'Open Singles',
@@ -50,7 +50,16 @@ export const EVENT = {
   EMPTY: 'U1500 Singles',
   /** Doubles — the *entry-closed* roster state, and no Enter control at all. */
   DOUBLES: 'Mixed Doubles',
+  /** Singles with more entrants than a card lists — the *truncated* roster.
+   * Opt-in (`crowded: true`), so the default seed's counts stay the ones the
+   * other specs narrate. */
+  CROWDED: 'Veterans Singles',
 } as const
+
+/** How many people are already in the crowded event before I enter it. Comfortably
+ * past the card's 8-chip cut-off, so my own entry — appended LAST, the server lists
+ * entrants oldest-entry-first — is truncated away unless the roster pins it (#781). */
+const CROWD_SIZE = 12
 
 /**
  * ⚠️ The join key. The session payload carries a username and **no user id**, so
@@ -69,10 +78,26 @@ const OTHERS: TournamentEntrantRead[] = [
   buildTournamentEntrantRead({ id: 'entry-2', user_id: 'u-2', username: 'player.2' }),
 ]
 
+/** A crowd of strangers, `player.1` … `player.N`, in entry order — the roster a
+ * late entrant lands behind. */
+function crowd(size: number): TournamentEntrantRead[] {
+  return Array.from({ length: size }, (_, i) =>
+    buildTournamentEntrantRead({
+      id: `entry-crowd-${i + 1}`,
+      user_id: `u-crowd-${i + 1}`,
+      username: `player.${i + 1}`,
+    }),
+  )
+}
+
 /** All three roster states (`listed` / `empty` / `entry-closed`) on one page, on
  * purpose: it is the real shape of an Events tab, and it lets one axe scan cover
- * every state the roster can be in. */
-function seed(): TournamentDetailRead {
+ * every state the roster can be in.
+ *
+ * The fourth — a roster *longer than the card lists* — is opt-in (`crowded`),
+ * because its dozen entrants would move the tournament-level Entries total that
+ * the journey spec asserts on. */
+function seed(crowded: boolean): TournamentDetailRead {
   return buildTournamentDetailRead({
     id: TOURNAMENT_ID,
     events: [
@@ -99,6 +124,18 @@ function seed(): TournamentDetailRead {
         entrants: [],
         pools: [],
       }),
+      ...(crowded
+        ? [
+            buildTournamentEventRead({
+              id: 'ev-veterans',
+              name: EVENT.CROWDED,
+              format: 'singles',
+              max_players: 64,
+              entrants: crowd(CROWD_SIZE),
+              pools: [],
+            }),
+          ]
+        : []),
     ],
   })
 }
@@ -107,6 +144,9 @@ export interface TournamentsStoreOptions {
   /** The signed-in player's permissions. Defaults to a beta tester (can enter).
    * Pass `[PERM.TOURNAMENT_VIEW]` for the "no Enter control" case. */
   permissions?: string[]
+  /** Add `EVENT.CROWDED` — a singles event already holding more entrants than a
+   * card can list, so entering it puts me past the truncation cut-off. */
+  crowded?: boolean
 }
 
 interface RecordedRequest {
@@ -127,7 +167,7 @@ export class TournamentsStore {
   readonly unhandled: RecordedRequest[] = []
 
   constructor(private readonly options: TournamentsStoreOptions = {}) {
-    this.detail = seed()
+    this.detail = seed(options.crowded ?? false)
   }
 
   /** The event as the *server* would report it: the `entered` count derived from
