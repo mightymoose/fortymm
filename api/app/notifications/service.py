@@ -42,7 +42,6 @@ from app.notifications.taxonomy import (
     resolve_cell_enabled,
     resolve_channel_enabled,
 )
-from app.players import escape_like
 from app.schemas.notification import (
     BroadcastRecipient,
     BroadcastRecipientList,
@@ -64,6 +63,7 @@ from app.schemas.notification import (
     TestNotificationResponse,
     UnreadCountResponse,
 )
+from app.sql import escape_like
 
 log = logging.getLogger(__name__)
 

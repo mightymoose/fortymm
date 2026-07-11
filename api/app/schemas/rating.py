@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING
 
 from pydantic import BaseModel
 
-from app.domain.match.extras import rating_delta
+from app.domain.rating import rating_delta
 
 if TYPE_CHECKING:
     from app.models.rating_history import RatingHistory

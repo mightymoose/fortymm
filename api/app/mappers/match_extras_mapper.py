@@ -11,7 +11,9 @@ builds the in-progress ``schemas.view`` replacement under the ``data`` key.)
 from __future__ import annotations
 
 import uuid
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from types import MappingProxyType
 
 from app.domain.match.extras import HeadToHead as HeadToHeadModel
 from app.domain.match.extras import MatchViewExtras
@@ -28,10 +30,18 @@ from app.schemas.rating import RatingChange
 
 @dataclass(frozen=True)
 class MatchDetailsExtras:
-    """The serialized extras, ready to drop onto ``MatchDetails``."""
+    """The serialized extras, ready to drop onto ``MatchDetails``.
 
-    rating_changes: dict[uuid.UUID, RatingChange]
-    recent_form: list[MatchDetailsPlayerForm]
+    Deeply immutable, on purpose. ``frozen=True`` only stops attributes being
+    *rebound* — it would happily hand every caller the same mutable ``dict`` /
+    ``list``. So the collections are read-only too: ``Mapping`` / ``Sequence``
+    make ``extras.rating_changes[uid] = ...`` and ``extras.recent_form.append(...)``
+    a type error, and the ``MappingProxyType`` / ``tuple`` behind them make such a
+    write a ``TypeError`` at runtime rather than a silent shared-state mutation.
+    See ``empty_extras`` for why that matters."""
+
+    rating_changes: Mapping[uuid.UUID, RatingChange]
+    recent_form: Sequence[MatchDetailsPlayerForm]
     head_to_head: MatchDetailsH2H | None
 
 
@@ -81,11 +91,13 @@ def _head_to_head(h2h: HeadToHeadModel) -> MatchDetailsH2H:
 
 def serialize_match_extras(extras: MatchViewExtras) -> MatchDetailsExtras:
     return MatchDetailsExtras(
-        rating_changes={
-            user_id: _rating_change(change)
-            for user_id, change in extras.rating_changes.items()
-        },
-        recent_form=[_player_form(form) for form in extras.recent_form],
+        rating_changes=MappingProxyType(
+            {
+                user_id: _rating_change(change)
+                for user_id, change in extras.rating_changes.items()
+            }
+        ),
+        recent_form=tuple(_player_form(form) for form in extras.recent_form),
         head_to_head=(
             _head_to_head(extras.head_to_head)
             if extras.head_to_head is not None
@@ -94,5 +106,15 @@ def serialize_match_extras(extras: MatchViewExtras) -> MatchDetailsExtras:
     )
 
 
-# The extras a non-participant sees: none of them (#515).
-EMPTY_EXTRAS = serialize_match_extras(MatchViewExtras.empty())
+def empty_extras() -> MatchDetailsExtras:
+    """The extras a non-participant sees: none of them (#515).
+
+    A *function*, not a module-level ``EMPTY_EXTRAS`` constant — do not "optimize"
+    it back into one. A shared instance is a shared object: every spectator and
+    anonymous share-URL viewer would be handed the same collections, so a single
+    stray write anywhere (``extras.rating_changes[uid] = ...``) would poison the
+    process and leak one real player's ratings/form into every later response.
+    A fresh instance per call means there is nothing shared to poison — and the
+    read-only collections on ``MatchDetailsExtras`` mean a future field added here
+    can't quietly re-arm the trap."""
+    return serialize_match_extras(MatchViewExtras.empty())

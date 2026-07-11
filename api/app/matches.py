@@ -2,6 +2,7 @@ import csv
 import io
 import logging
 import uuid
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Annotated, Any, cast
 
@@ -31,8 +32,8 @@ from app.domain.match.models import Match as MatchModel
 from app.leagues import resolve_league
 from app.mappers.match_details_mapper import serialize_match_details
 from app.mappers.match_extras_mapper import (
-    EMPTY_EXTRAS,
     MatchDetailsExtras,
+    empty_extras,
     serialize_match_extras,
 )
 from app.match_queries import (
@@ -117,7 +118,7 @@ def _side_schema(
     side: MatchSide,
     side_wins: dict[int, int],
     current_user_id: uuid.UUID | None,
-    rating_changes: dict[uuid.UUID, RatingChange] | None = None,
+    rating_changes: Mapping[uuid.UUID, RatingChange] | None = None,
 ) -> MatchDetailsSide:
     # Singles only for v1: each side has at most one rated player.
     rating_change = (
@@ -414,7 +415,7 @@ async def _view_extras(match_service: MatchService, match: Match) -> MatchDetail
     The router hands the service the primitives it already holds and gets back a
     domain model; the SQL lives in ``MatchDetailsRepository`` and the wire shapes
     are built by the extras mapper. Callers gate on participation *before* calling
-    this — a non-participant gets ``EMPTY_EXTRAS`` (see #515)."""
+    this — a non-participant gets ``empty_extras()`` (see #515)."""
     return serialize_match_extras(
         await match_service.load_view_extras(
             match_id=match.id,
@@ -432,7 +433,7 @@ def _serialize_details(
     extras: MatchDetailsExtras | None = None,
     domain_match: MatchModel | None = None,
 ) -> MatchDetails:
-    extras = extras or EMPTY_EXTRAS
+    extras = extras or empty_extras()
     # The ``data`` view is built from the domain model. The match-details
     # endpoint loads it through MatchService/MatchRepository and passes it in;
     # the other serialize call sites already hold the full ORM row, so they
@@ -496,7 +497,9 @@ def _serialize_details(
         # it is, and (when the opponent corrected the viewer's own proposal) the
         # diff. Drives the accept CTA + the negotiation callouts (#713).
         negotiation=_negotiation(match, current_user_id),
-        recent_form=extras.recent_form,
+        # ``extras.recent_form`` is a read-only Sequence; the response model owns
+        # its own list, so copy rather than alias it.
+        recent_form=list(extras.recent_form),
         head_to_head=extras.head_to_head,
         data=serialize_match_details(domain_match),
     )
@@ -939,7 +942,7 @@ async def get_match(
         match, current_user.id
     )
     extras = (
-        await _view_extras(match_service, match) if is_participant else EMPTY_EXTRAS
+        await _view_extras(match_service, match) if is_participant else empty_extras()
     )
     return _serialize_details(
         match,

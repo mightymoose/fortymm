@@ -14,16 +14,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime
 
-
-def rating_delta(before: float | None, after: float) -> float:
-    """The rating movement a completed match produced. A player who had no
-    rating in the league going in moved by nothing, not by their whole rating.
-
-    The single home for that rule: ``schemas.rating.RatingChange.from_history``
-    (the dashboard's path) and ``MatchDetailsRepository.rating_changes`` (the
-    match-details path) both call it, so the two surfaces cannot drift into
-    disagreeing about the same player's delta."""
-    return after - before if before is not None else 0.0
+from app.domain.rating import rating_delta
 
 
 @dataclass(frozen=True)
@@ -32,8 +23,8 @@ class RatingChange:
     for a player who had no rating in the league going in.
 
     ``delta`` is *derived*, never stored: it is by definition
-    ``rating_delta(before, after)``, so a ``RatingChange`` that disagrees with its
-    own endpoints cannot be constructed."""
+    ``app.domain.rating.rating_delta(before, after)``, so a ``RatingChange`` that
+    disagrees with its own endpoints cannot be constructed."""
 
     before: float | None
     after: float

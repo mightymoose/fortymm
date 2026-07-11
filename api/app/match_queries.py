@@ -8,14 +8,11 @@ match-details read path all build on these.
 They used to live on the ``app.matches`` router, which made every other module
 import a router's internals (against the ``api/CLAUDE.md`` rule that routers must
 not depend on each other) and made a match-details module importing them a
-circular import. Nothing here holds a FastAPI type, and nothing here reaches back
-into ``app.matches`` — so the match-details read path can import these freely.
-
-One wart, inherited rather than introduced: ``escape_like`` still comes from
-``app.players``, which does define a router. It's a pure string helper with no
-router dependency of its own and it creates no cycle for our callers, but it does
-mean this module is not yet the clean leaf it should be. Moving it to a neutral
-home would finish the job.
+circular import. This module is a leaf: nothing here holds a FastAPI type, and
+nothing here reaches back into a router — importing it (or the match-details read
+path built on it) does not construct a single ``APIRouter``. Keep it that way; if
+you need a helper that lives on a router, move the helper out rather than
+importing the router.
 """
 
 import uuid
@@ -35,8 +32,8 @@ from app.models import (
     MatchStatus,
     User,
 )
-from app.players import escape_like
 from app.result_acceptance import _games_to_win, side_win_counts
+from app.sql import escape_like
 
 # ----- eager-load chains ---------------------------------------------------
 

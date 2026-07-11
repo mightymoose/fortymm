@@ -30,6 +30,7 @@ from app.schemas.player import (
     PlayerSummary,
 )
 from app.sessions import get_current_user
+from app.sql import escape_like
 
 router = APIRouter(prefix="/v1")
 
@@ -121,12 +122,6 @@ async def _load_player_ranks(
         )
     ).all()
     return {user_id: int(rank) for user_id, rank in rows}
-
-
-def escape_like(term: str) -> str:
-    """Escape LIKE wildcards so a query of ``%`` matches a literal percent
-    sign rather than every username."""
-    return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 @router.get("/players/recent", response_model=list[PlayerRead])
