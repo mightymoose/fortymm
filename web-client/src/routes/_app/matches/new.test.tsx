@@ -2,11 +2,13 @@ import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import {
   RouterProvider,
+  createBrowserHistory,
   createMemoryHistory,
   createRootRoute,
   createRoute,
   createRouter,
 } from '@tanstack/react-router'
+import type { RouterHistory } from '@tanstack/react-router'
 import {
   QueryClient,
   QueryClientProvider,
@@ -33,7 +35,7 @@ function pendingMatch() {
   })
 }
 
-function renderNewMatch() {
+function renderNewMatch(opts: { history?: RouterHistory } = {}) {
   const queryClient = new QueryClient({
     // Mirror the app's real client (`main.tsx`): a 30s staleTime is what keeps
     // a freshly-primed match-details entry from being treated as stale and
@@ -93,12 +95,18 @@ function renderNewMatch() {
       detailsRoute,
       loginRoute,
     ]),
-    history: createMemoryHistory({
-      // Seed a prior entry (the dashboard) so a Back from score entry has
-      // somewhere real to land — and the new-match form must not be it.
-      initialEntries: ['/dashboard', '/matches/new'],
-      initialIndex: 1,
-    }),
+    // Default: an in-memory history seeded with a prior entry (the dashboard)
+    // so a Back from score entry has somewhere real to land — and the new-match
+    // form must not be it. A test that needs the real browser popstate path
+    // (#830) injects a `createBrowserHistory()` instead, since memory history's
+    // `back()` never consults the blocker (only the browser popstate handler
+    // does).
+    history:
+      opts.history ??
+      createMemoryHistory({
+        initialEntries: ['/dashboard', '/matches/new'],
+        initialIndex: 1,
+      }),
   })
   return {
     router,
@@ -585,6 +593,72 @@ describe('NewMatchPage', () => {
       screen.queryByText('Scoring route m-test game 1'),
     ).not.toBeInTheDocument()
     expect(screen.getByText('Dashboard route')).toBeInTheDocument()
+  })
+
+  it('in-app browser Back on a dirty form pops the custom discard dialog, not the native prompt (#830)', async () => {
+    const user = userEvent.setup()
+    server.use(
+      http.get('*/v1/players/recent', () =>
+        HttpResponse.json([{ id: 'pl-1', username: 'ada.lovelace' }]),
+      ),
+    )
+
+    // Why a real `createBrowserHistory()` here instead of the harness's default
+    // memory history: a browser Back is a *popstate*, not the push-`navigate()`
+    // the Cancel button fires. `@tanstack/history` only consults the blocker on
+    // a popstate via its `window` popstate handler — memory history's `back()`
+    // has no such handler and would sail straight through, so it can't exercise
+    // #830 at all. The distinction matters because the native `beforeunload`
+    // prompt is only unavoidable when Back actually *leaves* the app's document;
+    // an in-app Back (landing on the seeded /dashboard entry below) is fully
+    // guardable, and must pop our custom "Discard changes?" dialog rather than a
+    // browser-native prompt or a silent navigation.
+    const history = createBrowserHistory()
+    // Seed the stack so Back from /matches/new lands on a real /dashboard entry.
+    history.push('/dashboard')
+    history.flush()
+    history.push('/matches/new')
+    history.flush()
+    try {
+      const { router } = renderNewMatch({ history })
+
+      // Dirty the form by picking an opponent — but do NOT start the match, so
+      // `hasSucceeded()` stays false and the form is still dirty.
+      await user.click(
+        await screen.findByRole('button', { name: /ada\.lovelace/i }),
+      )
+
+      // The browser Back — a popstate — must be caught by the blocker.
+      act(() => {
+        router.history.back()
+      })
+
+      expect(
+        await screen.findByRole('alertdialog', { name: /discard changes/i }),
+      ).toBeInTheDocument()
+      expect(screen.queryByText('Dashboard route')).not.toBeInTheDocument()
+
+      // "Keep editing" dismisses the dialog and keeps us on the form — the Back
+      // was blocked and its history entry restored, not honored.
+      await user.click(screen.getByRole('button', { name: /keep editing/i }))
+      await waitFor(() =>
+        expect(
+          screen.queryByRole('alertdialog', { name: /discard changes/i }),
+        ).not.toBeInTheDocument(),
+      )
+      expect(
+        screen.getByRole('button', { name: /start match/i }),
+      ).toBeInTheDocument()
+      expect(
+        screen.getByRole('button', { name: /^change$/i }),
+      ).toBeInTheDocument()
+      expect(screen.queryByText('Dashboard route')).not.toBeInTheDocument()
+    } finally {
+      // `createBrowserHistory` monkeypatches the global `window.history`
+      // push/replaceState and adds popstate/beforeunload listeners — tear it
+      // down so it can't leak into the other tests in this file.
+      history.destroy()
+    }
   })
 
   it('shows a wait cursor on the Start match button while submitting (#77)', async () => {
