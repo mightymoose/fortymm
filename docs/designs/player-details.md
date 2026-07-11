@@ -6,15 +6,18 @@ recent matches) in place of today's hero + paginated table.
 
 [mockup]: https://claude.ai/design/p/0c7326c8-59c0-4753-8d33-184ca9be1724?file=Player+Details.dc.html
 
-Decisions live in ADRs [0015][a15] (league scope), [0016][a16] (overview +
-sub-route), [0017][a17] (chart), [0018][a18] (viewer-aware). New vocabulary lives
-in `CONTEXT.md` (*Game*, *League*, *Default league*, *Career*, *Peak rating*,
-*Rating confidence*, *Form*, *Streak*, *Games won*, *Meeting*, *Head-to-head*).
+Decisions live in four ADRs, all numbered `0915` after the PR that introduced them
+(ADR numbers in this repo are not a sequence — numbering off `max + 1` from a
+stale main is how we ended up with four `0008`s): [league scope][a15],
+[overview + sub-route][a16], [the chart][a17], [viewer-aware][a18]. New vocabulary
+lives in `CONTEXT.md` (*Game*, *League*, *Default league*, *Career*, *Peak
+rating*, *Rating confidence*, *Form*, *Streak*, *Games won*, *Meeting*,
+*Head-to-head*).
 
-[a15]: ../adr/0015-the-profile-is-league-scoped-for-rating-and-cross-league-for-career.md
-[a16]: ../adr/0016-the-profile-is-an-overview-and-full-match-history-is-its-own-route.md
-[a17]: ../adr/0017-the-rating-chart-is-a-calendar-window-with-a-carry-in-anchor.md
-[a18]: ../adr/0018-the-player-profile-is-viewer-aware.md
+[a15]: ../adr/0915-the-profile-is-league-scoped-for-rating-and-cross-league-for-career.md
+[a16]: ../adr/0915-the-profile-is-an-overview-and-full-match-history-is-its-own-route.md
+[a17]: ../adr/0915-the-rating-chart-is-a-calendar-window-with-a-carry-in-anchor.md
+[a18]: ../adr/0915-the-player-profile-is-viewer-aware.md
 
 ## What the mockup asks for, and what backs it
 
@@ -48,8 +51,9 @@ row per user until USATT lands.
   RD/σ stay in the `<details>` drawer.
 - **"Top 8%"** as the hero's headline standing. In a twelve-player alpha, "top 8%"
   means *you are first*, dressed as a statistic. The hero leads with **rank**
-  (`#3 of 42 in FortyMM`); percentile is suppressed below 50 rated players in the
-  league and appears alongside above it.
+  (`#3 of 42 in FortyMM`); percentile appears alongside it only once the league is
+  big enough for the number to mean anything (see the API section — the threshold
+  is provisional).
 - **"Sets won".** There are no sets. See below.
 
 ## Renames
@@ -68,13 +72,21 @@ change.
 One request paints the page. Extends today's bundle:
 
 - `PlayerSummary` fields (`rating`, `rank`, `wins`, `losses`, `form`) — **now
-  league-scoped by `league_id`**, and `form` widens to 10 (`FORM_WINDOW`; the
-  roster keeps slicing the first 5).
+  league-scoped by `league_id`**.
+- `form` widens from 5 to 10. **`form` lives on `PlayerSummary`, which the
+  `/players` roster also serializes** — so widening it means the roster ships a
+  10-char string for every row and slices the first 5 client-side. That is the
+  intended trade (one shared field, a few bytes per roster row) rather than a
+  second, wider field on `PlayerDetail`; name it here so nobody "optimises" the
+  roster back to 5 and silently truncates the profile.
 - `member_since: datetime` — from `User.created_at`.
 - `rating_delta: RatingChange | null` — from the most recent rated match. `null`,
   never `0`, when there is none.
 - `peak: float | null`, `rank_of: int | null` (rated population, so `#3 of 42`
-  can't flatter), `percentile: int | null` (suppressed below 50 rated players).
+  can't flatter), `percentile: int | null`. **Provisional:** percentile is
+  suppressed below 50 rated players in the league. The *principle* is settled — a
+  percentile over a tiny population flatters and must not headline — but 50 is a
+  guess, not a ratified number. Put it in one named constant.
 - `confidence: RatingConfidence | null` — `{ level: "provisional" | "firming_up" |
   "settled", deviation, volatility, interval: { low, high } }`. Level keys on RD:
   `≥160` provisional, `90–160` firming up, `<90` settled. Interval is
@@ -154,18 +166,27 @@ Leagues highlight at once.
 
 ### Loading and errors
 
-Per-card `<Suspense>` with a hand-mirrored skeleton (`role="status"`,
-`aria-busy`), `useSuspenseQuery` in every fetcher — no `isLoading` branching, no
-page-level skeleton.
+**The eight bundle-backed cards**: per-card `<Suspense>` with a hand-mirrored
+skeleton (`role="status"`, `aria-busy`), `useSuspenseQuery` in the fetcher — no
+`isLoading` branching, no page-level skeleton. `throwOnError: true` and **no
+per-card error boundaries**, exactly as match-details: all eight share one query,
+so a failure means none of them has anything to draw, and it throws to the route's
+`PlayerRouteError` (4xx → "Player not found", no retry; 5xx → "Couldn't load this
+player" + Try again).
 
-Errors are two-tier, matching the two queries:
+**The chart is the exception, and it cannot use `useSuspenseQuery`.** Two of its
+requirements are things `useSuspenseQuery` structurally cannot do: it always
+throws to the nearest boundary (there is no `throwOnError: false` for it), and a
+key change re-suspends the card to its skeleton. But a range flip must (a) keep
+the old chart on screen while the new range loads, and (b) fail *inside the card*
+— blanking a fully-painted profile because someone clicked "30d" would be absurd.
 
-- **The bundle throws to the route.** `throwOnError: true`, no per-card
-  boundaries (as in match-details). `PlayerRouteError` keeps its shape: 4xx →
-  "Player not found", no retry; 5xx → "Couldn't load this player" + Try again.
-- **The chart owns its failure.** `throwOnError: false`; a failed range flip
-  renders "Couldn't load that range · Try again" inside the card and leaves the
-  painted page alone.
+So the chart's fetcher is **`useQuery`**, with `placeholderData: keepPreviousData`
+and `throwOnError: false`, rendering an inline "Couldn't load that range · Try
+again" in place of the SVG on failure. That is not a new pattern: it is precisely
+what `usePlayerMatches` does today (`keepPreviousData`, no `throwOnError`, inline
+`MatchesError` that "does not blow away the whole page"). Its *initial* load still
+costs no request and no spinner, because its cache is seeded from the bundle.
 
 ### Component tree
 
