@@ -107,6 +107,11 @@ class MatchDetailsRepository:
         if not user_ids:
             return []
 
+        # Batched once for every player, ahead of the loop — one round-trip
+        # each, not one per user (issue #195).
+        careers = await self.career_before(user_ids, created_at)
+        ratings = await self.pre_match_ratings(user_ids, league_id, created_at)
+
         result: list[PlayerForm] = []
         for user_id in user_ids:
             rows = (
@@ -125,73 +130,121 @@ class MatchDetailsRepository:
                 PlayerForm(
                     user_id=user_id,
                     recent_results=[_form_result(past, user_id) for past in rows],
-                    rating_before=await self.pre_match_rating(
-                        user_id, league_id, created_at
-                    ),
-                    career_before=await self.career_before(user_id, created_at),
+                    rating_before=ratings[user_id],
+                    career_before=careers[user_id],
                 )
             )
         return result
 
-    async def pre_match_rating(
+    async def pre_match_ratings(
         self,
-        user_id: uuid.UUID,
+        user_ids: list[uuid.UUID],
         league_id: uuid.UUID,
         before: datetime,
-    ) -> PreMatchRating:
-        """The player's rating in ``league_id`` as of just before ``before``,
-        plus the chronological trail behind it. Strict ``<`` on ``before`` so
-        this match's own rating row never leaks in."""
-        rows = (
-            (
-                await self._db.execute(
-                    select(RatingHistory.rating_value)
-                    .where(
-                        RatingHistory.user_id == user_id,
-                        RatingHistory.league_id == league_id,
-                        RatingHistory.created_at < before,
-                    )
-                    .order_by(RatingHistory.created_at.desc())
-                    .limit(RATING_HISTORY_LIMIT)
+    ) -> dict[uuid.UUID, PreMatchRating]:
+        """Every cited player's rating in ``league_id`` as of just before
+        ``before``, plus the chronological trail behind it, in **one** round-trip
+        rather than one query per user (issue #195).
+
+        The per-user ``ORDER BY created_at DESC LIMIT n`` collapses into a single
+        ``ROW_NUMBER() OVER (PARTITION BY user_id ...)`` window, capped in an outer
+        query (a window function can't be filtered in its own ``WHERE``). The cap
+        is therefore genuinely **per user** — a flat ``LIMIT`` over the whole
+        result set would starve the second player.
+
+        Strict ``<`` on ``before`` so this match's own rating row never leaks in.
+
+        A player with no rating history in the league has **no rows** in the
+        windowed result; they are defaulted back in as an unrated player, so every
+        requested id is always a key of the returned dict."""
+        if not user_ids:
+            return {}
+        ranked = (
+            select(
+                RatingHistory.user_id,
+                RatingHistory.rating_value,
+                func.row_number()
+                .over(
+                    partition_by=RatingHistory.user_id,
+                    order_by=RatingHistory.created_at.desc(),
                 )
+                .label("rn"),
             )
-            .scalars()
-            .all()
+            .where(
+                RatingHistory.user_id.in_(user_ids),
+                RatingHistory.league_id == league_id,
+                RatingHistory.created_at < before,
+            )
+            .subquery()
         )
-        if not rows:
-            return PreMatchRating(value=None, history=[])
-        # ``rows`` is DESC, so ``rows[0]`` is already the most-recent value; the
-        # history list is the chronological (ASC) reversal.
-        return PreMatchRating(value=rows[0], history=list(reversed(rows)))
+        rows = (
+            await self._db.execute(
+                select(ranked.c.user_id, ranked.c.rating_value)
+                .where(ranked.c.rn <= RATING_HISTORY_LIMIT)
+                .order_by(ranked.c.user_id, ranked.c.rn)
+            )
+        ).all()
+
+        # Rows arrive newest-first per user (``rn`` ascending), so the head of each
+        # trail is the most-recent value and the history is its chronological
+        # (ASC) reversal.
+        trails: dict[uuid.UUID, list[float]] = {}
+        for row in rows:
+            trails.setdefault(row[0], []).append(float(row[1]))
+        rated = {
+            user_id: PreMatchRating(value=trail[0], history=list(reversed(trail)))
+            for user_id, trail in trails.items()
+        }
+        return {
+            user_id: rated.get(user_id, PreMatchRating(value=None, history=[]))
+            for user_id in user_ids
+        }
 
     async def career_before(
         self,
-        user_id: uuid.UUID,
+        user_ids: list[uuid.UUID],
         before: datetime,
-    ) -> CareerRecord:
-        """Cross-league ``(matches, wins)`` completed strictly before ``before``
-        (the current match's ``created_at``). The current match is excluded by the
-        date filter alone: a completed match's ``completed_at`` is always ``>=`` its
-        own ``created_at``, so it can never satisfy ``completed_at < created_at``. No
-        separate ``id`` guard is needed (issue #202)."""
+    ) -> dict[uuid.UUID, CareerRecord]:
+        """Every cited player's cross-league ``(matches, wins)`` completed strictly
+        before ``before`` (the current match's ``created_at``), in **one**
+        ``GROUP BY user_id`` round-trip rather than one query per user (issue #195).
+
+        The current match is excluded by the date filter alone: a completed match's
+        ``completed_at`` is always ``>=`` its own ``created_at``, so it can never
+        satisfy ``completed_at < created_at``. No separate ``id`` guard is needed
+        (issue #202).
+
+        A player with no prior completed matches has **no row** in the grouped
+        result; they are defaulted back in as a zero record, so every requested id
+        is always a key of the returned dict."""
+        if not user_ids:
+            return {}
         side = aliased(MatchSide)
         player = aliased(MatchSidePlayer)
-        row = (
+        rows = (
             await self._db.execute(
                 select(
+                    player.user_id,
                     func.count(Match.id),
                     func.count(Match.id).filter(side.won.is_(True)),
                 )
                 .join(side, side.match_id == Match.id)
                 .join(player, player.match_side_id == side.id)
                 .where(
-                    player.user_id == user_id,
+                    player.user_id.in_(user_ids),
                     Match.status == MatchStatus.completed,
                     Match.completed_at < before,
                 )
+                .group_by(player.user_id)
             )
-        ).one()
-        return CareerRecord(matches=int(row[0]), wins=int(row[1]))
+        ).all()
+        played = {
+            row[0]: CareerRecord(matches=int(row[1]), wins=int(row[2])) for row in rows
+        }
+        return {
+            user_id: played.get(user_id, CareerRecord(matches=0, wins=0))
+            for user_id in user_ids
+        }
 
     async def head_to_head(
         self,
