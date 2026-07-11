@@ -7,6 +7,10 @@ import type { ConfidenceView } from './confidence-card-query'
  *
  * There is no confidence *percentage* in here, and there must never be one: it
  * is not a number that exists (`CONTEXT.md` § *Rating confidence*).
+ *
+ * `isOwn` is **false** — somebody else's profile, the common visit, and the voice
+ * (third person) that is safe to be wrong in. It is a field on the *view* because
+ * the projection reads it off the payload, not off the session (ADR-0915).
  */
 export function buildConfidenceView(
   overrides: Partial<ConfidenceView> = {},
@@ -19,6 +23,7 @@ export function buildConfidenceView(
       { label: 'Deviation (RD)', value: '69.4' },
       { label: 'Volatility (σ)', value: '0.0592' },
     ],
+    isOwn: false,
     ...overrides,
   }
 }

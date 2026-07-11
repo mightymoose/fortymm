@@ -1,13 +1,6 @@
-import {
-  RouterProvider,
-  createMemoryHistory,
-  createRootRoute,
-  createRoute,
-  createRouter,
-} from "@tanstack/react-router";
 import type { ReactNode } from "react";
 
-import { render } from "@/test/utilities";
+import { renderWithRoutes } from "@/test/router";
 
 /**
  * Render `ui` under a minimal memory router that registers the
@@ -15,22 +8,10 @@ import { render } from "@/test/utilities";
  * match (e.g. a head-to-head meeting row) need the route present so the link
  * resolves at render time. The router loads asynchronously, so first reads
  * should await an async finder.
+ *
+ * A named special case of `renderWithRoutes` — the same harness, with the one
+ * link target these components need already filled in.
  */
 export function renderUnderMatchRoute(ui: ReactNode) {
-  const rootRoute = createRootRoute();
-  const indexRoute = createRoute({
-    getParentRoute: () => rootRoute,
-    path: "/",
-    component: () => <>{ui}</>,
-  });
-  const matchDetail = createRoute({
-    getParentRoute: () => rootRoute,
-    path: "/matches/$matchId",
-    component: () => <div>match-detail</div>,
-  });
-  const router = createRouter({
-    routeTree: rootRoute.addChildren([indexRoute, matchDetail]),
-    history: createMemoryHistory({ initialEntries: ["/"] }),
-  });
-  return render(<RouterProvider router={router} />);
+  return renderWithRoutes(ui, { linkTargets: ["/matches/$matchId"] });
 }

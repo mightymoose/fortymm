@@ -13,6 +13,14 @@ The streak helpers are deliberately split into a *fetch* (``completed_results``)
 and a *pure* fold over that sequence (``current_streak``), so a caller that
 wants more than one statistic — e.g. the current run *and* the longest-ever run
 — pays for a single scan and folds it twice.
+
+The two profile-hero blocks — ``player_standing`` and ``player_confidence`` —
+are the read-side *compositions* of the statistics above, and live here for the
+same reason the parts do. ``player_confidence`` in particular is here and NOT in
+``app.ratings.confidence`` (whose ``rating_interval`` it calls): that module is a
+LEAF on purpose — ``app.schemas.rating`` imports it for the ``level``
+``@computed_field`` — so a read that builds a ``RatingConfidence`` cannot live
+there without closing an import cycle.
 """
 
 import uuid
@@ -22,6 +30,7 @@ from typing import Literal
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import joinedload
 
 from app.models import (
     Match,
@@ -32,12 +41,28 @@ from app.models import (
     User,
     UserLeagueRating,
 )
+from app.ratings.confidence import rating_interval
+from app.ratings.state import Glicko2State, parse_rating_state
+from app.schemas.player import PlayerSummary
+from app.schemas.rating import RatingChange, RatingConfidence, RatingInterval
 
 # How many of a player's most-recent completed matches the *current*-streak scan
 # reads. A run longer than this is vanishingly rare and would only under-report
 # the count, never mis-report its kind. A caller that needs an untruncated scan
 # (a longest-ever streak) passes ``limit=None`` to ``completed_results``.
 STREAK_SCAN_LIMIT = 100
+
+# The smallest rated population for which "Top N%" is a statement rather than a
+# flourish. Below it the profile withholds `percentile` entirely: in a
+# twelve-player league "top 8%" only ever means "you are first", and dressing
+# that up as a percentile is a lie of precision. The number is a provisional
+# guess — the *principle* (withhold it while the league is too small) is what is
+# settled, so move it freely.
+#
+# Deliberately applied in `player_standing` and not inside `league_percentile`:
+# the dashboard's rating card is the helper's other caller and its behavior is
+# out of scope.
+PERCENTILE_MIN_RATED_PLAYERS = 50
 
 
 @dataclass(frozen=True)
@@ -83,7 +108,7 @@ async def league_rated_population(db: AsyncSession, league_id: uuid.UUID) -> int
 
     The population is EXACTLY the one ranks are computed over (non-merged, rated
     members of this league), so ``rank <= league_rated_population`` always holds.
-    Keep this WHERE clause in step with ``players._load_player_ranks`` — a
+    Keep this WHERE clause in step with ``player_summary._load_player_ranks`` — a
     tombstoned ghost or an unrated member leaking in here would make the
     denominator disagree with the numerator.
     """
@@ -249,3 +274,103 @@ async def current_streak_for_user(
     no decided matches. Scans at most ``STREAK_SCAN_LIMIT`` matches — enough to
     count any run a real player is on."""
     return current_streak(await completed_results(db, user_id))
+
+
+@dataclass(frozen=True)
+class _Standing:
+    """The hero's "where this player stands" block, computed once and handed to
+    the response model as typed fields (not a ``dict[str, Any]`` seam)."""
+
+    peak: float | None
+    rank_of: int | None
+    percentile: int | None
+    rating_delta: RatingChange | None
+
+
+async def player_standing(
+    db: AsyncSession, user_id: uuid.UUID, league_id: uuid.UUID, summary: PlayerSummary
+) -> _Standing:
+    """Peak, the size of the ladder behind the player's rank, a percentile (only
+    once the league is big enough for one to mean anything), and the rating
+    change from their most recent rated match.
+
+    At most four round trips for the whole block — this is a single-player
+    surface, so every read below is one query scoped to that one player, never
+    one query per statistic per row.
+
+    Everything here hangs off the player HAVING a rating in this league. An
+    unrated player (never finished a rated match) has no rank, and so no peak, no
+    ladder position and no percentile: reporting a peak of 1500 for them would
+    present the seed rating as an achievement they earned.
+    """
+    rating = summary.rating
+    population = await league_rated_population(db, league_id)
+    history = await latest_rated_match_change(db, user_id, league_id)
+    peak = (
+        None
+        if rating is None
+        else await league_peak_rating(db, user_id, league_id, rating)
+    )
+    percentile = (
+        await league_percentile(db, league_id, rating)
+        if rating is not None and population >= PERCENTILE_MIN_RATED_PLAYERS
+        else None
+    )
+    return _Standing(
+        peak=peak,
+        # None exactly when `rank` is None — no rank, no ladder to stand on.
+        rank_of=None if summary.rank is None else population,
+        percentile=percentile,
+        rating_delta=None if history is None else RatingChange.from_history(history),
+    )
+
+
+async def player_confidence(
+    db: AsyncSession, user_id: uuid.UUID, league_id: uuid.UUID
+) -> RatingConfidence | None:
+    """How settled this player's rating is on THIS ladder (CONTEXT.md, "Rating
+    confidence") — league-scoped, like rating / rank / peak, and unlike career.
+
+    ``None`` — the card does not render at all — in three cases, none of which
+    is an error:
+
+    * the player has no rating row in this league, or no rating in it (they have
+      never finished a rated match; the hero already says "Unrated"). Nothing to
+      be confident *about*;
+    * the rating came from a MANUAL strategy — an imported USATT number carries
+      no deviation, so it has no confidence to report. This is why the state is
+      parsed rather than indexed: ``state["rd"]`` on a manual row is a
+      ``KeyError``, while a ``ManualState`` simply has no ``rd`` to reach for and
+      the type checker makes us say what happens instead.
+
+    The state is decoded with the strategy off the RATING ROW (not the league):
+    a row written under a superseded strategy still holds state in that
+    strategy's shape.
+
+    The interval is centred on the state's own rating — the Glicko-2 mean its RD
+    describes — which is the same number the hero displays: every write sets
+    ``rating_value`` from ``state_rating_value(state)``.
+    """
+    row = (
+        await db.execute(
+            select(UserLeagueRating)
+            .where(
+                UserLeagueRating.user_id == user_id,
+                UserLeagueRating.league_id == league_id,
+            )
+            # Many-to-one (``user_league_ratings.rating_strategy_id``): a
+            # LEFT JOIN folded into this query, not a second SELECT.
+            .options(joinedload(UserLeagueRating.rating_strategy))
+        )
+    ).scalar_one_or_none()
+    if row is None or row.rating_value is None:
+        return None
+    state = parse_rating_state(row.rating_strategy.key, row.rating_state)
+    if not isinstance(state, Glicko2State):
+        return None
+    low, high = rating_interval(state.rating, state.rd)
+    return RatingConfidence(
+        deviation=state.rd,
+        volatility=state.volatility,
+        interval=RatingInterval(low=low, high=high),
+    )

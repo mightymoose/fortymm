@@ -28,8 +28,12 @@ export interface CareerCardFetcherProps {
  * hands it to the display. No second request: the bundle already carries the
  * career block.
  *
- * It takes a player id and nothing else. Career is cross-league (ADR-0915), so
- * there is deliberately no league to thread through here. */
+ * It takes `leagueId` and `range` even though **nothing in this card varies with
+ * either** — career is cross-league (ADR-0915), and the window is the chart's. They
+ * are threaded because the key and the request they belong to are the *bundle's*,
+ * shared by every card on the page: a card that dropped one would fork the profile
+ * into a second request for a second cache entry, which is the one thing this
+ * projection pattern exists to avoid. */
 export function CareerCardFetcher({ playerId, leagueId, range }: CareerCardFetcherProps) {
   const { data: career } = useSuspenseQuery(careerCardQuery(playerId, leagueId, range))
 

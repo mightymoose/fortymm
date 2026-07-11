@@ -13,10 +13,14 @@ const DEFAULT_PLAYER_ID = 'p-1'
 
 /**
  * Test page-object for `leaguesCardQuery`. The query projects a `LeaguesView` off
- * the profile bundle via `select`: the rating formatting (an em dash for a ladder
- * the player holds no rating on) and — the load-bearing one — *which row is
- * selected*, which is derived from the league the URL named rather than read off
- * the response. Asserted here headlessly, with no DOM.
+ * the profile bundle via `select` — the rows and their rating formatting (an em
+ * dash for a ladder the player holds no rating on). Asserted here headlessly, with
+ * no DOM.
+ *
+ * *Which row is selected* is deliberately **not** part of that view: it follows
+ * from the league the URL named, not from the response, so it is derived in
+ * `LeaguesCardDisplay` and asserted there. `leagueId` still matters here — it is
+ * part of the bundle's **key** and rides on the request.
  */
 export const leaguesCardQueryPage = {
   mockEndpoint(resolver: PlayerDetailResolver) {

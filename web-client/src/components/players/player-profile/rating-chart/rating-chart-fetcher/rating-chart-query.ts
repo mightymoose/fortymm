@@ -5,7 +5,11 @@ import {
   type RatingPoint,
   type RatingRange,
 } from '@/api/players'
-import { formatRatingDelta, formatRatingDeltaAria } from '@/lib/rating'
+import {
+  formatRating,
+  formatRatingDelta,
+  formatRatingDeltaAria,
+} from '@/lib/rating'
 
 /**
  * The chart's own query — `GET /v1/players/{id}/rating-history?league_id=&range=`.
@@ -140,9 +144,6 @@ export type ChartView = {
    * false and in the second is better said in words than in a chip.
    */
   change: ChartChangeView | null
-  /** True when the window holds no rated matches at all: the line is flat at the
-   * player's current rating, and it is a real answer rather than an error. */
-  isEmptyWindow: boolean
 }
 
 const round = (value: number): number => Math.round(value * 100) / 100
@@ -208,9 +209,6 @@ function vertices(
   if (last && last.at < now) drawn.push({ at: now, rating: last.rating })
   return drawn
 }
-
-/** Rounded to whole rating points — a chart is not the place for "1687.4". */
-const formatRating = (rating: number): string => String(Math.round(rating))
 
 /** "12 Mar" — enough to place a point in the year without crowding the axis. */
 const formatDay = (at: number): string =>
@@ -314,7 +312,6 @@ export function selectRatingChart(
     ],
     summary: summarize(window, range),
     change: changeChip(window.change),
-    isEmptyWindow: window.points.length === 0,
   }
 }
 

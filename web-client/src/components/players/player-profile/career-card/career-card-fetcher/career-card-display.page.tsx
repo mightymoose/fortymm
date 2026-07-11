@@ -18,9 +18,6 @@ const scoped = (container: Container) => ({
   getCareerCard() {
     return container.getByRole('region', { name: 'Career' })
   },
-  findCareerCard() {
-    return container.findByRole('region', { name: 'Career' })
-  },
   /**
    * The card's total — "35 decided · 2 leagues".
    *

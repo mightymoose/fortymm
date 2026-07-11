@@ -43,10 +43,7 @@ const scoped = (container: Container) => ({
     return container.findByRole('status', { name: 'Loading chart' })
   },
   /** The *route's* error fallback. The chart must not reach it: a failed range
-   * belongs inside the card (`queryChartError`). */
-  queryRouteError() {
-    return container.queryByText(ROUTE_ERROR)
-  },
+   * belongs inside the card (`findChartError`). */
   findRouteError() {
     return container.findByText(ROUTE_ERROR)
   },

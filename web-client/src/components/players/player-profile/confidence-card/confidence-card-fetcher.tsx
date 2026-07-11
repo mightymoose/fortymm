@@ -2,8 +2,6 @@ import { useSuspenseQuery } from '@tanstack/react-query'
 
 import type { RatingRange } from '@/api/players'
 
-import { useIsViewer } from '@/api/viewer'
-
 import { ConfidenceCardDisplay } from './confidence-card-fetcher/confidence-card-display'
 import { confidenceCardQuery } from './confidence-card-fetcher/confidence-card-query'
 
@@ -39,18 +37,21 @@ export interface ConfidenceCardFetcherProps {
  * card for a rating that isn't there would be nonsense. Not an empty state: an
  * absent one.
  *
- * **It asks who is looking.** `useIsViewer` compares the session's own player id
- * to this profile's, and the display turns its copy to the second person when
- * they match (ADR-0915). The session is a plain (non-suspense) query on purpose:
- * this card must not be held hostage to it. If the session is slow or fails, the
- * card still paints — in the third person, which is the voice it is safe to be
- * wrong in.
+ * **It knows who is looking, and it knows it from the bundle.** The display turns
+ * its copy to the second person on your own profile (ADR-0915), and that bit —
+ * `isOwn` — is projected off the very payload this card just suspended on, via the
+ * shared `isOwnProfile` predicate (the API omits `versus_viewer` exactly when the
+ * caller *is* the player). So the voice is right on the first frame, with no second
+ * query to wait on. Asking the *session* instead would mean painting before the
+ * answer arrives and flashing the wrong voice — the mistake the page's card order
+ * and the head-to-head card both document at length.
  */
 export function ConfidenceCardFetcher({ playerId, leagueId, range }: ConfidenceCardFetcherProps) {
   const { data: confidence } = useSuspenseQuery(confidenceCardQuery(playerId, leagueId, range))
-  const isViewer = useIsViewer(playerId)
 
   if (!confidence) return null
 
-  return <ConfidenceCardDisplay confidence={confidence} isViewer={isViewer} />
+  return (
+    <ConfidenceCardDisplay confidence={confidence} isViewer={confidence.isOwn} />
+  )
 }

@@ -1794,14 +1794,9 @@
   padding: 8px clamp(20px, 5vw, 40px) 4px;
 }
 
-.rating-chart__unrated-title {
-  margin: 0 0 4px;
-  font-family: var(--font-display);
-  font-size: 20px;
-  line-height: 1;
-  color: var(--fg-2);
-}
-
+/* No `…__unrated-title` rule, and no element for one: the panel is deliberately a
+ * single sentence. The hero is the page's one canonical "Unrated" — see
+ * `unrated-panel.tsx`. */
 .rating-chart__unrated-body {
   margin: 0;
   font-size: 13px;

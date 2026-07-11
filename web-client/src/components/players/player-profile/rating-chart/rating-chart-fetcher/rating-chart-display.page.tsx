@@ -48,9 +48,6 @@ const scoped = (container: Container) => ({
   },
   /** The in-card failure — "Couldn't load that range", *in place of the SVG*, with
    * the rest of the profile still painted around it. */
-  queryChartError(): HTMLElement | null {
-    return within(this.getChartCard()).queryByRole('alert')
-  },
   findChartError() {
     return within(this.getChartCard()).findByRole('alert')
   },
@@ -59,11 +56,6 @@ const scoped = (container: Container) => ({
     return within(this.getChartCard()).getByRole('button', {
       name: 'Try again',
     })
-  },
-  /** The placeholder shown when there is no line at all yet — neither a seeded one
-   * nor a previous one. */
-  queryChartPending(): HTMLElement | null {
-    return container.queryByRole('status', { name: 'Loading chart data' })
   },
   /** One range tab, by its label ("30d" / "90d" / "1y"). A **link**, not a
    * button: the selected window is the URL. */

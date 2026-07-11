@@ -110,7 +110,7 @@ describe('HeadToHeadCardFetcher', () => {
   })
 
   it('picks its shape from the PAYLOAD, not the session — a dead session can’t break it', async () => {
-    // `useIsViewer` is deliberately false while the session is in flight (and
+    // A session-derived "is this me?" is false while the session is in flight (and
     // forever, if it fails). A card that branched its structure on it would, on
     // your own profile, try to render a "You're 1–4 against…" block off a record
     // the API deliberately did not send. The payload has no such gap: the server

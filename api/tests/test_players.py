@@ -24,9 +24,13 @@ from app.models import (
     User,
     UserLeagueRating,
 )
-from app.players import PERCENTILE_MIN_RATED_PLAYERS
 from app.ratings.history import MAX_POINTS, downsample
-from app.ratings.stats import STREAK_SCAN_LIMIT, Streak, best_win_streak
+from app.ratings.stats import (
+    PERCENTILE_MIN_RATED_PLAYERS,
+    STREAK_SCAN_LIMIT,
+    Streak,
+    best_win_streak,
+)
 from app.schemas.rating import RatingPoint
 from tests._helpers import make_client, make_user, start_session
 

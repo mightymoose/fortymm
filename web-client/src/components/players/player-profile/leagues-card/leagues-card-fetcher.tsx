@@ -31,9 +31,14 @@ export interface LeaguesCardFetcherProps {
  *
  * `leagueId` does double duty here, and that is the whole mechanism of the
  * switcher: it is part of the **query key**, so picking a league re-keys the
- * bundle and refetches the rating half of the page; and it is what the projection
- * reads to decide which row is highlighted. One prop, one request, both halves of
- * "the selection is in the URL" (ADR-0915).
+ * bundle and refetches the rating half of the page; and it goes on to the card,
+ * which highlights the row it names. One prop, one request, both halves of "the
+ * selection is in the URL" (ADR-0915).
+ *
+ * The second half is a *prop*, not a field on the projected view, on purpose: the
+ * bundle carries the same `leagues` list whichever league was asked for, so the
+ * selection is a fact about the URL and the `select` stays a stable, response-only
+ * function of the payload.
  */
 export function LeaguesCardFetcher({
   playerId,
@@ -42,5 +47,11 @@ export function LeaguesCardFetcher({
 }: LeaguesCardFetcherProps) {
   const { data: leagues } = useSuspenseQuery(leaguesCardQuery(playerId, leagueId, range))
 
-  return <LeaguesCardDisplay leagues={leagues} playerId={playerId} />
+  return (
+    <LeaguesCardDisplay
+      leagues={leagues}
+      playerId={playerId}
+      leagueId={leagueId}
+    />
+  )
 }

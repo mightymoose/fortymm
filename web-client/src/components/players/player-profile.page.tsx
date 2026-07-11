@@ -57,10 +57,6 @@ const scoped = (container: Container) => ({
   queryConfidenceLoading() {
     return container.queryByRole('status', { name: /loading confidence/i })
   },
-  /** The Leagues card's skeleton, while the bundle is pending. */
-  queryLeaguesLoading() {
-    return container.queryByRole('status', { name: /loading leagues/i })
-  },
   /** The Head-to-head card's skeleton, while the bundle is pending. */
   queryHeadToHeadLoading() {
     return container.queryByRole('status', { name: /loading head-to-head/i })

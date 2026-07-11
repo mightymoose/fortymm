@@ -63,7 +63,7 @@ export function RatingChartFetcher({
   leagueId,
   range,
 }: RatingChartFetcherProps) {
-  const { data: gate } = useSuspenseQuery(
+  const { data: isRated } = useSuspenseQuery(
     ratingChartGateQuery(playerId, leagueId, range),
   )
 
@@ -81,7 +81,7 @@ export function RatingChartFetcher({
     // again" where the SVG goes and leaves the painted page alone.
     throwOnError: false,
     // An unrated player has no timeline to draw: don't go and ask for one.
-    enabled: gate.isRated,
+    enabled: isRated,
   })
 
   const chart = useMemo(
@@ -89,7 +89,7 @@ export function RatingChartFetcher({
     [history.data, range],
   )
 
-  if (!gate.isRated) return <UnratedPanel />
+  if (!isRated) return <UnratedPanel />
 
   return (
     <RatingChartDisplay

@@ -29,12 +29,15 @@ export interface HeadToHeadCardFetcherProps {
  * entry — the same entry the hero, Career, confidence, Leagues and Recent-matches
  * cards read — and hands it to the display. No second request.
  *
- * **It does not ask `useIsViewer` who is looking, and that is deliberate.** The
- * confidence card does, because who is looking changes its *pronouns* — a wrong
- * guess there is a wobble in the copy. Here it would change the card's *structure*,
- * and `useIsViewer` is (by its own design) `false` while the session is in flight:
- * on your own profile this card would spend its first frames trying to render a
- * "You're 1–4 against…" block off a record the API deliberately did not send. The
+ * **It does not ask the SESSION who is looking, and that is deliberate.** No card
+ * on this page does: the session is a plain query that does not suspend, so it is
+ * still in flight when a card that *did* suspend on the bundle paints, and a
+ * component branching on it renders its first frames for the wrong viewer. Here
+ * that would be the card's whole *structure*: on your own profile this card would
+ * spend those frames trying to render a "You're 1–4 against…" block off a record
+ * the API deliberately did not send. (The confidence card, whose voice turns on the
+ * same bit, once read it from the session and flashed the wrong pronoun; it now
+ * reads the payload, like this one.) The
  * payload answers the same question with no such gap — the API omits
  * `versus_viewer` exactly when the caller *is* the player (ADR-0915) — so the
  * structure is read from the data, which is also the only source that can be

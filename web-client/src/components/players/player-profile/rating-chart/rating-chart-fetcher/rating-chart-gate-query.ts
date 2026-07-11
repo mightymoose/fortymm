@@ -20,20 +20,15 @@ import {
  * `/rating-history` with no points; only the bundle says *which*, and only the
  * bundle can say so **before** the chart has fetched anything — which is what
  * lets an unrated player's profile skip the rating-history request entirely.
+ *
+ * One **boolean**, not an object — the same shape `isOwnProfile` takes. Narrowing
+ * the bundle to the single bit the card branches on is also what keeps the card
+ * from re-rendering on every unrelated field of the bundle. The *rating* itself is
+ * not needed here: the "Unrated" panel takes no props, and the chart's own payload
+ * carries the number at the end of its line.
  */
-export type ChartGateView = {
-  /** Whether they hold a rating on this ladder. */
-  isRated: boolean
-  /** Their current rating on it, or `null`. The chart's own payload carries the
-   * same number at the end of the line; this is here so the card can say
-   * "Unrated" without waiting for it. */
-  rating: number | null
-}
-
-export const selectChartGate = (player: PlayerDetail): ChartGateView => ({
-  isRated: player.rating != null,
-  rating: player.rating ?? null,
-})
+export const selectChartGate = (player: PlayerDetail): boolean =>
+  player.rating != null
 
 /**
  * The gate, projected off the profile bundle — same key, same fetch, no second

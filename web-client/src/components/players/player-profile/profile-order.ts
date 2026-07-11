@@ -19,11 +19,12 @@ export type ProfileCardKey =
  * party who can be right about it.
  *
  * The session cannot be used for this, and the difference is not academic: the
- * bundle suspends and the session does not, so a component branching on
- * `useIsViewer` renders its first frames with the session's default (`false`) and
- * flashes the *other* viewer's shape before correcting itself. The head-to-head
- * card learned this first; the page's card **order** now depends on the same bit,
- * so it reads it the same way.
+ * bundle suspends and the session does not, so a component branching on the
+ * session renders its first frames with "not you" (the only safe default while it
+ * is in flight) and flashes the *other* viewer's shape before correcting itself.
+ * The head-to-head card learned this first; the page's card **order** and the
+ * confidence card's voice now turn on the same bit, so all three read it the same
+ * way — off this one predicate.
  *
  * Optional *and* nullable on the wire, hence `== null`: both spellings of "absent"
  * mean the same thing here.

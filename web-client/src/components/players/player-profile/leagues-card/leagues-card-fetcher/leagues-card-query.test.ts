@@ -28,9 +28,6 @@ async function selectFrom(
   return result.current.data!
 }
 
-const selectedName = (view: LeaguesView) =>
-  view.rows.find((row) => row.isSelected)?.name
-
 describe('leaguesCardQuery', () => {
   it('lists every league the player is in, with their rating ON each', async () => {
     const view = await selectFrom({})
@@ -41,30 +38,24 @@ describe('leaguesCardQuery', () => {
     ])
   })
 
-  it('selects the league the URL named', async () => {
+  it('says NOTHING about which row is selected — that is the URL’s business, not the response’s', async () => {
+    // The bundle carries the same `leagues` list whichever league was asked for,
+    // so selection is not a fact this projection can know. It lives in the card,
+    // off the `leagueId` prop — which is what lets `select` be a stable, payload-
+    // only function (see the identity test below).
     const view = await selectFrom({}, USATT_LEAGUE_ID)
 
-    expect(selectedName(view)).toBe('USATT')
-    expect(view.rows.filter((row) => row.isSelected)).toHaveLength(1)
+    expect(view.rows.some((row) => 'isSelected' in row)).toBe(false)
   })
 
-  it('falls back to the DEFAULT league when the URL names none', async () => {
-    // No `?league=` is not "no league" — it means the default one, which is what
-    // the API answers with (CONTEXT.md § Default league). The card must say so,
-    // or the page would show FortyMM's numbers with nothing highlighted.
-    const view = await selectFrom({}, undefined)
-
-    expect(selectedName(view)).toBe('FortyMM')
-  })
-
-  it('falls back to the DEFAULT league when the URL names one the player is not in', async () => {
-    // A well-formed league id the player has no membership in. The API answers
-    // happily; the card must not then claim they are on a ladder it is showing no
-    // row for — nor leave every row unhighlighted.
-    const view = await selectFrom({}, '11111111-2222-3333-4444-555555555555')
-
-    expect(selectedName(view)).toBe('FortyMM')
-    expect(view.rows.filter((row) => row.isSelected)).toHaveLength(1)
+  it('hands TanStack the SAME select fn whatever the league — an inline arrow would re-project on every render', () => {
+    // TanStack memoizes `select` on its *identity*. A `select` closing over
+    // `leagueId` is rebuilt on every call, so the memo never hits and the whole
+    // view model is recomputed on every render of the card. Every other card on
+    // this page passes a stable module-level ref; this one now does too.
+    expect(leaguesCardQuery('p-1', USATT_LEAGUE_ID).select).toBe(
+      leaguesCardQuery('p-1', FORTYMM_LEAGUE_ID).select,
+    )
   })
 
   it('flags the default league, and only the default league', async () => {
@@ -101,7 +92,7 @@ describe('leaguesCardQuery', () => {
     })
 
     expect(view.rows).toHaveLength(1)
-    expect(selectedName(view)).toBe('FortyMM')
+    expect(view.rows[0].name).toBe('FortyMM')
   })
 
   it('keeps the league in the CACHE KEY — a switch re-keys the bundle and refetches', async () => {
@@ -165,7 +156,6 @@ describe('leaguesCardQuery', () => {
     expect(Object.keys(view.rows[0]).sort()).toEqual([
       'id',
       'isDefault',
-      'isSelected',
       'name',
       'rating',
     ])

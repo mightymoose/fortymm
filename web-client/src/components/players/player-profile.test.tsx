@@ -190,7 +190,7 @@ describe('PlayerProfile', () => {
     // Same page, same six cards, a different order — and the bit that decides it
     // comes from the BUNDLE (`versus_viewer: null` ⟺ this is you), never from the
     // session. The session doesn't suspend and the bundle does, so a page ordering
-    // itself off `useIsViewer` would render its first frames in a stranger's order
+    // itself off the session would render its first frames in a stranger's order
     // and then reshuffle a fully-painted page (ADR-0915).
     //
     // The win-rate ring is what you came for; your frequent opponents sink to the

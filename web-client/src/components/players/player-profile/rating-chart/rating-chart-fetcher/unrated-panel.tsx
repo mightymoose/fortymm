@@ -19,7 +19,7 @@ export const UnratedPanel = () => {
 
   return (
     <section
-      className="player-profile__section rating-chart rating-chart--unrated"
+      className="player-profile__section rating-chart"
       aria-labelledby={id}
     >
       <div className="player-profile__section-header">

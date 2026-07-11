@@ -1,5 +1,6 @@
 import { useRouter } from '@tanstack/react-router'
 
+import { ApiError } from '@/api/client'
 import { Button } from '@/components/ui/button'
 
 /**
@@ -17,12 +18,13 @@ export function PlayerRouteError({
   reset: () => void
 }) {
   const router = useRouter()
-  // ApiError is what `unwrap` throws for non-2xx responses; treat 4xx as
-  // "no such player" and avoid offering a retry that will fail the same way.
-  const status =
-    typeof error === 'object' && error !== null && 'status' in error
-      ? (error as { status: number }).status
-      : 0
+  // `ApiError` is what `unwrap` throws for non-2xx responses, and it carries the
+  // status — so narrow on the class rather than duck-typing a `status` off an
+  // `unknown` shape. Anything else that reaches this boundary (a render error, a
+  // network throw) has no status, and gets the retryable branch.
+  //
+  // Treat 4xx as "no such player": retrying the same id would fail the same way.
+  const status = error instanceof ApiError ? error.status : 0
   const notFound = status >= 400 && status < 500
   return (
     <div role="alert" className="empty">

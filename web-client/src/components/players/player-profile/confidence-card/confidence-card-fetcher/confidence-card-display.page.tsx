@@ -32,9 +32,6 @@ const scoped = (container: Container) => ({
   getConfidenceExplanation() {
     return container.getByText(byClass('confidence-card__explanation'))
   },
-  findConfidenceExplanation() {
-    return container.findByText(byClass('confidence-card__explanation'))
-  },
   /** The 95% interval, ON THE CARD'S FACE: "We think they're somewhere between
    * 1551 and 1823." */
   getConfidenceInterval() {

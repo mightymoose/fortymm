@@ -51,14 +51,13 @@ describe('LeaguesCardDisplay', () => {
     expect(leaguesCardDisplayPage.getLeagueHref('FortyMM')).not.toContain('league=')
   })
 
-  it('marks exactly one row as the selected ladder', async () => {
+  it('marks the league the URL named — and exactly one row', async () => {
+    // The selection is a fact about the URL, not about the response: the bundle
+    // carries the same rows whichever league was asked for, so the card is handed
+    // the league and derives the highlight from it.
     leaguesCardDisplayPage.render({
-      leagues: buildLeaguesView({
-        rows: [
-          buildLeagueRowView({ isSelected: false }),
-          buildSecondLeagueRowView({ isSelected: true }),
-        ],
-      }),
+      leagues: buildLeaguesView(),
+      leagueId: USATT_LEAGUE_ID,
     })
 
     await leaguesCardDisplayPage.findLeaguesCard()
@@ -66,6 +65,51 @@ describe('LeaguesCardDisplay', () => {
     // `getSelectedLeagueRow` throws unless there is exactly one — so this also
     // proves the card never highlights two ladders, or none.
     expect(leaguesCardDisplayPage.getSelectedLeagueName()).toBe('USATT')
+  })
+
+  it('falls back to the DEFAULT league when the URL names none', async () => {
+    // No `?league=` is not "no league" — it means the default one, which is what
+    // the API answers with (CONTEXT.md § Default league). The card must say so, or
+    // the page would show FortyMM's numbers with nothing highlighted.
+    leaguesCardDisplayPage.render({
+      leagues: buildLeaguesView(),
+      leagueId: undefined,
+    })
+
+    await leaguesCardDisplayPage.findLeaguesCard()
+
+    expect(leaguesCardDisplayPage.getSelectedLeagueName()).toBe('FortyMM')
+  })
+
+  it('falls back to the DEFAULT league when the URL names one the player is not in', async () => {
+    // A well-formed league id the player has no membership in. The API answers
+    // happily; the card must not then claim they are on a ladder it is showing no
+    // row for — nor leave every row unhighlighted.
+    leaguesCardDisplayPage.render({
+      leagues: buildLeaguesView(),
+      leagueId: '11111111-2222-3333-4444-555555555555',
+    })
+
+    await leaguesCardDisplayPage.findLeaguesCard()
+
+    expect(leaguesCardDisplayPage.getSelectedLeagueName()).toBe('FortyMM')
+  })
+
+  it('still highlights a row for a player whose leagues carry no default at all', async () => {
+    // Not a shape the API sends today. It is the last rung of the fallback: a card
+    // with no row highlighted would say the page's ratings are about nothing.
+    leaguesCardDisplayPage.render({
+      leagues: buildLeaguesView({
+        rows: [
+          buildLeagueRowView({ isDefault: false }),
+          buildSecondLeagueRowView(),
+        ],
+      }),
+    })
+
+    await leaguesCardDisplayPage.findLeaguesCard()
+
+    expect(leaguesCardDisplayPage.getSelectedLeagueName()).toBe('FortyMM')
   })
 
   it('prints an em dash — never a 0 — for a league the player holds no rating in', async () => {

@@ -1,4 +1,3 @@
-import { HttpResponse } from 'msw'
 import { Suspense } from 'react'
 import { ErrorBoundary } from 'react-error-boundary'
 
@@ -6,9 +5,7 @@ import {
   mockPlayerDetailEndpoint,
   type PlayerDetailResolver,
 } from '@/mocks/endpoints/players/player-detail.endpoint'
-import { mockSessionEndpoint } from '@/mocks/endpoints/session/session.endpoint'
 import { server } from '@/mocks/server'
-import { sessionResponse } from '@/test/factories'
 import { render, screen, type Container } from '@/test/utilities'
 
 import {
@@ -44,26 +41,16 @@ const scoped = (container: Container) => ({
  * `<Suspense>` plus the ancestor `ErrorBoundary` the route provides — and stubs
  * the profile bundle the card projects off.
  *
- * It also stubs **who is looking**: the card is the profile's first viewer-aware
- * surface, so `signInAs(playerId)` is how a test says "this is *your* profile"
- * and gets the second-person copy.
+ * It stubs **only** that bundle, and there is nothing else to stub: the card is
+ * viewer-aware, but who is looking is read off the payload (`versus_viewer` is
+ * omitted exactly when the caller *is* the player), not off the session. So a test
+ * says "this is *your* profile" by handing the card a self-shaped bundle —
+ * `buildPlayerDetail({ head_to_head: buildSelfHeadToHead() })` — and gets the
+ * second-person copy, on the first frame.
  */
 export const confidenceCardFetcherPage = {
   mockEndpoint(resolver: PlayerDetailResolver) {
     mockPlayerDetailEndpoint(server, resolver)
-  },
-
-  /**
-   * Make the session's own user the player with `viewerId`.
-   *
-   * `handlers.ts` has a global session handler, so leaving this out doesn't blow
-   * up — it just leaves the viewer as somebody else, which is the third-person
-   * case. Pass the *profile's* id to get the second-person one.
-   */
-  signInAs(viewerId: string) {
-    mockSessionEndpoint(server, () =>
-      HttpResponse.json(sessionResponse({ user: { id: viewerId } })),
-    )
   },
 
   render(overrides: Partial<ConfidenceCardFetcherProps> = {}) {

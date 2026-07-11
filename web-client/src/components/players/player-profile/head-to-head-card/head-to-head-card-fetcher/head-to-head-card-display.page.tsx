@@ -35,11 +35,6 @@ const scoped = (container: Container) => ({
       name: /head-to-head|frequent opponents/i,
     })
   },
-  queryHeadToHeadCard(): HTMLElement | null {
-    return container.queryByRole('region', {
-      name: /head-to-head|frequent opponents/i,
-    })
-  },
   /** The card's heading — which of the two cards this is. */
   getHeadToHeadTitle(): string {
     return (

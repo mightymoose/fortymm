@@ -69,9 +69,10 @@ export const headToHeadCardFetcherPage = {
     )
   },
 
-  /** A session that never arrives — the state `useIsViewer` reports as "not the
-   * viewer" (deliberately). A card that branched its *structure* on the session
-   * would render the wrong shape here; one that reads the payload does not care. */
+  /** A session that never arrives — so a card reading "is this me?" off the session
+   * would be stuck on "not the viewer" forever. One that branched its *structure*
+   * on that would render the wrong shape here; one that reads the payload, as every
+   * card on this page does, cannot tell the difference. */
   withFailingSession() {
     mockSessionEndpoint(server, () => new HttpResponse(null, { status: 500 }))
   },

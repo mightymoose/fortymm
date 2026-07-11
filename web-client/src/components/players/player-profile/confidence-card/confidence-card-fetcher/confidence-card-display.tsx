@@ -18,10 +18,11 @@ export interface ConfidenceCardDisplayProps {
  * The card's copy, in both voices (ADR-0915: "The player profile is
  * viewer-aware").
  *
- * Second person on your own profile, third person on everybody else's. This is
- * the page's *first* viewer-aware surface and the reason `useIsViewer` exists:
- * "A reliable read on where **you** stand" is right on your own profile and a
- * lie on a stranger's.
+ * Second person on your own profile, third person on everybody else's: "A
+ * reliable read on where **you** stand" is right on your own profile and a lie on
+ * a stranger's. Which of the two it is arrives as a prop, decided off the
+ * *payload* by the projection (`ConfidenceView.isOwn`) — never off the session,
+ * which would not have answered yet by the time this paints.
  *
  * The two voices are written out in full rather than assembled from a pronoun
  * variable, because they don't differ only by pronoun — "where you *stand*"

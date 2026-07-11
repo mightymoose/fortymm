@@ -56,10 +56,11 @@ export type HeadToHeadView = {
    *
    * That `null` is the card's structural switch, and it comes from the *payload*,
    * not from the session: the API omits the block exactly when the caller is the
-   * player (ADR-0915). Deriving it client-side from `useIsViewer` instead would be
-   * wrong in a way tests would catch late — `useIsViewer` is deliberately false
-   * while the session is in flight, so a self-profile would spend its first frames
-   * rendering a "you vs them" block against a record that does not exist.
+   * player (ADR-0915). Deriving it client-side by comparing the session's user id
+   * to this profile's would be wrong in a way tests would catch late — the session
+   * does not suspend, so it is still in flight when this card (which suspends on the
+   * bundle) paints, and a self-profile would spend its first frames rendering a
+   * "you vs them" block against a record that does not exist.
    */
   versusViewer: ViewerRecordView | null
   /** The player's most-met opponents, top three, longest rivalry first. */

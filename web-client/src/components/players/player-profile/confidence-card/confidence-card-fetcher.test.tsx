@@ -4,6 +4,7 @@ import {
   buildPlayerDetail,
   buildProvisionalConfidence,
   buildRatingConfidence,
+  buildSelfHeadToHead,
   buildUnratedPlayerDetail,
 } from '@/mocks/factories/players/player-detail.factory'
 import { waitFor, waitForElementToBeRemoved } from '@/test/utilities'
@@ -11,13 +12,11 @@ import { waitFor, waitForElementToBeRemoved } from '@/test/utilities'
 import { confidenceCardFetcherPage } from './confidence-card-fetcher.page'
 
 const PROFILE_ID = 'p-1'
-const SOMEONE_ELSE = 'p-9'
 
 describe('ConfidenceCardFetcher', () => {
   it('suspends until the bundle resolves, then paints the level and interval it carries', async () => {
     // The numbers ride on the bundle — the card makes no request of its own, and
     // anything else would be unhandled and MSW would fail the test.
-    confidenceCardFetcherPage.signInAs(SOMEONE_ELSE)
     confidenceCardFetcherPage.mockEndpoint(async () => {
       await delay(20)
       return HttpResponse.json(
@@ -51,9 +50,9 @@ describe('ConfidenceCardFetcher', () => {
   })
 
   it('speaks in the THIRD person on somebody else’s profile', async () => {
-    // The viewer is p-9; the profile is p-1. "A reliable read on where you stand"
-    // here would be a lie about a stranger's rating.
-    confidenceCardFetcherPage.signInAs(SOMEONE_ELSE)
+    // The default bundle carries a `versus_viewer` record — the viewer's own
+    // against this player — which is the API's way of saying "you are not them".
+    // "A reliable read on where you stand" here would be a lie about a stranger.
     confidenceCardFetcherPage.mockEndpoint(() =>
       HttpResponse.json(buildPlayerDetail({ id: PROFILE_ID })),
     )
@@ -64,28 +63,33 @@ describe('ConfidenceCardFetcher', () => {
     expect(
       confidenceCardFetcherPage.getConfidenceExplanation(),
     ).toHaveTextContent('A reliable read on where they stand. The math is quiet.')
-    // Give the session every chance to arrive and wrongly flip the voice.
+    // Give the card every chance to settle and wrongly flip the voice.
     await waitFor(() => expect(card.textContent).not.toMatch(/\byou\b/i))
   })
 
-  it('speaks in the SECOND person on your own profile — the session says it is yours', async () => {
-    // Same bundle, same numbers, different reader: the session's own user id is
-    // this profile's id, so the copy turns to "you" (ADR-0915).
-    confidenceCardFetcherPage.signInAs(PROFILE_ID)
+  it('speaks in the SECOND person on your own profile — the PAYLOAD says it is yours', async () => {
+    // Same numbers, different reader. The API omits `versus_viewer` exactly when
+    // the caller *is* the player (you cannot have a record against yourself), so
+    // the bundle the card suspended on already carries the answer (ADR-0915).
     confidenceCardFetcherPage.mockEndpoint(() =>
-      HttpResponse.json(buildPlayerDetail({ id: PROFILE_ID })),
+      HttpResponse.json(
+        buildPlayerDetail({
+          id: PROFILE_ID,
+          head_to_head: buildSelfHeadToHead(),
+        }),
+      ),
     )
 
     confidenceCardFetcherPage.render({ playerId: PROFILE_ID })
 
+    // No `waitFor`: the voice is right on the FIRST painted frame. Reading it off
+    // the session — a query the card does not suspend on — is what used to make
+    // this card spend a frame in the third person on your own profile, while the
+    // page's card order (read from the payload) had already put Career first.
     await confidenceCardFetcherPage.findConfidenceCard()
-    // The session is a plain query, so the voice settles a tick after the card
-    // paints — third person is the safe default to be caught in.
-    await waitFor(() =>
-      expect(
-        confidenceCardFetcherPage.getConfidenceExplanation(),
-      ).toHaveTextContent('A reliable read on where you stand. The math is quiet.'),
-    )
+    expect(
+      confidenceCardFetcherPage.getConfidenceExplanation(),
+    ).toHaveTextContent('A reliable read on where you stand. The math is quiet.')
     expect(confidenceCardFetcherPage.getConfidenceInterval()).toHaveTextContent(
       'We think you’re somewhere between 1551 and 1823.',
     )
@@ -94,7 +98,6 @@ describe('ConfidenceCardFetcher', () => {
   it('renders NOTHING AT ALL for a player with no rating', async () => {
     // Not an empty card, not a dash: no card. Confidence says how settled a
     // rating is, and this player has none — the hero already says "Unrated".
-    confidenceCardFetcherPage.signInAs(SOMEONE_ELSE)
     confidenceCardFetcherPage.mockEndpoint(() =>
       HttpResponse.json(buildUnratedPlayerDetail({ id: PROFILE_ID })),
     )
@@ -115,7 +118,6 @@ describe('ConfidenceCardFetcher', () => {
   it('still renders for a PROVISIONAL rating — a wide interval is a real answer', async () => {
     // The null case above is about having no rating at all. A rating the system
     // is unsure of is exactly what this card is for, so it must still appear.
-    confidenceCardFetcherPage.signInAs(SOMEONE_ELSE)
     confidenceCardFetcherPage.mockEndpoint(() =>
       HttpResponse.json(
         buildPlayerDetail({

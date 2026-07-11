@@ -10,6 +10,40 @@ export interface LeaguesCardDisplayProps {
   /** The profile the rows link back to — each row is a link to *this same page*,
    * with a different league selected. */
   playerId: string
+  /** The league the **URL** named (`?league=`), or `undefined` for a clean URL,
+   * which *means* the default league. It decides which row is highlighted — see
+   * `selectedLeagueId` — and it is a prop rather than a field on the view because
+   * it is a fact about the URL, not about the response: the bundle carries the
+   * same `leagues` list whichever league was asked for. */
+  leagueId?: string
+}
+
+/**
+ * Which league the page is bound to.
+ *
+ * `leagueId` is what the URL asked for — and the fallback chain is what keeps a
+ * nonsense `?league=` from producing a card with **no** row highlighted:
+ *
+ * 1. the league the URL named, if the player is actually in it;
+ * 2. otherwise the **default** league — the one the API answers with when the
+ *    caller names none, so this is the row the rest of the page is genuinely
+ *    showing (`CONTEXT.md` § *Default league*);
+ * 3. otherwise the first row, so a player whose leagues somehow carry no default
+ *    still gets a coherent card rather than a dead one.
+ *
+ * Step 2 matters beyond mangled URLs: a caller can name a league that *exists*
+ * but that this player does not belong to. The API answers happily (with no
+ * rating), and the card must not then claim they are on a ladder it isn't
+ * showing a row for.
+ */
+const selectedLeagueId = (
+  rows: LeagueRowView[],
+  leagueId: string | undefined,
+): string | undefined => {
+  const named = rows.find((row) => row.id === leagueId)
+  if (named) return named.id
+  const fallback = rows.find((row) => row.isDefault) ?? rows[0]
+  return fallback?.id
 }
 
 /**
@@ -40,15 +74,17 @@ export interface LeaguesCardDisplayProps {
  * delete the only affordance that will make the page legible the day a second
  * league lands.
  *
- * Pure view-in, DOM-out: the ratings arrive pre-formatted (an em dash for a
- * ladder they hold no rating on), and which row is selected was decided by the
- * projection.
+ * The ratings arrive pre-formatted (an em dash for a ladder they hold no rating
+ * on). Which row is **selected** is decided here rather than in the projection,
+ * because it follows from the URL — the response says nothing about it.
  */
 export const LeaguesCardDisplay = ({
   leagues,
   playerId,
+  leagueId,
 }: LeaguesCardDisplayProps) => {
   const id = useId()
+  const selectedId = selectedLeagueId(leagues.rows, leagueId)
 
   return (
     <section
@@ -63,7 +99,12 @@ export const LeaguesCardDisplay = ({
 
       <ul className="leagues-card__rows">
         {leagues.rows.map((row) => (
-          <LeagueRow key={row.id} row={row} playerId={playerId} />
+          <LeagueRow
+            key={row.id}
+            row={row}
+            playerId={playerId}
+            isSelected={row.id === selectedId}
+          />
         ))}
       </ul>
     </section>
@@ -73,9 +114,13 @@ export const LeaguesCardDisplay = ({
 const LeagueRow = ({
   row,
   playerId,
+  isSelected,
 }: {
   row: LeagueRowView
   playerId: string
+  /** The ladder the rest of the page is currently bound to. Exactly one row is
+   * selected, always. */
+  isSelected: boolean
 }) => (
   <li className="leagues-card__row-item">
     <Link
@@ -97,7 +142,7 @@ const LeagueRow = ({
       activeOptions={{ exact: true }}
       className={cn(
         'leagues-card__row',
-        row.isSelected && 'leagues-card__row--selected',
+        isSelected && 'leagues-card__row--selected',
       )}
       // `page`, deliberately the same value the router stamps on an active link
       // (it appends its own `aria-current="page"` and we cannot suppress it). So
@@ -105,7 +150,7 @@ const LeagueRow = ({
       // the one case the router cannot see (a `?league=` naming a league this
       // player is not in, where no row's href matches the url), only this one
       // does. Either way exactly one row is current.
-      aria-current={row.isSelected ? 'page' : undefined}
+      aria-current={isSelected ? 'page' : undefined}
     >
       <span className="leagues-card__dot" aria-hidden="true" />
       <span className="leagues-card__name">{row.name}</span>

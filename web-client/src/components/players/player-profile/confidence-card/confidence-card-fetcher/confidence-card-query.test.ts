@@ -6,6 +6,7 @@ import {
   buildPlayerDetail,
   buildProvisionalConfidence,
   buildRatingConfidence,
+  buildSelfHeadToHead,
   buildUnratedPlayerDetail,
 } from '@/mocks/factories/players/player-detail.factory'
 import { waitFor } from '@/test/utilities'
@@ -32,6 +33,22 @@ const detailValue = (view: ConfidenceView, label: string) =>
   view.details.find((detail) => detail.label === label)?.value
 
 describe('confidenceCardQuery', () => {
+  it('reads "this is MY OWN profile" off the payload — the card’s whole voice turns on it', async () => {
+    // The API omits `versus_viewer` exactly when the caller *is* the player: you
+    // cannot hold a record against yourself (ADR-0915). So the bundle the card
+    // suspends on already carries the answer, and the copy is right on the first
+    // frame — no session query to wait on, no frame spent in the wrong voice.
+    const own = await selectFrom({ head_to_head: buildSelfHeadToHead() })
+
+    expect(own!.isOwn).toBe(true)
+  })
+
+  it('is somebody ELSE’s profile whenever the payload carries a viewer record', async () => {
+    const other = await selectFrom({})
+
+    expect(other!.isOwn).toBe(false)
+  })
+
   it('names the level in English — "Firming up", never the wire’s "firming_up"', async () => {
     const firming = await selectFrom({
       confidence: buildFirmingUpConfidence(),

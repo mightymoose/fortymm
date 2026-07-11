@@ -1,5 +1,9 @@
 import { playerByIdQueryOptions, type PlayerDetail, type RatingRange } from '@/api/players'
-import { formatRatingDelta, formatRatingDeltaAria } from '@/lib/rating'
+import {
+  formatRating,
+  formatRatingDelta,
+  formatRatingDeltaAria,
+} from '@/lib/rating'
 
 /** One decided match's outcome, newest first. */
 export type FormResult = 'W' | 'L'
@@ -85,7 +89,7 @@ const selectStats = (player: PlayerDetail): StandingStatView[] => {
     stats.push({ label: 'Rank', value: `#${player.rank} of ${player.rank_of}` })
   }
   if (player.peak != null) {
-    stats.push({ label: 'Peak', value: String(Math.round(player.peak)) })
+    stats.push({ label: 'Peak', value: formatRating(player.peak) })
   }
   // The API withholds the percentile while the league is too small for it to
   // mean anything, so its presence — not a threshold here — is the signal.

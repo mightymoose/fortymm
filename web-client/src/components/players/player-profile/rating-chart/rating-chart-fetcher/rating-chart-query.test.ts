@@ -90,7 +90,6 @@ describe('selectRatingChart', () => {
     expect(new Set(yCoords).size).toBe(1) // flat
     expect(view.change).toBeNull()
     expect(view.peak).toBeNull()
-    expect(view.isEmptyWindow).toBe(true)
     expect(view.summary).toBe('No rated matches in the last 90 days')
     expect(JSON.stringify(view)).not.toContain('+0')
   })

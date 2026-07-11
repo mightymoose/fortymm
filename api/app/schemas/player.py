@@ -326,7 +326,7 @@ class PlayerDetail(PlayerSummary):
     # "Top N%" within the league. WITHHELD (``None``) while the league is too
     # small for the number to mean anything — in a twelve-player league "top 8%"
     # is just "you are first" dressed up as a statistic. The floor lives in one
-    # named constant (`players.PERCENTILE_MIN_RATED_PLAYERS`). Also ``None`` for
+    # named constant (`ratings.stats.PERCENTILE_MIN_RATED_PLAYERS`). Also ``None`` for
     # a player with no rating.
     percentile: int | None = None
 
