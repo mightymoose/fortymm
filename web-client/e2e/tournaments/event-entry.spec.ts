@@ -221,6 +221,62 @@ test.describe('Tournaments · entering an event', () => {
     await expect(pom.truncationTail(EVENT.CROWDED)).toHaveText('+4 more')
   })
 
+  test('a STALE tab that clicks Enter reconciles to the truth — it does not freeze on a render the 409 disproved', async ({
+    page,
+  }) => {
+    // The QA repro (#943), in the browser: the same player has this tournament
+    // open in two tabs. The other tab enters. THIS one still renders the world as
+    // it was — `0 / 48`, an Enter button, "No one has entered yet" — and clicking
+    // Enter is therefore a duplicate the server refuses with a 409.
+    //
+    // Only a browser can prove the whole of what has to happen next, because it is
+    // the *page* that must catch up: the count, the roster, the empty copy and the
+    // control are four independent renders off one refetch.
+    const { pom, store } = await TournamentDetailPage.navigateTo(page)
+    const card = pom.eventCard(EVENT.EMPTY)
+
+    await pom.expectEntryCount(EVENT.EMPTY, 0, 48)
+    await expect(pom.enterButton(EVENT.EMPTY)).toBeVisible()
+    await expect(card).toContainText(COPY.emptyLead)
+    await expect(pom.heroEntries).toContainText('2') // the journey event's two
+
+    // --- the other tab enters, and this page is none the wiser ---------------
+    store.enterElsewhere(EVENT.EMPTY)
+
+    // Still stale, and that is the point: the page has NOT refetched behind our
+    // backs (if it had, the assertions below would prove nothing at all).
+    await pom.expectEntryCount(EVENT.EMPTY, 0, 48)
+    await expect(pom.enterButton(EVENT.EMPTY)).toBeVisible()
+
+    // --- click Enter on the stale card ---------------------------------------
+    await pom.enterButton(EVENT.EMPTY).click()
+
+    // THE assertion. The POST 409s — and the card comes back TRUE rather than
+    // sitting frozen on its pre-click render: I am in the roster, the count says
+    // so, the empty copy is gone, and the control now offers the only action that
+    // is actually available to me.
+    await expect(pom.withdrawButton(EVENT.EMPTY)).toBeVisible()
+    await expect(pom.entrantsList(EVENT.EMPTY)).toContainText(ME.username)
+    await pom.expectEntryCount(EVENT.EMPTY, 1, 48)
+    await expect(card).not.toContainText(COPY.emptyLead)
+    await expect(pom.heroEntries).toContainText('3') // the whole page caught up
+
+    // The 409 is told gently: I *am* entered, and the screen now says so, so a red
+    // "Couldn't enter the event" on top of it would contradict the very card it
+    // was covering. One informational note, and no error.
+    await expect(pom.toasts).toHaveCount(1)
+    await expect(pom.toasts).toContainText('You were already entered in this event')
+    await expect(pom.toasts).not.toContainText("Couldn't")
+
+    // …and the reconciled view is a WORKING one, not a picture: the entry id it
+    // withdraws by came from the refetch, so Withdraw addresses the real entry.
+    await pom.withdrawButton(EVENT.EMPTY).click()
+
+    await expect(pom.enterButton(EVENT.EMPTY)).toBeVisible()
+    await pom.expectEntryCount(EVENT.EMPTY, 0, 48)
+    expect(store.entrantsOf(EVENT.EMPTY)).toEqual([])
+  })
+
   test('a doubles event offers no Enter control, and says why instead of lying about it', async ({
     page,
   }) => {

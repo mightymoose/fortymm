@@ -188,6 +188,37 @@ export class TournamentsStore {
     return this.detail.events.find((e) => e.name === eventName)?.entrants ?? []
   }
 
+  /**
+   * Enter **me** into an event *behind this page's back* — the second tab of the
+   * two-tab race (#943). No request is recorded, because none came from the page
+   * under test: from its point of view the server simply moved on without it, and
+   * whatever it is currently rendering is now stale.
+   *
+   * The next thing that page does with this event (clicking the Enter button it
+   * still shows) is therefore a duplicate entry, which the server refuses with a
+   * 409 — exactly as `enter()` below does.
+   */
+  enterElsewhere(eventName: string): TournamentEntrantRead {
+    const event = this.detail.events.find((e) => e.name === eventName)
+    if (!event) throw new Error(`no such event in the seed: ${eventName}`)
+    return this.addEntry(event.id)
+  }
+
+  /** Mint one active entry for ME on an event. A fresh entry id each time — as on
+   * the server, where re-entry after a withdrawal INSERTs a new row rather than
+   * resurrecting the tombstoned one. The withdraw address therefore changes, and
+   * a client that cached the old entry id would 404 on the second withdrawal. */
+  private addEntry(eventId: string): TournamentEntrantRead {
+    this.entryCounter += 1
+    const entrant = buildTournamentEntrantRead({
+      id: `entry-me-${this.entryCounter}`,
+      user_id: ME.userId,
+      username: ME.username,
+    })
+    this.mutateEvent(eventId, (e) => ({ ...e, entrants: [...e.entrants, entrant] }))
+    return entrant
+  }
+
   countOf(method: string): number {
     return this.requests.filter((r) => r.method === method).length
   }
@@ -279,22 +310,12 @@ export class TournamentsStore {
     }
     if (event.entrants.some((e) => e.user_id === ME.userId)) {
       // The server's partial unique index, in miniature: at most one *active*
-      // entry per player per event.
-      return json(route, 409, { detail: 'already entered' })
+      // entry per player per event. The API's wording, verbatim — a stale tab
+      // gets told this, so the copy is part of the contract under test.
+      return json(route, 409, { detail: 'You have already entered this event.' })
     }
 
-    this.entryCounter += 1
-    // A fresh entry id each time — as on the server, where re-entry after a
-    // withdrawal INSERTs a new row rather than resurrecting the tombstoned one.
-    // The withdraw address therefore changes, and a client that cached the old
-    // entry id would 404 on the second withdrawal.
-    const entrant = buildTournamentEntrantRead({
-      id: `entry-me-${this.entryCounter}`,
-      user_id: ME.userId,
-      username: ME.username,
-    })
-    this.mutateEvent(eventId, (e) => ({ ...e, entrants: [...e.entrants, entrant] }))
-    return json(route, 201, entrant)
+    return json(route, 201, this.addEntry(eventId))
   }
 
   /** `DELETE …/entries/{entry_id}` — withdrawal. The server soft-deletes; from

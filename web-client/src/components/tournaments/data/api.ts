@@ -12,6 +12,7 @@ import {
   useQuery,
   useQueryClient,
 } from '@tanstack/react-query'
+import { toast } from 'sonner'
 
 import { ApiError, api, unwrap } from '@/api/client'
 import { notifyError } from '@/lib/notify-error'
@@ -220,9 +221,18 @@ function tournamentDetailQuery(id: string) {
       return unwrap('load tournament', result)
     },
     // Bubble everything except a 404 (which resolved to null above and never
-    // reaches here as an error). A 403 reaches the RbacBoundary.
-    throwOnError: (error) =>
-      !(error instanceof ApiError && error.status === 404),
+    // reaches here as an error) — but only while there is NOTHING on screen. A
+    // 403 on load still reaches the RbacBoundary.
+    //
+    // `throwOnError` fires on *background refetch* failures too, not just the
+    // first load. Since the entry mutations now reconcile on settle (see below),
+    // a click during an outage would trigger a refetch that fails and throw the
+    // whole rendered tournament away — a network blip on Enter is a toast, not a
+    // teardown. With data in hand we keep the last-good view and let the
+    // mutation's own error toast carry the failure.
+    throwOnError: (error, query) =>
+      !(error instanceof ApiError && error.status === 404) &&
+      query.state.data === undefined,
     retry: false,
   })
 }
@@ -362,18 +372,42 @@ export function useDeleteEvent(tournamentId: string) {
 // + detail), and the refetched event carries both the updated `entrants` list
 // and the derived `entered` count. That is the whole invalidation set: the two
 // keys `invalidateTournament` already covers.
+//
+// Both mutations invalidate **`onSettled`, not `onSuccess`** — they reconcile
+// whether they succeeded or failed. A failed entry is precisely the moment the
+// screen is most likely to be lying: the 409 the server answers means "your view
+// and my state disagree" (someone — usually you, in another tab — already entered
+// you), so the only sane response is to re-read the server. Invalidating only on
+// success left the stale tab frozen on `0 / 64` + **Enter** + "No one has entered
+// yet" after the very request that proved all three wrong (#943). Withdraw's
+// stale-tab race happens to land on its *success* path (a repeat withdrawal is an
+// idempotent 204), so it looked fine — but that was luck, not design; it settles
+// into the same reconcile here on purpose.
+
+/** True for the entry endpoint's "You have already entered this event." — the
+ * only 409 `POST …/entries` raises (its partial unique index on the *active*
+ * entries; see `enter_event` in `api/app/tournaments.py`). It is not really a
+ * failure: it means the player IS entered, so the reconciled view is the answer,
+ * and shouting a red error over a screen that now says "Withdraw" would be the
+ * lie. Anything else — 400, 403, 5xx, network-down — is a genuine error and still
+ * toasts. */
+function isAlreadyEntered(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 409
+}
 
 /** Enter the *signed-in* player into an event. There is no request body — the
  * caller is the entrant (self-registration; a director entering someone else is
  * a separate, later endpoint). Resolves to the created `Entrant`, whose `id` is
  * the entry id a later withdrawal is addressed to.
  *
- * The server rejects a second *active* entry with a 409 and a non-singles event
- * with a 400; both surface as a toast here. A caller that wants to treat the 409
- * as benign (a two-tab race, where the player IS in fact entered) can await
- * `mutateAsync` and inspect the `ApiError` status itself. */
+ * A non-singles event is a 400 and surfaces as an error toast. A duplicate entry
+ * is a 409, which is treated as *benign*: the tournament is re-read (as on every
+ * settle) and the player gets a quiet, informational "you were already entered"
+ * note over the now-truthful card, not an error. A caller that wants to handle
+ * the 409 itself can still await `mutateAsync` and inspect the `ApiError`. */
 export function useEnterEvent(tournamentId: string) {
   const qc = useQueryClient()
+  const toastError = notifyError('enter the event')
   return useMutation({
     mutationFn: async (eventId: string): Promise<Entrant> => {
       const entrant = unwrap(
@@ -389,8 +423,17 @@ export function useEnterEvent(tournamentId: string) {
       )
       return apiToEntrant(entrant)
     },
-    onSuccess: () => invalidateTournament(qc, tournamentId),
-    onError: notifyError('enter the event'),
+    // Reconcile on BOTH paths — see the note above.
+    onSettled: () => invalidateTournament(qc, tournamentId),
+    onError: (error) => {
+      if (isAlreadyEntered(error)) {
+        toast.info('You were already entered in this event', {
+          description: "We've refreshed it with the latest entries.",
+        })
+        return
+      }
+      toastError(error)
+    },
   })
 }
 
@@ -419,7 +462,10 @@ export function useWithdrawEntry(tournamentId: string) {
         { allowEmpty: true },
       )
     },
-    onSuccess: () => invalidateTournament(qc, tournamentId),
+    // Reconcile on BOTH paths — see the note above. A failed withdrawal (a 403 on
+    // an entry that is no longer mine, a 404 on one the server has re-keyed) is a
+    // view/state disagreement just like the entry 409 is.
+    onSettled: () => invalidateTournament(qc, tournamentId),
     onError: notifyError('withdraw from the event'),
   })
 }
