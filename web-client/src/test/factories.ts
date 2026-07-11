@@ -67,6 +67,9 @@ export function healthCheck(
 
 export function sessionUser(overrides: Partial<SessionUser> = {}): SessionUser {
   return {
+    // The caller's own user id — the session is the only place the API tells a
+    // client who it is (the user menu's "Your profile" link reads it).
+    id: faker.string.uuid(),
     username: faker.internet.username().toLowerCase(),
     permissions: [],
     email: null,

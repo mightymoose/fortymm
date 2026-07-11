@@ -17,8 +17,14 @@ export type { Permission, RbacUser, Role, SeedSpec }
 // e2e tests see the full Roles/Permissions/Users sub-nav. Suites that need
 // a non-admin session should layer their own page.route('**/v1/session')
 // AFTER calling RbacStore.install() so it wins by recency.
+/** The signed-in admin's own user id. The users page identifies "this row is
+ * me" by id now (the session carries one), not by username — so a seeded user
+ * row that is meant to BE the caller must carry this id. */
+export const SESSION_USER_ID = 'u_self'
+
 const SESSION = sessionResponse({
   user: {
+    id: SESSION_USER_ID,
     username: 'rita.kovac',
     permissions: [PERM.ADMIN_VIEW, PERM.AUTH_MANAGE],
   },

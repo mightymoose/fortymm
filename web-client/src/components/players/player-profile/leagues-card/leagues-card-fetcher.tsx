@@ -1,0 +1,34 @@
+import { useSuspenseQuery } from '@tanstack/react-query'
+
+import { LeaguesCardDisplay } from './leagues-card-fetcher/leagues-card-display'
+import { leaguesCardQuery } from './leagues-card-fetcher/leagues-card-query'
+
+export interface LeaguesCardFetcherProps {
+  playerId: string
+  /** The ladder this card's numbers are about (ADR-0915), from the profile's
+   * `?league=`. `undefined` is the **default league** — the URL carries no param
+   * for it. It is part of the bundle's query key, so every card on the page must
+   * be handed the same one or the profile forks into two requests. */
+  leagueId?: string
+}
+
+/**
+ * Thin fetcher: reads the leagues view off the profile bundle's shared cache
+ * entry — the same entry the hero, the rating panel, the Career card and the
+ * Recent-matches card read — and hands it to the display. No second request: the
+ * bundle already carries the player's leagues.
+ *
+ * `leagueId` does double duty here, and that is the whole mechanism of the
+ * switcher: it is part of the **query key**, so picking a league re-keys the
+ * bundle and refetches the rating half of the page; and it is what the projection
+ * reads to decide which row is highlighted. One prop, one request, both halves of
+ * "the selection is in the URL" (ADR-0915).
+ */
+export function LeaguesCardFetcher({
+  playerId,
+  leagueId,
+}: LeaguesCardFetcherProps) {
+  const { data: leagues } = useSuspenseQuery(leaguesCardQuery(playerId, leagueId))
+
+  return <LeaguesCardDisplay leagues={leagues} playerId={playerId} />
+}

@@ -5,6 +5,11 @@ import { CareerCardSkeleton } from './career-card/career-card-skeleton'
 
 export interface CareerCardProps {
   playerId: string
+  /** The ladder this card's numbers are about (ADR-0915), from the profile's
+   * `?league=`. `undefined` is the **default league** — the URL carries no param
+   * for it. It is part of the bundle's query key, so every card on the page must
+   * be handed the same one or the profile forks into two requests. */
+  leagueId?: string
 }
 
 /**
@@ -17,10 +22,10 @@ export interface CareerCardProps {
  * same bundle query, so a failure means none of them has anything to draw and it
  * belongs to the route's `PlayerRouteError`.
  */
-export function CareerCard({ playerId }: CareerCardProps) {
+export function CareerCard({ playerId, leagueId }: CareerCardProps) {
   return (
     <Suspense fallback={<CareerCardSkeleton />}>
-      <CareerCardFetcher playerId={playerId} />
+      <CareerCardFetcher playerId={playerId} leagueId={leagueId} />
     </Suspense>
   )
 }

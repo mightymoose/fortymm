@@ -1,5 +1,5 @@
 import { Link, useNavigate } from '@tanstack/react-router'
-import { ChevronDown, LogOut, Settings, UserPlus } from 'lucide-react'
+import { ChevronDown, LogOut, Settings, User, UserPlus } from 'lucide-react'
 import { deriveEmailStatus, useLogout, useSession } from '@/api/session'
 import { UserAvatar } from '@/components/ui/user-avatar'
 import {
@@ -100,6 +100,23 @@ export function UserMenu() {
             </DropdownMenuItem>
             <DropdownMenuSeparator />
           </>
+        )}
+        {user && (
+          <DropdownMenuItem asChild>
+            {/* The app's only entry point to your own profile. Shown to guests
+                too: a guest is a real user row with a real id and a real
+                profile, and the profile's "start a match" flow is aimed
+                squarely at them. `user.id` comes from the session — never a
+                username, which a rename would break. */}
+            <Link
+              to="/players/$userId"
+              params={{ userId: user.id }}
+              data-testid="user-menu-profile"
+            >
+              <User />
+              Your profile
+            </Link>
+          </DropdownMenuItem>
         )}
         <DropdownMenuItem asChild>
           <Link to="/settings">

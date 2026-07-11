@@ -176,7 +176,7 @@ export const selectRecentMatches = (player: PlayerDetail): RecentMatchesView => 
  * (the match-details projection pattern). The full paginated history is a
  * different surface with a different query (`/players/$userId/matches`).
  */
-export const recentMatchesQuery = (playerId: string) => ({
-  ...playerByIdQueryOptions(playerId),
+export const recentMatchesQuery = (playerId: string, leagueId?: string) => ({
+  ...playerByIdQueryOptions(playerId, leagueId),
   select: selectRecentMatches,
 })

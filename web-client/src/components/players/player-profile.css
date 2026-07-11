@@ -955,3 +955,438 @@
   height: 14px;
   border-radius: 999px;
 }
+
+/* ============ Rating confidence card ============ */
+/* How settled the rating is, and the range the player might really be in
+ * (CONTEXT.md, "Rating confidence"). The interval sits on the face; RD and
+ * volatility hide in the drawer. There is no percentage — no bar, no meter, no
+ * 0–100 anything — because that number does not exist. Don't add one. */
+.confidence-card {
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--border-subtle);
+  padding-bottom: 24px;
+}
+
+.confidence-card__body {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 0 clamp(20px, 5vw, 40px);
+}
+
+/* The status dot + the level, in words. */
+.confidence-card__level {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-display);
+  font-size: 20px;
+  line-height: 1;
+  color: var(--fg-1);
+}
+
+.confidence-card__dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+
+/* Warm to cool as the rating settles down. */
+.confidence-card__dot--provisional {
+  background: var(--warn);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 22%, transparent);
+}
+
+.confidence-card__dot--firming_up {
+  background: var(--ball-500);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ball-500) 22%, transparent);
+}
+
+.confidence-card__dot--settled {
+  background: var(--serve-500);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--serve-500) 22%, transparent);
+}
+
+.confidence-card__explanation {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--fg-3);
+  max-width: 52ch;
+}
+
+/* The 95% interval — the card's one rigorous statement, and the reason it is
+ * worth trusting. It belongs here, in front of the reader, never in the drawer. */
+.confidence-card__interval {
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--fg-2);
+}
+
+.confidence-card__bound {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--fg-1);
+}
+
+/* The Glicko-2 internals, collapsed: they are the machinery BEHIND confidence,
+ * not names for it. */
+.confidence-card__drawer {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--fg-3);
+}
+
+.confidence-card__drawer-summary {
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+}
+
+.confidence-card__drawer-summary:hover {
+  color: var(--fg-2);
+}
+
+.confidence-card__details {
+  display: flex;
+  gap: 24px;
+  margin-top: 10px;
+}
+
+.confidence-card__detail-label {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+}
+
+.confidence-card__detail-value {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  color: var(--fg-1);
+  margin-top: 4px;
+}
+
+.confidence-card__skeleton-line {
+  display: block;
+  width: 320px;
+  max-width: 100%;
+  height: 14px;
+  border-radius: 4px;
+  background: var(--bg-raised);
+  animation: player-profile-shimmer 1.4s ease-in-out infinite;
+}
+
+.confidence-card__skeleton-line--level {
+  width: 128px;
+  height: 20px;
+}
+
+.confidence-card__skeleton-line--interval {
+  width: 260px;
+}
+
+/* ============ Leagues card (the league switcher) ============
+ *
+ * Not a passive list: every row is a link that rebinds the rating half of the
+ * page to that ladder (ADR-0915). So the rows must *look* pressable — hover and
+ * focus states, a cursor — and the selected one must be unmistakable, because it
+ * is the answer to "which league are these numbers about?" that the hero, the
+ * rating panel and the confidence card all depend on. */
+
+.leagues-card {
+  /* Content-sized, like the Career card — it must not stretch to eat the page's
+   * spare height. */
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--border-subtle);
+  padding-bottom: 24px;
+}
+
+.leagues-card__rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 clamp(20px, 5vw, 40px);
+  margin: 0;
+  list-style: none;
+}
+
+.leagues-card__row-item {
+  display: block;
+}
+
+.leagues-card__row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 12px 16px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  background: var(--bg-raised);
+  color: var(--fg-1);
+  text-decoration: none;
+  transition:
+    border-color 120ms ease,
+    background 120ms ease;
+}
+
+.leagues-card__row:hover {
+  border-color: color-mix(in srgb, var(--ball-500) 45%, transparent);
+  background: color-mix(in srgb, var(--ball-500) 6%, var(--bg-raised));
+}
+
+.leagues-card__row:focus-visible {
+  outline: 2px solid var(--ball-500);
+  outline-offset: 2px;
+}
+
+/* The selected ladder — the one every rating on this page is about. Tinted AND
+ * outlined, so it doesn't rely on a single cue. */
+.leagues-card__row--selected {
+  border-color: var(--ball-500);
+  background: color-mix(in srgb, var(--ball-500) 12%, var(--bg-raised));
+}
+
+.leagues-card__dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  background: var(--fg-3);
+}
+
+.leagues-card__row--selected .leagues-card__dot {
+  background: var(--ball-500);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ball-500) 22%, transparent);
+}
+
+.leagues-card__name {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.leagues-card__badge {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+
+/* The player's rating ON this ladder — pushed to the trailing edge, mono, so the
+ * numbers line up down the column and read as comparable. An em dash sits here
+ * when they hold no rating on this league. */
+.leagues-card__rating {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 15px;
+  color: var(--fg-1);
+}
+
+.leagues-card__row--skeleton {
+  display: block;
+  height: 45px;
+  border-color: transparent;
+  animation: player-profile-shimmer 1.4s ease-in-out infinite;
+}
+
+/* ============ Head-to-head ============ */
+/* The page's most viewer-aware card (ADR-0915), and the one that is genuinely two
+ * cards: on somebody else's profile it LEADS with the viewer's own record against
+ * them — a head-to-head is only meaningful read from a stated side (CONTEXT.md) —
+ * with the player's frequent opponents demoted below it. On your own profile there
+ * is no record and no CTA (you cannot play yourself), so only the list remains. */
+.head-to-head {
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--border-subtle);
+  padding-bottom: 24px;
+}
+
+.head-to-head__body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 0 clamp(20px, 5vw, 40px);
+}
+
+/* ----- You vs them: the lead ----- */
+.head-to-head__versus {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.head-to-head__versus-line {
+  font-family: var(--font-display);
+  font-size: 20px;
+  line-height: 1.3;
+  color: var(--fg-1);
+}
+
+/* The two numbers that are the entire point of the card. Mono so they read as a
+ * record and not as prose, and tinted so the eye lands on them first. */
+.head-to-head__versus-record {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  color: var(--ball-500);
+}
+
+.head-to-head__versus-name {
+  font-weight: 600;
+}
+
+.head-to-head__versus-meta {
+  font-size: 13px;
+  color: var(--fg-3);
+}
+
+.head-to-head__dot {
+  color: var(--fg-3);
+  opacity: 0.6;
+}
+
+/* ----- Never met: the invitation ----- */
+/* A guest — anyone who lands on a shared profile link — is ALWAYS in this state,
+ * so it is the first thing a brand-new visitor sees and the app's best conversion
+ * moment. Quiet copy, one loud action. */
+.head-to-head__invite {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--ball-500) 6%, var(--bg-raised));
+}
+
+.head-to-head__invite-copy {
+  font-size: 15px;
+  color: var(--fg-1);
+}
+
+.head-to-head__cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  background: var(--ball-500);
+  color: var(--bg-base);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  transition: filter 120ms ease;
+}
+
+.head-to-head__cta:hover {
+  filter: brightness(1.08);
+}
+
+.head-to-head__cta:focus-visible {
+  outline: 2px solid var(--ball-500);
+  outline-offset: 2px;
+}
+
+/* ----- Their frequent opponents: the secondary context ----- */
+.head-to-head__frequent {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.head-to-head__frequent-title {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+}
+
+.head-to-head__rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.head-to-head__row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0;
+}
+
+.head-to-head__opponent {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--fg-1);
+  flex: 0 0 auto;
+  min-width: 120px;
+}
+
+/* The record said again, geometrically: how much of this rivalry the player has
+ * won. Decorative — the record beside it is what a screen reader reads. */
+.head-to-head__bar {
+  flex: 1 1 auto;
+  height: 6px;
+  min-width: 40px;
+  border-radius: 999px;
+  background: var(--bg-raised);
+  overflow: hidden;
+}
+
+.head-to-head__bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--ball-500);
+}
+
+.head-to-head__record {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  color: var(--fg-1);
+  flex: 0 0 auto;
+}
+
+.head-to-head__meetings {
+  font-size: 12px;
+  color: var(--fg-3);
+  flex: 0 0 auto;
+  min-width: 78px;
+  text-align: right;
+}
+
+.head-to-head__empty {
+  font-size: 14px;
+  color: var(--fg-3);
+}
+
+/* ----- Skeleton ----- */
+.head-to-head__skeleton-line {
+  display: block;
+  height: 14px;
+  width: 100%;
+  border-radius: 6px;
+  background: var(--bg-raised);
+  animation: player-profile-shimmer 1.4s ease-in-out infinite;
+}
+
+.head-to-head__skeleton-line--lead {
+  height: 22px;
+  width: 62%;
+}

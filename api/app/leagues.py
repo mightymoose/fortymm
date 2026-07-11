@@ -1,7 +1,7 @@
 import uuid
 
 from fastapi import HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -13,6 +13,7 @@ from app.models import (
     RatingStrategy,
     UserLeagueRating,
 )
+from app.schemas.player import PlayerLeague
 
 
 async def get_default_league(db: AsyncSession) -> League | None:
@@ -59,6 +60,53 @@ async def count_league_memberships(db: AsyncSession, user_id: uuid.UUID) -> int:
             )
         )
     ).scalar_one()
+
+
+async def player_leagues(db: AsyncSession, user_id: uuid.UUID) -> list[PlayerLeague]:
+    """Every league the user belongs to, each carrying THEIR rating on it — the
+    profile's Leagues card / league switcher (ADR-0915).
+
+    ONE round trip, whatever the number of memberships: the rating is outer-joined
+    onto the membership rather than fetched per league, so a player in twenty
+    ladders costs the same query as a player in one. A member with no rating row
+    on a ladder (a manual-strategy league awaiting its import) outer-joins to
+    ``None`` rather than dropping out of the list — belonging to a league and
+    holding a rating in it are different facts, and the card must still show the
+    league.
+
+    Membership is the source of truth, exactly as in ``count_league_memberships``
+    — so ``len(player_leagues(...)) == count_league_memberships(...)`` always, and
+    the Leagues card can never disagree with ``career.league_count`` sitting next
+    to it on the same page.
+
+    The default league sorts first (it is the one the page falls back to when the
+    caller names none), then alphabetically — a stable order, so the card does not
+    reshuffle between requests.
+    """
+    rows = (
+        await db.execute(
+            select(
+                League.id,
+                League.name,
+                League.is_default,
+                UserLeagueRating.rating_value,
+            )
+            .join(LeagueMembership, LeagueMembership.league_id == League.id)
+            .outerjoin(
+                UserLeagueRating,
+                and_(
+                    UserLeagueRating.league_id == League.id,
+                    UserLeagueRating.user_id == user_id,
+                ),
+            )
+            .where(LeagueMembership.user_id == user_id)
+            .order_by(League.is_default.desc(), League.name)
+        )
+    ).all()
+    return [
+        PlayerLeague(id=id_, name=name, is_default=is_default, rating=rating)
+        for id_, name, is_default, rating in rows
+    ]
 
 
 def seed_user_league_rating(

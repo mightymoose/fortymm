@@ -11,7 +11,8 @@ from sqlalchemy.sql.base import ExecutableOption
 
 from app.career import player_career
 from app.db import get_session
-from app.leagues import resolve_league
+from app.head_to_head import player_head_to_head
+from app.leagues import player_leagues, resolve_league
 from app.models import (
     Match,
     MatchGame,
@@ -22,6 +23,9 @@ from app.models import (
     User,
     UserLeagueRating,
 )
+from app.ratings.confidence import rating_interval
+from app.ratings.history import player_rating_history
+from app.ratings.state import Glicko2State, parse_rating_state
 from app.ratings.stats import (
     latest_rated_match_change,
     league_peak_rating,
@@ -38,7 +42,14 @@ from app.schemas.player import (
     PlayerRead,
     PlayerSummary,
 )
-from app.schemas.rating import RatingChange
+from app.schemas.rating import (
+    DEFAULT_RATING_WINDOW,
+    RatingChange,
+    RatingConfidence,
+    RatingHistoryWindow,
+    RatingInterval,
+    RatingWindow,
+)
 from app.sessions import get_current_user
 
 router = APIRouter(prefix="/v1")
@@ -301,11 +312,19 @@ async def _load_wl_counts(
 
 
 async def _load_form(
-    db: AsyncSession, user_ids: list[uuid.UUID]
+    db: AsyncSession, user_ids: list[uuid.UUID], league_id: uuid.UUID
 ) -> dict[uuid.UUID, str]:
     """One round trip via a window function: returns ``user_id -> "WLWWL"``
-    of up to FORM_WINDOW newest-first completed-match outcomes. Drives the
-    form-dots column."""
+    of up to FORM_WINDOW newest-first completed-match outcomes IN THIS LEAGUE.
+    Drives the form-dots column.
+
+    LEAGUE-SCOPED, like rating / rank / peak / confidence and unlike career
+    (ADR-0915): a match is played in exactly one league, and form says what is
+    happening lately *on this ladder*. Drop the ``Match.league_id`` filter and a
+    player's form on the FortyMM ladder starts quoting results they got on a USATT
+    one — the same class of bug as a peak read from the wrong league. Career is
+    the block that deliberately counts every league; this is not it.
+    """
     if not user_ids:
         return {}
     ranked = (
@@ -327,6 +346,7 @@ async def _load_form(
         .join(Match, Match.id == MatchSide.match_id)
         .where(
             MatchSidePlayer.user_id.in_(user_ids),
+            Match.league_id == league_id,
             Match.status == MatchStatus.completed,
             MatchSide.won.is_not(None),
         )
@@ -352,13 +372,20 @@ async def _summarize_players(
 ) -> list[PlayerSummary]:
     """Hydrate a list of ``User``s into the ``PlayerSummary`` shape the
     `/players` list + profile-page hero render. Four round trips total
-    (ratings, W-L, form, ranks) regardless of page size."""
+    (ratings, W-L, form, ranks) regardless of page size.
+
+    Three of the four are scoped to ``league_id``: `rating`, `rank` and `form`
+    are all facts about one ladder (ADR-0915). ``wins``/``losses`` are the
+    exception, and deliberately so — they are the CAREER W-L, a fact about the
+    person, and they must agree with the profile's `career` block, which counts
+    every league. That is why ``_load_wl_counts`` takes no league and
+    ``_load_form`` does."""
     if not users:
         return []
     user_ids = [user.id for user in users]
     ratings = await _load_player_ratings(db, league_id, user_ids)
     wl = await _load_wl_counts(db, user_ids)
-    form = await _load_form(db, user_ids)
+    form = await _load_form(db, user_ids, league_id)
     ranks = await _load_player_ranks(db, league_id, user_ids)
     return [
         PlayerSummary(
@@ -497,8 +524,61 @@ async def _player_standing(
     )
 
 
+async def _player_confidence(
+    db: AsyncSession, user_id: uuid.UUID, league_id: uuid.UUID
+) -> RatingConfidence | None:
+    """How settled this player's rating is on THIS ladder (CONTEXT.md, "Rating
+    confidence") — league-scoped, like rating / rank / peak, and unlike career.
+
+    ``None`` — the card does not render at all — in three cases, none of which
+    is an error:
+
+    * the player has no rating row in this league, or no rating in it (they have
+      never finished a rated match; the hero already says "Unrated"). Nothing to
+      be confident *about*;
+    * the rating came from a MANUAL strategy — an imported USATT number carries
+      no deviation, so it has no confidence to report. This is why the state is
+      parsed rather than indexed: ``state["rd"]`` on a manual row is a
+      ``KeyError``, while a ``ManualState`` simply has no ``rd`` to reach for and
+      the type checker makes us say what happens instead.
+
+    The state is decoded with the strategy off the RATING ROW (not the league):
+    a row written under a superseded strategy still holds state in that
+    strategy's shape.
+
+    The interval is centred on the state's own rating — the Glicko-2 mean its RD
+    describes — which is the same number the hero displays: every write sets
+    ``rating_value`` from ``state_rating_value(state)``.
+    """
+    row = (
+        await db.execute(
+            select(UserLeagueRating)
+            .where(
+                UserLeagueRating.user_id == user_id,
+                UserLeagueRating.league_id == league_id,
+            )
+            .options(selectinload(UserLeagueRating.rating_strategy))
+        )
+    ).scalar_one_or_none()
+    if row is None or row.rating_value is None:
+        return None
+    state = parse_rating_state(row.rating_strategy.key, row.rating_state)
+    if not isinstance(state, Glicko2State):
+        return None
+    low, high = rating_interval(state.rating, state.rd)
+    return RatingConfidence(
+        deviation=state.rd,
+        volatility=state.volatility,
+        interval=RatingInterval(low=low, high=high),
+    )
+
+
 async def _player_detail(
-    db: AsyncSession, user: User, league_id: uuid.UUID
+    db: AsyncSession,
+    user: User,
+    league_id: uuid.UUID,
+    viewer_id: uuid.UUID,
+    window: RatingWindow,
 ) -> PlayerDetail:
     """Body for `/v1/players/{id}` — bundles the hero summary with the player's
     six most recent matches so the profile overview paints in one round trip.
@@ -509,10 +589,35 @@ async def _player_detail(
     is exactly ``matches.total``. It is deliberately larger than the hero's
     ``wins + losses`` whenever a match is undecided; see ADR-0915.
 
-    ``career`` is the one block here that is NOT scoped to ``league_id`` — it is
-    a fact about the person, so it counts every league they play in (ADR-0915).
-    Passing the league into ``player_career`` would be the bug, not an
-    improvement."""
+    THE LEAGUE SPLIT (ADR-0915), stated in one place because every field here
+    sits on one side of it or the other:
+
+    * LEAGUE-SCOPED — everything about where this player stands on a *ladder*:
+      ``rating`` and ``rank`` (via ``_summarize_one_player``), ``form`` (same),
+      ``peak`` / ``rank_of`` / ``percentile`` / ``rating_delta`` (via
+      ``_player_standing``) and ``confidence``. Ask for the same player in two
+      leagues and every one of them can differ.
+    * CROSS-LEAGUE — ``career``, a fact about the *person*: decided matches, W-L,
+      win rate, games-won share, streaks. Passing ``league_id`` into
+      ``player_career`` would be the bug, not an improvement. The summary's own
+      ``wins``/``losses`` are the same career W-L and are cross-league for the
+      same reason. ``matches`` / ``match_total`` are cross-league too: the
+      history is all-inclusive (ADR-0008).
+    * NEITHER — ``leagues`` is the switcher itself, so it is the same list on
+      every request for this player; each row carries that row's OWN rating. The
+      client derives which row is selected (falling back to ``is_default``).
+
+    THE VIEWER SPLIT (ADR-0915) is the other axis, and ``head_to_head`` is the
+    only field on it: this response now varies by WHO IS ASKING. ``viewer_id`` is
+    therefore a real argument and not the ``_current_user`` this endpoint used to
+    bind and throw away — the caller's own record against this player is the one
+    thing on the page that is about the caller. Everything above is a fact about
+    the player alone and is byte-identical for every viewer.
+
+    ``rating_history`` embeds the chart's ``window``-worth of data so first paint
+    costs one request; the standalone endpoint below serves the same shape when
+    the user flips range. It is league-scoped like the rest of the rating half.
+    """
     summary = await _summarize_one_player(db, user, league_id)
     matches = await _paginated_player_matches(
         db, user.id, page=1, page_size=PROFILE_RECENT_MATCHES
@@ -527,7 +632,11 @@ async def _player_detail(
         rank_of=standing.rank_of,
         percentile=standing.percentile,
         rating_delta=standing.rating_delta,
+        confidence=await _player_confidence(db, user.id, league_id),
         career=await player_career(db, user.id),
+        leagues=await player_leagues(db, user.id),
+        head_to_head=await player_head_to_head(db, user, viewer_id),
+        rating_history=await player_rating_history(db, user.id, league_id, window),
     )
 
 
@@ -535,7 +644,8 @@ async def _player_detail(
 async def get_player(
     player_id: uuid.UUID,
     league_id: uuid.UUID | None = Query(default=None),
-    _current_user: User = Depends(get_current_user),
+    window: RatingWindow = Query(default=DEFAULT_RATING_WINDOW, alias="range"),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_session),
 ) -> PlayerDetail:
     """Authed profile bundle for `/players/$userId` — the overview in one
@@ -543,26 +653,108 @@ async def get_player(
     `match_total` behind the "View all N matches" link. The full paginated
     history is served by `/v1/players/{id}/matches`.
 
-    The hero's standing block says where this player stands in the requested
-    league: `rating` and `rank` out of `rank_of` (so it reads "#3 of 42", never a
-    naked "#3"), their all-time `peak`, the `rating_delta` their most recent
-    rated match moved, and — only once the league is large enough for it to mean
-    anything — a `percentile`. An unrated player has none of them.
+    `league_id` selects the ladder the RATING HALF of the page is about,
+    defaulting to the default league when it is omitted. Everything about where
+    this player stands follows it: `rating` and `rank` out of `rank_of` (so it
+    reads "#3 of 42", never a naked "#3"), their all-time `peak`, the
+    `rating_delta` their most recent rated match moved, their recent `form`, a
+    `percentile` (only once the league is large enough for it to mean anything),
+    and `confidence`. An unrated player has none of them.
+
+    `confidence` says how settled that rating is on this ladder: a `level`
+    (`provisional` / `firming_up` / `settled`), the 95% `interval` around the
+    rating ("somewhere between 1551 and 1823"), and the Glicko-2 `deviation` and
+    `volatility` behind them. It is `null` — the card does not render — for an
+    unrated player, and for one whose rating was supplied externally by a manual
+    strategy, which carries no deviation to be confident about.
+
+    `leagues` lists every league this player belongs to with their rating on each
+    — the Leagues card, which is the page's league *switcher*. It is the same
+    list whichever league was asked for; the client marks the selected row (and
+    falls back to the one flagged `is_default` when no `league_id` was named).
 
     `career` is the exception: it is CROSS-LEAGUE and ignores `league_id`
-    entirely. Rating, rank, peak and percentile are facts about a *ladder*; a
-    player's lifetime record — decided matches, W-L, win rate, games-won share,
+    entirely. Rating, rank, peak, form and percentile are facts about a *ladder*;
+    a player's lifetime record — decided matches, W-L, win rate, games-won share,
     current and best streak — is a fact about the *person* (ADR-0915). Ask for
     the same player in two different leagues and only the rating half changes.
     `career.decided` counts decided matches alone, so it is smaller than
-    `match_total` whenever one of their matches is still in play."""
+    `match_total` whenever one of their matches is still in play.
+
+    `head_to_head` is VIEWER-AWARE — the one block here that depends on who is
+    asking (ADR-0915), so two callers get different bytes for the same profile
+    and no cache in front of this endpoint may share them. `versus_viewer` is the
+    CALLER's own record against this player, written from the caller's side ("you
+    are 1-4 against them", not "they are 4-1 against you"): `null` when the caller
+    *is* this player, and present with zero meetings — never `null`, never an
+    error — when they have simply never played, which is what a brand-new guest
+    always sees. `frequent_opponents` is this player's most-met opponents, read
+    from *their* side. A meeting is a *decided* match between two named players,
+    rated or not, in any league: a match still in play is not a record, and a solo
+    "No opponent" match can never be one.
+
+    `rating_history` is the rating chart's data for the calendar window named by
+    `range` (`30d` / `90d` / `1y`, defaulting to `90d`) — the same shape
+    `GET /v1/players/{id}/rating-history` returns, embedded so the profile paints
+    its chart without a second request. The client seeds that endpoint's cache from
+    this block and calls it only when the user changes range (ADR-0915). Note the
+    `anchor` inside it is a point from OUTSIDE the window, on purpose."""
     user = await _load_player_by_id(db, player_id)
     if user is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Player not found."
         )
     league = await resolve_league(db, league_id)
-    return await _player_detail(db, user, league.id)
+    return await _player_detail(db, user, league.id, current_user.id, window)
+
+
+@router.get("/players/{player_id}/rating-history", response_model=RatingHistoryWindow)
+async def get_player_rating_history(
+    player_id: uuid.UUID,
+    league_id: uuid.UUID | None = Query(default=None),
+    window: RatingWindow = Query(default=DEFAULT_RATING_WINDOW, alias="range"),
+    _current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+) -> RatingHistoryWindow:
+    """The player's rating over a CALENDAR window — the profile's rating chart
+    (ADR-0915). `range` is `30d`, `90d` (the default) or `1y`; `league_id` names
+    the ladder, defaulting to the default league, because a rating is a fact about
+    one ladder and never about a player "in general".
+
+    The chart is drawn from three things:
+
+    * `anchor` — the player's rating **as of the window start**, read from their
+      last rating change *at or before* it. It is therefore A POINT FROM OUTSIDE
+      THE REQUESTED WINDOW, with an `at` older than the window's left edge, and
+      that is deliberate: rating history exists only where matches completed, so
+      the window's left edge is almost never a match. Without it, a player whose
+      first match in the window landed on day forty would be told their ninety-day
+      change was only the movement since day forty. `null` when they held no rating
+      at that instant — there is nothing to carry in — and the line then starts at
+      the first in-window point.
+    * `points` — every rating change inside the window, oldest first. A **voided**
+      match is absent, not zeroed: voiding deletes its rating-history rows, so it
+      leaves the rating timeline entirely (CONTEXT.md, "Voided match") and the
+      chart can change shape retroactively. An EMPTY list is a first-class answer,
+      never an error: a rated player with nothing in the last ninety days gets
+      their anchor and no points, and the chart draws a flat line at their current
+      rating.
+    * `change` — the net movement across the window, measured from the `anchor`
+      (or, with no anchor, from the first in-window point) to the latest one.
+      `null`, never `+0`, for an empty window: nothing was played, so there is no
+      delta to report.
+
+    `peak` is the highest point WITHIN THE WINDOW, and is a different number from
+    the profile's `peak`, which is the player's all-time high on the ladder. Do not
+    read either for the other.
+    """
+    user = await _load_player_by_id(db, player_id)
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Player not found."
+        )
+    league = await resolve_league(db, league_id)
+    return await player_rating_history(db, user.id, league.id, window)
 
 
 def _player_matches_eager() -> tuple[ExecutableOption, ...]:

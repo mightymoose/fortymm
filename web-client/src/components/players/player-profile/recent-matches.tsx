@@ -5,6 +5,11 @@ import { RecentMatchesSkeleton } from './recent-matches/recent-matches-skeleton'
 
 export interface RecentMatchesProps {
   playerId: string
+  /** The ladder this card's numbers are about (ADR-0915), from the profile's
+   * `?league=`. `undefined` is the **default league** — the URL carries no param
+   * for it. It is part of the bundle's query key, so every card on the page must
+   * be handed the same one or the profile forks into two requests. */
+  leagueId?: string
 }
 
 /**
@@ -17,10 +22,10 @@ export interface RecentMatchesProps {
  * same bundle query, so a failure means none of them has anything to draw and it
  * belongs to the route's `PlayerRouteError`.
  */
-export function RecentMatches({ playerId }: RecentMatchesProps) {
+export function RecentMatches({ playerId, leagueId }: RecentMatchesProps) {
   return (
     <Suspense fallback={<RecentMatchesSkeleton />}>
-      <RecentMatchesFetcher playerId={playerId} />
+      <RecentMatchesFetcher playerId={playerId} leagueId={leagueId} />
     </Suspense>
   )
 }

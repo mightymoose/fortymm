@@ -2,6 +2,10 @@ import { delay, http, HttpResponse } from 'msw'
 import type { components } from '@/api/schema'
 import { healthCheck, player, sessionResponse } from '@/test/factories'
 import {
+  FORTYMM_LEAGUE_ID,
+  USATT_LEAGUE_ID,
+} from './factories/players/player-league.factory'
+import {
   acceptSeed,
   proposeSeed,
   findMatch,
@@ -35,8 +39,14 @@ import {
 } from './tournaments-store'
 import { PERM } from '@/lib/permissions'
 
+// The signed-in mock user's id, shared by the session, the roster's "me" row
+// and match-store's MOCK_CURRENT_USER — so the user menu's "Your profile" link
+// (which reads `session.user.id`) lands on a mock profile that exists.
+const MOCK_CURRENT_PLAYER_ID = 'u-me'
+
 export const mockSession = sessionResponse({
   user: {
+    id: MOCK_CURRENT_PLAYER_ID,
     username: 'rita.kovac',
     // The Administration nav *section* is gated on ADMIN_VIEW (app-shell), and
     // its children on their own permission. Grant ADMIN_VIEW so the section
@@ -112,8 +122,6 @@ type PlayerSummary = components['schemas']['PlayerSummary']
 type PlayerDetail = components['schemas']['PlayerDetail']
 type PlayerCareer = components['schemas']['PlayerCareer']
 type PlayerMatchRow = components['schemas']['PlayerMatchRow']
-
-const MOCK_CURRENT_PLAYER_ID = 'u-me' // matches MOCK_CURRENT_USER.id in match-store
 
 /** Mirrors `FORM_WINDOW` in `api/app/players.py` — the wire carries TEN recent
  * results, because the profile is where a player is actually studied. `form`
@@ -256,14 +264,48 @@ const PROFILE_RECENT_MATCHES = 6
  * - `rating_delta` is `null`, never a zero-delta object, when there is no
  *   preceding rated match to have moved the rating.
  */
+/** The API's confidence cut points (`app.ratings.confidence`), mirrored: both are
+ * inclusive floors on the Glicko-2 deviation, and the interval is `rating ±
+ * 1.96·RD`. There is deliberately no confidence *percentage* — that number does
+ * not exist. */
+const PROVISIONAL_RD_FLOOR = 160
+const FIRMING_UP_RD_FLOOR = 90
+const INTERVAL_Z = 1.96
+
+/** A rated mock player's confidence, seeded off their name so it is stable across
+ * reloads. Spreads the three levels across the roster so `npm run dev` shows a
+ * Provisional, a Firming up and a Settled card rather than a page of clones. */
+function playerConfidence(
+  rating: number,
+  seed: number,
+): components['schemas']['RatingConfidence'] {
+  const deviation = 45 + (seed % 180)
+  const level =
+    deviation >= PROVISIONAL_RD_FLOOR
+      ? 'provisional'
+      : deviation >= FIRMING_UP_RD_FLOOR
+        ? 'firming_up'
+        : 'settled'
+  const half = Math.round(INTERVAL_Z * deviation)
+  return {
+    level,
+    deviation,
+    volatility: 0.06 + (seed % 10) / 1000,
+    interval: { low: rating - half, high: rating + half },
+  }
+}
+
 function playerStanding(summary: PlayerSummary) {
   const ratedPopulation = rosterRankById().size
   if (summary.rating == null || summary.rank == null) {
+    // No rating means nothing to be confident *about* — the profile's confidence
+    // card must not render at all for them.
     return {
       peak: null,
       rank_of: null,
       percentile: null,
       rating_delta: null,
+      confidence: null,
     }
   }
   const seed = djb2(summary.username)
@@ -287,6 +329,7 @@ function playerStanding(summary: PlayerSummary) {
       after: summary.rating,
       delta,
     },
+    confidence: playerConfidence(summary.rating, seed),
   }
 }
 
@@ -313,7 +356,12 @@ function playerCareer(summary: PlayerSummary): PlayerCareer {
       games_won_pct: null,
       current_streak: null,
       best_streak: null,
-      league_count: 1,
+      // Their league count, like everyone's, is a count of *memberships* — not of
+      // the leagues they have played a match in. A player joins the default league
+      // on sign-up, so this is never 0, and it must agree with `leagues.length` on
+      // the same bundle whatever their record. Hard-coding a 1 here would put two
+      // rows in the Leagues card under a Career card reading "1 league".
+      league_count: MOCK_LEAGUES.length,
     }
   }
   const seed = djb2(summary.username)
@@ -338,21 +386,152 @@ function playerCareer(summary: PlayerSummary): PlayerCareer {
     // No wins, no winning run to have been anyone's best.
     best_streak:
       summary.wins > 0 ? { kind: 'W' as const, n: bestWinRun } : null,
-    // Every player is in exactly one league today (the default league).
-    league_count: 1,
+    // Career is CROSS-LEAGUE (ADR-0915), so this counts every ladder the player
+    // belongs to — and it must agree with `leagues.length` on the same bundle,
+    // exactly as the API guarantees (both are counted off league *memberships*).
+    // The mock roster puts everyone in both leagues, so the Leagues card is a
+    // switcher you can actually drive in `npm run dev`.
+    league_count: MOCK_LEAGUES.length,
+  }
+}
+
+/** The mock leagues. Ids are **uuids**, as the wire carries them — the profile
+ * route validates `?league=` as one, so a `'usatt'`-style id here would be caught
+ * at the boundary and silently degrade to the default league.
+ *
+ * Every mock player belongs to both. In production today every player is in
+ * exactly one (there is no join-league endpoint yet), and the card correctly
+ * renders a single row for them — but a one-league mock would leave the switcher
+ * undrivable in dev. */
+const MOCK_LEAGUES = [
+  { id: FORTYMM_LEAGUE_ID, name: 'FortyMM', is_default: true },
+  { id: USATT_LEAGUE_ID, name: 'USATT', is_default: false },
+] as const
+
+const DEFAULT_MOCK_LEAGUE = MOCK_LEAGUES[0]
+
+/** A player's rating **on one ladder**. There is no such thing as their rating
+ * "in general" (ADR-0915) — so the second league runs a fixed offset below the
+ * default one, and switching leagues visibly rebinds the hero, the rating panel
+ * and the confidence card rather than redrawing the same numbers. An unrated
+ * player is unrated everywhere. */
+function leagueRating(
+  base: number | null | undefined,
+  leagueId: string,
+): number | null {
+  if (base == null) return null
+  return leagueId === DEFAULT_MOCK_LEAGUE.id ? base : base - 45
+}
+
+/** The Leagues card's rows: every league this player belongs to, each carrying
+ * THEIR rating on it. The list is deliberately NOT scoped to the requested
+ * league — it is the same on every request for this player; which row is
+ * *selected* is the client's business (ADR-0915). */
+function playerLeagues(base: number | null | undefined) {
+  return MOCK_LEAGUES.map((league) => ({
+    id: league.id,
+    name: league.name,
+    is_default: league.is_default,
+    rating: leagueRating(base, league.id),
+  }))
+}
+
+/**
+ * The profile's **viewer-aware** head-to-head block (ADR-0915) — the one part of
+ * the bundle whose answer depends on *who is asking*. Mirrors `_load_head_to_head`
+ * in `api/app/head_to_head.py`:
+ *
+ * - asked for **yourself**, there is no `versus_viewer` at all. You cannot have a
+ *   record against yourself, and the profile must not offer to start a match with
+ *   you — so the API omits the block and the card degrades to your frequent
+ *   opponents. The mock viewer is always `MOCK_CURRENT_PLAYER_ID`, so opening
+ *   `/players/u-me` in `npm run dev` shows exactly that;
+ * - asked for **anyone else**, it is present — *even when the pair have never
+ *   met*, which is the common case in production (a guest session is minted for
+ *   anyone who lands on a profile link, and a guest has played nobody). Zero
+ *   meetings is a first-class value here, never a `null`: the card's
+ *   "You haven't played X yet" + Start-a-match CTA is rendered off it, and needs
+ *   the `opponent` to prefill the match with.
+ *
+ * One roster player (`silva.r`) is deliberately seeded as never-met so that empty
+ * state — the app's best conversion moment — is reachable under `npm run dev`
+ * without clearing a cookie.
+ *
+ * `meetings` is `wins + losses`, derived rather than stored (the API refuses to
+ * carry a field and its own derivation), so it is derived here too.
+ */
+function playerHeadToHead(p: {
+  id: string
+  username: string
+}): components['schemas']['PlayerHeadToHead'] {
+  const roster = mockPlayerRoster()
+  const seed = djb2(p.username)
+  const record = (
+    opponent: { id: string; username: string },
+    salt: number,
+  ) => {
+    const wins = (djb2(opponent.username) + salt) % 7
+    const losses = (seed + salt) % 5
+    return {
+      opponent: { id: opponent.id, username: opponent.username },
+      wins,
+      losses,
+      meetings: wins + losses,
+    }
+  }
+
+  // The profiled player's most-met opponents — top three, as the API caps it.
+  const frequent = roster
+    .filter((other) => other.id !== p.id)
+    .map((other) => record(other, 0))
+    .sort((a, b) => b.meetings - a.meetings)
+    .slice(0, 3)
+
+  if (p.id === MOCK_CURRENT_PLAYER_ID) {
+    return { versus_viewer: null, frequent_opponents: frequent }
+  }
+
+  // The viewer's own record AGAINST this player — read from the viewer's side, so
+  // `opponent` is the player whose profile this is.
+  const neverMet = p.username === 'silva.r'
+  const wins = neverMet ? 0 : 1 + (seed % 4)
+  const losses = neverMet ? 0 : seed % 5
+  return {
+    versus_viewer: {
+      opponent: { id: p.id, username: p.username },
+      wins,
+      losses,
+      meetings: wins + losses,
+      last_meeting: neverMet
+        ? null
+        : new Date(Date.UTC(2025, seed % 12, 1 + (seed % 27))).toISOString(),
+    },
+    frequent_opponents: frequent,
   }
 }
 
 /** PlayerDetail = PlayerSummary + the hero's standing (member-since, peak,
  * rank-of-ladder, percentile, rating delta) + the cross-league career block +
- * the six most recent matches + the all-inclusive `match_total` behind the
- * "View all N matches" link. */
-function playerDetail(p: {
-  id: string
-  username: string
-  rating?: number | null
-}): PlayerDetail {
-  const summary = summarizePlayer(p)
+ * the player's leagues + the viewer-aware head-to-head + the six most recent
+ * matches + the all-inclusive `match_total` behind the "View all N matches" link.
+ *
+ * `leagueId` is the ladder the **rating half** of the bundle is about, defaulting
+ * to the default league when the caller names none. Career ignores it, and so
+ * do the head-to-head and the match list. */
+function playerDetail(
+  p: {
+    id: string
+    username: string
+    rating?: number | null
+  },
+  leagueId: string = DEFAULT_MOCK_LEAGUE.id,
+): PlayerDetail {
+  // The rating half of the bundle is scoped to the requested league; everything
+  // below reads off this league-scoped summary.
+  const summary = summarizePlayer({
+    ...p,
+    rating: leagueRating(p.rating, leagueId),
+  })
   const rows = projectPlayerMatches({ id: p.id, username: p.username })
   const seed = djb2(p.username)
   return {
@@ -362,7 +541,13 @@ function playerDetail(p: {
       Date.UTC(2023 + (seed % 3), seed % 12, 1 + (seed % 27)),
     ).toISOString(),
     ...playerStanding(summary),
-    career: playerCareer(summary),
+    // Cross-league, so it reads off the player's *unscoped* record — ask for this
+    // player in either league and the career block comes back identical.
+    career: playerCareer(summarizePlayer(p)),
+    leagues: playerLeagues(p.rating),
+    // Viewer-aware, and deliberately NOT league-scoped: a meeting is a decided
+    // match in any league (ADR-0915).
+    head_to_head: playerHeadToHead(p),
     match_total: rows.length,
     matches: {
       items: rows.slice(0, PROFILE_RECENT_MATCHES),
@@ -593,7 +778,7 @@ export const handlers = [
         .slice(0, 10),
     )
   }),
-  http.get('*/v1/players/:playerId', async ({ params }) => {
+  http.get('*/v1/players/:playerId', async ({ params, request }) => {
     await delay(200)
     const playerId = String(params.playerId)
     const player = mockPlayerRoster().find((p) => p.id === playerId)
@@ -603,7 +788,18 @@ export const handlers = [
         { status: 404 },
       )
     }
-    return HttpResponse.json(playerDetail(player))
+    // `?league_id=` selects the ladder the rating half of the bundle is about
+    // (ADR-0915). An unknown one is a 404 here exactly as it is in the API
+    // (`resolve_league`) — the client never sends a malformed one, because the
+    // route's search schema catches it before it reaches the wire.
+    const leagueId = new URL(request.url).searchParams.get('league_id')
+    if (leagueId && !MOCK_LEAGUES.some((league) => league.id === leagueId)) {
+      return HttpResponse.json(
+        { detail: 'League not found.' },
+        { status: 404 },
+      )
+    }
+    return HttpResponse.json(playerDetail(player, leagueId ?? undefined))
   }),
   http.get('*/v1/players/:playerId/matches', async ({ params, request }) => {
     await delay(300)

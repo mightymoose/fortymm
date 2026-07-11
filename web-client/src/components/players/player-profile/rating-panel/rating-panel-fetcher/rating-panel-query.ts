@@ -110,7 +110,7 @@ export const selectRatingPanel = (player: PlayerDetail): RatingPanelView => ({
  * different view model. The hero's two cards therefore share ONE cache entry and
  * cost ONE request (the match-details projection pattern).
  */
-export const ratingPanelQuery = (playerId: string) => ({
-  ...playerByIdQueryOptions(playerId),
+export const ratingPanelQuery = (playerId: string, leagueId?: string) => ({
+  ...playerByIdQueryOptions(playerId, leagueId),
   select: selectRatingPanel,
 })

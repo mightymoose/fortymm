@@ -18,6 +18,8 @@ async function withSession(page: Page, session: SessionShape) {
   const sessionBody = JSON.stringify({
     data: {
       user: {
+        // Required on the wire — the user menu's "Your profile" link reads it.
+        id: '3a6d18f2-91b4-4e07-bd25-6c8f04a2e913',
         username: session.username ?? 'tester',
         permissions: session.permissions,
       },

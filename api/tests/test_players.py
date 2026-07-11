@@ -1,3 +1,4 @@
+import uuid
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 
@@ -19,11 +20,14 @@ from app.models import (
     MatchStatus,
     RatingHistory,
     RatingHistorySource,
+    RatingStrategy,
     User,
     UserLeagueRating,
 )
 from app.players import PERCENTILE_MIN_RATED_PLAYERS
+from app.ratings.history import MAX_POINTS, downsample
 from app.ratings.stats import STREAK_SCAN_LIMIT, Streak, best_win_streak
+from app.schemas.rating import RatingPoint
 from tests._helpers import make_client, make_user, start_session
 
 # A fixed anchor so recency-ordering assertions don't depend on wall-clock time.
@@ -512,24 +516,34 @@ async def _record_rating_change(
     before: float,
     after: float,
     league: League | None = None,
+    at: datetime | None = None,
 ) -> None:
     """Seed the ``RatingHistory`` row a rated match writes when it completes —
     the audit row the profile's per-row Δ column is read from. ``league``
     defaults to the default league; it must name the league the match was played
-    on, since a rating change belongs to one ladder."""
+    on, since a rating change belongs to one ladder.
+
+    ``at`` stamps the row's ``created_at``. In production a match row's
+    ``created_at`` IS its match's ``completed_at`` (ADR-0012: the live path writes
+    in the same transaction as ``mark_completed``, and the recompute stamps it
+    explicitly), so a test placing a rating change in the past must move BOTH — the
+    match's completion instant and the audit row — or the row it seeds is a shape
+    production never produces. Omitted, the row takes the server's ``now()``, which
+    is what every non-calendar test wants."""
     league = league or await get_default_league(db_session)
-    db_session.add(
-        RatingHistory(
-            league_id=league.id,
-            user_id=user.id,
-            match_id=match.id,
-            rating_strategy_id=league.rating_strategy_id,
-            rating_value=after,
-            rating_state={"rating": after, "rd": 200.0, "volatility": 0.06},
-            previous_rating_value=before,
-            source=RatingHistorySource.match,
-        )
+    row = RatingHistory(
+        league_id=league.id,
+        user_id=user.id,
+        match_id=match.id,
+        rating_strategy_id=league.rating_strategy_id,
+        rating_value=after,
+        rating_state={"rating": after, "rd": 200.0, "volatility": 0.06},
+        previous_rating_value=before,
+        source=RatingHistorySource.match,
     )
+    if at is not None:
+        row.created_at = at
+    db_session.add(row)
     await db_session.commit()
 
 
@@ -1051,13 +1065,26 @@ async def test_get_player_voided_match_reports_no_rating_change(
 
 
 async def _rated_cohort(
-    db_session: AsyncSession, prefix: str, count: int
+    db_session: AsyncSession,
+    prefix: str,
+    count: int,
+    *,
+    league: League | None = None,
+    base: float = 1400.0,
 ) -> list[User]:
-    """Seed ``count`` rated players in the default league in ONE commit — the
-    ladder population the hero's ``rank_of`` counts and the percentile gate is
-    measured against. Ratings ascend from 1400 and stay well below any rating a
-    test gives its headline player, so the target keeps rank 1."""
-    league = await get_default_league(db_session)
+    """Seed ``count`` rated players on a ladder in ONE commit — the population
+    the hero's ``rank_of`` counts and the percentile gate is measured against.
+
+    Ratings ascend from ``base``, which defaults low enough to sit well below any
+    rating a test gives its headline player, so the target keeps rank 1. Raise
+    ``base`` above the target's rating to seed the opposite shape: a ladder the
+    target is at the BOTTOM of.
+
+    ``league`` defaults to the default league; pass another to build a second,
+    independent ladder — a rating, a rank and a percentile are each about exactly
+    one of them."""
+    league = league or await get_default_league(db_session)
+    assert league is not None
     users = [User(username=f"{prefix}{i}") for i in range(count)]
     db_session.add_all(users)
     await db_session.flush()
@@ -1067,7 +1094,7 @@ async def _rated_cohort(
                 league_id=league.id,
                 user_id=user.id,
                 rating_strategy_id=league.rating_strategy_id,
-                rating_value=1400.0 + i,
+                rating_value=base + i,
             )
             for i, user in enumerate(users)
         ]
@@ -1924,3 +1951,1540 @@ async def test_get_player_career_is_present_and_empty_for_a_player_with_no_match
         "best_streak": None,
         "league_count": 1,
     }
+
+
+# ----- rating confidence (league-scoped) ------------------------------------
+
+
+async def _rate_glicko2(
+    db_session: AsyncSession,
+    user: User,
+    *,
+    rating: float,
+    rd: float,
+    volatility: float = 0.06,
+    league: League | None = None,
+) -> None:
+    """Rate ``user`` on a Glicko-2 ladder, carrying the full ``rating_state``
+    blob a real rated match writes.
+
+    ``rating_value`` mirrors ``state["rating"]``, exactly as every production
+    write does (``state_rating_value``) — so these tests never exercise a
+    rating/state disagreement that cannot occur.
+
+    ``_rate`` is the weaker sibling: it leaves ``rating_state`` null, which is
+    why the tests below all seed through this one — confidence is read out of the
+    state, not the column.
+    """
+    league = league or await get_default_league(db_session)
+    assert league is not None
+    db_session.add(
+        UserLeagueRating(
+            league_id=league.id,
+            user_id=user.id,
+            rating_strategy_id=league.rating_strategy_id,
+            rating_value=rating,
+            rating_state={"rating": rating, "rd": rd, "volatility": volatility},
+        )
+    )
+    await db_session.commit()
+
+
+async def _confidence_for(
+    api_client: AsyncClient, player: User, league: League | None = None
+) -> dict | None:
+    query = "" if league is None else f"?league_id={league.id}"
+    response = await api_client.get(f"/v1/players/{player.id}{query}")
+    assert response.status_code == 200
+    body = response.json()
+    confidence: dict | None = body["confidence"]
+    return confidence
+
+
+async def test_get_player_confidence_level_keys_off_the_deviation(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """The level is one of provisional / firming_up / settled, keyed off the
+    rating's DEVIATION alone (CONTEXT.md, "Rating confidence").
+
+    Every case sits ON or ONE POINT OFF a cut point, so the ladder is pinned in
+    both direction and inclusivity:
+
+    * RD 160 reads provisional and RD 159 firming up — swap the two thresholds
+      and 159 reads provisional; make the comparison strict (``>``) and 160 reads
+      firming up.
+    * RD 90 reads firming up and RD 89 settled — the same two mutants red on the
+      lower rung.
+
+    A single mid-band sample per level would let any of them through."""
+    await start_session(api_client, db_session)
+    cases = [
+        (350.0, "provisional"),  # the seed RD: the system has no idea yet
+        (160.0, "provisional"),  # inclusive floor
+        (159.0, "firming_up"),
+        (90.0, "firming_up"),  # inclusive floor
+        (89.0, "settled"),
+        (35.0, "settled"),
+    ]
+    for index, (rd, expected) in enumerate(cases):
+        player = await make_user(db_session, f"conf.level.{index}")
+        await _rate_glicko2(db_session, player, rating=1500.0, rd=rd)
+
+        confidence = await _confidence_for(api_client, player)
+        assert confidence is not None
+        assert confidence["level"] == expected, f"RD {rd}"
+        assert confidence["deviation"] == rd
+
+
+async def test_get_player_confidence_interval_is_the_95_percent_band(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """``interval`` is the 95% interval — ``rating ± 1.96 × RD`` — the one
+    rigorous number on the card and the one it puts on its face ("we think this
+    player is somewhere between…").
+
+    Two players pin it:
+
+    * 1687 ± 1.96×100 → 1491-1883. The rating is deliberately NOT 1500, so a
+      mutant centring the band on the seed rating reds; and the multiplier is
+      recoverable from the width — 1.0 would give 1587-1787 and 2.0 gives
+      1487-1887, both distinct from what we assert.
+    * 1500 ± 1.96×137 → half-width 268.52, so the band rounds to 1231-1769 —
+      whole rating points, and a truncating mutant reads 1231-1768.
+
+    ``volatility`` rides along untouched (it is display-only: nothing about the
+    level or the band is derived from it)."""
+    await start_session(api_client, db_session)
+
+    off_centre = await make_user(db_session, "conf.interval.offcentre")
+    await _rate_glicko2(
+        db_session, off_centre, rating=1687.0, rd=100.0, volatility=0.059
+    )
+    confidence = await _confidence_for(api_client, off_centre)
+    assert confidence is not None
+    assert confidence["interval"] == {"low": 1491.0, "high": 1883.0}
+    assert confidence["deviation"] == 100.0
+    assert confidence["volatility"] == 0.059
+    assert confidence["level"] == "firming_up"
+
+    fractional = await make_user(db_session, "conf.interval.fractional")
+    await _rate_glicko2(db_session, fractional, rating=1500.0, rd=137.0)
+    confidence = await _confidence_for(api_client, fractional)
+    assert confidence is not None
+    assert confidence["interval"] == {"low": 1231.0, "high": 1769.0}
+
+
+async def test_get_player_confidence_is_null_for_an_unrated_player(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """A player who has never finished a rated match has no rating — the hero
+    already says "Unrated" — and so nothing to be confident ABOUT. The whole
+    block is ``null`` and the card does not render.
+
+    The row here is the trap, and it is deliberately the hardest version of it:
+    it exists (they are on the roster), it has never been scored
+    (``rating_value`` null), and it still carries the untouched SEED state —
+    rating 1500 at RD 350. Read the state without first checking that there is a
+    rating, and the profile confidently reports "provisional, somewhere between
+    814 and 2186" for a player it is simultaneously calling Unrated: a card
+    rendered about a rating that does not exist. That mutant reds here and
+    nowhere else."""
+    await start_session(api_client, db_session)
+    target = await make_user(db_session, "conf.unrated")
+    league = await get_default_league(db_session)
+    assert league is not None
+    db_session.add(
+        UserLeagueRating(
+            league_id=league.id,
+            user_id=target.id,
+            rating_strategy_id=league.rating_strategy_id,
+            rating_value=None,
+            rating_state={"rating": 1500.0, "rd": 350.0, "volatility": 0.06},
+        )
+    )
+    await db_session.commit()
+
+    body = (await api_client.get(f"/v1/players/{target.id}")).json()
+    assert body["rating"] is None
+    assert body["confidence"] is None
+
+
+async def test_get_player_confidence_is_null_for_a_manually_rated_player(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    rating_strategies: dict[str, RatingStrategy],
+):
+    """A manual (externally-supplied) rating has NO deviation at all — its
+    ``rating_state`` is ``{"rating": …}`` and nothing else — so there is no
+    confidence to report about it, and the block is ``null`` even though the
+    player is very much rated.
+
+    This is the test that proves the state is PARSED and not indexed: reach into
+    the blob for ``state["rd"]`` here and it is a ``KeyError`` (a 500 on the
+    profile); default it to zero and the card claims an imported USATT number is
+    "settled" — the system's most confident possible read on a rating it has
+    never once computed."""
+    manual_league = League(
+        name="USATT",
+        description="Ratings imported from outside.",
+        visibility=LeagueVisibility.public,
+        is_default=False,
+        rating_strategy_id=rating_strategies["manual"].id,
+    )
+    db_session.add(manual_league)
+    await db_session.commit()
+    await db_session.refresh(manual_league)
+
+    await start_session(api_client, db_session)
+    target = await make_user(db_session, "conf.manual")
+    db_session.add(
+        UserLeagueRating(
+            league_id=manual_league.id,
+            user_id=target.id,
+            rating_strategy_id=manual_league.rating_strategy_id,
+            rating_value=1600.0,
+            rating_state={"rating": 1600.0},
+        )
+    )
+    await db_session.commit()
+
+    response = await api_client.get(
+        f"/v1/players/{target.id}?league_id={manual_league.id}"
+    )
+    assert response.status_code == 200
+    body = response.json()
+    # Rated — just not by us.
+    assert body["rating"] == 1600.0
+    assert body["confidence"] is None
+
+
+async def test_get_player_confidence_is_scoped_to_the_requested_league(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """Confidence describes the player's rating IN THIS LEAGUE, so it follows
+    ``league_id`` like rating / rank / peak do — and unlike career (ADR-0915).
+
+    The same player is a newcomer on the default ladder (RD 350, a wide
+    provisional band) and a regular on a side ladder (RD 40, a tight settled
+    one). Drop the league filter and whichever row the query happens to return
+    first decides the answer: the two rows disagree on every field of the block,
+    so the mutant cannot survive."""
+    await start_session(api_client, db_session)
+    home = await get_default_league(db_session)
+    assert home is not None
+    side_league = League(
+        name="Tuesday Nights",
+        description="Another ladder entirely.",
+        visibility=LeagueVisibility.private,
+        is_default=False,
+        rating_strategy_id=home.rating_strategy_id,
+    )
+    db_session.add(side_league)
+    await db_session.commit()
+    await db_session.refresh(side_league)
+
+    target = await make_user(db_session, "conf.scoped")
+    await _rate_glicko2(db_session, target, rating=1500.0, rd=350.0)
+    await _rate_glicko2(db_session, target, rating=1820.0, rd=40.0, league=side_league)
+
+    default_confidence = await _confidence_for(api_client, target)
+    assert default_confidence is not None
+    assert default_confidence["level"] == "provisional"
+    assert default_confidence["interval"] == {"low": 814.0, "high": 2186.0}
+
+    side_confidence = await _confidence_for(api_client, target, league=side_league)
+    assert side_confidence is not None
+    assert side_confidence["level"] == "settled"
+    assert side_confidence["interval"] == {"low": 1742.0, "high": 1898.0}
+
+
+async def test_get_player_confidence_reports_no_percentage(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """There is deliberately NO confidence percentage (CONTEXT.md, "Rating
+    confidence"): an "86%" is an arbitrary rescaling of RD onto a 0-100 axis and
+    says nothing the level and the interval do not say better. The block carries
+    exactly four keys, so re-adding one reds here rather than quietly reaching
+    the UI."""
+    await start_session(api_client, db_session)
+    target = await make_user(db_session, "conf.keys")
+    await _rate_glicko2(db_session, target, rating=1500.0, rd=350.0)
+
+    confidence = await _confidence_for(api_client, target)
+    assert confidence is not None
+    assert set(confidence) == {"level", "deviation", "volatility", "interval"}
+
+
+# ----- the league switch: the rating half follows it, career does not -------
+
+
+async def _side_league(db_session: AsyncSession, name: str) -> League:
+    """A second, non-default ladder — the thing that makes league scoping
+    observable at all. Shares the default league's rating strategy, so any
+    difference between the two responses is about the LEAGUE and never about how
+    its ratings are computed."""
+    home = await get_default_league(db_session)
+    assert home is not None
+    league = League(
+        name=name,
+        description="Another ladder entirely.",
+        visibility=LeagueVisibility.private,
+        is_default=False,
+        rating_strategy_id=home.rating_strategy_id,
+    )
+    db_session.add(league)
+    await db_session.commit()
+    await db_session.refresh(league)
+    return league
+
+
+async def test_get_player_every_league_scoped_fact_follows_the_requested_league(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """THE defining test of ADR-0915, said once and completely: ask for the same
+    player in two different leagues and EVERY rating-flavoured field differs,
+    while `career` is byte-identical.
+
+    The target is a big fish in a small pond at home (1520, top of the ladder,
+    settled) and a minnow on a side ladder full of stronger players (1490, bottom,
+    provisional, and coming off a slide from a 1600 peak). Their four decided
+    matches are split across both ladders — two at home, two away — so a career
+    that quietly followed the league would report the wrong number twice over.
+
+    Each field pins a DIFFERENT league filter, and every one of them is deletable
+    with the rest of the suite green unless it is pinned here:
+
+    * `rating`    → ``_load_player_ratings``
+    * `rank`      → ``_load_player_ranks``
+    * `rank_of`   → ``league_rated_population``
+    * `percentile`→ ``league_percentile``
+    * `peak`      → ``league_peak_rating`` (the away peak is 1600 — a number the
+                    player never reached at home)
+    * `rating_delta` → ``latest_rated_match_change`` (the away slide is the NEWEST
+                    rated match of all, so an unscoped read reports -110 at home)
+    * `form`      → ``_load_form`` ("WW" at home, "LW" away; unscoped it is
+                    "LWWW" on both)
+    * `confidence`→ ``_player_confidence``
+    * `career`    → ``player_career``, which must take NO league at all
+
+    The viewer is themselves a rated member of the default league (a session mints
+    a guest and joins them, seeding a 1500 rating), so they occupy a rung of the
+    home ladder and count in its population. That is correct, and the arithmetic
+    below accounts for it."""
+    await start_session(api_client, db_session)
+    home = await get_default_league(db_session)
+    assert home is not None
+    away = await _side_league(db_session, "Tuesday Nights")
+
+    target = await make_user(db_session, "switch.target")
+    rival = await make_user(db_session, "switch.rival")
+    await _join_league(db_session, target, home)
+    await _join_league(db_session, target, away)
+
+    # Two ladders sized so the percentile gate opens on BOTH (a small league
+    # withholds it) while the populations still differ: the home ladder also
+    # carries the viewer's own rung, the away one does not.
+    home_pop = PERCENTILE_MIN_RATED_PLAYERS  # cohort + the target + the viewer
+    away_pop = PERCENTILE_MIN_RATED_PLAYERS + 2  # cohort + the target
+    await _rated_cohort(db_session, "switch.home", home_pop - 2, base=1400.0)
+    await _rated_cohort(
+        db_session, "switch.away", away_pop - 1, league=away, base=1600.0
+    )
+
+    # Top of the home ladder, and settled there. Bottom of the away one, and
+    # still provisional on it.
+    await _rate_glicko2(db_session, target, rating=1520.0, rd=80.0, league=home)
+    await _rate_glicko2(db_session, target, rating=1490.0, rd=200.0, league=away)
+
+    # Home: two rated wins, 1500 → 1510 → 1520.
+    first = await _record_match_with_winner(
+        db_session, target, rival, created_at=BASE_TIME, affects_rating=True
+    )
+    await _record_rating_change(db_session, target, first, before=1500.0, after=1510.0)
+    second = await _record_match_with_winner(
+        db_session,
+        target,
+        rival,
+        created_at=BASE_TIME + timedelta(days=1),
+        affects_rating=True,
+    )
+    await _record_rating_change(db_session, target, second, before=1510.0, after=1520.0)
+
+    # Away: a rated win up to a 1600 peak, then a rated loss back down to 1490 —
+    # the NEWEST rated match either player has, on either ladder.
+    climb = await _record_match_with_winner(
+        db_session,
+        target,
+        rival,
+        created_at=BASE_TIME + timedelta(days=2),
+        affects_rating=True,
+        league=away,
+    )
+    await _record_rating_change(
+        db_session, target, climb, before=1500.0, after=1600.0, league=away
+    )
+    slide = await _record_match_with_winner(
+        db_session,
+        rival,
+        target,
+        created_at=BASE_TIME + timedelta(days=3),
+        affects_rating=True,
+        league=away,
+    )
+    await _record_rating_change(
+        db_session, target, slide, before=1600.0, after=1490.0, league=away
+    )
+
+    at_home = (await api_client.get(f"/v1/players/{target.id}")).json()
+    on_the_side = (
+        await api_client.get(f"/v1/players/{target.id}?league_id={away.id}")
+    ).json()
+
+    # --- the rating half: every field is about the LADDER, so every field moves.
+    assert at_home["rating"] == 1520.0
+    assert on_the_side["rating"] == 1490.0
+
+    assert at_home["rank"] == 1
+    assert on_the_side["rank"] == away_pop
+
+    assert at_home["rank_of"] == home_pop
+    assert on_the_side["rank_of"] == away_pop
+
+    # Top of one ladder, dead last on the other.
+    assert at_home["percentile"] == max(1, round(100 / home_pop))
+    assert on_the_side["percentile"] == 100
+
+    assert at_home["peak"] == 1520.0
+    assert on_the_side["peak"] == 1600.0
+
+    assert at_home["rating_delta"] == {"before": 1510.0, "after": 1520.0, "delta": 10.0}
+    assert on_the_side["rating_delta"] == {
+        "before": 1600.0,
+        "after": 1490.0,
+        "delta": -110.0,
+    }
+
+    # Newest-first, and only the matches played ON that ladder.
+    assert at_home["form"] == "WW"
+    assert on_the_side["form"] == "LW"
+
+    assert at_home["confidence"]["level"] == "settled"
+    assert on_the_side["confidence"]["level"] == "provisional"
+    assert at_home["confidence"] != on_the_side["confidence"]
+
+    # Not one of them agreed across the two ladders.
+    for field in (
+        "rating",
+        "rank",
+        "rank_of",
+        "percentile",
+        "peak",
+        "rating_delta",
+        "form",
+        "confidence",
+    ):
+        assert at_home[field] != on_the_side[field], field
+
+    # --- the career half: a fact about the PERSON, so it does not move an inch.
+    assert at_home["career"] == on_the_side["career"]
+    assert at_home["career"]["decided"] == 4
+    assert at_home["career"]["wins"] == 3
+    assert at_home["career"]["losses"] == 1
+    assert at_home["career"]["league_count"] == 2
+
+    # The hero's own W-L is that same career W-L (the roster's column shares this
+    # field), so it is cross-league too — and must never drift from the `career`
+    # block sitting on the same page. League-scoping `_load_wl_counts` would read
+    # 2-0 at home and 1-1 away, and red here.
+    for side in (at_home, on_the_side):
+        assert (side["wins"], side["losses"]) == (3, 1)
+        assert (side["wins"], side["losses"]) == (
+            side["career"]["wins"],
+            side["career"]["losses"],
+        )
+
+    # --- the switcher itself: the same list either way, each row its own rating.
+    assert at_home["leagues"] == on_the_side["leagues"]
+
+
+async def test_get_player_leagues_lists_every_membership_with_its_rating_on_it(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """The Leagues card: one row per league the player BELONGS to, each carrying
+    the rating they hold ON THAT LADDER (ADR-0915) — 1520 here, 1950 there, and
+    no such thing as their rating "in general".
+
+    The default league sorts first, since it is the row the page falls back to
+    when no league is named, and `is_default` is what lets the client mark it.
+
+    The rows are read from `league_memberships`, so the card can never disagree
+    with the `career.league_count` sitting next to it on the same page — a mutant
+    that lists the leagues the player has PLAYED in instead would drop a league
+    they have joined but not yet played on, and the length assertion reds."""
+    await start_session(api_client, db_session)
+    home = await get_default_league(db_session)
+    assert home is not None
+    away = await _side_league(db_session, "Alpha Ladder")  # sorts BEFORE "FortyMM"
+
+    target = await make_user(db_session, "leagues.target")
+    await _join_league(db_session, target, home)
+    await _join_league(db_session, target, away)
+    await _rate(db_session, target, 1520.0, league=home)
+    await _rate(db_session, target, 1950.0, league=away)
+
+    body = (await api_client.get(f"/v1/players/{target.id}")).json()
+
+    # The default league leads, despite sorting last alphabetically.
+    assert body["leagues"] == [
+        {
+            "id": str(home.id),
+            "name": home.name,
+            "is_default": True,
+            "rating": 1520.0,
+        },
+        {
+            "id": str(away.id),
+            "name": "Alpha Ladder",
+            "is_default": False,
+            "rating": 1950.0,
+        },
+    ]
+    assert len(body["leagues"]) == body["career"]["league_count"]
+
+
+async def test_get_player_leagues_keeps_a_league_the_player_has_no_rating_in(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """Belonging to a ladder and holding a rating on it are different facts. A
+    member who has never finished a rated match there (or whose manual-strategy
+    league is still waiting for its import) is still a MEMBER: the row stays, with
+    a ``null`` rating.
+
+    An inner join to `user_league_ratings` would silently drop the league —
+    leaving a player who has joined two and reads as being in one, with the
+    `career.league_count` beside it saying otherwise."""
+    await start_session(api_client, db_session)
+    home = await get_default_league(db_session)
+    assert home is not None
+    away = await _side_league(db_session, "Unrated Ladder")
+
+    target = await make_user(db_session, "leagues.unrated")
+    await _join_league(db_session, target, home)
+    await _join_league(db_session, target, away)
+    await _rate(db_session, target, 1520.0, league=home)
+    # No rating row on the side ladder at all — they have only just joined it.
+
+    body = (await api_client.get(f"/v1/players/{target.id}")).json()
+    assert [(row["name"], row["rating"]) for row in body["leagues"]] == [
+        (home.name, 1520.0),
+        ("Unrated Ladder", None),
+    ]
+    assert len(body["leagues"]) == body["career"]["league_count"] == 2
+
+
+async def test_get_player_leagues_is_a_single_row_for_a_player_in_only_the_default(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """Every real player is joined to the default league at sign-up and, today,
+    to nothing else — so the card renders exactly one row for everyone. That is
+    correct, not a bug to be optimised away by hiding the card (ADR-0915).
+
+    The viewer here is a real signed-in user (a guest minted by the session), not
+    a hand-built row: this is the shape production actually serves."""
+    session_user = await start_session(api_client, db_session)
+    home = await get_default_league(db_session)
+    assert home is not None
+
+    body = (await api_client.get(f"/v1/players/{session_user.id}")).json()
+    assert body["leagues"] == [
+        {
+            "id": str(home.id),
+            "name": home.name,
+            "is_default": True,
+            # Joining the default league seeds a rating row — so the caller is
+            # themselves a rated player on the ladder they are looking at.
+            "rating": 1500.0,
+        }
+    ]
+    assert body["career"]["league_count"] == 1
+
+
+# ----- head-to-head (viewer-aware) ------------------------------------------
+
+
+async def _record_solo_match(
+    db_session: AsyncSession, player: User, *, created_at: datetime
+) -> Match:
+    """A solo ("No opponent") match: side 2 is the player-less SENTINEL — a side
+    row with zero ``match_side_players`` (CONTEXT.md, "Solo match"; api/CLAUDE.md).
+
+    That sentinel is what the head-to-head queries have to survive: it is a real
+    second side, so a naive join to it yields an "opponent" with no id and no
+    username. A solo match has nobody on the other side, so it can never be a
+    **meeting** — but it is still match history, and still counted by
+    ``match_total``."""
+    league = await get_default_league(db_session)
+    match = Match(
+        match_settings=MatchSettings(team_size=1, best_of=5, affects_rating=False),
+        league=league,
+        created_by_user_id=player.id,
+        status=MatchStatus.completed,
+        created_at=created_at,
+        updated_at=created_at,
+        completed_at=created_at,
+    )
+    mine = MatchSide(match=match, side_number=1, won=True)
+    mine.players.append(MatchSidePlayer(match=match, user=player))
+    # The sentinel. No players, on purpose — do not "fix" this.
+    MatchSide(match=match, side_number=2, won=False)
+    db_session.add(match)
+    await db_session.commit()
+    return match
+
+
+def _opponent_names(records: list[dict]) -> list[str]:
+    return [record["opponent"]["username"] for record in records]
+
+
+async def test_get_player_head_to_head_is_written_from_the_callers_side(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """``versus_viewer`` is the CALLER's record against this player — "you are
+    1-4 against them", not "they are 4-1 against you" (CONTEXT.md,
+    "Head-to-head": the same record said from the other side is a different
+    sentence, and copy must name whose side it is written from).
+
+    The record is DELIBERATELY LOPSIDED. A 2-2 seed would read the same from
+    either perspective and so could not tell a caller-side implementation from a
+    player-side one; 1-4 flips to 4-1 the moment the ``won`` flag is read off the
+    wrong side.
+
+    Also pins the "decided" half of a meeting: the pair have a match still in
+    play, and a match in play is not a record (CONTEXT.md, "Meeting"). Count it
+    and ``meetings`` reads 6."""
+    caller = await start_session(api_client, db_session)
+    player = await make_user(db_session, "the.player")
+
+    # The caller won the first meeting…
+    await _record_match_with_winner(db_session, caller, player, created_at=BASE_TIME)
+    # …and lost the next four, the last of them on day 4.
+    for day in range(1, 5):
+        await _record_match_with_winner(
+            db_session, player, caller, created_at=BASE_TIME + timedelta(days=day)
+        )
+    # A sixth match between them is still being played — not a meeting.
+    await _record_match_with_winner(
+        db_session,
+        player,
+        caller,
+        created_at=BASE_TIME + timedelta(days=9),
+        status=MatchStatus.in_progress,
+    )
+
+    response = await api_client.get(f"/v1/players/{player.id}")
+    assert response.status_code == 200
+    versus = response.json()["head_to_head"]["versus_viewer"]
+
+    # The caller's one win and four losses — NOT the player's four and one.
+    assert versus["wins"] == 1
+    assert versus["losses"] == 4
+    # Derived from wins + losses, and so unable to disagree with them. Five, not
+    # six: the match still in play is not a record.
+    assert versus["meetings"] == 5
+    # The opponent named here is the player whose profile this is — the FE
+    # prefills "Start a match" from it.
+    assert versus["opponent"] == {"id": str(player.id), "username": "the.player"}
+    # The last DECIDED meeting (day 4), not the in-progress match on day 9.
+    assert datetime.fromisoformat(versus["last_meeting"]) == BASE_TIME + timedelta(
+        days=4
+    )
+
+
+async def test_get_player_head_to_head_varies_by_caller(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """The point of ADR-0915: the SAME profile returns a DIFFERENT head-to-head
+    to two different callers. This endpoint used to bind the caller as
+    ``_current_user`` and throw it away — every viewer got byte-identical bytes,
+    and this test is what makes that impossible to go back to (it also states the
+    caching consequence: no shared cache may serve one caller's copy to another).
+
+    One caller is 1-4 down against the player; the other is 2-0 up. Both ask for
+    the same URL."""
+    caller = await start_session(api_client, db_session)
+    player = await make_user(db_session, "the.player")
+    # The caller: one win, four losses (lopsided, so a perspective flip shows).
+    await _record_results(db_session, caller, player, "WLLLL")
+
+    async with make_client() as rival_client:
+        rival = await start_session(rival_client, db_session)
+        # The rival: two wins, no losses.
+        await _record_results(
+            db_session, rival, player, "WW", start=BASE_TIME + timedelta(days=10)
+        )
+
+        mine = (await api_client.get(f"/v1/players/{player.id}")).json()
+        theirs = (await rival_client.get(f"/v1/players/{player.id}")).json()
+
+    assert mine["head_to_head"]["versus_viewer"]["wins"] == 1
+    assert mine["head_to_head"]["versus_viewer"]["losses"] == 4
+    assert theirs["head_to_head"]["versus_viewer"]["wins"] == 2
+    assert theirs["head_to_head"]["versus_viewer"]["losses"] == 0
+    # Same player, same league, two different answers — the whole point.
+    assert mine["head_to_head"] != theirs["head_to_head"]
+    # …and only the viewer-aware block moved. Everything else on the page is a
+    # fact about the player alone.
+    assert mine["career"] == theirs["career"]
+    assert mine["matches"] == theirs["matches"]
+
+
+async def test_get_player_head_to_head_has_no_record_against_yourself(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """On your OWN profile there is no "you versus yourself": ``versus_viewer``
+    is ``null`` — the one case in which it is — and the card degrades to just
+    your frequent opponents (ADR-0915). A 0-0 record against yourself would
+    invite the FE to offer you a match against yourself."""
+    me = await start_session(api_client, db_session)
+    rival = await make_user(db_session, "my.rival")
+    await _record_results(db_session, me, rival, "WWL")
+
+    body = (await api_client.get(f"/v1/players/{me.id}")).json()
+    head_to_head = body["head_to_head"]
+
+    assert head_to_head["versus_viewer"] is None
+    # The rest of the card still renders — and from MY side: I am 2-1 up.
+    assert _opponent_names(head_to_head["frequent_opponents"]) == ["my.rival"]
+    assert head_to_head["frequent_opponents"][0]["wins"] == 2
+    assert head_to_head["frequent_opponents"][0]["losses"] == 1
+    assert head_to_head["frequent_opponents"][0]["meetings"] == 3
+
+
+async def test_get_player_head_to_head_is_empty_not_absent_for_a_stranger(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """A caller who has never played this player gets an EMPTY record, not
+    ``null`` and not an error.
+
+    This is the COMMON case, not an edge one: a guest session is minted for
+    anyone who lands on a profile link, and a guest has played nobody (ADR-0915).
+    The FE renders "You haven't played X yet" plus a Start-a-match CTA off
+    exactly this state, so it needs the block present, the counts at zero, and
+    the opponent named to prefill match creation with. ``null`` here would mean
+    something else entirely — that the caller IS this player."""
+    await start_session(api_client, db_session)  # a fresh guest: has played nobody
+    player = await make_user(db_session, "the.player")
+    other = await make_user(db_session, "someone.else")
+    await _record_match_with_winner(db_session, player, other, created_at=BASE_TIME)
+
+    response = await api_client.get(f"/v1/players/{player.id}")
+    assert response.status_code == 200
+    head_to_head = response.json()["head_to_head"]
+    versus = head_to_head["versus_viewer"]
+
+    assert versus is not None, "an empty record, never a missing one"
+    assert versus["wins"] == 0
+    assert versus["losses"] == 0
+    assert versus["meetings"] == 0
+    assert versus["last_meeting"] is None
+    # Named, so "Start a match" can arrive at /matches/new with them picked.
+    assert versus["opponent"] == {"id": str(player.id), "username": "the.player"}
+    # The player's own opponents are unaffected by who is asking.
+    assert _opponent_names(head_to_head["frequent_opponents"]) == ["someone.else"]
+
+
+async def test_get_player_frequent_opponents_are_the_top_three_by_meetings(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """The player's most-met opponents: top three by meetings, ties broken by the
+    most RECENT meeting — read from the PLAYER's side, not the caller's.
+
+    The two one-meeting opponents are the load-bearing pair. Only one of them can
+    make the cut, and the one that does is the one met most recently — which is
+    the alphabetically LATER of the two, so a tiebreak that fell back to the
+    username (or to insertion order) picks the wrong rival and reds."""
+    await start_session(api_client, db_session)
+    player = await make_user(db_session, "the.player")
+    most = await make_user(db_session, "most.met")
+    second = await make_user(db_session, "second.met")
+    old_tie = await make_user(db_session, "old.tie")
+    recent_tie = await make_user(db_session, "recent.tie")
+
+    await _record_results(db_session, player, most, "WWL", start=BASE_TIME)
+    await _record_results(
+        db_session, player, second, "LL", start=BASE_TIME + timedelta(days=10)
+    )
+    await _record_results(
+        db_session, player, old_tie, "W", start=BASE_TIME + timedelta(days=20)
+    )
+    await _record_results(
+        db_session, player, recent_tie, "L", start=BASE_TIME + timedelta(days=30)
+    )
+
+    frequent = (await api_client.get(f"/v1/players/{player.id}")).json()[
+        "head_to_head"
+    ]["frequent_opponents"]
+
+    assert _opponent_names(frequent) == ["most.met", "second.met", "recent.tie"]
+    # From the PLAYER's side: they are 2-1 up on their most-met opponent and
+    # 0-2 down on the next. Flip the perspective and both records invert.
+    assert (frequent[0]["wins"], frequent[0]["losses"]) == (2, 1)
+    assert frequent[0]["meetings"] == 3
+    assert (frequent[1]["wins"], frequent[1]["losses"]) == (0, 2)
+
+
+async def test_get_player_frequent_opponents_count_only_decided_matches(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """A meeting is a DECIDED match (CONTEXT.md): a match still in play is not a
+    record, and a voided one has stopped being one.
+
+    Seeded so the gate changes the ANSWER, not merely a count: the "busy"
+    opponent has one decided meeting plus three in play and one voided, and the
+    "settled" opponent two decided ones. Count the undecided matches and busy
+    (5) outranks settled (2) and leads the card; count the voided one and busy
+    ties on 2 and still leads, on the recency tiebreak."""
+    from app.match_voiding import void_match
+
+    await start_session(api_client, db_session)
+    player = await make_user(db_session, "the.player")
+    busy = await make_user(db_session, "busy.opponent")
+    settled = await make_user(db_session, "settled.opponent")
+
+    await _record_match_with_winner(db_session, player, busy, created_at=BASE_TIME)
+    for day in range(1, 4):
+        await _record_match_with_winner(
+            db_session,
+            player,
+            busy,
+            created_at=BASE_TIME + timedelta(days=day),
+            status=MatchStatus.in_progress,
+        )
+    await _record_results(
+        db_session, player, settled, "WL", start=BASE_TIME + timedelta(days=10)
+    )
+    # Played, remembered, and no longer counting.
+    voided = await _record_match_with_winner(
+        db_session, player, busy, created_at=BASE_TIME + timedelta(days=20)
+    )
+    await void_match(db_session, voided)
+    await db_session.commit()
+
+    body = (await api_client.get(f"/v1/players/{player.id}")).json()
+    frequent = body["head_to_head"]["frequent_opponents"]
+
+    assert _opponent_names(frequent) == ["settled.opponent", "busy.opponent"]
+    assert frequent[0]["meetings"] == 2
+    assert frequent[1]["meetings"] == 1
+    # The undecided and voided matches are still HISTORY — only the head-to-head
+    # declines to count them (the two totals differ on purpose, ADR-0915).
+    assert body["match_total"] == 7
+
+
+async def test_get_player_frequent_opponents_never_includes_the_solo_sentinel(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """A solo match has no opponent, so it can never be a meeting — and its
+    player-less sentinel side must never surface as a ``None``-named "opponent"
+    (api/CLAUDE.md; CONTEXT.md, "Solo match").
+
+    Two solo matches against one real meeting, so the sentinel would not just
+    appear — it would LEAD the card, on two meetings to the real rival's one."""
+    await start_session(api_client, db_session)
+    player = await make_user(db_session, "the.player")
+    rival = await make_user(db_session, "a.real.rival")
+    await _record_solo_match(db_session, player, created_at=BASE_TIME)
+    await _record_solo_match(
+        db_session, player, created_at=BASE_TIME + timedelta(days=1)
+    )
+    await _record_match_with_winner(
+        db_session, player, rival, created_at=BASE_TIME + timedelta(days=2)
+    )
+
+    body = (await api_client.get(f"/v1/players/{player.id}")).json()
+    frequent = body["head_to_head"]["frequent_opponents"]
+
+    assert _opponent_names(frequent) == ["a.real.rival"]
+    assert frequent[0]["meetings"] == 1
+    # The solo matches are still in the history — the sentinel is not filtered
+    # away, it simply is not a rivalry.
+    assert body["match_total"] == 3
+
+
+async def test_get_player_head_to_head_counts_meetings_on_every_ladder(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """A head-to-head is a fact about a PAIR OF PEOPLE, not about a ladder — so
+    it is cross-league, like ``career`` and unlike ``rating`` / ``rank`` / ``peak``
+    / ``confidence`` (ADR-0915). "How do I do against them" does not become a
+    different question because they beat you in a different league.
+
+    The caller and the player have met once at home and once away; both count,
+    and they count whichever league the profile was requested for."""
+    caller = await start_session(api_client, db_session)
+    player = await make_user(db_session, "the.player")
+    home_league = await get_default_league(db_session)
+    assert home_league is not None
+    side_league = League(
+        name="Side League",
+        description="Another ladder entirely.",
+        visibility=LeagueVisibility.private,
+        is_default=False,
+        rating_strategy_id=home_league.rating_strategy_id,
+    )
+    db_session.add(side_league)
+    await db_session.commit()
+    await db_session.refresh(side_league)
+
+    # Lost at home…
+    await _record_match_with_winner(
+        db_session, player, caller, created_at=BASE_TIME, league=home_league
+    )
+    # …and lost away as well.
+    await _record_match_with_winner(
+        db_session,
+        player,
+        caller,
+        created_at=BASE_TIME + timedelta(days=1),
+        league=side_league,
+    )
+
+    home = (await api_client.get(f"/v1/players/{player.id}")).json()
+    away = (
+        await api_client.get(f"/v1/players/{player.id}?league_id={side_league.id}")
+    ).json()
+
+    assert home["head_to_head"]["versus_viewer"]["losses"] == 2
+    assert home["head_to_head"]["versus_viewer"]["meetings"] == 2
+    # Ask for the other ladder and the rivalry is the same rivalry.
+    assert away["head_to_head"] == home["head_to_head"]
+
+
+# ---------------------------------------------------------------------------
+# The rating chart: a CALENDAR window with a carry-in anchor (ADR-0915).
+#
+# These tests seed relative to `datetime.now(UTC)`, never to `BASE_TIME` — the
+# window's edges are `now - 30d/90d/365d`, so a fixture pinned to a fixed date
+# would drift across the boundary as the calendar moves and quietly re-bucket
+# itself (2026-01-01 is outside 90d but inside 1y). Offsets are kept well clear
+# of the edges so no assertion here can hinge on a clock tick.
+# ---------------------------------------------------------------------------
+
+NOW = datetime.now(UTC)
+
+
+async def _rated_win(
+    db_session: AsyncSession,
+    winner: User,
+    loser: User,
+    *,
+    at: datetime,
+    before: float,
+    after: float,
+    league: League | None = None,
+) -> Match:
+    """A completed RATED match at ``at``, plus the rating-history row it wrote —
+    one point on the winner's rating timeline. Match and audit row share the
+    instant, exactly as production writes them (ADR-0012)."""
+    match = await _record_match_with_winner(
+        db_session, winner, loser, created_at=at, affects_rating=True, league=league
+    )
+    await _record_rating_change(
+        db_session, winner, match, before=before, after=after, league=league, at=at
+    )
+    return match
+
+
+def _at(point: dict) -> datetime:
+    return datetime.fromisoformat(point["at"])
+
+
+async def test_rating_history_anchors_the_window_on_a_point_outside_it(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """THE test for this endpoint. The window's left edge is almost never a match,
+    so the chart carries in an ANCHOR: the player's rating as of the window start,
+    read from the last change AT OR BEFORE it — a point from OUTSIDE the requested
+    window (ADR-0915).
+
+    This player's last match before the window was 200 days ago (1400 → 1500), and
+    their first match *inside* it is 40 days in, nowhere near its left edge. Their
+    rating on the day the window opened was 1500, and over the last 90 days they
+    have gone 1500 → 1600, so the honest headline is **+100**.
+
+    An implementation that clips strictly to the window — the cheap one ADR-0915
+    rejects as "the version that quietly lies" — sees only the two in-window points,
+    reports `anchor: null`, and computes +50 from the first of them. Both numbers
+    below are chosen so that reading is a DIFFERENT number, not a coincidentally
+    equal one: without the anchor this test reds."""
+    await start_session(api_client, db_session)
+    target = await make_user(db_session, "anchor.target")
+    rival = await make_user(db_session, "anchor.rival")
+    await _rate(db_session, target, 1600.0)
+
+    # Their last match before the window opened. This is the carry-in.
+    old = await _rated_win(
+        db_session,
+        target,
+        rival,
+        at=NOW - timedelta(days=200),
+        before=1400.0,
+        after=1500.0,
+    )
+    # …then a long silence, and two matches well inside the 90-day window.
+    await _rated_win(
+        db_session,
+        target,
+        rival,
+        at=NOW - timedelta(days=40),
+        before=1500.0,
+        after=1550.0,
+    )
+    await _rated_win(
+        db_session,
+        target,
+        rival,
+        at=NOW - timedelta(days=10),
+        before=1550.0,
+        after=1600.0,
+    )
+
+    response = await api_client.get(f"/v1/players/{target.id}/rating-history?range=90d")
+    assert response.status_code == 200
+    body = response.json()
+
+    # The anchor is present, is the rating they carried into the window, and — the
+    # whole point — is stamped OUTSIDE it.
+    assert body["anchor"] is not None
+    assert body["anchor"]["rating"] == 1500.0
+    assert body["anchor"]["match_id"] == str(old.id)
+    assert _at(body["anchor"]) < NOW - timedelta(days=90)
+
+    # The line itself holds only the in-window changes.
+    assert [point["rating"] for point in body["points"]] == [1550.0, 1600.0]
+    for point in body["points"]:
+        assert _at(point) >= NOW - timedelta(days=90)
+
+    # Measured from the anchor (1500), NOT from the first in-window point (1550),
+    # which would say +50.
+    assert body["change"] == 100.0
+    # The window's own peak — not the all-time peak, which is a different field.
+    assert body["peak"]["rating"] == 1600.0
+
+
+async def test_rating_history_empty_window_returns_the_anchor_and_no_points(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """A rated player with no matches in the last 90 days is a first-class state,
+    not an error (ADR-0915): they get their anchor, ZERO points, and NO change.
+
+    The chart draws a flat line at their current rating and suppresses the delta
+    chip — `change` is `null`, never `+0`, because a zero would claim they played
+    and moved nothing."""
+    await start_session(api_client, db_session)
+    target = await make_user(db_session, "idle.target")
+    rival = await make_user(db_session, "idle.rival")
+    await _rate(db_session, target, 1500.0)
+    await _rated_win(
+        db_session,
+        target,
+        rival,
+        at=NOW - timedelta(days=200),
+        before=1400.0,
+        after=1500.0,
+    )
+
+    response = await api_client.get(f"/v1/players/{target.id}/rating-history?range=90d")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["points"] == []
+    assert body["anchor"]["rating"] == 1500.0
+    assert _at(body["anchor"]) < NOW - timedelta(days=90)
+    # Not 0.0. An idle window has no delta to report.
+    assert body["change"] is None
+    # The in-window peak of an empty window is nothing — the all-time peak lives
+    # on the profile bundle and is untouched by this.
+    assert body["peak"] is None
+
+
+async def test_rating_history_has_no_anchor_before_the_players_first_rating(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """A player whose whole rated life fits inside the window held no rating when
+    it opened, so there is nothing to carry in: `anchor` is `null`, and the change
+    is measured from their first in-window point instead."""
+    await start_session(api_client, db_session)
+    target = await make_user(db_session, "fresh.target")
+    rival = await make_user(db_session, "fresh.rival")
+    await _rate(db_session, target, 1540.0)
+    await _rated_win(
+        db_session,
+        target,
+        rival,
+        at=NOW - timedelta(days=20),
+        before=1500.0,
+        after=1520.0,
+    )
+    await _rated_win(
+        db_session,
+        target,
+        rival,
+        at=NOW - timedelta(days=5),
+        before=1520.0,
+        after=1540.0,
+    )
+
+    body = (
+        await api_client.get(f"/v1/players/{target.id}/rating-history?range=90d")
+    ).json()
+
+    assert body["anchor"] is None
+    assert [point["rating"] for point in body["points"]] == [1520.0, 1540.0]
+    # From the first in-window point (1520) — the only honest baseline when there
+    # is no earlier rating to carry in.
+    assert body["change"] == 20.0
+
+
+async def test_rating_history_omits_a_voided_matchs_point_entirely(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """A voided match is ABSENT from the rating timeline, not merely skipped by it
+    (CONTEXT.md, "Voided match"): voiding deletes its rating-history rows, so its
+    point leaves the chart and the chart changes shape retroactively.
+
+    The endpoint gets this for free by reading `rating_history` — and would lose it
+    the moment anyone re-derived points from `matches` instead. This pins that: the
+    voided match's spike is gone, and the window's change and peak are computed as
+    though it never happened."""
+    from app.match_voiding import void_match
+
+    await start_session(api_client, db_session)
+    target = await make_user(db_session, "voided.target")
+    rival = await make_user(db_session, "voided.rival")
+    await _rate(db_session, target, 1550.0)
+
+    await _rated_win(
+        db_session,
+        target,
+        rival,
+        at=NOW - timedelta(days=200),
+        before=1450.0,
+        after=1500.0,
+    )
+    kept = await _rated_win(
+        db_session,
+        target,
+        rival,
+        at=NOW - timedelta(days=60),
+        before=1500.0,
+        after=1550.0,
+    )
+    # A big win 10 days ago — later voided, so it never really happened.
+    voided = await _rated_win(
+        db_session,
+        target,
+        rival,
+        at=NOW - timedelta(days=10),
+        before=1550.0,
+        after=1700.0,
+    )
+    await void_match(db_session, voided)
+    await db_session.commit()
+
+    body = (
+        await api_client.get(f"/v1/players/{target.id}/rating-history?range=90d")
+    ).json()
+
+    match_ids = [point["match_id"] for point in body["points"]]
+    assert match_ids == [str(kept.id)]
+    assert str(voided.id) not in match_ids
+    # The 1700 spike is gone from every derived number, not just from the line.
+    assert body["peak"]["rating"] == 1550.0
+    assert body["change"] == 50.0
+
+
+async def test_rating_history_is_scoped_to_the_requested_league(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """A rating is a fact about ONE ladder (CONTEXT.md, "League"), so the chart is
+    league-scoped like every other rating fact on the profile. Drop the
+    `league_id` filter and the default league's chart starts plotting points the
+    player earned on a different ladder — including, here, an anchor that is not
+    theirs.
+
+    The two ladders are seeded with disjoint rating levels so a leak is
+    unmistakable, and with no `league_id` named the DEFAULT league answers."""
+    await start_session(api_client, db_session)
+    target = await make_user(db_session, "ladder.target")
+    rival = await make_user(db_session, "ladder.rival")
+    home_league = await get_default_league(db_session)
+    assert home_league is not None
+    side_league = League(
+        name="Side League",
+        description="Another ladder entirely.",
+        visibility=LeagueVisibility.private,
+        is_default=False,
+        rating_strategy_id=home_league.rating_strategy_id,
+    )
+    db_session.add(side_league)
+    await db_session.commit()
+    await db_session.refresh(side_league)
+
+    # Home ladder: 1400 carried in, one in-window win to 1450.
+    await _rated_win(
+        db_session,
+        target,
+        rival,
+        at=NOW - timedelta(days=200),
+        before=1350.0,
+        after=1400.0,
+    )
+    await _rated_win(
+        db_session,
+        target,
+        rival,
+        at=NOW - timedelta(days=30),
+        before=1400.0,
+        after=1450.0,
+    )
+    # Side ladder: an entirely different, much higher career.
+    await _rated_win(
+        db_session,
+        target,
+        rival,
+        at=NOW - timedelta(days=200),
+        before=1850.0,
+        after=1900.0,
+        league=side_league,
+    )
+    await _rated_win(
+        db_session,
+        target,
+        rival,
+        at=NOW - timedelta(days=30),
+        before=1900.0,
+        after=1980.0,
+        league=side_league,
+    )
+
+    home = (
+        await api_client.get(f"/v1/players/{target.id}/rating-history?range=90d")
+    ).json()
+    away = (
+        await api_client.get(
+            f"/v1/players/{target.id}/rating-history"
+            f"?range=90d&league_id={side_league.id}"
+        )
+    ).json()
+
+    assert home["anchor"]["rating"] == 1400.0
+    assert [point["rating"] for point in home["points"]] == [1450.0]
+    assert away["anchor"]["rating"] == 1900.0
+    assert [point["rating"] for point in away["points"]] == [1980.0]
+
+
+async def test_rating_history_range_selects_the_calendar_window(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """`range` is a CALENDAR window, not a count of matches: the same history
+    answers three different questions. A match 200 days ago is a point on the 1y
+    chart and the ANCHOR of the 30d and 90d ones; a match 45 days ago is a point on
+    the 90d chart and the anchor of the 30d one."""
+    await start_session(api_client, db_session)
+    target = await make_user(db_session, "range.target")
+    rival = await make_user(db_session, "range.rival")
+    await _rate(db_session, target, 1600.0)
+    await _rated_win(
+        db_session,
+        target,
+        rival,
+        at=NOW - timedelta(days=200),
+        before=1450.0,
+        after=1500.0,
+    )
+    await _rated_win(
+        db_session,
+        target,
+        rival,
+        at=NOW - timedelta(days=45),
+        before=1500.0,
+        after=1550.0,
+    )
+    await _rated_win(
+        db_session,
+        target,
+        rival,
+        at=NOW - timedelta(days=5),
+        before=1550.0,
+        after=1600.0,
+    )
+
+    async def window(range_: str) -> dict:
+        return (
+            await api_client.get(
+                f"/v1/players/{target.id}/rating-history?range={range_}"
+            )
+        ).json()
+
+    year = await window("1y")
+    ninety = await window("90d")
+    thirty = await window("30d")
+
+    assert [point["rating"] for point in year["points"]] == [1500.0, 1550.0, 1600.0]
+    assert year["anchor"] is None
+    assert year["change"] == 100.0
+
+    assert [point["rating"] for point in ninety["points"]] == [1550.0, 1600.0]
+    assert ninety["anchor"]["rating"] == 1500.0
+    assert ninety["change"] == 100.0
+
+    assert [point["rating"] for point in thirty["points"]] == [1600.0]
+    assert thirty["anchor"]["rating"] == 1550.0
+    assert thirty["change"] == 50.0
+
+
+async def test_rating_history_carries_in_a_rating_that_came_from_no_match(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """A rating change need not come from a match: a manual override, an import,
+    or a seeded initial value is a real row on the timeline, with no ``match_id``
+    and its own wall-clock ``created_at`` (ADR-0012). The chart plots those too —
+    and, here, CARRIES ONE IN as the anchor.
+
+    This is what makes the OUTER join and the ``coalesce(completed_at,
+    created_at)`` axis load-bearing rather than decorative. Make the join an INNER
+    one — the obvious "simplification", since every other row has a match — and
+    this player's imported 1500 vanishes: the anchor goes ``null``, the chart
+    starts from nowhere, and a manual correction applied after someone's last match
+    would silently stop being their current rating.
+
+    The player is idle inside the window, so the anchor is the ONLY thing the chart
+    has. Nothing else in this file seeds a match-less row, so without this test the
+    fallback is deletable with the suite green."""
+    await start_session(api_client, db_session)
+    target = await make_user(db_session, "imported.target")
+    league = await get_default_league(db_session)
+    assert league is not None
+    await _rate(db_session, target, 1500.0)
+
+    # An imported rating, 200 days ago. No match — it was never played for.
+    imported = RatingHistory(
+        league_id=league.id,
+        user_id=target.id,
+        match_id=None,
+        rating_strategy_id=league.rating_strategy_id,
+        rating_value=1500.0,
+        rating_state={"rating": 1500.0, "rd": 200.0, "volatility": 0.06},
+        previous_rating_value=None,
+        source=RatingHistorySource.import_,
+    )
+    imported.created_at = NOW - timedelta(days=200)
+    db_session.add(imported)
+    await db_session.commit()
+
+    body = (
+        await api_client.get(f"/v1/players/{target.id}/rating-history?range=90d")
+    ).json()
+
+    assert body["anchor"] is not None
+    assert body["anchor"]["rating"] == 1500.0
+    # A point with no match behind it — and dated by its own `created_at`, since
+    # there is no `completed_at` to take.
+    assert body["anchor"]["match_id"] is None
+    assert _at(body["anchor"]) < NOW - timedelta(days=90)
+    assert body["points"] == []
+    assert body["change"] is None
+
+
+async def test_rating_history_plots_a_match_less_change_inside_the_window(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """The other half of the same rule: a match-less change INSIDE the window is a
+    point on the line, and the latest point is the player's current rating whatever
+    produced it.
+
+    An admin corrects this player DOWN to 1480 after their last rated match. Drop
+    match-less rows and the chart's last point is still the 1560 they no longer
+    have, so `change` reports a rise they did not keep."""
+    await start_session(api_client, db_session)
+    target = await make_user(db_session, "corrected.target")
+    rival = await make_user(db_session, "corrected.rival")
+    league = await get_default_league(db_session)
+    assert league is not None
+    await _rate(db_session, target, 1480.0)
+
+    await _rated_win(
+        db_session,
+        target,
+        rival,
+        at=NOW - timedelta(days=200),
+        before=1450.0,
+        after=1500.0,
+    )
+    await _rated_win(
+        db_session,
+        target,
+        rival,
+        at=NOW - timedelta(days=30),
+        before=1500.0,
+        after=1560.0,
+    )
+    correction = RatingHistory(
+        league_id=league.id,
+        user_id=target.id,
+        match_id=None,
+        rating_strategy_id=league.rating_strategy_id,
+        rating_value=1480.0,
+        rating_state={"rating": 1480.0, "rd": 200.0, "volatility": 0.06},
+        previous_rating_value=1560.0,
+        source=RatingHistorySource.manual,
+        note="Corrected after a scoring dispute.",
+    )
+    correction.created_at = NOW - timedelta(days=5)
+    db_session.add(correction)
+    await db_session.commit()
+
+    body = (
+        await api_client.get(f"/v1/players/{target.id}/rating-history?range=90d")
+    ).json()
+
+    assert [point["rating"] for point in body["points"]] == [1560.0, 1480.0]
+    assert body["points"][-1]["match_id"] is None
+    # From the anchor (1500) to where they actually stand now (1480) — a net LOSS
+    # across a window whose only match was a win.
+    assert body["change"] == -20.0
+    # The peak is still the high they briefly held inside the window.
+    assert body["peak"]["rating"] == 1560.0
+
+
+async def test_rating_history_for_an_unrated_player_is_empty_not_an_error(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """A player who has never finished a rated match has no timeline at all — no
+    anchor, no points, no change. That is an empty answer, not a 404: the FE
+    replaces the card with the "Unrated" panel off exactly this state."""
+    await start_session(api_client, db_session)
+    target = await make_user(db_session, "unrated.target")
+
+    response = await api_client.get(f"/v1/players/{target.id}/rating-history")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "anchor": None,
+        "points": [],
+        "peak": None,
+        "change": None,
+    }
+
+
+async def test_rating_history_404_when_the_player_is_missing(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    await start_session(api_client, db_session)
+    missing = uuid.uuid4()
+
+    response = await api_client.get(f"/v1/players/{missing}/rating-history")
+
+    assert response.status_code == 404
+
+
+async def test_rating_history_requires_a_session(api_client: AsyncClient):
+    response = await api_client.get(f"/v1/players/{uuid.uuid4()}/rating-history")
+    assert response.status_code == 401
+
+
+async def test_rating_history_rejects_a_range_it_does_not_serve(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """`range` is a closed domain (`30d` / `90d` / `1y`), typed as a `Literal`, so
+    a made-up window is a 422 at the boundary rather than a silently-wrong chart.
+    The client degrades a mangled `?range=` in the URL to the default before it ever
+    asks."""
+    target = await start_session(api_client, db_session)
+
+    response = await api_client.get(
+        f"/v1/players/{target.id}/rating-history?range=all-time"
+    )
+
+    assert response.status_code == 422
+
+
+async def test_get_player_embeds_the_rating_history_for_the_requested_range(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """The profile bundle carries the chart's window inline, for the range the page
+    loaded with — this is what makes first paint ONE request (ADR-0915): the client
+    seeds the chart's cache from it and only calls the standalone endpoint when the
+    user changes range.
+
+    So the embedded block must be BYTE-IDENTICAL to what that endpoint returns for
+    the same range — anchor included — or the seeded cache is a lie the first range
+    flip would silently correct."""
+    await start_session(api_client, db_session)
+    target = await make_user(db_session, "bundle.target")
+    rival = await make_user(db_session, "bundle.rival")
+    await _rate(db_session, target, 1600.0)
+    await _rated_win(
+        db_session,
+        target,
+        rival,
+        at=NOW - timedelta(days=200),
+        before=1450.0,
+        after=1500.0,
+    )
+    await _rated_win(
+        db_session,
+        target,
+        rival,
+        at=NOW - timedelta(days=20),
+        before=1500.0,
+        after=1600.0,
+    )
+
+    default_range = (await api_client.get(f"/v1/players/{target.id}")).json()
+    thirty = (await api_client.get(f"/v1/players/{target.id}?range=30d")).json()
+    standalone = (
+        await api_client.get(f"/v1/players/{target.id}/rating-history?range=30d")
+    ).json()
+
+    # No `range` named: the page loads 90 days, and the anchor comes with it.
+    assert default_range["rating_history"]["anchor"]["rating"] == 1500.0
+    assert [point["rating"] for point in default_range["rating_history"]["points"]] == [
+        1600.0
+    ]
+    assert default_range["rating_history"]["change"] == 100.0
+
+    # Ask for another range and the bundle re-cuts the same timeline…
+    assert thirty["rating_history"]["anchor"]["rating"] == 1500.0
+    assert [point["rating"] for point in thirty["rating_history"]["points"]] == [1600.0]
+    # …and what it embeds is exactly what the chart's own endpoint would fetch.
+    assert thirty["rating_history"] == standalone
+
+
+def test_downsample_caps_the_line_without_moving_its_endpoints():
+    """A 1y window on a hyper-active player could otherwise ship thousands of
+    points — on the PROFILE BUNDLE's first paint, not just on a range flip. Beyond
+    `MAX_POINTS` the line is sampled down.
+
+    What the sample must never do is move a number the page quotes. It keeps the
+    FIRST and LAST points (the chart's axis and its latest rating are read off
+    them) and preserves order; `peak` and `change` are folded from the full set
+    before it runs, so they are unaffected either way. Tested as a pure fold rather
+    than by seeding four hundred matches — the guard is then real regardless of how
+    rarely it fires in production."""
+    points = [
+        RatingPoint(at=NOW - timedelta(days=1000 - i), rating=1500.0 + i)
+        for i in range(1000)
+    ]
+
+    sampled = downsample(points, cap=MAX_POINTS)
+
+    assert len(sampled) == MAX_POINTS
+    assert sampled[0] == points[0]
+    assert sampled[-1] == points[-1]
+    # A subsequence, in order — a thinned line, not a re-drawn one.
+    assert [point.at for point in sampled] == sorted(point.at for point in sampled)
+    assert all(point in points for point in sampled)
+    # Below the cap it is a no-op: every real player's chart is untouched.
+    assert downsample(points[:10], cap=MAX_POINTS) == points[:10]

@@ -1,4 +1,5 @@
 import hashlib
+import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 
@@ -228,6 +229,67 @@ async def test_session_deduplicates_permissions_across_roles(
     assert second.json()["data"]["user"]["permissions"] == ["puzzle:read"]
 
 
+# ---- the caller's own id --------------------------------------------------
+
+
+async def _user_id_behind_cookie(db_session: AsyncSession, raw_token: str) -> uuid.UUID:
+    """The user a session cookie *actually* resolves to, found by hashing the
+    cookie the way the auth layer does. Deliberately not looked up by the
+    username the response echoed: that would let a response reporting some
+    other user's id launder itself past the assertion."""
+    token = (
+        await db_session.execute(
+            select(UserToken).where(
+                UserToken.token == hashlib.sha256(raw_token.encode("utf-8")).digest()
+            )
+        )
+    ).scalar_one()
+    return token.user_id
+
+
+async def test_session_returns_the_cookie_holders_own_user_id(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """The session response tells the caller their own player id — the only
+    place the API says who you are. A guest minted on the first hit is a real
+    user with a real id, so the field is never null for anyone with a session."""
+    minted = await api_client.get("/v1/session")
+    assert minted.status_code == 200
+
+    body_user = minted.json()["data"]["user"]
+    assert body_user.get("id") is not None
+    holder_id = await _user_id_behind_cookie(
+        db_session, minted.cookies.get(SESSION_COOKIE_NAME)
+    )
+    assert uuid.UUID(body_user["id"]) == holder_id
+
+    # The second hit takes the other branch — resolve an existing cookie rather
+    # than mint — and must report the same id.
+    resolved = await api_client.get("/v1/session")
+    assert uuid.UUID(resolved.json()["data"]["user"]["id"]) == holder_id
+
+
+async def test_session_id_is_the_callers_own_and_not_another_users(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """Two cookie-isolated callers each get *their own* id back, not each
+    other's and not one shared id."""
+    async with make_client() as other_client:
+        mine = await api_client.get("/v1/session")
+        theirs = await other_client.get("/v1/session")
+
+        my_id = mine.json()["data"]["user"]["id"]
+        their_id = theirs.json()["data"]["user"]["id"]
+        assert my_id != their_id
+
+        assert uuid.UUID(my_id) == await _user_id_behind_cookie(
+            db_session, mine.cookies.get(SESSION_COOKIE_NAME)
+        )
+        assert uuid.UUID(their_id) == await _user_id_behind_cookie(
+            db_session, theirs.cookies.get(SESSION_COOKIE_NAME)
+        )
+
+
 # ---- PATCH /v1/me ---------------------------------------------------------
 
 
@@ -365,6 +427,9 @@ async def test_update_username_preserves_user_id_and_permissions(
     response = await api_client.patch("/v1/me", json={"username": "renamed"})
     assert response.status_code == 200
     assert response.json()["data"]["user"]["permissions"] == ["match:create"]
+    # The id outlives the rename — which is the whole reason it beats a
+    # username as a "is this me?" check.
+    assert uuid.UUID(response.json()["data"]["user"]["id"]) == original_id
 
     refreshed = (
         await db_session.execute(select(User).where(User.username == "renamed"))

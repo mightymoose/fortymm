@@ -151,11 +151,20 @@ export const selectCareer = (player: PlayerDetail): CareerView => {
  * career block the bundle already carries, off the very cache entry the hero and
  * the Recent-matches card read.
  *
- * Note what it does *not* take: a league. Career ignores the profile's league
- * (ADR-0915), so the league switcher must not change a number on this card, and
- * a league in this key would be the first step towards it doing so.
+ * It takes a `leagueId` all the same, and that is **not** a contradiction of
+ * "career is cross-league" — it is what makes the page cost one request. The
+ * league is part of the *bundle's* key (ADR-0915): a switch re-keys the whole
+ * bundle, so every card must be handed the same league or the profile forks into
+ * two entries and fetches twice. What keeps this card still when the switcher
+ * moves is the **API's contract** — it sends back a byte-identical `career` block
+ * whichever league was asked for — not this card opting out of the key.
+ *
+ * So the thing to guard is the *projection*, not the key: `selectCareer` must read
+ * `player.career`, never the bundle's top-level `wins`/`losses`, which ARE
+ * league-scoped and would visibly change the W–L when you clicked a ladder. That
+ * is the bug ADR-0915 exists to prevent.
  */
-export const careerCardQuery = (playerId: string) => ({
-  ...playerByIdQueryOptions(playerId),
+export const careerCardQuery = (playerId: string, leagueId?: string) => ({
+  ...playerByIdQueryOptions(playerId, leagueId),
   select: selectCareer,
 })

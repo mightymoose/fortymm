@@ -28,8 +28,22 @@ export function playerListQueryKey(params: PlayerListParams) {
   return ['players', 'list', params] as const
 }
 
-export function playerQueryKey(playerId: string) {
-  return ['players', 'detail', playerId] as const
+/**
+ * The profile bundle's cache key — **player + league** (ADR-0915).
+ *
+ * The league is part of the key on purpose: the rating half of the profile (the
+ * hero, the rating panel, the confidence card, the Leagues card's highlight, and
+ * later the chart) is scoped to one ladder, so switching league re-keys the
+ * query and the whole bundle refetches in **one** request. A narrower per-card
+ * call would be four.
+ *
+ * `leagueId` is `undefined` for the **default league**, which is what the URL
+ * carries no `?league=` for — so the default key stays exactly what it was
+ * before leagues existed, and every default-league caller (the route loader, the
+ * full-history route) keeps hitting the same cache entry.
+ */
+export function playerQueryKey(playerId: string, leagueId?: string) {
+  return ['players', 'detail', playerId, leagueId ?? null] as const
 }
 
 export function playerMatchesQueryKey(
@@ -89,15 +103,35 @@ export function usePlayerList(
  * (ADR-0915); the full paginated history is its own route, backed by
  * `usePlayerMatches` below. The bundle's six-row window is NOT a page of that
  * list (its `page_size` is 6), so it must not be used to seed the
- * 25-per-page matches cache. */
-export function playerByIdQueryOptions(playerId: string) {
+ * 25-per-page matches cache.
+ *
+ * `leagueId` names the ladder the bundle's **rating half** is about — the hero's
+ * rating, rank, peak and Δ, the form, and the confidence card. Omit it and the
+ * API answers with the **default league**, which is what the profile's URL means
+ * when it carries no `?league=` (`CONTEXT.md` § *Default league*).
+ *
+ * Two things it deliberately does not scope: `career`, which is a fact about the
+ * *person* and counts every league they play in, and `leagues`, which lists all
+ * of them whichever one was asked for (ADR-0915). Both come back identical for
+ * the same player in either league — which is exactly why the switcher can
+ * re-key this whole query without the Career card flickering into a different
+ * number.
+ *
+ * Pass only a league id the API will accept: it is a `uuid.UUID` on the wire, so
+ * FastAPI 422s on a malformed one and 404s on an unknown one. The profile route's
+ * search schema catches a mangled `?league=` before it ever gets here.
+ */
+export function playerByIdQueryOptions(playerId: string, leagueId?: string) {
   return queryOptions({
-    queryKey: playerQueryKey(playerId),
+    queryKey: playerQueryKey(playerId, leagueId),
     queryFn: async (): Promise<PlayerDetail> =>
       unwrap(
         'load player',
         await api.GET('/v1/players/{player_id}', {
-          params: { path: { player_id: playerId } },
+          params: {
+            path: { player_id: playerId },
+            query: { league_id: leagueId },
+          },
         }),
       ),
     retry: false,
@@ -107,9 +141,13 @@ export function playerByIdQueryOptions(playerId: string) {
 
 export function usePlayerById(
   playerId: string,
-  options: { enabled?: boolean } = {},
+  options: { enabled?: boolean; leagueId?: string } = {},
 ) {
-  return useQuery({ ...playerByIdQueryOptions(playerId), ...options })
+  const { leagueId, ...queryOverrides } = options
+  return useQuery({
+    ...playerByIdQueryOptions(playerId, leagueId),
+    ...queryOverrides,
+  })
 }
 
 /** Per-player paginated match list — pre-shaped from the player's

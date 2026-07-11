@@ -12,6 +12,15 @@ import { screen, type Container } from '@/test/utilities'
 
 import { PlayerProfile, type PlayerProfileProps } from './player-profile'
 import { careerCardDisplayPage } from './player-profile/career-card/career-card-fetcher/career-card-display.page'
+import { confidenceCardDisplayPage } from './player-profile/confidence-card/confidence-card-fetcher/confidence-card-display.page'
+import {
+  headToHeadCardDisplayPage,
+  NEW_MATCH_ROUTE,
+} from './player-profile/head-to-head-card/head-to-head-card-fetcher/head-to-head-card-display.page'
+import {
+  leaguesCardDisplayPage,
+  PROFILE_ROUTE,
+} from './player-profile/leagues-card/leagues-card-fetcher/leagues-card-display.page'
 import { profileHeroDisplayPage } from './player-profile/profile-hero/profile-hero-fetcher/profile-hero-display.page'
 import { ratingPanelDisplayPage } from './player-profile/rating-panel/rating-panel-fetcher/rating-panel-display.page'
 import {
@@ -42,6 +51,20 @@ const scoped = (container: Container) => ({
   queryCareerLoading() {
     return container.queryByRole('status', { name: /loading career/i })
   },
+  /** The Rating confidence card's skeleton, while the bundle is pending. Named
+   * "Loading confidence", not "Loading rating confidence" — the latter would also
+   * match `queryStandingLoading`'s `/loading rating/i` and break it. */
+  queryConfidenceLoading() {
+    return container.queryByRole('status', { name: /loading confidence/i })
+  },
+  /** The Leagues card's skeleton, while the bundle is pending. */
+  queryLeaguesLoading() {
+    return container.queryByRole('status', { name: /loading leagues/i })
+  },
+  /** The Head-to-head card's skeleton, while the bundle is pending. */
+  queryHeadToHeadLoading() {
+    return container.queryByRole('status', { name: /loading head-to-head/i })
+  },
   /** The route-level error boundary's fallback. No card owns a boundary. */
   queryError() {
     return container.queryByRole('alert')
@@ -56,6 +79,20 @@ const scoped = (container: Container) => ({
   // `getCareerRecord`, `getRingFigure`, `queryCareerTile`), so they compose with
   // the three above rather than shadowing them.
   ...careerCardDisplayPage.within(container),
+  // …and confidence's are all confidence-prefixed (`getConfidenceLevel`,
+  // `getConfidenceInterval`, `queryConfidenceCard`), for the same reason.
+  ...confidenceCardDisplayPage.within(container),
+  // …and the Leagues card's are league-prefixed (`getLeagueRows`,
+  // `getSelectedLeagueName`, `getLeagueRating`, `getLeagueHref`). This is the
+  // page's league *switcher*, so `getSelectedLeagueName()` is the answer to
+  // "which ladder are the hero's numbers about?".
+  ...leaguesCardDisplayPage.within(container),
+  // …and the Head-to-head card's are all card-scoped (`queryVersusLine`,
+  // `queryStartMatchLink`, `getFrequentOpponentNames`). This is the page's
+  // viewer-aware card: `getHeadToHeadTitle()` is the answer to "whose profile does
+  // the page think this is?" — "Head-to-head" on somebody else's, "Frequent
+  // opponents" on your own.
+  ...headToHeadCardDisplayPage.within(container),
 })
 
 /**
@@ -109,7 +146,11 @@ export const playerProfilePage = {
       >
         <PlayerProfile {...props} />
       </ErrorBoundary>,
-      { linkTargets: [MATCH_HISTORY_ROUTE] },
+      // Three link targets: the Recent-matches footer opens the full history,
+      // every Leagues-card row links back to *this* profile with a different
+      // league selected (the switcher, ADR-0915), and the Head-to-head card's
+      // never-met CTA opens match creation with this player already picked.
+      { linkTargets: [MATCH_HISTORY_ROUTE, PROFILE_ROUTE, NEW_MATCH_ROUTE] },
     )
   },
 

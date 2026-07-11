@@ -2,10 +2,10 @@ import uuid
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, computed_field
 
 from app.models import MatchStatus
-from app.schemas.rating import RatingChange
+from app.schemas.rating import RatingChange, RatingConfidence, RatingHistoryWindow
 
 
 class PlayerRead(BaseModel):
@@ -180,6 +180,107 @@ class PlayerCareer(BaseModel):
     league_count: int
 
 
+class PlayerLeague(BaseModel):
+    """One league this player belongs to, and the rating they carry ON IT — a row
+    of the profile's Leagues card, which is also the page's league switcher
+    (ADR-0915).
+
+    A player's rating is a fact about a *ladder*: there is no such thing as their
+    rating "in general" (CONTEXT.md, "League"). So the same player may read 1687
+    here and 1642 in the next row, and the card is what makes that legible.
+
+    The list itself is NOT scoped to the requested league — it is the same on
+    every request for this player. Which row is *selected* is derived by the
+    client from the league it asked for, and `is_default` is what lets it derive
+    that when it asked for none (CONTEXT.md, "Default league").
+    """
+
+    id: uuid.UUID
+    name: str
+    # Exactly one league is the default — the one every player is joined to on
+    # sign-up and the one a surface falls back to when the caller names none.
+    is_default: bool
+    # This player's `rating_value` IN THIS LEAGUE. ``None`` when they hold no
+    # rating on it: they have never finished a rated match there, or the ladder
+    # is a manual-strategy one still waiting for an import.
+    rating: float | None = None
+
+
+class HeadToHeadOpponent(BaseModel):
+    """The other player in a head-to-head — a *named* player, always.
+
+    Both fields are required, unlike `PlayerMatchOpponent`, whose `id` and
+    `username` are nullable to model the player-less sentinel side of a solo
+    match. That difference is the point: a solo match has nobody on the other
+    side, so it can never be a **meeting** (CONTEXT.md), and a head-to-head
+    against nobody is not a state this schema can represent.
+    """
+
+    id: uuid.UUID
+    username: str
+
+
+class HeadToHeadRecord(BaseModel):
+    """One player's record of **meetings** against one named opponent, read
+    from a stated side (CONTEXT.md, "Head-to-head"): `wins` and `losses` are the
+    subject's, never the opponent's. `A 4-1 B` and `B 1-4 A` are the same record
+    said two ways, so every consumer of this model has to know whose side it
+    speaks for — the field it hangs off says which (`versus_viewer` is the
+    *caller's*; `frequent_opponents` is the *profiled player's*).
+    """
+
+    opponent: HeadToHeadOpponent
+    wins: int = 0
+    losses: int = 0
+
+    @computed_field  # type: ignore[prop-decorator]  # pydantic: decorate the property, not its getter
+    @property
+    def meetings(self) -> int:
+        """How many times the pair have played. DERIVED, not stored: a meeting
+        is a *decided* match (CONTEXT.md), and a decided match is a win for one
+        side and a loss for the other — so `meetings` is exactly
+        `wins + losses`, and carrying it as its own field would let the two
+        drift (api/CLAUDE.md, "don't carry a field and its own derivation")."""
+        return self.wins + self.losses
+
+
+class ViewerHeadToHead(HeadToHeadRecord):
+    """The CALLER's own record against the profiled player — "you are 1-4
+    against them", not "they are 4-1 against you".
+
+    Present with **zero meetings** for a caller who has never played them, which
+    is the common case, not an error: a guest session is minted for anyone who
+    lands on a profile link, and a guest has played nobody (ADR-0915). The card
+    renders "You haven't played X yet" plus a Start-a-match CTA off exactly this
+    state, and needs `opponent` populated to prefill it — so the empty record is
+    a first-class value, and never `null` in place of one.
+    """
+
+    # The most recent meeting. ``None`` exactly when `meetings` is 0 — a pair
+    # who have met have a date on which they last did.
+    last_meeting: datetime | None = None
+
+
+class PlayerHeadToHead(BaseModel):
+    """The profile's head-to-head card, VIEWER-AWARE (ADR-0915): the same player
+    returns a different block to two different callers.
+
+    A **meeting** is a *decided* match between two named players — rated or not,
+    in any league (CONTEXT.md). A match still in play is not a record, and a
+    voided one has stopped being one.
+    """
+
+    # The caller's record against the profiled player. ``None`` — and ONLY —
+    # when the caller *is* that player: there is no "you versus yourself", and
+    # the card falls back to being just their frequent opponents. An empty record
+    # (zero meetings) is a different thing entirely; see `ViewerHeadToHead`.
+    versus_viewer: ViewerHeadToHead | None = None
+    # The profiled player's most-met opponents, most meetings first (ties broken
+    # by the most recent meeting) — secondary context on someone else's profile,
+    # and the whole card on your own. Read from the PLAYER's side.
+    frequent_opponents: list[HeadToHeadRecord] = []
+
+
 class PlayerDetail(PlayerSummary):
     """Profile-page bundle: the hero (`PlayerSummary` fields + the standing
     block below) plus the player's six most recent matches inline. Saves a round
@@ -212,6 +313,16 @@ class PlayerDetail(PlayerSummary):
     # rated members of this league), so `rank <= rank_of` always holds.
     # ``None`` exactly when `rank` is ``None``: no rank, no ladder to be on.
     rank_of: int | None = None
+    # How settled this player's rating is IN THIS LEAGUE (CONTEXT.md, "Rating
+    # confidence") — the level, the Glicko-2 internals behind it, and the 95%
+    # interval the card puts on its face. League-scoped, like everything else in
+    # the standing block: confidence describes one ladder's read on the player.
+    #
+    # ``None`` — and the card simply does not render — for a player with no
+    # rating, and for a manual/externally-rated one: an imported USATT number
+    # carries no deviation, so there is no confidence to report about it. Never a
+    # confidence *percentage*; see `RatingConfidence`.
+    confidence: RatingConfidence | None = None
     # "Top N%" within the league. WITHHELD (``None``) while the league is too
     # small for the number to mean anything — in a twelve-player league "top 8%"
     # is just "you are first" dressed up as a statistic. The floor lives in one
@@ -238,3 +349,32 @@ class PlayerDetail(PlayerSummary):
     # ignores the requested league (ADR-0915). Always present: even a player who
     # has never finished a match has a league count.
     career: PlayerCareer
+
+    # Every league this player belongs to, with their rating on each — the
+    # Leagues card, which is the page's league SWITCHER (ADR-0915).
+    #
+    # Read from `league_memberships`, so it is exactly as long as
+    # `career.league_count` — belonging to a ladder and having played on it are
+    # different facts, and every real player is joined to the default league at
+    # sign-up. One row today, for everyone; that is correct and not a reason to
+    # hide the card. The rating half of this page follows whichever row the
+    # client selects; `career` does not.
+    leagues: list[PlayerLeague]
+
+    # The ONE block on this response that depends on WHO IS ASKING (ADR-0915):
+    # the caller's own record against this player, plus this player's most-met
+    # opponents. Two callers get two different `head_to_head` blocks for the same
+    # profile — so this response is not shareable across users by any cache in
+    # front of it. Everything else here is a fact about the player alone.
+    head_to_head: PlayerHeadToHead
+
+    # The rating chart's data, for the calendar window the page loaded with — the
+    # `range` query param, defaulting to 90 days. LEAGUE-SCOPED, like every other
+    # rating fact here.
+    #
+    # Embedded so first paint costs ONE request: the client seeds the chart's own
+    # cache entry from this and only calls `GET /v1/players/{id}/rating-history`
+    # when the user *changes* range (ADR-0915). It is the same shape that endpoint
+    # returns — including the carry-in `anchor`, a point from OUTSIDE the window,
+    # without which the chart's headline change is a lie.
+    rating_history: RatingHistoryWindow

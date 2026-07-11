@@ -39,7 +39,7 @@ export const selectProfileHero = (player: PlayerDetail): ProfileHeroView => ({
  * from the base: a failure has nothing to draw, so it throws to the route's
  * error boundary rather than to a per-card one.
  */
-export const profileHeroQuery = (playerId: string) => ({
-  ...playerByIdQueryOptions(playerId),
+export const profileHeroQuery = (playerId: string, leagueId?: string) => ({
+  ...playerByIdQueryOptions(playerId, leagueId),
   select: selectProfileHero,
 })
