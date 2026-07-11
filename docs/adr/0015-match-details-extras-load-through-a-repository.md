@@ -67,14 +67,41 @@ The issue floated a session-factory + `gather` approach. We rejected it:
 Batching adds zero connections and is correct on any session in any transaction
 state.
 
-### Why the recent-form rows query stays per-user
+### Why the recent-form rows query stays per-user — and why that reasoning was wrong
 
-Batching it (a window function for the top-N match ids, then one hydrating
-`SELECT ... WHERE id IN (...)`) would take **2 queries to 2 queries** at N=2 — it
-buys literally nothing. It only pays off for doubles, which cannot occur:
-`result_acceptance.py` raises on `team_size != 1` (issue #183) and
-`_singles_user_ids` skips any side without exactly one player. So the honest win
-here is **6 round-trips → 4**, not 6 → 2.
+The original argument was: batching it (a window function for the top-N match ids,
+then one hydrating `SELECT ... WHERE id IN (...)`) takes **2 queries to 2 queries**
+at N=2, so it buys nothing; it would only pay off for doubles, which cannot occur
+(`result_acceptance.py` raises on `team_size != 1`, issue #183).
+
+**That arithmetic was wrong, and it was never measured.** The recent-form rows
+query is `history_base_query(...)`, which attaches `match_history_options()` — a
+`selectinload` chain (`sides → players → user`, `games → score`). So each per-user
+execute fans out into **6 round-trips, not 1**. Counted against a completed singles
+match *with prior history* (an empty-history fixture hides this, because the eager
+chains have no rows to fan out over), the whole extras block is:
+
+```
+ 1  rating_changes
+ 1  career_before        (batched here)
+ 1  pre_match_ratings    (batched here)
+ 6  player 1 recent-form rows + its selectinload fan-out
+ 6  player 2 recent-form rows + its selectinload fan-out
+ 7  head-to-head rows + its fan-out
+ 1  head-to-head counts
+---
+23  total
+```
+
+So the per-user term is `6 × N`, and batching it is worth roughly **12 → 6** —
+about three times what this ADR's decision actually saved. It is the *dominant*
+term, and it was YAGNI'd on an unchecked number.
+
+We are still not doing it here (this change is already three slices deep, and the
+right response to having been wrong about a query's cost is a measured follow-up,
+not a same-day scope expansion). It is filed as **issue #920** with the breakdown
+above. What this ADR actually delivers is **25 → 23** statements, plus two loaders
+that are now O(1) in player count instead of O(N), plus the guard.
 
 ### What "fixed" means, given we cannot measure it
 
@@ -84,6 +111,29 @@ loader issues exactly one SQL statement regardless of how many user ids it is
 given** (asserted with a 3-element list, so a reintroduced per-user loop fails
 loudly), plus a blunt total-round-trip tripwire around the extras block. We are
 explicitly *not* claiming a latency improvement.
+
+The tripwire is pinned against a fixture that **has prior history**. This matters:
+an empty-history fixture makes the `selectinload` chains emit nothing, so it counts
+7 statements where a real match costs 23 — it would flatter the change and, worse,
+would not notice an eager-load fan-out regression at all. Pin the realistic case.
+
+### A batched query is not automatically a cheaper query
+
+Batching `pre_match_ratings` with `ROW_NUMBER() OVER (PARTITION BY user_id ...)`
+collapsed N round-trips into one — and silently **threw away the per-user `LIMIT`
+pushdown**. Postgres cannot stop an index scan early across window partitions (the
+`Run Condition: row_number() <= 10` doesn't terminate it), so the query read every
+one of a player's in-league rating rows and sorted them just to return 10. Measured
+on a 120k-row `rating_history`: 600 rows scanned / 614 buffers, versus 20 rows / 26
+buffers for the per-user query it replaced — and **unbounded in career length** (a
+player with 3000 rating rows sorted 3300). No index fixes it; the over-scan is
+inherent to the shape.
+
+The loader therefore uses a `LATERAL` join with the `LIMIT` *inside* — one round-trip
+**and** the pushdown. `career_before` has no such hazard precisely because it has no
+per-user `LIMIT` to lose: it aggregates the whole career either way, so its `GROUP BY`
+scans exactly what the per-user queries scanned, minus the round-trips. The rule:
+**`LIMIT` present → a window batch can regress; no `LIMIT` → the `GROUP BY` is free.**
 
 ### Accepted costs
 

@@ -14,7 +14,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import ARRAY, Uuid, cast, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased, selectinload
 
@@ -89,7 +89,7 @@ class MatchDetailsRepository:
             .all()
         )
         return {
-            row.user_id: RatingChange.of(
+            row.user_id: RatingChange(
                 before=row.previous_rating_value, after=row.rating_value
             )
             for row in rows
@@ -146,57 +146,81 @@ class MatchDetailsRepository:
         ``before``, plus the chronological trail behind it, in **one** round-trip
         rather than one query per user (issue #195).
 
-        The per-user ``ORDER BY created_at DESC LIMIT n`` collapses into a single
-        ``ROW_NUMBER() OVER (PARTITION BY user_id ...)`` window, capped in an outer
-        query (a window function can't be filtered in its own ``WHERE``). The cap
-        is therefore genuinely **per user** — a flat ``LIMIT`` over the whole
-        result set would starve the second player.
+        The cited ids are ``unnest``-ed into a driving table and each one is joined
+        to its *own* ``ORDER BY created_at DESC LIMIT n`` subquery via ``CROSS JOIN
+        LATERAL``. One statement, but the cap stays genuinely **per user** — a flat
+        ``LIMIT`` over a batched result set would starve the second player.
+
+        **Do not "simplify" this into a ``ROW_NUMBER() OVER (PARTITION BY
+        user_id)`` window.** That shape is also one statement and also caps per
+        user, but it throws away the per-user ``LIMIT`` pushdown: Postgres cannot
+        stop an index scan early across partitions (its ``Run Condition:
+        row_number() <= 10`` filters rows, it does not terminate the scan), so the
+        window reads *every* in-league rating row each cited player owns and sorts
+        the lot just to keep ten each. The cost is unbounded in career length.
+
+        ``EXPLAIN (ANALYZE, BUFFERS)``, 93k-row ``rating_history``, two players
+        holding 3000 and 300 rows:
+
+        ==================  ============  =======  ========
+        shape               rows scanned  buffers  exec
+        ==================  ============  =======  ========
+        ROW_NUMBER() window         3300      113  1.871 ms
+        CROSS JOIN LATERAL            20        8  0.030 ms
+        ==================  ============  =======  ========
+
+        The lateral is flat in career length (``rows=10 loops=2``); the window
+        grows with it. Both plans *use* the composite index
+        ``ix_rating_history_league_id_user_id_created_at`` — no index fixes the
+        window, the over-scan is inherent to its shape.
 
         Strict ``<`` on ``before`` so this match's own rating row never leaks in.
 
-        A player with no rating history in the league has **no rows** in the
-        windowed result; they are defaulted back in as an unrated player, so every
+        A player with no rating history in the league matches **no rows** in their
+        lateral; they are defaulted back in as an unrated player, so every
         requested id is always a key of the returned dict."""
         if not user_ids:
             return {}
-        ranked = (
-            select(
-                RatingHistory.user_id,
-                RatingHistory.rating_value,
-                func.row_number()
-                .over(
-                    partition_by=RatingHistory.user_id,
-                    order_by=RatingHistory.created_at.desc(),
-                )
-                .label("rn"),
-            )
+        # The driving table: the cited ids as rows. Deduped first (order-preserving)
+        # because ``unnest`` — unlike the ``IN`` list this replaced — would emit a
+        # repeated id twice and join it to its trail twice. Cast explicitly: an
+        # untyped array bind leaves ``unnest()`` polymorphic and Postgres rejects it.
+        cited_ids = list(dict.fromkeys(user_ids))
+        cited = func.unnest(cast(cited_ids, ARRAY(Uuid(as_uuid=True)))).column_valued(
+            "cited_user_id"
+        )
+        trail = (
+            select(RatingHistory.rating_value, RatingHistory.created_at)
             .where(
-                RatingHistory.user_id.in_(user_ids),
+                RatingHistory.user_id == cited,
                 RatingHistory.league_id == league_id,
                 RatingHistory.created_at < before,
             )
-            .subquery()
+            .order_by(RatingHistory.created_at.desc())
+            .limit(RATING_HISTORY_LIMIT)
+            .lateral("trail")
         )
         rows = (
             await self._db.execute(
-                select(ranked.c.user_id, ranked.c.rating_value)
-                .where(ranked.c.rn <= RATING_HISTORY_LIMIT)
-                .order_by(ranked.c.user_id, ranked.c.rn)
+                select(cited.label("user_id"), trail.c.rating_value).order_by(
+                    cited, trail.c.created_at
+                )
             )
         ).all()
 
-        # Rows arrive newest-first per user (``rn`` ascending), so the head of each
-        # trail is the most-recent value and the history is its chronological
-        # (ASC) reversal.
+        # The lateral hands back each player's newest ``RATING_HISTORY_LIMIT`` rows;
+        # the outer ``ORDER BY created_at`` re-sorts them oldest-first, so each
+        # trail *is* the chronological history and its tail is the current value
+        # (which ``PreMatchRating.value`` derives — see the dataclass).
         trails: dict[uuid.UUID, list[float]] = {}
         for row in rows:
             trails.setdefault(row[0], []).append(float(row[1]))
         rated = {
-            user_id: PreMatchRating(value=trail[0], history=list(reversed(trail)))
-            for user_id, trail in trails.items()
+            user_id: PreMatchRating(history=history)
+            for user_id, history in trails.items()
         }
         return {
-            user_id: rated.get(user_id, PreMatchRating(value=None, history=[]))
+            user_id: rated.get(user_id, PreMatchRating(history=[]))
             for user_id in user_ids
         }
 

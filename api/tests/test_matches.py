@@ -6,7 +6,7 @@ import pytest
 from fastapi import HTTPException
 from httpx import AsyncClient
 from rq import Queue
-from sqlalchemy import event, select, update
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 from sqlalchemy.sql.base import ExecutableOption
@@ -44,32 +44,23 @@ from app.repositories.match_details_repository import (
     RATING_HISTORY_LIMIT,
     MatchDetailsRepository,
 )
-from app.repositories.match_repository import MatchRepository
 from app.schemas.match import (
     MatchGameScoreUpdate,
     MatchGameScoreWrite,
     MatchResultsGameWrite,
     MatchResultsWrite,
 )
-from app.services.match_service import MatchService
+from app.services.dependencies import get_match_service
 from tests._helpers import (
     FakeSender,
     accept_standing_result,
+    counted_statements,
     enqueued_notification_jobs,
     make_client,
     make_user,
     opponent_session,
     start_session,
 )
-
-
-def _match_service(session: AsyncSession) -> MatchService:
-    """The wiring ``get_match_service`` would do for a request. The concurrency
-    tests below drive the score-write handlers as plain functions on their own
-    real sessions (bypassing FastAPI's DI), so they construct the service the
-    handlers now depend on themselves."""
-    return MatchService(MatchRepository(session), MatchDetailsRepository(session))
-
 
 # ----- decided-board compaction (#742) ------------------------------------
 
@@ -1054,7 +1045,7 @@ async def test_concurrent_score_create_returns_409_not_500(
                 )
                 try:
                     await create_game_score(
-                        match_id, payload, 1, user, session, _match_service(session)
+                        match_id, payload, 1, user, session, get_match_service(session)
                     )
                     return "ok"
                 except HTTPException as exc:
@@ -1145,7 +1136,7 @@ async def _first_propose_after_barrier(
                 MatchResultsWrite(games=games),
                 user,
                 session,
-                _match_service(session),
+                get_match_service(session),
                 NotificationService(session, FakeSender()),
             )
             return 201
@@ -1211,7 +1202,7 @@ async def test_create_game_score_racing_first_propose_never_strays(
                 payload = MatchGameScoreWrite(side_1_points=11, side_2_points=2)
                 try:
                     await create_game_score(
-                        match_id, payload, 5, user, session, _match_service(session)
+                        match_id, payload, 5, user, session, get_match_service(session)
                     )
                     return 201
                 except HTTPException as exc:
@@ -1286,7 +1277,7 @@ async def test_delete_game_score_double_clear_never_500s(
                 ).scalar_one()
                 try:
                     await delete_game_score(
-                        match_id, 3, user, session, _match_service(session)
+                        match_id, 3, user, session, get_match_service(session)
                     )
                     return 200
                 except HTTPException as exc:
@@ -1371,7 +1362,7 @@ async def test_update_game_score_racing_first_propose_never_500s(
                 )
                 try:
                     await update_game_score(
-                        match_id, payload, 1, user, session, _match_service(session)
+                        match_id, payload, 1, user, session, get_match_service(session)
                     )
                     return 200
                 except HTTPException as exc:
@@ -2467,7 +2458,7 @@ async def test_concurrent_propose_counters_nowait_409(
                         payload,
                         poster,
                         session,
-                        _match_service(session),
+                        get_match_service(session),
                         notifications,
                     )
                     return "ok"
@@ -2534,7 +2525,7 @@ async def test_concurrent_results_posts_do_not_pile_up(
                         payload,
                         poster,
                         session,
-                        _match_service(session),
+                        get_match_service(session),
                         notifications,
                     )
                     return "ok"
@@ -3329,28 +3320,14 @@ async def test_career_before_batches_every_user_into_one_statement(
 ):
     """The career record for N players costs one SQL statement, not N (#195).
 
-    Three ids on purpose: a reintroduced per-user loop emits three statements and
-    fails loudly here, where a two-id list could still be read as a coincidence.
-    The counter runs on its own fresh ``async_sessionmaker`` session so the setup
-    INSERTs (already committed on ``db_session``) can't inflate the count, and so
-    the shared session's identity map / pending flushes can't mask a query.
+    Counted on a fresh session, over three ids — see ``counted_statements``.
     """
     user_ids = [(await make_user(db_session, f"career-batch-{n}")).id for n in range(3)]
 
-    statements: list[str] = []
-
-    def before(conn: object, cursor: object, statement: str, *args: object) -> None:
-        statements.append(statement)
-
-    fresh_session = async_sessionmaker(engine)
-    event.listen(engine.sync_engine, "before_cursor_execute", before)
-    try:
-        async with fresh_session() as session:
-            careers = await MatchDetailsRepository(session).career_before(
-                user_ids, datetime.now(UTC)
-            )
-    finally:
-        event.remove(engine.sync_engine, "before_cursor_execute", before)
+    async with counted_statements(engine) as (session, statements):
+        careers = await MatchDetailsRepository(session).career_before(
+            user_ids, datetime.now(UTC)
+        )
 
     assert len(statements) == 1, statements
     assert list(careers) == user_ids
@@ -3382,28 +3359,6 @@ async def test_career_before_defaults_a_zero_history_player_to_zero(
     assert careers[opp.id] == CareerRecord(matches=1, wins=0)
 
 
-def _standalone_rating_row(
-    league: League,
-    user: User,
-    strategy: RatingStrategy,
-    value: float,
-    created_at: datetime,
-) -> RatingHistory:
-    """A match-less rating row at a chosen instant. ``match_id`` stays ``None`` so
-    the partial unique index on ``(match_id, user_id)`` doesn't cap a player at one
-    row — these tests need a player to carry more than the sparkline limit."""
-    return RatingHistory(
-        league_id=league.id,
-        user_id=user.id,
-        match_id=None,
-        rating_strategy_id=strategy.id,
-        rating_value=value,
-        rating_state={"rating": value, "rd": 350.0, "volatility": 0.06},
-        source=RatingHistorySource.manual,
-        created_at=created_at,
-    )
-
-
 async def test_pre_match_ratings_batches_every_user_into_one_statement(
     db_session: AsyncSession,
     engine: AsyncEngine,
@@ -3413,40 +3368,28 @@ async def test_pre_match_ratings_batches_every_user_into_one_statement(
     """The pre-match rating + sparkline for N players costs one SQL statement,
     not N (#195).
 
-    Three ids on purpose: a reintroduced per-user loop emits three statements and
-    fails loudly here, where a two-id list could still be read as a coincidence.
-    The counter runs on its own fresh ``async_sessionmaker`` session so the setup
-    INSERTs (already committed on ``db_session``) can't inflate the count, and so
-    the shared session's identity map / pending flushes can't mask a query.
+    Counted on a fresh session, over three ids — see ``counted_statements``.
     """
     users = [await make_user(db_session, f"rating-batch-{n}") for n in range(3)]
     user_ids = [user.id for user in users]
     for n, user in enumerate(users):
         db_session.add(
-            _standalone_rating_row(
+            _match_history_row(
                 default_league,
                 user,
+                None,
                 rating_strategies["glicko2"],
+                RatingHistorySource.manual,
                 value=1500.0 + n,
                 created_at=datetime(2026, 5, 1, tzinfo=UTC),
             )
         )
     await db_session.commit()
 
-    statements: list[str] = []
-
-    def before(conn: object, cursor: object, statement: str, *args: object) -> None:
-        statements.append(statement)
-
-    fresh_session = async_sessionmaker(engine)
-    event.listen(engine.sync_engine, "before_cursor_execute", before)
-    try:
-        async with fresh_session() as session:
-            ratings = await MatchDetailsRepository(session).pre_match_ratings(
-                user_ids, default_league.id, datetime.now(UTC)
-            )
-    finally:
-        event.remove(engine.sync_engine, "before_cursor_execute", before)
+    async with counted_statements(engine) as (session, statements):
+        ratings = await MatchDetailsRepository(session).pre_match_ratings(
+            user_ids, default_league.id, datetime.now(UTC)
+        )
 
     assert len(statements) == 1, statements
     assert list(ratings) == user_ids
@@ -3458,9 +3401,9 @@ async def test_pre_match_ratings_defaults_a_never_rated_player_to_null(
     db_session: AsyncSession,
     default_league: League,
 ):
-    """A player with no rating history has *no rows* in the batched window
-    result. They must be defaulted back in as an unrated player — a present key
-    holding ``value=None, history=[]``, not a dropped key (which would silently
+    """A player with no rating history matches *no rows* in their lateral. They
+    must be defaulted back in as an unrated player — a present key holding an
+    empty trail (and so a ``None`` value), not a dropped key (which would silently
     strip them from recent_form) and not a ``KeyError``."""
     me = await start_session(api_client, db_session)
     newcomer = await make_user(db_session, "rating-null-newcomer")
@@ -3473,9 +3416,10 @@ async def test_pre_match_ratings_defaults_a_never_rated_player_to_null(
 
     # Present, not missing — the whole trap of batching this loader.
     assert newcomer.id in ratings
-    assert ratings[newcomer.id] == PreMatchRating(value=None, history=[])
+    assert ratings[newcomer.id] == PreMatchRating(history=[])
+    assert ratings[newcomer.id].value is None
     # And the player who *does* have history keeps their league-join seed.
-    assert ratings[me.id] == PreMatchRating(value=1500.0, history=[1500.0])
+    assert ratings[me.id] == PreMatchRating(history=[1500.0])
 
 
 async def test_pre_match_ratings_caps_the_sparkline_per_user(
@@ -3490,28 +3434,26 @@ async def test_pre_match_ratings_caps_the_sparkline_per_user(
     a = await make_user(db_session, "rating-cap-a")
     b = await make_user(db_session, "rating-cap-b")
     base = datetime(2026, 5, 1, tzinfo=UTC)
+    manual = RatingHistorySource.manual
     for n in range(RATING_HISTORY_LIMIT + 2):
         at = base + timedelta(minutes=n)
-        db_session.add(
-            _standalone_rating_row(default_league, a, strategy, 1000.0 + n, at)
-        )
-        db_session.add(
-            _standalone_rating_row(default_league, b, strategy, 2000.0 + n, at)
-        )
+        for user, value in ((a, 1000.0 + n), (b, 2000.0 + n)):
+            db_session.add(
+                _match_history_row(
+                    default_league, user, None, strategy, manual, value, at
+                )
+            )
     await db_session.commit()
 
     ratings = await MatchDetailsRepository(db_session).pre_match_ratings(
         [a.id, b.id], default_league.id, base + timedelta(days=1)
     )
 
-    # Twelve rows each, ten kept each: the newest ten, oldest-first, with
-    # ``value`` the most recent of them.
-    assert ratings[a.id] == PreMatchRating(
-        value=1011.0, history=[1000.0 + n for n in range(2, 12)]
-    )
-    assert ratings[b.id] == PreMatchRating(
-        value=2011.0, history=[2000.0 + n for n in range(2, 12)]
-    )
+    # Twelve rows each, ten kept each: the newest ten, oldest-first, so the
+    # derived ``value`` is the most recent of them.
+    assert ratings[a.id] == PreMatchRating(history=[1000.0 + n for n in range(2, 12)])
+    assert ratings[b.id] == PreMatchRating(history=[2000.0 + n for n in range(2, 12)])
+    assert (ratings[a.id].value, ratings[b.id].value) == (1011.0, 2011.0)
 
 
 async def test_pre_match_ratings_ignores_other_leagues(
@@ -3539,13 +3481,20 @@ async def test_pre_match_ratings_ignores_other_leagues(
     await db_session.commit()
 
     player = await make_user(db_session, "cross-league-player")
+    manual = RatingHistorySource.manual
     base = datetime(2026, 5, 1, tzinfo=UTC)
     db_session.add(
-        _standalone_rating_row(default_league, player, strategy, 1500.0, base)
+        _match_history_row(default_league, player, None, strategy, manual, 1500.0, base)
     )
     db_session.add(
-        _standalone_rating_row(
-            other_league, player, strategy, 1900.0, base + timedelta(minutes=1)
+        _match_history_row(
+            other_league,
+            player,
+            None,
+            strategy,
+            manual,
+            1900.0,
+            base + timedelta(minutes=1),
         )
     )
     await db_session.commit()
@@ -3555,7 +3504,7 @@ async def test_pre_match_ratings_ignores_other_leagues(
     )
 
     # Only the default league's row exists as far as this match is concerned.
-    assert ratings[player.id] == PreMatchRating(value=1500.0, history=[1500.0])
+    assert ratings[player.id] == PreMatchRating(history=[1500.0])
 
 
 async def test_pre_match_ratings_excludes_a_row_stamped_at_the_cutoff(
@@ -3574,16 +3523,25 @@ async def test_pre_match_ratings_excludes_a_row_stamped_at_the_cutoff(
     """
     strategy = rating_strategies["glicko2"]
     player = await make_user(db_session, "cutoff-player")
+    manual = RatingHistorySource.manual
     # One shared literal for the cutoff and the row stamped on it: two calls to
     # now() would differ by microseconds and the boundary would never be tested.
     cutoff = datetime(2026, 5, 1, 12, 0, tzinfo=UTC)
     db_session.add(
-        _standalone_rating_row(
-            default_league, player, strategy, 1500.0, cutoff - timedelta(minutes=1)
+        _match_history_row(
+            default_league,
+            player,
+            None,
+            strategy,
+            manual,
+            1500.0,
+            cutoff - timedelta(minutes=1),
         )
     )
     db_session.add(
-        _standalone_rating_row(default_league, player, strategy, 1650.0, cutoff)
+        _match_history_row(
+            default_league, player, None, strategy, manual, 1650.0, cutoff
+        )
     )
     await db_session.commit()
 
@@ -3592,34 +3550,44 @@ async def test_pre_match_ratings_excludes_a_row_stamped_at_the_cutoff(
     )
 
     # The row *at* the cutoff is excluded; only the strictly-earlier one survives.
-    assert ratings[player.id] == PreMatchRating(value=1500.0, history=[1500.0])
+    assert ratings[player.id] == PreMatchRating(history=[1500.0])
 
 
-# The whole view-extras block for a completed singles match, pinned. The terms:
+# The whole view-extras block for a completed singles match whose two players have
+# met before, pinned. The prior history is load-bearing: with none, every history
+# window comes back empty and the ``selectinload`` chains hung off the form-rows /
+# H2H-rows queries emit *nothing* — the count would collapse to 7 and could not
+# notice an eager-load fan-out regression at all. The terms:
 #
-#   1  rating_changes    — the match's own rating rows
-#   1  career_before     — batched: one GROUP BY user_id covering both users
-#   1  pre_match_ratings — batched: one ROW_NUMBER() window covering both users
-#   2  recent_form       — the form-rows query, once per user (see below)
-#   1  head_to_head      — the prior-meetings rows
-#   1  head_to_head      — the prior-meetings counts aggregate
-#   = 7
+#    1  rating_changes    — the match's own rating rows (no eager loads)
+#    1  career_before     — batched: one GROUP BY user_id covering both users
+#    1  pre_match_ratings — batched: one CROSS JOIN LATERAL covering both users
+#    6  recent_form, player 1 — the form-rows query + its 5-query selectinload
+#                               fan-out (sides, players, user, games, score)
+#    6  recent_form, player 2 — same again: the form-rows query is the one term
+#                               that scales with player count (ADR 0015)
+#    7  head_to_head      — the prior-meetings rows + a 6-query fan-out (the same
+#                           five, plus match_settings for the ``rated`` flag)
+#    1  head_to_head      — the prior-meetings counts aggregate
+#   = 23
 #
-# The form-rows query is the one term that intentionally scales with player count
-# (ADR 0015: batching it is 2 queries → 2 queries at N=2, so it stays per-user).
-# Everything else is constant. The fixture is a single completed match with no
-# prior history for either player, so the history windows come back empty and the
-# ``selectinload`` chains on the form-rows / H2H-rows queries emit nothing — the
-# count stays a measure of *round-trips through the extras loaders*, not of the
-# eager-load options hung off them.
-EXPECTED_VIEW_EXTRAS_STATEMENTS = 7
+# The dominant term is the ``6 × N`` per-user recent-form block: the fan-out, not
+# the round-trip, is what this costs. Collapsing it is issue #920 — not fixed here,
+# so this pin is what today's shape *is*, not what it should be.
+#
+# The count is independent of how deep the history runs — ``selectinload`` batches
+# one query per relationship level whatever the row count — which is what the two
+# ``priors`` cases below prove; both measure 23.
+EXPECTED_VIEW_EXTRAS_STATEMENTS = 23
 
 
+@pytest.mark.parametrize("priors", [2, 4])
 async def test_view_extras_issues_a_pinned_number_of_statements(
-    api_client: AsyncClient, db_session: AsyncSession, engine: AsyncEngine
+    api_client: AsyncClient, db_session: AsyncSession, engine: AsyncEngine, priors: int
 ):
-    """Loading the extras for a completed singles match costs a pinned, constant
-    number of SQL statements (#195).
+    """Loading the extras for a completed singles match costs a pinned number of
+    SQL statements (#195) — one that does not grow with how much history the two
+    players have (hence the two ``priors`` cases).
 
     This is the tripwire the per-loader batching tests can't be. They prove each
     *loader* emits one statement per call — but they'd still pass if someone moved
@@ -3631,11 +3599,17 @@ async def test_view_extras_issues_a_pinned_number_of_statements(
     Counting is scoped to ``load_view_extras`` rather than the HTTP request on
     purpose: an endpoint-level count would also sweep up session / auth /
     rate-limit statements and go red for reasons that have nothing to do with the
-    N+1. The counter runs on a fresh ``async_sessionmaker`` session so the setup's
-    committed writes and the shared session's identity map can't skew the count.
+    N+1. It runs on a fresh session — see ``counted_statements``.
     """
     me = await start_session(api_client, db_session)
     async with opponent_session(db_session, "roundtrip-opp") as (opp_client, opp):
+        # Prior meetings, so both players carry recent form and a head-to-head
+        # into the match under test and every eager-load chain has rows to fan
+        # out over.
+        for n in range(priors):
+            await _play_match_to_completion(
+                api_client, opp_client, opp.id, best_of=3, side_1_wins=n % 2 == 0
+            )
         finished = await _play_match_to_completion(
             api_client, opp_client, opp.id, best_of=3, side_1_wins=True
         )
@@ -3645,24 +3619,14 @@ async def test_view_extras_issues_a_pinned_number_of_statements(
         )
     ).scalar_one()
 
-    statements: list[str] = []
-
-    def before(conn: object, cursor: object, statement: str, *args: object) -> None:
-        statements.append(statement)
-
-    fresh_session = async_sessionmaker(engine)
-    event.listen(engine.sync_engine, "before_cursor_execute", before)
-    try:
-        async with fresh_session() as session:
-            extras = await _match_service(session).load_view_extras(
-                match_id=match.id,
-                league_id=match.league_id,
-                status=match.status,
-                created_at=match.created_at,
-                user_ids=[me.id, opp.id],
-            )
-    finally:
-        event.remove(engine.sync_engine, "before_cursor_execute", before)
+    async with counted_statements(engine) as (session, statements):
+        extras = await get_match_service(session).load_view_extras(
+            match_id=match.id,
+            league_id=match.league_id,
+            status=match.status,
+            created_at=match.created_at,
+            user_ids=[me.id, opp.id],
+        )
 
     for n, statement in enumerate(statements, start=1):
         print(f"[{n}] {' '.join(statement.split())}")
@@ -3670,8 +3634,10 @@ async def test_view_extras_issues_a_pinned_number_of_statements(
     assert len(statements) == EXPECTED_VIEW_EXTRAS_STATEMENTS, statements
     # And the block it counted is the real one, fully populated.
     assert {form.user_id for form in extras.recent_form} == {me.id, opp.id}
+    assert all(form.recent_results for form in extras.recent_form)
     assert set(extras.rating_changes) == {me.id, opp.id}
     assert extras.head_to_head is not None
+    assert extras.head_to_head.total_meetings == priors
 
 
 async def test_list_matches_csv_export(
@@ -4172,7 +4138,11 @@ async def test_concurrent_accept_and_counter_serialize(
                 ).scalar_one()
                 try:
                     await accept_match_result(
-                        match_id, standing_id, actor, session, _match_service(session)
+                        match_id,
+                        standing_id,
+                        actor,
+                        session,
+                        get_match_service(session),
                     )
                     return "ok-accept"
                 except HTTPException as exc:
@@ -4198,7 +4168,7 @@ async def test_concurrent_accept_and_counter_serialize(
                         payload,
                         actor,
                         session,
-                        _match_service(session),
+                        get_match_service(session),
                         notifications,
                     )
                     return "ok-counter"
@@ -4478,16 +4448,31 @@ def _match_history_row(
     match: Match | None,
     strategy: RatingStrategy,
     source: RatingHistorySource,
+    value: float = 1500.0,
+    created_at: datetime | None = None,
 ) -> RatingHistory:
-    return RatingHistory(
+    """One ``rating_history`` row.
+
+    ``match=None`` writes a match-less row (an ``initial`` seed, or a ``manual``
+    adjustment). The partial unique index on ``(match_id, user_id)`` only covers
+    ``match_id IS NOT NULL``, so those rows don't cap a player at one — which is
+    how the sparkline tests give a player more history than the trail limit.
+
+    ``created_at`` defaults to the column's ``now()`` server default; pass it to
+    place the row at a chosen instant (never as ``None``, which would insert a
+    NULL over that default)."""
+    row = RatingHistory(
         league_id=league.id,
         user_id=user.id,
         match_id=match.id if match is not None else None,
         rating_strategy_id=strategy.id,
-        rating_value=1500.0,
-        rating_state={"rating": 1500.0, "rd": 350.0, "volatility": 0.06},
+        rating_value=value,
+        rating_state={"rating": value, "rd": 350.0, "volatility": 0.06},
         source=source,
     )
+    if created_at is not None:
+        row.created_at = created_at
+    return row
 
 
 async def test_void_sets_status_and_deletes_all_rating_history(

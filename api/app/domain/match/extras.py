@@ -29,15 +29,18 @@ def rating_delta(before: float | None, after: float) -> float:
 @dataclass(frozen=True)
 class RatingChange:
     """A player's rating delta on the match being viewed. ``before`` is ``None``
-    for a player who had no rating in the league going in."""
+    for a player who had no rating in the league going in.
+
+    ``delta`` is *derived*, never stored: it is by definition
+    ``rating_delta(before, after)``, so a ``RatingChange`` that disagrees with its
+    own endpoints cannot be constructed."""
 
     before: float | None
     after: float
-    delta: float
 
-    @classmethod
-    def of(cls, before: float | None, after: float) -> RatingChange:
-        return cls(before=before, after=after, delta=rating_delta(before, after))
+    @property
+    def delta(self) -> float:
+        return rating_delta(self.before, self.after)
 
 
 @dataclass(frozen=True)
@@ -56,12 +59,18 @@ class FormResult:
 @dataclass(frozen=True)
 class PreMatchRating:
     """A player's rating in this match's league as it stood *before* this match:
-    the most recent value plus the chronological (oldest-first) trail behind it.
-    ``value`` is ``None`` — and ``history`` empty — for a player with no prior
-    rating in the league."""
+    the chronological (oldest-first) trail of every value they carried into it.
 
-    value: float | None
+    ``value`` — the rating they actually took into the match — is *derived*, never
+    stored: it is the last entry of the trail, and ``None`` exactly when the trail
+    is empty (a player with no prior rating in the league). Storing both would let
+    a value drift from the history it is supposed to end."""
+
     history: list[float]
+
+    @property
+    def value(self) -> float | None:
+        return self.history[-1] if self.history else None
 
 
 @dataclass(frozen=True)
