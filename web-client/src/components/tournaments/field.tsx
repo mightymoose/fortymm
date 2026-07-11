@@ -5,28 +5,52 @@ import { cn } from '@/lib/utils'
 
 import { ReadOnlyValue, type ReadOnlyValueContent } from './read-only-value'
 
-export interface FieldProps {
+export interface FieldBase {
   label: string
   required?: boolean
   /** Helper or error text shown below the control. */
   hint?: ReactNode
   /** When true, `hint` is rendered as an error (red). */
   error?: boolean
-  /** When true the row renders its `value` instead of its control, and drops the
-   * form's furniture (the `hint` and the `required` asterisk). See below. */
-  readOnly?: boolean
+  className?: string
+}
+
+/** A row that can be read-only **must** say what it holds. The two props are one
+ * decision, so the type makes them one: opt into `readOnly` and `value` is
+ * required. Were they independent optionals, a row could pass `readOnly` and
+ * forget `value` — and would then render an em-dash, which by ADR 0015 rule 3
+ * means *the organizer set nothing*. That is real data misreported as absent,
+ * silently: the guard sweep still passes (no control is rendered) and the
+ * per-field value assertions don't know the new row exists. Exactly the class of
+ * quiet wrongness this ADR was written to end.
+ *
+ * Note the discriminant is the **presence** of `readOnly`, not its value — call
+ * sites pass `readOnly={!canEdit}`, a `boolean`, which no `true`/`false` union
+ * could narrow. */
+type FieldReadable = {
+  readOnly: boolean
   /** What the row *holds* — rendered in place of the control when `readOnly`.
    * Formatted for a reader by the caller (an option's label, a formatted date),
    * since only the caller knows what the raw value means. */
-  value?: ReadOnlyValueContent
+  value: ReadOnlyValueContent
   /** Class for the read-only rendering, when it needs to match the control it
    * stands in for (a `font-mono` time, a multi-line description). */
   valueClassName?: string
-  /** The control, for an editor. Not called in the read-only branch — a row that
-   * is only ever a view may omit it. */
+  /** The control, for an editor. Not called in the read-only branch — and a row
+   * that is *only* ever a view (one inside a subtree the editor never renders,
+   * like a read-only pool card) has no control to give. */
   children?: (controlId: string) => ReactNode
-  className?: string
 }
+
+/** A row that is always an editor (a create form, say) needs no reader's value. */
+type FieldEditorOnly = {
+  readOnly?: undefined
+  value?: undefined
+  valueClassName?: undefined
+  children: (controlId: string) => ReactNode
+}
+
+export type FieldProps = FieldBase & (FieldReadable | FieldEditorOnly)
 
 /** Uppercase-overline label + control + hint, the standard form row used
  * across the tournament forms. `children` receives the generated control id:
@@ -73,7 +97,9 @@ export const Field = ({
     <div className={cn('flex flex-col gap-1.5', className)}>
       <Label
         id={`${id}-label`}
-        htmlFor={id}
+        // Read-only renders no control, so there is no element with this id to
+        // point at — a dangling `for` is an orphaned label, not an association.
+        htmlFor={readOnly ? undefined : id}
         className="text-[11px] font-semibold tracking-[0.12em] text-[color:var(--fg-3)] uppercase"
       >
         {label}

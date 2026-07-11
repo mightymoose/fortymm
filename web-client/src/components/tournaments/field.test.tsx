@@ -76,5 +76,17 @@ describe('Field', () => {
         fieldPage.queryHint('Hard cap. Waitlist opens past this.'),
       ).toBeNull()
     })
+
+    // A read-only row renders no control, so a `for` would point at nothing. An
+    // orphaned label is not an association — it just looks like one.
+    it('leaves no dangling label association when there is no control', () => {
+      fieldPage.render({ ...FURNITURE, readOnly: true })
+      expect(fieldPage.getLabel('Player limit')).not.toHaveAttribute('for')
+    })
+
+    it('associates the label with the control for an editor', () => {
+      fieldPage.render({ ...FURNITURE, readOnly: false })
+      expect(fieldPage.getLabel('Player limit')).toHaveAttribute('for')
+    })
   })
 })

@@ -17,9 +17,15 @@ import type { Container } from './utilities'
  * to use today: it must catch the control someone adds tomorrow. Hence `a[href]`
  * (a link is a real affordance, and a read-only *view* is not a navigation
  * surface) and `[role="slider"]` (shadcn's `Slider`), neither of which any
- * surface renders yet. */
+ * surface renders yet.
+ *
+ * `tabindex="-1"` is excluded: it is *not* in the tab order and is not an
+ * affordance — Radix puts it on focus guards, scroll containers and tabpanels.
+ * Matching it would fail a guard on chrome rather than on a control, and a guard
+ * that cries wolf gets loosened, which is how it dies. A genuinely interactive
+ * element carrying `tabindex="-1"` is still caught by its tag or its role. */
 export const INTERACTIVE_SELECTOR =
-  'input, select, textarea, button, a[href], [role="switch"], [role="radio"], [role="slider"], [tabindex], [contenteditable]'
+  'input, select, textarea, button, a[href], [role="switch"], [role="radio"], [role="slider"], [tabindex]:not([tabindex="-1"]), [contenteditable]'
 
 /** The roles a form control claims in the accessibility tree. Kept only as a
  * *supplement* to the DOM sweep — never instead of it, for the reasons above. */

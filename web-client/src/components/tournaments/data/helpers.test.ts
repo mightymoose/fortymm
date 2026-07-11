@@ -3,6 +3,7 @@ import {
   effectiveDateRange,
   fmtDateRange,
   formatPredicate,
+  predicateSentence,
   findPoolConflicts,
 } from './helpers'
 import { buildPool, buildTournament, buildEvent } from './seed.factory'
@@ -69,6 +70,16 @@ describe('formatPredicate', () => {
   it('labels a between rule with the range', () => {
     const p: Predicate = { id: 'p', field: 'age', op: 'between', value: [13, 17] }
     expect(formatPredicate(p)).toBe('Age in [13–17]')
+  })
+
+  // The chip and the sentence share one vocabulary, so they must agree on the
+  // unset case too: an unfinished enum rule reads as the em-dash both use, never
+  // as the string "null" that `String(p.value)` used to leak onto the card.
+  it('renders an unfinished enum rule as an em-dash, not "null"', () => {
+    const p: Predicate = { id: 'p', field: 'gender', op: 'is', value: null }
+    expect(formatPredicate(p)).toBe('Gender = —')
+    expect(formatPredicate(p)).not.toContain('null')
+    expect(predicateSentence(p)).toBe('Gender is —')
   })
 })
 

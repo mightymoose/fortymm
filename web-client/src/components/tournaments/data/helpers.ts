@@ -79,7 +79,12 @@ export function effectiveDateRange(t: Tournament): {
  * ("Female"), never the key it is stored under ("F"). Shared by both predicate
  * formatters below — the one lookup they genuinely have in common. */
 const enumValueLabel = (schema: PredicateFieldSchema, p: Predicate): string =>
-  labelFor(schema.options ?? [], String(p.value), String(p.value))
+  // An unfinished enum rule (`value: null`) is unset, so it reads as the em-dash
+  // both voices use — never `String(null)`, which rendered the literal "null" on
+  // the event card.
+  p.value == null
+    ? EM_DASH
+    : labelFor(schema.options ?? [], String(p.value), String(p.value))
 
 /** A **compact** summary of one eligibility predicate, e.g. `Age < 18` — the
  * chip form, sized for an event card's badge row.

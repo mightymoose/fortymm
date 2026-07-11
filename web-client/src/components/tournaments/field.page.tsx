@@ -1,7 +1,7 @@
 import { render, screen, within, type Container } from '@/test/utilities'
 
-import { Field, type FieldProps } from './field'
-import { buildFieldProps } from './field.factory'
+import { Field } from './field'
+import { buildFieldProps, type FieldOverrides } from './field.factory'
 import { READ_ONLY_VALUE_TESTID } from './read-only-value.page'
 
 const scoped = (container: Container) => ({
@@ -26,6 +26,11 @@ const scoped = (container: Container) => ({
   getLabelText(label: string, { exact = false }: { exact?: boolean } = {}) {
     return container.getByText(label, { exact, selector: 'label' }).textContent
   },
+  /** The `<label>` element itself — for asserting on the association (`for`),
+   * which a read-only row must not claim: it renders no control to point at. */
+  getLabel(label: string, { exact = false }: { exact?: boolean } = {}) {
+    return container.getByText(label, { exact, selector: 'label' })
+  },
   /** The value a read-only row renders in place of its control, found by the
    * row's label so the assertion survives a re-ordering of the rows. Composed by
    * every surface with `Field` rows, rather than re-derived in each. */
@@ -39,7 +44,7 @@ const scoped = (container: Container) => ({
 
 /** Test page-object for `Field` — the label/control/hint form row. */
 export const fieldPage = {
-  render(overrides: Partial<FieldProps> = {}) {
+  render(overrides: FieldOverrides = {}) {
     render(<Field {...buildFieldProps(overrides)} />)
   },
 
