@@ -172,9 +172,23 @@ function filterNavByPermissions(
     .filter((s) => s.items.length > 0)
 }
 
+/**
+ * A top-level nav item owns its whole route subtree: `/matches` stays lit on
+ * `/matches/new` and `/matches/123/games/2/scores/edit`, `/players` on
+ * `/players/abc`. The trailing slash is load-bearing — a bare `startsWith`
+ * would light Players on a sibling like `/players-archive`.
+ *
+ * Sub-nav children deliberately do NOT use this: they stay on strict equality,
+ * or `/notifications/settings` would light both Inbox (`/notifications`) and
+ * Preferences at once.
+ */
+function isUnder(pathname: string, to: string) {
+  return pathname === to || pathname.startsWith(`${to}/`)
+}
+
 function renderNavItem(item: NavItem, pathname: string, closeOnMobile: () => void) {
   const childActive = item.children?.some((c) => pathname === c.to) ?? false
-  const isActive = pathname === item.to || childActive
+  const isActive = isUnder(pathname, item.to) || childActive
   return (
     <li key={item.label}>
       <Link
@@ -212,7 +226,7 @@ function renderNavItem(item: NavItem, pathname: string, closeOnMobile: () => voi
   )
 }
 
-interface AppShellProps {
+export interface AppShellProps {
   children: ReactNode
 }
 
