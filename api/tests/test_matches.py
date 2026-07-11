@@ -39,12 +39,15 @@ from app.models import (
 )
 from app.notifications.apns import MATCH_RESULT_CONFIRMATION_CATEGORY
 from app.notifications.service import NotificationService
+from app.repositories.match_details_repository import MatchDetailsRepository
+from app.repositories.match_repository import MatchRepository
 from app.schemas.match import (
     MatchGameScoreUpdate,
     MatchGameScoreWrite,
     MatchResultsGameWrite,
     MatchResultsWrite,
 )
+from app.services.match_service import MatchService
 from tests._helpers import (
     FakeSender,
     accept_standing_result,
@@ -54,6 +57,15 @@ from tests._helpers import (
     opponent_session,
     start_session,
 )
+
+
+def _match_service(session: AsyncSession) -> MatchService:
+    """The wiring ``get_match_service`` would do for a request. The concurrency
+    tests below drive the score-write handlers as plain functions on their own
+    real sessions (bypassing FastAPI's DI), so they construct the service the
+    handlers now depend on themselves."""
+    return MatchService(MatchRepository(session), MatchDetailsRepository(session))
+
 
 # ----- decided-board compaction (#742) ------------------------------------
 
@@ -1037,7 +1049,9 @@ async def test_concurrent_score_create_returns_409_not_500(
                     side_1_points=side_1, side_2_points=side_2
                 )
                 try:
-                    await create_game_score(match_id, payload, 1, user, session)
+                    await create_game_score(
+                        match_id, payload, 1, user, session, _match_service(session)
+                    )
                     return "ok"
                 except HTTPException as exc:
                     return exc.status_code
@@ -1127,6 +1141,7 @@ async def _first_propose_after_barrier(
                 MatchResultsWrite(games=games),
                 user,
                 session,
+                _match_service(session),
                 NotificationService(session, FakeSender()),
             )
             return 201
@@ -1191,7 +1206,9 @@ async def test_create_game_score_racing_first_propose_never_strays(
                 ).scalar_one()
                 payload = MatchGameScoreWrite(side_1_points=11, side_2_points=2)
                 try:
-                    await create_game_score(match_id, payload, 5, user, session)
+                    await create_game_score(
+                        match_id, payload, 5, user, session, _match_service(session)
+                    )
                     return 201
                 except HTTPException as exc:
                     return exc.status_code
@@ -1264,7 +1281,9 @@ async def test_delete_game_score_double_clear_never_500s(
                     await session.execute(select(User).where(User.id == me_id))
                 ).scalar_one()
                 try:
-                    await delete_game_score(match_id, 3, user, session)
+                    await delete_game_score(
+                        match_id, 3, user, session, _match_service(session)
+                    )
                     return 200
                 except HTTPException as exc:
                     return exc.status_code
@@ -1347,7 +1366,9 @@ async def test_update_game_score_racing_first_propose_never_500s(
                     side_1_points=8, side_2_points=11, expected_version=1
                 )
                 try:
-                    await update_game_score(match_id, payload, 1, user, session)
+                    await update_game_score(
+                        match_id, payload, 1, user, session, _match_service(session)
+                    )
                     return 200
                 except HTTPException as exc:
                     return exc.status_code
@@ -2438,7 +2459,12 @@ async def test_concurrent_propose_counters_nowait_409(
                 )
                 try:
                     await post_match_result(
-                        match_id, payload, poster, session, notifications
+                        match_id,
+                        payload,
+                        poster,
+                        session,
+                        _match_service(session),
+                        notifications,
                     )
                     return "ok"
                 except HTTPException as exc:
@@ -2500,7 +2526,12 @@ async def test_concurrent_results_posts_do_not_pile_up(
                 notifications = NotificationService(session, FakeSender())
                 try:
                     await post_match_result(
-                        match_id, payload, poster, session, notifications
+                        match_id,
+                        payload,
+                        poster,
+                        session,
+                        _match_service(session),
+                        notifications,
                     )
                     return "ok"
                 except HTTPException as exc:
@@ -3786,7 +3817,9 @@ async def test_concurrent_accept_and_counter_serialize(
                     await session.execute(select(User).where(User.id == me_id))
                 ).scalar_one()
                 try:
-                    await accept_match_result(match_id, standing_id, actor, session)
+                    await accept_match_result(
+                        match_id, standing_id, actor, session, _match_service(session)
+                    )
                     return "ok-accept"
                 except HTTPException as exc:
                     return exc.status_code
@@ -3807,7 +3840,12 @@ async def test_concurrent_accept_and_counter_serialize(
                 )
                 try:
                     await post_match_result(
-                        match_id, payload, actor, session, notifications
+                        match_id,
+                        payload,
+                        actor,
+                        session,
+                        _match_service(session),
+                        notifications,
                     )
                     return "ok-counter"
                 except HTTPException as exc:

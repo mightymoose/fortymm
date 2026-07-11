@@ -204,6 +204,15 @@ def _attention_matches_query(
 # ----- readers over a loaded match -----------------------------------------
 
 
+def singles_user_ids(match: Match) -> list[uuid.UUID]:
+    """Singles player IDs, ordered by side number. Sides without exactly one
+    player are skipped — no doubles surface yet."""
+    sides_in_order = sorted(match.sides, key=lambda s: s.side_number)
+    return [
+        side.players[0].user_id for side in sides_in_order if len(side.players) == 1
+    ]
+
+
 def my_side(match: Match, user_id: uuid.UUID) -> MatchSide | None:
     return next(
         (s for s in match.sides if any(p.user_id == user_id for p in s.players)),
