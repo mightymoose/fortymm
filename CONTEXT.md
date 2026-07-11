@@ -94,6 +94,13 @@ _Avoid_: deadline, SLA, grace period, expiry.
 
 ## Match taxonomy
 
+**Game**:
+One leg of a **match** — a single race to `games_to_win` points. A match is a
+best-of-`N` run of games and is won by taking a majority of them. The unit is
+always a game, never a set: table tennis has games, tennis has sets.
+_Avoid_: set, leg, frame (the API's `PlayerMatchRow.sets` field was a misnomer and
+was renamed to `games`).
+
 **Rating**:
 A player's skill number in a league, moved only by **rated matches**. A player who
 has never finished a rated match has no rating ("Unrated" on their profile). Copy
@@ -156,6 +163,84 @@ upstream disturbs it (an account **merge**, a **voided match**). Deterministic a
 idempotent: it reads current state and rewrites it, so a retry lands on the same
 answer. Runs one league at a time, in the background.
 _Avoid_: recalculation, rating rebuild, backfill.
+
+## Leagues
+
+**League**:
+A population of players who share one rating ladder. It is the unit a **rating**,
+a **rank**, and a **rating timeline** are scoped to — there is no such thing as a
+player's rating *in general*, only their rating *in a league*. A player may belong
+to several leagues at once and carries an independent rating in each. A **match**
+is played in exactly one league.
+_Avoid_: club, ladder, division, season (a league is none of these; it is the
+rating scope).
+
+**Default league**:
+The one league every player is joined to on sign-up, and the league a surface
+falls back to when the caller names none. Exactly one exists.
+_Avoid_: home league, main league, global league.
+
+## Player profile
+
+**Career**:
+A player's lifetime record across *every* league they play in: matches decided,
+wins, losses, win rate, **games won**, and **streaks**. Career is a fact about the
+person, not about a ladder — unlike **rating**, **rank**, **peak rating**, and
+**rating confidence**, which are all league-scoped. A career total counts only
+**decided** matches (a win or a loss); it is therefore a smaller number than the
+player's **match history**, which also counts matches still in play.
+_Avoid_: stats, record, lifetime rating (a career has no rating).
+
+**Peak rating**:
+The highest **rating** a player has ever held in a league. Read off the league's
+**rating timeline**, so a **voided match** can lower it retroactively — a peak
+reached only via a match that was later voided was never really reached.
+_Avoid_: best rating, high score, all-time high.
+
+**Rating confidence**:
+How settled a player's **rating** is — how much the next match could move it.
+Three levels, in order: **provisional** (a new or long-idle player; the rating is
+a guess and will swing hard), **firming up**, and **settled** (a reliable read;
+matches move it only a little). Its honest statement is an interval — "we think
+this player is somewhere between 1551 and 1823" — not a percentage.
+_Avoid_: certainty, accuracy, reliability score, confidence *percent* (there is no
+such number); RD and volatility are the Glicko-2 internals *behind* confidence,
+not names for it.
+
+**Form**:
+A player's most recent decided matches as a newest-first run of W's and L's. A
+short-window fact — it says what is happening lately, and deliberately says
+nothing about **career** or **rating**.
+_Avoid_: streak (a **streak** counts *consecutive* same results; form shows the
+run whatever it looks like), recent results.
+
+**Streak**:
+A run of consecutive same-outcome decided matches. **Current streak** is the run
+ending at the player's most recent decided match — it breaks the moment the other
+outcome lands. **Best streak** is the longest winning run they have ever put
+together. Cross-league, like the rest of **career**.
+_Avoid_: run, hot streak, form (see **form**).
+
+**Games won**:
+The share of individual **games** a player has taken across their decided matches
+— a finer-grained read on dominance than wins and losses, which only count whole
+matches. A 3–2 win and a 3–0 win are the same in the W–L column and very
+different here.
+_Avoid_: sets won, points won (points are not modelled), game win rate.
+
+**Meeting**:
+One decided **match** between two named players. The count of meetings and their
+outcomes make up a **head-to-head**.
+_Avoid_: encounter, fixture, matchup (a *head-to-head* is the record; a *meeting*
+is one match in it).
+
+**Head-to-head**:
+One player's record of **meetings** against another — how many times they have
+played and who won. Always relative to a stated pair, and always read from a
+stated side: `A 4–1 B` and `B 1–4 A` are the same head-to-head said two ways, so
+copy must name whose side it is written from.
+_Avoid_: H2H record vs *the field* (a head-to-head is always against one named
+opponent, never against everyone).
 
 **Cascade**:
 The forward propagation of staleness through the **rating timeline**. If a
