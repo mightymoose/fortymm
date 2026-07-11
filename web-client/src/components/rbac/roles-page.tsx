@@ -5,6 +5,7 @@ import { toast } from 'sonner'
 import { z } from 'zod'
 import { Check, Copy, Folder, Pencil, Plus, Search, Shield, Trash2, Users, X } from 'lucide-react'
 import { ApiError } from '@/api/client'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import {
@@ -51,6 +52,19 @@ import {
 } from './queries'
 import { Avatar, EmptyState, Field, Stat } from './primitives'
 import { colorFor, fmtDate, fmtDateRel, groupPermissions } from './helpers'
+
+// The default role is held by every user on the platform, so the API refuses to
+// delete it (that would cascade the grant away from everyone) or rename it (the
+// name is guest-mint's lookup key) — ADR-0016. Those refusals are 400s; the page
+// doesn't offer the action in the first place, the way the Users page disables
+// self-removal. Permissions and description stay freely editable: granting a
+// capability to the whole population by ticking it onto this role is the entire
+// point of it.
+const DEFAULT_ROLE_HINT = 'Held by every user on the platform.'
+const DEFAULT_ROLE_DELETE_HINT =
+  "This role is held by everyone on the platform and can't be deleted. You can change the permissions it grants instead."
+const DEFAULT_ROLE_RENAME_HINT =
+  "Held by everyone on the platform, so it can't be renamed. Its permissions and description are still yours to change."
 
 export function RolesPage() {
   const { data: roles = [], isLoading: rolesLoading } = useRoles()
@@ -229,6 +243,7 @@ function RoleRow({
     <div
       onClick={onClick}
       className="rbac-row"
+      data-testid={`role-row-${role.name}`}
       data-active={active || undefined}
       style={{
         padding: '14px 18px 14px 15px',
@@ -248,6 +263,11 @@ function RoleRow({
           }}
         />
         <div style={{ flex: 1, fontSize: 14, fontWeight: 600, color: 'var(--fg-1)' }}>{role.name}</div>
+        {role.is_default && (
+          <Badge variant="secondary" title={DEFAULT_ROLE_HINT}>
+            Default
+          </Badge>
+        )}
       </div>
       <div
         style={{
@@ -335,7 +355,7 @@ function RoleDetail({
   }
 
   return (
-    <div>
+    <div data-testid="role-detail">
       <div style={{ padding: '24px 32px 20px', borderBottom: '1px solid var(--border-subtle)' }}>
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: 14 }}>
           <div
@@ -354,7 +374,14 @@ function RoleDetail({
             <Shield size={20} color={accent} strokeWidth={1.75} />
           </div>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <h1 style={titleStyle}>{role.name}</h1>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <h1 style={titleStyle}>{role.name}</h1>
+              {role.is_default && (
+                <Badge variant="secondary" title={DEFAULT_ROLE_HINT}>
+                  Default
+                </Badge>
+              )}
+            </div>
             <div style={descStyle(!!role.description)}>
               {role.description || 'No description'}
             </div>
@@ -384,9 +411,23 @@ function RoleDetail({
             >
               <Copy size={14} /> Duplicate
             </Button>
-            <Button variant="destructive" size="sm" onClick={() => setConfirmDelete(true)}>
-              <Trash2 size={14} /> Delete
-            </Button>
+            {/* A disabled Button is `pointer-events-none`, so a `title` on the
+                button itself would never surface on hover — the wrapper carries
+                the tooltip so the refusal is explained where it's felt. */}
+            <span
+              data-testid="delete-role-tooltip"
+              title={role.is_default ? DEFAULT_ROLE_DELETE_HINT : undefined}
+              style={{ display: 'inline-flex' }}
+            >
+              <Button
+                variant="destructive"
+                size="sm"
+                disabled={role.is_default}
+                onClick={() => setConfirmDelete(true)}
+              >
+                <Trash2 size={14} /> Delete
+              </Button>
+            </span>
           </div>
         </div>
 
@@ -512,7 +553,11 @@ function EditRoleModal({
       <DialogContent className="max-h-[calc(100vh-2rem)] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Edit role</DialogTitle>
-          <DialogDescription>Rename this role or update its description.</DialogDescription>
+          <DialogDescription>
+            {role.is_default
+              ? 'Update this role’s description. Its name is fixed.'
+              : 'Rename this role or update its description.'}
+          </DialogDescription>
         </DialogHeader>
         <Form {...form}>
           <form onSubmit={handleSubmit} noValidate>
@@ -524,8 +569,20 @@ function EditRoleModal({
                   <FormItem>
                     <FormLabel>Name</FormLabel>
                     <FormControl>
-                      <Input autoFocus {...field} />
+                      {/* The default role's name is load-bearing (ADR-0016), so
+                          the field is locked. The DOM `disabled` doesn't touch
+                          RHF's value, so the unchanged name still submits — and
+                          the API only refuses a name that actually *changes*,
+                          which keeps this same PATCH free to edit the
+                          description. */}
+                      <Input
+                        autoFocus={!role.is_default}
+                        disabled={role.is_default}
+                        title={role.is_default ? DEFAULT_ROLE_RENAME_HINT : undefined}
+                        {...field}
+                      />
                     </FormControl>
+                    {role.is_default && <FormDescription>{DEFAULT_ROLE_RENAME_HINT}</FormDescription>}
                     <FormMessage />
                   </FormItem>
                 )}
@@ -537,7 +594,14 @@ function EditRoleModal({
                   <FormItem>
                     <FormLabel>Description</FormLabel>
                     <FormControl>
-                      <Textarea style={{ minHeight: 80 }} {...field} value={field.value ?? ''} />
+                      {/* On the default role the name field is disabled, so the
+                          description is the first thing a keyboard user can edit. */}
+                      <Textarea
+                        autoFocus={role.is_default}
+                        style={{ minHeight: 80 }}
+                        {...field}
+                        value={field.value ?? ''}
+                      />
                     </FormControl>
                     <FormDescription>What does this role let people do?</FormDescription>
                     <FormMessage />
@@ -669,6 +733,8 @@ function PermRow({ p, on, onToggle }: { p: Permission; on: boolean; onToggle: ()
         checked={on}
         onCheckedChange={onToggle}
         onClick={(e) => e.stopPropagation()}
+        data-testid={`perm-toggle-${p.name}`}
+        aria-label={p.name}
       />
       <PermissionCode name={p.name} active={on} />
       <div style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: 'var(--fg-3)', lineHeight: 1.4 }}>

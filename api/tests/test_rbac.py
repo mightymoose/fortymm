@@ -383,6 +383,48 @@ async def test_rename_default_role_is_refused(
     assert fetched["name"] == DEFAULT_ROLE_NAME
 
 
+async def test_list_roles_flags_only_the_default_role(
+    api_client: AsyncClient, default_role: Role
+):
+    """`is_default` is derived from the name, so exactly one role carries it."""
+    await api_client.post("/v1/roles", json={"name": "Beta tester"})
+    await api_client.post("/v1/roles", json={"name": "Administrator"})
+
+    rows = (await api_client.get("/v1/roles")).json()
+    assert {r["name"]: r["is_default"] for r in rows} == {
+        DEFAULT_ROLE_NAME: True,
+        "Beta tester": False,
+        "Administrator": False,
+    }
+
+
+async def test_get_role_flags_the_default_role(
+    api_client: AsyncClient, default_role: Role
+):
+    other = (await api_client.post("/v1/roles", json={"name": "Beta tester"})).json()
+
+    fetched_default = (await api_client.get(f"/v1/roles/{default_role.id}")).json()
+    assert fetched_default["is_default"] is True
+
+    fetched_other = (await api_client.get(f"/v1/roles/{other['id']}")).json()
+    assert fetched_other["is_default"] is False
+
+
+async def test_create_and_update_responses_carry_is_default(
+    api_client: AsyncClient, default_role: Role
+):
+    """The client never sees a role payload without the flag — write paths too."""
+    created = await api_client.post("/v1/roles", json={"name": "Beta tester"})
+    assert created.status_code == 201
+    assert created.json()["is_default"] is False
+
+    patched = await api_client.patch(
+        f"/v1/roles/{default_role.id}", json={"description": "still the default"}
+    )
+    assert patched.status_code == 200
+    assert patched.json()["is_default"] is True
+
+
 # ----- users ---------------------------------------------------------------
 
 

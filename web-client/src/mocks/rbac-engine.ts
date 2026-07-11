@@ -69,6 +69,14 @@ function invalidPermissionName(name: string | undefined): DispatchResult | null 
   return null
 }
 
+/** Mirrors the 400 detail the API answers with (api/app/rbac.py, ADR-0016). */
+function defaultRoleRefusal(name: string, verb: 'deleted' | 'renamed'): string {
+  return (
+    `The "${name}" role is held by everyone on the platform and cannot be ` +
+    `${verb}. You can change the permissions it grants${verb === 'renamed' ? ' and its description' : ''} instead.`
+  )
+}
+
 const sortedPermissions = (s: RbacState) =>
   [...s.permissions.values()].sort((a, b) => a.name.localeCompare(b.name))
 const sortedRoles = (s: RbacState) =>
@@ -163,6 +171,13 @@ export function dispatchRbac(
     if (!existing) return { status: 404, body: { detail: 'role not found' } }
     if (method === 'GET') return { status: 200, body: existing }
     if (method === 'PATCH') {
+      // Mirrors the API's default-role guard (api/app/rbac.py, ADR-0016): only a
+      // *change* of name is refused. The edit modal always PATCHes `name`
+      // alongside `description`, so a no-op name must still go through —
+      // description and permissions stay freely editable on the default role.
+      if (existing.is_default && body.name !== undefined && body.name !== existing.name) {
+        return { status: 400, body: { detail: defaultRoleRefusal(existing.name, 'renamed') } }
+      }
       if (
         body.name &&
         [...state.roles.values()].some((r) => r.id !== id && r.name === body.name)
@@ -179,6 +194,12 @@ export function dispatchRbac(
       return { status: 200, body: updated }
     }
     if (method === 'DELETE') {
+      // The API refuses this outright — deleting the default role would cascade
+      // the grant away from every user. The UI disables the button; this is the
+      // backstop that keeps the mock honest about what the server would answer.
+      if (existing.is_default) {
+        return { status: 400, body: { detail: defaultRoleRefusal(existing.name, 'deleted') } }
+      }
       state.roles.delete(id)
       for (const u of state.users.values()) {
         u.role_ids = u.role_ids.filter((rid) => rid !== id)
