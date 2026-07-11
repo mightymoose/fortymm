@@ -2,7 +2,11 @@ import { createFileRoute } from '@tanstack/react-router'
 import { zodValidator } from '@tanstack/zod-adapter'
 import { z } from 'zod'
 
-import { playerByIdQueryOptions } from '@/api/players'
+import {
+  playerByIdQueryOptions,
+  playerQueryKey,
+  RATING_RANGES,
+} from '@/api/players'
 import { SESSION_QUERY_KEY } from '@/api/session'
 import { PlayerProfile } from '@/components/players/player-profile'
 import { PlayerRouteError } from '@/components/players/player-route-error'
@@ -39,6 +43,23 @@ import { pageTitle } from '@/lib/page-title'
  */
 const profileSearchSchema = z.object({
   league: z.string().uuid().optional().catch(undefined),
+  /**
+   * The rating chart's calendar window (ADR-0915) — the range tabs write it, and
+   * the chart's query is keyed on it.
+   *
+   * Same three decisions as `league`, for the same reasons. `.catch(undefined)`
+   * degrades a mangled `?range=lol` to the default window rather than erroring or
+   * — worse — putting a value on the wire that the API's `Literal["30d","90d","1y"]`
+   * would 422.
+   *
+   * And it stays **optional rather than defaulted**: the default range is the
+   * *absence* of the param, so `?range=90d` never appears in a URL and the
+   * overwhelmingly common visit stays clean. A `z.enum(...).catch('90d')` without
+   * `.optional()` would make `search.range` always `'90d'`, and every
+   * `search={(prev) => ({ ...prev })}` link on the page (the Leagues switcher's
+   * rows) would start dragging `?range=90d` along behind it.
+   */
+  range: z.enum(RATING_RANGES).optional().catch(undefined),
 })
 
 export const Route = createFileRoute('/_app/players/$userId')({
@@ -46,16 +67,36 @@ export const Route = createFileRoute('/_app/players/$userId')({
     meta: [{ title: pageTitle('Player') }],
   }),
   validateSearch: zodValidator(profileSearchSchema),
+  // The loader must ask for the SAME bundle the cards will ask for, which means it
+  // needs the search params — hence `loaderDeps`. Without them it prefetched the
+  // league-less, default-range bundle while the page's cards asked for the one the
+  // URL actually names, and a cold deep-link paid for it twice over: a `?league=`
+  // link is a different cache key, so the page fired TWO bundle requests; and a
+  // `?range=` link got a bundle carrying the wrong window, leaving the chart
+  // nothing to seed from and sending it off for a third.
+  loaderDeps: ({ search }) => ({ league: search.league, range: search.range }),
   // Warm the profile cache on hover/touch preload without blocking navigation —
   // the page's cards all suspend on this same query, so a warm cache paints them
   // instantly. Skip it before the session is resolved so the prefetch can't 401
   // into the error boundary; the `_app` layout loader awaits the session, so by
   // the time this route's component renders the cookie is established (which is
   // what lets the cards fetch with `useSuspenseQuery`, ungated).
-  loader: ({ context, params }) => {
+  loader: ({ context, params, deps }) => {
     if (!context.queryClient.getQueryData(SESSION_QUERY_KEY)) return
+    // Already have this player's bundle? Leave it alone.
+    //
+    // The loader re-runs whenever its deps change — and `range` is one of them,
+    // because a COLD load has to fetch the bundle with the window the URL names.
+    // But a range **flip** is also a deps change, and re-prefetching there would
+    // put a second, wide request on the wire for a card that exists precisely so
+    // that flipping fetches *only* the range (ADR-0915). The bundle does not vary
+    // with the range — only the window embedded in it does, and the chart already
+    // holds the one it was seeded with — so having it at all is reason enough not
+    // to ask again.
+    if (context.queryClient.getQueryData(playerQueryKey(params.userId, deps.league)))
+      return
     void context.queryClient.prefetchQuery(
-      playerByIdQueryOptions(params.userId),
+      playerByIdQueryOptions(params.userId, deps.league, deps.range),
     )
   },
   component: PlayerRoute,
@@ -64,7 +105,7 @@ export const Route = createFileRoute('/_app/players/$userId')({
 
 function PlayerRoute() {
   const { userId } = Route.useParams()
-  const { league } = Route.useSearch()
+  const { league, range } = Route.useSearch()
 
   // No page-level fetch: every card projects off the profile bundle's single
   // cache entry and suspends for itself. That query is `throwOnError`, so any
@@ -77,5 +118,11 @@ function PlayerRoute() {
   // not four, which is why the switch goes through the URL and not through
   // per-card state (ADR-0915). It also means the selection survives a reload for
   // free: the URL is the state.
-  return <PlayerProfile playerId={userId} leagueId={league} />
+  //
+  // `range` is NOT part of that key, and that is the whole point of the chart
+  // owning its own query: flipping range must fetch the range and nothing else,
+  // keep the painted page (and the old chart) on screen while it does, and fail
+  // inside the card if it fails. It rides along on the bundle's *request* all the
+  // same, because the bundle embeds the window the chart paints first.
+  return <PlayerProfile playerId={userId} leagueId={league} range={range} />
 }

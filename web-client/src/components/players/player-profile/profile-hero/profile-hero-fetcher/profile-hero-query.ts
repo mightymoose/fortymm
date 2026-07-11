@@ -1,4 +1,4 @@
-import { playerByIdQueryOptions, type PlayerDetail } from '@/api/players'
+import { playerByIdQueryOptions, type PlayerDetail, type RatingRange } from '@/api/players'
 
 /** The identity half of the profile hero: who this is, and since when.
  *
@@ -39,7 +39,11 @@ export const selectProfileHero = (player: PlayerDetail): ProfileHeroView => ({
  * from the base: a failure has nothing to draw, so it throws to the route's
  * error boundary rather than to a per-card one.
  */
-export const profileHeroQuery = (playerId: string, leagueId?: string) => ({
-  ...playerByIdQueryOptions(playerId, leagueId),
+export const profileHeroQuery = (
+  playerId: string,
+  leagueId?: string,
+  range?: RatingRange,
+) => ({
+  ...playerByIdQueryOptions(playerId, leagueId, range),
   select: selectProfileHero,
 })

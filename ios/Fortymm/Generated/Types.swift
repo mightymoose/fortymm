@@ -358,9 +358,53 @@ internal protocol APIProtocol: Sendable {
     /// rated or not, in any league: a match still in play is not a record, and a solo
     /// "No opponent" match can never be one.
     ///
+    /// `rating_history` is the rating chart's data for the calendar window named by
+    /// `range` (`30d` / `90d` / `1y`, defaulting to `90d`) — the same shape
+    /// `GET /v1/players/{id}/rating-history` returns, embedded so the profile paints
+    /// its chart without a second request. The client seeds that endpoint's cache from
+    /// this block and calls it only when the user changes range (ADR-0915). Note the
+    /// `anchor` inside it is a point from OUTSIDE the window, on purpose.
+    ///
     /// - Remark: HTTP `GET /v1/players/{player_id}`.
     /// - Remark: Generated from `#/paths//v1/players/{player_id}/get(get_player_v1_players__player_id__get)`.
     func getPlayerV1PlayersPlayerIdGet(_ input: Operations.GetPlayerV1PlayersPlayerIdGet.Input) async throws -> Operations.GetPlayerV1PlayersPlayerIdGet.Output
+    /// Get Player Rating History
+    ///
+    /// The player's rating over a CALENDAR window — the profile's rating chart
+    /// (ADR-0915). `range` is `30d`, `90d` (the default) or `1y`; `league_id` names
+    /// the ladder, defaulting to the default league, because a rating is a fact about
+    /// one ladder and never about a player "in general".
+    ///
+    /// The chart is drawn from three things:
+    ///
+    /// * `anchor` — the player's rating **as of the window start**, read from their
+    ///   last rating change *at or before* it. It is therefore A POINT FROM OUTSIDE
+    ///   THE REQUESTED WINDOW, with an `at` older than the window's left edge, and
+    ///   that is deliberate: rating history exists only where matches completed, so
+    ///   the window's left edge is almost never a match. Without it, a player whose
+    ///   first match in the window landed on day forty would be told their ninety-day
+    ///   change was only the movement since day forty. `null` when they held no rating
+    ///   at that instant — there is nothing to carry in — and the line then starts at
+    ///   the first in-window point.
+    /// * `points` — every rating change inside the window, oldest first. A **voided**
+    ///   match is absent, not zeroed: voiding deletes its rating-history rows, so it
+    ///   leaves the rating timeline entirely (CONTEXT.md, "Voided match") and the
+    ///   chart can change shape retroactively. An EMPTY list is a first-class answer,
+    ///   never an error: a rated player with nothing in the last ninety days gets
+    ///   their anchor and no points, and the chart draws a flat line at their current
+    ///   rating.
+    /// * `change` — the net movement across the window, measured from the `anchor`
+    ///   (or, with no anchor, from the first in-window point) to the latest one.
+    ///   `null`, never `+0`, for an empty window: nothing was played, so there is no
+    ///   delta to report.
+    ///
+    /// `peak` is the highest point WITHIN THE WINDOW, and is a different number from
+    /// the profile's `peak`, which is the player's all-time high on the ladder. Do not
+    /// read either for the other.
+    ///
+    /// - Remark: HTTP `GET /v1/players/{player_id}/rating-history`.
+    /// - Remark: Generated from `#/paths//v1/players/{player_id}/rating-history/get(get_player_rating_history_v1_players__player_id__rating_history_get)`.
+    func getPlayerRatingHistoryV1PlayersPlayerIdRatingHistoryGet(_ input: Operations.GetPlayerRatingHistoryV1PlayersPlayerIdRatingHistoryGet.Input) async throws -> Operations.GetPlayerRatingHistoryV1PlayersPlayerIdRatingHistoryGet.Output
     /// List Player Matches
     ///
     /// Paginated per-player match history backing the full-history route
@@ -1134,6 +1178,13 @@ extension APIProtocol {
     /// rated or not, in any league: a match still in play is not a record, and a solo
     /// "No opponent" match can never be one.
     ///
+    /// `rating_history` is the rating chart's data for the calendar window named by
+    /// `range` (`30d` / `90d` / `1y`, defaulting to `90d`) — the same shape
+    /// `GET /v1/players/{id}/rating-history` returns, embedded so the profile paints
+    /// its chart without a second request. The client seeds that endpoint's cache from
+    /// this block and calls it only when the user changes range (ADR-0915). Note the
+    /// `anchor` inside it is a point from OUTSIDE the window, on purpose.
+    ///
     /// - Remark: HTTP `GET /v1/players/{player_id}`.
     /// - Remark: Generated from `#/paths//v1/players/{player_id}/get(get_player_v1_players__player_id__get)`.
     internal func getPlayerV1PlayersPlayerIdGet(
@@ -1142,6 +1193,53 @@ extension APIProtocol {
         headers: Operations.GetPlayerV1PlayersPlayerIdGet.Input.Headers = .init()
     ) async throws -> Operations.GetPlayerV1PlayersPlayerIdGet.Output {
         try await getPlayerV1PlayersPlayerIdGet(Operations.GetPlayerV1PlayersPlayerIdGet.Input(
+            path: path,
+            query: query,
+            headers: headers
+        ))
+    }
+    /// Get Player Rating History
+    ///
+    /// The player's rating over a CALENDAR window — the profile's rating chart
+    /// (ADR-0915). `range` is `30d`, `90d` (the default) or `1y`; `league_id` names
+    /// the ladder, defaulting to the default league, because a rating is a fact about
+    /// one ladder and never about a player "in general".
+    ///
+    /// The chart is drawn from three things:
+    ///
+    /// * `anchor` — the player's rating **as of the window start**, read from their
+    ///   last rating change *at or before* it. It is therefore A POINT FROM OUTSIDE
+    ///   THE REQUESTED WINDOW, with an `at` older than the window's left edge, and
+    ///   that is deliberate: rating history exists only where matches completed, so
+    ///   the window's left edge is almost never a match. Without it, a player whose
+    ///   first match in the window landed on day forty would be told their ninety-day
+    ///   change was only the movement since day forty. `null` when they held no rating
+    ///   at that instant — there is nothing to carry in — and the line then starts at
+    ///   the first in-window point.
+    /// * `points` — every rating change inside the window, oldest first. A **voided**
+    ///   match is absent, not zeroed: voiding deletes its rating-history rows, so it
+    ///   leaves the rating timeline entirely (CONTEXT.md, "Voided match") and the
+    ///   chart can change shape retroactively. An EMPTY list is a first-class answer,
+    ///   never an error: a rated player with nothing in the last ninety days gets
+    ///   their anchor and no points, and the chart draws a flat line at their current
+    ///   rating.
+    /// * `change` — the net movement across the window, measured from the `anchor`
+    ///   (or, with no anchor, from the first in-window point) to the latest one.
+    ///   `null`, never `+0`, for an empty window: nothing was played, so there is no
+    ///   delta to report.
+    ///
+    /// `peak` is the highest point WITHIN THE WINDOW, and is a different number from
+    /// the profile's `peak`, which is the player's all-time high on the ladder. Do not
+    /// read either for the other.
+    ///
+    /// - Remark: HTTP `GET /v1/players/{player_id}/rating-history`.
+    /// - Remark: Generated from `#/paths//v1/players/{player_id}/rating-history/get(get_player_rating_history_v1_players__player_id__rating_history_get)`.
+    internal func getPlayerRatingHistoryV1PlayersPlayerIdRatingHistoryGet(
+        path: Operations.GetPlayerRatingHistoryV1PlayersPlayerIdRatingHistoryGet.Input.Path,
+        query: Operations.GetPlayerRatingHistoryV1PlayersPlayerIdRatingHistoryGet.Input.Query = .init(),
+        headers: Operations.GetPlayerRatingHistoryV1PlayersPlayerIdRatingHistoryGet.Input.Headers = .init()
+    ) async throws -> Operations.GetPlayerRatingHistoryV1PlayersPlayerIdRatingHistoryGet.Output {
+        try await getPlayerRatingHistoryV1PlayersPlayerIdRatingHistoryGet(Operations.GetPlayerRatingHistoryV1PlayersPlayerIdRatingHistoryGet.Input(
             path: path,
             query: query,
             headers: headers
@@ -4462,6 +4560,8 @@ internal enum Components {
             internal var leagues: [Components.Schemas.PlayerLeague]
             /// - Remark: Generated from `#/components/schemas/PlayerDetail/head_to_head`.
             internal var headToHead: Components.Schemas.PlayerHeadToHead
+            /// - Remark: Generated from `#/components/schemas/PlayerDetail/rating_history`.
+            internal var ratingHistory: Components.Schemas.RatingHistoryWindow
             /// Creates a new `PlayerDetail`.
             ///
             /// - Parameters:
@@ -4483,6 +4583,7 @@ internal enum Components {
             ///   - career:
             ///   - leagues:
             ///   - headToHead:
+            ///   - ratingHistory:
             internal init(
                 id: Swift.String,
                 username: Swift.String,
@@ -4501,7 +4602,8 @@ internal enum Components {
                 matchTotal: Swift.Int,
                 career: Components.Schemas.PlayerCareer,
                 leagues: [Components.Schemas.PlayerLeague],
-                headToHead: Components.Schemas.PlayerHeadToHead
+                headToHead: Components.Schemas.PlayerHeadToHead,
+                ratingHistory: Components.Schemas.RatingHistoryWindow
             ) {
                 self.id = id
                 self.username = username
@@ -4521,6 +4623,7 @@ internal enum Components {
                 self.career = career
                 self.leagues = leagues
                 self.headToHead = headToHead
+                self.ratingHistory = ratingHistory
             }
             internal enum CodingKeys: String, CodingKey {
                 case id
@@ -4541,6 +4644,7 @@ internal enum Components {
                 case career
                 case leagues
                 case headToHead = "head_to_head"
+                case ratingHistory = "rating_history"
             }
         }
         /// The profile's head-to-head card, VIEWER-AWARE (ADR-0915): the same player
@@ -5284,6 +5388,85 @@ internal enum Components {
                 case level
             }
         }
+        /// A player's rating over one CALENDAR window — the profile's rating chart
+        /// (ADR-0915).
+        ///
+        /// The chart plots rating against *calendar time*, not against the player's
+        /// match sequence, and the `rating_history` audit cannot pay for that on its own:
+        /// it holds rows only where matches completed, so the window's left edge is
+        /// almost never a match. Hence `anchor`.
+        ///
+        /// - Remark: Generated from `#/components/schemas/RatingHistoryWindow`.
+        internal struct RatingHistoryWindow: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/RatingHistoryWindow/anchor`.
+            internal struct AnchorPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/RatingHistoryWindow/anchor/value1`.
+                internal var value1: Components.Schemas.RatingPoint
+                /// Creates a new `AnchorPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                internal init(value1: Components.Schemas.RatingPoint) {
+                    self.value1 = value1
+                }
+                internal init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                internal func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/RatingHistoryWindow/anchor`.
+            internal var anchor: Components.Schemas.RatingHistoryWindow.AnchorPayload?
+            /// - Remark: Generated from `#/components/schemas/RatingHistoryWindow/points`.
+            internal var points: [Components.Schemas.RatingPoint]?
+            /// - Remark: Generated from `#/components/schemas/RatingHistoryWindow/peak`.
+            internal struct PeakPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/RatingHistoryWindow/peak/value1`.
+                internal var value1: Components.Schemas.RatingPoint
+                /// Creates a new `PeakPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                internal init(value1: Components.Schemas.RatingPoint) {
+                    self.value1 = value1
+                }
+                internal init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                internal func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/RatingHistoryWindow/peak`.
+            internal var peak: Components.Schemas.RatingHistoryWindow.PeakPayload?
+            /// - Remark: Generated from `#/components/schemas/RatingHistoryWindow/change`.
+            internal var change: Swift.Double?
+            /// Creates a new `RatingHistoryWindow`.
+            ///
+            /// - Parameters:
+            ///   - anchor:
+            ///   - points:
+            ///   - peak:
+            ///   - change:
+            internal init(
+                anchor: Components.Schemas.RatingHistoryWindow.AnchorPayload? = nil,
+                points: [Components.Schemas.RatingPoint]? = nil,
+                peak: Components.Schemas.RatingHistoryWindow.PeakPayload? = nil,
+                change: Swift.Double? = nil
+            ) {
+                self.anchor = anchor
+                self.points = points
+                self.peak = peak
+                self.change = change
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case anchor
+                case points
+                case peak
+                case change
+            }
+        }
         /// The 95% interval around a rating — "we think this player is somewhere
         /// between 1551 and 1823". Whole rating points, low first.
         ///
@@ -5308,6 +5491,43 @@ internal enum Components {
             internal enum CodingKeys: String, CodingKey {
                 case low
                 case high
+            }
+        }
+        /// One instant on a player's **rating timeline** (CONTEXT.md): what their
+        /// rating became, and when it became that.
+        ///
+        /// `at` is the *completion* instant of the match that moved it (ADR-0012) — not
+        /// when the audit row happened to be written, which a recompute rewrites. For a
+        /// manual / import / initial change there is no match, so `at` is the moment the
+        /// change was recorded and `match_id` is `null`.
+        ///
+        /// - Remark: Generated from `#/components/schemas/RatingPoint`.
+        internal struct RatingPoint: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/RatingPoint/at`.
+            internal var at: Foundation.Date
+            /// - Remark: Generated from `#/components/schemas/RatingPoint/rating`.
+            internal var rating: Swift.Double
+            /// - Remark: Generated from `#/components/schemas/RatingPoint/match_id`.
+            internal var matchId: Swift.String?
+            /// Creates a new `RatingPoint`.
+            ///
+            /// - Parameters:
+            ///   - at:
+            ///   - rating:
+            ///   - matchId:
+            internal init(
+                at: Foundation.Date,
+                rating: Swift.Double,
+                matchId: Swift.String? = nil
+            ) {
+                self.at = at
+                self.rating = rating
+                self.matchId = matchId
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case at
+                case rating
+                case matchId = "match_id"
             }
         }
         /// - Remark: Generated from `#/components/schemas/RbacUserCreate`.
@@ -13724,6 +13944,13 @@ internal enum Operations {
     /// rated or not, in any league: a match still in play is not a record, and a solo
     /// "No opponent" match can never be one.
     ///
+    /// `rating_history` is the rating chart's data for the calendar window named by
+    /// `range` (`30d` / `90d` / `1y`, defaulting to `90d`) — the same shape
+    /// `GET /v1/players/{id}/rating-history` returns, embedded so the profile paints
+    /// its chart without a second request. The client seeds that endpoint's cache from
+    /// this block and calls it only when the user changes range (ADR-0915). Note the
+    /// `anchor` inside it is a point from OUTSIDE the window, on purpose.
+    ///
     /// - Remark: HTTP `GET /v1/players/{player_id}`.
     /// - Remark: Generated from `#/paths//v1/players/{player_id}/get(get_player_v1_players__player_id__get)`.
     internal enum GetPlayerV1PlayersPlayerIdGet {
@@ -13746,12 +13973,25 @@ internal enum Operations {
             internal struct Query: Sendable, Hashable {
                 /// - Remark: Generated from `#/paths/v1/players/{player_id}/GET/query/league_id`.
                 internal var leagueId: Swift.String?
+                /// - Remark: Generated from `#/paths/v1/players/{player_id}/GET/query/range`.
+                internal enum RangePayload: String, Codable, Hashable, Sendable, CaseIterable {
+                    case _30d = "30d"
+                    case _90d = "90d"
+                    case _1y = "1y"
+                }
+                /// - Remark: Generated from `#/paths/v1/players/{player_id}/GET/query/range`.
+                internal var range: Operations.GetPlayerV1PlayersPlayerIdGet.Input.Query.RangePayload?
                 /// Creates a new `Query`.
                 ///
                 /// - Parameters:
                 ///   - leagueId:
-                internal init(leagueId: Swift.String? = nil) {
+                ///   - range:
+                internal init(
+                    leagueId: Swift.String? = nil,
+                    range: Operations.GetPlayerV1PlayersPlayerIdGet.Input.Query.RangePayload? = nil
+                ) {
                     self.leagueId = leagueId
+                    self.range = range
                 }
             }
             internal var query: Operations.GetPlayerV1PlayersPlayerIdGet.Input.Query
@@ -13874,6 +14114,246 @@ internal enum Operations {
             /// - Throws: An error if `self` is not `.unprocessableContent`.
             /// - SeeAlso: `.unprocessableContent`.
             internal var unprocessableContent: Operations.GetPlayerV1PlayersPlayerIdGet.Output.UnprocessableContent {
+                get throws {
+                    switch self {
+                    case let .unprocessableContent(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "unprocessableContent",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Undocumented response.
+            ///
+            /// A response with a code that is not documented in the OpenAPI document.
+            case undocumented(statusCode: Swift.Int, OpenAPIRuntime.UndocumentedPayload)
+        }
+        internal enum AcceptableContentType: AcceptableProtocol {
+            case json
+            case other(Swift.String)
+            internal init?(rawValue: Swift.String) {
+                switch rawValue.lowercased() {
+                case "application/json":
+                    self = .json
+                default:
+                    self = .other(rawValue)
+                }
+            }
+            internal var rawValue: Swift.String {
+                switch self {
+                case let .other(string):
+                    return string
+                case .json:
+                    return "application/json"
+                }
+            }
+            internal static var allCases: [Self] {
+                [
+                    .json
+                ]
+            }
+        }
+    }
+    /// Get Player Rating History
+    ///
+    /// The player's rating over a CALENDAR window — the profile's rating chart
+    /// (ADR-0915). `range` is `30d`, `90d` (the default) or `1y`; `league_id` names
+    /// the ladder, defaulting to the default league, because a rating is a fact about
+    /// one ladder and never about a player "in general".
+    ///
+    /// The chart is drawn from three things:
+    ///
+    /// * `anchor` — the player's rating **as of the window start**, read from their
+    ///   last rating change *at or before* it. It is therefore A POINT FROM OUTSIDE
+    ///   THE REQUESTED WINDOW, with an `at` older than the window's left edge, and
+    ///   that is deliberate: rating history exists only where matches completed, so
+    ///   the window's left edge is almost never a match. Without it, a player whose
+    ///   first match in the window landed on day forty would be told their ninety-day
+    ///   change was only the movement since day forty. `null` when they held no rating
+    ///   at that instant — there is nothing to carry in — and the line then starts at
+    ///   the first in-window point.
+    /// * `points` — every rating change inside the window, oldest first. A **voided**
+    ///   match is absent, not zeroed: voiding deletes its rating-history rows, so it
+    ///   leaves the rating timeline entirely (CONTEXT.md, "Voided match") and the
+    ///   chart can change shape retroactively. An EMPTY list is a first-class answer,
+    ///   never an error: a rated player with nothing in the last ninety days gets
+    ///   their anchor and no points, and the chart draws a flat line at their current
+    ///   rating.
+    /// * `change` — the net movement across the window, measured from the `anchor`
+    ///   (or, with no anchor, from the first in-window point) to the latest one.
+    ///   `null`, never `+0`, for an empty window: nothing was played, so there is no
+    ///   delta to report.
+    ///
+    /// `peak` is the highest point WITHIN THE WINDOW, and is a different number from
+    /// the profile's `peak`, which is the player's all-time high on the ladder. Do not
+    /// read either for the other.
+    ///
+    /// - Remark: HTTP `GET /v1/players/{player_id}/rating-history`.
+    /// - Remark: Generated from `#/paths//v1/players/{player_id}/rating-history/get(get_player_rating_history_v1_players__player_id__rating_history_get)`.
+    internal enum GetPlayerRatingHistoryV1PlayersPlayerIdRatingHistoryGet {
+        internal static let id: Swift.String = "get_player_rating_history_v1_players__player_id__rating_history_get"
+        internal struct Input: Sendable, Hashable {
+            /// - Remark: Generated from `#/paths/v1/players/{player_id}/rating-history/GET/path`.
+            internal struct Path: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/players/{player_id}/rating-history/GET/path/player_id`.
+                internal var playerId: Swift.String
+                /// Creates a new `Path`.
+                ///
+                /// - Parameters:
+                ///   - playerId:
+                internal init(playerId: Swift.String) {
+                    self.playerId = playerId
+                }
+            }
+            internal var path: Operations.GetPlayerRatingHistoryV1PlayersPlayerIdRatingHistoryGet.Input.Path
+            /// - Remark: Generated from `#/paths/v1/players/{player_id}/rating-history/GET/query`.
+            internal struct Query: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/players/{player_id}/rating-history/GET/query/league_id`.
+                internal var leagueId: Swift.String?
+                /// - Remark: Generated from `#/paths/v1/players/{player_id}/rating-history/GET/query/range`.
+                internal enum RangePayload: String, Codable, Hashable, Sendable, CaseIterable {
+                    case _30d = "30d"
+                    case _90d = "90d"
+                    case _1y = "1y"
+                }
+                /// - Remark: Generated from `#/paths/v1/players/{player_id}/rating-history/GET/query/range`.
+                internal var range: Operations.GetPlayerRatingHistoryV1PlayersPlayerIdRatingHistoryGet.Input.Query.RangePayload?
+                /// Creates a new `Query`.
+                ///
+                /// - Parameters:
+                ///   - leagueId:
+                ///   - range:
+                internal init(
+                    leagueId: Swift.String? = nil,
+                    range: Operations.GetPlayerRatingHistoryV1PlayersPlayerIdRatingHistoryGet.Input.Query.RangePayload? = nil
+                ) {
+                    self.leagueId = leagueId
+                    self.range = range
+                }
+            }
+            internal var query: Operations.GetPlayerRatingHistoryV1PlayersPlayerIdRatingHistoryGet.Input.Query
+            /// - Remark: Generated from `#/paths/v1/players/{player_id}/rating-history/GET/header`.
+            internal struct Headers: Sendable, Hashable {
+                internal var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.GetPlayerRatingHistoryV1PlayersPlayerIdRatingHistoryGet.AcceptableContentType>]
+                /// Creates a new `Headers`.
+                ///
+                /// - Parameters:
+                ///   - accept:
+                internal init(accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.GetPlayerRatingHistoryV1PlayersPlayerIdRatingHistoryGet.AcceptableContentType>] = .defaultValues()) {
+                    self.accept = accept
+                }
+            }
+            internal var headers: Operations.GetPlayerRatingHistoryV1PlayersPlayerIdRatingHistoryGet.Input.Headers
+            /// Creates a new `Input`.
+            ///
+            /// - Parameters:
+            ///   - path:
+            ///   - query:
+            ///   - headers:
+            internal init(
+                path: Operations.GetPlayerRatingHistoryV1PlayersPlayerIdRatingHistoryGet.Input.Path,
+                query: Operations.GetPlayerRatingHistoryV1PlayersPlayerIdRatingHistoryGet.Input.Query = .init(),
+                headers: Operations.GetPlayerRatingHistoryV1PlayersPlayerIdRatingHistoryGet.Input.Headers = .init()
+            ) {
+                self.path = path
+                self.query = query
+                self.headers = headers
+            }
+        }
+        internal enum Output: Sendable, Hashable {
+            internal struct Ok: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/players/{player_id}/rating-history/GET/responses/200/content`.
+                internal enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/players/{player_id}/rating-history/GET/responses/200/content/application\/json`.
+                    case json(Components.Schemas.RatingHistoryWindow)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    internal var json: Components.Schemas.RatingHistoryWindow {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                internal var body: Operations.GetPlayerRatingHistoryV1PlayersPlayerIdRatingHistoryGet.Output.Ok.Body
+                /// Creates a new `Ok`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                internal init(body: Operations.GetPlayerRatingHistoryV1PlayersPlayerIdRatingHistoryGet.Output.Ok.Body) {
+                    self.body = body
+                }
+            }
+            /// Successful Response
+            ///
+            /// - Remark: Generated from `#/paths//v1/players/{player_id}/rating-history/get(get_player_rating_history_v1_players__player_id__rating_history_get)/responses/200`.
+            ///
+            /// HTTP response code: `200 ok`.
+            case ok(Operations.GetPlayerRatingHistoryV1PlayersPlayerIdRatingHistoryGet.Output.Ok)
+            /// The associated value of the enum case if `self` is `.ok`.
+            ///
+            /// - Throws: An error if `self` is not `.ok`.
+            /// - SeeAlso: `.ok`.
+            internal var ok: Operations.GetPlayerRatingHistoryV1PlayersPlayerIdRatingHistoryGet.Output.Ok {
+                get throws {
+                    switch self {
+                    case let .ok(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "ok",
+                            response: self
+                        )
+                    }
+                }
+            }
+            internal struct UnprocessableContent: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/players/{player_id}/rating-history/GET/responses/422/content`.
+                internal enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/players/{player_id}/rating-history/GET/responses/422/content/application\/json`.
+                    case json(Components.Schemas.HTTPValidationError)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    internal var json: Components.Schemas.HTTPValidationError {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                internal var body: Operations.GetPlayerRatingHistoryV1PlayersPlayerIdRatingHistoryGet.Output.UnprocessableContent.Body
+                /// Creates a new `UnprocessableContent`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                internal init(body: Operations.GetPlayerRatingHistoryV1PlayersPlayerIdRatingHistoryGet.Output.UnprocessableContent.Body) {
+                    self.body = body
+                }
+            }
+            /// Validation Error
+            ///
+            /// - Remark: Generated from `#/paths//v1/players/{player_id}/rating-history/get(get_player_rating_history_v1_players__player_id__rating_history_get)/responses/422`.
+            ///
+            /// HTTP response code: `422 unprocessableContent`.
+            case unprocessableContent(Operations.GetPlayerRatingHistoryV1PlayersPlayerIdRatingHistoryGet.Output.UnprocessableContent)
+            /// The associated value of the enum case if `self` is `.unprocessableContent`.
+            ///
+            /// - Throws: An error if `self` is not `.unprocessableContent`.
+            /// - SeeAlso: `.unprocessableContent`.
+            internal var unprocessableContent: Operations.GetPlayerRatingHistoryV1PlayersPlayerIdRatingHistoryGet.Output.UnprocessableContent {
                 get throws {
                     switch self {
                     case let .unprocessableContent(response):

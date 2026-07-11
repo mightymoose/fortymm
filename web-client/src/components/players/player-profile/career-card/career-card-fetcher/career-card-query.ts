@@ -1,4 +1,4 @@
-import { playerByIdQueryOptions, type PlayerDetail } from '@/api/players'
+import { playerByIdQueryOptions, type PlayerDetail, type RatingRange } from '@/api/players'
 import type { components } from '@/api/schema'
 
 type PlayerCareer = components['schemas']['PlayerCareer']
@@ -164,7 +164,11 @@ export const selectCareer = (player: PlayerDetail): CareerView => {
  * league-scoped and would visibly change the W–L when you clicked a ladder. That
  * is the bug ADR-0915 exists to prevent.
  */
-export const careerCardQuery = (playerId: string, leagueId?: string) => ({
-  ...playerByIdQueryOptions(playerId, leagueId),
+export const careerCardQuery = (
+  playerId: string,
+  leagueId?: string,
+  range?: RatingRange,
+) => ({
+  ...playerByIdQueryOptions(playerId, leagueId, range),
   select: selectCareer,
 })

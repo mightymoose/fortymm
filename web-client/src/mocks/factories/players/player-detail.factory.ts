@@ -38,6 +38,14 @@ import {
   buildProvisionalConfidence,
   buildRatingConfidence,
 } from './rating-confidence.factory'
+import {
+  buildEmptyRatingWindow,
+  buildFallingRatingWindow,
+  buildRatingHistoryWindow,
+  buildRatingPoint,
+  buildUnratedRatingWindow,
+  daysAgo,
+} from './rating-history.factory'
 
 type PlayerDetail = components['schemas']['PlayerDetail']
 
@@ -63,6 +71,12 @@ export {
   buildNeverMetHeadToHead,
   buildHeadToHeadRecord,
   buildHeadToHeadOpponent,
+  buildRatingHistoryWindow,
+  buildEmptyRatingWindow,
+  buildFallingRatingWindow,
+  buildUnratedRatingWindow,
+  buildRatingPoint,
+  daysAgo,
   FORTYMM_LEAGUE_ID,
   USATT_LEAGUE_ID,
 }
@@ -114,6 +128,14 @@ export {
  * For the other two viewers, see `buildSelfHeadToHead` (you, looking at yourself:
  * no record, no self-challenge) and `buildNeverMetHeadToHead` (a guest, who has
  * played nobody — the common case, not an edge one).
+ *
+ * `rating_history` is the **90-day window the chart draws on first paint** — the
+ * bundle carries it inline so the chart costs no second request (ADR-0915), and
+ * the client seeds the chart's own cache from it. Its numbers are kept honest
+ * against the rest of the bundle: it ends at the same 1687 the hero prints, and
+ * its `change` (+127) is measured from an anchor dated *outside* the window. Note
+ * its in-window `peak` (1701) is deliberately NOT the bundle's all-time `peak`
+ * (1712) — two different numbers on one page, as the API sends them.
  */
 export function buildPlayerDetail(
   overrides: Partial<PlayerDetail> = {},
@@ -136,6 +158,7 @@ export function buildPlayerDetail(
     career: buildPlayerCareer(),
     leagues: [buildDefaultLeague(), buildSecondLeague()],
     head_to_head: buildPlayerHeadToHead(),
+    rating_history: buildRatingHistoryWindow(),
     matches: buildPlayerMatchList([
       buildLiveMatchRow({ opponent: { id: 'p-8', username: 'kai.zhou' } }),
       buildAwaitingMatchRow({ opponent: { id: 'p-7', username: 'lin.wu' } }),
@@ -178,6 +201,11 @@ export function buildPlayerDetail(
  * Start-a-match CTA), and their single meeting is their one frequent opponent.
  * Note the head-to-head is orthogonal to the *rating* — a meeting is a decided
  * match, rated or not — so an unrated player very much has one, unlike confidence.
+ *
+ * And their `rating_history` is **empty of everything**, anchor included: a rating
+ * timeline is a sequence of *rated* matches, and they have finished none. The
+ * profile must not draw them a chart at all — the slot shows an "Unrated" panel,
+ * exactly as the hero says "Unrated" and the confidence card does not render.
  */
 export function buildUnratedPlayerDetail(
   overrides: Partial<PlayerDetail> = {},
@@ -192,6 +220,7 @@ export function buildUnratedPlayerDetail(
     percentile: null,
     rating_delta: null,
     confidence: null,
+    rating_history: buildUnratedRatingWindow(),
     leagues: [buildDefaultLeague({ rating: null })],
     head_to_head: buildPlayerHeadToHead({
       versus_viewer: buildNeverMetHeadToHead({

@@ -1,5 +1,7 @@
 import { useSuspenseQuery } from '@tanstack/react-query'
 
+import type { RatingRange } from '@/api/players'
+
 import { ProfileHeroDisplay } from './profile-hero-fetcher/profile-hero-display'
 import { profileHeroQuery } from './profile-hero-fetcher/profile-hero-query'
 
@@ -10,14 +12,23 @@ export interface ProfileHeroFetcherProps {
    * for it. It is part of the bundle's query key, so every card on the page must
    * be handed the same one or the profile forks into two requests. */
   leagueId?: string
+  /** The chart's calendar window (ADR-0915), from the profile's `?range=`.
+   * `undefined` is the **default** window — the URL carries no param for it.
+   *
+   * It is **not** in the bundle's cache key (a range flip must not refetch the
+   * bundle, or a failed flip would blank the page), but it *is* in the bundle's
+   * request: the response embeds that window, and the chart seeds its own cache
+   * from it. So every card must be handed the same range — whichever card's query
+   * happens to trigger the shared fetch decides which window comes back in it. */
+  range?: RatingRange
 }
 
 /** Thin fetcher: reads the hero's view off the profile bundle's shared cache
  * entry and hands it to the display. No `isLoading` branching — the wrapper's
  * `<Suspense>` owns the pending state, and the bundle's `throwOnError` sends a
  * failure to the route's error boundary. */
-export function ProfileHeroFetcher({ playerId, leagueId }: ProfileHeroFetcherProps) {
-  const { data: hero } = useSuspenseQuery(profileHeroQuery(playerId, leagueId))
+export function ProfileHeroFetcher({ playerId, leagueId, range }: ProfileHeroFetcherProps) {
+  const { data: hero } = useSuspenseQuery(profileHeroQuery(playerId, leagueId, range))
 
   return <ProfileHeroDisplay hero={hero} />
 }

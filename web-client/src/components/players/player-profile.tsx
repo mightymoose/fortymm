@@ -1,8 +1,10 @@
+import type { RatingRange } from '@/api/players'
 import { CareerCard } from '@/components/players/player-profile/career-card'
 import { ConfidenceCard } from '@/components/players/player-profile/confidence-card'
 import { HeadToHeadCard } from '@/components/players/player-profile/head-to-head-card'
 import { LeaguesCard } from '@/components/players/player-profile/leagues-card'
 import { ProfileHero } from '@/components/players/player-profile/profile-hero'
+import { RatingChart } from '@/components/players/player-profile/rating-chart'
 import { RatingPanel } from '@/components/players/player-profile/rating-panel'
 import { RecentMatches } from '@/components/players/player-profile/recent-matches'
 
@@ -58,6 +60,15 @@ import './player-profile.css'
  * there is no record against yourself, and no challenging yourself to a match.
  * Like Career it is cross-league (a meeting is a decided match on any ladder) and
  * takes `leagueId` anyway, for the same one-request reason.
+ *
+ * The **Rating chart** is the one card here that does *not* project off the bundle
+ * (ADR-0915). Its range tabs must fetch **only** the range, so it owns a query
+ * against `/rating-history` keyed on the range — and, because it does, it is also
+ * the only card that can fail on its own and must therefore hold its own error
+ * state. It still costs nothing on first paint: its cache is seeded from the
+ * `rating_history` block the bundle already carries for the range the page loaded
+ * with. Hence `range`, which every card is handed for the same one-request reason
+ * `leagueId` is: it rides on the bundle's *request* (though not its key).
  */
 export interface PlayerProfileProps {
   /** Route path param. Known before any query resolves, so the cards can start
@@ -67,23 +78,32 @@ export interface PlayerProfileProps {
    * (ADR-0915). `undefined` is the **default league**, which is what a URL with
    * no param means. */
   leagueId?: string
+  /** The calendar window the rating chart is drawn over — the route's `?range=`
+   * (ADR-0915). `undefined` is the **default window** (90 days), which is what a
+   * URL with no param means. */
+  range?: RatingRange
 }
 
-export function PlayerProfile({ playerId, leagueId }: PlayerProfileProps) {
+export function PlayerProfile({
+  playerId,
+  leagueId,
+  range,
+}: PlayerProfileProps) {
   return (
     <div className="player-profile dark fortymm-theme">
       <header className="player-profile__hero">
         <div className="player-profile__hero-row">
-          <ProfileHero playerId={playerId} leagueId={leagueId} />
-          <RatingPanel playerId={playerId} leagueId={leagueId} />
+          <ProfileHero playerId={playerId} leagueId={leagueId} range={range} />
+          <RatingPanel playerId={playerId} leagueId={leagueId} range={range} />
         </div>
       </header>
       <div className="player-profile__body">
-        <CareerCard playerId={playerId} leagueId={leagueId} />
-        <LeaguesCard playerId={playerId} leagueId={leagueId} />
-        <ConfidenceCard playerId={playerId} leagueId={leagueId} />
-        <HeadToHeadCard playerId={playerId} leagueId={leagueId} />
-        <RecentMatches playerId={playerId} leagueId={leagueId} />
+        <RatingChart playerId={playerId} leagueId={leagueId} range={range} />
+        <CareerCard playerId={playerId} leagueId={leagueId} range={range} />
+        <LeaguesCard playerId={playerId} leagueId={leagueId} range={range} />
+        <ConfidenceCard playerId={playerId} leagueId={leagueId} range={range} />
+        <HeadToHeadCard playerId={playerId} leagueId={leagueId} range={range} />
+        <RecentMatches playerId={playerId} leagueId={leagueId} range={range} />
       </div>
     </div>
   )

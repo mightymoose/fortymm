@@ -625,8 +625,65 @@ export interface paths {
          *     from *their* side. A meeting is a *decided* match between two named players,
          *     rated or not, in any league: a match still in play is not a record, and a solo
          *     "No opponent" match can never be one.
+         *
+         *     `rating_history` is the rating chart's data for the calendar window named by
+         *     `range` (`30d` / `90d` / `1y`, defaulting to `90d`) — the same shape
+         *     `GET /v1/players/{id}/rating-history` returns, embedded so the profile paints
+         *     its chart without a second request. The client seeds that endpoint's cache from
+         *     this block and calls it only when the user changes range (ADR-0915). Note the
+         *     `anchor` inside it is a point from OUTSIDE the window, on purpose.
          */
         get: operations["get_player_v1_players__player_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/players/{player_id}/rating-history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Player Rating History
+         * @description The player's rating over a CALENDAR window — the profile's rating chart
+         *     (ADR-0915). `range` is `30d`, `90d` (the default) or `1y`; `league_id` names
+         *     the ladder, defaulting to the default league, because a rating is a fact about
+         *     one ladder and never about a player "in general".
+         *
+         *     The chart is drawn from three things:
+         *
+         *     * `anchor` — the player's rating **as of the window start**, read from their
+         *       last rating change *at or before* it. It is therefore A POINT FROM OUTSIDE
+         *       THE REQUESTED WINDOW, with an `at` older than the window's left edge, and
+         *       that is deliberate: rating history exists only where matches completed, so
+         *       the window's left edge is almost never a match. Without it, a player whose
+         *       first match in the window landed on day forty would be told their ninety-day
+         *       change was only the movement since day forty. `null` when they held no rating
+         *       at that instant — there is nothing to carry in — and the line then starts at
+         *       the first in-window point.
+         *     * `points` — every rating change inside the window, oldest first. A **voided**
+         *       match is absent, not zeroed: voiding deletes its rating-history rows, so it
+         *       leaves the rating timeline entirely (CONTEXT.md, "Voided match") and the
+         *       chart can change shape retroactively. An EMPTY list is a first-class answer,
+         *       never an error: a rated player with nothing in the last ninety days gets
+         *       their anchor and no points, and the chart draws a flat line at their current
+         *       rating.
+         *     * `change` — the net movement across the window, measured from the `anchor`
+         *       (or, with no anchor, from the first in-window point) to the latest one.
+         *       `null`, never `+0`, for an empty window: nothing was played, so there is no
+         *       delta to report.
+         *
+         *     `peak` is the highest point WITHIN THE WINDOW, and is a different number from
+         *     the profile's `peak`, which is the player's all-time high on the ladder. Do not
+         *     read either for the other.
+         */
+        get: operations["get_player_rating_history_v1_players__player_id__rating_history_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2131,6 +2188,7 @@ export interface components {
             /** Leagues */
             leagues: components["schemas"]["PlayerLeague"][];
             head_to_head: components["schemas"]["PlayerHeadToHead"];
+            rating_history: components["schemas"]["RatingHistoryWindow"];
         };
         /**
          * PlayerHeadToHead
@@ -2409,6 +2467,27 @@ export interface components {
             readonly level: "provisional" | "firming_up" | "settled";
         };
         /**
+         * RatingHistoryWindow
+         * @description A player's rating over one CALENDAR window — the profile's rating chart
+         *     (ADR-0915).
+         *
+         *     The chart plots rating against *calendar time*, not against the player's
+         *     match sequence, and the `rating_history` audit cannot pay for that on its own:
+         *     it holds rows only where matches completed, so the window's left edge is
+         *     almost never a match. Hence `anchor`.
+         */
+        RatingHistoryWindow: {
+            anchor?: components["schemas"]["RatingPoint"] | null;
+            /**
+             * Points
+             * @default []
+             */
+            points: components["schemas"]["RatingPoint"][];
+            peak?: components["schemas"]["RatingPoint"] | null;
+            /** Change */
+            change?: number | null;
+        };
+        /**
          * RatingInterval
          * @description The 95% interval around a rating — "we think this player is somewhere
          *     between 1551 and 1823". Whole rating points, low first.
@@ -2418,6 +2497,27 @@ export interface components {
             low: number;
             /** High */
             high: number;
+        };
+        /**
+         * RatingPoint
+         * @description One instant on a player's **rating timeline** (CONTEXT.md): what their
+         *     rating became, and when it became that.
+         *
+         *     `at` is the *completion* instant of the match that moved it (ADR-0012) — not
+         *     when the audit row happened to be written, which a recompute rewrites. For a
+         *     manual / import / initial change there is no match, so `at` is the moment the
+         *     change was recorded and `match_id` is `null`.
+         */
+        RatingPoint: {
+            /**
+             * At
+             * Format: date-time
+             */
+            at: string;
+            /** Rating */
+            rating: number;
+            /** Match Id */
+            match_id?: string | null;
         };
         /** RbacUserCreate */
         RbacUserCreate: {
@@ -4196,6 +4296,7 @@ export interface operations {
         parameters: {
             query?: {
                 league_id?: string | null;
+                range?: "30d" | "90d" | "1y";
             };
             header?: never;
             path: {
@@ -4214,6 +4315,42 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PlayerDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_player_rating_history_v1_players__player_id__rating_history_get: {
+        parameters: {
+            query?: {
+                league_id?: string | null;
+                range?: "30d" | "90d" | "1y";
+            };
+            header?: never;
+            path: {
+                player_id: string;
+            };
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RatingHistoryWindow"];
                 };
             };
             /** @description Validation Error */

@@ -1,5 +1,7 @@
 import { useSuspenseQuery } from '@tanstack/react-query'
 
+import type { RatingRange } from '@/api/players'
+
 import { HeadToHeadCardDisplay } from './head-to-head-card-fetcher/head-to-head-card-display'
 import { headToHeadCardQuery } from './head-to-head-card-fetcher/head-to-head-card-query'
 
@@ -11,6 +13,15 @@ export interface HeadToHeadCardFetcherProps {
    * every card on the page must be handed the same one or the profile forks into
    * two requests. */
   leagueId?: string
+  /** The chart's calendar window (ADR-0915), from the profile's `?range=`.
+   * `undefined` is the **default** window — the URL carries no param for it.
+   *
+   * It is **not** in the bundle's cache key (a range flip must not refetch the
+   * bundle, or a failed flip would blank the page), but it *is* in the bundle's
+   * request: the response embeds that window, and the chart seeds its own cache
+   * from it. So every card must be handed the same range — whichever card's query
+   * happens to trigger the shared fetch decides which window comes back in it. */
+  range?: RatingRange
 }
 
 /**
@@ -32,9 +43,10 @@ export interface HeadToHeadCardFetcherProps {
 export function HeadToHeadCardFetcher({
   playerId,
   leagueId,
+  range,
 }: HeadToHeadCardFetcherProps) {
   const { data: headToHead } = useSuspenseQuery(
-    headToHeadCardQuery(playerId, leagueId),
+    headToHeadCardQuery(playerId, leagueId, range),
   )
 
   return <HeadToHeadCardDisplay headToHead={headToHead} />

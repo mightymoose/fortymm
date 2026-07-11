@@ -1,4 +1,4 @@
-import { playerByIdQueryOptions, type PlayerDetail } from '@/api/players'
+import { playerByIdQueryOptions, type PlayerDetail, type RatingRange } from '@/api/players'
 import type { components } from '@/api/schema'
 
 type HeadToHeadRecord = components['schemas']['HeadToHeadRecord']
@@ -159,7 +159,11 @@ export const selectHeadToHead = (player: PlayerDetail): HeadToHeadView => ({
  * — one for `?league=<x>` and one for the default ladder — and the profile's
  * one-request test would catch it.
  */
-export const headToHeadCardQuery = (playerId: string, leagueId?: string) => ({
-  ...playerByIdQueryOptions(playerId, leagueId),
+export const headToHeadCardQuery = (
+  playerId: string,
+  leagueId?: string,
+  range?: RatingRange,
+) => ({
+  ...playerByIdQueryOptions(playerId, leagueId, range),
   select: selectHeadToHead,
 })

@@ -1390,3 +1390,201 @@
   height: 22px;
   width: 62%;
 }
+
+/* ============ Rating chart (ADR-0915) ============
+ * The one card on the profile with its own query, its own error state — and the
+ * only drawing. It scales by `viewBox` alone: no measured widths, no resize
+ * observer, so the same 600x180 line is a full-width panel on a desktop and
+ * survives a 390px phone. */
+.rating-chart {
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--border-subtle);
+  padding-bottom: 20px;
+}
+
+.rating-chart__header {
+  justify-content: flex-start;
+}
+
+/* The signed change — and there is deliberately no "+0" variant, because that
+ * chip does not exist (ADR-0915): an empty window renders no chip at all. */
+.rating-chart__chip {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+
+.rating-chart__chip--up {
+  color: var(--win);
+  background: color-mix(in srgb, var(--win) 14%, transparent);
+}
+
+.rating-chart__chip--down {
+  color: var(--loss);
+  background: color-mix(in srgb, var(--loss) 14%, transparent);
+}
+
+/* The range tabs sit at the right-hand end of the header row, and wrap under it
+ * on a narrow viewport rather than squeezing the heading out. */
+.rating-chart__tabs {
+  display: flex;
+  gap: 4px;
+  margin-left: auto;
+  flex-wrap: wrap;
+}
+
+.rating-chart__tab {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border-subtle);
+  text-decoration: none;
+  transition:
+    color 120ms ease,
+    background 120ms ease,
+    border-color 120ms ease;
+}
+
+.rating-chart__tab:hover {
+  color: var(--fg-1);
+  border-color: var(--ball-500);
+}
+
+.rating-chart__tab--selected {
+  color: var(--bg-app);
+  background: var(--ball-500);
+  border-color: var(--ball-500);
+}
+
+.rating-chart__summary {
+  padding: 0 clamp(20px, 5vw, 40px);
+  margin: 0 0 10px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--fg-3);
+  min-height: 20px;
+}
+
+.rating-chart__plot {
+  padding: 0 clamp(20px, 5vw, 40px);
+}
+
+.rating-chart__canvas {
+  transition: opacity 160ms ease;
+}
+
+/* A range still loading: the previous line stays, dimmed. It is the truth about
+ * the *previous* window — busy, not gone. */
+.rating-chart__canvas--loading {
+  opacity: 0.45;
+}
+
+.rating-chart__svg {
+  width: 100%;
+  height: auto;
+  display: block;
+  overflow: visible;
+}
+
+.rating-chart__gridline {
+  stroke: var(--border-subtle);
+  stroke-width: 1;
+  stroke-dasharray: 3 5;
+}
+
+.rating-chart__y-label,
+.rating-chart__x-label {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  fill: var(--fg-3);
+}
+
+.rating-chart__line {
+  fill: none;
+  stroke: var(--ball-500);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.rating-chart__area {
+  stroke: none;
+}
+
+.rating-chart__peak-dot {
+  fill: var(--bg-app);
+  stroke: var(--fg-2);
+  stroke-width: 1.5;
+}
+
+.rating-chart__peak-label {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 600;
+  fill: var(--fg-2);
+}
+
+.rating-chart__current-dot {
+  fill: var(--ball-500);
+  stroke: var(--bg-app);
+  stroke-width: 2;
+}
+
+/* The card's OWN error, in place of the SVG (ADR-0915). A failed range flip is
+ * not a failed page: the hero, career, confidence, leagues, head-to-head and
+ * recent matches stay exactly where they are. */
+.rating-chart__error {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 24px 0;
+}
+
+.rating-chart__error-title {
+  margin: 0;
+  font-size: 14px;
+  color: var(--fg-2);
+}
+
+.rating-chart__pending,
+.rating-chart__skeleton-plot {
+  display: block;
+  width: 100%;
+  height: 120px;
+  border-radius: 10px;
+  background: var(--bg-raised);
+  animation: player-profile-shimmer 1.4s ease-in-out infinite;
+}
+
+.rating-chart__pending-bar {
+  display: block;
+}
+
+/* No rating, no chart (CONTEXT.md, "Rating"): the slot says what would end that,
+ * rather than drawing an axis with nothing on it. */
+.rating-chart__unrated {
+  padding: 8px clamp(20px, 5vw, 40px) 4px;
+}
+
+.rating-chart__unrated-title {
+  margin: 0 0 4px;
+  font-family: var(--font-display);
+  font-size: 20px;
+  line-height: 1;
+  color: var(--fg-2);
+}
+
+.rating-chart__unrated-body {
+  margin: 0;
+  font-size: 13px;
+  color: var(--fg-3);
+}

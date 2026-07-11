@@ -1,4 +1,10 @@
 import { delay, http, HttpResponse } from 'msw'
+import {
+  DEFAULT_RATING_RANGE,
+  RATING_RANGES,
+  type RatingHistoryWindow,
+  type RatingRange,
+} from '@/api/players'
 import type { components } from '@/api/schema'
 import { healthCheck, player, sessionResponse } from '@/test/factories'
 import {
@@ -510,14 +516,94 @@ function playerHeadToHead(p: {
   }
 }
 
+/** How many days each range's calendar window spans (mirrors `window_start` in
+ * `api/app/ratings/history.py`). */
+const RANGE_DAYS: Record<RatingRange, number> = {
+  '30d': 30,
+  '90d': 90,
+  '1y': 365,
+}
+
+/** A range the caller may have sent as anything at all. Anything but the three
+ * the API accepts degrades to the default, as FastAPI's `Literal` would 422 it and
+ * the client's search schema never puts one on the wire. */
+function parseRange(raw: string | null): RatingRange {
+  return RATING_RANGES.find((range) => range === raw) ?? DEFAULT_RATING_RANGE
+}
+
+const isoDaysAgo = (days: number): string =>
+  new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString()
+
+/**
+ * The player's rating over one CALENDAR window — the profile's chart (ADR-0915).
+ * Mirrors `player_rating_history` in `api/app/ratings/history.py`, and holds the
+ * three things the real endpoint's shape turns on:
+ *
+ * - the **anchor is dated OUTSIDE the window**: it is the player's rating *as of
+ *   the window start*, carried in from their last match before it. It is what
+ *   makes "up +127 over 90 days" true, so a mock that started the line at the
+ *   first in-window point would let a chart that ignores the anchor look right;
+ * - `change` is measured **from that anchor** to the latest point;
+ * - an **unrated** player gets a wholly empty window — no anchor, no points, no
+ *   change. Not a zeroed one: they have no rating timeline at all, and the profile
+ *   draws them no chart.
+ *
+ * The window is relative to *now* and deterministic per (player, range), so
+ * flipping the range tab in `npm run dev` visibly redraws the line rather than
+ * re-serving the same one.
+ */
+function playerRatingHistory(
+  summary: PlayerSummary,
+  range: RatingRange,
+): RatingHistoryWindow {
+  const rating = summary.rating
+  if (rating == null) {
+    return { anchor: null, points: [], peak: null, change: null }
+  }
+  const days = RANGE_DAYS[range]
+  const seed = djb2(`${summary.username}:${range}`)
+  const count = 5 + (seed % 6)
+  // The window's net movement, and so the anchor it must have started from.
+  const net = 20 + (seed % 90)
+  const anchorRating = rating - net
+  const anchor = {
+    at: isoDaysAgo(days + 4 + (seed % 25)),
+    rating: anchorRating,
+    match_id: `m-anchor-${summary.id}`,
+  }
+  const points = Array.from({ length: count }, (_, i) => {
+    const progress = (i + 1) / count
+    const wobble = (((seed >> i) % 21) - 10) * (i === count - 1 ? 0 : 1)
+    return {
+      // The last point is the player's CURRENT rating: the line's right-hand end
+      // and the hero's big number are the same fact.
+      rating:
+        i === count - 1
+          ? rating
+          : Math.round(anchorRating + net * progress + wobble),
+      at: isoDaysAgo(Math.max(1, days * (1 - progress))),
+      match_id: `m-${summary.id}-${i}`,
+    }
+  })
+  const peak = points.reduce((best, point) =>
+    point.rating > best.rating ? point : best,
+  )
+  return { anchor, points, peak, change: rating - anchorRating }
+}
+
 /** PlayerDetail = PlayerSummary + the hero's standing (member-since, peak,
  * rank-of-ladder, percentile, rating delta) + the cross-league career block +
- * the player's leagues + the viewer-aware head-to-head + the six most recent
- * matches + the all-inclusive `match_total` behind the "View all N matches" link.
+ * the player's leagues + the viewer-aware head-to-head + the chart's window + the
+ * six most recent matches + the all-inclusive `match_total` behind the
+ * "View all N matches" link.
  *
  * `leagueId` is the ladder the **rating half** of the bundle is about, defaulting
  * to the default league when the caller names none. Career ignores it, and so
- * do the head-to-head and the match list. */
+ * do the head-to-head and the match list.
+ *
+ * `range` is the chart's calendar window, embedded so the profile's first paint
+ * costs ONE request — the client seeds the chart's own cache from it and calls
+ * `/rating-history` only when the user flips range (ADR-0915). */
 function playerDetail(
   p: {
     id: string
@@ -525,6 +611,7 @@ function playerDetail(
     rating?: number | null
   },
   leagueId: string = DEFAULT_MOCK_LEAGUE.id,
+  range: RatingRange = DEFAULT_RATING_RANGE,
 ): PlayerDetail {
   // The rating half of the bundle is scoped to the requested league; everything
   // below reads off this league-scoped summary.
@@ -548,6 +635,9 @@ function playerDetail(
     // Viewer-aware, and deliberately NOT league-scoped: a meeting is a decided
     // match in any league (ADR-0915).
     head_to_head: playerHeadToHead(p),
+    // League-scoped like the rest of the rating half — it reads off the SAME
+    // league-scoped summary, so the line ends where the hero's rating does.
+    rating_history: playerRatingHistory(summary, range),
     match_total: rows.length,
     matches: {
       items: rows.slice(0, PROFILE_RECENT_MATCHES),
@@ -792,14 +882,51 @@ export const handlers = [
     // (ADR-0915). An unknown one is a 404 here exactly as it is in the API
     // (`resolve_league`) — the client never sends a malformed one, because the
     // route's search schema catches it before it reaches the wire.
-    const leagueId = new URL(request.url).searchParams.get('league_id')
+    const url = new URL(request.url)
+    const leagueId = url.searchParams.get('league_id')
     if (leagueId && !MOCK_LEAGUES.some((league) => league.id === leagueId)) {
       return HttpResponse.json(
         { detail: 'League not found.' },
         { status: 404 },
       )
     }
-    return HttpResponse.json(playerDetail(player, leagueId ?? undefined))
+    // `?range=` names the chart's window, embedded in the bundle so the profile's
+    // first paint is one request. Answering the DEFAULT window whatever was asked
+    // for would break exactly that: the client seeds the chart's cache from this
+    // block for the range it asked for, so a mock that ignored the param would
+    // hand a 90-day window to a 30-day chart.
+    return HttpResponse.json(
+      playerDetail(
+        player,
+        leagueId ?? undefined,
+        parseRange(url.searchParams.get('range')),
+      ),
+    )
+  }),
+  // The chart's own endpoint — the one narrow request a range flip makes. Same
+  // shape as the bundle's embedded `rating_history` block, on purpose: the client
+  // seeds this cache from that one.
+  http.get('*/v1/players/:playerId/rating-history', async ({ params, request }) => {
+    await delay(200)
+    const playerId = String(params.playerId)
+    const found = mockPlayerRoster().find((p) => p.id === playerId)
+    if (!found) {
+      return HttpResponse.json({ detail: 'Player not found.' }, { status: 404 })
+    }
+    const url = new URL(request.url)
+    const leagueId = url.searchParams.get('league_id')
+    if (leagueId && !MOCK_LEAGUES.some((league) => league.id === leagueId)) {
+      return HttpResponse.json({ detail: 'League not found.' }, { status: 404 })
+    }
+    // A rating is a fact about ONE ladder (ADR-0915), so the window is read off
+    // the league-scoped summary — the same one the bundle's block comes from.
+    const summary = summarizePlayer({
+      ...found,
+      rating: leagueRating(found.rating, leagueId ?? DEFAULT_MOCK_LEAGUE.id),
+    })
+    return HttpResponse.json(
+      playerRatingHistory(summary, parseRange(url.searchParams.get('range'))),
+    )
   }),
   http.get('*/v1/players/:playerId/matches', async ({ params, request }) => {
     await delay(300)

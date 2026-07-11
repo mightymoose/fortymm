@@ -2,6 +2,7 @@ import {
   playerByIdQueryOptions,
   type PlayerDetail,
   type PlayerMatchRow,
+  type RatingRange,
 } from '@/api/players'
 import { formatRatingDelta, formatRatingDeltaAria } from '@/lib/rating'
 
@@ -176,7 +177,11 @@ export const selectRecentMatches = (player: PlayerDetail): RecentMatchesView => 
  * (the match-details projection pattern). The full paginated history is a
  * different surface with a different query (`/players/$userId/matches`).
  */
-export const recentMatchesQuery = (playerId: string, leagueId?: string) => ({
-  ...playerByIdQueryOptions(playerId, leagueId),
+export const recentMatchesQuery = (
+  playerId: string,
+  leagueId?: string,
+  range?: RatingRange,
+) => ({
+  ...playerByIdQueryOptions(playerId, leagueId, range),
   select: selectRecentMatches,
 })

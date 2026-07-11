@@ -1,5 +1,7 @@
 import { Suspense } from 'react'
 
+import type { RatingRange } from '@/api/players'
+
 import { CareerCardFetcher } from './career-card/career-card-fetcher'
 import { CareerCardSkeleton } from './career-card/career-card-skeleton'
 
@@ -10,6 +12,15 @@ export interface CareerCardProps {
    * for it. It is part of the bundle's query key, so every card on the page must
    * be handed the same one or the profile forks into two requests. */
   leagueId?: string
+  /** The chart's calendar window (ADR-0915), from the profile's `?range=`.
+   * `undefined` is the **default** window — the URL carries no param for it.
+   *
+   * It is **not** in the bundle's cache key (a range flip must not refetch the
+   * bundle, or a failed flip would blank the page), but it *is* in the bundle's
+   * request: the response embeds that window, and the chart seeds its own cache
+   * from it. So every card must be handed the same range — whichever card's query
+   * happens to trigger the shared fetch decides which window comes back in it. */
+  range?: RatingRange
 }
 
 /**
@@ -22,10 +33,14 @@ export interface CareerCardProps {
  * same bundle query, so a failure means none of them has anything to draw and it
  * belongs to the route's `PlayerRouteError`.
  */
-export function CareerCard({ playerId, leagueId }: CareerCardProps) {
+export function CareerCard({ playerId, leagueId, range }: CareerCardProps) {
   return (
     <Suspense fallback={<CareerCardSkeleton />}>
-      <CareerCardFetcher playerId={playerId} leagueId={leagueId} />
+      <CareerCardFetcher
+        playerId={playerId}
+        leagueId={leagueId}
+        range={range}
+      />
     </Suspense>
   )
 }

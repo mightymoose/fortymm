@@ -3488,3 +3488,93 @@ def test_downsample_caps_the_line_without_moving_its_endpoints():
     assert all(point in points for point in sampled)
     # Below the cap it is a no-op: every real player's chart is untouched.
     assert downsample(points[:10], cap=MAX_POINTS) == points[:10]
+
+
+async def test_rating_history_peak_is_folded_before_the_line_is_thinned(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """The number the page QUOTES is not read off the line the page DRAWS.
+
+    Beyond `MAX_POINTS` the line is sampled down, and a uniform stride steps over
+    points — so a one-off spike can be missing from the drawn line entirely. `peak`
+    is folded from the FULL set BEFORE that sample runs, which is the only reason
+    the quoted high is still the high the player actually hit.
+
+    Here that spike sits at an index the stride DROPS: the response caps at 400
+    points, none of which carries 9999.0, and `peak` is 9999.0 anyway. Fold `peak`
+    from the sampled line instead — the tempting "simplification", since every
+    other number is read off `points` — and this reds with 2499.0: the profile would
+    quote a peak that is nowhere in the data it plotted.
+
+    Nothing else in the suite can tell those two implementations apart. The pure-fold
+    test above uses a monotone line, where the peak IS the last point and downsample
+    keeps the last point regardless.
+
+    (`change` needs no twin of this test: it is `points[-1] - baseline`, and
+    downsample provably preserves the first and last points — pinned directly by
+    the test above — so folding it from the sampled line is the same arithmetic.)
+    """
+    await start_session(api_client, db_session)
+    target = await make_user(db_session, "spike.target")
+    league = await get_default_league(db_session)
+    assert league is not None
+
+    total = 1000
+    spike = 9999.0
+    # Every point sits well inside the 90-day window, minutes apart — a bulk import
+    # of an existing ladder's history, which is how a player ends up with more
+    # changes in one window than the chart can draw.
+    stamps = [NOW - timedelta(days=80) + timedelta(minutes=i) for i in range(total)]
+
+    # Park the spike on an index the stride DROPS. Which indices survive is asked of
+    # `downsample` itself (over a probe whose rating IS its index), so a later change
+    # to the sampling rule cannot quietly slide the spike onto a kept point and turn
+    # this into a test that passes for the wrong reason.
+    probe = [RatingPoint(at=at, rating=float(i)) for i, at in enumerate(stamps)]
+    kept = {int(point.rating) for point in downsample(probe)}
+    spike_index = next(i for i in range(total) if i not in kept)
+
+    # Otherwise a monotone climb, so the sampled line's own maximum is its LAST
+    # point (2499.0) — a different number from the true peak, not a lucky match.
+    ratings = [spike if i == spike_index else 1500.0 + i for i in range(total)]
+    await _rate(db_session, target, ratings[-1])
+    db_session.add_all(
+        [
+            RatingHistory(
+                league_id=league.id,
+                user_id=target.id,
+                match_id=None,
+                rating_strategy_id=league.rating_strategy_id,
+                rating_value=rating,
+                rating_state={"rating": rating, "rd": 200.0, "volatility": 0.06},
+                previous_rating_value=ratings[i - 1] if i else None,
+                source=RatingHistorySource.import_,
+                created_at=stamps[i],
+            )
+            for i, rating in enumerate(ratings)
+        ]
+    )
+    await db_session.commit()
+
+    body = (
+        await api_client.get(f"/v1/players/{target.id}/rating-history?range=90d")
+    ).json()
+
+    # The line is thinned…
+    assert len(body["points"]) == MAX_POINTS
+    drawn = [point["rating"] for point in body["points"]]
+    # …and the spike is genuinely NOT on it. (If a future stride keeps index
+    # `spike_index`, this reds: move the spike, don't delete the test.)
+    assert spike not in drawn
+    assert max(drawn) == 2499.0
+
+    # THE assertion: the quoted peak is the spike, folded from the full set, even
+    # though no drawn point carries it — and no drawn point is even stamped at it.
+    assert body["peak"]["rating"] == spike
+    assert _at(body["peak"]) not in [_at(point) for point in body["points"]]
+
+    # Context, not a discriminator: the endpoints survive the sample, so the net
+    # change is the same either way. Their whole rated life is in-window, so it is
+    # measured from the first point.
+    assert body["anchor"] is None
+    assert body["change"] == 2499.0 - 1500.0

@@ -1,4 +1,4 @@
-import { playerByIdQueryOptions, type PlayerDetail } from '@/api/players'
+import { playerByIdQueryOptions, type PlayerDetail, type RatingRange } from '@/api/players'
 import type { components } from '@/api/schema'
 
 type PlayerLeague = components['schemas']['PlayerLeague']
@@ -112,7 +112,11 @@ export const selectLeagues = (
  * - it is closed over by the **select**, because it decides which row is
  *   highlighted — and that is a fact about the *URL*, not about the response.
  */
-export const leaguesCardQuery = (playerId: string, leagueId?: string) => ({
-  ...playerByIdQueryOptions(playerId, leagueId),
+export const leaguesCardQuery = (
+  playerId: string,
+  leagueId?: string,
+  range?: RatingRange,
+) => ({
+  ...playerByIdQueryOptions(playerId, leagueId, range),
   select: (player: PlayerDetail): LeaguesView => selectLeagues(player, leagueId),
 })

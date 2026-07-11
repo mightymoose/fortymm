@@ -1,4 +1,4 @@
-import { playerByIdQueryOptions, type PlayerDetail } from '@/api/players'
+import { playerByIdQueryOptions, type PlayerDetail, type RatingRange } from '@/api/players'
 import type { components } from '@/api/schema'
 
 type RatingConfidence = components['schemas']['RatingConfidence']
@@ -102,7 +102,11 @@ export const selectConfidence = (player: PlayerDetail): ConfidenceView | null =>
  * (ADR-0915), so the voice is a display concern and keying the cache on it would
  * fork one player's bundle into two identical entries.
  */
-export const confidenceCardQuery = (playerId: string, leagueId?: string) => ({
-  ...playerByIdQueryOptions(playerId, leagueId),
+export const confidenceCardQuery = (
+  playerId: string,
+  leagueId?: string,
+  range?: RatingRange,
+) => ({
+  ...playerByIdQueryOptions(playerId, leagueId, range),
   select: selectConfidence,
 })
