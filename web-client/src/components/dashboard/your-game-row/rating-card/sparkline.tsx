@@ -29,10 +29,11 @@ export const Sparkline = ({
   color = C.ball500,
   fluid = false,
 }: SparklineProps) => {
-  const { points, path, last } = sparklineGeometry(data, w, h)
+  const { path, last, pad } = sparklineGeometry(data, w, h)
   // Close the fill: down from the last point to the baseline, back along it to
-  // under the first point (which sits at the helper's left inset), and shut.
-  const areaPath = `${path} L${last[0]} ${h} L${points[0][0]} ${h} Z`
+  // under the first point — which sits at the helper's left inset, so ask the
+  // helper for it rather than re-deriving it from the projected geometry.
+  const areaPath = `${path} L${last[0]} ${h} L${pad} ${h} Z`
   const gradId = `dash-spark-${color.replace(/[^a-z0-9]/gi, '')}`
   // Position the end-point dot as a fraction of the box; since the overlay is a
   // sibling of the (possibly stretched) SVG, percentages keep it pinned to the

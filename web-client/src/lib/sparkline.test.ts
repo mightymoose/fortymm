@@ -57,4 +57,35 @@ describe('sparklineGeometry', () => {
     expect(points[1][0]).toBeCloseTo(3.6666666666666665, 12)
     expect(last).toEqual([7, 2])
   })
+
+  it('reports the inset so callers need not re-derive it from the first point', () => {
+    // The dashboard's area fill closes back to the left edge of the *data*, not
+    // of the box — that x is the inset, and the helper owns it.
+    const { pad, points } = sparklineGeometry([1480, 1510], 280, 48)
+
+    expect(pad).toBe(2)
+    expect(points[0][0]).toBe(pad)
+  })
+
+  it('throws on an empty series rather than returning an undefined `last`', () => {
+    // `points[points.length - 1]` would be `undefined` while typed as a tuple,
+    // so a caller's `last[0]` would TypeError far from the source.
+    expect(() => sparklineGeometry([], 280, 48)).toThrow(
+      new RangeError(
+        'sparklineGeometry needs at least 2 points to draw a line, got 0. ' +
+          'Withhold the sparkline for a shorter series, or pad it up to two points.',
+      ),
+    )
+  })
+
+  it('throws on a single-point series rather than rendering a blank NaN path', () => {
+    // x divides by `data.length - 1` — 0/0 = NaN, which yields the path
+    // "MNaN NaN" and a silently empty sparkline.
+    expect(() => sparklineGeometry([1500], 280, 48)).toThrow(
+      new RangeError(
+        'sparklineGeometry needs at least 2 points to draw a line, got 1. ' +
+          'Withhold the sparkline for a shorter series, or pad it up to two points.',
+      ),
+    )
+  })
 })

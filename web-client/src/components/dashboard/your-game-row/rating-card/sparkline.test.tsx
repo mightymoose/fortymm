@@ -22,6 +22,23 @@ describe('Sparkline', () => {
     )
   })
 
+  it('closes the gradient area fill from the trend line down to the baseline', () => {
+    // The fill retraces the trend line, drops from the last point to the bottom
+    // of the 48-high box, runs back along it to the helper's left inset (x=2 —
+    // where the first data point sits), and shuts. Pinning `d` keeps the close
+    // honest if the helper's x-projection ever moves.
+    sparklinePage.render({ data: [0, 10] })
+
+    expect(sparklinePage.getAreaFill()).toHaveAttribute(
+      'd',
+      'M2.0 46.0 L278.0 2.0 L278 48 L2 48 Z',
+    )
+    // It's the unstroked path: the gradient carries it, not an outline.
+    expect(sparklinePage.getAreaFill().getAttribute('fill')).toMatch(
+      /^url\(#dash-spark-/,
+    )
+  })
+
   it('strokes the trend line in the given color', () => {
     sparklinePage.render({ data: [1480, 1510], color: 'var(--serve-500)' })
 
