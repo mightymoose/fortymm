@@ -9,12 +9,13 @@ import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 
 import type { Address, Tournament, TournamentStatus } from '../data/types'
 import { Field } from '../field'
+import { ReadOnlyValue } from '../read-only-value'
 import { SectionHeader } from './section-header'
 
 export interface DetailsTabProps {
   tournament: Tournament
-  /** When false (a non-creator), every field is disabled and the Save action
-   * is hidden — the tab is a read-only view of the tournament details. */
+  /** When false (a non-creator), the tab renders the tournament's details as
+   * values rather than as a disabled form: no controls, no Save (ADR 0015). */
   canEdit: boolean
   onUpdate: (tournament: Tournament) => void
 }
@@ -26,8 +27,18 @@ const STATUS_OPTIONS: { value: TournamentStatus; label: string }[] = [
   { value: 'archived', label: 'Archived' },
 ]
 
-/** The Details tab: edit the tournament's name, description, status, and venue
- * address. Changes stage in a draft and commit on Save. */
+const statusLabel = (status: TournamentStatus) =>
+  STATUS_OPTIONS.find((o) => o.value === status)?.label ?? status
+
+/** The Details tab: the creator edits the tournament's name, description,
+ * status, and venue address — changes stage in a draft and commit on Save.
+ * Everyone else reads the same fields as rendered values (ADR 0015): a viewer
+ * gets a rendering of the data, only an editor gets controls.
+ *
+ * The rows declare `required` and `hint` unconditionally and pass
+ * `readOnly={!canEdit}`; `Field` drops that furniture for a viewer. There is one
+ * mechanism, not a conditional per call site — a field added here cannot
+ * reintroduce an asterisk or a hint to a reader by forgetting one. */
 export const DetailsTab = ({
   tournament,
   canEdit,
@@ -52,11 +63,40 @@ export const DetailsTab = ({
     setDraft((d) => ({ ...d, address: { ...d.address, ...patch } }))
   const save = () => onUpdate(draft)
 
+  /** The address rows are the same shape six times over: an `Input` for the
+   * creator, the value itself for everyone else. */
+  const addressField = (
+    label: string,
+    key: keyof Address,
+    className?: string,
+  ) => (
+    <Field label={label} key={key} readOnly={!canEdit}>
+      {(id) =>
+        canEdit ? (
+          <Input
+            id={id}
+            className={className}
+            value={draft.address[key]}
+            onChange={(e) => updateAddress({ [key]: e.target.value })}
+          />
+        ) : (
+          <ReadOnlyValue className={className}>
+            {draft.address[key]}
+          </ReadOnlyValue>
+        )
+      }
+    </Field>
+  )
+
   return (
-    <div>
+    <div data-testid="details-tab">
       <SectionHeader
         title="Tournament details"
-        subtitle="Edit the basics. Players see this on the public page and registration emails."
+        subtitle={
+          canEdit
+            ? 'Edit the basics. Players see this on the public page and registration emails.'
+            : 'The basics for this tournament.'
+        }
         action={
           canEdit &&
           dirty && (
@@ -79,48 +119,66 @@ export const DetailsTab = ({
             <div className="text-[15px] font-bold text-[color:var(--fg-1)]">
               About
             </div>
-            <Field label="Name" required>
-              {(id) => (
-                <Input
-                  id={id}
-                  disabled={!canEdit}
-                  value={draft.name}
-                  onChange={(e) => update({ name: e.target.value })}
-                />
-              )}
+            <Field label="Name" required readOnly={!canEdit}>
+              {(id) =>
+                canEdit ? (
+                  <Input
+                    id={id}
+                    value={draft.name}
+                    onChange={(e) => update({ name: e.target.value })}
+                  />
+                ) : (
+                  <ReadOnlyValue>{draft.name}</ReadOnlyValue>
+                )
+              }
             </Field>
             <Field
               label="Description"
               hint="Optional. Shown on the public registration page."
+              readOnly={!canEdit}
             >
-              {(id) => (
-                <Textarea
-                  id={id}
-                  rows={4}
-                  disabled={!canEdit}
-                  value={draft.description}
-                  placeholder="Two-day open. USATT-sanctioned."
-                  onChange={(e) => update({ description: e.target.value })}
-                />
-              )}
+              {(id) =>
+                canEdit ? (
+                  <Textarea
+                    id={id}
+                    rows={4}
+                    value={draft.description}
+                    placeholder="Two-day open. USATT-sanctioned."
+                    onChange={(e) => update({ description: e.target.value })}
+                  />
+                ) : (
+                  // Taller than a single-line row so it mirrors the textarea it
+                  // stands in for, and wraps rather than clipping the prose.
+                  <ReadOnlyValue className="h-auto min-h-10 items-start whitespace-pre-wrap">
+                    {draft.description}
+                  </ReadOnlyValue>
+                )
+              }
             </Field>
-            <Field label="Status">
-              {(id) => (
-                <ToggleGroup
-                  type="single"
-                  aria-labelledby={`${id}-label`}
-                  disabled={!canEdit}
-                  value={draft.status}
-                  onValueChange={(v) => v && update({ status: v as TournamentStatus })}
-                  className="w-fit"
-                >
-                  {STATUS_OPTIONS.map((o) => (
-                    <ToggleGroupItem key={o.value} value={o.value}>
-                      {o.label}
-                    </ToggleGroupItem>
-                  ))}
-                </ToggleGroup>
-              )}
+            <Field label="Status" readOnly={!canEdit}>
+              {(id) =>
+                canEdit ? (
+                  <ToggleGroup
+                    type="single"
+                    aria-labelledby={`${id}-label`}
+                    value={draft.status}
+                    onValueChange={(v) =>
+                      v && update({ status: v as TournamentStatus })
+                    }
+                    className="w-fit"
+                  >
+                    {STATUS_OPTIONS.map((o) => (
+                      <ToggleGroupItem key={o.value} value={o.value}>
+                        {o.label}
+                      </ToggleGroupItem>
+                    ))}
+                  </ToggleGroup>
+                ) : (
+                  // The label, not the wire value: a reader sees "Published",
+                  // the same word the toggle would have shown as selected.
+                  <ReadOnlyValue>{statusLabel(draft.status)}</ReadOnlyValue>
+                )
+              }
             </Field>
           </div>
         </Card>
@@ -130,69 +188,14 @@ export const DetailsTab = ({
             <div className="text-[15px] font-bold text-[color:var(--fg-1)]">
               Venue &amp; address
             </div>
-            <Field label="Venue name">
-              {(id) => (
-                <Input
-                  id={id}
-                  disabled={!canEdit}
-                  value={draft.address.venue}
-                  onChange={(e) => updateAddress({ venue: e.target.value })}
-                />
-              )}
-            </Field>
-            <Field label="Street">
-              {(id) => (
-                <Input
-                  id={id}
-                  disabled={!canEdit}
-                  value={draft.address.street}
-                  onChange={(e) => updateAddress({ street: e.target.value })}
-                />
-              )}
-            </Field>
+            {addressField('Venue name', 'venue')}
+            {addressField('Street', 'street')}
             <div className="grid grid-cols-[2fr_1fr_1fr] gap-3">
-              <Field label="City">
-                {(id) => (
-                  <Input
-                    id={id}
-                    disabled={!canEdit}
-                    value={draft.address.city}
-                    onChange={(e) => updateAddress({ city: e.target.value })}
-                  />
-                )}
-              </Field>
-              <Field label="Region">
-                {(id) => (
-                  <Input
-                    id={id}
-                    disabled={!canEdit}
-                    value={draft.address.region}
-                    onChange={(e) => updateAddress({ region: e.target.value })}
-                  />
-                )}
-              </Field>
-              <Field label="Postal">
-                {(id) => (
-                  <Input
-                    id={id}
-                    className="font-mono"
-                    disabled={!canEdit}
-                    value={draft.address.postal}
-                    onChange={(e) => updateAddress({ postal: e.target.value })}
-                  />
-                )}
-              </Field>
+              {addressField('City', 'city')}
+              {addressField('Region', 'region')}
+              {addressField('Postal', 'postal', 'font-mono')}
             </div>
-            <Field label="Country">
-              {(id) => (
-                <Input
-                  id={id}
-                  disabled={!canEdit}
-                  value={draft.address.country}
-                  onChange={(e) => updateAddress({ country: e.target.value })}
-                />
-              )}
-            </Field>
+            {addressField('Country', 'country')}
           </div>
         </Card>
       </div>
