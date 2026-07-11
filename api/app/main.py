@@ -11,6 +11,7 @@ from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy import text
+from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 
 from app import db, queue
 from app.dashboard import router as dashboard_router
@@ -65,6 +66,30 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="FortyMM API", lifespan=lifespan)
+
+# When the async DB connection pool saturates under a burst, SQLAlchemy raises
+# ``sqlalchemy.exc.TimeoutError`` ("QueuePool limit ... connection timed out")
+# out of the request. Unhandled, Starlette turns that into an opaque 500 with no
+# retry hint (issue #79). Convert it to a 503 + ``Retry-After`` so the pressure
+# is transient-and-retryable to the caller. The catch is deliberately narrow —
+# only the pool-timeout class — so genuine query errors still surface as 500s.
+POOL_TIMEOUT_RETRY_AFTER_SECONDS = 1
+
+
+@app.exception_handler(SQLAlchemyTimeoutError)
+async def db_pool_timeout_handler(
+    request: Request, exc: SQLAlchemyTimeoutError
+) -> JSONResponse:
+    log.warning(
+        "DB pool exhausted; returning 503 for %s %s",
+        request.method,
+        request.url.path,
+    )
+    return JSONResponse(
+        status_code=503,
+        content={"detail": "The server is briefly overloaded. Please retry."},
+        headers={"Retry-After": str(POOL_TIMEOUT_RETRY_AFTER_SECONDS)},
+    )
 
 
 @app.middleware("http")
