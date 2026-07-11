@@ -18,10 +18,12 @@ export type StatusChipView = {
 
 export type ScoreboardHeadingView = {
   chip: StatusChipView;
-  /** e.g. "SINGLES · BO5" */
+  /** e.g. "SINGLES · BO5"; "SINGLES · SINGLE" for a best-of-1 (single-game)
+   * match. */
   formatLabel: string;
   /** e.g. "First to 3"; null for an upcoming match, where the race to a
-   * games target hasn't started. */
+   * games target hasn't started, and for a best-of-1 match, where there is no
+   * race — a single game decides it. */
   raceLabel: string | null;
 };
 
@@ -104,6 +106,11 @@ export type ScoreboardView = {
   /** Null when there's nothing to tabulate: an upcoming match, or a match
    * without two sides. */
   gameGrid: GameGridView | null;
+  /** Whether the per-game grid should render. False for a best-of-1
+   * (single-game) match, where a one-cell grid is just noise — the hero
+   * scoreline already tells the whole story. The display reads this flag
+   * rather than re-deriving `best_of`. */
+  showGameGrid: boolean;
 };
 
 const games = (n: number) => `${n} ${n === 1 ? "game" : "games"}`;
@@ -187,11 +194,20 @@ const selectHeading = (match: MatchDetailsResult): ScoreboardHeadingView => {
   const status = match.data.scoreboard.status;
   const details = match.unmigrated;
 
+  const teamLabel = details.team_size === 1 ? "SINGLES" : "DOUBLES";
+  const isSingleGame = details.best_of === 1;
   return {
     chip: selectChip(status, details),
-    formatLabel: `${details.team_size === 1 ? "SINGLES" : "DOUBLES"} · BO${details.best_of}`,
+    // A best-of-1 is a single game — "SINGLE" instead of "BO1".
+    formatLabel: isSingleGame
+      ? `${teamLabel} · SINGLE`
+      : `${teamLabel} · BO${details.best_of}`,
+    // No race pill for an upcoming match (race not started) or a best-of-1
+    // (there is no race — one game decides it).
     raceLabel:
-      status === "scheduled" ? null : `First to ${details.games_to_win}`,
+      status === "scheduled" || isSingleGame
+        ? null
+        : `First to ${details.games_to_win}`,
   };
 };
 
@@ -301,6 +317,9 @@ const selectScoreboard = (match: MatchDetailsResult): ScoreboardView => ({
   heading: selectHeading(match),
   heroRow: selectHeroRow(match),
   gameGrid: selectGameGrid(match),
+  // A best-of-1 match plays a single game, so the per-game grid adds nothing
+  // over the hero scoreline — hide it.
+  showGameGrid: match.unmigrated.best_of !== 1,
 });
 
 export const scoreboardQuery = (matchId: string) => ({

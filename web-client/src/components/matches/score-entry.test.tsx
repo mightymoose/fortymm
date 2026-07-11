@@ -954,6 +954,57 @@ describe('ScoreEntry — create', () => {
       screen.queryByText(/rejected by the server/i),
     ).not.toBeInTheDocument()
   })
+
+  it('reads as a single game for a best-of-1 match (#171)', async () => {
+    // A best-of-1 ("Single") match has no "final game" / "next game" framing:
+    // before a valid score is typed the copy speaks only of posting the one
+    // result, and there is no SCORELINE strip to switch games on. (The
+    // finalize copy — shown once a valid score is entered — is unchanged and
+    // covered elsewhere, so this asserts the pre-valid-score state only.)
+    server.use(
+      http.get('*/v1/matches/m-1', () =>
+        HttpResponse.json(
+          matchDetails({
+            id: 'm-1',
+            status: 'in_progress',
+            status_label: 'Live',
+            best_of: 1,
+            games_to_win: 1,
+            affects_rating: true,
+            sides: participantSides({ meWins: 0, oppWins: 0 }),
+            games: [],
+            current_game: { game_number: 1 },
+            can_score: true,
+            can_finalize: false,
+          }),
+        ),
+      ),
+    )
+
+    const { container } = renderScoreEntry({
+      kind: 'create',
+      matchId: 'm-1',
+      gameNumber: 1,
+    })
+
+    await screen.findByRole('heading', { name: /enter game 1 score/i })
+
+    // Subtitle drops the "Final game." lead — it's the only game.
+    expect(screen.getByText('Save to post the result.')).toBeInTheDocument()
+    // The submit button posts the result rather than saving a "final game".
+    expect(
+      screen.getByRole('button', { name: /save & post/i }),
+    ).toBeInTheDocument()
+
+    // The keyboard hint says "to save", not "for next / save game".
+    const hint = container.querySelector('.hint')
+    expect(hint?.textContent).toMatch(/to save/)
+    expect(hint?.textContent).not.toMatch(/next \/ save game/)
+
+    // No SCORELINE strip: a best-of-1 has nothing to switch between.
+    expect(screen.queryByText('SCORELINE')).not.toBeInTheDocument()
+    expect(container.querySelector('.sl-label')).toBeNull()
+  })
 })
 
 describe('ScoreEntry — name layout (#566)', () => {

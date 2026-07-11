@@ -15,6 +15,8 @@ export function buildScoreboardView(
     // Null by default so the view renders without a router — scored grid
     // cells may carry typed <Link>s; see `gameGridPage.render`.
     gameGrid: null,
+    // Multi-game by default; a best-of-1 view sets this false to hide the grid.
+    showGameGrid: true,
     ...overrides,
   };
 }

@@ -64,9 +64,9 @@ export const FirstMatchCard = () => {
 
   const gamesToWin = Math.ceil(bestOf / 2)
   const effectivelyRated = rated && opponent !== null
-  const summary = `Best of ${bestOf} · first to ${gamesToWin} · ${
-    effectivelyRated ? 'rated' : 'unrated'
-  }`
+  const lengthCopy =
+    bestOf === 1 ? 'Single game' : `Best of ${bestOf} · first to ${gamesToWin}`
+  const summary = `${lengthCopy} · ${effectivelyRated ? 'rated' : 'unrated'}`
 
   function handlePick(player: Parameters<typeof opponentFromPlayer>[0]) {
     setOpponent(opponentFromPlayer(player))

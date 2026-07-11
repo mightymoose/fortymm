@@ -19,7 +19,9 @@ export const ScoreboardDisplay = ({ scoreboard }: ScoreboardDisplayProps) => {
       <div className="md-hero__grid-bg" aria-hidden="true" />
       <Heading heading={scoreboard.heading} />
       <HeroRow heroRow={scoreboard.heroRow} />
-      {scoreboard.gameGrid && <GameGrid gameGrid={scoreboard.gameGrid} />}
+      {scoreboard.showGameGrid && scoreboard.gameGrid && (
+        <GameGrid gameGrid={scoreboard.gameGrid} />
+      )}
     </section>
   );
 };

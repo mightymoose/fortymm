@@ -17,11 +17,18 @@ export type MatchInfoView = {
 
 const selectMatchInfo = (match: MatchDetailsResult): MatchInfoView => {
   const details = match.unmigrated;
+  const teamLabel = details.team_size === 1 ? "Singles" : "Doubles";
+  // A best-of-1 match is a single game, so drop the "Best of N, first to M"
+  // race framing that only makes sense for a multi-game set.
+  const formatValue =
+    details.best_of === 1
+      ? `${teamLabel} · Single game`
+      : `${teamLabel} · Best of ${details.best_of}, first to ${details.games_to_win}`;
   return {
     rows: [
       {
         label: "Format",
-        value: `${details.team_size === 1 ? "Singles" : "Doubles"} · Best of ${details.best_of}, first to ${details.games_to_win}`,
+        value: formatValue,
       },
       { label: "Status", value: details.status_label },
       { label: "Rated", value: details.affects_rating ? "Yes" : "No" },

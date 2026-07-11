@@ -207,8 +207,8 @@ describe("scoreboardQuery", () => {
     scoreboardQueryPage.mockEndpoint(() =>
       HttpResponse.json(
         buildMatchDetails({
-          best_of: 1,
-          games_to_win: 1,
+          best_of: 3,
+          games_to_win: 2,
           data: { scoreboard: { status: "final" } },
         }),
       ),
@@ -217,7 +217,40 @@ describe("scoreboardQuery", () => {
     const { result } = scoreboardQueryPage.render();
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(result.current.data?.heading.raceLabel).toBe("First to 1");
+    expect(result.current.data?.heading.raceLabel).toBe("First to 2");
+  });
+
+  it("projects a best-of-1 match as a single game: SINGLE label, no race, no grid", async () => {
+    scoreboardQueryPage.mockEndpoint(() =>
+      HttpResponse.json(
+        buildMatchDetails({
+          best_of: 1,
+          games_to_win: 1,
+          data: { scoreboard: { status: "live" } },
+        }),
+      ),
+    );
+
+    const { result } = scoreboardQueryPage.render();
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data?.heading.formatLabel).toBe("SINGLES · SINGLE");
+    expect(result.current.data?.heading.raceLabel).toBeNull();
+    // The single-game grid is suppressed via the flag the display reads.
+    expect(result.current.data?.showGameGrid).toBe(false);
+  });
+
+  it("labels a best-of-1 team match DOUBLES · SINGLE", async () => {
+    scoreboardQueryPage.mockEndpoint(() =>
+      HttpResponse.json(
+        buildMatchDetails({ team_size: 2, best_of: 1, games_to_win: 1 }),
+      ),
+    );
+
+    const { result } = scoreboardQueryPage.render();
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data?.heading.formatLabel).toBe("DOUBLES · SINGLE");
   });
 
   it("reports no games recorded for a match that has not started", async () => {
