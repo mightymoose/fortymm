@@ -148,6 +148,52 @@ async def merge_user(
         .values(created_by_user_id=to_user_id)
     )
 
+    # Carry the guest's tournament entries onto the survivor. An entry is a
+    # registration in a real event (a draw gets seeded from it), and the FK is
+    # RESTRICT — but we TOMBSTONE the guest rather than deleting it, so ON DELETE
+    # never fires and an unhandled entry would simply stay registered to a ghost.
+    #
+    # Dedup, then re-point. The uniqueness guard on ``tournament_entries`` is
+    # PARTIAL — ``UNIQUE (event_id, user_id) WHERE status = 'entered'``
+    # (ADR-0016) — so the ONLY rows that can collide are a guest ACTIVE entry in
+    # an event the survivor is ALSO actively entered in. Drop the guest's losing
+    # row first: the survivor's entry stands, so the event's active-entry count is
+    # unchanged by the merge (it was one person all along).
+    #
+    # The predicate tests ``status``, not the (event, user) pair alone, because
+    # two *withdrawn* rows for the same pair are legal — soft-deleted history the
+    # partial index deliberately permits. Deleting those would destroy withdrawal
+    # history the index exists to keep.
+    await db.execute(
+        text(
+            """
+            DELETE FROM tournament_entries AS te
+            WHERE te.user_id = :from_id
+              AND te.status = 'entered'
+              AND EXISTS (
+                SELECT 1 FROM tournament_entries other
+                WHERE other.user_id = :to_id
+                  AND other.event_id = te.event_id
+                  AND other.status = 'entered'
+              )
+            """
+        ),
+        {"from_id": from_user_id, "to_id": to_user_id},
+    )
+    # Nothing left can collide, so the re-point is unconditional and total: every
+    # remaining guest entry — active or withdrawn — moves onto the survivor, and
+    # no row is left pointing at the tombstone for the cleanup below to sweep.
+    await db.execute(
+        text(
+            """
+            UPDATE tournament_entries
+            SET user_id = :to_id
+            WHERE user_id = :from_id
+            """
+        ),
+        {"from_id": from_user_id, "to_id": to_user_id},
+    )
+
     # Preserve the audit trail by re-pointing rather than letting the FK's
     # ON DELETE SET NULL null it out when the ephemeral user is deleted.
     await db.execute(

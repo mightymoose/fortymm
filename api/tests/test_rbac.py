@@ -11,7 +11,11 @@ from app.main import app
 from app.models import Permission, Role, RolePermission, Tournament, User, UserRole
 from app.rbac import _require_rbac
 from app.sessions import get_current_user
+from app.tournaments import TOURNAMENT_CREATE, TOURNAMENT_ENTER, TOURNAMENT_VIEW
+from scripts import seed_rbac
 from tests._helpers import CSRF_EVENT_HOOKS
+
+BETA_TESTER = "Beta tester"
 
 
 @pytest_asyncio.fixture
@@ -501,3 +505,78 @@ async def test_list_users_role_ids_sorted_by_role_name(
     listing = (await api_client.get("/v1/users")).json()
     fetched = next(u for u in listing if u["id"] == user["id"])
     assert fetched["role_ids"] == [ra["id"], rz["id"]]
+
+
+# ----- the RBAC seed script (scripts/seed_rbac.py) -------------------------
+#
+# The seed runs on every container boot (see the api command in the compose
+# files), so "grants what it should" and "inserts nothing on a re-run" are both
+# load-bearing.
+
+
+async def _role_permission_names(db: AsyncSession, role_name: str) -> list[str]:
+    names = (
+        (
+            await db.execute(
+                select(Permission.name)
+                .join(RolePermission, RolePermission.permission_id == Permission.id)
+                .join(Role, Role.id == RolePermission.role_id)
+                .where(Role.name == role_name)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return sorted(names)
+
+
+async def test_seed_grants_beta_tester_the_tournament_permissions(
+    db_session: AsyncSession,
+):
+    """A freshly seeded database lets a Beta tester enter a tournament as well
+    as view and create one — self-registration is gated on its own permission
+    (#781), since a player entering themselves is not the tournament's owner."""
+    counts = await seed_rbac.upsert_rbac(db_session)
+    await db_session.commit()
+    assert counts.permissions == len(seed_rbac.PERMISSIONS)
+    assert counts.roles == len(seed_rbac.ROLES)
+
+    granted = await _role_permission_names(db_session, BETA_TESTER)
+    assert granted == sorted([TOURNAMENT_VIEW, TOURNAMENT_CREATE, TOURNAMENT_ENTER])
+
+
+async def test_seed_is_idempotent(db_session: AsyncSession):
+    """Re-running the seed (every boot does) inserts nothing the second time."""
+    await seed_rbac.upsert_rbac(db_session)
+    await db_session.commit()
+
+    second = await seed_rbac.upsert_rbac(db_session)
+    await db_session.commit()
+    assert second == seed_rbac.SeedCounts(permissions=0, roles=0, links=0)
+
+    perms = (
+        (
+            await db_session.execute(
+                select(Permission).where(Permission.name == TOURNAMENT_ENTER)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(perms) == 1
+
+    links = (
+        (
+            await db_session.execute(
+                select(RolePermission).where(
+                    RolePermission.permission_id == perms[0].id
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(links) == 1
+    assert await _role_permission_names(db_session, BETA_TESTER) == sorted(
+        [TOURNAMENT_VIEW, TOURNAMENT_CREATE, TOURNAMENT_ENTER]
+    )

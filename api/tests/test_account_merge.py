@@ -27,6 +27,8 @@ from app.models import (
     RatingHistorySource,
     Role,
     Tournament,
+    TournamentEntry,
+    TournamentEntryStatus,
     TournamentEvent,
     User,
     UserLeagueRating,
@@ -398,7 +400,6 @@ async def test_merge_repoints_tournament_ownership(db_session: AsyncSession):
             draw_type=DrawType.single_elim,
             max_players=32,
             entry_fee=40,
-            entered=0,
             slot={"date": "2026-06-13", "start": "09:00", "end": "18:00"},
             match_settings={"rated": True, "length_games": 5},
             predicates=[],
@@ -428,6 +429,216 @@ async def test_merge_repoints_tournament_ownership(db_session: AsyncSession):
         .all()
     )
     assert [e.name for e in events] == ["Open Singles"]
+
+
+# ----- tournament entries -------------------------------------------------
+
+
+async def _make_event(db: AsyncSession, owner: User) -> TournamentEvent:
+    """A singles event on a tournament ``owner`` created. ``entered`` is left to
+    its server default — it is a dead counter being retired, and an entry's
+    existence is the truth."""
+    tournament = Tournament(
+        name="Guest Cup",
+        created_by_user_id=owner.id,
+        address={
+            "venue": "Berkeley TT Club",
+            "street": "2727 Milvia St",
+            "city": "Berkeley",
+            "region": "CA",
+            "postal": "94703",
+            "country": "USA",
+        },
+        table_catalogue=[{"id": "t1", "label": "Table 1", "court": "A"}],
+    )
+    event = TournamentEvent(
+        name="Open Singles",
+        format=EventFormat.singles,
+        draw_type=DrawType.single_elim,
+        max_players=32,
+        entry_fee=40,
+        slot={"date": "2026-06-13", "start": "09:00", "end": "18:00"},
+        match_settings={"rated": True, "length_games": 5},
+        predicates=[],
+        pools=[],
+    )
+    tournament.events.append(event)
+    db.add(tournament)
+    await db.commit()
+    await db.refresh(event)
+    return event
+
+
+async def _enter(
+    db: AsyncSession,
+    event: TournamentEvent,
+    user: User,
+    *,
+    status: TournamentEntryStatus = TournamentEntryStatus.entered,
+) -> TournamentEntry:
+    entry = TournamentEntry(event_id=event.id, user_id=user.id, status=status)
+    db.add(entry)
+    await db.commit()
+    await db.refresh(entry)
+    return entry
+
+
+async def _entries_for(
+    db: AsyncSession, event: TournamentEvent
+) -> list[TournamentEntry]:
+    # ``merge_user`` re-points entries with a bulk statement, and the test
+    # sessionmaker sets ``expire_on_commit=False`` — so a plain SELECT would hand
+    # back the identity map's stale copies and happily "prove" the merge did
+    # nothing. ``populate_existing`` overwrites them from the row that came back,
+    # so what we assert on is what the database actually holds.
+    return list(
+        (
+            await db.execute(
+                select(TournamentEntry)
+                .where(TournamentEntry.event_id == event.id)
+                .order_by(TournamentEntry.created_at)
+                .execution_options(populate_existing=True)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+
+async def test_merge_repoints_tournament_entry_onto_survivor(
+    db_session: AsyncSession,
+):
+    """``tournament_entries.user_id`` is RESTRICT, but the merge TOMBSTONES the
+    guest rather than deleting it — so ON DELETE never fires and an unhandled
+    entry would be left registered to a ghost user (and would seed a draw with
+    it). The merge re-points it, and the event's active-entry count is unchanged:
+    the same one person is still entered."""
+    ephemeral = await _make_ephemeral(db_session, "drifting-grouse")
+    verified = await _make_verified(db_session, "rita@example.com")
+    event = await _make_event(db_session, verified)
+
+    entry = await _enter(db_session, event, ephemeral)
+
+    await merge_user(db_session, from_user_id=ephemeral.id, to_user_id=verified.id)
+    await db_session.commit()
+
+    await db_session.refresh(entry)
+    assert entry.user_id == verified.id
+    assert entry.status is TournamentEntryStatus.entered
+
+    entries = await _entries_for(db_session, event)
+    active = [e for e in entries if e.status is TournamentEntryStatus.entered]
+    assert len(active) == 1, "the event's active-entry count must not change"
+    # Nothing left pointing at the tombstone.
+    assert not [e for e in entries if e.user_id == ephemeral.id]
+
+
+async def test_merge_dedups_entry_when_both_users_entered_same_event(
+    db_session: AsyncSession,
+):
+    """The collision case. Both users hold an ACTIVE entry in the SAME event —
+    legal today (they are different ``user_id``s), fatal on a naive re-point: the
+    partial unique index ``(event_id, user_id) WHERE status = 'entered'`` would
+    reject the second ``(event, survivor, entered)`` row and blow the whole merge
+    up with an IntegrityError. The merge must instead drop the guest's losing row
+    and keep exactly one active entry — the survivor's."""
+    ephemeral = await _make_ephemeral(db_session, "drifting-grouse")
+    verified = await _make_verified(db_session, "rita@example.com")
+    event = await _make_event(db_session, verified)
+
+    survivor_entry = await _enter(db_session, event, verified)
+    guest_entry = await _enter(db_session, event, ephemeral)
+    assert survivor_entry.id != guest_entry.id
+
+    # A naive ``UPDATE ... SET user_id = survivor`` raises IntegrityError here.
+    await merge_user(db_session, from_user_id=ephemeral.id, to_user_id=verified.id)
+    await db_session.commit()
+
+    entries = await _entries_for(db_session, event)
+    assert [e.id for e in entries] == [survivor_entry.id], (
+        "the survivor's entry stands and the guest's duplicate is dropped"
+    )
+    assert entries[0].user_id == verified.id
+    assert entries[0].status is TournamentEntryStatus.entered
+
+
+async def test_merge_keeps_withdrawn_entry_when_survivor_is_actively_entered(
+    db_session: AsyncSession,
+):
+    """The index is PARTIAL, so a guest's WITHDRAWN row for an event the survivor
+    is actively entered in does not collide with anything — it must ride onto the
+    survivor, not be mistaken for the duplicate-active case and deleted. The
+    active count still comes out at one."""
+    ephemeral = await _make_ephemeral(db_session, "drifting-grouse")
+    verified = await _make_verified(db_session, "rita@example.com")
+    event = await _make_event(db_session, verified)
+
+    withdrawn = await _enter(
+        db_session, event, ephemeral, status=TournamentEntryStatus.withdrawn
+    )
+    survivor_entry = await _enter(db_session, event, verified)
+
+    await merge_user(db_session, from_user_id=ephemeral.id, to_user_id=verified.id)
+    await db_session.commit()
+
+    entries = await _entries_for(db_session, event)
+    assert {e.id for e in entries} == {withdrawn.id, survivor_entry.id}
+    assert all(e.user_id == verified.id for e in entries)
+    active = [e for e in entries if e.status is TournamentEntryStatus.entered]
+    assert [e.id for e in active] == [survivor_entry.id]
+
+
+async def test_merge_carries_both_users_withdrawn_entries_for_one_event(
+    db_session: AsyncSession,
+):
+    """Two WITHDRAWN rows for the same (event, user) pair are legal — the unique
+    index only covers ``status = 'entered'``. So both users' withdrawn history
+    must survive the merge on the survivor, with no active entry conjured and
+    nothing spuriously deduped."""
+    ephemeral = await _make_ephemeral(db_session, "drifting-grouse")
+    verified = await _make_verified(db_session, "rita@example.com")
+    event = await _make_event(db_session, verified)
+
+    guest_withdrawn = await _enter(
+        db_session, event, ephemeral, status=TournamentEntryStatus.withdrawn
+    )
+    survivor_withdrawn = await _enter(
+        db_session, event, verified, status=TournamentEntryStatus.withdrawn
+    )
+
+    await merge_user(db_session, from_user_id=ephemeral.id, to_user_id=verified.id)
+    await db_session.commit()
+
+    entries = await _entries_for(db_session, event)
+    assert {e.id for e in entries} == {guest_withdrawn.id, survivor_withdrawn.id}
+    assert all(e.user_id == verified.id for e in entries)
+    assert all(e.status is TournamentEntryStatus.withdrawn for e in entries)
+
+
+async def test_merge_repoints_active_entry_over_survivors_withdrawn_row(
+    db_session: AsyncSession,
+):
+    """The survivor withdrew from an event the guest is actively entered in. The
+    guest's ACTIVE row does NOT collide (the survivor has no active row), so it
+    re-points — the merged player stays entered, and the withdrawn row sits
+    alongside it."""
+    ephemeral = await _make_ephemeral(db_session, "drifting-grouse")
+    verified = await _make_verified(db_session, "rita@example.com")
+    event = await _make_event(db_session, verified)
+
+    survivor_withdrawn = await _enter(
+        db_session, event, verified, status=TournamentEntryStatus.withdrawn
+    )
+    guest_active = await _enter(db_session, event, ephemeral)
+
+    await merge_user(db_session, from_user_id=ephemeral.id, to_user_id=verified.id)
+    await db_session.commit()
+
+    entries = await _entries_for(db_session, event)
+    assert {e.id for e in entries} == {survivor_withdrawn.id, guest_active.id}
+    assert all(e.user_id == verified.id for e in entries)
+    active = [e for e in entries if e.status is TournamentEntryStatus.entered]
+    assert [e.id for e in active] == [guest_active.id]
 
 
 async def test_merge_repoints_rating_history_created_by(
