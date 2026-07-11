@@ -4,7 +4,31 @@
 // double-booking detection.
 
 import { PRED_FIELDS } from './options'
-import type { Predicate, Pool, Tournament, TournamentEvent } from './types'
+import type {
+  Entrant,
+  Predicate,
+  Pool,
+  Tournament,
+  TournamentEvent,
+} from './types'
+
+/**
+ * The signed-in player's own active entry in an event, or `undefined` when they
+ * are not entered — i.e. the "Enter or Withdraw?" decision, and the entry id a
+ * withdrawal is addressed to.
+ *
+ * It matches on USERNAME, not user id, on purpose: the session payload
+ * (`SessionUser`) carries only `username` + `permissions` — the web client never
+ * learns its own user id — while an entrant carries both. Usernames are unique,
+ * so this is exact; it is just the only join key the two payloads share.
+ */
+export function myEntrant(
+  event: TournamentEvent,
+  username: string | null | undefined,
+): Entrant | undefined {
+  if (!username) return undefined
+  return event.entrants.find((e) => e.username === username)
+}
 
 /** Parse a date-only `YYYY-MM-DD` string into a local-midnight Date. */
 function parseDateOnly(iso: string): Date {
@@ -167,7 +191,9 @@ export function emptyEvent(t: Tournament): TournamentEvent {
     drawType: 'single-elim',
     maxPlayers: 32,
     entryFee: 30,
+    // A draft event nobody has entered: no entrants, so the derived count is 0.
     entered: 0,
+    entrants: [],
     slot: { date: defaultDate, start: '09:00', end: '13:00' },
     predicates: [],
     match: { rated: true, lengthGames: 5 },

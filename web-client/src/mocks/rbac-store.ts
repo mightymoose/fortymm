@@ -1,7 +1,7 @@
 import type { SeedSpec } from './rbac-engine'
 
 const ALL = [
-  'p_tv', 'p_tc', 'p_te', 'p_td', 'p_tp',
+  'p_tv', 'p_tc', 'p_te', 'p_td', 'p_tp', 'p_tn',
   'p_dv', 'p_dg', 'p_de', 'p_dp', 'p_dl',
   'p_cv', 'p_ca', 'p_cs', 'p_co',
   'p_pv', 'p_pc', 'p_pe', 'p_pd', 'p_pm',
@@ -18,6 +18,7 @@ export const DEMO_SEED: SeedSpec = {
     { id: 'p_te', name: 'tournament.edit', description: 'Rename, reschedule, change format.' },
     { id: 'p_td', name: 'tournament.delete', description: 'Permanently remove a tournament.' },
     { id: 'p_tp', name: 'tournament.publish', description: 'Publish a tournament to the spectator view.' },
+    { id: 'p_tn', name: 'tournament.enter', description: 'Enter yourself into a singles event, and withdraw again.' },
     { id: 'p_dv', name: 'draws.view', description: 'View brackets and seeds.' },
     { id: 'p_dg', name: 'draws.generate', description: 'Run the SMT solver to build a draw.' },
     { id: 'p_de', name: 'draws.edit', description: 'Re-seed or manually swap matchups.' },
@@ -50,7 +51,7 @@ export const DEMO_SEED: SeedSpec = {
       name: 'Tournament Director',
       description: 'Runs events end-to-end. Cannot edit org-wide settings.',
       permission_ids: [
-        'p_tv', 'p_tc', 'p_te', 'p_tp',
+        'p_tv', 'p_tc', 'p_te', 'p_tp', 'p_tn',
         'p_dv', 'p_dg', 'p_de', 'p_dp', 'p_dl',
         'p_cv', 'p_ca', 'p_cs', 'p_co',
         'p_pv', 'p_pc', 'p_pe', 'p_pm',

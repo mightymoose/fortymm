@@ -3,6 +3,14 @@
 // module's array, and everything resets on reload. PATCH/DELETE (tournament and
 // event) enforce the same creator-only rule the real API does — a
 // `can_edit: false` row (created by someone else) returns 403.
+//
+// Entries (ADR-0016) are modelled the way the server models them: an event
+// stores its *active entrants* and NOTHING ELSE — the `entered` count is derived
+// (`entrants.length`) at read time by `readEvent` below, so the count and the
+// list it counts cannot drift apart. Withdrawing drops the entrant, which is
+// indistinguishable, from the wire, from the server's soft-delete: a withdrawn
+// entry appears in neither the list nor the count, and the player may enter
+// again afterwards (the server's partial unique index; here, simply a fresh row).
 
 import type { components } from '@/api/schema'
 
@@ -14,9 +22,21 @@ type TournamentUpdate = components['schemas']['TournamentUpdate']
 type TournamentEventCreate = components['schemas']['TournamentEventCreate']
 type TournamentEventUpdate = components['schemas']['TournamentEventUpdate']
 type TournamentTable = components['schemas']['TournamentTable']
+type TournamentEntrantRead = components['schemas']['TournamentEntrantRead']
+
+/** What the store actually holds for an event: everything the wire shape has
+ * *except* the derived `entered` count. Deriving it on read (rather than storing
+ * a number) makes "the counter says 52, the list has 51" unrepresentable — the
+ * same reason the API dropped the column. */
+type StoredEvent = Omit<TournamentEventRead, 'entered'>
+type StoredTournament = Omit<TournamentDetailRead, 'events'> & {
+  events: StoredEvent[]
+}
 
 // The dev current user — must line up with the mocked session in handlers.ts so
-// `can_edit` reads true for rows this user owns.
+// `can_edit` reads true for rows this user owns, and so an entry created here is
+// recognised as *mine* (the client matches on username: the session carries no
+// user id).
 const DEV_USER_ID = 'u-me'
 const DEV_USERNAME = 'rita.kovac'
 
@@ -28,7 +48,19 @@ function tables(count: number): TournamentTable[] {
   }))
 }
 
-function seed(): TournamentDetailRead[] {
+/** `count` other players already entered in an event — enough to make the fill
+ * bars and the "Entries" hero stat meaningful in `npm run dev`. Deliberately
+ * never the dev user, so the Enter control is offered on every seeded event. */
+function otherEntrants(eventId: string, count: number): TournamentEntrantRead[] {
+  return Array.from({ length: count }, (_, i) => ({
+    id: `entry-${eventId}-${i + 1}`,
+    user_id: `u-other-${i + 1}`,
+    username: `player.${i + 1}`,
+    seed: i < 8 ? i + 1 : null,
+  }))
+}
+
+function seed(): StoredTournament[] {
   return [
     {
       id: 'bay-area-open-2026',
@@ -60,7 +92,7 @@ function seed(): TournamentDetailRead[] {
           draw_type: 'rr-then-ko',
           max_players: 64,
           entry_fee: 45,
-          entered: 52,
+          entrants: otherEntrants('ev-open-singles', 52),
           slot: { date: '2026-06-13', start: '09:00', end: '18:00' },
           match_settings: { rated: true, length_games: 5 },
           predicates: [],
@@ -82,6 +114,8 @@ function seed(): TournamentDetailRead[] {
           updated_at: '2026-06-09T12:00:00Z',
         },
         {
+          // Deliberately empty: the designed empty entrants state, and the event
+          // whose count a dev demo ticks from 0 to 1.
           id: 'ev-u1500',
           tournament_id: 'bay-area-open-2026',
           name: 'U1500 Singles',
@@ -89,12 +123,31 @@ function seed(): TournamentDetailRead[] {
           draw_type: 'rr-then-ko',
           max_players: 48,
           entry_fee: 30,
-          entered: 41,
+          entrants: [],
           slot: { date: '2026-06-14', start: '09:00', end: '16:00' },
           match_settings: { rated: true, length_games: 3 },
           predicates: [{ id: 'pr-2', field: 'rating', op: '<', value: 1500 }],
           pools: [],
           created_at: '2026-06-01T09:06:00Z',
+          updated_at: '2026-06-09T12:00:00Z',
+        },
+        {
+          // A doubles event: entry is a singles-only affair (one row per user
+          // cannot express a pairing — ADR-0016), so the API 400s here and the
+          // UI offers no Enter control. Seeded so that case is visible in dev.
+          id: 'ev-mixed-doubles',
+          tournament_id: 'bay-area-open-2026',
+          name: 'Mixed Doubles',
+          format: 'doubles',
+          draw_type: 'single-elim',
+          max_players: 32,
+          entry_fee: 25,
+          entrants: [],
+          slot: { date: '2026-06-14', start: '10:00', end: '15:00' },
+          match_settings: { rated: false, length_games: 3 },
+          predicates: [],
+          pools: [],
+          created_at: '2026-06-01T09:07:00Z',
           updated_at: '2026-06-09T12:00:00Z',
         },
       ],
@@ -145,6 +198,8 @@ function seed(): TournamentDetailRead[] {
       updated_at: '2026-06-12T08:00:00Z',
       events: [
         {
+          // On a tournament the dev user does NOT own: entering is gated on the
+          // `tournament.enter` permission, not on ownership, so Enter still shows.
           id: 'ev-cc-open',
           tournament_id: 'club-champs-2026',
           name: 'Championship Singles',
@@ -152,7 +207,7 @@ function seed(): TournamentDetailRead[] {
           draw_type: 'single-elim',
           max_players: 32,
           entry_fee: 40,
-          entered: 28,
+          entrants: otherEntrants('ev-cc-open', 28),
           slot: { date: '2026-07-01', start: '17:00', end: '21:00' },
           match_settings: { rated: true, length_games: 5 },
           predicates: [],
@@ -165,9 +220,20 @@ function seed(): TournamentDetailRead[] {
   ]
 }
 
-let tournaments: TournamentDetailRead[] = seed()
+let tournaments: StoredTournament[] = seed()
 
-/** Reset the store to its seed — used by the dev worker bootstrap if needed. */
+/** Project a stored event onto the wire shape, deriving the `entered` count from
+ * the entrants — the one place the count comes from. */
+function readEvent(event: StoredEvent): TournamentEventRead {
+  return { ...event, entered: event.entrants.length }
+}
+
+function readDetail(t: StoredTournament): TournamentDetailRead {
+  return { ...t, events: t.events.map(readEvent) }
+}
+
+/** Reset the store to its seed — used by the dev worker bootstrap if needed, and
+ * by tests that drive the store through the default handlers. */
 export function resetTournamentsStore() {
   tournaments = seed()
 }
@@ -177,11 +243,13 @@ export function listTournaments(): TournamentDetailRead[] {
   return tournaments
     .slice()
     .sort((a, b) => b.created_at.localeCompare(a.created_at))
+    .map(readDetail)
 }
 
 /** A single tournament's detail, or `undefined` if missing. */
 export function findTournament(id: string): TournamentDetailRead | undefined {
-  return tournaments.find((t) => t.id === id)
+  const found = tournaments.find((t) => t.id === id)
+  return found === undefined ? undefined : readDetail(found)
 }
 
 let createCounter = 0
@@ -202,7 +270,7 @@ function slugId(name: string): string {
 export function createTournament(body: TournamentCreate): TournamentRead {
   const now = new Date().toISOString()
   const id = slugId(body.name)
-  const created: TournamentDetailRead = {
+  const created: StoredTournament = {
     id,
     name: body.name,
     description: body.description ?? null,
@@ -232,11 +300,28 @@ export type EventResult =
 
 export type DeleteResult = { ok: true } | { ok: false; status: 403 | 404 }
 
+/** Entering can fail four ways, mirroring the API: 404 (no such tournament or
+ * event), 400 (not a singles event), 409 (already actively entered). A 403 for a
+ * missing `tournament.enter` permission is the session's business, not the
+ * store's — the dev session always holds it. */
+export type EnterResult =
+  | { ok: true; entrant: TournamentEntrantRead }
+  | { ok: false; status: 400 | 404 | 409 }
+
+/** Withdrawing fails with a 403 when the entry is someone else's; withdrawing an
+ * entry that is already gone is idempotent (`ok`), as on the server. */
+export type WithdrawResult = { ok: true } | { ok: false; status: 403 | 404 }
+
 /** Strip the embedded `events` so the create/update handlers return the bare
  * `TournamentRead` the real API does. */
-function readOf({ events, ...read }: TournamentDetailRead): TournamentRead {
+function readOf({ events, ...read }: StoredTournament): TournamentRead {
   void events
   return read
+}
+
+/** Swap one tournament in the store for an updated copy. */
+function replace(next: StoredTournament) {
+  tournaments = tournaments.map((t) => (t.id === next.id ? next : t))
 }
 
 /** Patch a tournament's top-level fields. Non-owned rows (`can_edit: false`)
@@ -248,7 +333,7 @@ export function updateTournament(
   const existing = tournaments.find((t) => t.id === id)
   if (!existing) return { ok: false, status: 404 }
   if (!existing.can_edit) return { ok: false, status: 403 }
-  const next: TournamentDetailRead = {
+  const next: StoredTournament = {
     ...existing,
     name: patch.name ?? existing.name,
     description:
@@ -264,7 +349,7 @@ export function updateTournament(
         : patch.table_catalogue,
     updated_at: new Date().toISOString(),
   }
-  tournaments = tournaments.map((t) => (t.id === id ? next : t))
+  replace(next)
   return { ok: true, tournament: readOf(next) }
 }
 
@@ -289,7 +374,7 @@ export function createEvent(
   if (!existing.can_edit) return { ok: false, status: 403 }
   eventCounter += 1
   const now = new Date().toISOString()
-  const event: TournamentEventRead = {
+  const event: StoredEvent = {
     id: `ev-new-${eventCounter}`,
     tournament_id: tournamentId,
     name: body.name,
@@ -297,7 +382,9 @@ export function createEvent(
     draw_type: body.draw_type,
     max_players: body.max_players,
     entry_fee: body.entry_fee,
-    entered: 0,
+    // A brand-new event has no entrants, so its derived count is 0. There is no
+    // `entered` to set — that's the point.
+    entrants: [],
     slot: body.slot,
     match_settings: body.match_settings,
     predicates: body.predicates ?? [],
@@ -305,9 +392,8 @@ export function createEvent(
     created_at: now,
     updated_at: now,
   }
-  const next = { ...existing, events: [...existing.events, event] }
-  tournaments = tournaments.map((t) => (t.id === tournamentId ? next : t))
-  return { ok: true, event }
+  replace({ ...existing, events: [...existing.events, event] })
+  return { ok: true, event: readEvent(event) }
 }
 
 /** Patch an event (full replace of the provided fields). Creator-only. */
@@ -321,29 +407,27 @@ export function updateEvent(
   if (!existing.can_edit) return { ok: false, status: 403 }
   const event = existing.events.find((e) => e.id === eventId)
   if (!event) return { ok: false, status: 404 }
-  const next: TournamentEventRead = {
+  const next: StoredEvent = {
     ...event,
     name: patch.name ?? event.name,
     format: patch.format ?? event.format,
     draw_type: patch.draw_type ?? event.draw_type,
     max_players: patch.max_players ?? event.max_players,
     entry_fee: patch.entry_fee ?? event.entry_fee,
-    // entered is server-managed — not in the PATCH body; keep the existing value.
-    entered: event.entered,
+    // Entrants are not in the PATCH body — an editor edit never touches the
+    // registrations, so the derived count survives the edit untouched.
+    entrants: event.entrants,
     slot: patch.slot ?? event.slot,
     match_settings: patch.match_settings ?? event.match_settings,
     predicates: patch.predicates ?? event.predicates,
     pools: patch.pools ?? event.pools,
     updated_at: new Date().toISOString(),
   }
-  const nextTournament = {
+  replace({
     ...existing,
     events: existing.events.map((e) => (e.id === eventId ? next : e)),
-  }
-  tournaments = tournaments.map((t) =>
-    t.id === tournamentId ? nextTournament : t,
-  )
-  return { ok: true, event: next }
+  })
+  return { ok: true, event: readEvent(next) }
 }
 
 /** Delete an event. Creator-only. */
@@ -356,10 +440,74 @@ export function deleteEvent(
   if (!existing.can_edit) return { ok: false, status: 403 }
   const event = existing.events.find((e) => e.id === eventId)
   if (!event) return { ok: false, status: 404 }
-  const next = {
+  replace({
     ...existing,
     events: existing.events.filter((e) => e.id !== eventId),
+  })
+  return { ok: true }
+}
+
+let entryCounter = 0
+
+/** Enter the dev user into an event — the caller is always the entrant (there is
+ * no request body; self-registration only). Not creator-gated: the whole point
+ * is that a player writes to a tournament they don't own. */
+export function enterEvent(
+  tournamentId: string,
+  eventId: string,
+): EnterResult {
+  const existing = tournaments.find((t) => t.id === tournamentId)
+  if (!existing) return { ok: false, status: 404 }
+  const event = existing.events.find((e) => e.id === eventId)
+  if (!event) return { ok: false, status: 404 }
+  // One row per user can't express a doubles pairing or a team (ADR-0016).
+  if (event.format !== 'singles') return { ok: false, status: 400 }
+  // The server's partial unique index, in miniature: at most one *active* entry
+  // per player per event. A second one is a 409, never a second row.
+  if (event.entrants.some((e) => e.user_id === DEV_USER_ID)) {
+    return { ok: false, status: 409 }
   }
-  tournaments = tournaments.map((t) => (t.id === tournamentId ? next : t))
+  entryCounter += 1
+  const entrant: TournamentEntrantRead = {
+    id: `entry-me-${entryCounter}`,
+    user_id: DEV_USER_ID,
+    username: DEV_USERNAME,
+    seed: null,
+  }
+  const next: StoredEvent = { ...event, entrants: [...event.entrants, entrant] }
+  replace({
+    ...existing,
+    events: existing.events.map((e) => (e.id === eventId ? next : e)),
+  })
+  return { ok: true, entrant }
+}
+
+/** Withdraw one entry. A player may only withdraw their *own* (someone else's is
+ * a 403). Withdrawing an entry that is no longer active is idempotent — the
+ * server soft-deletes, so a repeat DELETE is still a 204; here the row is simply
+ * already gone. Dropping it (rather than tombstoning) is faithful on the wire:
+ * a withdrawn entry appears in neither the list nor the count, and the player can
+ * enter again straight away. */
+export function withdrawEntry(
+  tournamentId: string,
+  eventId: string,
+  entryId: string,
+): WithdrawResult {
+  const existing = tournaments.find((t) => t.id === tournamentId)
+  if (!existing) return { ok: false, status: 404 }
+  const event = existing.events.find((e) => e.id === eventId)
+  if (!event) return { ok: false, status: 404 }
+  const entrant = event.entrants.find((e) => e.id === entryId)
+  // Already withdrawn (or never existed): idempotent, exactly as on the server.
+  if (!entrant) return { ok: true }
+  if (entrant.user_id !== DEV_USER_ID) return { ok: false, status: 403 }
+  const next: StoredEvent = {
+    ...event,
+    entrants: event.entrants.filter((e) => e.id !== entryId),
+  }
+  replace({
+    ...existing,
+    events: existing.events.map((e) => (e.id === eventId ? next : e)),
+  })
   return { ok: true }
 }

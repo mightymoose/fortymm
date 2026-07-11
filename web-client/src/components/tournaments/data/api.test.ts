@@ -2,9 +2,12 @@ import { describe, expect, it } from 'vitest'
 
 import {
   buildTournamentDetailRead,
+  buildTournamentEntrantRead,
+  buildTournamentEntrantReads,
   buildTournamentEventRead,
 } from '@/mocks/factories/tournaments/tournament.factory'
 import {
+  apiToEntrant,
   apiToEvent,
   apiToTournament,
   draftToCreateBody,
@@ -21,7 +24,7 @@ describe('apiToEvent', () => {
         draw_type: 'single-elim',
         max_players: 32,
         entry_fee: 35,
-        entered: 22,
+        entrants: buildTournamentEntrantReads(22),
         match_settings: { rated: false, length_games: 3 },
       }),
     )
@@ -29,8 +32,37 @@ describe('apiToEvent', () => {
     expect(event.drawType).toBe('single-elim')
     expect(event.maxPlayers).toBe(32)
     expect(event.entryFee).toBe(35)
+    // The count is the server's derived `entered` — and it agrees with the list
+    // it counts, because they are the same fact (ADR-0016).
     expect(event.entered).toBe(22)
+    expect(event.entrants).toHaveLength(22)
     expect(event.match).toEqual({ rated: false, lengthGames: 3 })
+  })
+
+  it('maps each entrant, keeping the ENTRY id a withdrawal is addressed to', () => {
+    const event = apiToEvent(
+      buildTournamentEventRead({
+        entrants: [
+          buildTournamentEntrantRead({
+            id: 'entry-9',
+            user_id: 'u-7',
+            username: 'rita.kovac',
+            seed: 3,
+          }),
+        ],
+      }),
+    )
+
+    expect(event.entrants).toEqual([
+      { id: 'entry-9', userId: 'u-7', username: 'rita.kovac', seed: 3 },
+    ])
+  })
+
+  it('maps an event nobody has entered to an empty list and a zero count', () => {
+    const event = apiToEvent(buildTournamentEventRead({ entrants: [] }))
+
+    expect(event.entrants).toEqual([])
+    expect(event.entered).toBe(0)
   })
 
   it('maps a pool, renaming table_ids to tableIds', () => {
@@ -79,6 +111,19 @@ describe('apiToEvent', () => {
     )
 
     expect(event.predicates[0].value).toEqual([1200, 1600])
+  })
+})
+
+describe('apiToEntrant', () => {
+  it('renames user_id and passes an unseeded entrant through', () => {
+    expect(
+      apiToEntrant({
+        id: 'entry-1',
+        user_id: 'u-1',
+        username: 'player.1',
+        seed: null,
+      }),
+    ).toEqual({ id: 'entry-1', userId: 'u-1', username: 'player.1', seed: null })
   })
 })
 
@@ -205,7 +250,14 @@ const event: TournamentEvent = {
   drawType: 'rr-then-ko',
   maxPlayers: 48,
   entryFee: 30,
-  entered: 41,
+  // Two active entrants, so the derived count is 2 — the count and the list are
+  // the same fact, and a fixture that disagreed with itself would be a lie the
+  // server cannot tell.
+  entered: 2,
+  entrants: [
+    { id: 'entry-1', userId: 'u-1', username: 'player.1', seed: 1 },
+    { id: 'entry-2', userId: 'u-2', username: 'player.2', seed: null },
+  ],
   slot: { date: '2026-06-14', start: '09:00', end: '16:00' },
   predicates: [{ id: 'pr-2', field: 'rating', op: '<', value: 1500 }],
   match: { rated: true, lengthGames: 3 },
@@ -247,8 +299,23 @@ describe('eventToCreateBody', () => {
       pools: wire.pools ?? [],
       id: event.id,
       tournament_id: 't-1',
-      // `entered` is server-managed and absent from the create body; supply the
-      // read-shape value directly so the round-trip assertion holds.
+      // The registrations are server-owned and absent from the create body;
+      // supply the read-shape entrants (the count derives from them) so the
+      // round-trip assertion holds.
+      entrants: [
+        buildTournamentEntrantRead({
+          id: 'entry-1',
+          user_id: 'u-1',
+          username: 'player.1',
+          seed: 1,
+        }),
+        buildTournamentEntrantRead({
+          id: 'entry-2',
+          user_id: 'u-2',
+          username: 'player.2',
+          seed: null,
+        }),
+      ],
       entered: event.entered,
       created_at: '2026-06-01T00:00:00Z',
       updated_at: '2026-06-01T00:00:00Z',
@@ -279,5 +346,10 @@ describe('eventToUpdateBody', () => {
   it('omits the server-owned entered count so a PATCH never clobbers it', () => {
     const body = eventToUpdateBody(event)
     expect('entered' in body).toBe(false)
+  })
+
+  it('omits the entrants too — registrations are written through the entries endpoints, never an event PATCH', () => {
+    const body = eventToUpdateBody(event)
+    expect('entrants' in body).toBe(false)
   })
 })

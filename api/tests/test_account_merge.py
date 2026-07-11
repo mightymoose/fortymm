@@ -435,9 +435,8 @@ async def test_merge_repoints_tournament_ownership(db_session: AsyncSession):
 
 
 async def _make_event(db: AsyncSession, owner: User) -> TournamentEvent:
-    """A singles event on a tournament ``owner`` created. ``entered`` is left to
-    its server default — it is a dead counter being retired, and an entry's
-    existence is the truth."""
+    """A singles event on a tournament ``owner`` created. An event has no entry
+    counter to set: the count is derived from the entries themselves."""
     tournament = Tournament(
         name="Guest Cup",
         created_by_user_id=owner.id,
@@ -486,11 +485,12 @@ async def _enter(
 async def _entries_for(
     db: AsyncSession, event: TournamentEvent
 ) -> list[TournamentEntry]:
-    # ``merge_user`` re-points entries with a bulk statement, and the test
-    # sessionmaker sets ``expire_on_commit=False`` — so a plain SELECT would hand
-    # back the identity map's stale copies and happily "prove" the merge did
-    # nothing. ``populate_existing`` overwrites them from the row that came back,
-    # so what we assert on is what the database actually holds.
+    # ``merge_user`` re-points entries with a bulk statement, which the identity
+    # map never sees, and the test sessionmaker sets ``expire_on_commit=False`` —
+    # so a plain SELECT hands back stale copies still carrying the *pre-merge*
+    # ``user_id``, making a correct merge look as though it did nothing.
+    # ``populate_existing`` overwrites them from the row that came back, so what
+    # we assert on is what the database actually holds.
     return list(
         (
             await db.execute(

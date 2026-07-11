@@ -17,6 +17,7 @@ import { ApiError, api, unwrap } from '@/api/client'
 import { notifyError } from '@/lib/notify-error'
 import type { components } from '@/api/schema'
 import type {
+  Entrant,
   Pool,
   Predicate,
   PredicateValue,
@@ -28,6 +29,7 @@ import type {
 type TournamentDetailRead = components['schemas']['TournamentDetailRead']
 type TournamentRead = components['schemas']['TournamentRead']
 type TournamentEventRead = components['schemas']['TournamentEventRead']
+type TournamentEntrantRead = components['schemas']['TournamentEntrantRead']
 type TournamentCreate = components['schemas']['TournamentCreate']
 type TournamentUpdate = components['schemas']['TournamentUpdate']
 type TournamentEventCreate = components['schemas']['TournamentEventCreate']
@@ -51,7 +53,14 @@ function apiToPredicate(p: ApiPredicate): Predicate {
 
 // ----- adapters: API (snake_case) <-> prototype (camelCase) ----------------
 
-/** Map an API event payload to the prototype's `TournamentEvent`. */
+/** Map an API entrant to the prototype's `Entrant`. */
+export function apiToEntrant(e: TournamentEntrantRead): Entrant {
+  return { id: e.id, userId: e.user_id, username: e.username, seed: e.seed }
+}
+
+/** Map an API event payload to the prototype's `TournamentEvent`. `entered`
+ * comes straight off the wire: the server derives it from the same active
+ * entries it lists in `entrants`, so the two always agree. */
 export function apiToEvent(e: TournamentEventRead): TournamentEvent {
   return {
     id: e.id,
@@ -61,6 +70,7 @@ export function apiToEvent(e: TournamentEventRead): TournamentEvent {
     maxPlayers: e.max_players,
     entryFee: e.entry_fee,
     entered: e.entered,
+    entrants: e.entrants.map(apiToEntrant),
     slot: e.slot,
     predicates: e.predicates.map(apiToPredicate),
     match: { rated: e.match_settings.rated, lengthGames: e.match_settings.length_games },
@@ -342,5 +352,74 @@ export function useDeleteEvent(tournamentId: string) {
     },
     onSuccess: () => invalidateTournament(qc, tournamentId),
     onError: notifyError('delete the event'),
+  })
+}
+
+// ----- entries (self-registration, ADR-0016) -------------------------------
+//
+// Entrants arrive nested in the tournament detail/list payloads, so entering and
+// withdrawing need no query of their own — they invalidate the tournament (list
+// + detail), and the refetched event carries both the updated `entrants` list
+// and the derived `entered` count. That is the whole invalidation set: the two
+// keys `invalidateTournament` already covers.
+
+/** Enter the *signed-in* player into an event. There is no request body — the
+ * caller is the entrant (self-registration; a director entering someone else is
+ * a separate, later endpoint). Resolves to the created `Entrant`, whose `id` is
+ * the entry id a later withdrawal is addressed to.
+ *
+ * The server rejects a second *active* entry with a 409 and a non-singles event
+ * with a 400; both surface as a toast here. A caller that wants to treat the 409
+ * as benign (a two-tab race, where the player IS in fact entered) can await
+ * `mutateAsync` and inspect the `ApiError` status itself. */
+export function useEnterEvent(tournamentId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (eventId: string): Promise<Entrant> => {
+      const entrant = unwrap(
+        'enter event',
+        await api.POST(
+          '/v1/tournaments/{tournament_id}/events/{event_id}/entries',
+          {
+            params: {
+              path: { tournament_id: tournamentId, event_id: eventId },
+            },
+          },
+        ),
+      )
+      return apiToEntrant(entrant)
+    },
+    onSuccess: () => invalidateTournament(qc, tournamentId),
+    onError: notifyError('enter the event'),
+  })
+}
+
+/** Withdraw one of the signed-in player's own entries (a soft-delete on the
+ * server: the entry survives as history, and the player may enter again). Keyed
+ * by the ENTRY's id — take it from the entrant in the event's `entrants` list.
+ * Repeating a withdrawal is a no-op, not an error. */
+export function useWithdrawEntry(tournamentId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (input: { eventId: string; entryId: string }) => {
+      unwrap(
+        'withdraw from event',
+        await api.DELETE(
+          '/v1/tournaments/{tournament_id}/events/{event_id}/entries/{entry_id}',
+          {
+            params: {
+              path: {
+                tournament_id: tournamentId,
+                event_id: input.eventId,
+                entry_id: input.entryId,
+              },
+            },
+          },
+        ),
+        { allowEmpty: true },
+      )
+    },
+    onSuccess: () => invalidateTournament(qc, tournamentId),
+    onError: notifyError('withdraw from the event'),
   })
 }

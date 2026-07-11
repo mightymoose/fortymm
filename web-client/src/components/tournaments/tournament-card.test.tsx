@@ -1,6 +1,6 @@
 import userEvent from '@testing-library/user-event'
 
-import { buildTournament, buildEvent } from './data/seed.factory'
+import { buildEntrants, buildTournament, buildEvent } from './data/seed.factory'
 import { tournamentCardPage } from './tournament-card.page'
 
 describe('TournamentCard', () => {
@@ -9,9 +9,11 @@ describe('TournamentCard', () => {
       tournament: buildTournament({
         name: 'Bay Area Open 2026',
         tableIds: ['t1', 't2', 't3'],
+        // The entry count is derived from the entrants, so the fixture states
+        // the entrants and the count follows — there is no second copy to skew.
         events: [
-          buildEvent({ id: 'a', entered: 52 }),
-          buildEvent({ id: 'b', entered: 22 }),
+          buildEvent({ id: 'a', entrants: buildEntrants(52) }),
+          buildEvent({ id: 'b', entrants: buildEntrants(22) }),
         ],
       }),
     })
