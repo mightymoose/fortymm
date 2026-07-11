@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { act, render, screen } from '@/test/utilities'
 
-import { ScreenEmail, ScreenSent } from './login-screens'
+import { ScreenEmail, ScreenSent, ScreenVerifyNetError } from './login-screens'
 
 describe('ScreenSent expiry countdown', () => {
   beforeEach(() => {
@@ -75,5 +75,42 @@ describe('ScreenEmail over-long address (#377)', () => {
       screen.getByText("That doesn't look like a valid email."),
     ).toBeInTheDocument()
     expect(screen.getByText(/FAILED/)).toBeInTheDocument()
+  })
+})
+
+describe('ScreenVerifyNetError fabricated diagnostics (#226)', () => {
+  // This screen came in wholesale from a static design mockup, so it used to
+  // render invented diagnostics at the user: a hostname we don't own and a
+  // fake HTTP log (522s against /auth/verify endpoints that don't exist).
+  // Never show the user a detail we didn't actually observe.
+  it('renders no invented hostnames, status codes or request logs', () => {
+    const { container } = render(<ScreenVerifyNetError />)
+    const text = container.textContent ?? ''
+
+    expect(text).not.toMatch(/auth\.fortymm\.com/)
+    expect(text).not.toMatch(/522/)
+    expect(text).not.toMatch(/\/auth\/verify/)
+    expect(text).not.toMatch(/\/auth\/session/)
+    expect(text).not.toMatch(/gave up after/i)
+    expect(text).not.toMatch(/retry 2\/3/i)
+  })
+
+  it('still explains the failure and offers both recovery actions', async () => {
+    const user = userEvent.setup()
+    const onRetry = vi.fn()
+    const onSendNewLink = vi.fn()
+    render(
+      <ScreenVerifyNetError onRetry={onRetry} onSendNewLink={onSendNewLink} />,
+    )
+
+    expect(
+      screen.getByRole('heading', { name: /couldn.t reach fortymm/i }),
+    ).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /retry verification/i }))
+    expect(onRetry).toHaveBeenCalledTimes(1)
+
+    await user.click(screen.getByRole('button', { name: /send a new link/i }))
+    expect(onSendNewLink).toHaveBeenCalledTimes(1)
   })
 })

@@ -61,7 +61,7 @@ function LoginPage() {
             // Stamp the send time so /login/sent can run a real expiry
             // countdown anchored to when the link actually went out (survives
             // refresh; a fresh send via resend re-stamps it).
-            search: { email, sentAt: Date.now(), error: undefined },
+            search: { email, sentAt: Date.now() },
           })
         } catch (err) {
           if (err instanceof ApiError) {

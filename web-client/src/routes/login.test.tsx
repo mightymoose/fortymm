@@ -276,6 +276,28 @@ describe('/login/sent flow', () => {
     expect(router.state.location.pathname).toBe('/login/sent')
   })
 
+  // Regression test for #226: `?error=bounce` used to render a dead-end screen
+  // full of fabricated delivery diagnostics (a made-up SMTP reason, mail server
+  // and "did you mean" address). Nothing ever sets it, so a hand-typed URL was
+  // the only way in. The key is dropped from the search schema now — the page
+  // must fall through to the normal "check your inbox" screen, not blank out.
+  it('falls through to the normal sent screen for a hand-typed ?error=bounce', async () => {
+    const { router } = renderAt(
+      '/login/sent?error=bounce&email=rita@example.com&sentAt=1000',
+    )
+
+    // The route's search schema has no `error` key, so nothing reads one: the
+    // page renders its single, normal state instead of blanking or crashing.
+    expect(
+      await screen.findByRole('heading', { name: /link sent to rita@example.com/i }),
+    ).toBeInTheDocument()
+    expect(router.state.location.pathname).toBe('/login/sent')
+    // None of the deleted bounce screen's fabricated fixtures reach the user.
+    expect(screen.queryByText(/couldn.t deliver/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/tomas\.fischer@club37\.de/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/550 5\.1\.1/)).not.toBeInTheDocument()
+  })
+
   it('"Start over" routes back to /login with the email prefilled', async () => {
     const user = userEvent.setup()
     const { router } = renderAt('/login/sent?email=rita@example.com&sentAt=1000')

@@ -3,7 +3,7 @@ import { createFileRoute, useNavigate } from '@tanstack/react-router'
 
 import { ApiError } from '@/api/client'
 import { useRequestLogin } from '@/api/session'
-import { ScreenSent, ScreenSentBounced } from '@/components/login/login-screens'
+import { ScreenSent } from '@/components/login/login-screens'
 import { Turnstile, type TurnstileHandle } from '@/components/turnstile'
 import { pageTitle } from '@/lib/page-title'
 
@@ -11,8 +11,10 @@ export const Route = createFileRoute('/login/sent')({
   head: () => ({
     meta: [{ title: pageTitle('Check your inbox') }],
   }),
+  // No `error` key: this page has exactly one state. A hand-typed `?error=…`
+  // is simply never read, so it falls through to the normal "check your inbox"
+  // screen rather than a bespoke error screen (#226).
   validateSearch: (search: Record<string, unknown>) => ({
-    error: search.error === 'bounce' ? ('bounce' as const) : undefined,
     email: typeof search.email === 'string' ? search.email : '',
     sentAt: typeof search.sentAt === 'number' ? search.sentAt : undefined,
   }),
@@ -20,7 +22,7 @@ export const Route = createFileRoute('/login/sent')({
 })
 
 function LoginSentPage() {
-  const { error, email, sentAt } = Route.useSearch()
+  const { email, sentAt } = Route.useSearch()
   const navigate = useNavigate()
   const requestLogin = useRequestLogin()
   // A fresh captcha token is kept on this page (the Turnstile widget below
@@ -32,8 +34,8 @@ function LoginSentPage() {
   const captchaRef = useRef<TurnstileHandle | null>(null)
   const inFlight = useRef(false)
 
-  // "Start over" (and bounce recovery) goes back to /login with the email
-  // prefilled to re-run the whole flow from scratch.
+  // "Start over" goes back to /login with the email prefilled to re-run the
+  // whole flow from scratch.
   const startOver = () => {
     navigate({
       to: '/login',
@@ -60,7 +62,7 @@ function LoginSentPage() {
           navigate({
             to: '/login/sent',
             replace: true,
-            search: { email, sentAt: Date.now(), error: undefined },
+            search: { email, sentAt: Date.now() },
           })
         },
         onError: (err) => {
@@ -78,16 +80,6 @@ function LoginSentPage() {
           captchaRef.current?.reset()
         },
       },
-    )
-  }
-
-  if (error === 'bounce') {
-    return (
-      <ScreenSentBounced
-        email={email}
-        onChangeEmail={startOver}
-        onRetry={startOver}
-      />
     )
   }
 
