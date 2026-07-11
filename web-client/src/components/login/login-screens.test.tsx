@@ -78,6 +78,24 @@ describe('ScreenEmail over-long address (#377)', () => {
   })
 })
 
+describe('ScreenEmail honeypot', () => {
+  it('keeps the honeypot in the DOM but out of the accessibility tree', () => {
+    render(<ScreenEmail onSubmit={vi.fn()} />)
+
+    // The trap is still wired: bots parse the DOM, so the field must be there.
+    expect(screen.getByTestId('login-honeypot')).toBeInTheDocument()
+
+    // ...but a human never perceives it. `*ByRole` skips `aria-hidden`
+    // subtrees, which is the same lens a screen reader uses.
+    expect(
+      screen.queryByRole('textbox', { name: /leave this empty/i }),
+    ).toBeNull()
+    expect(screen.getAllByRole('textbox')).toEqual([
+      screen.getByLabelText('Email address'),
+    ])
+  })
+})
+
 describe('ScreenVerifyNetError fabricated diagnostics (#226)', () => {
   // This screen came in wholesale from a static design mockup, so it used to
   // render invented diagnostics at the user: a hostname we don't own and a
