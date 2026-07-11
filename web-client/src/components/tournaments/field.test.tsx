@@ -16,6 +16,38 @@ describe('Field', () => {
     expect(fieldPage.queryHint('Required')).toHaveClass('text-[color:var(--loss)]')
   })
 
+  // ADR 0015: `Field` owns the read-only *branch*, not merely a flag. The row is
+  // handed both its control and the value it holds, and decides between them —
+  // so a call site cannot leak a live control to a reader by forgetting a
+  // `canEdit ? … : …` of its own. That leak is structurally impossible here
+  // rather than merely swept for.
+  describe('readOnly', () => {
+    it('renders the control for an editor', () => {
+      fieldPage.render({
+        label: 'Entry fee',
+        value: 30,
+        children: (id) => <Input id={id} defaultValue={30} />,
+      })
+      expect(fieldPage.getControl('Entry fee')).toBeInTheDocument()
+    })
+
+    it('renders the value instead of the control for a viewer', () => {
+      fieldPage.render({
+        label: 'Entry fee',
+        readOnly: true,
+        value: 30,
+        children: (id) => <Input id={id} defaultValue={30} />,
+      })
+      expect(fieldPage.getFieldValue('Entry fee')).toHaveTextContent('30')
+      expect(fieldPage.queryControl('Entry fee')).toBeNull()
+    })
+
+    it('renders an em-dash for a value the organizer left unset', () => {
+      fieldPage.render({ label: 'Entry fee', readOnly: true, value: null })
+      expect(fieldPage.getFieldValue('Entry fee')).toHaveTextContent('—')
+    })
+  })
+
   // ADR 0015: the hint and the asterisk are the form's *furniture*. They explain
   // how to fill in a control and mark one you must complete — both nonsense next
   // to a value nobody can edit. Suppressing them here rather than at each call

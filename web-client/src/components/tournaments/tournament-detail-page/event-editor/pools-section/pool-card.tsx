@@ -4,6 +4,7 @@ import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 
+import { fmtDate } from '../../../data/helpers'
 import type { Pool, TournamentTable } from '../../../data/types'
 import { Field } from '../../../field'
 import { ReadOnlyValue } from '../../../read-only-value'
@@ -83,27 +84,25 @@ export const PoolCard = ({
           <TableCount count={pool.tableIds.length} />
         </div>
 
-        {/* `readOnly` on each row is what keeps the form's furniture out of the
-            view: these rows carry no hint or asterisk today, but a `Field` that
-            grows one must not leak it here (ADR 0015). */}
+        {/* `readOnly` on each row is what renders the value instead of a control
+            and keeps the form's furniture out of the view: these rows carry no
+            hint or asterisk today, but a `Field` that grows one must not leak it
+            here (ADR 0015). The date reads in words — the wire format is the
+            editor's `<input type="date">` value, not a reader's. */}
         <div className={WINDOW_ROW}>
-          <Field label="Date" readOnly>
-            {() => <ReadOnlyValue>{pool.slot.date}</ReadOnlyValue>}
-          </Field>
-          <Field label="Start" readOnly>
-            {() => (
-              <ReadOnlyValue className="font-mono">
-                {pool.slot.start}
-              </ReadOnlyValue>
-            )}
-          </Field>
-          <Field label="End" readOnly>
-            {() => (
-              <ReadOnlyValue className="font-mono">
-                {pool.slot.end}
-              </ReadOnlyValue>
-            )}
-          </Field>
+          <Field label="Date" readOnly value={fmtDate(pool.slot.date)} />
+          <Field
+            label="Start"
+            readOnly
+            value={pool.slot.start}
+            valueClassName="font-mono"
+          />
+          <Field
+            label="End"
+            readOnly
+            value={pool.slot.end}
+            valueClassName="font-mono"
+          />
         </div>
 
         <div className="px-3.5 pb-3.5">

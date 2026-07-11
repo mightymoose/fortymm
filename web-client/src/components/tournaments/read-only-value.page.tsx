@@ -1,31 +1,31 @@
+import { interactiveControlsIn, interactiveElementsIn } from '@/test/read-only'
 import { render, screen, type Container } from '@/test/utilities'
 
 import { ReadOnlyValue, type ReadOnlyValueProps } from './read-only-value'
 import { buildReadOnlyValueProps } from './read-only-value.factory'
 
-/** The roles a form control would take in the accessibility tree. A read-only
- * surface must render none of them (ADR 0015). */
-const INTERACTIVE_ROLES = ['textbox', 'combobox', 'switch', 'button'] as const
+/** The testid `ReadOnlyValue` stamps on its rendering. Every page object that
+ * reads a value back goes through this constant rather than re-typing it. */
+export const READ_ONLY_VALUE_TESTID = 'tournament-read-only-value'
 
 const scoped = (container: Container) => ({
   /** The rendered value, as text. Always present — an unset value renders an
    * em-dash rather than nothing. */
   getValue() {
-    return container.getByTestId('tournament-read-only-value')
+    return container.getByTestId(READ_ONLY_VALUE_TESTID)
   },
-  /** Every interactive control in scope, across the roles a form control could
-   * claim. Empty is the whole point of the component. */
+  /** Every interactive control in scope, swept by role. Empty is the whole point
+   * of the component. Supplement only — `getFormElements()` is the guarantee. */
   getInteractiveControls() {
-    return INTERACTIVE_ROLES.flatMap((role) => container.queryAllByRole(role))
+    return interactiveControlsIn(container)
   },
-  /** Anything focusable — the tab-order escape hatch a plain `role` sweep would
-   * miss (a `tabindex`, an anchor, a bare `<input>` with no accessible name). */
-  getFocusableElements() {
-    return container
-      .getByTestId('tournament-read-only-value')
-      .parentElement!.querySelectorAll(
-        'input, select, textarea, button, a[href], [tabindex], [contenteditable="true"]',
-      )
+  /** Every interactive element in scope, swept by DOM (`@/test/read-only`) — the
+   * tab-order escape hatch a role sweep would miss (a `tabindex`, an anchor, a
+   * bare `<input>` with no accessible name). */
+  getFormElements() {
+    return interactiveElementsIn(
+      container.getByTestId(READ_ONLY_VALUE_TESTID).parentElement!,
+    )
   },
 })
 

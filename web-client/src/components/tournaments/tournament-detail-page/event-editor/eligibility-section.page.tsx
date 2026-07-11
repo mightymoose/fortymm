@@ -1,3 +1,4 @@
+import { interactiveControlsIn, interactiveElementsIn } from '@/test/read-only'
 import { render, screen, type Container } from '@/test/utilities'
 
 import {
@@ -6,17 +7,6 @@ import {
 } from './eligibility-section'
 import { buildEligibilitySectionProps } from './eligibility-section.factory'
 import { predicateRowPage } from './eligibility-section/predicate-row.page'
-
-/** The roles a form control would take in the accessibility tree. A read-only
- * surface must render none of them (ADR 0015). */
-const INTERACTIVE_ROLES = ['textbox', 'combobox', 'switch', 'button'] as const
-
-/** The role sweep alone under-proves this section: a rule row's value control is
- * a `type="number"` input, which is a `spinbutton` rather than a `textbox`, so a
- * live rule builder would sail straight through it. This catches the element
- * itself, whatever role it claims (ADR 0015, rule 6). */
-const FORM_ELEMENTS =
-  'input, select, textarea, button, [role="switch"], [role="radio"], [tabindex], [contenteditable]'
 
 const scoped = (container: Container) => ({
   /** Reuse the predicate-row queries (scoped to the section). Spread first: the
@@ -43,17 +33,15 @@ const scoped = (container: Container) => ({
   getFootnote() {
     return container.getByTestId('eligibility-footnote')
   },
-  /** Every interactive control in the section. Empty is the point of the
-   * read-only view. */
+  /** Every interactive control in the section, swept by role. Supplement only —
+   * `getFormElements()` is the guarantee. */
   getInteractiveControls() {
-    return INTERACTIVE_ROLES.flatMap((role) => container.queryAllByRole(role))
+    return interactiveControlsIn(container)
   },
-  /** Every form element in the section, by tag/widget role rather than by the
-   * four canonical roles — the escape hatch the role sweep misses. */
+  /** Every interactive element in the section, swept by DOM (`@/test/read-only`).
+   * Empty is the point of the read-only view. */
   getFormElements() {
-    return container
-      .getByTestId('eligibility-section')
-      .querySelectorAll(FORM_ELEMENTS)
+    return interactiveElementsIn(container.getByTestId('eligibility-section'))
   },
 })
 

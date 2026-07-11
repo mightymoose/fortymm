@@ -1,5 +1,7 @@
 import userEvent from '@testing-library/user-event'
 
+import { screen } from '@/test/utilities'
+
 import { buildPool } from '../../../data/seed.factory'
 import { poolCardPage } from './pool-card.page'
 
@@ -49,6 +51,9 @@ describe('PoolCard', () => {
       expect(poolCardPage.queryNameInput()).toBeNull()
     })
 
+    // The date reads in words, never as the `YYYY-MM-DD` the editor's
+    // `<input type="date">` takes. The times have no such helper and stay raw
+    // here, on the event card, and everywhere else.
     it('reads the window back under the same Date / Start / End labels', () => {
       poolCardPage.render({
         pool: buildPool({
@@ -56,9 +61,12 @@ describe('PoolCard', () => {
         }),
         canEdit: false,
       })
-      expect(poolCardPage.getFieldValue('Date')).toHaveTextContent('2026-06-13')
+      expect(poolCardPage.getFieldValue('Date')).toHaveTextContent(
+        'Jun 13, 2026',
+      )
       expect(poolCardPage.getFieldValue('Start')).toHaveTextContent('09:00')
       expect(poolCardPage.getFieldValue('End')).toHaveTextContent('12:30')
+      expect(screen.queryByText('2026-06-13')).toBeNull()
     })
 
     // The reserved tables are the point of a pool. Read-only they are a list of

@@ -1,20 +1,15 @@
-import { render, screen, within, type Container } from '@/test/utilities'
+import { interactiveControlsIn, interactiveElementsIn } from '@/test/read-only'
+import { render, screen, type Container } from '@/test/utilities'
 
+import { fieldPage } from '../../../field.page'
 import { PoolCard, type PoolCardProps } from './pool-card'
 import { buildPoolCardProps } from './pool-card.factory'
 
-/** The roles a form control would take in the accessibility tree. A read-only
- * card must render none of them (ADR 0015). */
-const INTERACTIVE_ROLES = ['textbox', 'combobox', 'switch', 'button'] as const
-
-/** The role sweep alone under-proves this card: its window is three
- * `type="date"` / `type="time"` inputs, which have **no ARIA role at all** — a
- * whole live date/time row sails straight through a role sweep. This catches the
- * element itself, whatever role it claims (ADR 0015, rule 6). */
-const FORM_ELEMENTS =
-  'input, select, textarea, button, [role="switch"], [role="radio"], [tabindex], [contenteditable]'
-
 const scoped = (container: Container) => ({
+  /** Reuse the `Field` row queries — the pool's window is three `Field` rows,
+   * whose read-only values `getFieldValue(label)` reads back. */
+  ...fieldPage.within(container),
+
   getCard() {
     return container.getByTestId('pool-card')
   },
@@ -46,23 +41,15 @@ const scoped = (container: Container) => ({
   getReservedTables() {
     return container.getByTestId('pool-tables')
   },
-  /** The read-only value rendered in place of a window field's control, found by
-   * the field's label so the assertion survives a re-ordering of the row. */
-  getFieldValue(label: string) {
-    const row = container
-      .getByText(label, { exact: false, selector: 'label' })
-      .closest('div')!
-    return within(row).getByTestId('tournament-read-only-value')
-  },
-  /** Every interactive control in the card. Empty is the point of the read-only
-   * view. */
+  /** Every interactive control in the card, swept by role. Supplement only —
+   * `getFormElements()` is the guarantee. */
   getInteractiveControls() {
-    return INTERACTIVE_ROLES.flatMap((role) => container.queryAllByRole(role))
+    return interactiveControlsIn(container)
   },
-  /** Every form element in the card, by tag/widget role rather than by the four
-   * canonical roles — the escape hatch the role sweep misses. */
+  /** Every interactive element in the card, swept by DOM (`@/test/read-only`).
+   * Empty is the point of the read-only view. */
   getFormElements() {
-    return container.getByTestId('pool-card').querySelectorAll(FORM_ELEMENTS)
+    return interactiveElementsIn(container.getByTestId('pool-card'))
   },
 })
 

@@ -111,7 +111,8 @@ describe('PoolsSection', () => {
 
       const [first, second] = poolsSectionPage.queryPoolCards()
       expect(first).toHaveTextContent('Pool A')
-      expect(first).toHaveTextContent('2026-06-13')
+      // In words, not the `YYYY-MM-DD` the editor's date input takes.
+      expect(first).toHaveTextContent('Jun 13, 2026')
       expect(first).toHaveTextContent('09:00')
       expect(first).toHaveTextContent('12:30')
       expect(first).toHaveTextContent('T1, T2')

@@ -31,7 +31,9 @@ export const PoolsSection = ({
 }: PoolsSectionProps) => {
   const pools = event.pools
   const setPools = (next: Pool[]) => onChange({ ...event, pools: next })
-  const conflicts = findPoolConflicts(pools)
+  // Double-booking is a diagnostic only the organizer can act on, so a viewer
+  // is neither shown it nor pays to compute it.
+  const conflicts = canEdit ? findPoolConflicts(pools) : []
   // Count distinct tables, not conflict pairs: one table double-booked across
   // several overlapping pools yields multiple conflict entries.
   const conflictTableCount = new Set(conflicts.map((c) => c.table)).size

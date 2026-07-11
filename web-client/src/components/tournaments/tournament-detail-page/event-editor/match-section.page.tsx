@@ -1,19 +1,9 @@
+import { interactiveControlsIn, interactiveElementsIn } from '@/test/read-only'
 import { render, screen, within, type Container } from '@/test/utilities'
 
+import { READ_ONLY_VALUE_TESTID } from '../../read-only-value.page'
 import { MatchSection, type MatchSectionProps } from './match-section'
 import { buildMatchSectionProps } from './match-section.factory'
-
-/** The roles a form control would take in the accessibility tree. A read-only
- * surface must render none of them (ADR 0015). */
-const INTERACTIVE_ROLES = ['textbox', 'combobox', 'switch', 'button'] as const
-
-/** The role sweep alone under-proves this section: the length picker's toggle
- * items are `radio`s, which the four canonical roles don't cover. This catches
- * the element itself, whatever role it claims — the full selector documented in
- * `web-client/CLAUDE.md`, verbatim, so a focusable `[tabindex]` div cannot walk
- * through a sweep that was trimmed to only the controls this section has today. */
-const FORM_ELEMENTS =
-  'input, select, textarea, button, [role="switch"], [role="radio"], [tabindex], [contenteditable]'
 
 const scoped = (container: Container) => ({
   getRatedSwitch() {
@@ -30,26 +20,24 @@ const scoped = (container: Container) => ({
   /** The rated state as a viewer sees it — prose, not a dead toggle. */
   getRatedValue() {
     return within(container.getByTestId('match-rated-card')).getByTestId(
-      'tournament-read-only-value',
+      READ_ONLY_VALUE_TESTID,
     )
   },
   /** The best-of length as a viewer sees it. */
   getLengthValue() {
     return within(container.getByTestId('match-length-card')).getByTestId(
-      'tournament-read-only-value',
+      READ_ONLY_VALUE_TESTID,
     )
   },
-  /** Every interactive control in the section. Empty is the point of the
-   * read-only view. */
+  /** Every interactive control in the section, swept by role. Supplement only —
+   * `getFormElements()` is the guarantee. */
   getInteractiveControls() {
-    return INTERACTIVE_ROLES.flatMap((role) => container.queryAllByRole(role))
+    return interactiveControlsIn(container)
   },
-  /** Every form element in the section, by tag/widget role rather than by the
-   * four canonical roles — the escape hatch the role sweep misses. */
+  /** Every interactive element in the section, swept by DOM (`@/test/read-only`).
+   * Empty is the point of the read-only view. */
   getFormElements() {
-    return container
-      .getByTestId('match-section')
-      .querySelectorAll(FORM_ELEMENTS)
+    return interactiveElementsIn(container.getByTestId('match-section'))
   },
 })
 

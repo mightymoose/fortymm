@@ -3,6 +3,23 @@
 
 import type { DrawType, EventFormat, MatchLength } from './types'
 
+/** The label an option list gives `value`, or `fallback` when the list has no
+ * entry for it. A viewer reads the option's label ("RR → KO"), never the enum
+ * key it is stored under ("rr-then-ko"), so every surface that renders a stored
+ * value needs this lookup — it was hand-rolled five times before it lived here.
+ *
+ * The fallback is an argument rather than a default because the two policies in
+ * use differ deliberately: a read-only `Field` passes `null`, so an unknown key
+ * renders as `ReadOnlyValue`'s em-dash; a card passes the raw value, so it shows
+ * *something* rather than blanking a whole row. */
+export function labelFor<V, F>(
+  options: readonly { value: V; label: string }[],
+  value: V,
+  fallback: F,
+): string | F {
+  return options.find((o) => o.value === value)?.label ?? fallback
+}
+
 export const FORMAT_OPTIONS: { value: EventFormat; label: string }[] = [
   { value: 'singles', label: 'Singles' },
   { value: 'doubles', label: 'Doubles' },

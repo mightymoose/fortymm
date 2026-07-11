@@ -1,5 +1,7 @@
 import { cn } from '@/lib/utils'
 
+import { EM_DASH } from './data/helpers'
+
 /** Anything a form control would hold. `null`/`undefined` mean "the organizer
  * left this empty" — they are values, not a missing prop. */
 export type ReadOnlyValueContent = string | number | boolean | null | undefined
@@ -8,11 +10,6 @@ export interface ReadOnlyValueProps {
   children: ReadOnlyValueContent
   className?: string
 }
-
-/** Shown when the value is unset — absent and not-applicable must stay
- * distinguishable, so an empty field renders as an em-dash rather than as
- * nothing at all (ADR 0015). */
-const EM_DASH = '—'
 
 /** A value is unset when it is `null`, `undefined`, or a string with nothing in
  * it but whitespace. Note what is *not* unset: `0` and `false` are values the

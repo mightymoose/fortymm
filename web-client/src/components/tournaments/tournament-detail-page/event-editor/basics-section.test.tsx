@@ -70,10 +70,27 @@ describe('BasicsSection', () => {
       )
       expect(basicsSectionPage.getFieldValue('Entry fee')).toHaveTextContent('45')
       expect(basicsSectionPage.getFieldValue('Date')).toHaveTextContent(
-        '2026-06-13',
+        'Jun 13, 2026',
       )
       expect(basicsSectionPage.getFieldValue('Start')).toHaveTextContent('09:00')
       expect(basicsSectionPage.getFieldValue('End')).toHaveTextContent('18:00')
+    })
+
+    // `YYYY-MM-DD` is what an `<input type="date">` wants, not what a person
+    // reads — a viewer gets the date in the same words the event card that
+    // opened this panel used. (The times have no such helper and stay raw
+    // everywhere, card included.)
+    it('reads the date in words, not as the wire format', () => {
+      basicsSectionPage.render({
+        event: buildEvent({
+          slot: { date: '2026-07-01', start: '09:00', end: '13:00' },
+        }),
+        canEdit: false,
+      })
+      expect(basicsSectionPage.getFieldValue('Date')).toHaveTextContent(
+        'Jul 1, 2026',
+      )
+      expect(screen.queryByText('2026-07-01')).toBeNull()
     })
 
     // A free event is a real value the organizer chose — it must not be

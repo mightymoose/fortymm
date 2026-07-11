@@ -1,9 +1,9 @@
 import { Input } from '@/components/ui/input'
 
-import { DRAW_TYPE_OPTIONS, FORMAT_OPTIONS } from '../../data/options'
+import { fmtDate } from '../../data/helpers'
+import { DRAW_TYPE_OPTIONS, FORMAT_OPTIONS, labelFor } from '../../data/options'
 import type { DrawType, EventFormat, TournamentEvent } from '../../data/types'
 import { Field } from '../../field'
-import { ReadOnlyValue } from '../../read-only-value'
 import { SectionHeader } from '../section-header'
 import { OptionSelect } from './option-select'
 
@@ -22,21 +22,18 @@ export interface BasicsSectionProps {
  * not `0` (a real, different answer: free to enter). */
 const numericValue = (n: number): number | null => (Number.isNaN(n) ? null : n)
 
-/** A viewer reads the option's label ("RR → KO"), never the enum key it is
- * stored under ("rr-then-ko"). */
-const optionLabel = (
-  options: { value: string; label: string }[],
-  value: string,
-): string | null => options.find((o) => o.value === value)?.label ?? null
-
 /** The event editor's "Basics" tab: name, format, draw type, caps, and the
- * time-slot window. For a non-creator each control is replaced by its value —
- * the `Field` label rows are identical either way, so the two renderings line
- * up (ADR 0015).
+ * time-slot window. Each row declares its control *and* the value it holds;
+ * `readOnly` is what picks between them, so a viewer's rows line up with an
+ * editor's and neither can drift (ADR 0015).
  *
- * `readOnly={!canEdit}` on every `Field` is what drops the form's furniture (the
- * required asterisks and the "Hard cap…" hint): the rows still declare `required`
- * and `hint` unconditionally, and `Field` suppresses them for a viewer. */
+ * That single flag also drops the form's furniture (the required asterisks and
+ * the "Hard cap…" hint): the rows still declare `required` and `hint`
+ * unconditionally, and `Field` suppresses them for a viewer.
+ *
+ * The read-only `value` is what a *reader* needs, not what the control needs: an
+ * option's label rather than the enum key it is stored under, and a formatted
+ * date rather than the `YYYY-MM-DD` an `<input type="date">` wants. */
 export const BasicsSection = ({
   event,
   canEdit,
@@ -58,54 +55,47 @@ export const BasicsSection = ({
         }
       />
 
-      <Field label="Event name" required readOnly={readOnly}>
-        {(id) =>
-          canEdit ? (
-            <Input
-              id={id}
-              autoFocus
-              value={event.name}
-              placeholder="Open Singles"
-              onChange={(e) => set({ name: e.target.value })}
-            />
-          ) : (
-            <ReadOnlyValue>{event.name}</ReadOnlyValue>
-          )
-        }
+      <Field label="Event name" required readOnly={readOnly} value={event.name}>
+        {(id) => (
+          <Input
+            id={id}
+            autoFocus
+            value={event.name}
+            placeholder="Open Singles"
+            onChange={(e) => set({ name: e.target.value })}
+          />
+        )}
       </Field>
 
       <div className="grid grid-cols-2 gap-4">
-        <Field label="Format" required readOnly={readOnly}>
-          {() =>
-            canEdit ? (
-              <OptionSelect
-                ariaLabel="Format"
-                value={event.format}
-                options={FORMAT_OPTIONS}
-                onChange={(v) => set({ format: v as EventFormat })}
-              />
-            ) : (
-              <ReadOnlyValue>
-                {optionLabel(FORMAT_OPTIONS, event.format)}
-              </ReadOnlyValue>
-            )
-          }
+        <Field
+          label="Format"
+          required
+          readOnly={readOnly}
+          value={labelFor(FORMAT_OPTIONS, event.format, null)}
+        >
+          {() => (
+            <OptionSelect
+              ariaLabel="Format"
+              value={event.format}
+              options={FORMAT_OPTIONS}
+              onChange={(v) => set({ format: v as EventFormat })}
+            />
+          )}
         </Field>
-        <Field label="Draw type" readOnly={readOnly}>
-          {() =>
-            canEdit ? (
-              <OptionSelect
-                ariaLabel="Draw type"
-                value={event.drawType}
-                options={DRAW_TYPE_OPTIONS}
-                onChange={(v) => set({ drawType: v as DrawType })}
-              />
-            ) : (
-              <ReadOnlyValue>
-                {optionLabel(DRAW_TYPE_OPTIONS, event.drawType)}
-              </ReadOnlyValue>
-            )
-          }
+        <Field
+          label="Draw type"
+          readOnly={readOnly}
+          value={labelFor(DRAW_TYPE_OPTIONS, event.drawType, null)}
+        >
+          {() => (
+            <OptionSelect
+              ariaLabel="Draw type"
+              value={event.drawType}
+              options={DRAW_TYPE_OPTIONS}
+              onChange={(v) => set({ drawType: v as DrawType })}
+            />
+          )}
         </Field>
       </div>
 
@@ -114,36 +104,33 @@ export const BasicsSection = ({
           label="Player limit"
           hint="Hard cap. Waitlist opens past this."
           readOnly={readOnly}
+          value={numericValue(event.maxPlayers)}
         >
-          {(id) =>
-            canEdit ? (
-              <Input
-                id={id}
-                type="number"
-                min={2}
-                max={512}
-                value={event.maxPlayers}
-                onChange={(e) => set({ maxPlayers: Number(e.target.value) })}
-              />
-            ) : (
-              <ReadOnlyValue>{numericValue(event.maxPlayers)}</ReadOnlyValue>
-            )
-          }
+          {(id) => (
+            <Input
+              id={id}
+              type="number"
+              min={2}
+              max={512}
+              value={event.maxPlayers}
+              onChange={(e) => set({ maxPlayers: Number(e.target.value) })}
+            />
+          )}
         </Field>
-        <Field label="Entry fee" readOnly={readOnly}>
-          {(id) =>
-            canEdit ? (
-              <Input
-                id={id}
-                type="number"
-                min={0}
-                value={event.entryFee}
-                onChange={(e) => set({ entryFee: Number(e.target.value) })}
-              />
-            ) : (
-              <ReadOnlyValue>{numericValue(event.entryFee)}</ReadOnlyValue>
-            )
-          }
+        <Field
+          label="Entry fee"
+          readOnly={readOnly}
+          value={numericValue(event.entryFee)}
+        >
+          {(id) => (
+            <Input
+              id={id}
+              type="number"
+              min={0}
+              value={event.entryFee}
+              onChange={(e) => set({ entryFee: Number(e.target.value) })}
+            />
+          )}
         </Field>
       </div>
 
@@ -155,53 +142,54 @@ export const BasicsSection = ({
       </div>
 
       <div className="grid grid-cols-[1.4fr_1fr_1fr] gap-4">
-        <Field label="Date" readOnly={readOnly}>
-          {(id) =>
-            canEdit ? (
-              <Input
-                id={id}
-                type="date"
-                value={event.slot.date}
-                onChange={(e) => setSlot({ date: e.target.value })}
-              />
-            ) : (
-              <ReadOnlyValue>{event.slot.date}</ReadOnlyValue>
-            )
-          }
+        {/* The editor's value is the raw `YYYY-MM-DD` an `<input type="date">`
+            takes; a reader gets the same date in the words the event card uses
+            ("Jun 13, 2026"), never the wire format. */}
+        <Field
+          label="Date"
+          readOnly={readOnly}
+          value={fmtDate(event.slot.date)}
+        >
+          {(id) => (
+            <Input
+              id={id}
+              type="date"
+              value={event.slot.date}
+              onChange={(e) => setSlot({ date: e.target.value })}
+            />
+          )}
         </Field>
-        <Field label="Start" readOnly={readOnly}>
-          {(id) =>
-            canEdit ? (
-              <Input
-                id={id}
-                type="time"
-                className="font-mono"
-                value={event.slot.start}
-                onChange={(e) => setSlot({ start: e.target.value })}
-              />
-            ) : (
-              <ReadOnlyValue className="font-mono">
-                {event.slot.start}
-              </ReadOnlyValue>
-            )
-          }
+        <Field
+          label="Start"
+          readOnly={readOnly}
+          value={event.slot.start}
+          valueClassName="font-mono"
+        >
+          {(id) => (
+            <Input
+              id={id}
+              type="time"
+              className="font-mono"
+              value={event.slot.start}
+              onChange={(e) => setSlot({ start: e.target.value })}
+            />
+          )}
         </Field>
-        <Field label="End" readOnly={readOnly}>
-          {(id) =>
-            canEdit ? (
-              <Input
-                id={id}
-                type="time"
-                className="font-mono"
-                value={event.slot.end}
-                onChange={(e) => setSlot({ end: e.target.value })}
-              />
-            ) : (
-              <ReadOnlyValue className="font-mono">
-                {event.slot.end}
-              </ReadOnlyValue>
-            )
-          }
+        <Field
+          label="End"
+          readOnly={readOnly}
+          value={event.slot.end}
+          valueClassName="font-mono"
+        >
+          {(id) => (
+            <Input
+              id={id}
+              type="time"
+              className="font-mono"
+              value={event.slot.end}
+              onChange={(e) => setSlot({ end: e.target.value })}
+            />
+          )}
         </Field>
       </div>
     </div>

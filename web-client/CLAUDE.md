@@ -122,26 +122,55 @@ tournament payload), **render a view — do not disable the form.** The reasonin
 is in [ADR 0015](../docs/adr/0015-read-only-is-a-view-not-a-disabled-form.md);
 the tooling is:
 
-- **`ReadOnlyValue`** (`src/components/tournaments/read-only-value.tsx`) is the
-  read-only counterpart to `Field`'s control slot — it renders the value as text
-  with the same row rhythm, and an em-dash (`—`) when the value is unset. Branch
-  at the control: `{canEdit ? <Input … /> : <ReadOnlyValue>{draft.name}</ReadOnlyValue>}`.
-  A read-only surface must put **no** `<input>` / `<select>` / `<textarea>` /
-  `<switch>` in the accessibility tree.
+- **`Field` owns the branch.** Give a `Field` row its control *and* the value it
+  holds, plus one `readOnly` — it renders one or the other, and drops the form's
+  furniture (the **hint** and the **required asterisk**) with it. One flag, one
+  obligation; a call site cannot leak a live control, an asterisk, or a hint to a
+  reader by forgetting a conditional of its own:
+
+  ```tsx
+  <Field label="Entry fee" required readOnly={!canEdit} value={event.entryFee}>
+    {(id) => <Input id={id} type="number" … />}
+  </Field>
+  ```
+
+  The `value` is what a *reader* needs, not what the control needs: an option's
+  label (`labelFor` in `data/options.ts`), a formatted date (`fmtDate` in
+  `data/helpers.ts`) — never the enum key or the `YYYY-MM-DD` an
+  `<input type="date">` takes.
+- **`ReadOnlyValue`** (`src/components/tournaments/read-only-value.tsx`) is what
+  `Field` renders in that branch, and stays usable directly for the controls that
+  aren't a "label + one control + one value" row (a `Switch`, a `ToggleGroup`, the
+  pool table chips): the value as text, with the same row rhythm, and an em-dash
+  (`EM_DASH`, `data/helpers.ts`) when it is unset. A read-only surface must put
+  **no** `<input>` / `<select>` / `<textarea>` / `<switch>` in the accessibility
+  tree.
 - **Hide mutating affordances — never disable them.** Save, Delete, Revert, and
   the add/remove row buttons are wrapped in `{canEdit && …}`, not given a
   `disabled` prop. A disabled button is an unexplained dead end.
-- **Drop the form's furniture too, at `Field`.** Pass `readOnly` to `Field` and it
-  suppresses the **hint** and the **required asterisk**. A hint explains how to
-  fill in a control and an asterisk marks one you must complete — both are
-  nonsense next to a value nobody can edit. Suppressing them *in `Field`* rather
-  than at each call site means a newly-added field can't reintroduce them by
-  forgetting to.
 - **Swap organizer-voiced copy.** Imperatives written for the person in control
   ("Edit event", "Click any event to edit") get neutral copy when `!canEdit`.
 - **Every read-only-capable component carries a guard test** asserting that with
-  `canEdit: false` it renders zero interactive controls. **Sweep the DOM, not just
-  ARIA roles** — a role-only sweep silently under-proves:
+  `canEdit: false` it renders zero interactive controls. There is **one** sweep,
+  in `src/test/read-only.ts` — never a selector re-typed in a page object. Compose
+  it:
+
+  ```tsx
+  // in the page object
+  getFormElements() {
+    return interactiveElementsIn(container.getByTestId('basics-section'))
+  },
+
+  // in the test
+  it('renders no interactive controls for a non-owner', () => {
+    basicsSectionPage.render({ event: buildEvent(), canEdit: false })
+    expect(basicsSectionPage.getFormElements()).toHaveLength(0)
+  })
+  ```
+
+  (Scoped to the component's root — make sure that root actually wraps every
+  field.) `interactiveElementsIn` sweeps the **DOM**, not ARIA roles, because a
+  role-only sweep silently under-proves:
 
   | Control | Role you'd guess | Role it actually has |
   | --- | --- | --- |
@@ -153,28 +182,13 @@ the tooling is:
   implicit one**: `ToggleGroupItem` renders `<button role="radio">`, so
   `queryAllByRole('button')` never matches it. A whole live toggle group sails
   through a role sweep — measured, not theorised: with the status ToggleGroup left
-  live in the read-only branch, the four-role sweep found **0** controls and
-  passed, while the DOM sweep found **5**.
+  live in the read-only branch, a four-role sweep found **0** controls and passed,
+  while the DOM sweep found **5**. `interactiveControlsIn` (the role sweep) may be
+  kept *alongside* it, but never instead of it.
 
-  So a sweep of `textbox`/`combobox`/`switch`/`button` can pass with live date,
-  number, and toggle inputs still on screen — a false green of exactly the kind
-  this rule exists to prevent. Assert on the DOM instead, scoped to the
-  component's root (and make sure that root actually wraps every field):
-
-  ```tsx
-  it('renders no interactive controls for a non-owner', () => {
-    render(<BasicsSection event={anEvent()} canEdit={false} onChange={vi.fn()} />)
-    expect(
-      page.root().querySelectorAll(
-        'input, select, textarea, button, [role="switch"], [role="radio"], [tabindex], [contenteditable]',
-      ),
-    ).toHaveLength(0)
-  })
-  ```
-
-  This is what keeps the rule true as fields are added — it fails loudly the
-  moment someone reaches for `disabled` out of habit. A role sweep may be kept
-  *alongside* it, but never instead of it.
+  The sweep lives in one module because it forked three ways the first time it was
+  copy-pasted — leaving an `<a href>`-shaped hole in six of the eight guards. Add
+  a control kind to `INTERACTIVE_SELECTOR` there and every guard tightens at once.
 
 Hiding a control is a UX decision, **never** a security boundary: the API
 independently 403s every owner-only endpoint, and must continue to.

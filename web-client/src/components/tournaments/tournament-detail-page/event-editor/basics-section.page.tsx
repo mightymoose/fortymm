@@ -1,24 +1,15 @@
-import { render, screen, within, type Container } from '@/test/utilities'
+import { interactiveControlsIn, interactiveElementsIn } from '@/test/read-only'
+import { render, screen, type Container } from '@/test/utilities'
 
+import { fieldPage } from '../../field.page'
 import { BasicsSection, type BasicsSectionProps } from './basics-section'
 import { buildBasicsSectionProps } from './basics-section.factory'
 
-/** The roles a form control would take in the accessibility tree. A read-only
- * surface must render none of them (ADR 0015). */
-const INTERACTIVE_ROLES = ['textbox', 'combobox', 'switch', 'button'] as const
-
-/** The role sweep alone under-proves this section: a `type="number"` input is a
- * `spinbutton` and a `type="date"`/`type="time"` input has no role at all, so a
- * forgotten numeric or date field would slip through it. This catches the
- * element itself, whatever role it claims.
- *
- * The full selector documented in `web-client/CLAUDE.md`, verbatim: a shortened
- * one is a sweep with a hole in it — a `ToggleGroupItem` (`[role="radio"]`) or a
- * hand-rolled focusable `[tabindex]` div would walk straight through. */
-const FORM_ELEMENTS =
-  'input, select, textarea, button, [role="switch"], [role="radio"], [tabindex], [contenteditable]'
-
 const scoped = (container: Container) => ({
+  /** Reuse the `Field` row queries (label text, the read-only value under a
+   * label) — this section is nothing but `Field` rows. */
+  ...fieldPage.within(container),
+
   getNameInput() {
     return container.getByLabelText(/Event name/)
   },
@@ -28,37 +19,20 @@ const scoped = (container: Container) => ({
   getFormatTrigger() {
     return container.getByRole('combobox', { name: 'Format' })
   },
-  /** The read-only value rendered in place of a field's control, found by the
-   * field's label so the assertion survives a re-ordering of the rows. */
-  getFieldValue(label: string) {
-    const row = container
-      .getByText(label, { exact: false, selector: 'label' })
-      .closest('div')!
-    return within(row).getByTestId('tournament-read-only-value')
-  },
-  /** A field's label row as text. The required asterisk is a `<span>` inside the
-   * `<label>` with no separating space ("Event name*"), so it shows up only in
-   * the label's `textContent` — never as a text node you could query for. */
-  getLabelText(label: string) {
-    return container.getByText(label, { exact: false, selector: 'label' })
-      .textContent
-  },
   /** The "Hard cap…" helper text under Player limit — form furniture, and so
    * absent from the read-only view (ADR 0015). */
   queryPlayerLimitHint() {
     return container.queryByText(/Hard cap\. Waitlist opens past this\./)
   },
-  /** Every interactive control in the section. Empty is the point of the
-   * read-only view. */
+  /** Every interactive control in the section, swept by role. Supplement only —
+   * `getFormElements()` is the guarantee. */
   getInteractiveControls() {
-    return INTERACTIVE_ROLES.flatMap((role) => container.queryAllByRole(role))
+    return interactiveControlsIn(container)
   },
-  /** Every form element in the section, by tag rather than by role — the
-   * escape hatch the role sweep misses. */
+  /** Every interactive element in the section, swept by DOM (`@/test/read-only`).
+   * Empty is the point of the read-only view. */
   getFormElements() {
-    return container
-      .getByTestId('basics-section')
-      .querySelectorAll(FORM_ELEMENTS)
+    return interactiveElementsIn(container.getByTestId('basics-section'))
   },
 })
 

@@ -2,11 +2,8 @@ import { Trash2 } from 'lucide-react'
 
 import { Input } from '@/components/ui/input'
 
-import {
-  PRED_FIELDS,
-  PRED_OPS_BY_TYPE,
-  type PredicateFieldSchema,
-} from '../../../data/options'
+import { BOOL_PREDICATE_VALUE, predicateSentence } from '../../../data/helpers'
+import { PRED_FIELDS, PRED_OPS_BY_TYPE } from '../../../data/options'
 import type { Predicate, PredicateValue } from '../../../data/types'
 import { OptionSelect } from '../option-select'
 
@@ -14,7 +11,10 @@ export interface PredicateRowProps {
   predicate: Predicate
   /** When false (a non-creator), the row renders as one readable sentence
    * instead of three controls — a viewer gets a rendering of the data, never a
-   * disabled form (ADR 0015). */
+   * disabled form (ADR 0015). The sentence itself is `predicateSentence` in
+   * `data/helpers.ts`, beside the chip formatter it shares its vocabulary with:
+   * a new predicate field or operator is a one-file change there, not a hunt
+   * through this component. */
   canEdit: boolean
   onChange: (predicate: Predicate) => void
   onRemove: () => void
@@ -25,61 +25,10 @@ const FIELD_OPTIONS = Object.entries(PRED_FIELDS).map(([value, schema]) => ({
   label: schema.label,
 }))
 
-/** The bool field's value, as prose. It reads as the tail of its operator
- * ("must be" + "a club member"), which is why the editor's value cell shows it
- * verbatim rather than a control. */
-const BOOL_VALUE = 'a club member'
-
-/** An unset value — the organizer left this bound empty (cf. `ReadOnlyValue`). */
-const EM_DASH = '—'
-
 function numberOrNull(raw: string): number | null {
   if (raw === '') return null
   const n = Number(raw)
   return Number.isNaN(n) ? null : n
-}
-
-const num = (n: number | null | undefined): string =>
-  n === null || n === undefined ? EM_DASH : String(n)
-
-const opLabel = (schema: PredicateFieldSchema, op: string): string =>
-  PRED_OPS_BY_TYPE[schema.type].find((o) => o.value === op)?.label ?? op
-
-/** The value half of the sentence, in the same words the editor's value control
- * shows: an enum reads as its option label ("Female"), never the stored key. */
-function valueText(schema: PredicateFieldSchema, p: Predicate): string {
-  if (schema.type === 'enum') {
-    const options = schema.options ?? []
-    return (
-      options.find((o) => o.value === p.value)?.label ??
-      (p.value == null ? EM_DASH : String(p.value))
-    )
-  }
-  if (p.op === 'between') {
-    const [lo, hi] = Array.isArray(p.value) ? p.value : [null, null]
-    return `${num(lo)} and ${num(hi)}`
-  }
-  return num(typeof p.value === 'number' ? p.value : null)
-}
-
-/** The rule as one sentence: `[field] [operator] [value]` was always a sentence
- * chopped into a grid, so read-only it is simply put back together — "USATT
- * rating is between 1200 and 1500" (ADR 0015, rule 4). Every word comes from the
- * labels the editor's own three controls display, so there is no second
- * vocabulary to keep in step.
- *
- * The bool field is the exception: it is the *object* of its operator, so the
- * literal three-cell join would read "Club member must be a club member". It
- * keeps the operator and the prose value only — "Must be a club member". */
-function predicateSentence(p: Predicate): string {
-  const schema = PRED_FIELDS[p.field]
-  if (!schema) return EM_DASH
-
-  const op = opLabel(schema, p.op)
-  if (schema.type === 'bool') {
-    return `${op.charAt(0).toUpperCase()}${op.slice(1)} ${BOOL_VALUE}`
-  }
-  return `${schema.label} ${op} ${valueText(schema, p)}`
 }
 
 /** One ANDed eligibility rule. For the creator: a field picker, an operator
@@ -193,7 +142,7 @@ export const PredicateRow = ({
         )}
         {schema?.type === 'bool' && (
           <div className="py-2.5 text-[13px] text-[color:var(--fg-3)]">
-            {BOOL_VALUE}
+            {BOOL_PREDICATE_VALUE}
           </div>
         )}
       </div>

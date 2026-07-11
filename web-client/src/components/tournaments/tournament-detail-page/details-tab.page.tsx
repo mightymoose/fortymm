@@ -1,28 +1,15 @@
+import { interactiveControlsIn, interactiveElementsIn } from '@/test/read-only'
 import { render, screen, type Container } from '@/test/utilities'
 
+import { fieldPage } from '../field.page'
+import { READ_ONLY_VALUE_TESTID } from '../read-only-value.page'
 import { DetailsTab, type DetailsTabProps } from './details-tab'
 import { buildDetailsTabProps } from './details-tab.factory'
 
-/** The roles a form control would take in the accessibility tree. Kept only as
- * a supplement: the role sweep alone *under-proves*, because a `type="number"`
- * input is a `spinbutton`, a `type="date"` input has no role at all, and a
- * `ToggleGroupItem` is a `radio` rather than a `button`. */
-const INTERACTIVE_ROLES = [
-  'textbox',
-  'combobox',
-  'switch',
-  'button',
-  'radio',
-  'spinbutton',
-] as const
-
-/** Every interactive element, by tag rather than by role — the sweep that
- * actually holds the line (ADR 0015, `web-client/CLAUDE.md`). It catches the
- * element whatever role it claims, including the roleless ones. */
-const FORM_ELEMENTS =
-  'input, select, textarea, button, [role="switch"], [role="radio"], [tabindex], [contenteditable]'
-
 const scoped = (container: Container) => ({
+  /** Reuse the `Field` row queries — the tab is a grid of `Field` rows. */
+  ...fieldPage.within(container),
+
   getNameInput() {
     return container.getByLabelText(/Name/)
   },
@@ -32,8 +19,7 @@ const scoped = (container: Container) => ({
    * asterisk is a nested `<span>`, so "Name" finds the label whether or not it is
    * marked required. Exact, or this would also match the "Venue name" row. */
   getNameLabelText() {
-    return container.getByText('Name', { exact: true, selector: 'label' })
-      .textContent
+    return fieldPage.within(container).getLabelText('Name', { exact: true })
   },
   /** The Description hint — form furniture, so absent for a viewer (ADR 0015). */
   queryDescriptionHint() {
@@ -50,21 +36,19 @@ const scoped = (container: Container) => ({
   /** The read-only rendering of the fields, in document order — what a
    * non-creator sees where the creator gets controls (ADR 0015). */
   getReadOnlyValues() {
-    const values: HTMLElement[] = container.queryAllByTestId(
-      'tournament-read-only-value',
-    )
+    const values: HTMLElement[] =
+      container.queryAllByTestId(READ_ONLY_VALUE_TESTID)
     return values.map((el) => el.textContent)
   },
   /** Every interactive control in the tab, swept by role. Supplement only —
-   * assert on `getFormElements()` for the guarantee. */
+   * `getFormElements()` is the guarantee. */
   getInteractiveControls() {
-    return INTERACTIVE_ROLES.flatMap((role) => container.queryAllByRole(role))
+    return interactiveControlsIn(container)
   },
-  /** Every form element in the tab, by tag. Empty is the whole point of the
-   * read-only view. */
+  /** Every interactive element in the tab, swept by DOM (`@/test/read-only`).
+   * Empty is the whole point of the read-only view. */
   getFormElements() {
-    const root: HTMLElement = container.getByTestId('details-tab')
-    return root.querySelectorAll(FORM_ELEMENTS)
+    return interactiveElementsIn(container.getByTestId('details-tab'))
   },
 })
 

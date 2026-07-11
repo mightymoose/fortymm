@@ -7,9 +7,9 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 
+import { labelFor } from '../data/options'
 import type { Address, Tournament, TournamentStatus } from '../data/types'
 import { Field } from '../field'
-import { ReadOnlyValue } from '../read-only-value'
 import { SectionHeader } from './section-header'
 
 export interface DetailsTabProps {
@@ -27,18 +27,16 @@ const STATUS_OPTIONS: { value: TournamentStatus; label: string }[] = [
   { value: 'archived', label: 'Archived' },
 ]
 
-const statusLabel = (status: TournamentStatus) =>
-  STATUS_OPTIONS.find((o) => o.value === status)?.label ?? status
-
 /** The Details tab: the creator edits the tournament's name, description,
  * status, and venue address — changes stage in a draft and commit on Save.
  * Everyone else reads the same fields as rendered values (ADR 0015): a viewer
  * gets a rendering of the data, only an editor gets controls.
  *
- * The rows declare `required` and `hint` unconditionally and pass
- * `readOnly={!canEdit}`; `Field` drops that furniture for a viewer. There is one
- * mechanism, not a conditional per call site — a field added here cannot
- * reintroduce an asterisk or a hint to a reader by forgetting one. */
+ * Each row hands `Field` both its control and the value it holds, and passes one
+ * `readOnly={!canEdit}`; `Field` picks between them and drops the form's
+ * furniture (the asterisk, the hint) with it. There is one mechanism and one
+ * flag, not a conditional per call site — a field added here cannot leak a
+ * control, an asterisk, or a hint to a reader by forgetting one. */
 export const DetailsTab = ({
   tournament,
   canEdit,
@@ -63,28 +61,28 @@ export const DetailsTab = ({
     setDraft((d) => ({ ...d, address: { ...d.address, ...patch } }))
   const save = () => onUpdate(draft)
 
-  /** The address rows are the same shape six times over: an `Input` for the
-   * creator, the value itself for everyone else. */
+  /** The address rows are the same shape six times over: an `Input` over the
+   * same value, which `Field` renders as text for a reader. */
   const addressField = (
     label: string,
     key: keyof Address,
     className?: string,
   ) => (
-    <Field label={label} key={key} readOnly={!canEdit}>
-      {(id) =>
-        canEdit ? (
-          <Input
-            id={id}
-            className={className}
-            value={draft.address[key]}
-            onChange={(e) => updateAddress({ [key]: e.target.value })}
-          />
-        ) : (
-          <ReadOnlyValue className={className}>
-            {draft.address[key]}
-          </ReadOnlyValue>
-        )
-      }
+    <Field
+      label={label}
+      key={key}
+      readOnly={!canEdit}
+      value={draft.address[key]}
+      valueClassName={className}
+    >
+      {(id) => (
+        <Input
+          id={id}
+          className={className}
+          value={draft.address[key]}
+          onChange={(e) => updateAddress({ [key]: e.target.value })}
+        />
+      )}
     </Field>
   )
 
@@ -119,66 +117,58 @@ export const DetailsTab = ({
             <div className="text-[15px] font-bold text-[color:var(--fg-1)]">
               About
             </div>
-            <Field label="Name" required readOnly={!canEdit}>
-              {(id) =>
-                canEdit ? (
-                  <Input
-                    id={id}
-                    value={draft.name}
-                    onChange={(e) => update({ name: e.target.value })}
-                  />
-                ) : (
-                  <ReadOnlyValue>{draft.name}</ReadOnlyValue>
-                )
-              }
+            <Field label="Name" required readOnly={!canEdit} value={draft.name}>
+              {(id) => (
+                <Input
+                  id={id}
+                  value={draft.name}
+                  onChange={(e) => update({ name: e.target.value })}
+                />
+              )}
             </Field>
             <Field
               label="Description"
               hint="Optional. Shown on the public registration page."
               readOnly={!canEdit}
+              value={draft.description}
+              // Taller than a single-line row so the value mirrors the textarea
+              // it stands in for, and wraps rather than clipping the prose.
+              valueClassName="h-auto min-h-10 items-start whitespace-pre-wrap"
             >
-              {(id) =>
-                canEdit ? (
-                  <Textarea
-                    id={id}
-                    rows={4}
-                    value={draft.description}
-                    placeholder="Two-day open. USATT-sanctioned."
-                    onChange={(e) => update({ description: e.target.value })}
-                  />
-                ) : (
-                  // Taller than a single-line row so it mirrors the textarea it
-                  // stands in for, and wraps rather than clipping the prose.
-                  <ReadOnlyValue className="h-auto min-h-10 items-start whitespace-pre-wrap">
-                    {draft.description}
-                  </ReadOnlyValue>
-                )
-              }
+              {(id) => (
+                <Textarea
+                  id={id}
+                  rows={4}
+                  value={draft.description}
+                  placeholder="Two-day open. USATT-sanctioned."
+                  onChange={(e) => update({ description: e.target.value })}
+                />
+              )}
             </Field>
-            <Field label="Status" readOnly={!canEdit}>
-              {(id) =>
-                canEdit ? (
-                  <ToggleGroup
-                    type="single"
-                    aria-labelledby={`${id}-label`}
-                    value={draft.status}
-                    onValueChange={(v) =>
-                      v && update({ status: v as TournamentStatus })
-                    }
-                    className="w-fit"
-                  >
-                    {STATUS_OPTIONS.map((o) => (
-                      <ToggleGroupItem key={o.value} value={o.value}>
-                        {o.label}
-                      </ToggleGroupItem>
-                    ))}
-                  </ToggleGroup>
-                ) : (
-                  // The label, not the wire value: a reader sees "Published",
-                  // the same word the toggle would have shown as selected.
-                  <ReadOnlyValue>{statusLabel(draft.status)}</ReadOnlyValue>
-                )
-              }
+            {/* The label, not the wire value: a reader sees "Published", the
+                same word the toggle would have shown as selected. */}
+            <Field
+              label="Status"
+              readOnly={!canEdit}
+              value={labelFor(STATUS_OPTIONS, draft.status, draft.status)}
+            >
+              {(id) => (
+                <ToggleGroup
+                  type="single"
+                  aria-labelledby={`${id}-label`}
+                  value={draft.status}
+                  onValueChange={(v) =>
+                    v && update({ status: v as TournamentStatus })
+                  }
+                  className="w-fit"
+                >
+                  {STATUS_OPTIONS.map((o) => (
+                    <ToggleGroupItem key={o.value} value={o.value}>
+                      {o.label}
+                    </ToggleGroupItem>
+                  ))}
+                </ToggleGroup>
+              )}
             </Field>
           </div>
         </Card>

@@ -3,7 +3,7 @@ import { Switch } from '@/components/ui/switch'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { cn } from '@/lib/utils'
 
-import { MATCH_LENGTH_OPTIONS } from '../../data/options'
+import { labelFor, MATCH_LENGTH_OPTIONS } from '../../data/options'
 import type { MatchLength, TournamentEvent } from '../../data/types'
 import { ReadOnlyValue } from '../../read-only-value'
 import { SectionHeader } from '../section-header'
@@ -35,8 +35,9 @@ export const MatchSection = ({
   const setMatch = (patch: Partial<TournamentEvent['match']>) =>
     onChange({ ...event, match: { ...m, ...patch } })
 
-  const lengthLabel =
-    MATCH_LENGTH_OPTIONS.find((o) => o.value === m.lengthGames)?.label ?? null
+  // The option's label ("Bo5"), never the raw count — and `null` for an unknown
+  // length, so `ReadOnlyValue` reads it as unset rather than blank.
+  const lengthLabel = labelFor(MATCH_LENGTH_OPTIONS, m.lengthGames, null)
 
   return (
     <div className="flex flex-col gap-5" data-testid="match-section">

@@ -19,6 +19,7 @@ import { ConfirmDeleteDialog } from './confirm-delete-dialog'
 import {
   daysBetween,
   effectiveDateRange,
+  EM_DASH,
   emptyEvent,
   fmtDateRange,
   genId,
@@ -187,7 +188,7 @@ export const TournamentDetailPage = ({
           <HeroStat label="Pools" value={pools} icon={<Layers size={16} />} />
           <HeroStat
             label="Days"
-            value={range.start ? daysBetween(range.start, range.end) : '—'}
+            value={range.start ? daysBetween(range.start, range.end) : EM_DASH}
             suffix={range.start ? 'days' : undefined}
             icon={<Calendar size={16} />}
           />

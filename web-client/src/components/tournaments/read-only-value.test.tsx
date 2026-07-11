@@ -42,7 +42,7 @@ describe('ReadOnlyValue', () => {
   it('puts no interactive control in the accessibility tree', () => {
     readOnlyValuePage.render({ children: 'Open Singles' })
     expect(readOnlyValuePage.getInteractiveControls()).toHaveLength(0)
-    expect(readOnlyValuePage.getFocusableElements()).toHaveLength(0)
+    expect(readOnlyValuePage.getFormElements()).toHaveLength(0)
   })
 
   it('holds the row height and type scale of the input it replaces', () => {
