@@ -32,9 +32,9 @@ const scoped = (container: Container) => {
         name: "Head to head",
       });
     },
-    /** The "N MEETING(S)" count in the card header. */
+    /** The "N MEETING(S)" count in the shared Card's trailing header slot. */
     getMeta() {
-      return getCard().querySelector(".md-card__hd-meta")!;
+      return getCard().querySelector('[data-slot="card-action"]')!;
     },
     /** The left side's player-name label. */
     getLeftLabel() {

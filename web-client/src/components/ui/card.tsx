@@ -1,14 +1,24 @@
 import * as React from "react"
+import { Slot } from "radix-ui"
 
 import { cn } from "@/lib/utils"
 
 function Card({
   className,
   size = "default",
+  asChild = false,
   ...props
-}: React.ComponentProps<"div"> & { size?: "default" | "sm" }) {
+}: React.ComponentProps<"div"> & {
+  size?: "default" | "sm"
+  asChild?: boolean
+}) {
+  // `asChild` lets a caller render the card as their own element — e.g. a
+  // `<section aria-labelledby>` landmark — instead of an anonymous `<div>`,
+  // without losing the card's styling. Mirrors `Button`/`Badge`.
+  const Comp = asChild ? Slot.Root : "div"
+
   return (
-    <div
+    <Comp
       data-slot="card"
       data-size={size}
       className={cn(

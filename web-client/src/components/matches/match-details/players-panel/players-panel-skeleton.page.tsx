@@ -7,10 +7,10 @@ const scoped = (container: Container) => ({
   getStatus() {
     return container.getByRole("status", { name: /loading the players panel/i });
   },
-  /** The card chrome the loaded panel reuses (the status region is itself the
-   * `.md-card`). */
+  /** The shared design-system Card chrome the loaded panel also wears — the
+   * status region is itself the card (`Card asChild`). */
   queryCard() {
-    return this.getStatus().closest(".md-card");
+    return this.getStatus().closest('[data-slot="card"]');
   },
   /** The two-profile grid the loaded panel reuses; reserved so the card keeps
    * its height before the profiles arrive. */

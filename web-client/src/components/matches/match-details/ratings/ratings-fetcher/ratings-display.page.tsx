@@ -27,6 +27,28 @@ const scoped = (container: Container) => {
     getDividers() {
       return Array.from(getCard().querySelectorAll(".md-rating-divider"));
     },
+    /**
+     * The card's header slot — the shared design-system `CardHeader`. Its
+     * absence of a bottom rule is the point of the migration.
+     */
+    queryHeader() {
+      return getCard().querySelector('[data-slot="card-header"]');
+    },
+    /** The card's body slot — the shared design-system `CardContent`. */
+    queryContent() {
+      return getCard().querySelector('[data-slot="card-content"]');
+    },
+    /**
+     * Anything still wearing the hand-rolled `.md-card*` chrome the shared
+     * `Card` replaced (the container class or its header/body slots).
+     */
+    queryLegacyChrome() {
+      const card = getCard();
+      return [
+        ...(card.classList.contains("md-card") ? [card] : []),
+        ...card.querySelectorAll(".md-card, .md-card__hd, .md-card__body"),
+      ];
+    },
     // Row lookups (`getRow(username)`, `queryDelta(username)`, …) come from
     // the row's own page object.
     ...ratingRowPage.within(container),

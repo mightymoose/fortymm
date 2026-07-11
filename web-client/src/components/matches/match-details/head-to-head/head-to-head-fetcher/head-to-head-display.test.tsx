@@ -11,6 +11,24 @@ describe("HeadToHeadDisplay", () => {
     expect(headToHeadDisplayPage.getTitle()).toHaveTextContent("Head to head");
   });
 
+  it("renders the panel through the shared Card, not the hand-rolled chrome", async () => {
+    headToHeadDisplayPage.render();
+
+    const card = await headToHeadDisplayPage.findCard();
+    // The landmark must survive the reskin: the shared Card renders `asChild`,
+    // so the styled card element *is* the labelled <section> — not an
+    // anonymous <div> wrapping one.
+    expect(card.tagName).toBe("SECTION");
+    expect(card).toHaveAttribute("data-slot", "card");
+    // Shared design-system chrome (hairline ring, rounded corners)…
+    expect(card).toHaveClass("bg-card", "rounded-xl", "ring-1");
+    // …and none of the bespoke `.md-card` family it replaced.
+    expect(card).not.toHaveClass("md-card");
+    expect(card.querySelector(".md-card__hd")).toBeNull();
+    expect(card.querySelector(".md-card__body")).toBeNull();
+    expect(card.querySelector(".md-card__hd-meta")).toBeNull();
+  });
+
   it("shows the side labels and win counts", async () => {
     headToHeadDisplayPage.render();
 

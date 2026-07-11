@@ -116,6 +116,49 @@ describe('players roster rank column (#841)', () => {
     expect(unratedSeed.classList.contains('players-seed--top')).toBe(false)
   })
 
+  it('captions the stat cells with their column names, leaving name + seed bare (#900)', async () => {
+    const items = [playerRow({ id: 'p-1', username: 'ace.top', rank: 1 })]
+    server.use(
+      http.get('*/v1/session', () => HttpResponse.json(sessionResponse())),
+      http.get('*/v1/players', () =>
+        HttpResponse.json({ items, page: 1, page_size: 25, total: items.length }),
+      ),
+    )
+
+    renderRoster('/players')
+    await screen.findByText('ace.top')
+
+    // Below 640px the shared match-list stylesheet hides the thead and re-adds
+    // each column's name inside the card via `td[data-label]::before`. Zip the
+    // header cells against the row's cells so we assert the caption *equals the
+    // column it stands in for* — retyping the strings here would let a mismatched
+    // dash ("W-L" vs "W–L") pass while the mobile caption disagreed with desktop.
+    const row = screen.getByText('ace.top').closest('tr')!
+    const headers = [
+      ...row.closest('table')!.querySelectorAll('thead th'),
+    ].map((th) => th.textContent)
+    const labels = [...row.querySelectorAll('td')].map(
+      (td) => td.dataset.label ?? null,
+    )
+    expect(headers).toHaveLength(labels.length)
+
+    // Rating / W–L / Form each caption themselves with their column's own words.
+    expect(labels[2]).toBe(headers[2])
+    expect(labels[3]).toBe(headers[3])
+    expect(labels[4]).toBe(headers[4])
+    // ...and those words are non-empty, so the assertions above can't pass by
+    // both sides being blank.
+    expect(labels.slice(2).every((l) => (l?.length ?? 0) > 0)).toBe(true)
+
+    // Seed + player are the card's caption and headline — they carry no stat
+    // label (the CSS gives them their own treatment via `.id-cell` /
+    // `data-cell="players"`).
+    expect(labels[0]).toBeNull()
+    expect(labels[1]).toBeNull()
+    expect(row.querySelectorAll('td')[0].classList).toContain('id-cell')
+    expect(row.querySelectorAll('td')[1].dataset.cell).toBe('players')
+  })
+
   it('does not crash when the roster is empty', async () => {
     server.use(
       http.get('*/v1/session', () => HttpResponse.json(sessionResponse())),

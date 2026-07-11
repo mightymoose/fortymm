@@ -1,5 +1,6 @@
 import { render, screen, type Container } from "@/test/utilities";
 
+import { cardChrome } from "./match-info-fetcher/match-info-display.page";
 import { MatchInfoSkeleton } from "./match-info-skeleton";
 
 const scoped = (container: Container) => ({
@@ -7,10 +8,15 @@ const scoped = (container: Container) => ({
   getStatus() {
     return container.getByRole("status", { name: /loading match info/i });
   },
-  /** The card chrome the loaded card reuses (the status region is itself the
-   * `.md-card`). */
+  /** The shared design-system card the skeleton wears. Rendered with
+   * `Card asChild`, so the status `<section>` *is* the card element. */
   queryCard() {
-    return this.getStatus().closest(".md-card");
+    return this.getStatus().closest('[data-slot="card"]');
+  },
+  /** The skeleton's card chrome, in the same shape the loaded panel's page
+   * object reports — see {@link cardChrome}. */
+  getCardChrome() {
+    return cardChrome(this.getStatus());
   },
   /** The label/value rows reserved so the card keeps its height before the
    * real rows arrive. */
