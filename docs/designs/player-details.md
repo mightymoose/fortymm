@@ -100,6 +100,10 @@ One request paints the page. Extends today's bundle:
 - `matches: PlayerMatchListResponse` — the recent **6** (was: page 1 of 25).
 - `match_total: int` — the *all-inclusive* history count, for the "View all N
   matches" link. **Deliberately ≠ `career.decided`** (see ADR-0016).
+
+`PlayerMatchRow` also gains `rating_change: RatingChange | null` — the rating the
+match moved, for the row's Δ column, read from that match's `rating_history` row.
+`null` (rendered `—`, never `+0`) for any row that is undecided *or* unrated.
 - `rating_history: RatingHistoryWindow` — the `range` window, inline, so first
   paint costs one request.
 
@@ -235,6 +239,11 @@ tabs wrap.
 
 ### Other web changes
 
+- **`?opponent=<userId>` on `/matches/new`**, preseeding the opponent picker. The
+  route has **no `validateSearch` at all** today, so the "Start a match" CTA has
+  nothing to prefill into. New public URL contract on an existing route: Zod-
+  validated, `.catch()`ing an unknown id back to the empty picker rather than
+  erroring.
 - **"Your profile" link in the user menu.** The app has never had one — the only
   way to reach your own profile is to find yourself on the roster.
 - Delete the `.player-profile--standalone` CSS variant. It exists for a "public
