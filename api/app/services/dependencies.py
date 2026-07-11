@@ -10,9 +10,10 @@ from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_session
+from app.repositories.match_details_repository import MatchDetailsRepository
 from app.repositories.match_repository import MatchRepository
 from app.services.match_service import MatchService
 
 
 def get_match_service(db: AsyncSession = Depends(get_session)) -> MatchService:
-    return MatchService(MatchRepository(db))
+    return MatchService(MatchRepository(db), MatchDetailsRepository(db))

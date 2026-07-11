@@ -2,7 +2,7 @@ import csv
 import io
 import logging
 import uuid
-from dataclasses import dataclass
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Annotated, Any, cast
 
@@ -20,7 +20,7 @@ from pyrate_limiter import Duration, Rate
 from sqlalchemy import CursorResult, Select, func, select, update
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import aliased, selectinload
+from sqlalchemy.orm import selectinload
 from sqlalchemy.sql.base import ExecutableOption
 
 from app.attention import (
@@ -31,6 +31,22 @@ from app.db import get_session
 from app.domain.match.models import Match as MatchModel
 from app.leagues import resolve_league
 from app.mappers.match_details_mapper import serialize_match_details
+from app.mappers.match_extras_mapper import (
+    MatchDetailsExtras,
+    empty_extras,
+    serialize_match_extras,
+)
+from app.match_queries import (
+    _actionable_attention_filter,
+    _attention_matches_query,
+    _player_username_filter,
+    current_game_number,
+    match_eager_options,
+    my_side,
+    opponent_side,
+    participant_filter,
+    singles_user_ids,
+)
 from app.models import (
     League,
     Match,
@@ -41,14 +57,12 @@ from app.models import (
     MatchSide,
     MatchSidePlayer,
     MatchStatus,
-    RatingHistory,
     User,
 )
 from app.notifications.apns import MATCH_RESULT_CONFIRMATION_CATEGORY
 from app.notifications.dependencies import get_notification_service
 from app.notifications.service import NotificationService
 from app.notifications.taxonomy import NotificationCategory
-from app.players import escape_like
 from app.rate_limiting import RedisRateLimiter
 from app.result_acceptance import (
     PostedGamesNotDecisiveError,
@@ -58,9 +72,7 @@ from app.result_acceptance import (
     _games_to_win,
     _set_side_won,
     accept_standing_result,
-)
-from app.result_acceptance import (
-    side_win_counts as side_win_counts,  # noqa: PLC0414  (explicit re-export: app.dashboard imports it from here)
+    side_win_counts,
 )
 from app.result_chain import accepted_result, standing_result
 from app.retirement import retirement_deadline
@@ -68,12 +80,8 @@ from app.schemas.match import (
     MatchCreate,
     MatchDetails,
     MatchDetailsCurrentGame,
-    MatchDetailsFormResult,
     MatchDetailsGame,
-    MatchDetailsH2H,
-    MatchDetailsH2HMeeting,
     MatchDetailsPlayer,
-    MatchDetailsPlayerForm,
     MatchDetailsScore,
     MatchDetailsSide,
     MatchGameScoreConflict,
@@ -101,11 +109,6 @@ router = APIRouter(prefix="/v1")
 log = logging.getLogger(__name__)
 
 MAX_PAGE_SIZE = 100
-RECENT_FORM_LIMIT = 5
-H2H_MEETINGS_LIMIT = 5
-# Cap on the pre-match sparkline so the BFF stays cheap; the dashboard
-# Sparkline already pads single points to 2.
-RATING_HISTORY_LIMIT = 10
 
 
 # ----- helpers -------------------------------------------------------------
@@ -115,7 +118,7 @@ def _side_schema(
     side: MatchSide,
     side_wins: dict[int, int],
     current_user_id: uuid.UUID | None,
-    rating_changes: dict[uuid.UUID, RatingChange] | None = None,
+    rating_changes: Mapping[uuid.UUID, RatingChange] | None = None,
 ) -> MatchDetailsSide:
     # Singles only for v1: each side has at most one rated player.
     rating_change = (
@@ -140,26 +143,6 @@ def _side_schema(
     )
 
 
-# Shared eager-load chain. Used by every read path that returns a hierarchical
-# match — async SQLAlchemy can't lazy-load mid-request, so all collections are
-# pulled up front. The posted results (the propose/accept chain) are needed
-# wherever ``can_finalize`` / the awaiting-acceptance status label / the
-# derived ``negotiation`` block are computed.
-#
-# ``Match.league`` is eager (serializers read ``league.id``/``league.name``) but
-# its nested ``rating_strategy`` is NOT — only the score-write finalize paths
-# read it (inside ``_apply_rating_update``), and they load it explicitly via
-# ``match_rating_eager_options`` so the list / detail / dashboard reads don't pay
-# an extra ``selectinload`` on the strategy row (issue #182).
-def match_eager_options() -> tuple[ExecutableOption, ...]:
-    return (
-        selectinload(Match.match_settings),
-        selectinload(Match.league),
-        selectinload(Match.results),
-        *_match_history_options(),
-    )
-
-
 # The finalize/score-write superset: everything a read needs, plus the league's
 # rating strategy that ``_apply_rating_update`` reads when a completing match
 # applies ratings. Under async SQLAlchemy a lazy access on the unloaded
@@ -170,17 +153,6 @@ def match_rating_eager_options() -> tuple[ExecutableOption, ...]:
     return (
         *match_eager_options(),
         selectinload(Match.league).selectinload(League.rating_strategy),
-    )
-
-
-def _match_history_options() -> tuple[ExecutableOption, ...]:
-    """Subset of ``match_eager_options`` for paths that only need sides + scores
-    (recent form, H2H): no match_settings, no league/rating-strategy."""
-    return (
-        selectinload(Match.sides)
-        .selectinload(MatchSide.players)
-        .selectinload(MatchSidePlayer.user),
-        selectinload(Match.games).selectinload(MatchGame.score),
     )
 
 
@@ -196,27 +168,6 @@ async def _load_match(
         .options(*(options if options is not None else match_eager_options()))
     )
     return result.scalar_one_or_none()
-
-
-def my_side(match: Match, user_id: uuid.UUID) -> MatchSide | None:
-    return next(
-        (s for s in match.sides if any(p.user_id == user_id for p in s.players)),
-        None,
-    )
-
-
-def opponent_side(match: Match, user_id: uuid.UUID) -> MatchSide | None:
-    mine = my_side(match, user_id)
-    if mine is None:
-        return None
-    return next((s for s in match.sides if s.side_number != mine.side_number), None)
-
-
-def opponent_username(match: Match, user_id: uuid.UUID) -> str | None:
-    opp = opponent_side(match, user_id)
-    if opp is None or not opp.players:
-        return None
-    return opp.players[0].user.username
 
 
 def _is_participant(match: Match, user_id: uuid.UUID) -> bool:
@@ -293,37 +244,6 @@ async def _committed_score(
         return None
     game = next((g for g in reloaded.games if g.game_number == game_number), None)
     return _score_view(game.score) if game and game.score else None
-
-
-def current_game_number(match: Match) -> int | None:
-    """The next un-scored game number for an open match. ``None`` when:
-
-    - the match is finalized / voided / pending (not in progress);
-    - any result has been posted (the board is frozen — score writes are locked
-      once a result exists);
-    - the currently-saved games already decide the match — even if some game
-      numbers in ``1..best_of`` were never played, there's no meaningful
-      "next game to play" (a bo3 won 2-0 has no game 3). Returning a
-      phantom number here would deep-link the dashboard / list / scoring
-      page to a game that doesn't exist.
-
-    Game rows are created lazily by the score-write endpoints, so the next
-    game to score may not have a ``MatchGame`` row yet — this helper exposes
-    the number rather than an object so deeplinks work either way."""
-    if match.status != MatchStatus.in_progress:
-        return None
-    if match.results:
-        return None
-    target = _games_to_win(match.match_settings.best_of)
-    wins = side_win_counts(match)
-    if any(c >= target for c in wins.values()):
-        return None
-    best_of = match.match_settings.best_of
-    scored = {g.game_number for g in match.games if g.score is not None}
-    for n in range(1, best_of + 1):
-        if n not in scored:
-            return n
-    return None
 
 
 def _negotiation_game(snapshot: dict[str, int]) -> NegotiationGame:
@@ -488,13 +408,32 @@ def _negotiation(match: Match, current_user_id: uuid.UUID | None) -> MatchNegoti
     )
 
 
+async def _view_extras(match_service: MatchService, match: Match) -> MatchDetailsExtras:
+    """The participant-only extras block (rating changes, recent form,
+    head-to-head) for an already-loaded ``match``.
+
+    The router hands the service the primitives it already holds and gets back a
+    domain model; the SQL lives in ``MatchDetailsRepository`` and the wire shapes
+    are built by the extras mapper. Callers gate on participation *before* calling
+    this — a non-participant gets ``empty_extras()`` (see #515)."""
+    return serialize_match_extras(
+        await match_service.load_view_extras(
+            match_id=match.id,
+            league_id=match.league_id,
+            status=match.status,
+            created_at=match.created_at,
+            user_ids=singles_user_ids(match),
+        )
+    )
+
+
 def _serialize_details(
     match: Match,
     current_user_id: uuid.UUID | None,
-    extras: "ViewExtras | None" = None,
+    extras: MatchDetailsExtras | None = None,
     domain_match: MatchModel | None = None,
 ) -> MatchDetails:
-    extras = extras or _EMPTY_EXTRAS
+    extras = extras or empty_extras()
     # The ``data`` view is built from the domain model. The match-details
     # endpoint loads it through MatchService/MatchRepository and passes it in;
     # the other serialize call sites already hold the full ORM row, so they
@@ -558,7 +497,9 @@ def _serialize_details(
         # it is, and (when the opponent corrected the viewer's own proposal) the
         # diff. Drives the accept CTA + the negotiation callouts (#713).
         negotiation=_negotiation(match, current_user_id),
-        recent_form=extras.recent_form,
+        # ``extras.recent_form`` is a read-only Sequence; the response model owns
+        # its own list, so copy rather than alias it.
+        recent_form=list(extras.recent_form),
         head_to_head=extras.head_to_head,
         data=serialize_match_details(domain_match),
     )
@@ -583,20 +524,6 @@ def _add_side(match: Match, side_number: int, player: User | None) -> None:
 # ----- list helpers --------------------------------------------------------
 
 
-def participant_filter[SelectT: Select[Any]](
-    query: SelectT, current_user_id: uuid.UUID
-) -> SelectT:
-    me_in_match = (
-        select(MatchSidePlayer.id)
-        .where(
-            MatchSidePlayer.match_id == Match.id,
-            MatchSidePlayer.user_id == current_user_id,
-        )
-        .exists()
-    )
-    return query.where(me_in_match)
-
-
 def _has_result_exists() -> Any:
     """``EXISTS`` correlated subquery: this match has any result row. On an
     ``in_progress`` match the presence of any result means a standing proposal
@@ -606,58 +533,6 @@ def _has_result_exists() -> Any:
     so the list filter and the status-count aggregate split the Live vs awaiting
     buckets identically (issue #381)."""
     return select(MatchResult.id).where(MatchResult.match_id == Match.id).exists()
-
-
-def my_standing_proposal_exists(current_user_id: uuid.UUID) -> Any:
-    """``EXISTS`` correlated subquery: ``current_user`` submitted the *standing*
-    proposal on this match — the unaccepted result nothing else supersedes.
-
-    On an ``in_progress`` match that means the match is parked *waiting on the
-    opponent* to accept: the current user has already signed and owes no move.
-    It's the SQL twin of ``list_attention_kind``'s ``waiting_opponent`` bucket.
-    Shared by the dashboard's waiting/actionable split and the matches-list
-    Attention filter so the two can never disagree about who owes a move.
-
-    Singles-only assumption: this keys on ``submitted_by_user_id ==
-    current_user``, whereas ``list_attention_kind`` treats a proposal from *any*
-    player on the viewer's side as theirs (``_submitted_on_side``). For
-    ``team_size == 1`` (the only topology today — see ``create_match``) the two
-    coincide. When doubles lands, a partner's proposal would make this ``False``
-    while the classifier says ``waiting_opponent``, so this must move to a
-    side-based match to keep the SQL and Python twins aligned."""
-    superseding = aliased(MatchResult)
-    return (
-        select(MatchResult.id)
-        .where(
-            MatchResult.match_id == Match.id,
-            MatchResult.accepted_by_user_id.is_(None),
-            MatchResult.submitted_by_user_id == current_user_id,
-            ~select(superseding.id)
-            .where(superseding.supersedes_result_id == MatchResult.id)
-            .exists(),
-        )
-        .exists()
-    )
-
-
-def _player_username_filter[SelectT: Select[Any]](query: SelectT, q: str) -> SelectT:
-    """Restrict to matches that have *any* player whose username matches ``q``.
-
-    A row-narrowing filter preserves the ``Select``'s row shape, so it's
-    generic over whatever the caller is selecting (matches list vs. status
-    counts).
-    """
-    pattern = f"%{escape_like(q.strip())}%"
-    has_matching_player = (
-        select(MatchSidePlayer.id)
-        .join(User, User.id == MatchSidePlayer.user_id)
-        .where(
-            MatchSidePlayer.match_id == Match.id,
-            User.username.ilike(pattern, escape="\\"),
-        )
-        .exists()
-    )
-    return query.where(has_matching_player)
 
 
 # ----- endpoints -----------------------------------------------------------
@@ -764,41 +639,6 @@ def _filtered_matches_query(
 # rather than crashing the page. Only reachable defensively: the actionable
 # filter already excludes everything that would classify as ``None``.
 _UNCLASSIFIED_SORT_RANK = 99
-
-
-def _actionable_attention_filter[SelectT: Select[Any]](
-    query: SelectT, current_user_id: uuid.UUID
-) -> SelectT:
-    """Narrow ``query`` to the caller's matches that need *their own* action —
-    the Attention tab's membership, computed per viewer (issue #729).
-
-    Mirrors the actionable half of ``app.attention.list_attention_kind``
-    (``review`` / ``score``): an in-progress match where the caller has *not*
-    submitted the standing proposal. This deliberately excludes the passive
-    waiting buckets — ``waiting_others`` (a pending/scheduled match) and
-    ``waiting_opponent`` (the caller's own posted result awaiting the opponent's
-    acceptance) — so the tab never flags a match the caller is merely waiting
-    on. The poster and the reviewer of the same posted result therefore see
-    *different* Attention counts, unlike before."""
-    return query.where(
-        Match.status == MatchStatus.in_progress,
-        ~my_standing_proposal_exists(current_user_id),
-    )
-
-
-def _attention_matches_query(
-    q: str | None, current_user_id: uuid.UUID
-) -> Select[tuple[Match]]:
-    """The caller's own matches that need their action (optionally
-    search-narrowed) — the row set behind the Attention tab and its tab-badge
-    count. Restricted to participation, unlike the perspective-neutral browsing
-    query, and to the *actionable* buckets, unlike a plain open-status scan."""
-    base = _actionable_attention_filter(
-        participant_filter(select(Match), current_user_id), current_user_id
-    )
-    if q:
-        base = _player_username_filter(base, q)
-    return base
 
 
 def _attention_sort_key(
@@ -1101,7 +941,9 @@ async def get_match(
     is_participant = current_user is not None and _is_participant(
         match, current_user.id
     )
-    extras = await _load_view_extras(db, match) if is_participant else _EMPTY_EXTRAS
+    extras = (
+        await _view_extras(match_service, match) if is_participant else empty_extras()
+    )
     return _serialize_details(
         match,
         current_user.id if current_user else None,
@@ -1287,291 +1129,6 @@ async def _notify_result_posted(
                 collapse_id=f"result-confirm:{match.id}",
             )
         )
-
-
-async def _load_rating_changes(
-    db: AsyncSession, match: Match
-) -> dict[uuid.UUID, RatingChange]:
-    """Returns ``user_id -> RatingChange`` for every rating row this match
-    produced. Empty for matches that didn't move ratings — including, always,
-    a non-completed match, since no rating rows can exist before completion."""
-    if match.status != MatchStatus.completed:
-        return {}
-    rows = (
-        (
-            await db.execute(
-                select(RatingHistory).where(RatingHistory.match_id == match.id)
-            )
-        )
-        .scalars()
-        .all()
-    )
-    return {row.user_id: RatingChange.from_history(row) for row in rows}
-
-
-def _singles_user_ids(match: Match) -> list[uuid.UUID]:
-    """Singles player IDs, ordered by side number. Sides without exactly one
-    player are skipped — no doubles surface yet."""
-    sides_in_order = sorted(match.sides, key=lambda s: s.side_number)
-    return [
-        side.players[0].user_id for side in sides_in_order if len(side.players) == 1
-    ]
-
-
-def _history_base_query(
-    current_match_id: uuid.UUID, before: datetime | None = None
-) -> Select[tuple[Match]]:
-    """Foundation for both recent-form and H2H lookups: completed matches
-    other than this one, eagerly loading just the sides + games subtree.
-
-    Pass ``before`` to restrict to matches completed before that instant, so a
-    match viewed in the past shows the form as it stood then rather than the
-    players' current form. Ordering and the ``before`` cutoff both key off the
-    stable ``completed_at`` (not the mutable ``updated_at``) so editing an old
-    completed match can't shuffle it within — or out of — a history window."""
-    query = (
-        select(Match)
-        .where(
-            Match.status == MatchStatus.completed,
-            Match.id != current_match_id,
-        )
-        .options(*_match_history_options())
-        .order_by(Match.completed_at.desc())
-    )
-    if before is not None:
-        query = query.where(Match.completed_at < before)
-    return query
-
-
-async def _load_recent_form(
-    db: AsyncSession,
-    user_ids: list[uuid.UUID],
-    match: Match,
-) -> list[MatchDetailsPlayerForm]:
-    if not user_ids:
-        return []
-
-    # One round-trip for every player's career counts, rather than one per
-    # player. Users with no prior completed matches produce no GROUP BY row, so
-    # the lookup below defaults them to ``(0, 0)``.
-    career_before = await _load_career_before(db, user_ids, match.created_at)
-
-    result: list[MatchDetailsPlayerForm] = []
-    for user_id in user_ids:
-        rows = (
-            (
-                await db.execute(
-                    participant_filter(
-                        _history_base_query(match.id, before=match.created_at),
-                        user_id,
-                    ).limit(RECENT_FORM_LIMIT)
-                )
-            )
-            .scalars()
-            .all()
-        )
-        rating_before, rating_history = await _load_pre_match_rating(
-            db, user_id, match.league_id, match.created_at
-        )
-        matches_before, wins_before = career_before.get(user_id, (0, 0))
-        result.append(
-            MatchDetailsPlayerForm(
-                user_id=user_id,
-                recent_results=[_build_form_result(past, user_id) for past in rows],
-                rating_before=rating_before,
-                rating_history=rating_history,
-                career_matches_before=matches_before,
-                career_wins_before=wins_before,
-            )
-        )
-    return result
-
-
-async def _load_pre_match_rating(
-    db: AsyncSession,
-    user_id: uuid.UUID,
-    league_id: uuid.UUID,
-    before: datetime,
-) -> tuple[float | None, list[float]]:
-    """Returns ``(most-recent-value, chronological-list)``. Strict ``<`` on
-    ``before`` so this match's own rating row never leaks in."""
-    rows = (
-        (
-            await db.execute(
-                select(RatingHistory.rating_value)
-                .where(
-                    RatingHistory.user_id == user_id,
-                    RatingHistory.league_id == league_id,
-                    RatingHistory.created_at < before,
-                )
-                .order_by(RatingHistory.created_at.desc())
-                .limit(RATING_HISTORY_LIMIT)
-            )
-        )
-        .scalars()
-        .all()
-    )
-    if not rows:
-        return None, []
-    # ``rows`` is DESC, so ``rows[0]`` is already the most-recent value; the
-    # history list is the chronological (ASC) reversal.
-    return rows[0], list(reversed(rows))
-
-
-async def _load_career_before(
-    db: AsyncSession,
-    user_ids: list[uuid.UUID],
-    before: datetime,
-) -> dict[uuid.UUID, tuple[int, int]]:
-    """Cross-league ``(matches, wins)`` completed strictly before ``before``
-    (the current match's ``created_at``), for every user in ``user_ids`` in a
-    single grouped query. The current match is excluded by the date filter
-    alone: a completed match's ``completed_at`` is always ``>=`` its own
-    ``created_at``, so it can never satisfy ``completed_at < created_at``. No
-    separate ``id`` guard is needed (issue #202).
-
-    A user with no prior completed matches has **no row** under ``GROUP BY`` and
-    so is simply absent from the mapping — callers must default them to
-    ``(0, 0)``."""
-    if not user_ids:
-        return {}
-    side = aliased(MatchSide)
-    player = aliased(MatchSidePlayer)
-    rows = (
-        await db.execute(
-            select(
-                player.user_id,
-                func.count(Match.id),
-                func.count(Match.id).filter(side.won.is_(True)),
-            )
-            .join(side, side.match_id == Match.id)
-            .join(player, player.match_side_id == side.id)
-            .where(
-                player.user_id.in_(user_ids),
-                Match.status == MatchStatus.completed,
-                Match.completed_at < before,
-            )
-            .group_by(player.user_id)
-        )
-    ).all()
-    return {row[0]: (int(row[1]), int(row[2])) for row in rows}
-
-
-def _build_form_result(past_match: Match, user_id: uuid.UUID) -> MatchDetailsFormResult:
-    mine = my_side(past_match, user_id)
-    assert mine is not None  # participant_filter guarantees membership
-    # The history query filters status == completed, so completed_at is set.
-    assert past_match.completed_at is not None
-    side_wins = side_win_counts(past_match)
-    player_games = side_wins.get(mine.side_number, 0)
-    opp_games = sum(wins for n, wins in side_wins.items() if n != mine.side_number)
-    return MatchDetailsFormResult(
-        match_id=past_match.id,
-        is_win=mine.won is True,
-        player_games_won=player_games,
-        opponent_games_won=opp_games,
-        opponent_username=opponent_username(past_match, user_id),
-        completed_at=past_match.completed_at,
-    )
-
-
-async def _load_head_to_head(
-    db: AsyncSession,
-    user_ids: list[uuid.UUID],
-    match: Match,
-) -> MatchDetailsH2H | None:
-    if len(user_ids) != 2:
-        return None
-    current_match_id = match.id
-    user_a, user_b = user_ids
-    rows_query = participant_filter(
-        participant_filter(
-            _history_base_query(current_match_id, before=match.created_at), user_a
-        ),
-        user_b,
-    ).options(selectinload(Match.match_settings))
-    rows = (await db.execute(rows_query.limit(H2H_MEETINGS_LIMIT))).scalars().all()
-
-    meetings: list[MatchDetailsH2HMeeting] = []
-    for past in rows:
-        past_a = my_side(past, user_a)
-        past_b = my_side(past, user_b)
-        assert past_a is not None and past_b is not None
-        # The history query filters status == completed, so completed_at is set.
-        assert past.completed_at is not None
-        side_wins = side_win_counts(past)
-        a_games = side_wins.get(past_a.side_number, 0)
-        b_games = side_wins.get(past_b.side_number, 0)
-        winner_side: int | None = (
-            1 if past_a.won is True else 2 if past_b.won is True else None
-        )
-        meetings.append(
-            MatchDetailsH2HMeeting(
-                match_id=past.id,
-                completed_at=past.completed_at,
-                side_1_games_won=a_games,
-                side_2_games_won=b_games,
-                winner_side_number=winner_side,
-                rated=past.match_settings.affects_rating,
-            )
-        )
-
-    # Prior-meetings aggregates (completed before this match) so the displayed
-    # window doesn't undercount the rivalry going into this match. Driven from
-    # MatchSide.won so a future void that leaves `won` null naturally
-    # drops out of both totals.
-    a_side = aliased(MatchSide)
-    b_side = aliased(MatchSide)
-    a_player = aliased(MatchSidePlayer)
-    b_player = aliased(MatchSidePlayer)
-    counts_query = (
-        select(
-            func.count(Match.id),
-            func.count(Match.id).filter(a_side.won.is_(True)),
-            func.count(Match.id).filter(b_side.won.is_(True)),
-        )
-        .join(a_side, a_side.match_id == Match.id)
-        .join(a_player, a_player.match_side_id == a_side.id)
-        .join(b_side, b_side.match_id == Match.id)
-        .join(b_player, b_player.match_side_id == b_side.id)
-        .where(
-            Match.status == MatchStatus.completed,
-            Match.id != current_match_id,
-            Match.completed_at < match.created_at,
-            a_player.user_id == user_a,
-            b_player.user_id == user_b,
-            a_side.id != b_side.id,
-        )
-    )
-    total, a_wins, b_wins = (await db.execute(counts_query)).one()
-
-    return MatchDetailsH2H(
-        total_meetings=total,
-        side_1_wins=a_wins,
-        side_2_wins=b_wins,
-        recent_meetings=meetings,
-    )
-
-
-@dataclass
-class ViewExtras:
-    rating_changes: dict[uuid.UUID, RatingChange]
-    recent_form: list[MatchDetailsPlayerForm]
-    head_to_head: MatchDetailsH2H | None
-
-
-_EMPTY_EXTRAS = ViewExtras(rating_changes={}, recent_form=[], head_to_head=None)
-
-
-async def _load_view_extras(db: AsyncSession, match: Match) -> ViewExtras:
-    user_ids = _singles_user_ids(match)
-    return ViewExtras(
-        rating_changes=await _load_rating_changes(db, match),
-        recent_form=await _load_recent_form(db, user_ids, match),
-        head_to_head=await _load_head_to_head(
-            db, user_ids if len(user_ids) == 2 else [], match
-        ),
-    )
 
 
 # ----- finalize-payload validation + apply --------------------------------
@@ -1920,6 +1477,7 @@ async def create_game_score(
     game_number: Annotated[int, Path(ge=1, le=7)],
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_session),
+    match_service: MatchService = Depends(get_match_service),
 ) -> MatchDetails:
     # Take the blocking match row lock so this score write serializes against a
     # concurrent first ``post_match_result`` (which locks the same row NOWAIT).
@@ -1979,7 +1537,7 @@ async def create_game_score(
 
     reloaded = await _load_match(db, match.id)
     assert reloaded is not None
-    extras = await _load_view_extras(db, reloaded)
+    extras = await _view_extras(match_service, reloaded)
     return _serialize_details(reloaded, current_user.id, extras)
 
 
@@ -1994,6 +1552,7 @@ async def update_game_score(
     game_number: Annotated[int, Path(ge=1, le=7)],
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_session),
+    match_service: MatchService = Depends(get_match_service),
 ) -> MatchDetails:
     # Blocking match row lock (see ``create_game_score``): serializes this update
     # against a concurrent first ``post_match_result`` so ``_enforce_scorable``
@@ -2055,7 +1614,7 @@ async def update_game_score(
 
     reloaded = await _load_match(db, match.id)
     assert reloaded is not None
-    extras = await _load_view_extras(db, reloaded)
+    extras = await _view_extras(match_service, reloaded)
     return _serialize_details(reloaded, current_user.id, extras)
 
 
@@ -2068,6 +1627,7 @@ async def delete_game_score(
     game_number: Annotated[int, Path(ge=1, le=7)],
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_session),
+    match_service: MatchService = Depends(get_match_service),
 ) -> MatchDetails:
     # Blocking match row lock (see ``create_game_score``): serializes this delete
     # against a concurrent first ``post_match_result`` so ``_enforce_scorable``
@@ -2090,7 +1650,7 @@ async def delete_game_score(
 
     reloaded = await _load_match(db, match.id)
     assert reloaded is not None
-    extras = await _load_view_extras(db, reloaded)
+    extras = await _view_extras(match_service, reloaded)
     return _serialize_details(reloaded, current_user.id, extras)
 
 
@@ -2116,6 +1676,7 @@ async def post_match_result(
     payload: MatchResultsWrite,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_session),
+    match_service: MatchService = Depends(get_match_service),
     notifications: NotificationService = Depends(get_notification_service),
 ) -> MatchDetails:
     """Propose a result for a match — the first verb of the propose/accept
@@ -2243,7 +1804,7 @@ async def post_match_result(
 
     reloaded = await _load_match(db, match.id)
     assert reloaded is not None
-    extras = await _load_view_extras(db, reloaded)
+    extras = await _view_extras(match_service, reloaded)
     details = _serialize_details(reloaded, current_user.id, extras)
     # Record + notify the side that now owes an acceptance. Built after the
     # response and best-effort: the result is already committed, so *nothing*
@@ -2274,6 +1835,7 @@ async def accept_match_result(
     result_id: uuid.UUID,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_session),
+    match_service: MatchService = Depends(get_match_service),
 ) -> MatchDetails:
     """Accept a standing proposal — the second verb of the negotiation. The
     opposing side ratifies the proposing side's board; the match completes,
@@ -2332,5 +1894,5 @@ async def accept_match_result(
 
     reloaded = await _load_match(db, match.id)
     assert reloaded is not None
-    extras = await _load_view_extras(db, reloaded)
+    extras = await _view_extras(match_service, reloaded)
     return _serialize_details(reloaded, current_user.id, extras)

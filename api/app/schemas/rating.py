@@ -4,6 +4,8 @@ from typing import TYPE_CHECKING
 
 from pydantic import BaseModel
 
+from app.domain.rating import rating_delta
+
 if TYPE_CHECKING:
     from app.models.rating_history import RatingHistory
 
@@ -18,5 +20,8 @@ class RatingChange(BaseModel):
     @classmethod
     def from_history(cls, row: RatingHistory) -> RatingChange:
         prev = row.previous_rating_value
-        delta = row.rating_value - prev if prev is not None else 0.0
-        return cls(before=prev, after=row.rating_value, delta=delta)
+        return cls(
+            before=prev,
+            after=row.rating_value,
+            delta=rating_delta(prev, row.rating_value),
+        )
