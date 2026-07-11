@@ -65,6 +65,61 @@ const scoped = (container: Container) => ({
   queryHeadToHeadLoading() {
     return container.queryByRole('status', { name: /loading head-to-head/i })
   },
+  /**
+   * The body's cards in **DOM order**, by their headings — top to bottom, which
+   * on this page is also the order a phone reads, a keyboard tabs and a screen
+   * reader announces (the profile is one column at every width, and the order is
+   * DOM order, not a CSS `order:`).
+   *
+   * This is what makes the viewer-dependent order (ADR-0915) honestly testable in
+   * jsdom, which has no layout engine and would see straight through a CSS
+   * reordering.
+   *
+   * Only `<h2>`s **inside `.player-profile__body`**: the rating panel's overline
+   * in the hero is an `h2` too, and the cards' *skeletons* deliberately title
+   * themselves with a `<span>` rather than a heading — so a mid-load call answers
+   * with the cards that have actually painted, not with a phantom order.
+   */
+  getCardOrder(): string[] {
+    const headings: HTMLElement[] = container.getAllByRole('heading', {
+      level: 2,
+    })
+    return headings
+      .filter((heading) => heading.closest('.player-profile__body'))
+      .map((heading) => heading.textContent?.trim() ?? '')
+  },
+
+  /**
+   * Each painted card as `[heading, card-root class]`, in DOM order.
+   *
+   * The desktop grid (`player-profile.css`, `@media (min-width: 960px)`) puts the
+   * cards into two columns by **explicit placement keyed on these class names** —
+   * `.rating-chart` and `.recent-matches` into the wide column, `.career-card`,
+   * `.confidence-card`, `.leagues-card` and `.head-to-head` into the narrow one —
+   * because the DOM order is the phone's, and viewer-dependent, so it cannot also
+   * be the desktop reading order.
+   *
+   * That makes the class on each card's root a **contract with the stylesheet**,
+   * not decoration: rename one and the card silently falls out of its column into
+   * whatever auto-placement makes of it. jsdom has no layout engine, so a test
+   * cannot see the columns — it CAN see the hooks, which is what this exposes.
+   * The columns themselves are a browser-only fact.
+   */
+  getCardPlacementHooks(): [heading: string, cardClass: string][] {
+    const headings: HTMLElement[] = container.getAllByRole('heading', {
+      level: 2,
+    })
+    return headings
+      .filter((heading) => heading.closest('.player-profile__body'))
+      .map((heading) => {
+        const root = heading.closest('.player-profile__section')
+        const cardClass = [...(root?.classList ?? [])].find(
+          (name) => name !== 'player-profile__section',
+        )
+        return [heading.textContent?.trim() ?? '', cardClass ?? '(none)']
+      })
+  },
+
   /** The route-level error boundary's fallback. No card owns a boundary. */
   queryError() {
     return container.queryByRole('alert')

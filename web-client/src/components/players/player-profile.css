@@ -313,7 +313,19 @@
 
 /* ============ Body / matches ============ */
 /* No padding — table.matches takes the full width like /matches and
- * /players. Section heading sits in its own padded row above. */
+ * /players. Section heading sits in its own padded row above.
+ *
+ * ONE COLUMN by default: the cards stack, full-bleed, in the order the
+ * composition root hands them over — which is viewer-dependent (ADR-0915, and
+ * `profile-order.ts`). That order is DOM order and not a CSS `order:`, so on a
+ * phone what you read, what you tab through and what a screen reader announces
+ * are the same sequence.
+ *
+ * The desktop grid below is layered on top of this as a `min-width` override, so
+ * the phone stack is what you get by default and by fallback — and the DOM stays
+ * in the phone's reading order at *every* width. See the grid's own comment for
+ * why the columns are painted with explicit placement rather than by reordering
+ * the DOM. */
 .player-profile__body {
   width: 100%;
   box-sizing: border-box;
@@ -330,6 +342,119 @@
   flex-direction: column;
   flex: 1;
   min-height: 0;
+}
+
+/* ============ Desktop: the mockup's two-column grid ============ */
+/* Wide (1.72fr) primary column: the rating chart, then recent matches.
+ * Narrow (1fr) secondary column: career, confidence, leagues, head-to-head.
+ *
+ * The DOM order is NOT this order — it is the phone's, and it is
+ * viewer-dependent (`profile-order.ts`): on somebody else's profile head-to-head
+ * comes first and the chart fourth. So the two columns are painted with
+ * **explicit grid placement** (`grid-column` + `grid-row` per card), which lets
+ * the eye see two columns while the DOM keeps the one reading/tab/screen-reader
+ * order 9a established. Three consequences worth knowing:
+ *
+ * - The cards are placed by their own root class (`.rating-chart`, `.career-card`
+ *   …), which every card's *skeleton* carries too — so the grid holds its shape
+ *   while the bundle is still in flight instead of assembling itself as cards
+ *   land.
+ * - Auto-placement is useless here: with the interleaved DOM order it walks a
+ *   row cursor forward and leaves a hole at the top of the left column. Every
+ *   card therefore names its row.
+ * - Explicit rows mean the two columns SHARE row bands, and a row is as tall as
+ *   the tallest card in it — so where the slack lands is a *choice*, and a wrong
+ *   one puts a hole in the middle of a column. Recent matches therefore spans
+ *   from row 2 to the end (`2 / -1`) instead of naming one row: the four right-
+ *   hand cards keep a row each and stay tight against one another, while the
+ *   left column's shortfall collects *below* recent matches, at the foot of the
+ *   page. (Row 1 is shared by the chart and career, which are within a few pixels
+ *   of each other, so the columns start on the same line.) `align-items: start`
+ *   keeps every card at its content height rather than stretching it to its band.
+ *
+ * An **unrated** player is the layout's awkward case, and it holds: the confidence
+ * card renders NOTHING (there is no confidence without a rating), so its row
+ * collapses to zero height — but the gutters either side of it do not, so career
+ * and leagues end up two gaps (~40px) apart rather than one. Measured in a
+ * browser: it reads as breathing room, not as a hole, and the explicit rows keep
+ * leagues and head-to-head where they are instead of sliding up into a
+ * chart-shaped gap. The same player's chart collapses to its short "Unrated"
+ * panel, which leaves the left column open under it until recent matches starts
+ * on row 2 — the price of sharing row 1 with career, and the reason the two
+ * columns start on the same line at all.
+ *
+ * The hero above stays full-bleed; it is the body that is centred and capped. */
+@media (min-width: 960px) {
+  .player-profile__body {
+    display: grid;
+    grid-template-columns: 1.72fr 1fr;
+    /* Four explicit rows — one per card in the narrow column. They have to be
+     * explicit for `-1` to mean anything: with an implicit grid, `grid-row: 2 /
+     * -1` resolves its end line back to the start of the (empty) explicit grid
+     * and quietly lands the card in row 1, on top of the chart. */
+    grid-template-rows: repeat(4, auto);
+    gap: 20px;
+    align-items: start;
+    /* `box-sizing: border-box` is inherited from the base rule and must stay: the
+     * body is `width: 100%`, so a content-box here would add the page padding on
+     * top of that 100% and push the narrow column off the right edge. */
+    max-width: 1240px;
+    margin: 0 auto;
+    padding: 24px clamp(20px, 4vw, 40px) 48px;
+  }
+
+  /* A grid item is not a flex item: the `flex: 1` / `flex: 0 0 auto` the cards
+   * carry for the stacked layout stop applying, and each card sizes to its
+   * content. */
+  .player-profile__body > .player-profile__section {
+    min-width: 0;
+  }
+
+  /* The stacked layout separates the cards with a rule under each. In a gapped
+   * grid that rule reads as a line floating in whitespace, so the cards are
+   * separated by the gap alone — including the bottom one, which the stacked
+   * layout special-cases. */
+  .player-profile__body > .player-profile__section,
+  .player-profile__body > .recent-matches {
+    border-bottom: none;
+  }
+
+  /* ----- The wide, primary column ----- */
+  .player-profile__body > .rating-chart {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  /* Rows 2 to the end: recent matches takes the whole band the three lower
+   * right-hand cards occupy, so any slack between the two columns' heights falls
+   * *below* it — at the foot of the page, where an unequal column is just an
+   * unequal column. Pinned to row 2 rather than spanning from row 1, the chart
+   * and career top out on the same line and the two columns start together. */
+  .player-profile__body > .recent-matches {
+    grid-column: 1;
+    grid-row: 2 / -1;
+  }
+
+  /* ----- The narrow, secondary column ----- */
+  .player-profile__body > .career-card {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .player-profile__body > .confidence-card {
+    grid-column: 2;
+    grid-row: 2;
+  }
+
+  .player-profile__body > .leagues-card {
+    grid-column: 2;
+    grid-row: 3;
+  }
+
+  .player-profile__body > .head-to-head {
+    grid-column: 2;
+    grid-row: 4;
+  }
 }
 
 .player-profile__section-header {
@@ -604,6 +729,52 @@
  * The grid is Opponent | Score | Δ | When — there is no result-chip column
  * (ADR-0915). A match that hasn't finished carries its state on the status dot
  * and in the score cell, so both have to read at a glance. */
+
+/* Content-sized and separated, exactly like Career, Leagues, confidence and
+ * head-to-head — which it did not have to be while it was always the LAST card
+ * on the page. It is not any more: on somebody else's profile it sits second,
+ * directly under head-to-head (ADR-0915). Inheriting `.player-profile__section`'s
+ * `flex: 1` there would let it swallow the body's spare height as a gap in the
+ * middle of the page, and having no bottom border would glue it to the card
+ * underneath. (The `flex: 1` still belongs to `.player-profile__section` itself:
+ * the full-history route's scrolling pane is built on it.) */
+.recent-matches {
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--border-subtle);
+  /* Lets the card be NARROWER than the table inside it. A flex item's automatic
+   * minimum size is its content's — `min-width: auto` — so without this the card
+   * refuses to shrink below the table's min-content width, the scroll container
+   * below is handed a box wider than the phone, and the `overflow-x` never fires:
+   * the page scrolls sideways instead of the table. This is the usual reason an
+   * overflow wrapper "does nothing". */
+  min-width: 0;
+}
+
+/* Whichever card the viewer-dependent order happens to leave at the bottom, the
+ * page must not end on a rule hanging under the last one. */
+.player-profile__body > .player-profile__section:last-child {
+  border-bottom: none;
+}
+
+/* The table's own scroll container. Four `white-space: nowrap` columns are wider
+ * than a phone, and wide content must scroll INSIDE its box — a profile that
+ * scrolls sideways under the thumb is unusable next to a table, which is where
+ * this app is read. The card sits in a one-column stack on a phone and in the
+ * wide column of the desktop grid; both hand it a definite width, and this keeps
+ * the table inside it either way. */
+.recent-matches__table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+  /* `position: relative` is load-bearing, not habit. An overflow box only clips
+   * the descendants it is a **containing block** for, and the Δ column's
+   * `.sr-only` label is `position: absolute` — so against a static wrapper it
+   * escapes the clip, plants itself at its static position out in the wide table,
+   * and drags the document's scrollWidth out past the viewport on its own. The
+   * page then scrolls sideways even though the table is scrolling correctly
+   * inside its box. Measured: 553px vs a 390px viewport, from a 1px-wide span
+   * nobody can see. */
+  position: relative;
+}
 
 .recent-matches__table {
   width: 100%;
@@ -1168,9 +1339,17 @@
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--ball-500) 22%, transparent);
 }
 
+/* A league name is data, so it can be long — and a row that cannot shrink around
+ * it drags the DEFAULT badge and the rating off the side of the phone, taking the
+ * page with them. It ellipsises instead; the rating on the trailing edge is the
+ * one thing on the row that must never be pushed out of sight. */
 .leagues-card__name {
   font-size: 15px;
   font-weight: 600;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .leagues-card__badge {
@@ -1182,6 +1361,7 @@
   border: 1px solid var(--border-subtle);
   border-radius: 999px;
   padding: 2px 8px;
+  flex: 0 0 auto;
 }
 
 /* The player's rating ON this ladder — pushed to the trailing edge, mono, so the
@@ -1192,6 +1372,8 @@
   font-family: var(--font-mono);
   font-size: 15px;
   color: var(--fg-1);
+  flex: 0 0 auto;
+  padding-left: 4px;
 }
 
 .leagues-card__row--skeleton {
@@ -1227,11 +1409,15 @@
   gap: 4px;
 }
 
+/* "You're 3–2 against <name>" — and the name is a single unbroken token the user
+ * chose, which on a phone can be longer than the line. `anywhere` lets it break
+ * mid-token rather than run off the side of the card. */
 .head-to-head__versus-line {
   font-family: var(--font-display);
   font-size: 20px;
   line-height: 1.3;
   color: var(--fg-1);
+  overflow-wrap: anywhere;
 }
 
 /* The two numbers that are the entire point of the card. Mono so they read as a
@@ -1330,12 +1516,21 @@
   padding: 8px 0;
 }
 
+/* `flex: 0 1 auto`, not `0 0 auto`: a name is user-supplied and can be far longer
+ * than the phone is wide, and a row that refuses to shrink around it pushes the
+ * whole page sideways (the same class of bug as the un-wrapped matches table
+ * above). It shrinks to the 120px floor — which still lines the bars up for the
+ * ordinary short name — and the name itself ellipsises rather than the profile
+ * scrolling. */
 .head-to-head__opponent {
   font-size: 14px;
   font-weight: 600;
   color: var(--fg-1);
-  flex: 0 0 auto;
+  flex: 0 1 auto;
   min-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* The record said again, geometrically: how much of this rivalry the player has
@@ -1402,8 +1597,15 @@
   padding-bottom: 20px;
 }
 
+/* The heading, the change chip and the range tabs share one row — until they
+ * can't. `.player-profile__section-header` is a nowrap flex row, so without this
+ * the tabs (which wrap internally, but only within whatever width is left over)
+ * squeeze the heading rather than dropping below it. On a phone they take their
+ * own line. */
 .rating-chart__header {
   justify-content: flex-start;
+  flex-wrap: wrap;
+  row-gap: 10px;
 }
 
 /* The signed change — and there is deliberately no "+0" variant, because that
@@ -1505,6 +1707,23 @@
   font-family: var(--font-mono);
   font-size: 9px;
   fill: var(--fg-3);
+}
+
+/* On a phone the SVG is the same 600×180 viewBox squeezed into ~350 CSS pixels,
+ * so its 9-unit type lands at about 5px — unreadable, and the gridlines behind it
+ * are just noise at that size. Drop the scaffolding and keep the line, the peak
+ * and the dot: the sentence above the chart ("Up +127 over the last 90 days") is
+ * already the number a phone reader actually wants, and it is what a screen reader
+ * gets in place of the drawing either way.
+ *
+ * A viewport query, not a container query: the SVG has no width of its own to
+ * query — it fills whatever it is given, which is the page. */
+@media (max-width: 480px) {
+  .rating-chart__gridline,
+  .rating-chart__y-label,
+  .rating-chart__x-label {
+    display: none;
+  }
 }
 
 .rating-chart__line {

@@ -47,6 +47,28 @@ const scoped = (container: Container) => ({
   queryEmptyState() {
     return container.queryByText('No matches yet')
   },
+  /**
+   * The element the table scrolls **inside** — `.recent-matches__table-wrap`,
+   * `overflow-x: auto` (and `position: relative`, so it also clips the Δ column's
+   * absolutely-positioned screen-reader label).
+   *
+   * Four `white-space: nowrap` columns are wider than a phone. Wide content
+   * scrolls in its own box; if it doesn't, it widens the *page* and the whole
+   * profile scrolls sideways under the thumb — which is how this card shipped
+   * before, and is unusable next to a table.
+   *
+   * jsdom has no layout engine and vitest does not load the stylesheet, so no
+   * test here can measure an overflow or a scrollWidth. What it CAN check is the
+   * structure that makes the overflow possible: the table has a wrapper, and it
+   * is the wrapper the CSS knows by name. Take the table out of it — as the card
+   * shipped originally — and this goes red. The scroll behaviour itself is a
+   * browser fact.
+   */
+  queryTableScrollContainer() {
+    return container
+      .getByRole('table')
+      .closest('.recent-matches__table-wrap') as HTMLElement | null
+  },
   /** Per-row accessors (`getStatusDot`, `getScoreCell`, `getDeltaCell`,
    * `getWhenCell`), each taking the opponent's name — reuse them rather than
    * re-deriving the row's internals. */

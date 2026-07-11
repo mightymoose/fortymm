@@ -1,8 +1,16 @@
+import { useQuery } from '@tanstack/react-query'
+import type { ReactNode } from 'react'
+
 import type { RatingRange } from '@/api/players'
 import { CareerCard } from '@/components/players/player-profile/career-card'
 import { ConfidenceCard } from '@/components/players/player-profile/confidence-card'
 import { HeadToHeadCard } from '@/components/players/player-profile/head-to-head-card'
 import { LeaguesCard } from '@/components/players/player-profile/leagues-card'
+import {
+  profileCardOrder,
+  profileOrderQuery,
+  type ProfileCardKey,
+} from '@/components/players/player-profile/profile-order'
 import { ProfileHero } from '@/components/players/player-profile/profile-hero'
 import { RatingChart } from '@/components/players/player-profile/rating-chart'
 import { RatingPanel } from '@/components/players/player-profile/rating-panel'
@@ -69,6 +77,15 @@ import './player-profile.css'
  * `rating_history` block the bundle already carries for the range the page loaded
  * with. Hence `range`, which every card is handed for the same one-request reason
  * `leagueId` is: it rides on the bundle's *request* (though not its key).
+ *
+ * Finally, the **order** those six cards come in is itself viewer-aware
+ * (ADR-0915). The page is one column at every width, so it is stacked in DOM
+ * order — the same order a phone reads top-to-bottom, a keyboard tabs through and
+ * a screen reader announces, which a CSS `order:` would have silently split in
+ * three. On somebody else's profile Head-to-head sits directly under the hero (on
+ * a phone that is all the room there is, and it belongs to "shall we play right
+ * now?"); on your own, Career does. See `profile-order.ts` — including why the bit
+ * comes from the payload rather than the session.
  */
 export interface PlayerProfileProps {
   /** Route path param. Known before any query resolves, so the cards can start
@@ -89,6 +106,68 @@ export function PlayerProfile({
   leagueId,
   range,
 }: PlayerProfileProps) {
+  // Whose profile is this? One boolean, projected off the bundle every card
+  // already reads — no session, no second request (`profile-order.ts`). It is
+  // `undefined` until the bundle lands, which is the cold-load case the order
+  // function defaults for.
+  const { data: isOwn } = useQuery(
+    profileOrderQuery(playerId, leagueId, range),
+  )
+
+  // Keyed, so a reorder MOVES each card rather than remounting it: the chart holds
+  // its own query with `keepPreviousData`, and a remount would throw that buffer
+  // away and re-suspend a card that already has its data.
+  const cards: Record<ProfileCardKey, ReactNode> = {
+    'head-to-head': (
+      <HeadToHeadCard
+        key="head-to-head"
+        playerId={playerId}
+        leagueId={leagueId}
+        range={range}
+      />
+    ),
+    'recent-matches': (
+      <RecentMatches
+        key="recent-matches"
+        playerId={playerId}
+        leagueId={leagueId}
+        range={range}
+      />
+    ),
+    career: (
+      <CareerCard
+        key="career"
+        playerId={playerId}
+        leagueId={leagueId}
+        range={range}
+      />
+    ),
+    'rating-chart': (
+      <RatingChart
+        key="rating-chart"
+        playerId={playerId}
+        leagueId={leagueId}
+        range={range}
+      />
+    ),
+    confidence: (
+      <ConfidenceCard
+        key="confidence"
+        playerId={playerId}
+        leagueId={leagueId}
+        range={range}
+      />
+    ),
+    leagues: (
+      <LeaguesCard
+        key="leagues"
+        playerId={playerId}
+        leagueId={leagueId}
+        range={range}
+      />
+    ),
+  }
+
   return (
     <div className="player-profile dark fortymm-theme">
       <header className="player-profile__hero">
@@ -98,12 +177,7 @@ export function PlayerProfile({
         </div>
       </header>
       <div className="player-profile__body">
-        <RatingChart playerId={playerId} leagueId={leagueId} range={range} />
-        <CareerCard playerId={playerId} leagueId={leagueId} range={range} />
-        <LeaguesCard playerId={playerId} leagueId={leagueId} range={range} />
-        <ConfidenceCard playerId={playerId} leagueId={leagueId} range={range} />
-        <HeadToHeadCard playerId={playerId} leagueId={leagueId} range={range} />
-        <RecentMatches playerId={playerId} leagueId={leagueId} range={range} />
+        {profileCardOrder(isOwn).map((key) => cards[key])}
       </div>
     </div>
   )

@@ -99,10 +99,13 @@ export const RatingChartSvg = ({ chart, summary }: RatingChartSvgProps) => {
             cy={chart.peak.y}
             r="3.5"
           />
+          {/* `labelY`, not `peak.y - 8`: when the peak sits at the top of the
+            * plot there is no room above the dot, and the view model flips the
+            * label below it rather than drawing it through the dot. */}
           <text
             className="rating-chart__peak-label"
             x={chart.peak.x}
-            y={Math.max(10, chart.peak.y - 8)}
+            y={chart.peak.labelY}
             textAnchor="middle"
           >
             {chart.peak.rating}

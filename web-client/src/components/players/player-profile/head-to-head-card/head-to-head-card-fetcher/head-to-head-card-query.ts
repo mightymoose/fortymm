@@ -1,5 +1,6 @@
 import { playerByIdQueryOptions, type PlayerDetail, type RatingRange } from '@/api/players'
 import type { components } from '@/api/schema'
+import { isOwnProfile } from '@/components/players/player-profile/profile-order'
 
 type HeadToHeadRecord = components['schemas']['HeadToHeadRecord']
 type ViewerHeadToHead = components['schemas']['ViewerHeadToHead']
@@ -141,7 +142,13 @@ const selectFrequentOpponent = (
  */
 export const selectHeadToHead = (player: PlayerDetail): HeadToHeadView => ({
   playerName: player.username,
-  versusViewer: selectViewerRecord(player.head_to_head.versus_viewer),
+  // Through the *shared* predicate: the page's card ORDER now turns on the same
+  // bit (Head-to-head leads on somebody else's profile, Career on your own —
+  // ADR-0915), and a card whose shape disagreed with the slot it was ordered into
+  // would be a page that says "Frequent opponents" in the "You vs them" position.
+  versusViewer: isOwnProfile(player)
+    ? null
+    : selectViewerRecord(player.head_to_head.versus_viewer),
   frequentOpponents: player.head_to_head.frequent_opponents.map(
     selectFrequentOpponent,
   ),

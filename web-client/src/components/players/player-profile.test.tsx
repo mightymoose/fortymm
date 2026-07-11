@@ -6,11 +6,15 @@ import {
   USATT_LEAGUE_ID,
 } from '@/mocks/factories/players/player-detail.factory'
 import {
+  buildPlayerHeadToHead,
+  buildSelfHeadToHead,
+} from '@/mocks/factories/players/head-to-head.factory'
+import {
   buildLiveMatchRow,
   buildPlayerMatchList,
   buildPlayerMatchRow,
 } from '@/mocks/factories/players/player-match-row.factory'
-import { waitForElementToBeRemoved } from '@/test/utilities'
+import { waitFor, waitForElementToBeRemoved } from '@/test/utilities'
 
 import { playerProfilePage } from './player-profile.page'
 
@@ -150,6 +154,109 @@ describe('PlayerProfile', () => {
     // …off ONE request, and one that named the league. Two entries here means a
     // card forked its key; a lone `null` means they all did.
     expect(leaguesAsked).toEqual([USATT_LEAGUE_ID])
+  })
+
+  it('leads with HEAD-TO-HEAD on someone else’s profile — the phone’s first screen', async () => {
+    // The page is one column at every width, so this list IS what a phone reads
+    // top-to-bottom (and what a keyboard tabs through, and what a screen reader
+    // announces). jsdom has no layout engine — a CSS `order:` would be invisible
+    // to it — so the order lives in the DOM, and this asserts the DOM.
+    //
+    // On somebody else's profile the first screen and a half belongs to "am I
+    // going to beat this person, and shall we play right now?" (ADR-0915): the
+    // viewer's record against them and the Start-a-match CTA, not a 90-day chart.
+    playerProfilePage.mockEndpoint(() =>
+      HttpResponse.json(
+        buildPlayerDetail({ head_to_head: buildPlayerHeadToHead() }),
+      ),
+    )
+
+    playerProfilePage.render()
+
+    await playerProfilePage.findCard()
+    await waitFor(() => expect(playerProfilePage.getCardOrder()).toHaveLength(6))
+
+    expect(playerProfilePage.getCardOrder()).toEqual([
+      'Head-to-head',
+      'Recent matches',
+      'Career',
+      'Rating over time',
+      'Rating confidence',
+      'Leagues',
+    ])
+  })
+
+  it('leads with CAREER on your own profile — read from the payload, not the session', async () => {
+    // Same page, same six cards, a different order — and the bit that decides it
+    // comes from the BUNDLE (`versus_viewer: null` ⟺ this is you), never from the
+    // session. The session doesn't suspend and the bundle does, so a page ordering
+    // itself off `useIsViewer` would render its first frames in a stranger's order
+    // and then reshuffle a fully-painted page (ADR-0915).
+    //
+    // The win-rate ring is what you came for; your frequent opponents sink to the
+    // bottom, and there is no record against yourself to lead with.
+    playerProfilePage.mockEndpoint(() =>
+      HttpResponse.json(
+        buildPlayerDetail({ head_to_head: buildSelfHeadToHead() }),
+      ),
+    )
+
+    playerProfilePage.render()
+
+    await playerProfilePage.findCard()
+    await waitFor(() => expect(playerProfilePage.getCardOrder()).toHaveLength(6))
+
+    expect(playerProfilePage.getCardOrder()).toEqual([
+      'Career',
+      'Rating over time',
+      'Recent matches',
+      'Rating confidence',
+      'Leagues',
+      // The head-to-head card in its self form — no "you vs you", just the list.
+      'Frequent opponents',
+    ])
+  })
+
+  it('hands the desktop grid the class hooks it places the two columns by', async () => {
+    // The desktop layout is a two-column grid (`player-profile.css`), and it
+    // CANNOT be built by reordering the DOM: the DOM order is the phone's, and
+    // viewer-dependent (the two tests above). So the grid places each card
+    // explicitly, keyed on the card's own root class — which makes those class
+    // names a contract between the components and the stylesheet.
+    //
+    // Be clear about what this does and does not prove. jsdom has no layout
+    // engine: it cannot see a column, a row or a gap, and a test that claimed to
+    // check the grid here would be checking nothing. What it pins is the *hook* —
+    // rename `.career-card` on the card's root and the CSS keeps compiling, the
+    // page keeps rendering, and the card quietly drops out of the narrow column
+    // into whatever auto-placement does with it. That regression is invisible to
+    // every other test in this file. The columns themselves are verified in a
+    // browser.
+    playerProfilePage.mockEndpoint(() =>
+      HttpResponse.json(
+        buildPlayerDetail({ head_to_head: buildSelfHeadToHead() }),
+      ),
+    )
+
+    playerProfilePage.render()
+
+    await playerProfilePage.findCard()
+    await waitFor(() =>
+      expect(playerProfilePage.getCardPlacementHooks()).toHaveLength(6),
+    )
+
+    // In DOM order — which is the phone's order, NOT the desktop columns. The
+    // trailing note on each row is the column that card's class is placed into at
+    // ≥960px, and the fact that those two sequences disagree is the whole reason
+    // the grid is built out of explicit placement rather than out of the DOM.
+    expect(playerProfilePage.getCardPlacementHooks()).toEqual([
+      ['Career', 'career-card'], // narrow column, row 1
+      ['Rating over time', 'rating-chart'], // wide column, row 1
+      ['Recent matches', 'recent-matches'], // wide column, rows 2…
+      ['Rating confidence', 'confidence-card'], // narrow column, row 2
+      ['Leagues', 'leagues-card'], // narrow column, row 3
+      ['Frequent opponents', 'head-to-head'], // narrow column, row 4
+    ])
   })
 
   it('holds a skeleton per card while the bundle loads', async () => {

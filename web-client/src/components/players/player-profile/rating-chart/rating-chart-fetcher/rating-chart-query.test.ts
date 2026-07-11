@@ -146,6 +146,56 @@ describe('selectRatingChart', () => {
     expect(view.peak?.x).toBeGreaterThan(42)
   })
 
+  it('flips the peak’s LABEL below its dot when the peak sits at the top of the plot', () => {
+    // The peak of a window is usually the top of that window's y-domain, which
+    // puts its dot at `PLOT.top` (y = 12) — and a 9-unit label 8 units above a dot
+    // at 12 has nowhere to go. The old geometry clamped the baseline to 10 and
+    // drew the digits straight through a dot spanning 8.5–15.5.
+    const view = selectRatingChart(
+      buildRatingHistoryWindow({
+        anchor: buildRatingPoint({ at: at(100), rating: 1560 }),
+        points: [
+          buildRatingPoint({ at: at(60), rating: 1600 }),
+          // The highest rating in the window, so it lands on the domain's ceiling.
+          buildRatingPoint({ at: at(30), rating: 1700 }),
+          buildRatingPoint({ at: at(5), rating: 1650 }),
+        ],
+        peak: buildRatingPoint({ at: at(30), rating: 1700 }),
+      }),
+      '90d',
+      NOW,
+    )
+
+    const peak = view.peak
+    expect(peak?.y).toBe(12) // PLOT.top — the ceiling
+    // Below the dot (bigger y is further down), clear of its 3.5 radius…
+    expect(peak!.labelY).toBeGreaterThan(peak!.y + 3.5)
+    // …and emphatically not the old clamped baseline that collided with it.
+    expect(peak!.labelY).not.toBe(10)
+  })
+
+  it('keeps the peak’s label ABOVE its dot when there is room', () => {
+    // A peak *inside* the window's y-range — the anchor came in higher than the
+    // player ever got back to — leaves clear air above the dot, and the label
+    // belongs there. Only the no-room case flips.
+    const view = selectRatingChart(
+      buildRatingHistoryWindow({
+        anchor: buildRatingPoint({ at: at(100), rating: 1800 }),
+        points: [
+          buildRatingPoint({ at: at(60), rating: 1600 }),
+          buildRatingPoint({ at: at(30), rating: 1650 }),
+        ],
+        peak: buildRatingPoint({ at: at(30), rating: 1650 }),
+      }),
+      '90d',
+      NOW,
+    )
+
+    const peak = view.peak
+    expect(peak!.y).toBeGreaterThan(12) // not on the ceiling: the anchor is
+    expect(peak!.labelY).toBe(peak!.y - 8) // dot radius (3.5) + the gap (4.5)
+  })
+
   it('survives a player with no rating at all — no NaNs on the axes', () => {
     // The profile never asks for this (an unrated player gets no chart), but a
     // divide-by-zero on an empty domain would paint every coordinate as `NaN` and

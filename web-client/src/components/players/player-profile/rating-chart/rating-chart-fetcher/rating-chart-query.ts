@@ -68,6 +68,28 @@ const PLOT_HEIGHT = CHART_HEIGHT - PLOT.top - PLOT.bottom
  * and paint every point at `NaN`). */
 const FLAT_PADDING = 20
 
+/* ------------------------------------------------------- the peak's label --
+ * The peak carries a dot AND its rating, and the two must not sit on top of each
+ * other. The label normally rides ABOVE the dot — but the peak is very often the
+ * top of the y-domain, which puts it at `PLOT.top` (12), and there is no room
+ * above 12 for a 9-unit-tall label plus a 3.5-radius dot. Clamping the baseline
+ * to the top edge (what this used to do) does not avoid the collision, it *is*
+ * the collision: a baseline of 10 draws the digits straight through a dot that
+ * spans 8.5–15.5.
+ *
+ * So when there is no room above, the label flips BELOW the dot. Both placements
+ * are computed here, in the view model, rather than in the SVG — same rule as
+ * every other coordinate on this chart: the drawing draws, the numbers are
+ * decided (and asserted) here.
+ */
+/** The peak marker's radius, in viewBox units — must match the `r` the SVG draws. */
+const PEAK_DOT_RADIUS = 3.5
+/** Clear air between the dot's edge and the label, above or below. */
+const PEAK_LABEL_GAP = 4.5
+/** The label's font-size in viewBox units (`.rating-chart__peak-label`), which is
+ * also how far a baseline must sit below the top edge to render un-clipped. */
+const PEAK_LABEL_SIZE = 9
+
 export type ChartCoord = { x: number; y: number }
 
 export type ChartAxisTick = {
@@ -95,8 +117,12 @@ export type ChartView = {
   current: ChartCoord & { rating: string }
   /** The window's high-water mark. `null` for an empty window (nothing was
    * played, so nothing peaked) — and never the profile's *all-time* peak, which
-   * is a different number on the same page. */
-  peak: (ChartCoord & { rating: string }) | null
+   * is a different number on the same page.
+   *
+   * `labelY` is the baseline the rating is printed at: **above** the dot when
+   * there is room, **below** it when the peak sits at the top of the plot and
+   * there is not. See `peakLabelBaseline`. */
+  peak: (ChartCoord & { rating: string; labelY: number }) | null
   /** Rating labels up the left-hand side, bottom-first. */
   yTicks: ChartAxisTick[]
   /** Date labels along the bottom. */
@@ -120,6 +146,23 @@ export type ChartView = {
 }
 
 const round = (value: number): number => Math.round(value * 100) / 100
+
+/**
+ * Where the peak's rating is printed, given where its dot sits.
+ *
+ * Above the dot by default. Below it when the dot is high enough in the plot that
+ * a label above would run off the top of the viewBox — which is the *common* case,
+ * not an exotic one: the peak of a window is usually the top of that window's
+ * y-domain, i.e. `PLOT.top`, and a label 8 units above 12 has nowhere to go. It
+ * used to be clamped to a baseline of 10, which drew the digits through the dot.
+ */
+export function peakLabelBaseline(dotY: number): number {
+  const above = dotY - PEAK_DOT_RADIUS - PEAK_LABEL_GAP
+  // The text grows upward from its baseline, so it only clears the top edge when
+  // the baseline is at least its own height below it.
+  if (above >= PEAK_LABEL_SIZE) return above
+  return round(dotY + PEAK_DOT_RADIUS + PEAK_LABEL_GAP + PEAK_LABEL_SIZE)
+}
 
 /** A drawn vertex: a rating at an instant, in milliseconds. */
 type Vertex = { at: number; rating: number }
@@ -241,6 +284,7 @@ export function selectRatingChart(
 
   const currentVertex = drawn.at(-1)
   const peakPoint = window.peak
+  const peakY = peakPoint ? y(peakPoint.rating) : 0
 
   return {
     line,
@@ -253,8 +297,9 @@ export function selectRatingChart(
     peak: peakPoint
       ? {
           x: x(Date.parse(peakPoint.at)),
-          y: y(peakPoint.rating),
+          y: peakY,
           rating: formatRating(peakPoint.rating),
+          labelY: peakLabelBaseline(peakY),
         }
       : null,
     yTicks: [

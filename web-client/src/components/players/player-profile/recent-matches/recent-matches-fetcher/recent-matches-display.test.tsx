@@ -132,6 +132,28 @@ describe('RecentMatchesDisplay', () => {
     expect(link).toHaveAttribute('href', '/players/p-7/matches')
   })
 
+  it('keeps the table in its own scroll container, so a phone never scrolls sideways', async () => {
+    // The card's four columns are `white-space: nowrap` and add up to more than a
+    // phone is wide (measured: 517px against a 390px viewport). Without a scroll
+    // container the table widens the PAGE, and the whole profile — hero, chart,
+    // every card — slides under the thumb. That is what shipped, and it is not
+    // shippable on a table-tennis app people read standing next to a table.
+    //
+    // What this test proves, precisely: the table is inside the wrapper the
+    // stylesheet gives `overflow-x: auto`. It does NOT prove the table scrolls —
+    // jsdom has no layout engine and vitest doesn't even load the CSS, so nothing
+    // here can measure a `scrollWidth`, and a test that claimed to would be
+    // checking nothing. Unwrap the table (the shipped bug) and this goes red; the
+    // scrolling itself is verified in a browser.
+    recentMatchesDisplayPage.render()
+
+    await recentMatchesDisplayPage.findCard()
+
+    expect(
+      recentMatchesDisplayPage.queryTableScrollContainer(),
+    ).toBeInTheDocument()
+  })
+
   it('offers no history link to a player with no matches', async () => {
     recentMatchesDisplayPage.render({ recent: buildEmptyRecentMatchesView() })
 
