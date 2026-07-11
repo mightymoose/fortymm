@@ -202,7 +202,7 @@ function seed(): StoredTournament[] {
           // `tournament.enter` permission, not on ownership, so Enter still shows.
           id: 'ev-cc-open',
           tournament_id: 'club-champs-2026',
-          name: 'Championship Singles',
+          name: "Women's Championship Singles",
           format: 'singles',
           draw_type: 'single-elim',
           max_players: 32,
@@ -210,8 +210,43 @@ function seed(): StoredTournament[] {
           entrants: otherEntrants('ev-cc-open', 28),
           slot: { date: '2026-07-01', start: '17:00', end: '21:00' },
           match_settings: { rated: true, length_games: 5 },
-          predicates: [],
-          pools: [],
+          // The only non-owned row in the seed, so it is the only place the
+          // read-only event panel can be seen in `npm run dev`. These rules
+          // deliberately cover every branch of the read-only prose: a bool
+          // ("Must be a club member"), a plain numeric comparison ("Age is at
+          // least 16"), a `between` (a two-element value array — "USATT rating
+          // is between 1200 and 2400"), and an enum (renders its option label,
+          // "Gender is Female", not the stored `F`).
+          predicates: [
+            { id: 'pr-cc-1', field: 'club', op: 'true', value: true },
+            { id: 'pr-cc-2', field: 'age', op: '>=', value: 16 },
+            { id: 'pr-cc-3', field: 'rating', op: 'between', value: [1200, 2400] },
+            { id: 'pr-cc-4', field: 'gender', op: 'is', value: 'F' },
+          ],
+          // Two group-stage pools on disjoint tables, then a knockout that
+          // reuses the show tables once the groups are done. No pair both
+          // overlaps in time and shares a table, so this seed raises no
+          // double-booking diagnostic (see `findPoolConflicts`).
+          pools: [
+            {
+              id: 'p-cc-1',
+              name: 'Group A',
+              slot: { date: '2026-07-01', start: '17:00', end: '19:00' },
+              table_ids: ['t1', 't2', 't3'],
+            },
+            {
+              id: 'p-cc-2',
+              name: 'Group B',
+              slot: { date: '2026-07-01', start: '17:00', end: '19:00' },
+              table_ids: ['t4', 't5', 't6'],
+            },
+            {
+              id: 'p-cc-3',
+              name: 'Knockout',
+              slot: { date: '2026-07-01', start: '19:15', end: '21:00' },
+              table_ids: ['t1', 't2'],
+            },
+          ],
           created_at: '2026-05-20T10:05:00Z',
           updated_at: '2026-06-12T08:00:00Z',
         },

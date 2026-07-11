@@ -21,7 +21,7 @@ import {
   type SeedMatch,
 } from './match-store'
 import { notificationHandlers } from './notifications-store'
-import { createRbacState, dispatchRbac } from './rbac-engine'
+import { createRbacState, dispatchRbac, type RbacState } from './rbac-engine'
 import { DEMO_SEED } from './rbac-store'
 import {
   createEvent as createTournamentEvent,
@@ -343,18 +343,37 @@ async function readJson(request: Request): Promise<unknown> {
   }
 }
 
-async function rbacHandler({ request }: { request: Request }) {
-  const url = new URL(request.url)
-  const path = url.pathname.replace(/^\/api/, '')
-  const body = await readJson(request)
-  const result = dispatchRbac(state, request.method, path, body)
-  if (!result) {
-    return HttpResponse.json({ detail: `unmocked ${request.method} ${path}` }, { status: 404 })
+function rbacHandlerFor(rbacState: RbacState) {
+  return async ({ request }: { request: Request }) => {
+    const url = new URL(request.url)
+    const path = url.pathname.replace(/^\/api/, '')
+    const body = await readJson(request)
+    const result = dispatchRbac(rbacState, request.method, path, body)
+    if (!result) {
+      return HttpResponse.json({ detail: `unmocked ${request.method} ${path}` }, { status: 404 })
+    }
+    if (result.status === 204) return new HttpResponse(null, { status: 204 })
+    return HttpResponse.json(result.body as Parameters<typeof HttpResponse.json>[0], {
+      status: result.status,
+    })
   }
-  if (result.status === 204) return new HttpResponse(null, { status: 204 })
-  return HttpResponse.json(result.body as Parameters<typeof HttpResponse.json>[0], {
-    status: result.status,
-  })
+}
+
+/**
+ * The RBAC routes bound to a caller-owned `RbacState`. The default handlers use
+ * the shared `DEMO_SEED` state; a test that needs a deterministic universe
+ * (e.g. "exactly one default role and one plain one") builds its own state and
+ * `server.use(...)`es these over the top.
+ */
+export function rbacHandlersFor(rbacState: RbacState) {
+  const handler = rbacHandlerFor(rbacState)
+  return RBAC_PATHS.flatMap((path) => [
+    http.get(path, handler),
+    http.post(path, handler),
+    http.patch(path, handler),
+    http.put(path, handler),
+    http.delete(path, handler),
+  ])
 }
 
 const RBAC_PATHS = [
@@ -1082,11 +1101,5 @@ export const handlers = [
   }),
   ...notificationHandlers,
 
-  ...RBAC_PATHS.flatMap((path) => [
-    http.get(path, rbacHandler),
-    http.post(path, rbacHandler),
-    http.patch(path, rbacHandler),
-    http.put(path, rbacHandler),
-    http.delete(path, rbacHandler),
-  ]),
+  ...rbacHandlersFor(state),
 ]

@@ -66,6 +66,11 @@ export const EventEditor = ({
 
   const isNew = !event || event.id.startsWith('new')
 
+  // "Edit event" is an imperative addressed to the person in control. A viewer
+  // is not one — the panel is a rendering of the event, so it says so
+  // (ADR 0015, rule 5).
+  const overline = !canEdit ? 'Event' : isNew ? 'New event' : 'Edit event'
+
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
@@ -73,8 +78,11 @@ export const EventEditor = ({
         className="w-full gap-0 p-0 sm:w-[820px] sm:max-w-[820px]"
       >
         <SheetHeader className="border-b border-[color:var(--border-subtle)]">
-          <SheetDescription className="text-[11px] font-semibold tracking-[0.14em] uppercase">
-            {isNew ? 'New event' : 'Edit event'}
+          <SheetDescription
+            data-testid="event-editor-overline"
+            className="text-[11px] font-semibold tracking-[0.14em] uppercase"
+          >
+            {overline}
           </SheetDescription>
           <SheetTitle className="truncate text-[20px]">
             {draft?.name || 'Untitled event'}
@@ -92,16 +100,33 @@ export const EventEditor = ({
                 ))}
               </TabsList>
               <TabsContent value="basics">
-                <BasicsSection event={draft} onChange={setDraft} />
+                <BasicsSection
+                  event={draft}
+                  canEdit={canEdit}
+                  onChange={setDraft}
+                />
               </TabsContent>
               <TabsContent value="eligibility">
-                <EligibilitySection event={draft} onChange={setDraft} />
+                <EligibilitySection
+                  event={draft}
+                  canEdit={canEdit}
+                  onChange={setDraft}
+                />
               </TabsContent>
               <TabsContent value="match">
-                <MatchSection event={draft} onChange={setDraft} />
+                <MatchSection
+                  event={draft}
+                  canEdit={canEdit}
+                  onChange={setDraft}
+                />
               </TabsContent>
               <TabsContent value="pools">
-                <PoolsSection event={draft} tables={tables} onChange={setDraft} />
+                <PoolsSection
+                  event={draft}
+                  tables={tables}
+                  canEdit={canEdit}
+                  onChange={setDraft}
+                />
               </TabsContent>
             </Tabs>
           </div>

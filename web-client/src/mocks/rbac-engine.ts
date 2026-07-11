@@ -69,6 +69,25 @@ function invalidPermissionName(name: string | undefined): DispatchResult | null 
   return null
 }
 
+/**
+ * Mirrors, byte-for-byte, the 400 details `delete_role` / `update_role` answer
+ * with (api/app/rbac.py, ADR-0016). The two messages diverge in their tail —
+ * delete offers the permissions as the alternative ("instead"), rename offers
+ * the permissions *and* the description — so they're spelled out per verb
+ * rather than share a template that has to reconstruct the difference.
+ */
+function defaultRoleRefusal(name: string, verb: 'deleted' | 'renamed'): string {
+  const held = `The "${name}" role is held by everyone on the platform and cannot be`
+  return verb === 'deleted'
+    ? `${held} deleted. You can change the permissions it grants instead.`
+    : `${held} renamed. You can change the permissions it grants and its description.`
+}
+
+/** The role every user holds. Absent from a seed that deliberately has none. */
+function defaultRole(state: RbacState): Role | undefined {
+  return [...state.roles.values()].find((r) => r.is_default)
+}
+
 const sortedPermissions = (s: RbacState) =>
   [...s.permissions.values()].sort((a, b) => a.name.localeCompare(b.name))
 const sortedRoles = (s: RbacState) =>
@@ -163,6 +182,13 @@ export function dispatchRbac(
     if (!existing) return { status: 404, body: { detail: 'role not found' } }
     if (method === 'GET') return { status: 200, body: existing }
     if (method === 'PATCH') {
+      // Mirrors the API's default-role guard (api/app/rbac.py, ADR-0016): only a
+      // *change* of name is refused. The edit modal always PATCHes `name`
+      // alongside `description`, so a no-op name must still go through —
+      // description and permissions stay freely editable on the default role.
+      if (existing.is_default && body.name !== undefined && body.name !== existing.name) {
+        return { status: 400, body: { detail: defaultRoleRefusal(existing.name, 'renamed') } }
+      }
       if (
         body.name &&
         [...state.roles.values()].some((r) => r.id !== id && r.name === body.name)
@@ -179,6 +205,12 @@ export function dispatchRbac(
       return { status: 200, body: updated }
     }
     if (method === 'DELETE') {
+      // The API refuses this outright — deleting the default role would cascade
+      // the grant away from every user. The UI disables the button; this is the
+      // backstop that keeps the mock honest about what the server would answer.
+      if (existing.is_default) {
+        return { status: 400, body: { detail: defaultRoleRefusal(existing.name, 'deleted') } }
+      }
       state.roles.delete(id)
       for (const u of state.users.values()) {
         u.role_ids = u.role_ids.filter((rid) => rid !== id)
@@ -195,7 +227,16 @@ export function dispatchRbac(
     if ([...state.users.values()].some((u) => u.username === body.username)) {
       return { status: 409, body: { detail: 'username already exists' } }
     }
-    const u = makeUser({ username: body.username! })
+    // A user minted through the admin door is still a user, so it holds the
+    // default role from birth like every other (ADR-0016) — the API's
+    // `create_user` grants it and answers with it in `role_ids`. A seed with no
+    // default role is a legal universe for a test to construct, and mints a
+    // role-less user; only the *server* treats a missing role row as fatal.
+    const granted = defaultRole(state)
+    const u = makeUser({
+      username: body.username!,
+      role_ids: granted ? [granted.id] : [],
+    })
     state.users.set(u.id, u)
     return { status: 201, body: u }
   }
@@ -215,7 +256,14 @@ export function dispatchRbac(
     const id = m[1]
     const existing = state.users.get(id)
     if (!existing) return { status: 404, body: { detail: 'user not found' } }
-    existing.role_ids = [...(body.role_ids ?? [])]
+    const next = [...(body.role_ids ?? [])]
+    // The API always retains the default role on this full-replace endpoint
+    // (ADR-0016): whatever set of ids it's handed, the role every account holds
+    // survives. The editor disables that checkbox, but this backstop keeps the
+    // mock honest — a test can't strip the role here when the server won't.
+    const dflt = defaultRole(state)
+    if (dflt && !next.includes(dflt.id)) next.push(dflt.id)
+    existing.role_ids = next
     return { status: 200, body: existing }
   }
 

@@ -3,7 +3,8 @@
 // dodge timezone drift), derived date ranges, predicate labels, and table
 // double-booking detection.
 
-import { PRED_FIELDS } from './options'
+import { labelFor, PRED_FIELDS, PRED_OPS_BY_TYPE } from './options'
+import type { PredicateFieldSchema } from './options'
 import type {
   Entrant,
   Predicate,
@@ -30,6 +31,11 @@ export function myEntrant(
   return event.entrants.find((e) => e.username === username)
 }
 
+/** U+2014. "Unset renders as an em-dash" is a single contract (ADR 0015, rule
+ * 3) — absent and not-applicable must stay distinguishable — so it gets a single
+ * definition, shared by the formatters here and by `ReadOnlyValue`. */
+export const EM_DASH = '—'
+
 /** Parse a date-only `YYYY-MM-DD` string into a local-midnight Date. */
 function parseDateOnly(iso: string): Date {
   const [y, m, d] = iso.split('-').map(Number)
@@ -37,7 +43,7 @@ function parseDateOnly(iso: string): Date {
 }
 
 export function fmtDate(iso: string | null | undefined): string {
-  if (!iso) return '—'
+  if (!iso) return EM_DASH
   return parseDateOnly(iso).toLocaleDateString('en-US', {
     month: 'short',
     day: 'numeric',
@@ -46,11 +52,31 @@ export function fmtDate(iso: string | null | undefined): string {
 }
 
 export function fmtDateShort(iso: string | null | undefined): string {
-  if (!iso) return '—'
+  if (!iso) return EM_DASH
   return parseDateOnly(iso).toLocaleDateString('en-US', {
     month: 'short',
     day: 'numeric',
   })
+}
+
+/** An `HH:MM–HH:MM` time window, tolerant of a half-set (or wholly unset) slot.
+ *
+ * The naive `` `${start}–${end}` `` template renders a *hole* when a bound is
+ * missing — "09:00–" — which is punctuation pretending to be data. An unset
+ * value reads as the em-dash, one contract with the rest of this module (ADR
+ * 0015, rule 3). One bound alone is real information, so it is shown alone.
+ *
+ * Note the two dashes are different characters and are not interchangeable: the
+ * separator between two times is an **en** dash (`–`, U+2013); `EM_DASH` (`—`,
+ * U+2014) is the marker for "no value at all". */
+export function fmtTimeWindow(
+  start: string | null | undefined,
+  end: string | null | undefined,
+): string {
+  if (start && end) return `${start}–${end}`
+  if (start) return start
+  if (end) return end
+  return EM_DASH
 }
 
 /** A compact, human range: collapses same-day, same-month, and full spans. */
@@ -58,7 +84,7 @@ export function fmtDateRange(
   a: string | null | undefined,
   b: string | null | undefined,
 ): string {
-  if (!a || !b) return '—'
+  if (!a || !b) return EM_DASH
   if (a === b) return fmtDate(a)
   const [ay, am] = a.split('-').map(Number)
   const [by, bm] = b.split('-').map(Number)
@@ -93,10 +119,27 @@ export function effectiveDateRange(t: Tournament): {
   return { start: dates[0], end: dates[dates.length - 1] }
 }
 
-/** A human-readable summary of one eligibility predicate, e.g. `Age < 18`. */
+/** An enum predicate's value, as the option label the editor's own picker shows
+ * ("Female"), never the key it is stored under ("F"). Shared by both predicate
+ * formatters below — the one lookup they genuinely have in common. */
+const enumValueLabel = (schema: PredicateFieldSchema, p: Predicate): string =>
+  // An unfinished enum rule (`value: null`) is unset, so it reads as the em-dash
+  // both voices use — never `String(null)`, which rendered the literal "null" on
+  // the event card.
+  p.value == null
+    ? EM_DASH
+    : labelFor(schema.options ?? [], String(p.value), String(p.value))
+
+/** A **compact** summary of one eligibility predicate, e.g. `Age < 18` — the
+ * chip form, sized for an event card's badge row.
+ *
+ * Deliberately *not* the same output as `predicateSentence` below: a chip wants
+ * `USATT rating in [1200–2400]`, a panel wants the prose the rule already reads
+ * as. Two voices, one vocabulary — both compose their labels out of `options.ts`
+ * (`labelFor`) and both render an unset value as the same em-dash. */
 export function formatPredicate(p: Predicate): string {
   const f = PRED_FIELDS[p.field]
-  if (!f) return '—'
+  if (!f) return EM_DASH
   if (f.type === 'number') {
     const v = p.value
     const ops: Record<string, string> = {
@@ -113,14 +156,57 @@ export function formatPredicate(p: Predicate): string {
     if (ops[p.op]) return `${f.label} ${ops[p.op]} ${v ?? '?'}`
   }
   if (f.type === 'enum') {
-    const label =
-      f.options?.find((o) => o.value === p.value)?.label ?? String(p.value)
-    return `${f.label} ${p.op === 'is' ? '=' : '≠'} ${label}`
+    return `${f.label} ${p.op === 'is' ? '=' : '≠'} ${enumValueLabel(f, p)}`
   }
   if (f.type === 'bool') {
     return p.op === 'true' ? `Must be ${f.label}` : `Must not be ${f.label}`
   }
-  return '—'
+  return EM_DASH
+}
+
+/** The bool field's value, as prose. It reads as the tail of its operator
+ * ("must be" + "a club member"), which is why the editor's value cell shows it
+ * verbatim rather than as a control — and why `predicateSentence` can borrow it
+ * instead of inventing copy. */
+export const BOOL_PREDICATE_VALUE = 'a club member'
+
+const num = (n: number | null | undefined): string =>
+  n === null || n === undefined ? EM_DASH : String(n)
+
+/** The value half of the sentence, in the same words the editor's value control
+ * shows. */
+function valueText(schema: PredicateFieldSchema, p: Predicate): string {
+  if (schema.type === 'enum') {
+    return p.value == null ? EM_DASH : enumValueLabel(schema, p)
+  }
+  if (p.op === 'between') {
+    const [lo, hi] = Array.isArray(p.value) ? p.value : [null, null]
+    return `${num(lo)} and ${num(hi)}`
+  }
+  return num(typeof p.value === 'number' ? p.value : null)
+}
+
+/** The rule as one **sentence**: `[field] [operator] [value]` was always a
+ * sentence chopped into a grid, so read-only it is simply put back together —
+ * "USATT rating is between 1200 and 1500" (ADR 0015, rule 4). Every word comes
+ * from the labels the editor's own three controls display, so there is no second
+ * vocabulary to keep in step.
+ *
+ * The bool field is the exception: it is the *object* of its operator, so the
+ * literal three-cell join would read "Club member must be a club member". It
+ * keeps the operator and the prose value only — "Must be a club member".
+ *
+ * Lives here, beside `formatPredicate`, so that adding a predicate field or
+ * operator is a one-file change rather than a hunt through a component. */
+export function predicateSentence(p: Predicate): string {
+  const schema = PRED_FIELDS[p.field]
+  if (!schema) return EM_DASH
+
+  const op = labelFor(PRED_OPS_BY_TYPE[schema.type], p.op, p.op)
+  if (schema.type === 'bool') {
+    return `${op.charAt(0).toUpperCase()}${op.slice(1)} ${BOOL_PREDICATE_VALUE}`
+  }
+  return `${schema.label} ${op} ${valueText(schema, p)}`
 }
 
 export interface PoolConflict {

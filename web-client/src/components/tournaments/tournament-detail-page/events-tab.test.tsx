@@ -4,7 +4,7 @@ import { HttpResponse } from 'msw'
 import { mockEventEnterEndpoint } from '@/mocks/endpoints/tournaments/tournaments.endpoint'
 import { buildTournamentEntrantRead } from '@/mocks/factories/tournaments/tournament.factory'
 import { server } from '@/mocks/server'
-import { waitFor } from '@/test/utilities'
+import { screen, waitFor } from '@/test/utilities'
 
 import {
   buildTournament,
@@ -111,6 +111,33 @@ describe('EventsTab', () => {
       // stretched open-overlay is only truly asserted in the browser (2e).
       expect(onOpenEvent).not.toHaveBeenCalled()
     })
+
+    // The seam this merge creates. ADR 0015 says a non-owner gets a *rendering,
+    // not controls* — and its guards assert zero interactive controls in the
+    // editor panels. Entering is not one of those controls: it is a PLAYER
+    // affordance gated on `tournament.enter`, not an OWNER one gated on
+    // `canEdit`, and self-registration is by definition something you do to
+    // someone else's tournament. So the non-owner who gets the read-only view
+    // must still get Enter. (`EnterEventControl` never reads `canEdit`; this
+    // pins that it never starts to.)
+    it('still offers Enter to a non-owner, who gets the read-only view', async () => {
+      eventsTabPage.render({
+        tournament: buildTournament({
+          events: [buildEvent({ name: 'Open Singles' })],
+        }),
+        canEdit: false,
+      })
+
+      expect(
+        await eventsTabPage.findEnterButton('Open Singles'),
+      ).toBeInTheDocument()
+      // The card opens a read-only view, not an editor — ADR 0015 still holds
+      // around the control.
+      expect(
+        eventsTabPage.getOpenButton('Open Singles', 'View'),
+      ).toBeInTheDocument()
+      expect(eventsTabPage.queryNewEventButtons()).toHaveLength(0)
+    })
   })
 
   // The tab is where the session is READ (one query, every card): the roster's
@@ -144,5 +171,24 @@ describe('EventsTab', () => {
     expect(
       eventsTabPage.queryTruncationTail('Open Singles'),
     ).toHaveTextContent('+45 more')
+  })
+
+  // Clicking a card opens the editor for the organizer and a read-only view for
+  // everyone else, so the subtitle promises what the click delivers (ADR 0015,
+  // rule 5). Asserted both ways: the discriminating word is the verb.
+  describe('the "click any event" subtitle', () => {
+    it('invites the creator to edit', () => {
+      eventsTabPage.render({ tournament: buildTournament() })
+      expect(screen.getByText(/Click any event to edit\./)).toBeInTheDocument()
+      expect(screen.queryByText(/Click any event for details\./)).toBeNull()
+    })
+
+    it('offers a non-creator details, not editing', () => {
+      eventsTabPage.render({ tournament: buildTournament(), canEdit: false })
+      expect(
+        screen.getByText(/Click any event for details\./),
+      ).toBeInTheDocument()
+      expect(screen.queryByText(/Click any event to edit\./)).toBeNull()
+    })
   })
 })

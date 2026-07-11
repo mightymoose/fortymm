@@ -36,6 +36,7 @@ from app.models import (
     UserRole,
     UserToken,
 )
+from app.roles import grant_default_role
 from app.sessions import SESSION_TOKEN_CONTEXT
 from tests._helpers import start_session
 
@@ -822,6 +823,82 @@ async def test_merge_role_held_by_both_does_not_collide(db_session: AsyncSession
         .all()
     )
     assert ephemeral_role_ids == []
+
+
+async def test_merge_collapses_the_default_role_both_sides_hold(
+    db_session: AsyncSession, default_role: Role
+):
+    """Every user now holds the default role (ADR-0016), so *every* merge is a
+    both-sides-hold-the-same-role merge — the case the NOT EXISTS guard exists
+    for. Granting through the production seam (``grant_default_role``) rather
+    than hand-adding rows is what makes this exercise the real thing.
+
+    The survivor must end up holding it exactly once: not twice (a PK collision,
+    or a duplicate row), and not zero times (a dropped grant)."""
+    ephemeral = await _make_ephemeral(db_session, "drifting-grouse")
+    verified = await _make_verified(db_session, "rita@example.com")
+
+    await grant_default_role(db_session, ephemeral.id)
+    await grant_default_role(db_session, verified.id)
+    await db_session.commit()
+
+    await merge_user(db_session, from_user_id=ephemeral.id, to_user_id=verified.id)
+    await db_session.commit()
+
+    survivor_role_ids = (
+        (
+            await db_session.execute(
+                select(UserRole.role_id).where(UserRole.user_id == verified.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert survivor_role_ids == [default_role.id]
+
+    ephemeral_role_ids = (
+        (
+            await db_session.execute(
+                select(UserRole.role_id).where(UserRole.user_id == ephemeral.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert ephemeral_role_ids == []
+
+
+async def test_merge_keeps_the_default_role_and_carries_an_extra_one(
+    db_session: AsyncSession, default_role: Role
+):
+    """The realistic shape now: both sides hold the default role and the guest
+    also holds something the survivor doesn't. The de-dupe must not swallow the
+    extra grant along with the duplicate one."""
+    ephemeral = await _make_ephemeral(db_session, "drifting-grouse")
+    verified = await _make_verified(db_session, "rita@example.com")
+
+    extra = Role(name="tournament-director")
+    db_session.add(extra)
+    await grant_default_role(db_session, ephemeral.id)
+    await grant_default_role(db_session, verified.id)
+    await db_session.flush()
+    db_session.add(UserRole(user_id=ephemeral.id, role_id=extra.id))
+    await db_session.commit()
+
+    await merge_user(db_session, from_user_id=ephemeral.id, to_user_id=verified.id)
+    await db_session.commit()
+
+    survivor_role_ids = (
+        (
+            await db_session.execute(
+                select(UserRole.role_id).where(UserRole.user_id == verified.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert set(survivor_role_ids) == {default_role.id, extra.id}
+    assert len(survivor_role_ids) == 2
 
 
 # ----- counts -------------------------------------------------------------

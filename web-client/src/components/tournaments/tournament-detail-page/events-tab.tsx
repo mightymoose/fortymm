@@ -37,7 +37,14 @@ export const EventsTab = ({
     <div>
       <SectionHeader
         title="Events"
-        subtitle="Singles, doubles, age- and rating-restricted brackets. Click any event to edit."
+        // A card opens the editor for the organizer and a read-only view for
+        // everyone else, so the invitation to click says what clicking will
+        // actually get you (ADR 0015, rule 5).
+        subtitle={
+          canEdit
+            ? 'Singles, doubles, age- and rating-restricted brackets. Click any event to edit.'
+            : 'Singles, doubles, age- and rating-restricted brackets. Click any event for details.'
+        }
         action={
           canEdit && (
             <Button onClick={onNewEvent}>

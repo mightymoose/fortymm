@@ -40,4 +40,30 @@ describe('EventEditor', () => {
     expect(eventEditorPage.queryDeleteButton()).toBeNull()
     expect(eventEditorPage.getDismissButton()).toHaveTextContent('Done')
   })
+
+  // The overline names what the panel *is*. "Edit event" is addressed to the
+  // person in control (ADR 0015, rule 5) — a viewer is being shown an event, not
+  // invited to edit one. Both sides are asserted, so the editor's own labels
+  // cannot be deleted to satisfy the viewer's.
+  describe('the header overline', () => {
+    it('says "Edit event" to the creator of an existing event', () => {
+      eventEditorPage.render({ event: buildEvent({ id: 'ev-1' }) })
+      expect(eventEditorPage.getOverline()).toHaveTextContent('Edit event')
+    })
+
+    it('says "New event" to the creator of a new one', () => {
+      eventEditorPage.render({ event: buildEvent({ id: 'new-123' }) })
+      expect(eventEditorPage.getOverline()).toHaveTextContent('New event')
+    })
+
+    it('says just "Event" to a non-creator', () => {
+      eventEditorPage.render({
+        event: buildEvent({ id: 'ev-1' }),
+        canEdit: false,
+      })
+      // Exact: "Edit event" would satisfy a substring match on "event".
+      expect(eventEditorPage.getOverline()).toHaveTextContent(/^Event$/)
+      expect(eventEditorPage.getOverline()).not.toHaveTextContent(/Edit/)
+    })
+  })
 })

@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.db import get_engine
 from app.models import Permission, Role, RolePermission
+from app.roles import converge_default_role
 
 PERMISSIONS = [
     ("administration.view", "Open the Administration area and see the overview."),
@@ -23,6 +24,9 @@ PERMISSIONS = [
     ("notifications.broadcast", "Send broadcast notifications to players."),
 ]
 
+# The default `User` role is *not* listed here: it carries no permissions and
+# every user holds it, so `app.roles.converge_default_role` owns both its row
+# and the grants. Roles below are opt-in bundles an admin assigns by hand.
 ROLES = [
     (
         "Administrator",
@@ -51,6 +55,10 @@ async def upsert_rbac(db: AsyncSession) -> SeedCounts:
 
     Idempotent: rows already present are left untouched, so a re-run inserts
     nothing and returns all-zero counts. Caller commits.
+
+    Scoped to the opt-in bundles in ``ROLES``. The default ``User`` role every
+    user holds is *not* one of them — ``seed()`` converges that separately, via
+    ``app.roles.converge_default_role``.
     """
     perms_by_name: dict[str, Permission] = {
         p.name: p
@@ -127,10 +135,13 @@ async def seed() -> None:
     sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
     async with sessionmaker() as db:
         counts = await upsert_rbac(db)
+        convergence = await converge_default_role(db)
         await db.commit()
         print(
             f"Seed complete: +{counts.permissions} permissions, "
-            f"+{counts.roles} roles, +{counts.links} role/permission links."
+            f"+{counts.roles + int(convergence.role_created)} roles, "
+            f"+{counts.links} role/permission links, "
+            f"+{convergence.grants_added} default-role grants."
         )
 
 

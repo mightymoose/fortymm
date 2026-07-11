@@ -31,6 +31,7 @@ from app.models import (
 )
 from app.rate_limiting import RedisRateLimiter
 from app.ratings.jobs import RECOMPUTE_AFTER_MERGE_JOB
+from app.roles import grant_default_role
 from app.schemas.session import (
     ConfirmEmailRequest,
     ConsumeLoginRequest,
@@ -470,6 +471,10 @@ async def _create_session(db: AsyncSession) -> tuple[User, str]:
     await db.flush()
 
     await add_user_to_default_league(db, user.id)
+    # Guest-mint is where "everyone" is decided: there is no signup, so this is
+    # the moment a person joins the site. Raises (→ 500) if the role is missing;
+    # see app/roles.py and ADR-0016.
+    await grant_default_role(db, user.id)
 
     raw_token = secrets.token_urlsafe(32)
     db.add(

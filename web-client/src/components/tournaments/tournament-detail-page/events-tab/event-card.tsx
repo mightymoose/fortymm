@@ -5,8 +5,8 @@ import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
 import { cn } from '@/lib/utils'
 
-import { fmtDateShort, formatPredicate } from '../../data/helpers'
-import { DRAW_TYPE_OPTIONS, FORMAT_OPTIONS } from '../../data/options'
+import { fmtDateShort, fmtTimeWindow, formatPredicate } from '../../data/helpers'
+import { DRAW_TYPE_OPTIONS, FORMAT_OPTIONS, labelFor } from '../../data/options'
 import type { TournamentEvent } from '../../data/types'
 import { EntrantsList } from './entrants-list'
 
@@ -50,10 +50,11 @@ export const EventCard = ({
     ? Math.min(100, Math.round((ev.entered / ev.maxPlayers) * 100))
     : 0
   const isFull = ev.entered >= ev.maxPlayers
-  const formatLabel =
-    FORMAT_OPTIONS.find((f) => f.value === ev.format)?.label ?? ev.format
-  const drawLabel =
-    DRAW_TYPE_OPTIONS.find((d) => d.value === ev.drawType)?.label ?? ev.drawType
+  // Falling back to the stored key, not to `null`: a card must never blank out a
+  // row, so an unknown key shows *something* (cf. the read-only `Field`s, which
+  // pass `null` and let the em-dash say "unset").
+  const formatLabel = labelFor(FORMAT_OPTIONS, ev.format, ev.format)
+  const drawLabel = labelFor(DRAW_TYPE_OPTIONS, ev.drawType, ev.drawType)
   const tableCount = new Set(ev.pools.flatMap((p) => p.tableIds)).size
   // The card opens the editor, which is read-only for a non-owner — so the
   // affordance reads "View" (not "Edit") when the viewer can't mutate.
@@ -103,7 +104,7 @@ export const EventCard = ({
               Time slot
             </div>
             <div className="mt-1 font-mono text-[13px] tabular-nums text-[color:var(--fg-1)]">
-              {fmtDateShort(ev.slot.date)} · {ev.slot.start}–{ev.slot.end}
+              {fmtDateShort(ev.slot.date)} · {fmtTimeWindow(ev.slot.start, ev.slot.end)}
             </div>
             <div className="mt-1.5 flex items-center gap-1.5 text-[11px] whitespace-nowrap text-[color:var(--fg-3)]">
               <Layers size={12} />
@@ -111,7 +112,9 @@ export const EventCard = ({
                 {ev.pools.length} {ev.pools.length === 1 ? 'pool' : 'pools'}
               </span>
               <span>·</span>
-              <span className="font-mono">{tableCount} tables</span>
+              <span className="font-mono">
+                {tableCount} {tableCount === 1 ? 'table' : 'tables'}
+              </span>
             </div>
           </div>
 

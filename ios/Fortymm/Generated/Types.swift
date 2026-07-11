@@ -4995,6 +4995,10 @@ internal enum Components {
             internal var updatedAt: Foundation.Date
             /// - Remark: Generated from `#/components/schemas/RoleRead/permission_ids`.
             internal var permissionIds: [Swift.String]
+            /// Whether this is the default role held by every user on the platform.
+            ///
+            /// - Remark: Generated from `#/components/schemas/RoleRead/is_default`.
+            internal var isDefault: Swift.Bool
             /// Creates a new `RoleRead`.
             ///
             /// - Parameters:
@@ -5004,13 +5008,15 @@ internal enum Components {
             ///   - createdAt:
             ///   - updatedAt:
             ///   - permissionIds:
+            ///   - isDefault: Whether this is the default role held by every user on the platform.
             internal init(
                 name: Swift.String,
                 description: Swift.String? = nil,
                 id: Swift.String,
                 createdAt: Foundation.Date,
                 updatedAt: Foundation.Date,
-                permissionIds: [Swift.String]
+                permissionIds: [Swift.String],
+                isDefault: Swift.Bool
             ) {
                 self.name = name
                 self.description = description
@@ -5018,6 +5024,7 @@ internal enum Components {
                 self.createdAt = createdAt
                 self.updatedAt = updatedAt
                 self.permissionIds = permissionIds
+                self.isDefault = isDefault
             }
             internal enum CodingKeys: String, CodingKey {
                 case name
@@ -5026,6 +5033,7 @@ internal enum Components {
                 case createdAt = "created_at"
                 case updatedAt = "updated_at"
                 case permissionIds = "permission_ids"
+                case isDefault = "is_default"
             }
         }
         /// - Remark: Generated from `#/components/schemas/RoleUpdate`.

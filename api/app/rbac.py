@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db import get_session
 from app.leagues import add_user_to_default_league
 from app.models import Permission, Role, RolePermission, User, UserRole
+from app.roles import DEFAULT_ROLE_NAME, get_default_role, grant_default_role
 from app.schemas.rbac import (
     PermissionCreate,
     PermissionRead,
@@ -346,6 +347,22 @@ async def update_role(
 
     data = payload.model_dump(exclude_unset=True)
 
+    if role.name == DEFAULT_ROLE_NAME and "name" in data and data["name"] != role.name:
+        # The default role's name is guest-mint's lookup key (`app.roles`), so
+        # renaming it would make `grant_default_role` raise and 500 every future
+        # visitor's `GET /v1/session` (ADR-0016). Only a *change* is refused: the
+        # admin UI PATCHes the whole role, so a no-op name alongside a
+        # permissions/description edit must still go through — those stay freely
+        # editable, which is the entire point of this role.
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f'The "{DEFAULT_ROLE_NAME}" role is held by everyone on the '
+                "platform and cannot be renamed. You can change the permissions "
+                "it grants and its description."
+            ),
+        )
+
     new_permission_ids: list[uuid.UUID] | None = None
     if "permission_ids" in data:
         # Explicit `null` means "no change"; explicit `[]` means "clear all".
@@ -396,6 +413,20 @@ async def delete_role(
     role_id: uuid.UUID, db: AsyncSession = Depends(get_session)
 ) -> Response:
     role = await _get_role_or_404(db, role_id)
+    if role.name == DEFAULT_ROLE_NAME:
+        # Defense in depth — the UI also disables this button. Without this
+        # guard, deleting the default role cascades through user_roles
+        # (ON DELETE CASCADE) and silently strips it from every user on the
+        # platform, irreversibly. Its permissions stay freely editable via
+        # PATCH — that is the entire point of the role (ADR-0016).
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f'The "{DEFAULT_ROLE_NAME}" role is held by everyone on the '
+                "platform and cannot be deleted. You can change the "
+                "permissions it grants instead."
+            ),
+        )
     await db.delete(role)
     await db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -426,6 +457,11 @@ async def create_user(
     try:
         await db.flush()
         await add_user_to_default_league(db, user.id)
+        # A user minted through the admin door is still a user (ADR-0016), so it
+        # holds the default role like every other. Raises (→ 500) if the role row
+        # is missing — deliberately not folded into the IntegrityError branch,
+        # which means "that username is taken", not "the seed never ran".
+        default_role = await grant_default_role(db, user.id)
         await db.commit()
     except IntegrityError:
         await db.rollback()
@@ -433,7 +469,7 @@ async def create_user(
             status_code=409, detail="Username already exists."
         ) from None
     await db.refresh(user)
-    return _serialize_user(user, [])
+    return _serialize_user(user, [default_role.id])
 
 
 @router.get("/users/{user_id}", response_model=RbacUserRead)
@@ -458,6 +494,21 @@ async def set_user_roles(
     if user is None:
         raise HTTPException(status_code=404, detail="User not found.")
     role_ids = await _validate_role_ids(db, payload.role_ids)
+    # This is a full replace for every *other* role, but the default `User` role
+    # is held by everyone on the platform (ADR-0016) — so it survives regardless
+    # of what the caller sent. Silently retain it rather than 4xx: the admin UI
+    # disables that checkbox, and a raw API caller simply shouldn't be able to
+    # strip it either. Excluding a user would quietly break the "everyone holds
+    # it" invariant and cut them out of any capability later hung off the role.
+    default_role = await get_default_role(db)
+    if default_role is None:
+        # A missing seed row is a broken deployment (→ 500), mirroring
+        # `grant_default_role` — soft-skipping would leave a role-less user.
+        raise RuntimeError(
+            f"No {DEFAULT_ROLE_NAME!r} role to retain. Run scripts/seed_rbac.py."
+        )
+    if default_role.id not in role_ids:
+        role_ids = [*role_ids, default_role.id]
     await db.execute(delete(UserRole).where(UserRole.user_id == user.id))
     for rid in role_ids:
         db.add(UserRole(user_id=user.id, role_id=rid))

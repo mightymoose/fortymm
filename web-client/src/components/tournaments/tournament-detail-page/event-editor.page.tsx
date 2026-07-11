@@ -7,6 +7,13 @@ const scoped = (container: Container) => ({
   getSectionTab(label: string) {
     return container.getByRole('tab', { name: label })
   },
+  /** The header overline above the event's name: "New event" / "Edit event" for
+   * the creator, plain "Event" for a viewer. Read by test-id rather than by text
+   * — "Event" is a substring of both editor labels *and* of the event names in
+   * the title beneath it, so a text query would match the wrong node. */
+  getOverline() {
+    return container.getByTestId('event-editor-overline')
+  },
   getSaveButton() {
     return container.getByRole('button', { name: /Create event|Save changes/ })
   },

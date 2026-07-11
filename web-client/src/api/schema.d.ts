@@ -2330,6 +2330,11 @@ export interface components {
             updated_at: string;
             /** Permission Ids */
             permission_ids: string[];
+            /**
+             * Is Default
+             * @description Whether this is the default role held by every user on the platform.
+             */
+            readonly is_default: boolean;
         };
         /** RoleUpdate */
         RoleUpdate: {
