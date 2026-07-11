@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db import get_session
 from app.main import app
 from app.models import Permission, Role, RolePermission, User, UserRole, UserToken
+from app.roles import DEFAULT_ROLE_NAME
 from app.sessions import (
     CSRF_COOKIE_NAME,
     CSRF_HEADER_NAME,
@@ -70,6 +71,49 @@ async def test_creates_session_when_no_cookie(
     ).scalar_one()
     assert token.user_id == user.id
     assert token.context == SESSION_TOKEN_CONTEXT
+
+
+async def test_minted_guest_holds_the_default_role_and_nothing_else(
+    api_client: AsyncClient, db_session: AsyncSession, default_role: Role
+):
+    """The whole point of ADR-0016: there is no signup, so the first-ever
+    ``GET /v1/session`` is the moment a person joins the site — and they leave it
+    holding the default role."""
+    response = await api_client.get("/v1/session")
+    assert response.status_code == 200
+    username = response.json()["data"]["user"]["username"]
+
+    user = (
+        await db_session.execute(select(User).where(User.username == username))
+    ).scalar_one()
+    role_ids = (
+        await db_session.execute(
+            select(UserRole.role_id).where(UserRole.user_id == user.id)
+        )
+    ).scalars()
+    assert list(role_ids) == [default_role.id]
+
+    # The role carries no permissions, so the session payload is unchanged —
+    # no client sees this.
+    assert response.json()["data"]["user"]["permissions"] == []
+
+
+async def test_session_mint_raises_when_the_default_role_is_missing(
+    api_client: AsyncClient, db_session: AsyncSession, default_role: Role
+):
+    """A missing seed row is a broken deployment. Guest-mint fails loudly (500)
+    rather than soft-skipping and minting a role-less user nobody notices until a
+    permission is hung off the role months later (ADR-0016)."""
+    await db_session.delete(default_role)
+    await db_session.commit()
+
+    with pytest.raises(RuntimeError, match=DEFAULT_ROLE_NAME):
+        await api_client.get("/v1/session")
+
+    # Nothing was committed, so no role-less user was left behind.
+    await db_session.rollback()
+    users = (await db_session.execute(select(User))).scalars().all()
+    assert users == []
 
 
 async def test_returns_existing_session_when_cookie_valid(

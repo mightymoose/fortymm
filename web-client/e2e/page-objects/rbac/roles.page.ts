@@ -25,9 +25,11 @@ export class RolesPage extends RbacPage {
   get emptyState(): Locator {
     return this.page.getByText('No roles yet')
   }
-  /** Role row in the left sidebar */
+  /** Role row in the left sidebar. Keyed by test id, not by text: every row
+   * carries a "N users" count, and `hasText` is a case-insensitive substring —
+   * so filtering for a role literally named `User` would match every row. */
   roleRow(name: string): Locator {
-    return this.page.locator('.rbac-row').filter({ hasText: name }).first()
+    return this.page.getByTestId(`role-row-${name}`)
   }
   /** Permission row in the editor (matches by perm name) */
   permRow(name: string): Locator {
@@ -52,6 +54,23 @@ export class RolesPage extends RbacPage {
   }
   get confirmDeleteButton(): Locator {
     return this.page.getByRole('button', { name: 'Delete role' })
+  }
+  /** The "Default" badge inside a role's sidebar row — absent on a normal role. */
+  roleRowBadge(name: string): Locator {
+    return this.page.getByTestId(`role-row-${name}`).getByText('Default', { exact: true })
+  }
+  /** The "Default" badge in the detail header of the selected role. */
+  get detailBadge(): Locator {
+    return this.page.getByTestId('role-detail').getByText('Default', { exact: true })
+  }
+  /** The span wrapping the Delete button — it carries the "why not" tooltip,
+   * since a disabled button is pointer-events-none and would never show one. */
+  get deleteTooltipHost(): Locator {
+    return this.page.getByTestId('delete-role-tooltip')
+  }
+  /** The checkbox that grants `permName` to the selected role. */
+  permToggle(permName: string): Locator {
+    return this.page.getByTestId(`perm-toggle-${permName}`)
   }
   get newRoleNameInput(): Locator {
     return this.page.getByPlaceholder(/Volunteer scorer/i)

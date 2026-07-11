@@ -17,13 +17,14 @@ import app.models  # noqa: F401  -- ensures models register on Base.metadata
 from app import queue as queue_module
 from app.db import Base, get_session
 from app.main import app as fastapi_app
-from app.models import League, LeagueVisibility, NotificationType, RatingStrategy
+from app.models import League, LeagueVisibility, NotificationType, RatingStrategy, Role
 from app.models import NotificationChannel as NotificationChannelModel
 from app.notifications.taxonomy import (
     CHANNEL_AVAILABLE,
     NotificationCategory,
 )
 from app.notifications.taxonomy import NotificationChannel as ChannelEnum
+from app.roles import DEFAULT_ROLE_DESCRIPTION, DEFAULT_ROLE_NAME
 from tests._helpers import CSRF_EVENT_HOOKS
 
 
@@ -281,6 +282,25 @@ async def default_league(
     db_session.add(league)
     await db_session.commit()
     return league
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def default_role(db_session: AsyncSession) -> Role:
+    """Seed the default `User` role every user holds (ADR-0016).
+
+    Autouse because both user-minting paths (`GET /v1/session` and
+    `POST /v1/users`) now grant it and **raise** when it's absent — a missing
+    role row is a broken deployment, not a soft-skip. `scripts/seed_rbac.py`
+    inserts it in real deployments; tests build via ``Base.metadata.create_all``
+    so we re-seed here, exactly as ``default_league`` does.
+
+    Tests that want the "role is missing" branch can ``await
+    db_session.delete(...)`` this row before triggering the path under test.
+    """
+    role = Role(name=DEFAULT_ROLE_NAME, description=DEFAULT_ROLE_DESCRIPTION)
+    db_session.add(role)
+    await db_session.commit()
+    return role
 
 
 @pytest_asyncio.fixture
