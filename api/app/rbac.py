@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db import get_session
 from app.leagues import add_user_to_default_league
 from app.models import Permission, Role, RolePermission, User, UserRole
-from app.roles import DEFAULT_ROLE_NAME, grant_default_role
+from app.roles import DEFAULT_ROLE_NAME, get_default_role, grant_default_role
 from app.schemas.rbac import (
     PermissionCreate,
     PermissionRead,
@@ -494,6 +494,21 @@ async def set_user_roles(
     if user is None:
         raise HTTPException(status_code=404, detail="User not found.")
     role_ids = await _validate_role_ids(db, payload.role_ids)
+    # This is a full replace for every *other* role, but the default `User` role
+    # is held by everyone on the platform (ADR-0016) — so it survives regardless
+    # of what the caller sent. Silently retain it rather than 4xx: the admin UI
+    # disables that checkbox, and a raw API caller simply shouldn't be able to
+    # strip it either. Excluding a user would quietly break the "everyone holds
+    # it" invariant and cut them out of any capability later hung off the role.
+    default_role = await get_default_role(db)
+    if default_role is None:
+        # A missing seed row is a broken deployment (→ 500), mirroring
+        # `grant_default_role` — soft-skipping would leave a role-less user.
+        raise RuntimeError(
+            f"No {DEFAULT_ROLE_NAME!r} role to retain. Run scripts/seed_rbac.py."
+        )
+    if default_role.id not in role_ids:
+        role_ids = [*role_ids, default_role.id]
     await db.execute(delete(UserRole).where(UserRole.user_id == user.id))
     for rid in role_ids:
         db.add(UserRole(user_id=user.id, role_id=rid))

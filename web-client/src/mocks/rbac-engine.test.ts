@@ -86,3 +86,42 @@ describe('dispatchRbac · default-role refusals', () => {
     expect(updated.permission_ids).toEqual(['p_tv'])
   })
 })
+
+describe('dispatchRbac · PUT /v1/users/{id}/roles retains the default role', () => {
+  // The UI disables the default-role checkbox, so the front end can never omit
+  // it. The only way a caller *could* strip it is by hand-crafting the PUT body
+  // — exactly what the real endpoint refuses (ADR-0016). This pins the mock to
+  // that backstop: it goes red the moment the engine lets the role be stripped.
+  it('re-adds the default role when the body omits it', () => {
+    const state = createRbacState(SEED)
+
+    const result = dispatchRbac(state, 'PUT', '/v1/users/u1/roles', { role_ids: ['r_admin'] })
+
+    expect(result?.status).toBe(200)
+    const updated = result?.body as RbacUser
+    expect(updated.role_ids).toContain('r_user')
+    expect(updated.role_ids).toContain('r_admin')
+    expect(state.users.get('u1')?.role_ids).toContain('r_user')
+  })
+
+  it('drops a non-default role while keeping the default one', () => {
+    const state = createRbacState(SEED)
+
+    const result = dispatchRbac(state, 'PUT', '/v1/users/u1/roles', { role_ids: [] })
+
+    expect(result?.status).toBe(200)
+    expect((result?.body as RbacUser).role_ids).toEqual(['r_user'])
+  })
+
+  it('does not invent a default role when the seed has none', () => {
+    const state = createRbacState({
+      roles: [{ id: 'r_admin', name: 'Admin' }],
+      users: [{ id: 'u1', username: 'alex', role_ids: ['r_admin'] }],
+    })
+
+    const result = dispatchRbac(state, 'PUT', '/v1/users/u1/roles', { role_ids: [] })
+
+    expect(result?.status).toBe(200)
+    expect((result?.body as RbacUser).role_ids).toEqual([])
+  })
+})

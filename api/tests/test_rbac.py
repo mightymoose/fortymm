@@ -4,7 +4,7 @@ from collections.abc import AsyncIterator
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_session
@@ -285,7 +285,7 @@ async def test_update_role_partial_keeps_permissions(api_client: AsyncClient):
 
 
 async def test_delete_role_cascades_user_assignments(
-    api_client: AsyncClient, db_session: AsyncSession
+    api_client: AsyncClient, db_session: AsyncSession, default_role: Role
 ):
     role = (await api_client.post("/v1/roles", json={"name": "doomed"})).json()
     user = (await api_client.post("/v1/users", json={"username": "alice"})).json()
@@ -296,8 +296,10 @@ async def test_delete_role_cascades_user_assignments(
     deleted = await api_client.delete(f"/v1/roles/{role['id']}")
     assert deleted.status_code == 204
 
+    # Deleting the doomed role cascades away its grant; the default `User` role
+    # the PUT retained (ADR-0016) is all that remains.
     remaining = (await db_session.execute(select(UserRole))).scalars().all()
-    assert remaining == []
+    assert [r.role_id for r in remaining] == [default_role.id]
 
 
 async def test_delete_default_role_is_refused(
@@ -480,7 +482,7 @@ async def test_create_user_rejects_duplicate(api_client: AsyncClient):
 
 
 async def test_set_user_roles_replaces_assignments(
-    api_client: AsyncClient, db_session: AsyncSession
+    api_client: AsyncClient, db_session: AsyncSession, default_role: Role
 ):
     user = (await api_client.post("/v1/users", json={"username": "alex"})).json()
     r1 = (await api_client.post("/v1/roles", json={"name": "one"})).json()
@@ -491,14 +493,20 @@ async def test_set_user_roles_replaces_assignments(
         json={"role_ids": [r1["id"], r2["id"]]},
     )
     assert response.status_code == 200
-    assert set(response.json()["role_ids"]) == {r1["id"], r2["id"]}
+    # r1 and r2 are set exactly; the default role is retained alongside them.
+    assert set(response.json()["role_ids"]) == {
+        r1["id"],
+        r2["id"],
+        str(default_role.id),
+    }
 
+    # r2 is genuinely removed — the default role is the only extra that survives.
     response = await api_client.put(
         f"/v1/users/{user['id']}/roles", json={"role_ids": [r1["id"]]}
     )
-    assert response.json()["role_ids"] == [r1["id"]]
+    assert set(response.json()["role_ids"]) == {r1["id"], str(default_role.id)}
     rows = (await db_session.execute(select(UserRole))).scalars().all()
-    assert len(rows) == 1
+    assert {r.role_id for r in rows} == {uuid.UUID(r1["id"]), default_role.id}
 
 
 async def test_set_user_roles_rejects_unknown_role(api_client: AsyncClient):
@@ -508,6 +516,94 @@ async def test_set_user_roles_rejects_unknown_role(api_client: AsyncClient):
         json={"role_ids": ["00000000-0000-0000-0000-000000000000"]},
     )
     assert response.status_code == 400
+
+
+async def test_set_user_roles_empty_body_retains_the_default_role(
+    api_client: AsyncClient, db_session: AsyncSession, default_role: Role
+):
+    """A full-replace PUT that omits the default role must not strip it: everyone
+    holds `User` (ADR-0016), and the endpoint is the backstop behind the disabled
+    UI checkbox. Silently retained, not a 4xx."""
+    user = (await api_client.post("/v1/users", json={"username": "alex"})).json()
+    other = (await api_client.post("/v1/roles", json={"name": "other"})).json()
+    await api_client.put(
+        f"/v1/users/{user['id']}/roles", json={"role_ids": [other["id"]]}
+    )
+
+    response = await api_client.put(
+        f"/v1/users/{user['id']}/roles", json={"role_ids": []}
+    )
+    assert response.status_code == 200
+    # The response reflects the retained role …
+    assert response.json()["role_ids"] == [str(default_role.id)]
+    # … and so does the database.
+    rows = (
+        (
+            await db_session.execute(
+                select(UserRole).where(UserRole.user_id == uuid.UUID(user["id"]))
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert [r.role_id for r in rows] == [default_role.id]
+
+
+async def test_set_user_roles_retains_default_alongside_a_partial_body(
+    api_client: AsyncClient, default_role: Role
+):
+    """A body naming only some non-default roles still leaves the user holding
+    `User` — and the other role is set exactly as asked."""
+    user = (await api_client.post("/v1/users", json={"username": "alex"})).json()
+    other = (await api_client.post("/v1/roles", json={"name": "other"})).json()
+
+    response = await api_client.put(
+        f"/v1/users/{user['id']}/roles", json={"role_ids": [other["id"]]}
+    )
+    assert response.status_code == 200
+    assert set(response.json()["role_ids"]) == {other["id"], str(default_role.id)}
+
+
+async def test_set_user_roles_does_not_duplicate_an_explicit_default_role(
+    api_client: AsyncClient, db_session: AsyncSession, default_role: Role
+):
+    """A caller that *does* include the default role gets one grant, not two."""
+    user = (await api_client.post("/v1/users", json={"username": "alex"})).json()
+
+    response = await api_client.put(
+        f"/v1/users/{user['id']}/roles",
+        json={"role_ids": [str(default_role.id)]},
+    )
+    assert response.status_code == 200
+    assert response.json()["role_ids"] == [str(default_role.id)]
+    rows = (
+        (
+            await db_session.execute(
+                select(UserRole).where(UserRole.user_id == uuid.UUID(user["id"]))
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert [r.role_id for r in rows] == [default_role.id]
+
+
+async def test_set_user_roles_raises_when_the_default_role_is_missing(
+    api_client: AsyncClient, db_session: AsyncSession, default_role: Role
+):
+    """A missing seed row is a broken deployment: the endpoint hard-fails (500)
+    rather than quietly producing a user without `User` (ADR-0016), mirroring
+    `grant_default_role` / admin user-mint."""
+    user = (await api_client.post("/v1/users", json={"username": "alex"})).json()
+    # Drop the grant then the role so the delete isn't blocked by the FK.
+    await db_session.execute(
+        delete(UserRole).where(UserRole.role_id == default_role.id)
+    )
+    await db_session.delete(default_role)
+    await db_session.commit()
+
+    with pytest.raises(RuntimeError, match=DEFAULT_ROLE_NAME):
+        await api_client.put(f"/v1/users/{user['id']}/roles", json={"role_ids": []})
 
 
 async def test_list_users_includes_role_ids(
@@ -655,7 +751,7 @@ async def test_list_roles_permission_ids_sorted_by_name(
 
 
 async def test_list_users_role_ids_sorted_by_role_name(
-    api_client: AsyncClient,
+    api_client: AsyncClient, default_role: Role
 ):
     rz = (await api_client.post("/v1/roles", json={"name": "zeta"})).json()
     ra = (await api_client.post("/v1/roles", json={"name": "alpha"})).json()
@@ -665,4 +761,7 @@ async def test_list_users_role_ids_sorted_by_role_name(
     )
     listing = (await api_client.get("/v1/users")).json()
     fetched = next(u for u in listing if u["id"] == user["id"])
-    assert fetched["role_ids"] == [ra["id"], rz["id"]]
+    # The user also holds the retained default role (ADR-0016); filter it out so
+    # this stays a test of the ORDER BY Role.name sort, not of collation.
+    non_default = [rid for rid in fetched["role_ids"] if rid != str(default_role.id)]
+    assert non_default == [ra["id"], rz["id"]]

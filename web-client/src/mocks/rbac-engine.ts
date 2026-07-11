@@ -256,7 +256,14 @@ export function dispatchRbac(
     const id = m[1]
     const existing = state.users.get(id)
     if (!existing) return { status: 404, body: { detail: 'user not found' } }
-    existing.role_ids = [...(body.role_ids ?? [])]
+    const next = [...(body.role_ids ?? [])]
+    // The API always retains the default role on this full-replace endpoint
+    // (ADR-0016): whatever set of ids it's handed, the role every account holds
+    // survives. The editor disables that checkbox, but this backstop keeps the
+    // mock honest — a test can't strip the role here when the server won't.
+    const dflt = defaultRole(state)
+    if (dflt && !next.includes(dflt.id)) next.push(dflt.id)
+    existing.role_ids = next
     return { status: 200, body: existing }
   }
 

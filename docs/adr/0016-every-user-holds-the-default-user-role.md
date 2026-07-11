@@ -95,6 +95,18 @@ deleting the last `authorization.manage` holder (themselves).
 
 Its **permissions** stay freely editable. That is the entire point of the role.
 
+### Per-user membership is protected too
+
+The delete/rename guards defend the role's *existence*, but the per-user role
+editor (`PUT /v1/users/{id}/roles`, a full replace) could still strip `User`
+from one account at a time — quietly breaking the "everyone holds it" invariant
+for that user, and silently excluding them from any capability later hung off the
+role. So the assignment endpoint **always retains the default role**: whatever set
+of role ids it is handed, the default role's membership survives. The admin Users
+editor disables that one checkbox up front (as the Roles page disables Delete),
+and the endpoint enforces it as the backstop. Every *other* role remains freely
+assignable and removable.
+
 To make the role legible rather than merely protected, the role read payload
 carries an `is_default` flag **derived from the name** — not stored. A boolean
 column would be a second source of truth for a fact the name already settles, and
