@@ -90,6 +90,7 @@ export const TournamentDetailPage = ({
 
   const canEdit = tournament.canEdit
   const range = effectiveDateRange(tournament)
+  const days = daysBetween(range.start, range.end)
   const entries = tournament.events.reduce((s, e) => s + (e.entered || 0), 0)
   const pools = tournament.events.reduce((s, e) => s + e.pools.length, 0)
 
@@ -188,8 +189,8 @@ export const TournamentDetailPage = ({
           <HeroStat label="Pools" value={pools} icon={<Layers size={16} />} />
           <HeroStat
             label="Days"
-            value={range.start ? daysBetween(range.start, range.end) : EM_DASH}
-            suffix={range.start ? 'days' : undefined}
+            value={range.start ? days : EM_DASH}
+            suffix={range.start ? (days === 1 ? 'day' : 'days') : undefined}
             icon={<Calendar size={16} />}
           />
         </div>
