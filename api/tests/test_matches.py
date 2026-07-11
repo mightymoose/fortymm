@@ -3258,6 +3258,37 @@ async def test_details_career_count_excludes_only_the_viewed_match(
     assert forms[str(opp.id)]["career_wins_before"] == 0
 
 
+async def test_details_career_counts_are_per_player(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """The batched career-count query must key each player's totals to that
+    player: two participants with *different non-zero* histories (2 prior
+    matches vs 1) must not collapse onto a single shared count."""
+    me = await start_session(api_client, db_session)
+    async with opponent_session(db_session, "per-player-opp") as (opp_client, opp):
+        # The opponent's only prior — a loss to me.
+        await _play_match_to_completion(
+            api_client, opp_client, opp.id, best_of=3, side_1_wins=True
+        )
+    async with opponent_session(db_session, "per-player-third") as (
+        third_client,
+        third,
+    ):
+        # A second prior for me only, against someone else.
+        await _play_match_to_completion(
+            api_client, third_client, third.id, best_of=3, side_1_wins=True
+        )
+
+    current = await _create_match(api_client, opp.id, best_of=3)
+    detail = (await api_client.get(f"/v1/matches/{current['id']}")).json()
+
+    forms = {f["user_id"]: f for f in detail["recent_form"]}
+    assert forms[str(me.id)]["career_matches_before"] == 2
+    assert forms[str(me.id)]["career_wins_before"] == 2
+    assert forms[str(opp.id)]["career_matches_before"] == 1
+    assert forms[str(opp.id)]["career_wins_before"] == 0
+
+
 async def test_list_matches_csv_export(
     api_client: AsyncClient, db_session: AsyncSession
 ):
