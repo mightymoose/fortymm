@@ -887,7 +887,6 @@ body.dark.fortymm-theme {
   gap: 2px;
 }
 .app-shell__nav-link {
-  position: relative;
   display: flex;
   align-items: center;
   gap: 12px;
@@ -921,17 +920,6 @@ body.dark.fortymm-theme {
 }
 .app-shell__nav-link.is-active .app-shell__nav-icon {
   color: var(--ball-400);
-}
-.app-shell__nav-link.is-active::before {
-  content: '';
-  position: absolute;
-  left: -3px;
-  top: 8px;
-  bottom: 8px;
-  width: 3px;
-  border-radius: 0 2px 2px 0;
-  background: var(--ball-500);
-  box-shadow: 0 0 8px rgba(255, 122, 26, 0.6);
 }
 
 .app-shell__nav-link.is-parent-active .app-shell__nav-icon {
