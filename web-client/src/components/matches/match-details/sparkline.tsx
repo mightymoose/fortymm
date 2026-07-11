@@ -1,3 +1,5 @@
+import { sparklineGeometry } from "@/lib/sparkline";
+
 export interface SparklineProps {
   data: number[];
   w?: number;
@@ -13,25 +15,11 @@ export const Sparkline = ({
   h = 36,
   downColor = "var(--fg-3)",
 }: SparklineProps) => {
-  const min = Math.min(...data);
-  const max = Math.max(...data);
-  const range = max - min || 1;
-  const pad = 2;
-  const points = data.map((v, i) => {
-    const x = pad + (i / (data.length - 1)) * (w - pad * 2);
-    const y = h - pad - ((v - min) / range) * (h - pad * 2);
-    return [x, y] as const;
-  });
-  const path = points
-    .map(
-      (p, i) => `${i === 0 ? "M" : "L"}${p[0].toFixed(1)} ${p[1].toFixed(1)}`,
-    )
-    .join(" ");
+  const { path, last } = sparklineGeometry(data, w, h);
   // The last point's trend picks the colour so a falling rating reads as a
   // loss tone even before the user squints at the y-axis.
   const trendUp = data[data.length - 1] >= data[0];
   const color = trendUp ? "var(--serve-500)" : downColor;
-  const last = points[points.length - 1];
   return (
     <svg
       width={w}

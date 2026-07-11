@@ -47,7 +47,11 @@ describe("MeetingRow", () => {
 
   it("tints the left side's score when the left side won", async () => {
     meetingRowPage.render({
-      meeting: buildHeadToHeadMeetingView({ leftWon: true }),
+      meeting: buildHeadToHeadMeetingView({
+        leftGamesWon: 3,
+        rightGamesWon: 1,
+        leftWon: true,
+      }),
     });
 
     await meetingRowPage.findRow();
@@ -55,11 +59,20 @@ describe("MeetingRow", () => {
     expect(meetingRowPage.getRightScore()).not.toHaveClass(
       "md-h2h__score-side--win",
     );
+    // Anchor each side's identity to the count it displays: the class
+    // assertions above would still pass if the `--l`/`--r` classes and the win
+    // conditions were swapped together, which tints the wrong number.
+    expect(meetingRowPage.getLeftScore()).toHaveTextContent(/^3$/);
+    expect(meetingRowPage.getRightScore()).toHaveTextContent(/^1$/);
   });
 
   it("tints the right side's score when the right side won", async () => {
     meetingRowPage.render({
-      meeting: buildHeadToHeadMeetingView({ leftWon: false }),
+      meeting: buildHeadToHeadMeetingView({
+        leftGamesWon: 1,
+        rightGamesWon: 3,
+        leftWon: false,
+      }),
     });
 
     await meetingRowPage.findRow();
@@ -69,6 +82,8 @@ describe("MeetingRow", () => {
     expect(meetingRowPage.getLeftScore()).not.toHaveClass(
       "md-h2h__score-side--win",
     );
+    expect(meetingRowPage.getLeftScore()).toHaveTextContent(/^1$/);
+    expect(meetingRowPage.getRightScore()).toHaveTextContent(/^3$/);
   });
 
   it("tints neither side and shows a No result tag when no winner was recorded", async () => {

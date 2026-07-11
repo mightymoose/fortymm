@@ -30,7 +30,7 @@ export const MeetingRow = ({ meeting }: MeetingRowProps) => (
     <span className="md-h2h__score">
       <span
         className={cn(
-          "md-h2h__score-side",
+          "md-h2h__score-side md-h2h__score-side--l",
           meeting.leftWon === true && "md-h2h__score-side--win",
         )}
       >
@@ -39,7 +39,7 @@ export const MeetingRow = ({ meeting }: MeetingRowProps) => (
       <span className="md-h2h__score-sep">–</span>
       <span
         className={cn(
-          "md-h2h__score-side",
+          "md-h2h__score-side md-h2h__score-side--r",
           meeting.leftWon === false && "md-h2h__score-side--win",
         )}
       >
