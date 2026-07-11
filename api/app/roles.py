@@ -1,13 +1,15 @@
-"""The default role every user holds.
+"""Persisting the default role every user holds.
 
 `User` is a lever, not a capability: it ships with zero permissions so that
 granting something to the entire population later is one row in the admin UI
 (add the permission to this role) rather than a migration or a code change.
 See `docs/adr/0016-every-user-holds-the-default-user-role.md`.
 
-The name is load-bearing — guest-mint looks the role up by it, and the
-delete/rename guard defends it — so it lives here, in one constant, rather than
-in the seed script.
+The name itself is load-bearing — guest-mint looks the role up by it, and the
+delete/rename guard defends it — so it lives in exactly one constant, in
+``app.domain.roles``, which the Pydantic schema layer can read without pulling
+the ORM in behind it. Re-exported here so callers already holding the
+persistence module keep one import.
 """
 
 import uuid
@@ -17,13 +19,21 @@ from sqlalchemy import literal, select
 from sqlalchemy.dialects.postgresql import UUID, insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domain.roles import DEFAULT_ROLE_DESCRIPTION, DEFAULT_ROLE_NAME
 from app.models import Role, User, UserRole
 
-DEFAULT_ROLE_NAME = "User"
-DEFAULT_ROLE_DESCRIPTION = (
-    "Held by every user. Carries no permissions by default — add one here to "
-    "grant it to the whole population, including anonymous visitors."
-)
+# Required, not decorative: `mypy --strict` implies `no_implicit_reexport`, so
+# `app.rbac`'s existing `from app.roles import DEFAULT_ROLE_NAME` is an
+# attr-defined error unless this module re-exports the two constants it now
+# imports from `app.domain.roles` rather than defining.
+__all__ = [
+    "DEFAULT_ROLE_DESCRIPTION",
+    "DEFAULT_ROLE_NAME",
+    "DefaultRoleConvergence",
+    "converge_default_role",
+    "get_default_role",
+    "grant_default_role",
+]
 
 
 class DefaultRoleConvergence(NamedTuple):
@@ -68,6 +78,12 @@ async def converge_default_role(db: AsyncSession) -> DefaultRoleConvergence:
     """Make two things true of `db`: the default role exists, and every user
     holds it.
 
+    "Every user" means every *live* user. Tombstones — the merged-away guests
+    ``app.account_merge.merge_user`` soft-deletes — are excluded: that merge ends
+    by deleting the guest's ``user_roles`` rows on purpose, so backfilling them
+    would resurrect the role on a ghost account on the very next seed run and put
+    it back in the admin Users list holding it.
+
     Idempotent — the role is located by name, and the backfill is a set-based
     `INSERT … SELECT … ON CONFLICT DO NOTHING`, so a second run adds no rows. It
     only ever *adds*: a user's other roles are left alone, and permissions an
@@ -89,7 +105,9 @@ async def converge_default_role(db: AsyncSession) -> DefaultRoleConvergence:
         insert(UserRole)
         .from_select(
             ["user_id", "role_id"],
-            select(User.id, literal(role_id, type_=UUID(as_uuid=True))),
+            select(User.id, literal(role_id, type_=UUID(as_uuid=True))).where(
+                User.merged_into_user_id.is_(None)
+            ),
         )
         .on_conflict_do_nothing()
         .returning(UserRole.user_id)

@@ -114,14 +114,14 @@ async def seed() -> None:
                 db.add(RolePermission(role_id=role.id, permission_id=perm.id))
                 added_links += 1
 
-        default_role = await converge_default_role(db)
+        default_role_created, default_grants_added = await converge_default_role(db)
 
         await db.commit()
         print(
             f"Seed complete: +{created_perms} permissions, "
-            f"+{created_roles + int(default_role.role_created)} roles, "
+            f"+{created_roles + int(default_role_created)} roles, "
             f"+{added_links} role/permission links, "
-            f"+{default_role.grants_added} default-role grants."
+            f"+{default_grants_added} default-role grants."
         )
 
 

@@ -3,7 +3,11 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field
 
-from app.roles import DEFAULT_ROLE_NAME
+# Read from the ORM-free domain module, never from `app.roles`: that one imports
+# `app.models`, so importing it here would drag the whole SQLAlchemy ORM into the
+# schema layer — the one layer that must stay importable from anywhere — for a
+# single string, and would become an import cycle the day a model imports a schema.
+from app.domain.roles import DEFAULT_ROLE_NAME
 
 # Permission names follow a `resource.action` convention (e.g. `tournament.publish`).
 # Allowed chars per segment: lowercase letters, digits, underscores. At least

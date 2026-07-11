@@ -69,12 +69,23 @@ function invalidPermissionName(name: string | undefined): DispatchResult | null 
   return null
 }
 
-/** Mirrors the 400 detail the API answers with (api/app/rbac.py, ADR-0016). */
+/**
+ * Mirrors, byte-for-byte, the 400 details `delete_role` / `update_role` answer
+ * with (api/app/rbac.py, ADR-0016). The two messages diverge in their tail —
+ * delete offers the permissions as the alternative ("instead"), rename offers
+ * the permissions *and* the description — so they're spelled out per verb
+ * rather than share a template that has to reconstruct the difference.
+ */
 function defaultRoleRefusal(name: string, verb: 'deleted' | 'renamed'): string {
-  return (
-    `The "${name}" role is held by everyone on the platform and cannot be ` +
-    `${verb}. You can change the permissions it grants${verb === 'renamed' ? ' and its description' : ''} instead.`
-  )
+  const held = `The "${name}" role is held by everyone on the platform and cannot be`
+  return verb === 'deleted'
+    ? `${held} deleted. You can change the permissions it grants instead.`
+    : `${held} renamed. You can change the permissions it grants and its description.`
+}
+
+/** The role every user holds. Absent from a seed that deliberately has none. */
+function defaultRole(state: RbacState): Role | undefined {
+  return [...state.roles.values()].find((r) => r.is_default)
 }
 
 const sortedPermissions = (s: RbacState) =>
@@ -216,7 +227,16 @@ export function dispatchRbac(
     if ([...state.users.values()].some((u) => u.username === body.username)) {
       return { status: 409, body: { detail: 'username already exists' } }
     }
-    const u = makeUser({ username: body.username! })
+    // A user minted through the admin door is still a user, so it holds the
+    // default role from birth like every other (ADR-0016) — the API's
+    // `create_user` grants it and answers with it in `role_ids`. A seed with no
+    // default role is a legal universe for a test to construct, and mints a
+    // role-less user; only the *server* treats a missing role row as fatal.
+    const granted = defaultRole(state)
+    const u = makeUser({
+      username: body.username!,
+      role_ids: granted ? [granted.id] : [],
+    })
     state.users.set(u.id, u)
     return { status: 201, body: u }
   }

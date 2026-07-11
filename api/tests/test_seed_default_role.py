@@ -6,6 +6,7 @@ against the test session — the same call the script makes.
 """
 
 import uuid
+from datetime import UTC, datetime
 
 import pytest_asyncio
 from sqlalchemy import func, select
@@ -142,6 +143,36 @@ async def test_users_minted_since_the_last_run_are_backfilled(
     assert default is not None
     assert await _role_ids_of(db_session, latecomer.id) == {default.id}
     assert await _count(db_session, UserRole) == 2
+
+
+async def test_a_merged_away_tombstone_is_not_re_granted_the_role(
+    db_session: AsyncSession,
+) -> None:
+    """A tombstone holds no roles on purpose — the seed must not resurrect them.
+
+    ``app.account_merge.merge_user`` re-points the guest's grants onto the
+    survivor and then deletes whatever ``user_roles`` rows are left, so a
+    merged-away guest deliberately ends up holding zero roles. Backfilling every
+    row in ``users`` would hand the default role straight back to that ghost on
+    the next seed run, undoing the cleanup and listing it in the admin Users page
+    as a holder.
+    """
+    survivor, ghost = await _make_users(db_session, "ada", "ada-guest")
+    # The post-merge shape: tombstoned (both merge columns set), zero user_roles.
+    ghost.merged_into_user_id = survivor.id
+    ghost.merged_at = datetime.now(UTC)
+    await db_session.commit()
+
+    outcome = await converge_default_role(db_session)
+    await db_session.commit()
+
+    default = await get_default_role(db_session)
+    assert default is not None
+    assert await _role_ids_of(db_session, ghost.id) == set()
+    # The live user still gets it; only the tombstone is skipped.
+    assert outcome.grants_added == 1
+    assert await _role_ids_of(db_session, survivor.id) == {default.id}
+    assert await _count(db_session, UserRole) == 1
 
 
 async def test_permissions_hung_off_the_role_survive_a_re_run(
