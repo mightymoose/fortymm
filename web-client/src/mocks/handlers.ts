@@ -297,7 +297,7 @@ function projectPlayerMatches(player: {
       const opponentId = onSide1
         ? (m.opponent?.id ?? null)
         : MOCK_CURRENT_PLAYER_ID
-      const sets = m.games
+      const games = m.games
         .filter((g): g is typeof g & { score: NonNullable<typeof g.score> } =>
           g.score !== null,
         )
@@ -306,23 +306,23 @@ function projectPlayerMatches(player: {
           theirs: onSide1 ? g.score.side_2_points : g.score.side_1_points,
         }))
       const target = Math.ceil(m.best_of / 2)
-      let s1 = 0
-      let s2 = 0
-      for (const s of sets) {
-        if (s.mine > s.theirs) s1 += 1
-        else if (s.theirs > s.mine) s2 += 1
+      let gamesWonByMe = 0
+      let gamesWonByThem = 0
+      for (const g of games) {
+        if (g.mine > g.theirs) gamesWonByMe += 1
+        else if (g.theirs > g.mine) gamesWonByThem += 1
       }
       let result: 'W' | 'L' | null = null
       if (m.status === 'completed') {
-        if (s1 >= target) result = 'W'
-        else if (s2 >= target) result = 'L'
+        if (gamesWonByMe >= target) result = 'W'
+        else if (gamesWonByThem >= target) result = 'L'
       }
       return {
         id: m.id,
         status: m.status,
         created_at: m.created_at,
         opponent: { id: opponentId, username: opponentUsername },
-        sets,
+        games,
         result,
         awaiting_acceptance: false,
       }

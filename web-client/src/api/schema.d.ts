@@ -581,8 +581,10 @@ export interface paths {
         };
         /**
          * Get Player
-         * @description Authed profile bundle for `/players/$userId` — hero + first page of
-         *     matches in one response.
+         * @description Authed profile bundle for `/players/$userId` — the overview in one
+         *     response: hero + the six most recent matches + the all-inclusive
+         *     `match_total` behind the "View all N matches" link. The full paginated
+         *     history is served by `/v1/players/{id}/matches`.
          */
         get: operations["get_player_v1_players__player_id__get"];
         put?: never;
@@ -602,11 +604,15 @@ export interface paths {
         };
         /**
          * List Player Matches
-         * @description Paginated per-player match history backing page 2+ of the authed
-         *     profile page (`/players/$userId`); page 1 ships inline in the
-         *     `/v1/players/{id}` bundle. Newest-first by ``created_at``. Sets are
-         *     projected from the player's perspective so the FE renders them without
-         *     flipping sides.
+         * @description Paginated per-player match history backing the full-history route
+         *     (`/players/$userId/matches`), 25 to a page. The profile overview embeds only
+         *     the six most recent inline (`GET /v1/players/{id}`) and links here for the
+         *     rest.
+         *
+         *     The history is all-inclusive (ADR-0008): every match the player is a side
+         *     of, any status, rated or not, solo "No opponent" matches included.
+         *     Newest-first by ``created_at``. Games are projected from the player's
+         *     perspective so the FE renders them without flipping sides.
          */
         get: operations["list_player_matches_v1_players__player_id__matches_get"];
         put?: never;
@@ -1949,14 +1955,14 @@ export interface components {
         };
         /**
          * PlayerDetail
-         * @description Profile-page bundle: the hero (`PlayerSummary` fields) plus the
-         *     first page of matches inline. Saves a round trip on initial load —
-         *     `GET /v1/players/{id}` returns this so the profile page paints with one
+         * @description Profile-page bundle: the hero (`PlayerSummary` fields) plus the player's
+         *     six most recent matches inline. Saves a round trip on initial load —
+         *     `GET /v1/players/{id}` returns this so the profile overview paints with one
          *     request.
          *
-         *     Pagination beyond page 1 still hits `GET /v1/players/{id}/matches`
-         *     directly; the FE seeds page 1's cache from this `matches` field via
-         *     TanStack Query's `initialData`.
+         *     The profile is an *overview*: it shows a Recent-matches card, not the whole
+         *     table. The full paginated history lives at its own route, backed by
+         *     `GET /v1/players/{id}/matches` (ADR-0915).
          */
         PlayerDetail: {
             /**
@@ -1986,6 +1992,8 @@ export interface components {
             /** Rank */
             rank?: number | null;
             matches: components["schemas"]["PlayerMatchListResponse"];
+            /** Match Total */
+            match_total: number;
         };
         /**
          * PlayerListResponse
@@ -2000,6 +2008,16 @@ export interface components {
             page_size: number;
             /** Total */
             total: number;
+        };
+        /**
+         * PlayerMatchGame
+         * @description A single game's score from the headline player's perspective.
+         */
+        PlayerMatchGame: {
+            /** Mine */
+            mine: number;
+            /** Theirs */
+            theirs: number;
         };
         /**
          * PlayerMatchListResponse
@@ -2046,8 +2064,8 @@ export interface components {
              */
             created_at: string;
             opponent: components["schemas"]["PlayerMatchOpponent"];
-            /** Sets */
-            sets: components["schemas"]["PlayerMatchSet"][];
+            /** Games */
+            games: components["schemas"]["PlayerMatchGame"][];
             /** Result */
             result?: ("W" | "L") | null;
             /**
@@ -2055,16 +2073,7 @@ export interface components {
              * @default false
              */
             awaiting_acceptance: boolean;
-        };
-        /**
-         * PlayerMatchSet
-         * @description A single game's score from the headline player's perspective.
-         */
-        PlayerMatchSet: {
-            /** Mine */
-            mine: number;
-            /** Theirs */
-            theirs: number;
+            rating_change?: components["schemas"]["RatingChange"] | null;
         };
         /**
          * PlayerRead

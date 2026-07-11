@@ -23,7 +23,7 @@ function matchRows(count: number, page: number, pageSize: number) {
     .map((_, i) => ({
       id: `m-${start + i}`,
       opponent: { id: `opp-${start + i}`, username: `opp.${start + i}` },
-      sets: [{ mine: 11, theirs: 7 }],
+      games: [{ mine: 11, theirs: 7 }],
       result: 'W' as const,
       status: 'completed' as const,
       created_at: '2026-06-01T12:00:00Z',
@@ -175,7 +175,7 @@ describe('player profile match-history pagination', () => {
       {
         id: 'm-awaiting',
         opponent: { id: 'opp-a', username: 'opp.awaiting' },
-        sets: [{ mine: 11, theirs: 9 }],
+        games: [{ mine: 11, theirs: 9 }],
         result: null,
         status: 'in_progress' as const,
         created_at: '2026-06-02T12:00:00Z',
@@ -184,7 +184,7 @@ describe('player profile match-history pagination', () => {
       {
         id: 'm-live',
         opponent: { id: 'opp-l', username: 'opp.live' },
-        sets: [],
+        games: [],
         result: null,
         status: 'in_progress' as const,
         created_at: '2026-06-01T12:00:00Z',
@@ -216,5 +216,81 @@ describe('player profile match-history pagination', () => {
     expect(screen.getByText('LIVE')).toBeInTheDocument()
     // The awaiting row must NOT be labelled LIVE.
     expect(screen.getAllByText('LIVE')).toHaveLength(1)
+  })
+})
+
+/** The per-game score chips a row renders, in order, from the player's own
+ * perspective (`mine` on top, `theirs` beneath). */
+function gameChips() {
+  return Array.from(
+    document.querySelectorAll('.player-profile__game'),
+  ).map((chip) => ({
+    mine: chip.querySelector('.player-profile__game-mine')?.textContent,
+    theirs: chip.querySelector('.player-profile__game-theirs')?.textContent,
+    won: chip.classList.contains('player-profile__game--won'),
+  }))
+}
+
+describe('player profile per-game score chips', () => {
+  it('renders one chip per game, scored from the player’s perspective', async () => {
+    // A 2–1 win: won the first, dropped the second, took the third. Distinct
+    // scores in every game, so a chip that rendered the wrong game (or the
+    // opponent's side of one) can't accidentally pass.
+    const rows = [
+      {
+        id: 'm-scored',
+        opponent: { id: 'opp-s', username: 'opp.scored' },
+        games: [
+          { mine: 11, theirs: 7 },
+          { mine: 8, theirs: 11 },
+          { mine: 12, theirs: 10 },
+        ],
+        result: 'W' as const,
+        status: 'completed' as const,
+        created_at: '2026-06-02T12:00:00Z',
+        awaiting_acceptance: false,
+      },
+      {
+        id: 'm-unscored',
+        opponent: { id: 'opp-u', username: 'opp.unscored' },
+        games: [],
+        result: null,
+        status: 'in_progress' as const,
+        created_at: '2026-06-01T12:00:00Z',
+        awaiting_acceptance: false,
+      },
+    ]
+    const bundle = { items: rows, page: 1, page_size: 25, total: rows.length }
+    server.use(
+      http.get('*/v1/session', () => HttpResponse.json(sessionResponse())),
+      http.get('*/v1/players/:playerId', () =>
+        HttpResponse.json({
+          id: 'p-1',
+          username: 'rallymaster',
+          rating: 1234,
+          wins: 20,
+          losses: 8,
+          matches: bundle,
+        }),
+      ),
+      http.get('*/v1/players/:playerId/matches', () =>
+        HttpResponse.json(bundle),
+      ),
+    )
+
+    renderProfile('/players/p-1')
+
+    expect(await screen.findByText('opp.scored')).toBeInTheDocument()
+
+    // Every game gets its own chip, in play order, with the real points — and
+    // the won/lost tint follows the game, not the match.
+    expect(gameChips()).toEqual([
+      { mine: '11', theirs: '7', won: true },
+      { mine: '8', theirs: '11', won: false },
+      { mine: '12', theirs: '10', won: true },
+    ])
+
+    // A match with no scored games shows an em dash rather than an empty cell.
+    expect(screen.getByText('—')).toBeInTheDocument()
   })
 })

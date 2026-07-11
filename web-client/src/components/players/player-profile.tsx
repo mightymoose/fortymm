@@ -372,26 +372,26 @@ function MatchRowComponent({
         </div>
       </td>
       <td>
-        {m.sets.length === 0 ? (
+        {m.games.length === 0 ? (
           <span style={{ color: 'var(--fg-3)', fontFamily: 'var(--font-mono)' }}>
             —
           </span>
         ) : (
-          <div className="player-profile__sets">
-            {m.sets.map((s, i) => {
-              const setWon = s.mine > s.theirs
+          <div className="player-profile__games">
+            {m.games.map((g, i) => {
+              const gameWon = g.mine > g.theirs
               return (
                 <div
                   key={i}
                   className={
-                    'player-profile__set ' +
-                    (setWon
-                      ? 'player-profile__set--won'
-                      : 'player-profile__set--lost')
+                    'player-profile__game ' +
+                    (gameWon
+                      ? 'player-profile__game--won'
+                      : 'player-profile__game--lost')
                   }
                 >
-                  <span className="player-profile__set-mine">{s.mine}</span>
-                  <span className="player-profile__set-theirs">{s.theirs}</span>
+                  <span className="player-profile__game-mine">{g.mine}</span>
+                  <span className="player-profile__game-theirs">{g.theirs}</span>
                 </div>
               )
             })}

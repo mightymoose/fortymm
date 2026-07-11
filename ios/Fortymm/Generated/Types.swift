@@ -313,19 +313,25 @@ internal protocol APIProtocol: Sendable {
     func listPlayersV1PlayersGet(_ input: Operations.ListPlayersV1PlayersGet.Input) async throws -> Operations.ListPlayersV1PlayersGet.Output
     /// Get Player
     ///
-    /// Authed profile bundle for `/players/$userId` — hero + first page of
-    /// matches in one response.
+    /// Authed profile bundle for `/players/$userId` — the overview in one
+    /// response: hero + the six most recent matches + the all-inclusive
+    /// `match_total` behind the "View all N matches" link. The full paginated
+    /// history is served by `/v1/players/{id}/matches`.
     ///
     /// - Remark: HTTP `GET /v1/players/{player_id}`.
     /// - Remark: Generated from `#/paths//v1/players/{player_id}/get(get_player_v1_players__player_id__get)`.
     func getPlayerV1PlayersPlayerIdGet(_ input: Operations.GetPlayerV1PlayersPlayerIdGet.Input) async throws -> Operations.GetPlayerV1PlayersPlayerIdGet.Output
     /// List Player Matches
     ///
-    /// Paginated per-player match history backing page 2+ of the authed
-    /// profile page (`/players/$userId`); page 1 ships inline in the
-    /// `/v1/players/{id}` bundle. Newest-first by ``created_at``. Sets are
-    /// projected from the player's perspective so the FE renders them without
-    /// flipping sides.
+    /// Paginated per-player match history backing the full-history route
+    /// (`/players/$userId/matches`), 25 to a page. The profile overview embeds only
+    /// the six most recent inline (`GET /v1/players/{id}`) and links here for the
+    /// rest.
+    ///
+    /// The history is all-inclusive (ADR-0008): every match the player is a side
+    /// of, any status, rated or not, solo "No opponent" matches included.
+    /// Newest-first by ``created_at``. Games are projected from the player's
+    /// perspective so the FE renders them without flipping sides.
     ///
     /// - Remark: HTTP `GET /v1/players/{player_id}/matches`.
     /// - Remark: Generated from `#/paths//v1/players/{player_id}/matches/get(list_player_matches_v1_players__player_id__matches_get)`.
@@ -1043,8 +1049,10 @@ extension APIProtocol {
     }
     /// Get Player
     ///
-    /// Authed profile bundle for `/players/$userId` — hero + first page of
-    /// matches in one response.
+    /// Authed profile bundle for `/players/$userId` — the overview in one
+    /// response: hero + the six most recent matches + the all-inclusive
+    /// `match_total` behind the "View all N matches" link. The full paginated
+    /// history is served by `/v1/players/{id}/matches`.
     ///
     /// - Remark: HTTP `GET /v1/players/{player_id}`.
     /// - Remark: Generated from `#/paths//v1/players/{player_id}/get(get_player_v1_players__player_id__get)`.
@@ -1061,11 +1069,15 @@ extension APIProtocol {
     }
     /// List Player Matches
     ///
-    /// Paginated per-player match history backing page 2+ of the authed
-    /// profile page (`/players/$userId`); page 1 ships inline in the
-    /// `/v1/players/{id}` bundle. Newest-first by ``created_at``. Sets are
-    /// projected from the player's perspective so the FE renders them without
-    /// flipping sides.
+    /// Paginated per-player match history backing the full-history route
+    /// (`/players/$userId/matches`), 25 to a page. The profile overview embeds only
+    /// the six most recent inline (`GET /v1/players/{id}`) and links here for the
+    /// rest.
+    ///
+    /// The history is all-inclusive (ADR-0008): every match the player is a side
+    /// of, any status, rated or not, solo "No opponent" matches included.
+    /// Newest-first by ``created_at``. Games are projected from the player's
+    /// perspective so the FE renders them without flipping sides.
     ///
     /// - Remark: HTTP `GET /v1/players/{player_id}/matches`.
     /// - Remark: Generated from `#/paths//v1/players/{player_id}/matches/get(list_player_matches_v1_players__player_id__matches_get)`.
@@ -4101,14 +4113,14 @@ internal enum Components {
                 case description
             }
         }
-        /// Profile-page bundle: the hero (`PlayerSummary` fields) plus the
-        /// first page of matches inline. Saves a round trip on initial load —
-        /// `GET /v1/players/{id}` returns this so the profile page paints with one
+        /// Profile-page bundle: the hero (`PlayerSummary` fields) plus the player's
+        /// six most recent matches inline. Saves a round trip on initial load —
+        /// `GET /v1/players/{id}` returns this so the profile overview paints with one
         /// request.
         ///
-        /// Pagination beyond page 1 still hits `GET /v1/players/{id}/matches`
-        /// directly; the FE seeds page 1's cache from this `matches` field via
-        /// TanStack Query's `initialData`.
+        /// The profile is an *overview*: it shows a Recent-matches card, not the whole
+        /// table. The full paginated history lives at its own route, backed by
+        /// `GET /v1/players/{id}/matches` (ADR-0915).
         ///
         /// - Remark: Generated from `#/components/schemas/PlayerDetail`.
         internal struct PlayerDetail: Codable, Hashable, Sendable {
@@ -4128,6 +4140,8 @@ internal enum Components {
             internal var rank: Swift.Int?
             /// - Remark: Generated from `#/components/schemas/PlayerDetail/matches`.
             internal var matches: Components.Schemas.PlayerMatchListResponse
+            /// - Remark: Generated from `#/components/schemas/PlayerDetail/match_total`.
+            internal var matchTotal: Swift.Int
             /// Creates a new `PlayerDetail`.
             ///
             /// - Parameters:
@@ -4139,6 +4153,7 @@ internal enum Components {
             ///   - form:
             ///   - rank:
             ///   - matches:
+            ///   - matchTotal:
             internal init(
                 id: Swift.String,
                 username: Swift.String,
@@ -4147,7 +4162,8 @@ internal enum Components {
                 losses: Swift.Int? = nil,
                 form: Swift.String? = nil,
                 rank: Swift.Int? = nil,
-                matches: Components.Schemas.PlayerMatchListResponse
+                matches: Components.Schemas.PlayerMatchListResponse,
+                matchTotal: Swift.Int
             ) {
                 self.id = id
                 self.username = username
@@ -4157,6 +4173,7 @@ internal enum Components {
                 self.form = form
                 self.rank = rank
                 self.matches = matches
+                self.matchTotal = matchTotal
             }
             internal enum CodingKeys: String, CodingKey {
                 case id
@@ -4167,6 +4184,7 @@ internal enum Components {
                 case form
                 case rank
                 case matches
+                case matchTotal = "match_total"
             }
         }
         /// Paginated `/v1/players` response backing the `/players` list page.
@@ -4204,6 +4222,31 @@ internal enum Components {
                 case page
                 case pageSize = "page_size"
                 case total
+            }
+        }
+        /// A single game's score from the headline player's perspective.
+        ///
+        /// - Remark: Generated from `#/components/schemas/PlayerMatchGame`.
+        internal struct PlayerMatchGame: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/PlayerMatchGame/mine`.
+            internal var mine: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/PlayerMatchGame/theirs`.
+            internal var theirs: Swift.Int
+            /// Creates a new `PlayerMatchGame`.
+            ///
+            /// - Parameters:
+            ///   - mine:
+            ///   - theirs:
+            internal init(
+                mine: Swift.Int,
+                theirs: Swift.Int
+            ) {
+                self.mine = mine
+                self.theirs = theirs
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case mine
+                case theirs
             }
         }
         /// Paginated per-player match list backing the profile page's match
@@ -4284,8 +4327,8 @@ internal enum Components {
             internal var createdAt: Foundation.Date
             /// - Remark: Generated from `#/components/schemas/PlayerMatchRow/opponent`.
             internal var opponent: Components.Schemas.PlayerMatchOpponent
-            /// - Remark: Generated from `#/components/schemas/PlayerMatchRow/sets`.
-            internal var sets: [Components.Schemas.PlayerMatchSet]
+            /// - Remark: Generated from `#/components/schemas/PlayerMatchRow/games`.
+            internal var games: [Components.Schemas.PlayerMatchGame]
             /// - Remark: Generated from `#/components/schemas/PlayerMatchRow/result`.
             internal enum ResultPayload: String, Codable, Hashable, Sendable, CaseIterable {
                 case w = "W"
@@ -4295,6 +4338,26 @@ internal enum Components {
             internal var result: Components.Schemas.PlayerMatchRow.ResultPayload?
             /// - Remark: Generated from `#/components/schemas/PlayerMatchRow/awaiting_acceptance`.
             internal var awaitingAcceptance: Swift.Bool?
+            /// - Remark: Generated from `#/components/schemas/PlayerMatchRow/rating_change`.
+            internal struct RatingChangePayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/PlayerMatchRow/rating_change/value1`.
+                internal var value1: Components.Schemas.RatingChange
+                /// Creates a new `RatingChangePayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                internal init(value1: Components.Schemas.RatingChange) {
+                    self.value1 = value1
+                }
+                internal init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                internal func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/PlayerMatchRow/rating_change`.
+            internal var ratingChange: Components.Schemas.PlayerMatchRow.RatingChangePayload?
             /// Creates a new `PlayerMatchRow`.
             ///
             /// - Parameters:
@@ -4302,59 +4365,38 @@ internal enum Components {
             ///   - status:
             ///   - createdAt:
             ///   - opponent:
-            ///   - sets:
+            ///   - games:
             ///   - result:
             ///   - awaitingAcceptance:
+            ///   - ratingChange:
             internal init(
                 id: Swift.String,
                 status: Components.Schemas.MatchStatus,
                 createdAt: Foundation.Date,
                 opponent: Components.Schemas.PlayerMatchOpponent,
-                sets: [Components.Schemas.PlayerMatchSet],
+                games: [Components.Schemas.PlayerMatchGame],
                 result: Components.Schemas.PlayerMatchRow.ResultPayload? = nil,
-                awaitingAcceptance: Swift.Bool? = nil
+                awaitingAcceptance: Swift.Bool? = nil,
+                ratingChange: Components.Schemas.PlayerMatchRow.RatingChangePayload? = nil
             ) {
                 self.id = id
                 self.status = status
                 self.createdAt = createdAt
                 self.opponent = opponent
-                self.sets = sets
+                self.games = games
                 self.result = result
                 self.awaitingAcceptance = awaitingAcceptance
+                self.ratingChange = ratingChange
             }
             internal enum CodingKeys: String, CodingKey {
                 case id
                 case status
                 case createdAt = "created_at"
                 case opponent
-                case sets
+                case games
                 case result
                 case awaitingAcceptance = "awaiting_acceptance"
-            }
-        }
-        /// A single game's score from the headline player's perspective.
-        ///
-        /// - Remark: Generated from `#/components/schemas/PlayerMatchSet`.
-        internal struct PlayerMatchSet: Codable, Hashable, Sendable {
-            /// - Remark: Generated from `#/components/schemas/PlayerMatchSet/mine`.
-            internal var mine: Swift.Int
-            /// - Remark: Generated from `#/components/schemas/PlayerMatchSet/theirs`.
-            internal var theirs: Swift.Int
-            /// Creates a new `PlayerMatchSet`.
-            ///
-            /// - Parameters:
-            ///   - mine:
-            ///   - theirs:
-            internal init(
-                mine: Swift.Int,
-                theirs: Swift.Int
-            ) {
-                self.mine = mine
-                self.theirs = theirs
-            }
-            internal enum CodingKeys: String, CodingKey {
-                case mine
-                case theirs
+                case ratingChange = "rating_change"
             }
         }
         /// A user the current player can pick as a match opponent.
@@ -12994,8 +13036,10 @@ internal enum Operations {
     }
     /// Get Player
     ///
-    /// Authed profile bundle for `/players/$userId` — hero + first page of
-    /// matches in one response.
+    /// Authed profile bundle for `/players/$userId` — the overview in one
+    /// response: hero + the six most recent matches + the all-inclusive
+    /// `match_total` behind the "View all N matches" link. The full paginated
+    /// history is served by `/v1/players/{id}/matches`.
     ///
     /// - Remark: HTTP `GET /v1/players/{player_id}`.
     /// - Remark: Generated from `#/paths//v1/players/{player_id}/get(get_player_v1_players__player_id__get)`.
@@ -13192,11 +13236,15 @@ internal enum Operations {
     }
     /// List Player Matches
     ///
-    /// Paginated per-player match history backing page 2+ of the authed
-    /// profile page (`/players/$userId`); page 1 ships inline in the
-    /// `/v1/players/{id}` bundle. Newest-first by ``created_at``. Sets are
-    /// projected from the player's perspective so the FE renders them without
-    /// flipping sides.
+    /// Paginated per-player match history backing the full-history route
+    /// (`/players/$userId/matches`), 25 to a page. The profile overview embeds only
+    /// the six most recent inline (`GET /v1/players/{id}`) and links here for the
+    /// rest.
+    ///
+    /// The history is all-inclusive (ADR-0008): every match the player is a side
+    /// of, any status, rated or not, solo "No opponent" matches included.
+    /// Newest-first by ``created_at``. Games are projected from the player's
+    /// perspective so the FE renders them without flipping sides.
     ///
     /// - Remark: HTTP `GET /v1/players/{player_id}/matches`.
     /// - Remark: Generated from `#/paths//v1/players/{player_id}/matches/get(list_player_matches_v1_players__player_id__matches_get)`.

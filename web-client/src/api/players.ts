@@ -111,7 +111,7 @@ export function usePlayerById(
 }
 
 /** Per-player paginated match list — pre-shaped from the player's
- * perspective so the FE doesn't have to flip set scores. Backs page 2+ of
+ * perspective so the FE doesn't have to flip game scores. Backs page 2+ of
  * the authed `/players/$userId` profile page, which already has the id by
  * the time it calls this.
  *

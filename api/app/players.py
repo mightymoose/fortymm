@@ -16,19 +16,21 @@ from app.models import (
     MatchSide,
     MatchSidePlayer,
     MatchStatus,
+    RatingHistory,
     User,
     UserLeagueRating,
 )
 from app.schemas.player import (
     PlayerDetail,
     PlayerListResponse,
+    PlayerMatchGame,
     PlayerMatchListResponse,
     PlayerMatchOpponent,
     PlayerMatchRow,
-    PlayerMatchSet,
     PlayerRead,
     PlayerSummary,
 )
+from app.schemas.rating import RatingChange
 from app.sessions import get_current_user
 
 router = APIRouter(prefix="/v1")
@@ -48,6 +50,12 @@ LIST_MAX_PAGE_SIZE = 100
 # How many recent W/L results to surface as the "form" string on
 # PlayerSummary. Matches the FE's FormDots component (5 chips).
 FORM_WINDOW = 5
+
+# How many matches the profile bundle embeds. The profile is an *overview*: it
+# renders a "Recent matches" card of the last six and links to the full
+# paginated history at its own route (ADR-0915), which is served by
+# `/v1/players/{id}/matches` — that endpoint keeps its 25-per-page default.
+PROFILE_RECENT_MATCHES = 6
 
 
 def _serialize(
@@ -418,15 +426,21 @@ async def _summarize_one_player(
 async def _player_detail(
     db: AsyncSession, user: User, league_id: uuid.UUID
 ) -> PlayerDetail:
-    """Body for `/v1/players/{id}` — bundles the hero summary with the first
-    page of matches so the profile page paints in one round trip. The FE
-    seeds the matches-query cache from the embedded ``matches`` field;
-    page 2+ falls through to `/v1/players/{id}/matches`."""
+    """Body for `/v1/players/{id}` — bundles the hero summary with the player's
+    six most recent matches so the profile overview paints in one round trip.
+
+    ``match_total`` is the *all-inclusive* history count that backs the "View
+    all N matches" link — the same population the embedded window is drawn from
+    (any status, rated or not, solo matches and matches in play included), so it
+    is exactly ``matches.total``. It is deliberately larger than the hero's
+    ``wins + losses`` whenever a match is undecided; see ADR-0915."""
     summary = await _summarize_one_player(db, user, league_id)
     matches = await _paginated_player_matches(
-        db, user.id, page=1, page_size=LIST_DEFAULT_PAGE_SIZE
+        db, user.id, page=1, page_size=PROFILE_RECENT_MATCHES
     )
-    return PlayerDetail(**summary.model_dump(), matches=matches)
+    return PlayerDetail(
+        **summary.model_dump(), matches=matches, match_total=matches.total
+    )
 
 
 @router.get("/players/{player_id}", response_model=PlayerDetail)
@@ -436,8 +450,10 @@ async def get_player(
     _current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_session),
 ) -> PlayerDetail:
-    """Authed profile bundle for `/players/$userId` — hero + first page of
-    matches in one response."""
+    """Authed profile bundle for `/players/$userId` — the overview in one
+    response: hero + the six most recent matches + the all-inclusive
+    `match_total` behind the "View all N matches" link. The full paginated
+    history is served by `/v1/players/{id}/matches`."""
     user = await _load_player_by_id(db, player_id)
     if user is None:
         raise HTTPException(
@@ -448,9 +464,9 @@ async def get_player(
 
 
 def _player_matches_eager() -> tuple[ExecutableOption, ...]:
-    """Eager-load sides + side players + per-game scores. Matches the
-    structure matches.py uses for its detail view but skips match_settings
-    + league/rating_strategy since the per-player row doesn't render those."""
+    """Eager-load sides + side players + per-game scores + settings. Matches
+    the structure matches.py uses for its detail view but skips
+    league/rating_strategy since the per-player row doesn't render those."""
     return (
         selectinload(Match.sides)
         .selectinload(MatchSide.players)
@@ -460,13 +476,57 @@ def _player_matches_eager() -> tuple[ExecutableOption, ...]:
         # ``in_progress`` match with a posted-but-unaccepted result carries
         # a standing ``MatchResult``.
         selectinload(Match.results),
+        # ``affects_rating`` gates the row's Δ column: an unrated match moved no
+        # rating, so it reports no rating change (not a zero one).
+        selectinload(Match.match_settings),
     )
 
 
-def _serialize_player_match(match: Match, player_id: uuid.UUID) -> PlayerMatchRow:
-    """Project a hydrated ``Match`` into the player's perspective: sets
+async def _load_match_rating_changes(
+    db: AsyncSession,
+    player_id: uuid.UUID,
+    match_ids: Iterable[uuid.UUID],
+) -> dict[uuid.UUID, RatingChange]:
+    """One round trip for the whole page: returns ``match_id -> RatingChange``
+    for this player's ``rating_history`` rows on the given matches — never one
+    query per row.
+
+    Only rated, completed matches have a history row (voiding deletes them), and
+    ``(match_id, user_id)`` is unique among non-null ``match_id`` rows, so a
+    match maps to at most one change for a player."""
+    ids = list(match_ids)
+    if not ids:
+        return {}
+    rows = (
+        (
+            await db.execute(
+                select(RatingHistory).where(
+                    RatingHistory.match_id.in_(ids),
+                    RatingHistory.user_id == player_id,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    changes: dict[uuid.UUID, RatingChange] = {}
+    for row in rows:
+        # IN-filtered to non-null match ids, so this narrowing is total.
+        if row.match_id is None:
+            continue
+        changes[row.match_id] = RatingChange.from_history(row)
+    return changes
+
+
+def _serialize_player_match(
+    match: Match,
+    player_id: uuid.UUID,
+    rating_change: RatingChange | None = None,
+) -> PlayerMatchRow:
+    """Project a hydrated ``Match`` into the player's perspective: games
     ordered + scored from the player's side, opponent flattened, result
-    derived from ``MatchSide.won``."""
+    derived from ``MatchSide.won``, and the rating the match moved for this
+    player (``None`` unless the match is both decided and rated)."""
     sides_sorted = sorted(match.sides, key=lambda s: s.side_number)
     mine = next(
         (s for s in sides_sorted if any(p.user_id == player_id for p in s.players)),
@@ -490,20 +550,20 @@ def _serialize_player_match(match: Match, player_id: uuid.UUID) -> PlayerMatchRo
     )
 
     games_sorted = sorted(match.games, key=lambda g: g.game_number)
-    sets: list[PlayerMatchSet] = []
+    games: list[PlayerMatchGame] = []
     for game in games_sorted:
         if game.score is None:
             continue
         if mine.side_number == 1:
-            sets.append(
-                PlayerMatchSet(
+            games.append(
+                PlayerMatchGame(
                     mine=game.score.side_1_points,
                     theirs=game.score.side_2_points,
                 )
             )
         else:
-            sets.append(
-                PlayerMatchSet(
+            games.append(
+                PlayerMatchGame(
                     mine=game.score.side_2_points,
                     theirs=game.score.side_1_points,
                 )
@@ -530,14 +590,22 @@ def _serialize_player_match(match: Match, player_id: uuid.UUID) -> PlayerMatchRo
         match.status == MatchStatus.in_progress and len(match.results) > 0
     )
 
+    # The Δ column. A match only moved a rating if it is DECIDED (``result`` is
+    # set — so pending / in progress / awaiting acceptance / voided rows are all
+    # out) *and* RATED. Anything else reports ``None``, which the FE renders as
+    # ``—``: a zero here would claim the match was rated and moved nothing.
+    decided_and_rated = result is not None and match.match_settings.affects_rating
+    moved = rating_change if decided_and_rated else None
+
     return PlayerMatchRow(
         id=match.id,
         status=match.status,
         created_at=match.created_at,
         opponent=opponent,
-        sets=sets,
+        games=games,
         result=result,
         awaiting_acceptance=awaiting_acceptance,
+        rating_change=moved,
     )
 
 
@@ -549,7 +617,11 @@ async def _paginated_player_matches(
 ) -> PlayerMatchListResponse:
     """Per-player matches list backing `/v1/players/{id}/matches`: list
     shape, newest-first ordering, and the perspective flip onto the
-    headline player's side."""
+    headline player's side.
+
+    ``total`` is the ALL-INCLUSIVE history count (ADR-0008): every match the
+    player is a side of, any status, rated or not, solo "No opponent" matches
+    included. No status filter — a match still in play is history too."""
     participant = (
         select(MatchSidePlayer.id)
         .where(
@@ -575,7 +647,14 @@ async def _paginated_player_matches(
         .scalars()
         .all()
     )
-    items = [_serialize_player_match(match, player_id) for match in matches]
+    # One rating-history round trip for the whole page, not one per row.
+    changes = await _load_match_rating_changes(
+        db, player_id, (match.id for match in matches)
+    )
+    items = [
+        _serialize_player_match(match, player_id, changes.get(match.id))
+        for match in matches
+    ]
     return PlayerMatchListResponse(
         items=items, page=page, page_size=page_size, total=total
     )
@@ -589,11 +668,15 @@ async def list_player_matches(
     _current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_session),
 ) -> PlayerMatchListResponse:
-    """Paginated per-player match history backing page 2+ of the authed
-    profile page (`/players/$userId`); page 1 ships inline in the
-    `/v1/players/{id}` bundle. Newest-first by ``created_at``. Sets are
-    projected from the player's perspective so the FE renders them without
-    flipping sides.
+    """Paginated per-player match history backing the full-history route
+    (`/players/$userId/matches`), 25 to a page. The profile overview embeds only
+    the six most recent inline (`GET /v1/players/{id}`) and links here for the
+    rest.
+
+    The history is all-inclusive (ADR-0008): every match the player is a side
+    of, any status, rated or not, solo "No opponent" matches included.
+    Newest-first by ``created_at``. Games are projected from the player's
+    perspective so the FE renders them without flipping sides.
     """
     user = await _load_player_by_id(db, player_id)
     if user is None:

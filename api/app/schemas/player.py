@@ -5,6 +5,7 @@ from typing import Literal
 from pydantic import BaseModel
 
 from app.models import MatchStatus
+from app.schemas.rating import RatingChange
 
 
 class PlayerRead(BaseModel):
@@ -64,7 +65,7 @@ class PlayerMatchOpponent(BaseModel):
     username: str | None = None
 
 
-class PlayerMatchSet(BaseModel):
+class PlayerMatchGame(BaseModel):
     """A single game's score from the headline player's perspective."""
 
     mine: int
@@ -79,9 +80,10 @@ class PlayerMatchRow(BaseModel):
     status: MatchStatus
     created_at: datetime
     opponent: PlayerMatchOpponent
-    # Newest-first list of per-game scores. Empty when no games have been
-    # scored (e.g. status=pending).
-    sets: list[PlayerMatchSet]
+    # The match's per-game scores. Empty when no games have been scored (e.g.
+    # status=pending). A match is a best-of-N run of *games* — never "sets"
+    # (CONTEXT.md, "Game"): table tennis has games, tennis has sets.
+    games: list[PlayerMatchGame]
     # The headline player's outcome: ``W`` / ``L`` for decided matches,
     # ``None`` while the match is still pending / in_progress / voided.
     # The FE keys the WIN/LOSS/LIVE/UP NEXT chip off `status` + this.
@@ -94,6 +96,13 @@ class PlayerMatchRow(BaseModel):
     # genuinely-live match (both sit at ``in_progress``) without the FE having
     # to re-derive the negotiation state (#364).
     awaiting_acceptance: bool = False
+    # The rating this match moved for the headline player, read from the
+    # match's ``rating_history`` row — the row's Δ column. ``None`` (rendered
+    # ``—``, never ``+0``) for any row that is undecided (pending / in progress
+    # / awaiting acceptance / voided) *or* unrated (``affects_rating`` false):
+    # those matches moved no rating at all, and a zero is a claim that they
+    # moved it by nothing.
+    rating_change: RatingChange | None = None
 
 
 class PlayerMatchListResponse(BaseModel):
@@ -107,14 +116,27 @@ class PlayerMatchListResponse(BaseModel):
 
 
 class PlayerDetail(PlayerSummary):
-    """Profile-page bundle: the hero (`PlayerSummary` fields) plus the
-    first page of matches inline. Saves a round trip on initial load —
-    `GET /v1/players/{id}` returns this so the profile page paints with one
+    """Profile-page bundle: the hero (`PlayerSummary` fields) plus the player's
+    six most recent matches inline. Saves a round trip on initial load —
+    `GET /v1/players/{id}` returns this so the profile overview paints with one
     request.
 
-    Pagination beyond page 1 still hits `GET /v1/players/{id}/matches`
-    directly; the FE seeds page 1's cache from this `matches` field via
-    TanStack Query's `initialData`.
+    The profile is an *overview*: it shows a Recent-matches card, not the whole
+    table. The full paginated history lives at its own route, backed by
+    `GET /v1/players/{id}/matches` (ADR-0915).
     """
 
+    # The six most recent matches. ``matches.total`` is the same all-inclusive
+    # count as ``match_total`` below — the envelope is a window onto the full
+    # history, not a page of it.
     matches: PlayerMatchListResponse
+    # Every match this player is a side of: any status, rated or not, including
+    # solo "No opponent" matches and matches still in play. Backs the "View all
+    # N matches" link.
+    #
+    # DELIBERATELY NOT ``wins + losses``. Career counts only *decided* matches;
+    # this counts everything, so a player with 47 decided matches and 3 in play
+    # reports ``match_total == 50``. The two numbers appear on the same page and
+    # they differ on purpose — reconciling them reintroduces the bug ADR-0915
+    # and ADR-0008 exist to prevent.
+    match_total: int
