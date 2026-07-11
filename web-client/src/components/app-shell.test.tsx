@@ -105,4 +105,16 @@ describe('AppShell sidebar', () => {
     expect(appShellPage.getParentActiveNavLabels()).toEqual(['Administration'])
     expect(appShellPage.getActiveNavLabels()).toEqual([])
   })
+
+  it('still tints the parent on a route deeper than any listed child', async () => {
+    // No such route exists yet. The point is that when one is added, the
+    // section it belongs to stays lit rather than going dark — the very bug
+    // this predicate exists to prevent.
+    appShellPage.render('/admin/users/u_1')
+    await appShellPage.findNavLink('Administration')
+
+    expect(appShellPage.getParentActiveNavLabels()).toEqual(['Administration'])
+    // Deeper than "Users", so no child claims the strict-equality highlight.
+    expect(appShellPage.getActiveSubNavLabels()).toEqual([])
+  })
 })

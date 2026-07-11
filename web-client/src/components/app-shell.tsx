@@ -187,7 +187,10 @@ function isUnder(pathname: string, to: string) {
 }
 
 function renderNavItem(item: NavItem, pathname: string, closeOnMobile: () => void) {
-  const childActive = item.children?.some((c) => pathname === c.to) ?? false
+  // One notion of "you are in this section", used for all three decisions
+  // below. Deriving the parent tint from an exhaustive child match instead
+  // would leave a route deeper than any listed child (a future
+  // `/admin/users/:id`) expanding the sub-nav with nothing lit at all.
   const isActive = isUnder(pathname, item.to)
   return (
     <li key={item.label}>
@@ -195,8 +198,10 @@ function renderNavItem(item: NavItem, pathname: string, closeOnMobile: () => voi
         to={item.to}
         className={cn(
           'app-shell__nav-link',
+          // A parent defers the full treatment to its children and keeps only
+          // the icon tint.
           isActive && !item.children && 'is-active',
-          item.children && childActive && 'is-parent-active',
+          isActive && item.children && 'is-parent-active',
         )}
         onClick={closeOnMobile}
       >
