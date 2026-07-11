@@ -222,6 +222,32 @@ export function conflictDetail(
 }
 
 /**
+ * True when `error` is the propose-result NEGOTIATION conflict specifically —
+ * the server's `_negotiation_conflict`, whose 409 body is the viewer-relative
+ * negotiation OBJECT (`{ detail: { viewer_state, your_turn, standing_result … } }`).
+ * That's the "a result already exists" case: a refetch reliably surfaces the
+ * standing result, so score-entry can redirect the poster to match detail (#801).
+ *
+ * It deliberately does NOT match the other two propose 409s, whose `detail` is a
+ * plain STRING: the lock race ("A result is already being posted…") and the
+ * terminal guard ("This match is no longer open to results.") — those are
+ * transient/plain errors the caller should keep surfacing with a live retry,
+ * never a permanent redirect. Nor does it match the score-write `committed_score`
+ * conflict object (that shape has no `viewer_state`), keeping the two object-body
+ * 409s distinct.
+ */
+export function isNegotiationConflict(error: ApiError): boolean {
+  if (error.status !== 409) return false
+  const detail = (error.body as { detail?: unknown } | null | undefined)?.detail
+  return (
+    detail !== null &&
+    typeof detail === 'object' &&
+    !Array.isArray(detail) &&
+    'viewer_state' in detail
+  )
+}
+
+/**
  * Throws ApiError when the openapi-fetch result has an error or no data. Pass
  * `{ allowEmpty: true }` for endpoints that legitimately return no body (e.g.
  * 204 DELETEs).

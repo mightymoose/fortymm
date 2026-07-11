@@ -1351,7 +1351,9 @@ function renderScoringApp(
 
 // A match sitting on the deciding game: 2–0 with games 1 and 2 scored, so the
 // next entry (game 3) can finish the match.
-function decidingGameMatch() {
+function decidingGameMatch(
+  overrides: Parameters<typeof matchDetails>[0] = {},
+) {
   return inProgressMatch({
     sides: participantSides({ meWins: 2, oppWins: 0 }),
     games: [
@@ -1359,7 +1361,34 @@ function decidingGameMatch() {
       { id: 'g-2', game_number: 2, score: score('s-2', 11, 6) },
     ],
     current_game: { game_number: 3 },
+    ...overrides,
   })
+}
+
+// The propose-result NEGOTIATION-conflict 409 body: the server's
+// `_negotiation_conflict` responds with the viewer-relative negotiation OBJECT
+// as `detail` (it has `viewer_state`), NOT a plain string. `isNegotiationConflict`
+// keys on that object shape to trigger the calm redirect — the lock-race /
+// terminal 409s (plain-string detail) deliberately don't match.
+function negotiationConflictBody() {
+  return {
+    detail: {
+      viewer_state: 'review',
+      your_turn: true,
+      standing_result: {
+        id: 'r-opp',
+        games: [
+          { game_number: 1, side_1_points: 4, side_2_points: 11 },
+          { game_number: 2, side_1_points: 6, side_2_points: 11 },
+          { game_number: 3, side_1_points: 9, side_2_points: 11 },
+        ],
+        submitted_by: 'u-opp',
+        submitted_at: '2026-05-12T19:30:00Z',
+      },
+      prior_result: null,
+      diff: null,
+    },
+  }
 }
 
 // The finalized MatchDetails a successful POST /results returns: a completed
@@ -1945,7 +1974,7 @@ describe('ScoreEntry — failed saves', () => {
   // The finalize hook's contract is that its errors matter (unlike the swallowed
   // per-game saves). When the banner's online finalize fails, it surfaces the
   // server's reason instead of silently reverting.
-  it('banner surfaces a finalize error (e.g. result already posted) instead of failing silently', async () => {
+  it('a finalize 409 (result already posted) redirects calmly instead of dead-ending (#801)', async () => {
     const user = userEvent.setup()
     server.use(
       http.get('*/v1/matches/m-1', () =>
@@ -1955,10 +1984,7 @@ describe('ScoreEntry — failed saves', () => {
         HttpResponse.error(),
       ),
       http.post('*/v1/matches/m-1/results', () =>
-        HttpResponse.json(
-          { detail: 'A result has already been posted.' },
-          { status: 409 },
-        ),
+        HttpResponse.json(negotiationConflictBody(), { status: 409 }),
       ),
     )
 
@@ -1981,12 +2007,15 @@ describe('ScoreEntry — failed saves', () => {
     onlineManager.setOnline(true)
     await user.click(screen.getByRole('button', { name: /post result/i }))
 
-    // The reason surfaces inline rather than reverting silently, and the button
-    // stays usable for another attempt.
-    await screen.findByText('A result has already been posted.')
+    // A negotiation-conflict 409 means the match moved on (a result is already
+    // posted): the fix refetches the match and shows a CALM redirect notice — not
+    // the old red dead-end that re-fired the same 409 — and locks the submit so it
+    // can't re-fire while the redirect is pending (#801, replacing the pre-fix
+    // inline-error-and-retry behavior for THIS 409 shape).
+    await screen.findByText(/taking you there/i)
     expect(
       screen.getByRole('button', { name: /post result/i }),
-    ).toBeEnabled()
+    ).toBeDisabled()
   })
 
   // Regression for the fully-offline path (QA BUG 1): with NO games persisted
@@ -3181,6 +3210,168 @@ describe('ScoreEntry — finalize connection drop (#868)', () => {
     expect(resultsCalls).toBe(2)
     // No stale connection copy survives the successful resend.
     expect(hasConnectionAlert()).toBe(false)
+  })
+})
+
+describe('ScoreEntry — stale finalize hits a posted result (409 → redirect) (#801)', () => {
+  // The bug: a participant sits on a stale deciding-game screen while the
+  // opponent has already POSTed a final result. Tapping "Post result" hits the
+  // server's negotiation 409 (`_negotiation_conflict`). Pre-fix the score pad
+  // dead-ended on a red "Failed"/detail error with the button still live,
+  // re-firing the same 409. Option A (this fix, replacing the #800 interstitial
+  // ADR-0005 removed): `useProposeResult` refetches the match on a 409, and
+  // score-entry's own `standing_result`/`completed` early-return routes the
+  // poster to match detail. In the transient window before the refetch lands we
+  // show CALM redirect copy, not the red error.
+
+  // The refetched match once the opponent's standing result is visible: still
+  // in_progress (rated, awaiting the viewer's Accept), but `standing_result` is
+  // now set — which trips score-entry's early-return `<Navigate>` to detail.
+  function opponentStandingMatch() {
+    return decidingGameMatch({
+      negotiation: {
+        viewer_state: 'review',
+        your_turn: true,
+        standing_result: {
+          id: 'r-opp',
+          games: [
+            { game_number: 1, side_1_points: 4, side_2_points: 11 },
+            { game_number: 2, side_1_points: 6, side_2_points: 11 },
+            { game_number: 3, side_1_points: 9, side_2_points: 11 },
+          ],
+          submitted_by: 'u-opp',
+          submitted_at: '2026-05-12T19:30:00Z',
+        },
+        prior_result: null,
+        diff: null,
+      },
+    })
+  }
+
+  it('shows calm redirect copy — not a red error, with the submit locked — during the 409 window', async () => {
+    const user = userEvent.setup()
+    // The refetch keeps returning the same live match (standing_result null), so
+    // the early-return doesn't fire and we stay frozen in the transient window,
+    // which is exactly what we want to assert on. The actual navigation is
+    // covered by the next test.
+    server.use(
+      http.get('*/v1/matches/m-1', () => HttpResponse.json(decidingGameMatch())),
+      http.post('*/v1/matches/m-1/results', () =>
+        HttpResponse.json(negotiationConflictBody(), { status: 409 }),
+      ),
+    )
+
+    renderScoreEntry({ kind: 'create', matchId: 'm-1', gameNumber: 3 })
+    const meInput = await screen.findByRole('textbox', {
+      name: 'rita.kovac score',
+    })
+    const oppInput = screen.getByRole('textbox', { name: 'nguyen.t score' })
+    await user.type(meInput, '11')
+    await user.type(oppInput, '3')
+    await user.click(screen.getByRole('button', { name: /post result/i }))
+
+    // Calm "the app talking back" notice appears.
+    expect(await screen.findByText(/taking you there/i)).toBeInTheDocument()
+    // The old red dead-end copy is gone: the generic "Failed to post match
+    // result" error is not surfaced.
+    expect(
+      screen.queryByText(/failed to post match result/i),
+    ).not.toBeInTheDocument()
+    // The valid score stays clean — a 409 doesn't mean the entered board is bad.
+    expect(meInput).not.toHaveAttribute('aria-invalid', 'true')
+    expect(oppInput).not.toHaveAttribute('aria-invalid', 'true')
+    // The submit is locked so it can't re-fire the same conflict.
+    expect(
+      screen.getByRole('button', { name: /post result/i }),
+    ).toBeDisabled()
+  })
+
+  it('refetches on the 409 and lands on match detail once the opponent result is visible', async () => {
+    const user = userEvent.setup()
+    // Before the post the match is the stale live deciding game; once the propose
+    // POST 409s (opponent already posted), any subsequent GET — the 409-driven
+    // refetch — reports the opponent's standing result, tripping the
+    // early-return redirect. Gating on `posted` (not a raw GET counter) is robust
+    // to however many GETs the screen issues on mount.
+    let posted = false
+    server.use(
+      http.get('*/v1/matches/m-1', () =>
+        HttpResponse.json(
+          posted ? opponentStandingMatch() : decidingGameMatch(),
+        ),
+      ),
+      http.post('*/v1/matches/m-1/results', () => {
+        posted = true
+        return HttpResponse.json(negotiationConflictBody(), { status: 409 })
+      }),
+    )
+
+    renderScoreEntry({ kind: 'create', matchId: 'm-1', gameNumber: 3 })
+    const meInput = await screen.findByRole('textbox', {
+      name: 'rita.kovac score',
+    })
+    const oppInput = screen.getByRole('textbox', { name: 'nguyen.t score' })
+    await user.type(meInput, '11')
+    await user.type(oppInput, '3')
+    await user.click(screen.getByRole('button', { name: /post result/i }))
+
+    // The refetch sees the posted result and the early-return navigates to detail.
+    await waitFor(() =>
+      expect(screen.getByText('match-page m-1')).toBeInTheDocument(),
+    )
+    // Never dead-ended on the red error.
+    expect(
+      screen.queryByText(/failed to post match result/i),
+    ).not.toBeInTheDocument()
+  })
+
+  it('a plain-string lock-race 409 stays retryable (red error, live submit) — no calm redirect', async () => {
+    // The other two propose 409s carry a plain-STRING detail (lock race /
+    // terminal). `isNegotiationConflict` doesn't match them, so they must NOT
+    // enter the calm-redirect/lock path — a concurrent post might not have
+    // committed, and a refetch could leave `standing_result` null and strand the
+    // screen on "Taking you there…" forever. They fall through to the normal
+    // (red) finalize error with the submit live for another attempt, exactly as
+    // before the #801 fix.
+    const user = userEvent.setup()
+    let getCalls = 0
+    server.use(
+      http.get('*/v1/matches/m-1', () => {
+        getCalls += 1
+        return HttpResponse.json(decidingGameMatch())
+      }),
+      http.post('*/v1/matches/m-1/results', () =>
+        HttpResponse.json(
+          {
+            detail:
+              'A result is already being posted for this match. Refresh to see the latest.',
+          },
+          { status: 409 },
+        ),
+      ),
+    )
+
+    renderScoreEntry({ kind: 'create', matchId: 'm-1', gameNumber: 3 })
+    const meInput = await screen.findByRole('textbox', {
+      name: 'rita.kovac score',
+    })
+    const oppInput = screen.getByRole('textbox', { name: 'nguyen.t score' })
+    await user.type(meInput, '11')
+    await user.type(oppInput, '3')
+    // The screen's initial load GET(s); anything past this would be a refetch.
+    const getsBeforePost = getCalls
+    await user.click(screen.getByRole('button', { name: /post result/i }))
+
+    // The plain-string detail renders as the normal (red) finalize error…
+    await screen.findByText(/already being posted for this match/i)
+    // …not the calm redirect.
+    expect(screen.queryByText(/taking you there/i)).not.toBeInTheDocument()
+    // The submit stays live for another attempt (not locked).
+    expect(
+      screen.getByRole('button', { name: /post result/i }),
+    ).toBeEnabled()
+    // And no refetch was triggered — the string 409 doesn't invalidate.
+    expect(getCalls).toBe(getsBeforePost)
   })
 })
 

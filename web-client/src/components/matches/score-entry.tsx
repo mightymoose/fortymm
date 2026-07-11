@@ -7,7 +7,7 @@ import {
 } from '@tanstack/react-router'
 import { onlineManager, useQueryClient } from '@tanstack/react-query'
 import { Check, Loader2, TriangleAlert, X as XIcon } from 'lucide-react'
-import { ApiError } from '@/api/client'
+import { ApiError, isNegotiationConflict } from '@/api/client'
 import {
   forgetScoreSaves,
   matchDetailRoute,
@@ -375,6 +375,25 @@ function ScoreEntryInner({
   // request, so we branch on the rejection that really happened.
   const finalizeNetworkError =
     finalizeMutation.error !== null && finalizeApiError === null
+  // The NEGOTIATION-conflict 409 ("a result already exists") is not an error to
+  // fix here — the opponent already posted the standing result. `useProposeResult`
+  // refetches the match on this 409; once the fresh data lands, the
+  // `standing_result`/`completed` early-return above navigates to match detail
+  // (where the poster can Accept). Until that one-round-trip refetch resolves
+  // we're in a transient redirect window: show CALM "taking you there" copy
+  // instead of the red "Failed" error, and don't paint the valid inputs red. This
+  // is the minimal Option A that replaces the #800 reconcile interstitial ADR-0005
+  // (#827) removed.
+  //
+  // Only the negotiation-conflict 409 redirects. The other propose 409s carry a
+  // plain-STRING detail — the lock race ("a result is already being posted…") and
+  // the terminal guard ("no longer open to results") — and their concurrent post
+  // may not have committed, so a refetch could leave `standing_result` null and
+  // strand the screen on "Taking you there…" forever. Those fall through to the
+  // normal red-error path below (string detail rendered, submit live for retry),
+  // exactly as before this fix.
+  const finalizeRedirecting =
+    finalizeApiError !== null && isNegotiationConflict(finalizeApiError)
 
   // Build the hypothetical full-match games list including the current input,
   // so we can ask the scoring lib whether saving this entry would make the
@@ -437,7 +456,8 @@ function ScoreEntryInner({
   const showScoreError =
     inputsInvalid ||
     overrunError !== null ||
-    finalizeApiError !== null ||
+    // A 409 is surfaced as the calm redirect notice below, not the red error.
+    (finalizeApiError !== null && !finalizeRedirecting) ||
     finalizeNetworkError
   // The "both scores required" hint is its own, lower-severity line — shown only
   // when exactly one field is filled and there's no harder error to surface.
@@ -670,8 +690,10 @@ function ScoreEntryInner({
   }
 
   // Only finalize pending state locks inputs — per-game mutations are
-  // fire-and-forget, so we don't want to make the UI feel laggy on those.
-  const inputsLocked = finalizeMutation.isPending
+  // fire-and-forget, so we don't want to make the UI feel laggy on those. Also
+  // lock during the 409 redirect window so the still-valid submit can't re-fire
+  // the same conflict while the match refetches and the early-return navigates.
+  const inputsLocked = finalizeMutation.isPending || finalizeRedirecting
   const isEdit = mode.kind === 'edit'
 
   const heading = isEdit
@@ -732,6 +754,17 @@ function ScoreEntryInner({
             onKeepCommitted={keepCommittedScore}
             onUseMine={overwriteWithMyScore}
           />
+        )}
+
+        {finalizeRedirecting && (
+          // Calm "the app talking back" notice (design-system Alert, default
+          // variant — not the red error line) for the transient window between a
+          // propose 409 and the refetch-driven redirect to match detail.
+          <Alert className="mb-3">
+            <Loader2 className="animate-spin" aria-hidden />
+            <AlertTitle>This match already has a posted result</AlertTitle>
+            <AlertDescription>Taking you there…</AlertDescription>
+          </Alert>
         )}
 
         <ScorePad

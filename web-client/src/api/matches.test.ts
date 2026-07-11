@@ -15,6 +15,7 @@ import {
   useCreateMatch,
   useDeleteScore,
   useMatch,
+  useProposeResult,
 } from './matches'
 
 /** A promise plus its externally-callable `resolve`. Lets a test hold a mocked
@@ -870,6 +871,106 @@ describe('useCreateMatch', () => {
     })
     expect(invalidateSpy).toHaveBeenCalledWith({
       queryKey: ['dashboard'],
+    })
+  })
+})
+
+describe('useProposeResult', () => {
+  // #801: the NEGOTIATION-conflict 409 (`_negotiation_conflict`, "a result
+  // already exists") means the opponent already posted the standing result. The
+  // mutation must refetch the observed match so score-entry's
+  // `standing_result`/`completed` early-return can route the poster to match
+  // detail — the minimal Option A that replaces the #800 reconcile interstitial
+  // ADR-0005 deleted. The server's body for THIS 409 is the viewer-relative
+  // negotiation OBJECT (has `viewer_state`); the lock-race/terminal 409s carry a
+  // plain-STRING detail and must NOT trigger the refetch (they may not have
+  // committed yet, so a refetch could strand the screen with no standing result).
+  const wrapper = ({ children }: { children: ReactNode }) =>
+    createElement(QueryClientProvider, { client: queryClient }, children)
+
+  // The `_negotiation_conflict` 409 body: `detail` is the negotiation object.
+  const negotiationConflict = {
+    detail: {
+      viewer_state: 'review',
+      your_turn: true,
+      standing_result: {
+        id: 'r-opp',
+        games: [{ game_number: 1, side_1_points: 4, side_2_points: 11 }],
+        submitted_by: 'u-opp',
+        submitted_at: '2026-05-12T19:30:00Z',
+      },
+      prior_result: null,
+      diff: null,
+    },
+  }
+
+  it('refetches the observed match on a negotiation-conflict 409', async () => {
+    const matchId = 'm-801'
+    server.use(
+      http.post('*/v1/matches/:matchId/results', () =>
+        HttpResponse.json(negotiationConflict, { status: 409 }),
+      ),
+    )
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries')
+
+    const { result } = renderHook(() => useProposeResult(matchId), { wrapper })
+    result.current.mutate({ games: [] })
+
+    await waitFor(() => expect(result.current.isError).toBe(true))
+
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: matchQueryKey(matchId),
+    })
+  })
+
+  it('does NOT refetch on a plain-string lock-race 409, so score-entry keeps it retryable', async () => {
+    const matchId = 'm-801-lock'
+    server.use(
+      http.post('*/v1/matches/:matchId/results', () =>
+        HttpResponse.json(
+          {
+            detail:
+              'A result is already being posted for this match. Refresh to see the latest.',
+          },
+          { status: 409 },
+        ),
+      ),
+    )
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries')
+
+    const { result } = renderHook(() => useProposeResult(matchId), { wrapper })
+    result.current.mutate({ games: [] })
+
+    await waitFor(() => expect(result.current.isError).toBe(true))
+
+    // A string-bodied 409 (lock race / terminal) is NOT a negotiation conflict —
+    // no refetch, so score-entry surfaces it as a normal retryable error.
+    expect(invalidateSpy).not.toHaveBeenCalledWith({
+      queryKey: matchQueryKey(matchId),
+    })
+  })
+
+  it('does NOT refetch on a non-409 finalize error, so score-entry can surface it for retry', async () => {
+    const matchId = 'm-801b'
+    server.use(
+      http.post('*/v1/matches/:matchId/results', () =>
+        HttpResponse.json(
+          { detail: 'This payload was rejected by the server.' },
+          { status: 422 },
+        ),
+      ),
+    )
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries')
+
+    const { result } = renderHook(() => useProposeResult(matchId), { wrapper })
+    result.current.mutate({ games: [] })
+
+    await waitFor(() => expect(result.current.isError).toBe(true))
+
+    // A 422 (or 500 / transport drop) stays put on the score-entry screen for
+    // the user to fix and retry — no refetch, so nothing navigates them away.
+    expect(invalidateSpy).not.toHaveBeenCalledWith({
+      queryKey: matchQueryKey(matchId),
     })
   })
 })
