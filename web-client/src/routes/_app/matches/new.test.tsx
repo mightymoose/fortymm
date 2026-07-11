@@ -35,7 +35,9 @@ function pendingMatch() {
   })
 }
 
-function renderNewMatch(opts: { history?: RouterHistory } = {}) {
+function renderNewMatch(
+  opts: { history?: RouterHistory; search?: string } = {},
+) {
   const queryClient = new QueryClient({
     // Mirror the app's real client (`main.tsx`): a 30s staleTime is what keeps
     // a freshly-primed match-details entry from being treated as stale and
@@ -47,6 +49,9 @@ function renderNewMatch(opts: { history?: RouterHistory } = {}) {
     getParentRoute: () => rootRoute,
     path: '/matches/new',
     component: NewMatchPage,
+    // The real route's search schema, so `?opponent=` is parsed (and a
+    // malformed one `.catch`-ed) exactly as it is in the app.
+    validateSearch: Route.options.validateSearch,
   })
   const dashboardRoute = createRoute({
     getParentRoute: () => rootRoute,
@@ -104,7 +109,7 @@ function renderNewMatch(opts: { history?: RouterHistory } = {}) {
     history:
       opts.history ??
       createMemoryHistory({
-        initialEntries: ['/dashboard', '/matches/new'],
+        initialEntries: ['/dashboard', `/matches/new${opts.search ?? ''}`],
         initialIndex: 1,
       }),
   })
@@ -1116,4 +1121,159 @@ describe('NewMatchPage — mobile label layout (#388)', () => {
     expect(owner).toBeDefined()
     expect(owner).toHaveTextContent(/rated match/i)
   })
+})
+
+describe('NewMatchPage — preselected opponent from ?opponent=', () => {
+  // The profile bundle the preseed lookup reads (`GET /v1/players/{id}`) —
+  // only the fields the opponent slot actually consumes.
+  function playerDetail(
+    overrides: Partial<{
+      id: string
+      username: string
+      rating: number | null
+    }> = {},
+  ) {
+    return {
+      id: 'pl-7',
+      username: 'perky.ringtail',
+      rating: 1712,
+      wins: 3,
+      losses: 1,
+      matches: { items: [], page: 1, page_size: 25, total: 0 },
+      ...overrides,
+    }
+  }
+
+  it('lands with the player named in the URL already picked, and starts the match against them', async () => {
+    const user = userEvent.setup()
+    let captured: unknown = null
+    let recentCalls = 0
+    server.use(
+      // The picker must never mount — if it does, this fires and the count
+      // below catches the flash.
+      http.get('*/v1/players/recent', () => {
+        recentCalls += 1
+        return HttpResponse.json([{ id: 'pl-1', username: 'ada.lovelace' }])
+      }),
+      http.get('*/v1/players/:playerId', ({ params }) =>
+        HttpResponse.json(playerDetail({ id: String(params.playerId) })),
+      ),
+      http.post('*/v1/matches', async ({ request }) => {
+        captured = await request.json()
+        return HttpResponse.json(pendingMatch(), { status: 201 })
+      }),
+    )
+    renderNewMatch({ search: '?opponent=pl-7' })
+
+    // The slot arrives filled: the selected-opponent card, not the picker.
+    const change = await screen.findByRole('button', { name: /^change$/i })
+    const selected = change.parentElement!
+    expect(selected).toHaveTextContent(/perky\.ringtail/)
+    expect(selected).toHaveTextContent(/RATING 1712/)
+    expect(
+      screen.queryByRole('button', { name: /search all players/i }),
+    ).not.toBeInTheDocument()
+    expect(recentCalls).toBe(0)
+
+    // And the pick is real, not just painted — an opponent unlocks Rated, and
+    // Start match submits against that id.
+    await user.click(screen.getByRole('switch', { name: /rated match/i }))
+    await user.click(screen.getByRole('button', { name: /start match/i }))
+    await waitFor(() =>
+      expect(
+        screen.getByText('Scoring route m-test game 1'),
+      ).toBeInTheDocument(),
+    )
+    expect(captured).toEqual({
+      opponent_user_id: 'pl-7',
+      best_of: 5,
+      rated: true,
+    })
+  })
+
+  it('treats a URL-preseeded opponent as untouched, so Cancel leaves without the discard dialog (#75)', async () => {
+    const user = userEvent.setup()
+    server.use(
+      http.get('*/v1/players/recent', () => HttpResponse.json([])),
+      http.get('*/v1/players/:playerId', () =>
+        HttpResponse.json(playerDetail()),
+      ),
+    )
+    renderNewMatch({ search: '?opponent=pl-7' })
+
+    // Arriving from a "Start a match" link and immediately backing out is not
+    // "discarding changes" — the user invested nothing.
+    await screen.findByRole('button', { name: /^change$/i })
+    await user.click(screen.getByRole('button', { name: /^cancel$/i }))
+
+    await waitFor(() =>
+      expect(screen.getByText('Dashboard route')).toBeInTheDocument(),
+    )
+    expect(
+      screen.queryByRole('alertdialog', { name: /discard changes/i }),
+    ).not.toBeInTheDocument()
+  })
+
+  it('degrades to the empty picker when the id names nobody, instead of erroring the page', async () => {
+    let lookups = 0
+    server.use(
+      http.get('*/v1/players/recent', () =>
+        HttpResponse.json([{ id: 'pl-1', username: 'ada.lovelace' }]),
+      ),
+      // The id is well-formed but unknown — the lookup 404s.
+      http.get('*/v1/players/:playerId', () => {
+        lookups += 1
+        return HttpResponse.json({ detail: 'Player not found.' }, { status: 404 })
+      }),
+    )
+    renderNewMatch({ search: '?opponent=pl-does-not-exist' })
+
+    // The page stands and the picker is simply empty — no error boundary, no
+    // preselected card.
+    expect(
+      await screen.findByRole('button', { name: /ada\.lovelace/i }),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: /^change$/i }),
+    ).not.toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: /start match/i }),
+    ).toBeInTheDocument()
+    // This is the *404* degrade path, not the boundary one: the id was
+    // well-formed enough to be looked up, and the failed lookup is what left
+    // the picker empty.
+    expect(lookups).toBeGreaterThanOrEqual(1)
+  })
+
+  it.each([
+    ['blank', '?opponent='],
+    ['whitespace', '?opponent=%20%20'],
+    ['not a string', '?opponent=42'],
+  ])(
+    'drops a malformed (%s) ?opponent= at the route boundary and shows the empty picker',
+    async (_label, search) => {
+      let lookups = 0
+      server.use(
+        http.get('*/v1/players/recent', () =>
+          HttpResponse.json([{ id: 'pl-1', username: 'ada.lovelace' }]),
+        ),
+        http.get('*/v1/players/:playerId', () => {
+          lookups += 1
+          return HttpResponse.json(playerDetail())
+        }),
+      )
+      renderNewMatch({ search })
+
+      expect(
+        await screen.findByRole('button', { name: /ada\.lovelace/i }),
+      ).toBeInTheDocument()
+      expect(
+        screen.queryByRole('button', { name: /^change$/i }),
+      ).not.toBeInTheDocument()
+      // The Zod `.catch` swallowed it at the boundary — nothing was even looked
+      // up, and nothing leaked inward as a bogus id.
+      expect(lookups).toBe(0)
+    },
+  )
 })
