@@ -1,4 +1,6 @@
-import { Card, CardAction, CardContent, CardHeader } from "@/components/ui/card";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
+
+import { CardMeta } from "../card-meta";
 
 const SK = "md-sk animate-pulse";
 
@@ -62,13 +64,12 @@ export const PlayersPanelSkeleton = () => {
       >
         <CardHeader aria-hidden="true">
           <span className={`${SK} md-sk--card-title`} />
-          {/* `self-center` mirrors the loaded caption, which centres against
-              the overline in `CardHeader`'s `items-start` grid — so the
-              shimmer sits where the real text will. No colour class: the
-              placeholder is a shimmer block, not text. */}
-          <CardAction className="self-center">
+          {/* Same CardMeta as the loaded caption, so the shimmer sits exactly
+              where the real text will. (Its text colour is inert here — the
+              placeholder is a shimmer block, not text.) */}
+          <CardMeta>
             <span className={`${SK} md-sk--meta`} />
-          </CardAction>
+          </CardMeta>
         </CardHeader>
         {/* Padding-free for the same reason as the loaded panel: `.md-players`
             is a full-bleed grid and each `.md-profile` half pads itself. */}

@@ -1,12 +1,9 @@
 import { useId } from "react";
 
 import { Overline } from "@/components/overline";
-import {
-  Card,
-  CardAction,
-  CardContent,
-  CardHeader,
-} from "@/components/ui/card";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
+
+import { CardMeta } from "../../card-meta";
 import { cn } from "@/lib/utils";
 
 import { type HeadToHeadView } from "./head-to-head-query";
@@ -37,9 +34,9 @@ export const HeadToHeadDisplay = ({ headToHead }: HeadToHeadDisplayProps) => {
           <Overline as="h3" id={id}>
             Head to head
           </Overline>
-          <CardAction className="self-center text-[11px] font-medium tracking-[0.08em] text-[color:var(--fg-muted)]">
+          <CardMeta>
             {totalMeetings} {totalMeetings === 1 ? "MEETING" : "MEETINGS"}
-          </CardAction>
+          </CardMeta>
         </CardHeader>
         {/* `md-h2h` is content layout (the panel's own vertical rhythm), not
             card chrome — it stays. */}

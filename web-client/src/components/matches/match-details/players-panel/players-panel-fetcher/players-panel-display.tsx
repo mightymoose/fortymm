@@ -1,7 +1,9 @@
 import { useId } from "react";
 
 import { Overline } from "@/components/overline";
-import { Card, CardAction, CardContent, CardHeader } from "@/components/ui/card";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
+
+import { CardMeta } from "../../card-meta";
 
 import { NoOpponentProfile } from "./players-panel-display/no-opponent-profile";
 import { PlayerProfile } from "./players-panel-display/player-profile";
@@ -29,14 +31,7 @@ export const PlayersPanelDisplay = ({ panel }: PlayersPanelDisplayProps) => {
           <Overline as="h3" id={id}>
             Players · going into this match
           </Overline>
-          {/* Caption treatment is kept byte-identical to the head-to-head
-              panel's `CardAction` — same size, tracking, and the `--fg-muted`
-              grey both captions shipped with. `text-muted-foreground` is NOT
-              the same colour here: `.fortymm-theme` remaps it to the lighter
-              `--chalk-300`. */}
-          <CardAction className="self-center text-[11px] font-medium tracking-[0.08em] text-[color:var(--fg-muted)]">
-            {panel.snapshotLabel}
-          </CardAction>
+          <CardMeta>{panel.snapshotLabel}</CardMeta>
         </CardHeader>
         <CardContent className="md-players px-0">
           {panel.left ? (

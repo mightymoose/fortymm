@@ -3251,8 +3251,8 @@ body.dark.fortymm-theme {
   margin: 0 auto;
 }
 /* Card-section skeletons (players panel, match info) — leaf sizes only; the
-   `.md-card`/`.md-profile`/`.md-info-row` containers supply every dimension
-   that drives height, so the swap to real content doesn't shift. */
+   shared `Card` and the `.md-profile`/`.md-info-row` containers supply every
+   dimension that drives height, so the swap to real content doesn't shift. */
 .fortymm-theme .md-sk--card-title {
   width: 130px;
   height: 12px;

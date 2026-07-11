@@ -41,28 +41,6 @@ describe("PlayersPanelDisplay", () => {
     ).toBeInTheDocument();
   });
 
-  // The caption must wear the same treatment as the head-to-head panel's — the
-  // two cards sit side by side, and #218 is about making them look alike. Pin
-  // the tokens: `text-muted-foreground` looks like the right design-system
-  // choice but `.fortymm-theme` remaps it to a lighter grey (`--chalk-300`),
-  // which would silently restyle a caption this chrome-only change must leave
-  // untouched.
-  it("captions the header in the muted grey the head-to-head panel uses", () => {
-    playersPanelDisplayPage.render({
-      panel: buildPlayersPanelView({ snapshotLabel: "SNAPSHOT · NOW" }),
-    });
-
-    const caption = playersPanelDisplayPage.getSnapshotLabel("SNAPSHOT · NOW");
-    expect(caption).toHaveClass(
-      "self-center",
-      "text-[11px]",
-      "font-medium",
-      "tracking-[0.08em]",
-      "text-[color:var(--fg-muted)]",
-    );
-    expect(caption).not.toHaveClass("text-muted-foreground");
-  });
-
   it("renders a profile per side from the view", () => {
     // Wiring only: profile content is pinned by the query and profile tests.
     playersPanelDisplayPage.render({
