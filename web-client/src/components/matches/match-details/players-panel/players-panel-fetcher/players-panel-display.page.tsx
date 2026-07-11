@@ -20,6 +20,10 @@ const scoped = (container: Container) => ({
       name: "Players · going into this match",
     });
   },
+  /** The two-profile grid inside the card body. */
+  queryPlayersGrid() {
+    return this.getPanel().querySelector(".md-players");
+  },
   /** The visible card heading. */
   getTitle() {
     return container.getByRole("heading", {
@@ -27,9 +31,11 @@ const scoped = (container: Container) => ({
       name: "Players · going into this match",
     });
   },
-  /** The "SNAPSHOT · …" stamp in the card header. */
+  /** The "SNAPSHOT · …" stamp in the card header's trailing action slot. */
   getSnapshotLabel(text: string) {
-    return container.getByText(text, { selector: ".md-card__hd-meta" });
+    return container.getByText(text, {
+      selector: '[data-slot="card-action"]',
+    });
   },
   /**
    * One player's half of the panel, scoped by the player's name — the same

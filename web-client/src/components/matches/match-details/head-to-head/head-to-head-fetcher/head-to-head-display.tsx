@@ -1,6 +1,12 @@
 import { useId } from "react";
 
 import { Overline } from "@/components/overline";
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardHeader,
+} from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 
 import { type HeadToHeadView } from "./head-to-head-query";
@@ -22,65 +28,78 @@ export const HeadToHeadDisplay = ({ headToHead }: HeadToHeadDisplayProps) => {
   const rightPct = 100 - leftPct;
 
   return (
-    <section className="md-card" aria-labelledby={id}>
-      <div className="md-card__hd">
-        <Overline as="h3" id={id}>
-          Head to head
-        </Overline>
-        <span className="md-card__hd-meta">
-          {totalMeetings} {totalMeetings === 1 ? "MEETING" : "MEETINGS"}
-        </span>
-      </div>
-      <div className="md-card__body md-h2h">
-        <div className="md-h2h__counts">
-          <div className="md-h2h__count-label md-h2h__count-label--l">
-            {leftLabel}
-          </div>
-          <div
-            className={cn(
-              "md-h2h__count",
-              "md-h2h__count--l",
-              leftWins > rightWins && "md-h2h__count--win",
-            )}
-          >
-            {leftWins}
-          </div>
-          <span className="md-h2h__sep">—</span>
-          <div
-            className={cn(
-              "md-h2h__count",
-              "md-h2h__count--r",
-              rightWins > leftWins && "md-h2h__count--win",
-            )}
-          >
-            {rightWins}
-          </div>
-          <div className="md-h2h__count-label md-h2h__count-label--r">
-            {rightLabel}
-          </div>
-        </div>
-        {hasMeetings ? (
-          <>
-            <div className="md-h2h__bar" aria-hidden="true">
-              <div
-                style={{ width: `${leftPct}%`, background: "var(--serve-500)" }}
-              />
-              <div
-                style={{ width: `${rightPct}%`, background: "var(--ink-500)" }}
-              />
+    // `asChild` keeps the panel a labelled `<section>` landmark while the
+    // shared design-system Card supplies the chrome (ring, radius, spacing) —
+    // no bespoke `.md-card` classes, and no hard rule under the title.
+    <Card asChild>
+      <section aria-labelledby={id}>
+        <CardHeader>
+          <Overline as="h3" id={id}>
+            Head to head
+          </Overline>
+          <CardAction className="self-center text-[11px] font-medium tracking-[0.08em] text-[color:var(--fg-muted)]">
+            {totalMeetings} {totalMeetings === 1 ? "MEETING" : "MEETINGS"}
+          </CardAction>
+        </CardHeader>
+        {/* `md-h2h` is content layout (the panel's own vertical rhythm), not
+            card chrome — it stays. */}
+        <CardContent className="md-h2h">
+          <div className="md-h2h__counts">
+            <div className="md-h2h__count-label md-h2h__count-label--l">
+              {leftLabel}
             </div>
-            <div>
-              {headToHead.recentMeetings.map((meeting) => (
-                <MeetingRow key={meeting.matchId} meeting={meeting} />
-              ))}
+            <div
+              className={cn(
+                "md-h2h__count",
+                "md-h2h__count--l",
+                leftWins > rightWins && "md-h2h__count--win",
+              )}
+            >
+              {leftWins}
             </div>
-          </>
-        ) : (
-          <div className="md-h2h__empty">
-            No prior meetings — this match is the start of the rivalry.
+            <span className="md-h2h__sep">—</span>
+            <div
+              className={cn(
+                "md-h2h__count",
+                "md-h2h__count--r",
+                rightWins > leftWins && "md-h2h__count--win",
+              )}
+            >
+              {rightWins}
+            </div>
+            <div className="md-h2h__count-label md-h2h__count-label--r">
+              {rightLabel}
+            </div>
           </div>
-        )}
-      </div>
-    </section>
+          {hasMeetings ? (
+            <>
+              <div className="md-h2h__bar" aria-hidden="true">
+                <div
+                  style={{
+                    width: `${leftPct}%`,
+                    background: "var(--serve-500)",
+                  }}
+                />
+                <div
+                  style={{
+                    width: `${rightPct}%`,
+                    background: "var(--ink-500)",
+                  }}
+                />
+              </div>
+              <div>
+                {headToHead.recentMeetings.map((meeting) => (
+                  <MeetingRow key={meeting.matchId} meeting={meeting} />
+                ))}
+              </div>
+            </>
+          ) : (
+            <div className="md-h2h__empty">
+              No prior meetings — this match is the start of the rivalry.
+            </div>
+          )}
+        </CardContent>
+      </section>
+    </Card>
   );
 };

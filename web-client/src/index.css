@@ -2611,12 +2611,6 @@ body.dark.fortymm-theme {
 }
 
 /* ---------- Cards ---------- */
-.fortymm-theme .md-card {
-  background: var(--bg-card);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--r-md);
-}
-
 /* Acceptance callout that leads the match-details page when a posted result
    needs the viewer's action (or is waiting on the opponent's). The active
    "awaiting your acceptance" state is a Featured card (orange ring + accent glow, the
@@ -2838,21 +2832,6 @@ body.dark.fortymm-theme {
   }
 }
 
-.fortymm-theme .md-card__hd {
-  padding: 14px 18px 10px;
-  border-bottom: 1px solid var(--ink-700);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-.fortymm-theme .md-card__body {
-  padding: 18px;
-}
-.fortymm-theme .md-card__hd-meta {
-  font: 500 11px var(--font-ui);
-  color: var(--fg-muted);
-  letter-spacing: 0.08em;
-}
 .fortymm-theme .md-rating-card__body {
   display: flex;
   flex-direction: column;

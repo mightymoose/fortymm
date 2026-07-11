@@ -1,3 +1,5 @@
+import { Card, CardAction, CardContent, CardHeader } from "@/components/ui/card";
+
 const SK = "md-sk animate-pulse";
 
 /** One profile half — identity, rating box, recent-form list, career grid —
@@ -42,29 +44,40 @@ const ProfileSkeleton = () => (
 
 /**
  * Loading placeholder for the {@link PlayersPanel}, shown as its `<Suspense>`
- * fallback. Reuses the real `.md-card` / `.md-players` / `.md-profile`
- * structural classes so the card chrome and both profile columns occupy the
- * same boxes the loaded panel will — only the leaf text/avatars become shimmer
- * blocks. This mirrors `PlayersPanelDisplay`'s markup by hand (Suspense
- * unmounts the real tree during load), so revisit it if that structure changes.
+ * fallback. Reuses the same shared `Card` chrome (#218) and the same
+ * `.md-players` / `.md-profile` structural classes as the loaded panel, so the
+ * card and both profile columns occupy the boxes the loaded panel will — only
+ * the leaf text/avatars become shimmer blocks. The `asChild` card keeps the
+ * status region a `<section>` the same way the display stays a landmark. This
+ * mirrors `PlayersPanelDisplay`'s markup by hand (Suspense unmounts the real
+ * tree during load), so revisit it if that structure changes.
  */
 export const PlayersPanelSkeleton = () => {
   return (
-    <section
-      className="md-card"
-      role="status"
-      aria-busy="true"
-      aria-label="Loading the players panel"
-    >
-      <div className="md-card__hd" aria-hidden="true">
-        <span className={`${SK} md-sk--card-title`} />
-        <span className={`${SK} md-sk--meta`} />
-      </div>
-      <div className="md-players" aria-hidden="true">
-        <ProfileSkeleton />
-        <div className="md-players__divider" />
-        <ProfileSkeleton />
-      </div>
-    </section>
+    <Card asChild>
+      <section
+        role="status"
+        aria-busy="true"
+        aria-label="Loading the players panel"
+      >
+        <CardHeader aria-hidden="true">
+          <span className={`${SK} md-sk--card-title`} />
+          {/* `self-center` mirrors the loaded caption, which centres against
+              the overline in `CardHeader`'s `items-start` grid — so the
+              shimmer sits where the real text will. No colour class: the
+              placeholder is a shimmer block, not text. */}
+          <CardAction className="self-center">
+            <span className={`${SK} md-sk--meta`} />
+          </CardAction>
+        </CardHeader>
+        {/* Padding-free for the same reason as the loaded panel: `.md-players`
+            is a full-bleed grid and each `.md-profile` half pads itself. */}
+        <CardContent className="md-players px-0" aria-hidden="true">
+          <ProfileSkeleton />
+          <div className="md-players__divider" />
+          <ProfileSkeleton />
+        </CardContent>
+      </section>
+    </Card>
   );
 };
