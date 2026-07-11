@@ -12,6 +12,13 @@ const scoped = (container: Container) => ({
   queryHint(text: string) {
     return container.queryByText(text)
   },
+  /** The label row's own text. The required asterisk is a `<span>` inside the
+   * `<label>` with no separating space ("Name*"), so it is only visible in the
+   * label's `textContent` — never as a text node of its own. */
+  getLabelText(label: string) {
+    return container.getByText(new RegExp(label), { selector: 'label' })
+      .textContent
+  },
 })
 
 /** Test page-object for `Field` — the label/control/hint form row. */

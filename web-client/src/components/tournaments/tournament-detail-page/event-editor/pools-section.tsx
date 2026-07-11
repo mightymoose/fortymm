@@ -13,13 +13,22 @@ export interface PoolsSectionProps {
   event: TournamentEvent
   /** The tables available to this tournament. */
   tables: TournamentTable[]
+  /** When false (a non-creator), the pool *editor* becomes a pool *list*: each
+   * pool reads back as its name, its window and its reserved tables, and every
+   * mutating affordance is hidden (ADR 0015). */
+  canEdit: boolean
   onChange: (next: TournamentEvent) => void
 }
 
 /** The event editor's "Table pools" tab: each pool reserves a slice of tables
  * for a window, with a warning when tables are double-booked across overlapping
  * pools. */
-export const PoolsSection = ({ event, tables, onChange }: PoolsSectionProps) => {
+export const PoolsSection = ({
+  event,
+  tables,
+  canEdit,
+  onChange,
+}: PoolsSectionProps) => {
   const pools = event.pools
   const setPools = (next: Pool[]) => onChange({ ...event, pools: next })
   const conflicts = findPoolConflicts(pools)
@@ -39,19 +48,26 @@ export const PoolsSection = ({ event, tables, onChange }: PoolsSectionProps) => 
     ])
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-4" data-testid="pools-section">
       <SectionHeader
         title="Table pools"
         subtitle="Each pool reserves a slice of tables for a window of time."
         action={
-          <Button size="sm" onClick={addPool}>
-            <Plus size={14} />
-            Add pool
-          </Button>
+          canEdit && (
+            <Button size="sm" onClick={addPool}>
+              <Plus size={14} />
+              Add pool
+            </Button>
+          )
         }
       />
 
-      {conflicts.length > 0 && (
+      {/* A double-booking is a flaw in the *configuration*, and only the
+          organizer can fix it. To a reader it is an unactionable warning about
+          someone else's tournament — noise, not information — so they are not
+          shown it. (It is non-interactive, so this is a copy/UX call, not a
+          control leak: the guard sweep passes either way.) */}
+      {canEdit && conflicts.length > 0 && (
         <Alert className="border-[color:var(--warn)]/40 bg-[color:var(--warn)]/10">
           <TriangleAlert className="text-[color:var(--warn)]" />
           <AlertTitle className="text-[color:var(--warn)]">
@@ -68,14 +84,23 @@ export const PoolsSection = ({ event, tables, onChange }: PoolsSectionProps) => 
       )}
 
       {pools.length === 0 ? (
+        // "No pools yet" is a to-do — it reads as a gap the organizer is meant
+        // to close. A viewer is being told a fact about the event instead, and
+        // is offered nothing to add.
         <EmptyState
-          title="No pools yet"
-          hint="Add a pool to reserve tables for this event."
+          title={canEdit ? 'No pools yet' : 'No table pools'}
+          hint={
+            canEdit
+              ? 'Add a pool to reserve tables for this event.'
+              : 'No tables are reserved for this event.'
+          }
           action={
-            <Button onClick={addPool}>
-              <Plus size={16} />
-              Add first pool
-            </Button>
+            canEdit && (
+              <Button onClick={addPool}>
+                <Plus size={16} />
+                Add first pool
+              </Button>
+            )
           }
         />
       ) : (
@@ -85,6 +110,7 @@ export const PoolsSection = ({ event, tables, onChange }: PoolsSectionProps) => 
               key={p.id}
               pool={p}
               tables={tables}
+              canEdit={canEdit}
               onChange={(np) => setPools(pools.map((x, j) => (j === i ? np : x)))}
               onRemove={() => setPools(pools.filter((_, j) => j !== i))}
             />

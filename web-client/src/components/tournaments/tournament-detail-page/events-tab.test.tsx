@@ -1,5 +1,7 @@
 import userEvent from '@testing-library/user-event'
 
+import { screen } from '@/test/utilities'
+
 import { buildTournament, buildEvent } from '../data/seed.factory'
 import { eventsTabPage } from './events-tab.page'
 
@@ -40,5 +42,24 @@ describe('EventsTab', () => {
     })
     expect(document.body).toHaveTextContent('No events yet')
     expect(eventsTabPage.queryNewEventButtons()).toHaveLength(0)
+  })
+
+  // Clicking a card opens the editor for the organizer and a read-only view for
+  // everyone else, so the subtitle promises what the click delivers (ADR 0015,
+  // rule 5). Asserted both ways: the discriminating word is the verb.
+  describe('the "click any event" subtitle', () => {
+    it('invites the creator to edit', () => {
+      eventsTabPage.render({ tournament: buildTournament() })
+      expect(screen.getByText(/Click any event to edit\./)).toBeInTheDocument()
+      expect(screen.queryByText(/Click any event for details\./)).toBeNull()
+    })
+
+    it('offers a non-creator details, not editing', () => {
+      eventsTabPage.render({ tournament: buildTournament(), canEdit: false })
+      expect(
+        screen.getByText(/Click any event for details\./),
+      ).toBeInTheDocument()
+      expect(screen.queryByText(/Click any event to edit\./)).toBeNull()
+    })
   })
 })

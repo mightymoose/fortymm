@@ -6,18 +6,60 @@ import { cn } from '@/lib/utils'
 
 import type { Pool, TournamentTable } from '../../../data/types'
 import { Field } from '../../../field'
+import { ReadOnlyValue } from '../../../read-only-value'
 
 export interface PoolCardProps {
   pool: Pool
   /** The tables available to this tournament. */
   tables: TournamentTable[]
+  /** When false (a non-creator), the card renders the pool as text — its name,
+   * its window, and the tables it reserves — instead of a name box, three
+   * date/time fields and a wall of table toggles (ADR 0015). */
+  canEdit: boolean
   onChange: (pool: Pool) => void
   onRemove: () => void
 }
 
-/** A single table pool: a name, a date/start/end window, and a multi-select of
- * the tournament's tables (rendered as toggle chips). */
-export const PoolCard = ({ pool, tables, onChange, onRemove }: PoolCardProps) => {
+/** The card's chrome, shared by both renderings so the two cannot drift apart
+ * (ADR 0015, rule 3: the read-only view mirrors the editor's layout). */
+const HEADER_ROW =
+  'flex items-center gap-2.5 border-b border-[color:var(--border-subtle)] p-3.5'
+const OVERLINE =
+  'mb-1.5 text-[11px] font-semibold tracking-[0.12em] text-[color:var(--fg-3)] uppercase'
+const WINDOW_ROW = 'grid grid-cols-3 gap-3 p-3.5'
+
+/** How many tables the pool holds — a fact about the pool, so a viewer reads it
+ * too. */
+const TableCount = ({ count }: { count: number }) => (
+  <span className="rounded-full bg-[color:var(--bg-raised)] px-2 py-0.5 font-mono text-[11px] text-[color:var(--fg-2)]">
+    {count} {count === 1 ? 'table' : 'tables'}
+  </span>
+)
+
+/** The reserved tables as one line — the same labels the toggles show ("T1, T2,
+ * T5"), so there is no second vocabulary to keep in step. Driven off the table
+ * catalogue rather than off `pool.tableIds`, so the list reads in catalogue
+ * order and an id with no table behind it simply isn't named.
+ *
+ * An empty string is what `ReadOnlyValue` treats as unset — a pool that reserves
+ * nothing renders as an em-dash, not as a blank. */
+const reservedTableLabels = (pool: Pool, tables: TournamentTable[]): string =>
+  tables
+    .filter((t) => pool.tableIds.includes(t.id))
+    .map((t) => t.label)
+    .join(', ')
+
+/** A single table pool. For the creator: a name box, a date/start/end window,
+ * and a multi-select of the tournament's tables (rendered as toggle chips). For
+ * a viewer: the same pool read back as text — its name, its window, and the
+ * tables it reserves — with no control to reach for (ADR 0015). */
+export const PoolCard = ({
+  pool,
+  tables,
+  canEdit,
+  onChange,
+  onRemove,
+}: PoolCardProps) => {
   const setSlot = (patch: Partial<Pool['slot']>) =>
     onChange({ ...pool, slot: { ...pool.slot, ...patch } })
 
@@ -29,19 +71,63 @@ export const PoolCard = ({ pool, tables, onChange, onRemove }: PoolCardProps) =>
         : [...pool.tableIds, id],
     })
 
+  if (!canEdit) {
+    return (
+      <Card className="gap-0 p-0" data-testid="pool-card">
+        <div className={HEADER_ROW}>
+          <div data-testid="pool-name" className="min-w-0 flex-1">
+            <ReadOnlyValue className="h-8 text-[15px] font-semibold">
+              {pool.name}
+            </ReadOnlyValue>
+          </div>
+          <TableCount count={pool.tableIds.length} />
+        </div>
+
+        {/* `readOnly` on each row is what keeps the form's furniture out of the
+            view: these rows carry no hint or asterisk today, but a `Field` that
+            grows one must not leak it here (ADR 0015). */}
+        <div className={WINDOW_ROW}>
+          <Field label="Date" readOnly>
+            {() => <ReadOnlyValue>{pool.slot.date}</ReadOnlyValue>}
+          </Field>
+          <Field label="Start" readOnly>
+            {() => (
+              <ReadOnlyValue className="font-mono">
+                {pool.slot.start}
+              </ReadOnlyValue>
+            )}
+          </Field>
+          <Field label="End" readOnly>
+            {() => (
+              <ReadOnlyValue className="font-mono">
+                {pool.slot.end}
+              </ReadOnlyValue>
+            )}
+          </Field>
+        </div>
+
+        <div className="px-3.5 pb-3.5">
+          <div className={OVERLINE}>Tables in pool</div>
+          <div data-testid="pool-tables">
+            <ReadOnlyValue className="h-auto min-h-8 font-mono">
+              {reservedTableLabels(pool, tables)}
+            </ReadOnlyValue>
+          </div>
+        </div>
+      </Card>
+    )
+  }
+
   return (
     <Card className="gap-0 p-0" data-testid="pool-card">
-      <div className="flex items-center gap-2.5 border-b border-[color:var(--border-subtle)] p-3.5">
+      <div className={HEADER_ROW}>
         <Input
           aria-label="Pool name"
           value={pool.name}
           onChange={(e) => onChange({ ...pool, name: e.target.value })}
           className="h-8 flex-1 border-transparent bg-transparent text-[15px] font-semibold shadow-none focus-visible:border-[color:var(--border-default)]"
         />
-        <span className="rounded-full bg-[color:var(--bg-raised)] px-2 py-0.5 font-mono text-[11px] text-[color:var(--fg-2)]">
-          {pool.tableIds.length}{' '}
-          {pool.tableIds.length === 1 ? 'table' : 'tables'}
-        </span>
+        <TableCount count={pool.tableIds.length} />
         <button
           type="button"
           aria-label="Remove pool"
@@ -52,7 +138,7 @@ export const PoolCard = ({ pool, tables, onChange, onRemove }: PoolCardProps) =>
         </button>
       </div>
 
-      <div className="grid grid-cols-3 gap-3 p-3.5">
+      <div className={WINDOW_ROW}>
         <Field label="Date">
           {(id) => (
             <Input
@@ -88,9 +174,7 @@ export const PoolCard = ({ pool, tables, onChange, onRemove }: PoolCardProps) =>
       </div>
 
       <div className="px-3.5 pb-3.5">
-        <div className="mb-1.5 text-[11px] font-semibold tracking-[0.12em] text-[color:var(--fg-3)] uppercase">
-          Tables in pool
-        </div>
+        <div className={OVERLINE}>Tables in pool</div>
         <div className="flex flex-wrap gap-1.5">
           {tables.map((t) => {
             const selected = pool.tableIds.includes(t.id)

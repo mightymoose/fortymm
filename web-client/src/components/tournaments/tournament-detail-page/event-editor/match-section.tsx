@@ -5,46 +5,76 @@ import { cn } from '@/lib/utils'
 
 import { MATCH_LENGTH_OPTIONS } from '../../data/options'
 import type { MatchLength, TournamentEvent } from '../../data/types'
+import { ReadOnlyValue } from '../../read-only-value'
 import { SectionHeader } from '../section-header'
 
 export interface MatchSectionProps {
   event: TournamentEvent
+  /** When false (a non-creator), the section renders values instead of
+   * controls — a viewer gets a rendering of the data, never a disabled form
+   * (ADR 0015). */
+  canEdit: boolean
   onChange: (next: TournamentEvent) => void
 }
 
 /** The event editor's "Match settings" tab — a rated toggle and a best-of
- * length picker, with a per-length "first to N" breakdown. */
-export const MatchSection = ({ event, onChange }: MatchSectionProps) => {
+ * length picker, with a per-length "first to N" breakdown. For a non-creator
+ * the toggle and the picker are replaced by their values: a boolean reads as
+ * prose ("Not rated"), never as a dead switch (ADR 0015).
+ *
+ * The rated card's description drops its organizer-facing imperative ("Turn off
+ * for casual events") for a viewer, who has no toggle to turn off, and keeps
+ * only the descriptive half — copy addresses the reader, not the organizer
+ * (ADR 0015, rule 5). */
+export const MatchSection = ({
+  event,
+  canEdit,
+  onChange,
+}: MatchSectionProps) => {
   const m = event.match
   const setMatch = (patch: Partial<TournamentEvent['match']>) =>
     onChange({ ...event, match: { ...m, ...patch } })
 
+  const lengthLabel =
+    MATCH_LENGTH_OPTIONS.find((o) => o.value === m.lengthGames)?.label ?? null
+
   return (
-    <div className="flex flex-col gap-5">
+    <div className="flex flex-col gap-5" data-testid="match-section">
       <SectionHeader
         title="Match settings"
         subtitle="How each individual match is played in this event."
       />
 
-      <Card className="px-4">
+      <Card className="px-4" data-testid="match-rated-card">
         <div className="flex items-center justify-between gap-4">
           <div>
             <div className="text-[15px] font-semibold text-[color:var(--fg-1)]">
               Rated
             </div>
-            <div className="mt-0.5 text-[13px] text-[color:var(--fg-3)]">
-              Results count toward player ratings. Turn off for casual events.
+            <div
+              className="mt-0.5 text-[13px] text-[color:var(--fg-3)]"
+              data-testid="match-rated-description"
+            >
+              {canEdit
+                ? 'Results count toward player ratings. Turn off for casual events.'
+                : 'Results count toward player ratings.'}
             </div>
           </div>
-          <Switch
-            aria-label="Rated"
-            checked={m.rated}
-            onCheckedChange={(rated) => setMatch({ rated })}
-          />
+          {canEdit ? (
+            <Switch
+              aria-label="Rated"
+              checked={m.rated}
+              onCheckedChange={(rated) => setMatch({ rated })}
+            />
+          ) : (
+            <ReadOnlyValue className="shrink-0">
+              {m.rated ? 'Rated' : 'Not rated'}
+            </ReadOnlyValue>
+          )}
         </div>
       </Card>
 
-      <Card className="px-4">
+      <Card className="px-4" data-testid="match-length-card">
         <div>
           <div className="text-[15px] font-semibold text-[color:var(--fg-1)]">
             Match length
@@ -58,20 +88,24 @@ export const MatchSection = ({ event, onChange }: MatchSectionProps) => {
           </div>
         </div>
 
-        <ToggleGroup
-          type="single"
-          value={String(m.lengthGames)}
-          onValueChange={(v) => {
-            if (v) setMatch({ lengthGames: Number(v) as MatchLength })
-          }}
-          className="w-fit"
-        >
-          {MATCH_LENGTH_OPTIONS.map((o) => (
-            <ToggleGroupItem key={o.value} value={String(o.value)}>
-              {o.label}
-            </ToggleGroupItem>
-          ))}
-        </ToggleGroup>
+        {canEdit ? (
+          <ToggleGroup
+            type="single"
+            value={String(m.lengthGames)}
+            onValueChange={(v) => {
+              if (v) setMatch({ lengthGames: Number(v) as MatchLength })
+            }}
+            className="w-fit"
+          >
+            {MATCH_LENGTH_OPTIONS.map((o) => (
+              <ToggleGroupItem key={o.value} value={String(o.value)}>
+                {o.label}
+              </ToggleGroupItem>
+            ))}
+          </ToggleGroup>
+        ) : (
+          <ReadOnlyValue className="font-mono">{lengthLabel}</ReadOnlyValue>
+        )}
 
         <div className="grid grid-cols-4 gap-2">
           {MATCH_LENGTH_OPTIONS.map((o) => {
