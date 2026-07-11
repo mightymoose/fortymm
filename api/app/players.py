@@ -1,5 +1,6 @@
 import uuid
 from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -8,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased, selectinload
 from sqlalchemy.sql.base import ExecutableOption
 
+from app.career import player_career
 from app.db import get_session
 from app.leagues import resolve_league
 from app.models import (
@@ -19,6 +21,12 @@ from app.models import (
     RatingHistory,
     User,
     UserLeagueRating,
+)
+from app.ratings.stats import (
+    latest_rated_match_change,
+    league_peak_rating,
+    league_percentile,
+    league_rated_population,
 )
 from app.schemas.player import (
     PlayerDetail,
@@ -48,8 +56,25 @@ LIST_DEFAULT_PAGE_SIZE = 25
 LIST_MAX_PAGE_SIZE = 100
 
 # How many recent W/L results to surface as the "form" string on
-# PlayerSummary. Matches the FE's FormDots component (5 chips).
-FORM_WINDOW = 5
+# PlayerSummary. TEN, because the profile is where a player is actually studied
+# — a five-result window says almost nothing about how they are playing.
+#
+# `form` is ONE shared field: the `/players` roster serializes the same
+# `PlayerSummary` and so also receives ten results, and slices the first five for
+# its dots column. That is the intended trade — a second, roster-width form field
+# would be a field carrying its own derivation (api/CLAUDE.md).
+FORM_WINDOW = 10
+
+# The smallest rated population for which "Top N%" is a statement rather than a
+# flourish. Below it the profile withholds `percentile` entirely: in a
+# twelve-player league "top 8%" only ever means "you are first", and dressing
+# that up as a percentile is a lie of precision. The number is a provisional
+# guess — the *principle* (withhold it while the league is too small) is what is
+# settled, so move it freely.
+#
+# Deliberately applied HERE and not inside `league_percentile`: the dashboard's
+# rating card is the helper's other caller and its behavior is out of scope.
+PERCENTILE_MIN_RATED_PLAYERS = 50
 
 # How many matches the profile bundle embeds. The profile is an *overview*: it
 # renders a "Recent matches" card of the last six and links to the full
@@ -423,6 +448,55 @@ async def _summarize_one_player(
     return summaries[0]
 
 
+@dataclass(frozen=True)
+class _Standing:
+    """The hero's "where this player stands" block, computed once and handed to
+    the response model as typed fields (not a ``dict[str, Any]`` seam)."""
+
+    peak: float | None
+    rank_of: int | None
+    percentile: int | None
+    rating_delta: RatingChange | None
+
+
+async def _player_standing(
+    db: AsyncSession, user_id: uuid.UUID, league_id: uuid.UUID, summary: PlayerSummary
+) -> _Standing:
+    """Peak, the size of the ladder behind the player's rank, a percentile (only
+    once the league is big enough for one to mean anything), and the rating
+    change from their most recent rated match.
+
+    At most four round trips for the whole block — this is a single-player
+    surface, so every read below is one query scoped to that one player, never
+    one query per statistic per row.
+
+    Everything here hangs off the player HAVING a rating in this league. An
+    unrated player (never finished a rated match) has no rank, and so no peak, no
+    ladder position and no percentile: reporting a peak of 1500 for them would
+    present the seed rating as an achievement they earned.
+    """
+    rating = summary.rating
+    population = await league_rated_population(db, league_id)
+    history = await latest_rated_match_change(db, user_id, league_id)
+    peak = (
+        None
+        if rating is None
+        else await league_peak_rating(db, user_id, league_id, rating)
+    )
+    percentile = (
+        await league_percentile(db, league_id, rating)
+        if rating is not None and population >= PERCENTILE_MIN_RATED_PLAYERS
+        else None
+    )
+    return _Standing(
+        peak=peak,
+        # None exactly when `rank` is None — no rank, no ladder to stand on.
+        rank_of=None if summary.rank is None else population,
+        percentile=percentile,
+        rating_delta=None if history is None else RatingChange.from_history(history),
+    )
+
+
 async def _player_detail(
     db: AsyncSession, user: User, league_id: uuid.UUID
 ) -> PlayerDetail:
@@ -433,13 +507,27 @@ async def _player_detail(
     all N matches" link — the same population the embedded window is drawn from
     (any status, rated or not, solo matches and matches in play included), so it
     is exactly ``matches.total``. It is deliberately larger than the hero's
-    ``wins + losses`` whenever a match is undecided; see ADR-0915."""
+    ``wins + losses`` whenever a match is undecided; see ADR-0915.
+
+    ``career`` is the one block here that is NOT scoped to ``league_id`` — it is
+    a fact about the person, so it counts every league they play in (ADR-0915).
+    Passing the league into ``player_career`` would be the bug, not an
+    improvement."""
     summary = await _summarize_one_player(db, user, league_id)
     matches = await _paginated_player_matches(
         db, user.id, page=1, page_size=PROFILE_RECENT_MATCHES
     )
+    standing = await _player_standing(db, user.id, league_id, summary)
     return PlayerDetail(
-        **summary.model_dump(), matches=matches, match_total=matches.total
+        **summary.model_dump(),
+        matches=matches,
+        match_total=matches.total,
+        member_since=user.created_at,
+        peak=standing.peak,
+        rank_of=standing.rank_of,
+        percentile=standing.percentile,
+        rating_delta=standing.rating_delta,
+        career=await player_career(db, user.id),
     )
 
 
@@ -453,7 +541,21 @@ async def get_player(
     """Authed profile bundle for `/players/$userId` — the overview in one
     response: hero + the six most recent matches + the all-inclusive
     `match_total` behind the "View all N matches" link. The full paginated
-    history is served by `/v1/players/{id}/matches`."""
+    history is served by `/v1/players/{id}/matches`.
+
+    The hero's standing block says where this player stands in the requested
+    league: `rating` and `rank` out of `rank_of` (so it reads "#3 of 42", never a
+    naked "#3"), their all-time `peak`, the `rating_delta` their most recent
+    rated match moved, and — only once the league is large enough for it to mean
+    anything — a `percentile`. An unrated player has none of them.
+
+    `career` is the exception: it is CROSS-LEAGUE and ignores `league_id`
+    entirely. Rating, rank, peak and percentile are facts about a *ladder*; a
+    player's lifetime record — decided matches, W-L, win rate, games-won share,
+    current and best streak — is a fact about the *person* (ADR-0915). Ask for
+    the same player in two different leagues and only the rating half changes.
+    `career.decided` counts decided matches alone, so it is smaller than
+    `match_total` whenever one of their matches is still in play."""
     user = await _load_player_by_id(db, player_id)
     if user is None:
         raise HTTPException(

@@ -84,10 +84,12 @@ export function usePlayerList(
   })
 }
 
-/** Authed profile-page bundle — hero summary + first page of matches in one
- * request. The FE seeds page 1 of the matches-query cache from
- * `response.matches` via TanStack Query's `initialData` so the profile
- * page paints in a single round trip. */
+/** Authed profile-page bundle — hero summary + the six most recent matches +
+ * the all-inclusive `match_total`, in one request. The profile is an overview
+ * (ADR-0915); the full paginated history is its own route, backed by
+ * `usePlayerMatches` below. The bundle's six-row window is NOT a page of that
+ * list (its `page_size` is 6), so it must not be used to seed the
+ * 25-per-page matches cache. */
 export function playerByIdQueryOptions(playerId: string) {
   return queryOptions({
     queryKey: playerQueryKey(playerId),
@@ -111,27 +113,24 @@ export function usePlayerById(
 }
 
 /** Per-player paginated match list — pre-shaped from the player's
- * perspective so the FE doesn't have to flip game scores. Backs page 2+ of
- * the authed `/players/$userId` profile page, which already has the id by
- * the time it calls this.
+ * perspective so the FE doesn't have to flip game scores. Backs the full
+ * match-history route (`/players/$userId/matches`), 25 rows to a page.
  *
- * Intentionally NOT `throwOnError`: the profile page renders an inline
+ * The list is deliberately all-inclusive (ADR-0008): every match the player
+ * is a side of, any status, rated or not — including the player-less "No
+ * opponent" solo sentinel. Don't narrow it.
+ *
+ * `placeholderData: keepPreviousData` keeps the current page on screen while
+ * the next one resolves — no flash to empty between pages.
+ *
+ * Intentionally NOT `throwOnError`: the page renders an inline
  * "Couldn't load matches · Try again" affordance for transient failures
  * via the hook's `isError` + `refetch`, so a match-fetch hiccup doesn't
- * blank the whole profile page through the route-level error boundary. */
+ * blank the whole page through the route-level error boundary. */
 export function usePlayerMatches(
   playerId: string,
   params: PlayerMatchListParams,
-  options: {
-    enabled?: boolean
-    /** Hydrate the cache with a previously-fetched page (e.g. the
-     * first-page matches embedded in the `PlayerDetail` profile
-     * response). Caller is responsible for only passing this for the
-     * matching page+page_size — the cache key includes them. When
-     * provided, the query skips the initial fetch and renders straight
-     * from this value. */
-    initialData?: PlayerMatchListResponse
-  } = {},
+  options: { enabled?: boolean } = {},
 ) {
   return useQuery({
     queryKey: playerMatchesQueryKey(playerId, params),
@@ -147,16 +146,6 @@ export function usePlayerMatches(
       ),
     enabled: options.enabled ?? true,
     placeholderData: keepPreviousData,
-    initialData: options.initialData,
-    // Stamp the seeded data with "just fetched" — the matches were embedded
-    // in the profile response in this same render cycle, so they're as
-    // fresh as a real fetch would be. Without this, TanStack would use
-    // `initialDataUpdatedAt: 0` (epoch) and the data would always be
-    // considered stale, triggering a background refetch on mount even
-    // within the QueryClient's 30s default `staleTime` (see main.tsx).
-    // Function form so the impurity (`Date.now()`) is deferred out of the
-    // hook's render — TanStack Query invokes it lazily.
-    initialDataUpdatedAt: options.initialData ? () => Date.now() : undefined,
     retry: false,
   })
 }

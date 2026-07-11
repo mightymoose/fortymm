@@ -8,19 +8,12 @@
   background: var(--bg-app);
   color: var(--fg-1);
   font-family: var(--font-ui);
-  /* Fixed-height viewport so the matches list can scroll independently and
-   * the pagination footer sticks to the bottom — same pattern as
-   * `.match-list-page` in routes/matches/index.css. The 64px fallback
-   * matches the value set by AppShell so that the layout still works if the
-   * component is ever rendered outside both AppShell and `--standalone`. */
-  height: calc(100vh - var(--topbar-h, 64px));
-  overflow: hidden;
-}
-
-/* Public route renders without AppShell, so there's no 64px topbar to
- * account for — zero out the var so the same `calc(...)` reads 100vh. */
-.player-profile--standalone {
-  --topbar-h: 0px;
+  /* The profile is a normal scrolling document. It used to be a fixed-height
+   * pane (`height: calc(100vh - topbar)` + `overflow: hidden`) wrapped around an
+   * independently-scrolling table — an overview of stacked cards has no use for
+   * that, and it capped the page at one viewport. The full match-history route
+   * still wants the pane, and asks for it explicitly with
+   * `.player-profile--pane` (player-match-history.css). */
 }
 
 /* ============ Hero ============ */
@@ -43,11 +36,27 @@
   background-size: auto, 40px 40px;
 }
 
+/* Identity on the left, standing on the right. Each half is its own
+ * self-fetching card, so they wrap independently on a narrow viewport. */
 .player-profile__hero-row {
   display: grid;
-  grid-template-columns: auto 1fr auto;
+  grid-template-columns: 1fr auto;
   align-items: center;
   gap: clamp(20px, 4vw, 28px);
+}
+
+@media (max-width: 720px) {
+  .player-profile__hero-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* The identity card: avatar + name block. */
+.player-profile__identity {
+  display: flex;
+  align-items: center;
+  gap: clamp(16px, 3vw, 24px);
+  min-width: 0;
 }
 
 .player-profile__avatar-ring {
@@ -93,42 +102,119 @@
   color: var(--ball-500);
 }
 
-.player-profile__sub {
-  color: var(--fg-2);
-  font-family: var(--font-ui);
-  font-weight: 500;
-  font-size: 14px;
-  margin-top: 10px;
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
-.player-profile__sub-flag {
-  font-size: 18px;
-  line-height: 1;
-}
-
-.player-profile__sub-handle {
-  font-family: var(--font-mono);
-  color: var(--fg-3);
-  letter-spacing: 0.04em;
-}
-
-.player-profile__sub-sep {
-  width: 3px;
-  height: 3px;
-  border-radius: 50%;
-  background: var(--ink-500);
-  display: inline-block;
-}
-
-.player-profile__hero-rating {
+/* ============ Standing (rating · Δ · rank · peak · form) ============ */
+.player-profile__standing {
   display: flex;
   flex-direction: column;
   align-items: flex-end;
+  gap: 10px;
+}
+
+@media (max-width: 720px) {
+  .player-profile__standing {
+    align-items: flex-start;
+  }
+}
+
+.player-profile__standing > .player-profile__overline {
+  margin-bottom: 0;
+}
+
+.player-profile__rating-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* The Δ from the player's most recent rated match. Rendered only when there IS
+ * one — a player with no rating history gets no chip, never a "+0". */
+.player-profile__delta {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+}
+
+.player-profile__delta--win {
+  color: var(--serve-500);
+  background: rgba(0, 226, 154, 0.12);
+  border-color: rgba(0, 226, 154, 0.4);
+}
+
+.player-profile__delta--loss {
+  color: var(--loss);
+  background: rgba(255, 77, 109, 0.1);
+  border-color: rgba(255, 77, 109, 0.4);
+}
+
+/* Rank ("#3 of 42"), peak, percentile. Only the lines the player actually has. */
+.player-profile__stats {
+  display: flex;
+  align-items: baseline;
+  gap: 18px;
+  margin: 0;
+  flex-wrap: wrap;
+}
+
+.player-profile__stat {
+  display: flex;
+  align-items: baseline;
   gap: 6px;
+}
+
+.player-profile__stat-k {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+}
+
+.player-profile__stat-v {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--fg-1);
+}
+
+/* Ten results, newest first. (The /players roster shows five of the same wire
+ * field — that slice lives there.) */
+.player-profile__form {
+  display: inline-flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.player-profile__form-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  border: 1px solid transparent;
+}
+
+.player-profile__form-chip--w {
+  color: var(--serve-500);
+  background: rgba(0, 226, 154, 0.12);
+  border-color: rgba(0, 226, 154, 0.35);
+}
+
+.player-profile__form-chip--l {
+  color: var(--loss);
+  background: rgba(255, 77, 109, 0.1);
+  border-color: rgba(255, 77, 109, 0.3);
 }
 
 .player-profile__hero-rating-chip {
@@ -145,17 +231,24 @@
   background: rgba(255, 122, 26, 0.06);
 }
 
-.player-profile__hero-rating-meta {
+/* A player who has never finished a rated match reads "Unrated" in the same
+ * slot — a word, not a number, so it wears the muted tone rather than the
+ * ball-orange rating chrome. */
+.player-profile__hero-rating-chip--unrated {
   font-family: var(--font-ui);
-  font-size: 12px;
-  font-weight: 500;
+  font-size: clamp(18px, 2.5vw, 24px);
+  font-weight: 600;
+  letter-spacing: 0.04em;
   color: var(--fg-3);
-  margin-top: 2px;
+  border-color: var(--border-subtle);
+  background: transparent;
 }
 
-.player-profile__hero-rating-meta-mono {
-  font-family: var(--font-mono);
-  font-variant-numeric: tabular-nums;
+.player-profile__member-since {
+  margin: 10px 0 0;
+  font-family: var(--font-ui);
+  font-size: 14px;
+  font-weight: 500;
   color: var(--fg-2);
 }
 
@@ -194,35 +287,29 @@
   animation: player-profile-shimmer 1.4s ease-in-out infinite;
 }
 
+.player-profile__stat-skeleton {
+  display: block;
+  width: 76px;
+  height: 14px;
+  border-radius: 4px;
+  background: var(--bg-raised);
+  animation: player-profile-shimmer 1.4s ease-in-out infinite;
+}
+
+.player-profile__form-chip--skeleton {
+  background: var(--bg-raised);
+  border-color: var(--bg-raised);
+  animation: player-profile-shimmer 1.4s ease-in-out infinite;
+}
+
 @keyframes player-profile-shimmer {
   0%, 100% { opacity: 0.45; }
   50% { opacity: 0.75; }
 }
 
-/* ----- Hero W-L stats line ----- */
-.player-profile__sub-record {
-  font-family: var(--font-ui);
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--fg-1);
-  display: inline-flex;
-  align-items: baseline;
-  gap: 2px;
-}
-
-.player-profile__sub-record-mono {
-  font-family: var(--font-mono);
-  font-variant-numeric: tabular-nums;
-}
-
-/* Loading variant of the hero. */
-.player-profile__name--loading {
-  color: var(--fg-3);
-  letter-spacing: 0.04em;
-  font-size: clamp(28px, 4vw, 36px);
-  font-family: var(--font-mono);
-  text-transform: none;
-}
+/* The hero's W–L line is gone: the record belongs to the Career card, which
+ * lands with the career aggregate (slice 4). The hero says where a player
+ * *stands* — rating, rank, peak, form — not what their lifetime record is. */
 
 /* ============ Body / matches ============ */
 /* No padding — table.matches takes the full width like /matches and
@@ -511,4 +598,360 @@
 
 .player-profile .footer-spacer {
   flex: 1;
+}
+
+/* ----- Recent matches card (the profile's six-row overview) -----
+ * The grid is Opponent | Score | Δ | When — there is no result-chip column
+ * (ADR-0915). A match that hasn't finished carries its state on the status dot
+ * and in the score cell, so both have to read at a glance. */
+
+.recent-matches__table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-family: var(--font-ui);
+}
+
+.recent-matches__table thead th {
+  text-align: left;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+  padding: 12px clamp(20px, 5vw, 40px);
+  border-bottom: 1px solid var(--border-subtle);
+  white-space: nowrap;
+  user-select: none;
+}
+
+.recent-matches__table tbody td {
+  padding: 12px clamp(20px, 5vw, 40px);
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: 14px;
+  color: var(--fg-1);
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.recent-matches__row {
+  transition: background 120ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.recent-matches__row:hover {
+  background: var(--bg-hover);
+}
+
+/* The status dot: the only thing left carrying won/lost/live/awaiting once the
+ * result chip is gone. */
+.recent-matches__dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--fg-3);
+}
+
+.recent-matches__dot--won {
+  background: var(--serve-500);
+}
+
+.recent-matches__dot--lost {
+  background: var(--loss);
+}
+
+.recent-matches__dot--awaiting {
+  background: var(--warn);
+}
+
+.recent-matches__dot--live {
+  background: var(--ball-500);
+  animation: recent-matches-pulse 1.6s ease-in-out infinite;
+}
+
+/* Up next: agreed, not started. Hollow — nothing has happened yet. */
+.recent-matches__dot--up_next {
+  background: transparent;
+  border: 1px solid var(--fg-3);
+}
+
+.recent-matches__dot--voided {
+  background: var(--fg-4, var(--fg-3));
+  opacity: 0.6;
+}
+
+@keyframes recent-matches-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .recent-matches__dot--live {
+    animation: none;
+  }
+}
+
+/* "Live" / "Awaiting" / "—" where a scoreline would go. */
+.recent-matches__score-text {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  color: var(--fg-3);
+}
+
+/* The Δ cell for a row that moved no rating. An em dash, never a "+0". */
+.recent-matches__delta-none {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--fg-3);
+}
+
+.recent-matches__opponent--solo {
+  color: var(--fg-3);
+  font-style: italic;
+}
+
+.recent-matches__view-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+  margin: 14px clamp(20px, 5vw, 40px);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--fg-2);
+  text-decoration: none;
+  transition: color 120ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.recent-matches__view-all:hover {
+  color: var(--ball-500);
+}
+
+.recent-matches__empty {
+  padding: 40px clamp(20px, 5vw, 40px);
+  text-align: center;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--fg-2);
+}
+
+.recent-matches__skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0 clamp(20px, 5vw, 40px);
+}
+
+.recent-matches__skeleton-row {
+  height: 44px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: linear-gradient(
+    90deg,
+    var(--bg-hover) 0%,
+    var(--bg-panel) 50%,
+    var(--bg-hover) 100%
+  );
+  opacity: 0.5;
+}
+
+/* ----- Career card (the cross-league lifetime record) -----
+ * A fact about the *person*, not about a ladder (ADR-0915): nothing in here is
+ * league-scoped, so the league switcher must not move any of it.
+ *
+ * Its total reads "47 decided · 2 leagues" — deliberately a *different* number
+ * from the "View all 50 matches" link on the Recent-matches card below it, which
+ * counts the all-inclusive history. The word "decided" is doing load-bearing
+ * work; don't drop it to save space. */
+
+.career-card {
+  /* Unlike the matches section, the card is content-sized — it must not stretch
+   * to eat the page's spare height. */
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--border-subtle);
+  padding-bottom: 24px;
+}
+
+.career-card__total {
+  color: var(--fg-3);
+}
+
+.career-card__body {
+  display: flex;
+  align-items: center;
+  gap: clamp(20px, 4vw, 36px);
+  padding: 0 clamp(20px, 5vw, 40px);
+  flex-wrap: wrap;
+}
+
+/* ----- The win-rate ring ----- */
+.career-card__ring {
+  position: relative;
+  flex: 0 0 auto;
+  width: 116px;
+  height: 116px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.career-card__ring-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  fill: none;
+  stroke-width: 7;
+}
+
+.career-card__ring-track {
+  stroke: var(--bg-raised);
+}
+
+.career-card__ring-arc {
+  stroke: var(--serve-500);
+  stroke-linecap: round;
+  transition: stroke-dashoffset 400ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .career-card__ring-arc {
+    transition: none;
+  }
+}
+
+/* The figure in the middle: "68.6%" — or "—" for a player who has decided
+ * nothing. Never a "0%": that would say they lose every match they play. */
+.career-card__ring-figure {
+  font-family: var(--font-display);
+  font-size: 26px;
+  line-height: 1;
+  color: var(--fg-1);
+  letter-spacing: 0.01em;
+}
+
+.career-card__ring-caption {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+  margin-top: 4px;
+}
+
+.career-card__ring--skeleton {
+  border-radius: 50%;
+  background: var(--bg-raised);
+  animation: player-profile-shimmer 1.4s ease-in-out infinite;
+}
+
+/* ----- Record, streak pill, tiles ----- */
+.career-card__figures {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  flex: 1;
+}
+
+.career-card__record {
+  font-family: var(--font-display);
+  font-size: 28px;
+  line-height: 1;
+  color: var(--fg-1);
+  letter-spacing: 0.02em;
+  margin: 0;
+}
+
+.career-card__streak {
+  align-self: flex-start;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 4px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border-subtle);
+  color: var(--fg-2);
+}
+
+.career-card__streak--win {
+  color: var(--serve-500);
+  border-color: color-mix(in srgb, var(--serve-500) 40%, transparent);
+  background: color-mix(in srgb, var(--serve-500) 10%, transparent);
+}
+
+.career-card__streak--loss {
+  color: var(--loss);
+  border-color: color-mix(in srgb, var(--loss) 40%, transparent);
+  background: color-mix(in srgb, var(--loss) 10%, transparent);
+}
+
+/* A player with no decided match has no streak at all — the pill says so
+ * rather than showing a zero. */
+.career-card__streak--none {
+  color: var(--fg-3);
+}
+
+.career-card__tiles {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+.career-card__tile {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 108px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-panel);
+}
+
+.career-card__tile-k {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+}
+
+.career-card__tile-v {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--fg-1);
+}
+
+.career-card__tile--skeleton {
+  height: 52px;
+  background: var(--bg-raised);
+  animation: player-profile-shimmer 1.4s ease-in-out infinite;
+}
+
+.career-card__skeleton-line {
+  display: block;
+  width: 140px;
+  height: 20px;
+  border-radius: 4px;
+  background: var(--bg-raised);
+  animation: player-profile-shimmer 1.4s ease-in-out infinite;
+}
+
+.career-card__skeleton-line--pill {
+  width: 108px;
+  height: 14px;
+  border-radius: 999px;
 }

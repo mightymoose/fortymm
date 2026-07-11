@@ -17,20 +17,23 @@ import { Route } from './index'
 const PlayersRoute = Route.options.component!
 
 /** A PlayerSummary row — only the fields the roster table reads. `rank` is the
- * player's true global rating rank (1 = highest); `null` means unrated. */
+ * player's true global rating rank (1 = highest); `null` means unrated. `form`
+ * arrives from the wire TEN results wide (it is shared with the profile bundle),
+ * newest first — the roster slices it. */
 function playerRow(
   overrides: {
     id: string
     username: string
     rank: number | null
     rating?: number | null
+    form?: string
   },
 ) {
   return {
     rating: 1500,
     wins: 10,
     losses: 5,
-    form: 'WWLWL',
+    form: 'WWLWLLWWLW',
     ...overrides,
   }
 }
@@ -129,5 +132,103 @@ describe('players roster rank column (#841)', () => {
     await waitFor(() =>
       expect(screen.getByText(/no players match/i)).toBeInTheDocument(),
     )
+  })
+})
+
+/** `form` is a *shared* field: it lives on `PlayerSummary`, which both the
+ * profile bundle and this roster serialize, and the wire now carries TEN results
+ * because the profile studies a player in depth (api/app/players.py
+ * `FORM_WINDOW`). The roster's column is deliberately "Form · L5" — so it must
+ * slice, and its `aria-label` must promise exactly what it renders. */
+describe('players roster form column', () => {
+  /** The row's form cell — the `<span class="players-form">` wrapping the dots. */
+  function formSpanFor(username: string): HTMLElement {
+    const row = screen.getByText(username).closest('tr')
+    if (!row) throw new Error(`no row for ${username}`)
+    const span = within(row).getByText((_, el) =>
+      el?.classList.contains('players-form') ?? false,
+    )
+    return span
+  }
+
+  it('shows five dots for a ten-result wire form, under a label that says five', async () => {
+    const items = [
+      playerRow({
+        id: 'p-1',
+        username: 'ten.former',
+        rank: 1,
+        // Newest-first, as the API sends it: the roster shows the first five.
+        form: 'WWLWLLWWLW',
+      }),
+    ]
+    server.use(
+      http.get('*/v1/session', () => HttpResponse.json(sessionResponse())),
+      http.get('*/v1/players', () =>
+        HttpResponse.json({
+          items,
+          page: 1,
+          page_size: 25,
+          total: items.length,
+        }),
+      ),
+    )
+
+    renderRoster('/players')
+    await screen.findByText('ten.former')
+
+    const form = formSpanFor('ten.former')
+    // Five dots, not ten — the extra five belong to the profile hero.
+    expect(form.querySelectorAll('.players-form-dot')).toHaveLength(5)
+    expect(form.textContent).toBe('WWLWL')
+    // …and the label promises exactly what is on screen.
+    expect(form).toHaveAttribute('aria-label', 'Last 5: W W L W L')
+  })
+
+  it('labels a short form by how many results it actually shows', async () => {
+    const items = [
+      playerRow({ id: 'p-1', username: 'three.games', rank: 4, form: 'WLW' }),
+    ]
+    server.use(
+      http.get('*/v1/session', () => HttpResponse.json(sessionResponse())),
+      http.get('*/v1/players', () =>
+        HttpResponse.json({
+          items,
+          page: 1,
+          page_size: 25,
+          total: items.length,
+        }),
+      ),
+    )
+
+    renderRoster('/players')
+    await screen.findByText('three.games')
+
+    const form = formSpanFor('three.games')
+    expect(form.querySelectorAll('.players-form-dot')).toHaveLength(3)
+    expect(form).toHaveAttribute('aria-label', 'Last 3: W L W')
+  })
+
+  it('renders an em-dash for a player with no decided matches', async () => {
+    const items = [
+      playerRow({ id: 'p-1', username: 'fresh.rookie', rank: null, form: '' }),
+    ]
+    server.use(
+      http.get('*/v1/session', () => HttpResponse.json(sessionResponse())),
+      http.get('*/v1/players', () =>
+        HttpResponse.json({
+          items,
+          page: 1,
+          page_size: 25,
+          total: items.length,
+        }),
+      ),
+    )
+
+    renderRoster('/players')
+    await screen.findByText('fresh.rookie')
+
+    const form = formSpanFor('fresh.rookie')
+    expect(form.querySelectorAll('.players-form-dot')).toHaveLength(0)
+    expect(form.textContent).toBe('—')
   })
 })

@@ -109,9 +109,25 @@ function matchesListFilter(m: SeedMatch, statusFilter: string): boolean {
 // derives plausible W-L + form deterministically so reloads stay stable.
 
 type PlayerSummary = components['schemas']['PlayerSummary']
+type PlayerDetail = components['schemas']['PlayerDetail']
+type PlayerCareer = components['schemas']['PlayerCareer']
 type PlayerMatchRow = components['schemas']['PlayerMatchRow']
 
 const MOCK_CURRENT_PLAYER_ID = 'u-me' // matches MOCK_CURRENT_USER.id in match-store
+
+/** Mirrors `FORM_WINDOW` in `api/app/players.py` — the wire carries TEN recent
+ * results, because the profile is where a player is actually studied. `form`
+ * lives on the shared `PlayerSummary`, so the `/players` roster receives all ten
+ * too and slices the first five for its dots column. Synthesizing five here
+ * would hide that slice from every test (the real API sends ten). */
+const FORM_WINDOW = 10
+
+/** Mirrors `PERCENTILE_MIN_RATED_PLAYERS` in `api/app/players.py`: below this
+ * many rated players the API withholds `percentile` entirely, because "top 8%"
+ * in a twelve-player league only ever means "you are first". The mock roster is
+ * far smaller than this, so mock profiles carry `percentile: null` — exactly
+ * what the real API sends today. */
+const PERCENTILE_MIN_RATED_PLAYERS = 50
 
 function mockPlayerRoster() {
   const me = {
@@ -190,10 +206,10 @@ function summarizePlayer(p: {
       const target = Math.ceil(m.best_of / 2)
       if (s1 >= target) {
         wins += 1
-        if (recent.length < 5) recent.push('W')
+        if (recent.length < FORM_WINDOW) recent.push('W')
       } else if (s2 >= target) {
         losses += 1
-        if (recent.length < 5) recent.push('L')
+        if (recent.length < FORM_WINDOW) recent.push('L')
       }
     }
     return {
@@ -209,7 +225,7 @@ function summarizePlayer(p: {
   const seed = djb2(p.username)
   const wins = 5 + (seed % 25)
   const losses = 2 + ((seed * 7) % 12)
-  const form = Array.from({ length: 5 }, (_, i) =>
+  const form = Array.from({ length: FORM_WINDOW }, (_, i) =>
     (seed + i * 3) % 3 === 0 ? 'L' : 'W',
   ).join('')
   return {
@@ -223,29 +239,135 @@ function summarizePlayer(p: {
   }
 }
 
-/** Mirrors the backend's `LIST_DEFAULT_PAGE_SIZE` in `api/app/players.py`
- * and the FE's `PAGE_SIZE` in `player-profile.tsx`. If those drift, the
- * FE's `initialData` cache-key won't match the bundle's `page_size` and
- * we'll waste a second fetch on mount — the whole point of bundling. */
-const BUNDLED_MATCHES_PAGE_SIZE = 25
+/** Mirrors the backend's `PROFILE_RECENT_MATCHES` in `api/app/players.py` —
+ * the profile bundle is an *overview*: it embeds only the six most recent
+ * matches. The full 25-per-page history is its own surface
+ * (`/players/{id}/matches`), fed by `/v1/players/{id}/matches`. */
+const PROFILE_RECENT_MATCHES = 6
 
-/** PlayerDetail = PlayerSummary + first-page matches. The profile endpoint
- * (`/v1/players/{id}`) returns this so the FE paints the profile page in one
- * round trip; pagination beyond page 1 falls through to
- * `/v1/players/{id}/matches`. */
+/** The hero's standing block — profile-only (it deliberately does NOT ride on
+ * `PlayerSummary`, which the roster also serializes). Mirrors `_load_standing`
+ * in `api/app/players.py`:
+ *
+ * - an **unrated** player (never finished a rated match) has no rank, and so no
+ *   peak, no ladder position and no rating delta — `null` all the way down;
+ * - a rated player's rank is reported *out of the rated population* (`rank_of`),
+ *   so the hero can read "#3 of 42" instead of a flattering naked "#3";
+ * - `rating_delta` is `null`, never a zero-delta object, when there is no
+ *   preceding rated match to have moved the rating.
+ */
+function playerStanding(summary: PlayerSummary) {
+  const ratedPopulation = rosterRankById().size
+  if (summary.rating == null || summary.rank == null) {
+    return {
+      peak: null,
+      rank_of: null,
+      percentile: null,
+      rating_delta: null,
+    }
+  }
+  const seed = djb2(summary.username)
+  // Deterministic, non-zero move from the player's most recent rated match, so
+  // the Δ chip is stable across reloads and never renders as "+0".
+  const delta = ((seed % 19) - 9 || 8) as number
+  return {
+    peak: summary.rating + (seed % 40),
+    rank_of: ratedPopulation,
+    // The mock roster is a dozen players — far below the threshold at which a
+    // percentile means anything, so the API would withhold it. Mirror that.
+    percentile:
+      ratedPopulation >= PERCENTILE_MIN_RATED_PLAYERS
+        ? Math.max(
+            1,
+            Math.round((summary.rank / ratedPopulation) * 100),
+          )
+        : null,
+    rating_delta: {
+      before: summary.rating - delta,
+      after: summary.rating,
+      delta,
+    },
+  }
+}
+
+/** The player's **cross-league** career (ADR-0915) — a fact about the *person*,
+ * so it deliberately ignores the requested league. Mirrors `_load_career` in
+ * `api/app/career.py`:
+ *
+ * - `decided` counts only *decided* matches (a win or a loss), which is why it
+ *   is smaller than the all-inclusive `match_total` whenever a match is in play.
+ *   The two numbers sit side by side on the profile and differ on purpose;
+ * - `win_rate` and `games_won_pct` are **shares in [0, 1]** — 0.686, never 68.6
+ *   — despite the `_pct` name the API kept;
+ * - a player who has decided nothing gets `null` shares and `null` streaks, not
+ *   zeroes: a 0% would claim they lose every match they play.
+ */
+function playerCareer(summary: PlayerSummary): PlayerCareer {
+  const decided = summary.wins + summary.losses
+  if (decided === 0) {
+    return {
+      decided: 0,
+      wins: 0,
+      losses: 0,
+      win_rate: null,
+      games_won_pct: null,
+      current_streak: null,
+      best_streak: null,
+      league_count: 1,
+    }
+  }
+  const seed = djb2(summary.username)
+  // Form is newest-first, so the current streak is its leading run of one
+  // outcome — it breaks the moment the other one lands.
+  const results = summary.form.split('')
+  const kind = results[0] === 'L' ? ('L' as const) : ('W' as const)
+  let run = 0
+  while (run < results.length && results[run] === kind) run += 1
+  // The real API scans the whole history for the best *winning* run; the mock
+  // synthesizes one deterministically, never shorter than the current one.
+  const bestWinRun = Math.max(kind === 'W' ? run : 0, 3 + (seed % 5))
+  return {
+    decided,
+    wins: summary.wins,
+    losses: summary.losses,
+    win_rate: summary.wins / decided,
+    // A share in [0, 1], deliberately not equal to the match win rate: games
+    // won is a finer read on dominance than whole matches.
+    games_won_pct: Math.round((0.4 + (seed % 35) / 100) * 1000) / 1000,
+    current_streak: run > 0 ? { kind, n: run } : null,
+    // No wins, no winning run to have been anyone's best.
+    best_streak:
+      summary.wins > 0 ? { kind: 'W' as const, n: bestWinRun } : null,
+    // Every player is in exactly one league today (the default league).
+    league_count: 1,
+  }
+}
+
+/** PlayerDetail = PlayerSummary + the hero's standing (member-since, peak,
+ * rank-of-ladder, percentile, rating delta) + the cross-league career block +
+ * the six most recent matches + the all-inclusive `match_total` behind the
+ * "View all N matches" link. */
 function playerDetail(p: {
   id: string
   username: string
   rating?: number | null
-}) {
+}): PlayerDetail {
   const summary = summarizePlayer(p)
   const rows = projectPlayerMatches({ id: p.id, username: p.username })
+  const seed = djb2(p.username)
   return {
     ...summary,
+    // A stable join date: month + year is all the hero shows.
+    member_since: new Date(
+      Date.UTC(2023 + (seed % 3), seed % 12, 1 + (seed % 27)),
+    ).toISOString(),
+    ...playerStanding(summary),
+    career: playerCareer(summary),
+    match_total: rows.length,
     matches: {
-      items: rows.slice(0, BUNDLED_MATCHES_PAGE_SIZE),
+      items: rows.slice(0, PROFILE_RECENT_MATCHES),
       page: 1,
-      page_size: BUNDLED_MATCHES_PAGE_SIZE,
+      page_size: PROFILE_RECENT_MATCHES,
       total: rows.length,
     },
   }
@@ -317,6 +439,17 @@ function projectPlayerMatches(player: {
         if (gamesWonByMe >= target) result = 'W'
         else if (gamesWonByThem >= target) result = 'L'
       }
+      // The rating this match moved, for the Recent-matches card's Δ column.
+      // `null` — never a zero-delta object — for anything undecided (live, up
+      // next, awaiting, voided) or unrated, so the dev view exercises the em-dash
+      // path the way the real API does.
+      const ratingBefore = 1600 + (djb2(m.id) % 120)
+      const moved = 6 + (djb2(m.id) % 13)
+      const delta = result === 'W' ? moved : -moved
+      const rating_change =
+        result === null
+          ? null
+          : { before: ratingBefore, after: ratingBefore + delta, delta }
       return {
         id: m.id,
         status: m.status,
@@ -325,6 +458,7 @@ function projectPlayerMatches(player: {
         games,
         result,
         awaiting_acceptance: false,
+        rating_change,
       }
     })
 }

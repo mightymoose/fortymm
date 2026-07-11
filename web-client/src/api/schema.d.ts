@@ -585,6 +585,20 @@ export interface paths {
          *     response: hero + the six most recent matches + the all-inclusive
          *     `match_total` behind the "View all N matches" link. The full paginated
          *     history is served by `/v1/players/{id}/matches`.
+         *
+         *     The hero's standing block says where this player stands in the requested
+         *     league: `rating` and `rank` out of `rank_of` (so it reads "#3 of 42", never a
+         *     naked "#3"), their all-time `peak`, the `rating_delta` their most recent
+         *     rated match moved, and — only once the league is large enough for it to mean
+         *     anything — a `percentile`. An unrated player has none of them.
+         *
+         *     `career` is the exception: it is CROSS-LEAGUE and ignores `league_id`
+         *     entirely. Rating, rank, peak and percentile are facts about a *ladder*; a
+         *     player's lifetime record — decided matches, W-L, win rate, games-won share,
+         *     current and best streak — is a fact about the *person* (ADR-0915). Ask for
+         *     the same player in two different leagues and only the rating half changes.
+         *     `career.decided` counts decided matches alone, so it is smaller than
+         *     `match_total` whenever one of their matches is still in play.
          */
         get: operations["get_player_v1_players__player_id__get"];
         put?: never;
@@ -1954,15 +1968,45 @@ export interface components {
             description?: string | null;
         };
         /**
+         * PlayerCareer
+         * @description A player's lifetime record ACROSS EVERY LEAGUE they play in (CONTEXT.md,
+         *     "Career"; ADR-0915).
+         *
+         *     Career is a fact about the *person*. It deliberately ignores the league the
+         *     profile was requested for — unlike `rating`, `rank`, `peak` and `percentile`,
+         *     which are facts about one *ladder*. Ask for the same player in two different
+         *     leagues and the ratings differ while this block is identical.
+         */
+        PlayerCareer: {
+            /** Decided */
+            decided: number;
+            /** Wins */
+            wins: number;
+            /** Losses */
+            losses: number;
+            /** Win Rate */
+            win_rate?: number | null;
+            /** Games Won Pct */
+            games_won_pct?: number | null;
+            current_streak?: components["schemas"]["PlayerStreak"] | null;
+            best_streak?: components["schemas"]["PlayerStreak"] | null;
+            /** League Count */
+            league_count: number;
+        };
+        /**
          * PlayerDetail
-         * @description Profile-page bundle: the hero (`PlayerSummary` fields) plus the player's
-         *     six most recent matches inline. Saves a round trip on initial load —
-         *     `GET /v1/players/{id}` returns this so the profile overview paints with one
-         *     request.
+         * @description Profile-page bundle: the hero (`PlayerSummary` fields + the standing
+         *     block below) plus the player's six most recent matches inline. Saves a round
+         *     trip on initial load — `GET /v1/players/{id}` returns this so the profile
+         *     overview paints with one request.
          *
          *     The profile is an *overview*: it shows a Recent-matches card, not the whole
          *     table. The full paginated history lives at its own route, backed by
          *     `GET /v1/players/{id}/matches` (ADR-0915).
+         *
+         *     The standing fields (`peak`, `rank_of`, `percentile`, `rating_delta`) are
+         *     league-scoped, like `rating` and `rank` — and profile-only: they deliberately
+         *     do not ride on `PlayerSummary`, which the roster also serializes.
          */
         PlayerDetail: {
             /**
@@ -1991,9 +2035,22 @@ export interface components {
             form: string;
             /** Rank */
             rank?: number | null;
+            /**
+             * Member Since
+             * Format: date-time
+             */
+            member_since: string;
+            rating_delta?: components["schemas"]["RatingChange"] | null;
+            /** Peak */
+            peak?: number | null;
+            /** Rank Of */
+            rank_of?: number | null;
+            /** Percentile */
+            percentile?: number | null;
             matches: components["schemas"]["PlayerMatchListResponse"];
             /** Match Total */
             match_total: number;
+            career: components["schemas"]["PlayerCareer"];
         };
         /**
          * PlayerListResponse
@@ -2096,11 +2153,30 @@ export interface components {
             rating?: number | null;
         };
         /**
+         * PlayerStreak
+         * @description A run of consecutive same-outcome decided matches: ``n`` wins (``W``) or
+         *     ``n`` losses (``L``). Never zero-length — the absence of a streak is the
+         *     field being ``null``, not ``n=0`` (CONTEXT.md, "Streak").
+         *
+         *     Structurally identical to `DashboardStreak`, deliberately: merging them
+         *     would rename a component the dashboard's generated clients already bind to,
+         *     for no gain to either surface.
+         */
+        PlayerStreak: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "W" | "L";
+            /** N */
+            n: number;
+        };
+        /**
          * PlayerSummary
          * @description Pre-shaped for the `/players` list and the profile-page hero.
          *
          *     Carries everything those surfaces render: the username + the default-
-         *     league rating + a career W-L from completed matches + a 5-character form
+         *     league rating + a career W-L from completed matches + a 10-character form
          *     string (newest first) so the UI can render the form-dots without a
          *     follow-up query.
          */

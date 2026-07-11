@@ -318,6 +318,20 @@ internal protocol APIProtocol: Sendable {
     /// `match_total` behind the "View all N matches" link. The full paginated
     /// history is served by `/v1/players/{id}/matches`.
     ///
+    /// The hero's standing block says where this player stands in the requested
+    /// league: `rating` and `rank` out of `rank_of` (so it reads "#3 of 42", never a
+    /// naked "#3"), their all-time `peak`, the `rating_delta` their most recent
+    /// rated match moved, and — only once the league is large enough for it to mean
+    /// anything — a `percentile`. An unrated player has none of them.
+    ///
+    /// `career` is the exception: it is CROSS-LEAGUE and ignores `league_id`
+    /// entirely. Rating, rank, peak and percentile are facts about a *ladder*; a
+    /// player's lifetime record — decided matches, W-L, win rate, games-won share,
+    /// current and best streak — is a fact about the *person* (ADR-0915). Ask for
+    /// the same player in two different leagues and only the rating half changes.
+    /// `career.decided` counts decided matches alone, so it is smaller than
+    /// `match_total` whenever one of their matches is still in play.
+    ///
     /// - Remark: HTTP `GET /v1/players/{player_id}`.
     /// - Remark: Generated from `#/paths//v1/players/{player_id}/get(get_player_v1_players__player_id__get)`.
     func getPlayerV1PlayersPlayerIdGet(_ input: Operations.GetPlayerV1PlayersPlayerIdGet.Input) async throws -> Operations.GetPlayerV1PlayersPlayerIdGet.Output
@@ -1053,6 +1067,20 @@ extension APIProtocol {
     /// response: hero + the six most recent matches + the all-inclusive
     /// `match_total` behind the "View all N matches" link. The full paginated
     /// history is served by `/v1/players/{id}/matches`.
+    ///
+    /// The hero's standing block says where this player stands in the requested
+    /// league: `rating` and `rank` out of `rank_of` (so it reads "#3 of 42", never a
+    /// naked "#3"), their all-time `peak`, the `rating_delta` their most recent
+    /// rated match moved, and — only once the league is large enough for it to mean
+    /// anything — a `percentile`. An unrated player has none of them.
+    ///
+    /// `career` is the exception: it is CROSS-LEAGUE and ignores `league_id`
+    /// entirely. Rating, rank, peak and percentile are facts about a *ladder*; a
+    /// player's lifetime record — decided matches, W-L, win rate, games-won share,
+    /// current and best streak — is a fact about the *person* (ADR-0915). Ask for
+    /// the same player in two different leagues and only the rating half changes.
+    /// `career.decided` counts decided matches alone, so it is smaller than
+    /// `match_total` whenever one of their matches is still in play.
     ///
     /// - Remark: HTTP `GET /v1/players/{player_id}`.
     /// - Remark: Generated from `#/paths//v1/players/{player_id}/get(get_player_v1_players__player_id__get)`.
@@ -4113,14 +4141,121 @@ internal enum Components {
                 case description
             }
         }
-        /// Profile-page bundle: the hero (`PlayerSummary` fields) plus the player's
-        /// six most recent matches inline. Saves a round trip on initial load —
-        /// `GET /v1/players/{id}` returns this so the profile overview paints with one
-        /// request.
+        /// A player's lifetime record ACROSS EVERY LEAGUE they play in (CONTEXT.md,
+        /// "Career"; ADR-0915).
+        ///
+        /// Career is a fact about the *person*. It deliberately ignores the league the
+        /// profile was requested for — unlike `rating`, `rank`, `peak` and `percentile`,
+        /// which are facts about one *ladder*. Ask for the same player in two different
+        /// leagues and the ratings differ while this block is identical.
+        ///
+        /// - Remark: Generated from `#/components/schemas/PlayerCareer`.
+        internal struct PlayerCareer: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/PlayerCareer/decided`.
+            internal var decided: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/PlayerCareer/wins`.
+            internal var wins: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/PlayerCareer/losses`.
+            internal var losses: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/PlayerCareer/win_rate`.
+            internal var winRate: Swift.Double?
+            /// - Remark: Generated from `#/components/schemas/PlayerCareer/games_won_pct`.
+            internal var gamesWonPct: Swift.Double?
+            /// - Remark: Generated from `#/components/schemas/PlayerCareer/current_streak`.
+            internal struct CurrentStreakPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/PlayerCareer/current_streak/value1`.
+                internal var value1: Components.Schemas.PlayerStreak
+                /// Creates a new `CurrentStreakPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                internal init(value1: Components.Schemas.PlayerStreak) {
+                    self.value1 = value1
+                }
+                internal init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                internal func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/PlayerCareer/current_streak`.
+            internal var currentStreak: Components.Schemas.PlayerCareer.CurrentStreakPayload?
+            /// - Remark: Generated from `#/components/schemas/PlayerCareer/best_streak`.
+            internal struct BestStreakPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/PlayerCareer/best_streak/value1`.
+                internal var value1: Components.Schemas.PlayerStreak
+                /// Creates a new `BestStreakPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                internal init(value1: Components.Schemas.PlayerStreak) {
+                    self.value1 = value1
+                }
+                internal init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                internal func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/PlayerCareer/best_streak`.
+            internal var bestStreak: Components.Schemas.PlayerCareer.BestStreakPayload?
+            /// - Remark: Generated from `#/components/schemas/PlayerCareer/league_count`.
+            internal var leagueCount: Swift.Int
+            /// Creates a new `PlayerCareer`.
+            ///
+            /// - Parameters:
+            ///   - decided:
+            ///   - wins:
+            ///   - losses:
+            ///   - winRate:
+            ///   - gamesWonPct:
+            ///   - currentStreak:
+            ///   - bestStreak:
+            ///   - leagueCount:
+            internal init(
+                decided: Swift.Int,
+                wins: Swift.Int,
+                losses: Swift.Int,
+                winRate: Swift.Double? = nil,
+                gamesWonPct: Swift.Double? = nil,
+                currentStreak: Components.Schemas.PlayerCareer.CurrentStreakPayload? = nil,
+                bestStreak: Components.Schemas.PlayerCareer.BestStreakPayload? = nil,
+                leagueCount: Swift.Int
+            ) {
+                self.decided = decided
+                self.wins = wins
+                self.losses = losses
+                self.winRate = winRate
+                self.gamesWonPct = gamesWonPct
+                self.currentStreak = currentStreak
+                self.bestStreak = bestStreak
+                self.leagueCount = leagueCount
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case decided
+                case wins
+                case losses
+                case winRate = "win_rate"
+                case gamesWonPct = "games_won_pct"
+                case currentStreak = "current_streak"
+                case bestStreak = "best_streak"
+                case leagueCount = "league_count"
+            }
+        }
+        /// Profile-page bundle: the hero (`PlayerSummary` fields + the standing
+        /// block below) plus the player's six most recent matches inline. Saves a round
+        /// trip on initial load — `GET /v1/players/{id}` returns this so the profile
+        /// overview paints with one request.
         ///
         /// The profile is an *overview*: it shows a Recent-matches card, not the whole
         /// table. The full paginated history lives at its own route, backed by
         /// `GET /v1/players/{id}/matches` (ADR-0915).
+        ///
+        /// The standing fields (`peak`, `rank_of`, `percentile`, `rating_delta`) are
+        /// league-scoped, like `rating` and `rank` — and profile-only: they deliberately
+        /// do not ride on `PlayerSummary`, which the roster also serializes.
         ///
         /// - Remark: Generated from `#/components/schemas/PlayerDetail`.
         internal struct PlayerDetail: Codable, Hashable, Sendable {
@@ -4138,10 +4273,40 @@ internal enum Components {
             internal var form: Swift.String?
             /// - Remark: Generated from `#/components/schemas/PlayerDetail/rank`.
             internal var rank: Swift.Int?
+            /// - Remark: Generated from `#/components/schemas/PlayerDetail/member_since`.
+            internal var memberSince: Foundation.Date
+            /// - Remark: Generated from `#/components/schemas/PlayerDetail/rating_delta`.
+            internal struct RatingDeltaPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/PlayerDetail/rating_delta/value1`.
+                internal var value1: Components.Schemas.RatingChange
+                /// Creates a new `RatingDeltaPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                internal init(value1: Components.Schemas.RatingChange) {
+                    self.value1 = value1
+                }
+                internal init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                internal func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/PlayerDetail/rating_delta`.
+            internal var ratingDelta: Components.Schemas.PlayerDetail.RatingDeltaPayload?
+            /// - Remark: Generated from `#/components/schemas/PlayerDetail/peak`.
+            internal var peak: Swift.Double?
+            /// - Remark: Generated from `#/components/schemas/PlayerDetail/rank_of`.
+            internal var rankOf: Swift.Int?
+            /// - Remark: Generated from `#/components/schemas/PlayerDetail/percentile`.
+            internal var percentile: Swift.Int?
             /// - Remark: Generated from `#/components/schemas/PlayerDetail/matches`.
             internal var matches: Components.Schemas.PlayerMatchListResponse
             /// - Remark: Generated from `#/components/schemas/PlayerDetail/match_total`.
             internal var matchTotal: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/PlayerDetail/career`.
+            internal var career: Components.Schemas.PlayerCareer
             /// Creates a new `PlayerDetail`.
             ///
             /// - Parameters:
@@ -4152,8 +4317,14 @@ internal enum Components {
             ///   - losses:
             ///   - form:
             ///   - rank:
+            ///   - memberSince:
+            ///   - ratingDelta:
+            ///   - peak:
+            ///   - rankOf:
+            ///   - percentile:
             ///   - matches:
             ///   - matchTotal:
+            ///   - career:
             internal init(
                 id: Swift.String,
                 username: Swift.String,
@@ -4162,8 +4333,14 @@ internal enum Components {
                 losses: Swift.Int? = nil,
                 form: Swift.String? = nil,
                 rank: Swift.Int? = nil,
+                memberSince: Foundation.Date,
+                ratingDelta: Components.Schemas.PlayerDetail.RatingDeltaPayload? = nil,
+                peak: Swift.Double? = nil,
+                rankOf: Swift.Int? = nil,
+                percentile: Swift.Int? = nil,
                 matches: Components.Schemas.PlayerMatchListResponse,
-                matchTotal: Swift.Int
+                matchTotal: Swift.Int,
+                career: Components.Schemas.PlayerCareer
             ) {
                 self.id = id
                 self.username = username
@@ -4172,8 +4349,14 @@ internal enum Components {
                 self.losses = losses
                 self.form = form
                 self.rank = rank
+                self.memberSince = memberSince
+                self.ratingDelta = ratingDelta
+                self.peak = peak
+                self.rankOf = rankOf
+                self.percentile = percentile
                 self.matches = matches
                 self.matchTotal = matchTotal
+                self.career = career
             }
             internal enum CodingKeys: String, CodingKey {
                 case id
@@ -4183,8 +4366,14 @@ internal enum Components {
                 case losses
                 case form
                 case rank
+                case memberSince = "member_since"
+                case ratingDelta = "rating_delta"
+                case peak
+                case rankOf = "rank_of"
+                case percentile
                 case matches
                 case matchTotal = "match_total"
+                case career
             }
         }
         /// Paginated `/v1/players` response backing the `/players` list page.
@@ -4435,10 +4624,46 @@ internal enum Components {
                 case rating
             }
         }
+        /// A run of consecutive same-outcome decided matches: ``n`` wins (``W``) or
+        /// ``n`` losses (``L``). Never zero-length — the absence of a streak is the
+        /// field being ``null``, not ``n=0`` (CONTEXT.md, "Streak").
+        ///
+        /// Structurally identical to `DashboardStreak`, deliberately: merging them
+        /// would rename a component the dashboard's generated clients already bind to,
+        /// for no gain to either surface.
+        ///
+        /// - Remark: Generated from `#/components/schemas/PlayerStreak`.
+        internal struct PlayerStreak: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/PlayerStreak/kind`.
+            internal enum KindPayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case w = "W"
+                case l = "L"
+            }
+            /// - Remark: Generated from `#/components/schemas/PlayerStreak/kind`.
+            internal var kind: Components.Schemas.PlayerStreak.KindPayload
+            /// - Remark: Generated from `#/components/schemas/PlayerStreak/n`.
+            internal var n: Swift.Int
+            /// Creates a new `PlayerStreak`.
+            ///
+            /// - Parameters:
+            ///   - kind:
+            ///   - n:
+            internal init(
+                kind: Components.Schemas.PlayerStreak.KindPayload,
+                n: Swift.Int
+            ) {
+                self.kind = kind
+                self.n = n
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case kind
+                case n
+            }
+        }
         /// Pre-shaped for the `/players` list and the profile-page hero.
         ///
         /// Carries everything those surfaces render: the username + the default-
-        /// league rating + a career W-L from completed matches + a 5-character form
+        /// league rating + a career W-L from completed matches + a 10-character form
         /// string (newest first) so the UI can render the form-dots without a
         /// follow-up query.
         ///
@@ -13040,6 +13265,20 @@ internal enum Operations {
     /// response: hero + the six most recent matches + the all-inclusive
     /// `match_total` behind the "View all N matches" link. The full paginated
     /// history is served by `/v1/players/{id}/matches`.
+    ///
+    /// The hero's standing block says where this player stands in the requested
+    /// league: `rating` and `rank` out of `rank_of` (so it reads "#3 of 42", never a
+    /// naked "#3"), their all-time `peak`, the `rating_delta` their most recent
+    /// rated match moved, and — only once the league is large enough for it to mean
+    /// anything — a `percentile`. An unrated player has none of them.
+    ///
+    /// `career` is the exception: it is CROSS-LEAGUE and ignores `league_id`
+    /// entirely. Rating, rank, peak and percentile are facts about a *ladder*; a
+    /// player's lifetime record — decided matches, W-L, win rate, games-won share,
+    /// current and best streak — is a fact about the *person* (ADR-0915). Ask for
+    /// the same player in two different leagues and only the rating half changes.
+    /// `career.decided` counts decided matches alone, so it is smaller than
+    /// `match_total` whenever one of their matches is still in play.
     ///
     /// - Remark: HTTP `GET /v1/players/{player_id}`.
     /// - Remark: Generated from `#/paths//v1/players/{player_id}/get(get_player_v1_players__player_id__get)`.

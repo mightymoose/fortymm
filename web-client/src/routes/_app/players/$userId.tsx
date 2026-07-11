@@ -1,28 +1,32 @@
-import { useCallback } from 'react'
-import { createFileRoute, useNavigate, useRouter } from '@tanstack/react-router'
-import { zodValidator } from '@tanstack/zod-adapter'
-import { z } from 'zod'
+import { createFileRoute } from '@tanstack/react-router'
 
-import { playerByIdQueryOptions, usePlayerById } from '@/api/players'
-import { SESSION_QUERY_KEY, useSession } from '@/api/session'
+import { playerByIdQueryOptions } from '@/api/players'
+import { SESSION_QUERY_KEY } from '@/api/session'
 import { PlayerProfile } from '@/components/players/player-profile'
-import { Button } from '@/components/ui/button'
+import { PlayerRouteError } from '@/components/players/player-route-error'
 import { pageTitle } from '@/lib/page-title'
 
-// Matches list pagination lives in the URL so refresh / share / back works.
-const profileSearchSchema = z.object({
-  page: z.coerce.number().int().min(2).optional().catch(undefined),
-})
-
+// The profile is an overview and owns **no search params**: `?page=` left with
+// the table for `/players/$userId/matches` (ADR-0915), and nothing has replaced
+// it yet — so there is no `validateSearch` here, and nothing on the page reads
+// the URL's search. A stale `/players/x?page=3` bookmark therefore degrades
+// harmlessly: the page renders and the leftover param is simply never consumed.
+//
+// It is deliberately *not* a `zodValidator(z.object({}))`: an exactly-empty
+// search schema collapses TanStack's inference for every generic
+// `<Link to={string} search={…}>` in the app (the dashboard's "Full history"
+// link stops type-checking). Slices 6 and 8 bring a real schema back with
+// `league` and `range` in it.
 export const Route = createFileRoute('/_app/players/$userId')({
   head: () => ({
     meta: [{ title: pageTitle('Player') }],
   }),
-  validateSearch: zodValidator(profileSearchSchema),
-  // Warm the profile cache on hover/touch preload without blocking navigation.
-  // Skip on a cold direct load where the session isn't resolved yet, so the
-  // prefetch can't 401 into the error boundary ahead of the component's
-  // session-gated query (same pattern as `/matches`).
+  // Warm the profile cache on hover/touch preload without blocking navigation —
+  // the page's cards all suspend on this same query, so a warm cache paints them
+  // instantly. Skip it before the session is resolved so the prefetch can't 401
+  // into the error boundary; the `_app` layout loader awaits the session, so by
+  // the time this route's component renders the cookie is established (which is
+  // what lets the cards fetch with `useSuspenseQuery`, ungated).
   loader: ({ context, params }) => {
     if (!context.queryClient.getQueryData(SESSION_QUERY_KEY)) return
     void context.queryClient.prefetchQuery(
@@ -35,80 +39,11 @@ export const Route = createFileRoute('/_app/players/$userId')({
 
 function PlayerRoute() {
   const { userId } = Route.useParams()
-  const search = Route.useSearch()
-  const page = search.page ?? 1
-  const navigate = useNavigate()
 
-  // Gate on the session so a first-visit direct-load doesn't race the
-  // session cookie. Profile query is `throwOnError`, so any non-2xx /
-  // network failure flows to `errorComponent` above.
-  const session = useSession()
-  const { data: player, isPending } = usePlayerById(userId, {
-    enabled: session.isSuccess,
-  })
-
-  const setPage = useCallback(
-    (next: number) => {
-      void navigate({
-        to: '/players/$userId',
-        params: { userId },
-        replace: true,
-        search: { page: next > 1 ? next : undefined },
-      })
-    },
-    [navigate, userId],
-  )
-
-  return (
-    <PlayerProfile
-      player={player ?? null}
-      isPending={isPending}
-      page={page}
-      onPageChange={setPage}
-    />
-  )
-}
-
-/** Route-level fallback for `throwOnError` profile-fetch failures. 4xx →
- * "Player not found" (no point retrying the same id); 5xx → "Try again". */
-function PlayerRouteError({
-  error,
-  reset,
-}: {
-  error: Error
-  reset: () => void
-}) {
-  const router = useRouter()
-  // ApiError is what `unwrap` throws for non-2xx responses; treat 4xx as
-  // "no such player" and avoid offering a retry that will fail the same way.
-  const status =
-    typeof error === 'object' && error !== null && 'status' in error
-      ? (error as { status: number }).status
-      : 0
-  const notFound = status >= 400 && status < 500
-  return (
-    <div role="alert" className="empty">
-      <div className="empty-title">
-        {notFound ? 'Player not found.' : 'Couldn’t load this player.'}
-      </div>
-      <div className="empty-sub">
-        {notFound
-          ? 'The URL might be off, or this player has been removed.'
-          : 'Something went wrong reaching the server.'}
-      </div>
-      {!notFound && (
-        <Button
-          variant="ghost"
-          size="sm"
-          className="empty-clear"
-          onClick={() => {
-            reset()
-            router.invalidate()
-          }}
-        >
-          Try again
-        </Button>
-      )}
-    </div>
-  )
+  // No page-level fetch: every card projects off the profile bundle's single
+  // cache entry and suspends for itself. That query is `throwOnError`, so any
+  // non-2xx / network failure flows to `errorComponent` above rather than to a
+  // per-card boundary — all the cards share the one query, so a failure means
+  // none of them has anything to draw.
+  return <PlayerProfile playerId={userId} />
 }

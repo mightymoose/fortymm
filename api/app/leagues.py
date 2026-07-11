@@ -1,7 +1,7 @@
 import uuid
 
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -42,6 +42,23 @@ async def resolve_league(db: AsyncSession, league_id: uuid.UUID | None) -> Leagu
     if default is None:
         raise HTTPException(status_code=500, detail="No default league configured.")
     return default
+
+
+async def count_league_memberships(db: AsyncSession, user_id: uuid.UUID) -> int:
+    """How many leagues the user belongs to — the profile's "2 leagues" line.
+
+    Counted from ``league_memberships``, not from the leagues they happen to have
+    played a match in: belonging to a ladder and having played on it are
+    different facts, and a player joins the default league before their first
+    match. So this is ``>= 1`` for every real user.
+    """
+    return (
+        await db.execute(
+            select(func.count(LeagueMembership.id)).where(
+                LeagueMembership.user_id == user_id
+            )
+        )
+    ).scalar_one()
 
 
 def seed_user_league_rating(
