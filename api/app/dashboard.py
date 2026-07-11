@@ -1,7 +1,6 @@
 import uuid
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
-from typing import Literal
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import and_, func, or_, select
@@ -25,14 +24,17 @@ from app.matches import (
 from app.models import (
     League,
     Match,
-    MatchSide,
-    MatchSidePlayer,
     MatchStatus,
     RatingHistory,
     User,
     UserLeagueRating,
 )
 from app.ratings import RatingStrategyKey, parse_strategy_key
+from app.ratings.stats import (
+    current_streak_for_user,
+    league_peak_rating,
+    league_percentile,
+)
 from app.retirement import retirement_deadline
 from app.schemas.dashboard import (
     AttentionKind,
@@ -51,7 +53,6 @@ router = APIRouter(prefix="/v1")
 RECENT_RESULTS_LIMIT = 5
 SPARK_WINDOW_DAYS = 30
 SPARK_MAX_POINTS = 30
-STREAK_SCAN_LIMIT = 100
 # Most attention rows the panel *displays* at once. We load and rank EVERY
 # actionable match (so the highest-priority row can never be dropped before
 # ranking — the #838 bug was capping the DB read on ``updated_at``, an axis
@@ -299,7 +300,7 @@ async def _build_rating(
     current = rating_row.rating_value
     league_id = rating_row.league_id
     spark, delta = await _spark_and_delta(db, user_id, league_id)
-    peak = await _league_peak_rating(db, user_id, league_id, current)
+    peak = await league_peak_rating(db, user_id, league_id, current)
     # A user who has never completed a match sits at the seed rating (1500, RD
     # 350) — fully unrated. Ranking them against league peers reads as a
     # concrete claim ("Top 92%") about a player the system can't place yet, so
@@ -307,9 +308,9 @@ async def _build_rating(
     percentile = (
         None
         if completed_match_count == 0
-        else await _league_percentile(db, league_id, current)
+        else await league_percentile(db, league_id, current)
     )
-    streak = await _current_streak(db, user_id)
+    streak = await current_streak_for_user(db, user_id)
 
     return DashboardRating(
         league_id=league_id,
@@ -320,7 +321,9 @@ async def _build_rating(
         peak=peak,
         percentile=percentile,
         spark_data=spark,
-        streak=streak,
+        streak=(
+            None if streak is None else DashboardStreak(kind=streak.kind, n=streak.n)
+        ),
         stats=_strategy_stats(strategy.key, rating_row.rating_state or {}),
     )
 
@@ -360,51 +363,6 @@ async def _resolve_user_rating(
     ).scalar_one_or_none()
 
 
-async def _league_peak_rating(
-    db: AsyncSession,
-    user_id: uuid.UUID,
-    league_id: uuid.UUID,
-    current: float,
-) -> float:
-    history_peak = (
-        await db.execute(
-            select(func.max(RatingHistory.rating_value)).where(
-                RatingHistory.league_id == league_id,
-                RatingHistory.user_id == user_id,
-            )
-        )
-    ).scalar()
-    if history_peak is None:
-        return current
-    return max(current, history_peak)
-
-
-async def _league_percentile(
-    db: AsyncSession, league_id: uuid.UUID, my_rating: float
-) -> int | None:
-    """ "Top N%" rank within the league: the share of rated members at or above
-    the user's rating, so the strongest player reads a *small* percentage (e.g.
-    "Top 1%") and weaker players a larger one. Clamped to at least 1 so the top
-    player never reads "Top 0%". Returns None for leagues of one — nothing to
-    compare to."""
-    total, at_or_above = (
-        await db.execute(
-            select(
-                func.count(UserLeagueRating.id),
-                func.count(UserLeagueRating.id).filter(
-                    UserLeagueRating.rating_value >= my_rating
-                ),
-            ).where(
-                UserLeagueRating.league_id == league_id,
-                UserLeagueRating.rating_value.is_not(None),
-            )
-        )
-    ).one()
-    if total <= 1:
-        return None
-    return max(1, round(int(at_or_above) / int(total) * 100))
-
-
 async def _spark_and_delta(
     db: AsyncSession, user_id: uuid.UUID, league_id: uuid.UUID
 ) -> tuple[list[float], float]:
@@ -439,46 +397,6 @@ async def _spark_and_delta(
     )
     spark = [float(r.rating_value) for r in reversed(rows) if r.created_at >= cutoff]
     return spark, delta
-
-
-async def _current_streak(
-    db: AsyncSession, user_id: uuid.UUID
-) -> DashboardStreak | None:
-    """Walk the user's completed matches newest-first, counting consecutive
-    wins or losses from the top. Returns None if the user has no completed
-    matches."""
-    rows = (
-        (
-            await db.execute(
-                select(MatchSide.won)
-                .join(Match, Match.id == MatchSide.match_id)
-                .join(
-                    MatchSidePlayer,
-                    MatchSidePlayer.match_side_id == MatchSide.id,
-                )
-                .where(
-                    MatchSidePlayer.user_id == user_id,
-                    Match.status == MatchStatus.completed,
-                    MatchSide.won.is_not(None),
-                )
-                # Most-recent-completion first; stable under later edits.
-                .order_by(Match.completed_at.desc())
-                .limit(STREAK_SCAN_LIMIT)
-            )
-        )
-        .scalars()
-        .all()
-    )
-    if not rows:
-        return None
-    head_kind: Literal["W", "L"] = "W" if rows[0] else "L"
-    n = 1
-    for won in rows[1:]:
-        kind: Literal["W", "L"] = "W" if won else "L"
-        if kind != head_kind:
-            break
-        n += 1
-    return DashboardStreak(kind=head_kind, n=n)
 
 
 def _strategy_stats(

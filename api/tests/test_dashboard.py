@@ -5,7 +5,7 @@ from httpx import AsyncClient
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.dashboard import _league_percentile, _strategy_stats
+from app.dashboard import _strategy_stats
 from app.models import (
     League,
     LeagueMembership,
@@ -16,6 +16,7 @@ from app.models import (
     RatingStrategy,
     UserLeagueRating,
 )
+from app.ratings.stats import league_percentile
 from tests._helpers import (
     accept_standing_result,
     make_client,
@@ -569,9 +570,9 @@ async def test_league_percentile_ranks_against_rated_members(
     me = await start_session(api_client, db_session)
     default_league = await _seed_rated_peers(db_session)
 
-    assert await _league_percentile(db_session, default_league.id, 1500.0) == 60
-    assert await _league_percentile(db_session, default_league.id, 1800.0) == 20
-    assert await _league_percentile(db_session, default_league.id, 1200.0) == 100
+    assert await league_percentile(db_session, default_league.id, 1500.0) == 60
+    assert await league_percentile(db_session, default_league.id, 1800.0) == 20
+    assert await league_percentile(db_session, default_league.id, 1200.0) == 100
     _ = me
 
 
