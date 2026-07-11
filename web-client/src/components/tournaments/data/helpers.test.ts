@@ -2,7 +2,9 @@ import {
   daysBetween,
   effectiveDateRange,
   fmtDateRange,
+  fmtTimeWindow,
   formatPredicate,
+  predicateSentence,
   findPoolConflicts,
 } from './helpers'
 import { buildPool, buildTournament, buildEvent } from './seed.factory'
@@ -19,6 +21,26 @@ describe('fmtDateRange', () => {
 
   it('returns a single date when the days are equal', () => {
     expect(fmtDateRange('2026-06-13', '2026-06-13')).toBe('Jun 13, 2026')
+  })
+})
+
+describe('fmtTimeWindow', () => {
+  it('joins both bounds with an en dash', () => {
+    // U+2013 between the times; U+2014 (EM_DASH) is only the unset marker.
+    expect(fmtTimeWindow('09:00', '12:00')).toBe('09:00–12:00')
+  })
+
+  it('shows a lone start on its own, with no dangling dash', () => {
+    expect(fmtTimeWindow('09:00', '')).toBe('09:00')
+  })
+
+  it('shows a lone end on its own, with no leading dash', () => {
+    expect(fmtTimeWindow('', '12:00')).toBe('12:00')
+  })
+
+  it('renders a wholly unset window as an em-dash', () => {
+    expect(fmtTimeWindow('', '')).toBe('—')
+    expect(fmtTimeWindow(null, undefined)).toBe('—')
   })
 })
 
@@ -69,6 +91,16 @@ describe('formatPredicate', () => {
   it('labels a between rule with the range', () => {
     const p: Predicate = { id: 'p', field: 'age', op: 'between', value: [13, 17] }
     expect(formatPredicate(p)).toBe('Age in [13–17]')
+  })
+
+  // The chip and the sentence share one vocabulary, so they must agree on the
+  // unset case too: an unfinished enum rule reads as the em-dash both use, never
+  // as the string "null" that `String(p.value)` used to leak onto the card.
+  it('renders an unfinished enum rule as an em-dash, not "null"', () => {
+    const p: Predicate = { id: 'p', field: 'gender', op: 'is', value: null }
+    expect(formatPredicate(p)).toBe('Gender = —')
+    expect(formatPredicate(p)).not.toContain('null')
+    expect(predicateSentence(p)).toBe('Gender is —')
   })
 })
 

@@ -3,43 +3,116 @@ import { useId, type ReactNode } from 'react'
 import { Label } from '@/components/ui/label'
 import { cn } from '@/lib/utils'
 
-export interface FieldProps {
+import { ReadOnlyValue, type ReadOnlyValueContent } from './read-only-value'
+
+export interface FieldBase {
   label: string
   required?: boolean
   /** Helper or error text shown below the control. */
   hint?: ReactNode
   /** When true, `hint` is rendered as an error (red). */
   error?: boolean
-  children: (controlId: string) => ReactNode
   className?: string
 }
+
+/** A row that can be read-only **must** say what it holds. The two props are one
+ * decision, so the type makes them one: opt into `readOnly` and `value` is
+ * required. Were they independent optionals, a row could pass `readOnly` and
+ * forget `value` — and would then render an em-dash, which by ADR 0015 rule 3
+ * means *the organizer set nothing*. That is real data misreported as absent,
+ * silently: the guard sweep still passes (no control is rendered) and the
+ * per-field value assertions don't know the new row exists. Exactly the class of
+ * quiet wrongness this ADR was written to end.
+ *
+ * Note the discriminant is the **presence** of `readOnly`, not its value — call
+ * sites pass `readOnly={!canEdit}`, a `boolean`, which no `true`/`false` union
+ * could narrow. */
+type FieldReadable = {
+  readOnly: boolean
+  /** What the row *holds* — rendered in place of the control when `readOnly`.
+   * Formatted for a reader by the caller (an option's label, a formatted date),
+   * since only the caller knows what the raw value means. */
+  value: ReadOnlyValueContent
+  /** Class for the read-only rendering, when it needs to match the control it
+   * stands in for (a `font-mono` time, a multi-line description). */
+  valueClassName?: string
+  /** The control, for an editor. Not called in the read-only branch — and a row
+   * that is *only* ever a view (one inside a subtree the editor never renders,
+   * like a read-only pool card) has no control to give. */
+  children?: (controlId: string) => ReactNode
+}
+
+/** A row that is always an editor (a create form, say) needs no reader's value. */
+type FieldEditorOnly = {
+  readOnly?: undefined
+  value?: undefined
+  valueClassName?: undefined
+  children: (controlId: string) => ReactNode
+}
+
+export type FieldProps = FieldBase & (FieldReadable | FieldEditorOnly)
 
 /** Uppercase-overline label + control + hint, the standard form row used
  * across the tournament forms. `children` receives the generated control id:
  * a real input wires it as `id` (the label's `htmlFor` targets it); a
  * non-input control (e.g. a radio `ToggleGroup`) instead points
- * `aria-labelledby` at the label's `${id}-label` id. */
+ * `aria-labelledby` at the label's `${id}-label` id.
+ *
+ * **`readOnly` makes the row a view, and `Field` owns that branch** (ADR 0015).
+ * The caller passes `readOnly` and a `value`; the row decides for itself whether
+ * to render the control or the value, and drops the form's furniture with it —
+ * a **hint** explains how to fill in a control, and with no control there is
+ * nothing to explain; a **required asterisk** marks a field you must complete,
+ * which is nonsense on a field nobody can fill in. Both are dropped, not
+ * reworded, and callers keep declaring them unconditionally.
+ *
+ * One flag, one obligation. A `canEdit ? <Input/> : <ReadOnlyValue/>` at every
+ * call site would be a second one — and "twenty `disabled` props are twenty
+ * chances to forget one" is just as true of a dozen `readOnly` branches. Here the
+ * leak is structurally impossible rather than merely tested for:
+ *
+ * ```tsx
+ * <Field label="Entry fee" readOnly={!canEdit} value={event.entryFee}>
+ *   {(id) => <Input id={id} type="number" … />}
+ * </Field>
+ * ```
+ *
+ * (Controls that aren't a "label + one control + one value" row — a `Switch`, a
+ * `ToggleGroup`, the pool table chips — don't come through `Field`; the guard
+ * test in rule 6 is what covers those.) */
 export const Field = ({
   label,
   required,
   hint,
   error,
+  readOnly,
+  value,
+  valueClassName,
   children,
   className,
 }: FieldProps) => {
   const id = useId()
+  const showHint = hint && !readOnly
   return (
     <div className={cn('flex flex-col gap-1.5', className)}>
       <Label
         id={`${id}-label`}
-        htmlFor={id}
+        // Read-only renders no control, so there is no element with this id to
+        // point at — a dangling `for` is an orphaned label, not an association.
+        htmlFor={readOnly ? undefined : id}
         className="text-[11px] font-semibold tracking-[0.12em] text-[color:var(--fg-3)] uppercase"
       >
         {label}
-        {required && <span className="text-[color:var(--ball-500)]">*</span>}
+        {required && !readOnly && (
+          <span className="text-[color:var(--ball-500)]">*</span>
+        )}
       </Label>
-      {children(id)}
-      {hint && (
+      {readOnly ? (
+        <ReadOnlyValue className={valueClassName}>{value}</ReadOnlyValue>
+      ) : (
+        children?.(id)
+      )}
+      {showHint && (
         <p
           className={cn(
             'text-[11px]',

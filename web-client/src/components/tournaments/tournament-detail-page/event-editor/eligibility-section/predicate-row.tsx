@@ -2,15 +2,20 @@ import { Trash2 } from 'lucide-react'
 
 import { Input } from '@/components/ui/input'
 
-import {
-  PRED_FIELDS,
-  PRED_OPS_BY_TYPE,
-} from '../../../data/options'
+import { BOOL_PREDICATE_VALUE, predicateSentence } from '../../../data/helpers'
+import { PRED_FIELDS, PRED_OPS_BY_TYPE } from '../../../data/options'
 import type { Predicate, PredicateValue } from '../../../data/types'
 import { OptionSelect } from '../option-select'
 
 export interface PredicateRowProps {
   predicate: Predicate
+  /** When false (a non-creator), the row renders as one readable sentence
+   * instead of three controls — a viewer gets a rendering of the data, never a
+   * disabled form (ADR 0015). The sentence itself is `predicateSentence` in
+   * `data/helpers.ts`, beside the chip formatter it shares its vocabulary with:
+   * a new predicate field or operator is a one-file change there, not a hunt
+   * through this component. */
+  canEdit: boolean
   onChange: (predicate: Predicate) => void
   onRemove: () => void
 }
@@ -26,11 +31,13 @@ function numberOrNull(raw: string): number | null {
   return Number.isNaN(n) ? null : n
 }
 
-/** One ANDed eligibility rule: a field picker, an operator picker, a
- * type-appropriate value control, and a remove button. Switching the field
- * resets the operator and value to that field-type's defaults. */
+/** One ANDed eligibility rule. For the creator: a field picker, an operator
+ * picker, a type-appropriate value control, and a remove button — switching the
+ * field resets the operator and value to that field-type's defaults. For a
+ * viewer: the same rule, read back as a sentence. */
 export const PredicateRow = ({
   predicate,
+  canEdit,
   onChange,
   onRemove,
 }: PredicateRowProps) => {
@@ -56,6 +63,17 @@ export const PredicateRow = ({
   const between = Array.isArray(predicate.value)
     ? predicate.value
     : [null, null]
+
+  if (!canEdit) {
+    return (
+      <p
+        data-testid="predicate-row"
+        className="rounded-[6px] border border-[color:var(--border-subtle)] bg-[color:var(--bg-panel)] px-3.5 py-2.5 text-[13px] text-[color:var(--fg-1)]"
+      >
+        {predicateSentence(predicate)}
+      </p>
+    )
+  }
 
   return (
     <div
@@ -124,7 +142,7 @@ export const PredicateRow = ({
         )}
         {schema?.type === 'bool' && (
           <div className="py-2.5 text-[13px] text-[color:var(--fg-3)]">
-            a club member
+            {BOOL_PREDICATE_VALUE}
           </div>
         )}
       </div>
