@@ -4,7 +4,7 @@ import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
 import { cn } from '@/lib/utils'
 
-import { fmtDateShort, formatPredicate } from '../../data/helpers'
+import { fmtDateShort, fmtTimeWindow, formatPredicate } from '../../data/helpers'
 import { DRAW_TYPE_OPTIONS, FORMAT_OPTIONS, labelFor } from '../../data/options'
 import type { TournamentEvent } from '../../data/types'
 
@@ -78,7 +78,7 @@ export const EventCard = ({ event: ev, canEdit, onOpen }: EventCardProps) => {
               Time slot
             </div>
             <div className="mt-1 font-mono text-[13px] tabular-nums text-[color:var(--fg-1)]">
-              {fmtDateShort(ev.slot.date)} · {ev.slot.start}–{ev.slot.end}
+              {fmtDateShort(ev.slot.date)} · {fmtTimeWindow(ev.slot.start, ev.slot.end)}
             </div>
             <div className="mt-1.5 flex items-center gap-1.5 text-[11px] whitespace-nowrap text-[color:var(--fg-3)]">
               <Layers size={12} />
@@ -86,7 +86,9 @@ export const EventCard = ({ event: ev, canEdit, onOpen }: EventCardProps) => {
                 {ev.pools.length} {ev.pools.length === 1 ? 'pool' : 'pools'}
               </span>
               <span>·</span>
-              <span className="font-mono">{tableCount} tables</span>
+              <span className="font-mono">
+                {tableCount} {tableCount === 1 ? 'table' : 'tables'}
+              </span>
             </div>
           </div>
 

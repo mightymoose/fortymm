@@ -35,6 +35,26 @@ export function fmtDateShort(iso: string | null | undefined): string {
   })
 }
 
+/** An `HH:MM–HH:MM` time window, tolerant of a half-set (or wholly unset) slot.
+ *
+ * The naive `` `${start}–${end}` `` template renders a *hole* when a bound is
+ * missing — "09:00–" — which is punctuation pretending to be data. An unset
+ * value reads as the em-dash, one contract with the rest of this module (ADR
+ * 0015, rule 3). One bound alone is real information, so it is shown alone.
+ *
+ * Note the two dashes are different characters and are not interchangeable: the
+ * separator between two times is an **en** dash (`–`, U+2013); `EM_DASH` (`—`,
+ * U+2014) is the marker for "no value at all". */
+export function fmtTimeWindow(
+  start: string | null | undefined,
+  end: string | null | undefined,
+): string {
+  if (start && end) return `${start}–${end}`
+  if (start) return start
+  if (end) return end
+  return EM_DASH
+}
+
 /** A compact, human range: collapses same-day, same-month, and full spans. */
 export function fmtDateRange(
   a: string | null | undefined,

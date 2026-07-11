@@ -2,6 +2,7 @@ import {
   daysBetween,
   effectiveDateRange,
   fmtDateRange,
+  fmtTimeWindow,
   formatPredicate,
   predicateSentence,
   findPoolConflicts,
@@ -20,6 +21,26 @@ describe('fmtDateRange', () => {
 
   it('returns a single date when the days are equal', () => {
     expect(fmtDateRange('2026-06-13', '2026-06-13')).toBe('Jun 13, 2026')
+  })
+})
+
+describe('fmtTimeWindow', () => {
+  it('joins both bounds with an en dash', () => {
+    // U+2013 between the times; U+2014 (EM_DASH) is only the unset marker.
+    expect(fmtTimeWindow('09:00', '12:00')).toBe('09:00–12:00')
+  })
+
+  it('shows a lone start on its own, with no dangling dash', () => {
+    expect(fmtTimeWindow('09:00', '')).toBe('09:00')
+  })
+
+  it('shows a lone end on its own, with no leading dash', () => {
+    expect(fmtTimeWindow('', '12:00')).toBe('12:00')
+  })
+
+  it('renders a wholly unset window as an em-dash', () => {
+    expect(fmtTimeWindow('', '')).toBe('—')
+    expect(fmtTimeWindow(null, undefined)).toBe('—')
   })
 })
 

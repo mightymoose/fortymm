@@ -15,7 +15,8 @@ export interface TablesTabProps {
   /** This tournament's table catalogue (the venue tables it owns). */
   catalogue: TournamentTable[]
   /** When false (a non-creator), the add-table form and per-row Remove buttons
-   * are hidden and the tab is a read-only list of tables. */
+   * are hidden, the organizer-voiced half of the subtitle is dropped, and the
+   * tab is a read-only list of tables. */
   canEdit: boolean
   /** Emit the next catalogue. The catalogue IS the assigned set — the API has
    * no separate global table list, so removing a table drops it outright and
@@ -61,7 +62,15 @@ export const TablesTab = ({
     <div>
       <SectionHeader
         title="Tables"
-        subtitle="The physical tables available at this venue. Add them to pools when configuring events."
+        // "Add them to pools when configuring events" is an imperative only the
+        // organizer can act on — a reader who cannot edit is told to do
+        // something they have no control to do (ADR 0015, rule 5). The
+        // descriptive first sentence is true for both voices, so it stays.
+        subtitle={
+          canEdit
+            ? 'The physical tables available at this venue. Add them to pools when configuring events.'
+            : 'The physical tables available at this venue.'
+        }
       />
 
       <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3">
