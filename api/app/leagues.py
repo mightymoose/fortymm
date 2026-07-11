@@ -25,24 +25,88 @@ async def get_default_league(db: AsyncSession) -> League | None:
     return result.scalar_one_or_none()
 
 
-async def resolve_league(db: AsyncSession, league_id: uuid.UUID | None) -> League:
-    """Resolve a league by id, falling back to the default. Raises 404 if a
-    specific id is supplied but missing, 500 if no default is configured."""
-    if league_id is not None:
-        league = (
-            await db.execute(
-                select(League)
-                .where(League.id == league_id)
-                .options(selectinload(League.rating_strategy))
-            )
-        ).scalar_one_or_none()
-        if league is None:
-            raise HTTPException(status_code=404, detail="League not found.")
-        return league
+async def _load_league(db: AsyncSession, league_id: uuid.UUID) -> League | None:
+    return (
+        await db.execute(
+            select(League)
+            .where(League.id == league_id)
+            .options(selectinload(League.rating_strategy))
+        )
+    ).scalar_one_or_none()
+
+
+async def _default_league_or_500(db: AsyncSession) -> League:
     default = await get_default_league(db)
     if default is None:
         raise HTTPException(status_code=500, detail="No default league configured.")
     return default
+
+
+# ---------------------------------------------------------------------------
+# TWO resolvers, and they must stay two. The difference is not an oversight to
+# be tidied away — it is the whole distinction between a league that IDENTIFIES
+# something and a league that is a LENS on something (ADR-0915).
+#
+# * `resolve_league` — STRICT. For callers where the league is part of the thing
+#   being addressed: the roster's ladder (`/v1/players`), the opponent picker's
+#   ratings (`/players/recent`, `/players/search`), the league a match is created
+#   ON (`matches.py`). Naming a league that does not exist there is a real error
+#   and the honest answer is a 404 — silently substituting the default would
+#   serve confidently WRONG data (a roster ranked by the wrong ladder, a match
+#   created on a league the caller never asked for) with no signal that anything
+#   went astray.
+#
+# * `resolve_league_or_default` — DEGRADING. For the player-profile surfaces
+#   ONLY, where `?league=<id>` is a VIEW PREFERENCE and not the resource:
+#   `/players/{id}` addresses a *player*; the league is merely the lens the
+#   rating half of the page is seen through. A stale bookmark to a league that
+#   has since been deleted (or that the player has left) must not tell the user
+#   "player not found" — the player exists and is fine. It degrades to the
+#   default ladder, exactly as the web client's `.catch()` on the `league` search
+#   param already does for a *mangled* id (ADR-0915, docs/designs/player-details.md).
+#
+# Do NOT "unify" these by loosening `resolve_league`. Doing so converts a loud
+# client bug into invisible wrong data on every surface above. `player_id` stays
+# strict on the profile too: that IS the resource, and its 404 is correct.
+# ---------------------------------------------------------------------------
+
+
+async def resolve_league(db: AsyncSession, league_id: uuid.UUID | None) -> League:
+    """Resolve a league by id, falling back to the default when none is named.
+    Raises 404 if a specific id is supplied but missing, 500 if no default is
+    configured.
+
+    The STRICT resolver — an unknown id is an error. Profile surfaces want
+    `resolve_league_or_default` instead; see the note above for why the two
+    exist side by side.
+    """
+    if league_id is not None:
+        league = await _load_league(db, league_id)
+        if league is None:
+            raise HTTPException(status_code=404, detail="League not found.")
+        return league
+    return await _default_league_or_500(db)
+
+
+async def resolve_league_or_default(
+    db: AsyncSession, league_id: uuid.UUID | None
+) -> League:
+    """Resolve a league by id, degrading to the default when the id names NO
+    league — never raising 404 for it. Raises 500 only if no default league is
+    configured.
+
+    The DEGRADING resolver, for the player-profile surfaces, where the league is
+    a lens on the player rather than the resource being addressed: an unknown
+    (deleted, or never-existed) `?league=` shows the default ladder instead of
+    accusing an existing player of not existing. See the note above before
+    changing or reusing this — it is deliberately NOT what the roster, the
+    opponent picker or match creation use.
+    """
+    if league_id is not None:
+        league = await _load_league(db, league_id)
+        if league is not None:
+            return league
+    return await _default_league_or_500(db)
 
 
 async def count_league_memberships(db: AsyncSession, user_id: uuid.UUID) -> int:

@@ -10,7 +10,7 @@ from sqlalchemy.orm import aliased
 from app.career import player_career
 from app.db import get_session
 from app.head_to_head import player_head_to_head
-from app.leagues import player_leagues, resolve_league
+from app.leagues import player_leagues, resolve_league, resolve_league_or_default
 from app.models import (
     Match,
     MatchSidePlayer,
@@ -336,12 +336,16 @@ async def get_player(
     history is served by `/v1/players/{id}/matches`.
 
     `league_id` selects the ladder the RATING HALF of the page is about,
-    defaulting to the default league when it is omitted. Everything about where
-    this player stands follows it: `rating` and `rank` out of `rank_of` (so it
-    reads "#3 of 42", never a naked "#3"), their all-time `peak`, the
-    `rating_delta` their most recent rated match moved, their recent `form`, a
-    `percentile` (only once the league is large enough for it to mean anything),
-    and `confidence`. An unrated player has none of them.
+    defaulting to the default league when it is omitted — and also when it names
+    a league that does not exist. The league is a LENS on this player, not the
+    resource being addressed (ADR-0915): a stale bookmark to a deleted ladder
+    degrades to the default one rather than 404ing a player who is perfectly
+    fine. `player_id` is the resource, and an unknown one is still a 404.
+    Everything about where this player stands follows the league: `rating` and
+    `rank` out of `rank_of` (so it reads "#3 of 42", never a naked "#3"), their
+    all-time `peak`, the `rating_delta` their most recent rated match moved, their
+    recent `form`, a `percentile` (only once the league is large enough for it to
+    mean anything), and `confidence`. An unrated player has none of them.
 
     `confidence` says how settled that rating is on this ladder: a `level`
     (`provisional` / `firming_up` / `settled`), the 95% `interval` around the
@@ -386,7 +390,7 @@ async def get_player(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Player not found."
         )
-    league = await resolve_league(db, league_id)
+    league = await resolve_league_or_default(db, league_id)
     return await _player_detail(db, user, league.id, current_user.id, window)
 
 
@@ -401,7 +405,9 @@ async def get_player_rating_history(
     """The player's rating over a CALENDAR window — the profile's rating chart
     (ADR-0915). `range` is `30d`, `90d` (the default) or `1y`; `league_id` names
     the ladder, defaulting to the default league, because a rating is a fact about
-    one ladder and never about a player "in general".
+    one ladder and never about a player "in general". As on the profile bundle it
+    is a lens and not the resource, so a `league_id` naming no league degrades to
+    the default ladder rather than 404ing; an unknown `player_id` is still a 404.
 
     The chart is drawn from three things:
 
@@ -435,7 +441,7 @@ async def get_player_rating_history(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Player not found."
         )
-    league = await resolve_league(db, league_id)
+    league = await resolve_league_or_default(db, league_id)
     return await player_rating_history(db, user.id, league.id, window)
 
 

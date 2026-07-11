@@ -319,12 +319,16 @@ internal protocol APIProtocol: Sendable {
     /// history is served by `/v1/players/{id}/matches`.
     ///
     /// `league_id` selects the ladder the RATING HALF of the page is about,
-    /// defaulting to the default league when it is omitted. Everything about where
-    /// this player stands follows it: `rating` and `rank` out of `rank_of` (so it
-    /// reads "#3 of 42", never a naked "#3"), their all-time `peak`, the
-    /// `rating_delta` their most recent rated match moved, their recent `form`, a
-    /// `percentile` (only once the league is large enough for it to mean anything),
-    /// and `confidence`. An unrated player has none of them.
+    /// defaulting to the default league when it is omitted — and also when it names
+    /// a league that does not exist. The league is a LENS on this player, not the
+    /// resource being addressed (ADR-0915): a stale bookmark to a deleted ladder
+    /// degrades to the default one rather than 404ing a player who is perfectly
+    /// fine. `player_id` is the resource, and an unknown one is still a 404.
+    /// Everything about where this player stands follows the league: `rating` and
+    /// `rank` out of `rank_of` (so it reads "#3 of 42", never a naked "#3"), their
+    /// all-time `peak`, the `rating_delta` their most recent rated match moved, their
+    /// recent `form`, a `percentile` (only once the league is large enough for it to
+    /// mean anything), and `confidence`. An unrated player has none of them.
     ///
     /// `confidence` says how settled that rating is on this ladder: a `level`
     /// (`provisional` / `firming_up` / `settled`), the 95% `interval` around the
@@ -373,7 +377,9 @@ internal protocol APIProtocol: Sendable {
     /// The player's rating over a CALENDAR window — the profile's rating chart
     /// (ADR-0915). `range` is `30d`, `90d` (the default) or `1y`; `league_id` names
     /// the ladder, defaulting to the default league, because a rating is a fact about
-    /// one ladder and never about a player "in general".
+    /// one ladder and never about a player "in general". As on the profile bundle it
+    /// is a lens and not the resource, so a `league_id` naming no league degrades to
+    /// the default ladder rather than 404ing; an unknown `player_id` is still a 404.
     ///
     /// The chart is drawn from three things:
     ///
@@ -1139,12 +1145,16 @@ extension APIProtocol {
     /// history is served by `/v1/players/{id}/matches`.
     ///
     /// `league_id` selects the ladder the RATING HALF of the page is about,
-    /// defaulting to the default league when it is omitted. Everything about where
-    /// this player stands follows it: `rating` and `rank` out of `rank_of` (so it
-    /// reads "#3 of 42", never a naked "#3"), their all-time `peak`, the
-    /// `rating_delta` their most recent rated match moved, their recent `form`, a
-    /// `percentile` (only once the league is large enough for it to mean anything),
-    /// and `confidence`. An unrated player has none of them.
+    /// defaulting to the default league when it is omitted — and also when it names
+    /// a league that does not exist. The league is a LENS on this player, not the
+    /// resource being addressed (ADR-0915): a stale bookmark to a deleted ladder
+    /// degrades to the default one rather than 404ing a player who is perfectly
+    /// fine. `player_id` is the resource, and an unknown one is still a 404.
+    /// Everything about where this player stands follows the league: `rating` and
+    /// `rank` out of `rank_of` (so it reads "#3 of 42", never a naked "#3"), their
+    /// all-time `peak`, the `rating_delta` their most recent rated match moved, their
+    /// recent `form`, a `percentile` (only once the league is large enough for it to
+    /// mean anything), and `confidence`. An unrated player has none of them.
     ///
     /// `confidence` says how settled that rating is on this ladder: a `level`
     /// (`provisional` / `firming_up` / `settled`), the 95% `interval` around the
@@ -1203,7 +1213,9 @@ extension APIProtocol {
     /// The player's rating over a CALENDAR window — the profile's rating chart
     /// (ADR-0915). `range` is `30d`, `90d` (the default) or `1y`; `league_id` names
     /// the ladder, defaulting to the default league, because a rating is a fact about
-    /// one ladder and never about a player "in general".
+    /// one ladder and never about a player "in general". As on the profile bundle it
+    /// is a lens and not the resource, so a `league_id` naming no league degrades to
+    /// the default ladder rather than 404ing; an unknown `player_id` is still a 404.
     ///
     /// The chart is drawn from three things:
     ///
@@ -13905,12 +13917,16 @@ internal enum Operations {
     /// history is served by `/v1/players/{id}/matches`.
     ///
     /// `league_id` selects the ladder the RATING HALF of the page is about,
-    /// defaulting to the default league when it is omitted. Everything about where
-    /// this player stands follows it: `rating` and `rank` out of `rank_of` (so it
-    /// reads "#3 of 42", never a naked "#3"), their all-time `peak`, the
-    /// `rating_delta` their most recent rated match moved, their recent `form`, a
-    /// `percentile` (only once the league is large enough for it to mean anything),
-    /// and `confidence`. An unrated player has none of them.
+    /// defaulting to the default league when it is omitted — and also when it names
+    /// a league that does not exist. The league is a LENS on this player, not the
+    /// resource being addressed (ADR-0915): a stale bookmark to a deleted ladder
+    /// degrades to the default one rather than 404ing a player who is perfectly
+    /// fine. `player_id` is the resource, and an unknown one is still a 404.
+    /// Everything about where this player stands follows the league: `rating` and
+    /// `rank` out of `rank_of` (so it reads "#3 of 42", never a naked "#3"), their
+    /// all-time `peak`, the `rating_delta` their most recent rated match moved, their
+    /// recent `form`, a `percentile` (only once the league is large enough for it to
+    /// mean anything), and `confidence`. An unrated player has none of them.
     ///
     /// `confidence` says how settled that rating is on this ladder: a `level`
     /// (`provisional` / `firming_up` / `settled`), the 95% `interval` around the
@@ -14162,7 +14178,9 @@ internal enum Operations {
     /// The player's rating over a CALENDAR window — the profile's rating chart
     /// (ADR-0915). `range` is `30d`, `90d` (the default) or `1y`; `league_id` names
     /// the ladder, defaulting to the default league, because a rating is a fact about
-    /// one ladder and never about a player "in general".
+    /// one ladder and never about a player "in general". As on the profile bundle it
+    /// is a lens and not the resource, so a `league_id` naming no league degrades to
+    /// the default ladder rather than 404ing; an unknown `player_id` is still a 404.
     ///
     /// The chart is drawn from three things:
     ///

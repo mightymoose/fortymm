@@ -145,6 +145,50 @@ describe('selectRatingChart', () => {
     expect(view.peak?.x).toBeGreaterThan(42)
   })
 
+  it('marks the peak of the LINE — never a dot sitting BELOW the line it marks', () => {
+    // The bug this pins. `window.peak` is the highest point *in the window*, and the
+    // ANCHOR is not in the window — but it is DRAWN, and it sets the y-domain. So a
+    // player who came in at 1730 and fell to 1687 had their line start at the very top
+    // of the plot while the marker labelled 1712 — the highest *in-window* point — as
+    // the "peak", planting the dot a third of the way down a line that never goes that
+    // high again. The picture contradicted its own marker, and every player whose
+    // rating fell across the whole window saw it.
+    const view = selectRatingChart(buildFallingRatingWindow(), '90d', NOW)
+
+    const peak = view.peak
+    // The apex of the drawn line (y grows downward, so the highest point is the min).
+    const apex = Math.min(...ys(view.line))
+    expect(peak!.y).toBeLessThanOrEqual(apex)
+    // …which here is the anchor: a rating the player really held, at the edge the line
+    // really starts from. Marking it is what makes the dot and the line agree.
+    expect(peak!.rating).toBe('1730')
+    expect(peak!.x).toBe(42) // PLOT.left — the anchor's own vertex, not a floating dot
+  })
+
+  it('marks the MATCH that reached the peak, not the synthetic flat run to today', () => {
+    // The line's last vertex is a duplicate of the last real rating, held level to
+    // today (a rating does not decay while you rest). When that rating IS the window's
+    // high, the dot belongs on the match that earned it — sliding it to the right-hand
+    // edge would date the peak to a day the player didn't play.
+    const view = selectRatingChart(
+      buildRatingHistoryWindow({
+        anchor: buildRatingPoint({ at: at(100), rating: 1560 }),
+        points: [
+          buildRatingPoint({ at: at(60), rating: 1600 }),
+          buildRatingPoint({ at: at(20), rating: 1700 }),
+        ],
+        peak: buildRatingPoint({ at: at(20), rating: 1700 }),
+        change: 140,
+      }),
+      '90d',
+      NOW,
+    )
+
+    const xCoords = xs(view.line)
+    expect(view.peak!.x).toBe(xCoords.at(-2)) // the match, twenty days ago…
+    expect(view.peak!.x).toBeLessThan(xCoords.at(-1)!) // …and not today's edge.
+  })
+
   it('flips the peak’s LABEL below its dot when the peak sits at the top of the plot', () => {
     // The peak of a window is usually the top of that window's y-domain, which
     // puts its dot at `PLOT.top` (y = 12) — and a 9-unit label 8 units above a dot
@@ -174,25 +218,28 @@ describe('selectRatingChart', () => {
   })
 
   it('keeps the peak’s label ABOVE its dot when there is room', () => {
-    // A peak *inside* the window's y-range — the anchor came in higher than the
-    // player ever got back to — leaves clear air above the dot, and the label
-    // belongs there. Only the no-room case flips.
+    // Now that the peak is folded over the DRAWN vertices, its dot is the top of the
+    // y-domain by construction on any window whose rating moved at all — so the
+    // no-room flip above is the common case, and clear air exists only on a FLAT
+    // window, whose zero-height domain is padded out around the single rating and
+    // leaves the dot mid-plot. (This test used to be driven by an anchor of 1800 over
+    // points of 1600/1650 — which is not "room above the peak" at all, it is the bug:
+    // a peak dot 1650 sitting below a line that starts at 1800.)
     const view = selectRatingChart(
       buildRatingHistoryWindow({
-        anchor: buildRatingPoint({ at: at(100), rating: 1800 }),
-        points: [
-          buildRatingPoint({ at: at(60), rating: 1600 }),
-          buildRatingPoint({ at: at(30), rating: 1650 }),
-        ],
-        peak: buildRatingPoint({ at: at(30), rating: 1650 }),
+        anchor: buildRatingPoint({ at: at(100), rating: 1600 }),
+        points: [buildRatingPoint({ at: at(30), rating: 1600 })],
+        peak: buildRatingPoint({ at: at(30), rating: 1600 }),
+        change: 0,
       }),
       '90d',
       NOW,
     )
 
     const peak = view.peak
-    expect(peak!.y).toBeGreaterThan(12) // not on the ceiling: the anchor is
+    expect(peak!.y).toBeGreaterThan(12) // not on the ceiling: the padding lifts it off
     expect(peak!.labelY).toBe(peak!.y - 8) // dot radius (3.5) + the gap (4.5)
+    expect(peak!.labelY).toBeLessThan(peak!.y) // above (y grows downward)
   })
 
   it('survives a player with no rating at all — no NaNs on the axes', () => {

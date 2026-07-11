@@ -63,10 +63,17 @@ export const RatingChartSvg = ({ chart, summary }: RatingChartSvgProps) => {
             y1={tick.at}
             y2={tick.at}
           />
+          {/* Right-aligned, so the label sits IN the gutter `PLOT.left` reserves
+            * for it. Anchored at the start it grew rightwards *across* the plot's
+            * left edge instead — invisible while nothing was drawn there, but the
+            * peak dot legitimately sits on that edge whenever the ANCHOR is the
+            * line's high point (a window the player declined across), and it
+            * punched a hole through the digits: "1950" rendered as "…50". */}
           <text
             className="rating-chart__y-label"
             x={PLOT.left - 6}
             y={tick.at + 3.5}
+            textAnchor="end"
           >
             {tick.label}
           </text>
@@ -89,8 +96,10 @@ export const RatingChartSvg = ({ chart, summary }: RatingChartSvgProps) => {
         />
       )}
 
-      {/* The window's high-water mark. Absent from an empty window — nothing was
-       * played, so nothing peaked. */}
+      {/* The high-water mark of the LINE ABOVE — the view model folds it over the
+       * drawn vertices (the anchor among them), so the dot always sits on the
+       * line's own highest point rather than on a lower in-window one. Absent from
+       * an empty window — nothing was played, so nothing peaked. */}
       {chart.peak && (
         <g aria-hidden="true">
           <circle

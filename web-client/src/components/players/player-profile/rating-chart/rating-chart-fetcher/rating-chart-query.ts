@@ -119,9 +119,10 @@ export type ChartView = {
   area: string
   /** Where the player is **now** — the line's right-hand end. */
   current: ChartCoord & { rating: string }
-  /** The window's high-water mark. `null` for an empty window (nothing was
-   * played, so nothing peaked) — and never the profile's *all-time* peak, which
-   * is a different number on the same page.
+  /** The high-water mark **of the drawn line** — see `peakVertex`, which is
+   * where the choice of *which* vertex that is gets made. `null` for an empty
+   * window (nothing was played, so nothing peaked), and never the profile's
+   * *all-time* peak, which is a different number on the same page.
    *
    * `labelY` is the baseline the rating is printed at: **above** the dot when
    * there is room, **below** it when the peak sits at the top of the plot and
@@ -210,6 +211,55 @@ function vertices(
   return drawn
 }
 
+/**
+ * The vertex the peak marker sits on: the high-water mark of **the line the user
+ * is looking at**, which is not always `window.peak`.
+ *
+ * `window.peak` is the highest point IN THE WINDOW (`api/app/ratings/history.py`),
+ * and the anchor is by definition *not* in the window — but it IS drawn, and it
+ * participates in the y-domain. So for any player whose rating fell across the
+ * whole window (anchor above everything they got back to), reading `window.peak`
+ * straight through put the "peak" dot BELOW the line's own leftmost vertex: the
+ * anchor set `yMax` and started the line at the ceiling, while the marker labelled
+ * a lower point as the high. The picture contradicted its own marker.
+ *
+ * So the peak is folded over the drawn vertices, and when the **anchor** is the
+ * highest of them, it is what gets marked. That is the honest read of a marker
+ * whose whole job is to say "this is the highest this line goes": the anchor is a
+ * rating the player really held (it is what the window *opens* at), and the line
+ * really does reach its apex there. Suppressing the marker on a declining window —
+ * the alternative — would hide the number the eye is already drawn to, and leave
+ * the line's most conspicuous vertex conspicuously unlabelled. It is drawn at the
+ * domain's left edge rather than at its true (older) timestamp, exactly as
+ * `vertices` draws it, so dot and line agree — no marker ever floats off the line.
+ *
+ * Two vertices are deliberately NOT candidates:
+ *
+ * - the **flat run to today** is synthetic — a duplicate of the last real rating,
+ *   held level to the right-hand edge. It never wins here (it is not folded over),
+ *   so a peak that IS the current rating stays marked on the real match that
+ *   earned it rather than sliding to today's edge;
+ * - an **empty window** (anchor, no points) marks nothing. `window.peak` is `null`
+ *   there, and it stays `null`: the player did not play, so nothing peaked. The
+ *   line is flat at the one rating they hold — a "peak" dot on a horizontal line
+ *   would be noise, not information.
+ *
+ * Ties go to the in-window point (strict `>`), which keeps the marker on a real
+ * match — at its real timestamp — whenever the anchor merely equals it.
+ */
+function peakVertex(
+  window: RatingHistoryWindow,
+  domainStart: number,
+): Vertex | null {
+  const inWindow = window.peak
+  if (!inWindow) return null
+  const anchor = window.anchor
+  if (anchor && anchor.rating > inWindow.rating) {
+    return { at: domainStart, rating: anchor.rating }
+  }
+  return { at: Date.parse(inWindow.at), rating: inWindow.rating }
+}
+
 /** "12 Mar" — enough to place a point in the year without crowding the axis. */
 const formatDay = (at: number): string =>
   new Date(at).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
@@ -281,7 +331,10 @@ export function selectRatingChart(
       : ''
 
   const currentVertex = drawn.at(-1)
-  const peakPoint = window.peak
+  // The peak of the DRAWN line, anchor included — not `window.peak` read straight
+  // through, which marks the highest point *in the window* and so can sit below
+  // the anchor the line starts at. See `peakVertex`.
+  const peakPoint = peakVertex(window, xMin)
   const peakY = peakPoint ? y(peakPoint.rating) : 0
 
   return {
@@ -294,7 +347,7 @@ export function selectRatingChart(
     },
     peak: peakPoint
       ? {
-          x: x(Date.parse(peakPoint.at)),
+          x: x(peakPoint.at),
           y: peakY,
           rating: formatRating(peakPoint.rating),
           labelY: peakLabelBaseline(peakY),

@@ -3582,3 +3582,151 @@ async def test_rating_history_peak_is_folded_before_the_line_is_thinned(
     # measured from the first point.
     assert body["anchor"] is None
     assert body["change"] == 2499.0 - 1500.0
+
+
+# ---------------------------------------------------------------------------
+# An unknown `?league_id=` on the PROFILE is a stale LENS, not a missing
+# resource — and stays an error everywhere else (ADR-0915).
+#
+# These three tests are a pair of halves and only mean something together:
+# the first two pin that `/v1/players/{id}` and its rating-history sibling
+# DEGRADE to the default ladder, the third that every other league-taking
+# surface still 404s. Loosen `app.leagues.resolve_league` itself — "unifying"
+# the two resolvers — and the first two still pass while the third reds. That
+# is the point of the split; do not delete the third to make a refactor green.
+# ---------------------------------------------------------------------------
+
+
+async def test_get_player_with_an_unknown_league_falls_back_to_the_default_ladder(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """A well-formed but UNKNOWN `league_id` on the profile returns the player on
+    the DEFAULT ladder, 200 — it does not 404.
+
+    `/players/{id}` addresses a *player*; the league is only the lens the rating
+    half of the page is seen through (ADR-0915). A bookmark to a ladder that has
+    since been deleted must not answer "Player not found" about a player who
+    exists and is fine — the FE's route error boundary maps any 4xx here to
+    exactly that copy, so a 404 blames the wrong thing.
+
+    The target is deliberately rated on TWO ladders with disjoint numbers, and the
+    stale response is asserted byte-identical to naming no league at all: "fell
+    back to the default" is a stronger claim than "did not error", and rules out
+    an impl that fell back to *some* league (the side one, the first one found) or
+    to a null-shaped answer with no ladder at all."""
+    await start_session(api_client, db_session)
+    home = await get_default_league(db_session)
+    assert home is not None
+    away = await _side_league(db_session, "Deleted Ladder")
+
+    target = await make_user(db_session, "stale.target")
+    await _join_league(db_session, target, home)
+    await _join_league(db_session, target, away)
+
+    # Top of the home ladder and settled there; bottom of the away one and still
+    # provisional on it. Every rating fact below therefore disagrees across them.
+    await _rate_glicko2(db_session, target, rating=1520.0, rd=80.0, league=home)
+    await _rate_glicko2(db_session, target, rating=1490.0, rd=200.0, league=away)
+    await _rated_cohort(db_session, "stale.away", 3, league=away, base=1600.0)
+
+    default = (await api_client.get(f"/v1/players/{target.id}")).json()
+    on_the_side = (
+        await api_client.get(f"/v1/players/{target.id}?league_id={away.id}")
+    ).json()
+    response = await api_client.get(f"/v1/players/{target.id}?league_id={uuid.uuid4()}")
+
+    assert response.status_code == 200
+    body = response.json()
+
+    # The default ladder answers, whole: the same bytes as asking for no league.
+    assert body == default
+
+    # And emphatically not the other ladder, nor a ladderless husk.
+    assert body["rating"] == 1520.0
+    assert on_the_side["rating"] == 1490.0
+    assert body["rank"] == 1
+    assert on_the_side["rank"] == 4  # the 3-strong away cohort all outrate them
+    assert body["confidence"]["level"] == "settled"
+    assert body["confidence"]["deviation"] == 80.0
+    assert on_the_side["confidence"]["level"] == "provisional"
+
+
+async def test_rating_history_with_an_unknown_league_falls_back_to_the_default_ladder(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """The chart endpoint degrades exactly as the bundle it is embedded in does:
+    an unknown `league_id` plots the DEFAULT ladder's line rather than 404ing.
+
+    The profile seeds this endpoint's cache from the bundle and calls it when the
+    user flips range (ADR-0915) — so if the two disagreed about a stale `?league=`,
+    a page that painted fine would blow up the moment its range changed."""
+    await start_session(api_client, db_session)
+    target = await make_user(db_session, "stale.chart")
+    rival = await make_user(db_session, "stale.rival")
+    away = await _side_league(db_session, "Deleted Chart Ladder")
+
+    # Home ladder: 1400 carried in, one in-window win to 1450.
+    await _rated_win(
+        db_session,
+        target,
+        rival,
+        at=NOW - timedelta(days=200),
+        before=1350.0,
+        after=1400.0,
+    )
+    await _rated_win(
+        db_session,
+        target,
+        rival,
+        at=NOW - timedelta(days=30),
+        before=1400.0,
+        after=1450.0,
+    )
+    # Away ladder: an entirely different, much higher career.
+    await _rated_win(
+        db_session,
+        target,
+        rival,
+        at=NOW - timedelta(days=30),
+        before=1900.0,
+        after=1980.0,
+        league=away,
+    )
+
+    default = (
+        await api_client.get(f"/v1/players/{target.id}/rating-history?range=90d")
+    ).json()
+    response = await api_client.get(
+        f"/v1/players/{target.id}/rating-history?range=90d&league_id={uuid.uuid4()}"
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body == default
+    # The default ladder's line, not the away ladder's 1980.
+    assert [point["rating"] for point in body["points"]] == [1450.0]
+    assert body["anchor"]["rating"] == 1400.0
+
+
+async def test_unknown_league_is_still_a_404_where_the_league_is_the_resource(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """THE discriminator for the resolver split: `resolve_league` stays STRICT.
+
+    On the roster and the opponent picker the league is not a lens on one player —
+    it names the ladder the rows themselves are ranked and rated by. Substituting
+    the default for a league that does not exist would serve confidently WRONG
+    data (a roster ordered by a ladder nobody asked for) with nothing to tell the
+    caller their id was junk. 404 is the honest answer, and the profile's
+    fallback must not be smuggled in here by loosening the shared helper."""
+    await start_session(api_client, db_session)
+    await make_user(db_session, "strict.player")
+    unknown = uuid.uuid4()
+
+    roster = await api_client.get(f"/v1/players?league_id={unknown}")
+    recent = await api_client.get(f"/v1/players/recent?league_id={unknown}")
+    search = await api_client.get(f"/v1/players/search?q=strict&league_id={unknown}")
+
+    for response in (roster, recent, search):
+        assert response.status_code == 404, response.request.url
+        assert response.json()["detail"] == "League not found."
