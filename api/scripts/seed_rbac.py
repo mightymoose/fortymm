@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.db import get_engine
 from app.models import Permission, Role, RolePermission
+from app.roles import converge_default_role
 
 
 PERMISSIONS = [
@@ -22,6 +23,9 @@ PERMISSIONS = [
     ("notifications.broadcast", "Send broadcast notifications to players."),
 ]
 
+# The default `User` role is *not* listed here: it carries no permissions and
+# every user holds it, so `app.roles.converge_default_role` owns both its row
+# and the grants. Roles below are opt-in bundles an admin assigns by hand.
 ROLES = [
     (
         "Administrator",
@@ -110,10 +114,14 @@ async def seed() -> None:
                 db.add(RolePermission(role_id=role.id, permission_id=perm.id))
                 added_links += 1
 
+        default_role = await converge_default_role(db)
+
         await db.commit()
         print(
             f"Seed complete: +{created_perms} permissions, "
-            f"+{created_roles} roles, +{added_links} role/permission links."
+            f"+{created_roles + int(default_role.role_created)} roles, "
+            f"+{added_links} role/permission links, "
+            f"+{default_role.grants_added} default-role grants."
         )
 
 
