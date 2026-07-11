@@ -56,6 +56,36 @@ describe("matchInfoQuery", () => {
     });
   });
 
+  it("frames a best-of-1 match as a single game", async () => {
+    matchInfoQueryPage.mockEndpoint(() =>
+      HttpResponse.json(
+        buildMatchDetails({ team_size: 1, best_of: 1, games_to_win: 1 }),
+      ),
+    );
+
+    const result = await renderInfo();
+
+    expect(result.current.data?.rows[0]).toEqual({
+      label: "Format",
+      value: "Singles · Single game",
+    });
+  });
+
+  it("frames a best-of-1 team match as Doubles · Single game", async () => {
+    matchInfoQueryPage.mockEndpoint(() =>
+      HttpResponse.json(
+        buildMatchDetails({ team_size: 2, best_of: 1, games_to_win: 1 }),
+      ),
+    );
+
+    const result = await renderInfo();
+
+    expect(result.current.data?.rows[0]).toEqual({
+      label: "Format",
+      value: "Doubles · Single game",
+    });
+  });
+
   it("passes the server's status label through untouched", async () => {
     matchInfoQueryPage.mockEndpoint(() =>
       HttpResponse.json(buildMatchDetails({ status_label: "In progress" })),

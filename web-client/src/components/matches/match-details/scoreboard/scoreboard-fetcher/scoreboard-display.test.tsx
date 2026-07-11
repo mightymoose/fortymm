@@ -92,6 +92,19 @@ describe("ScoreboardDisplay", () => {
     expect(scoreboardDisplayPage.gameGrid.queryGrid()).not.toBeInTheDocument();
   });
 
+  it("omits the game grid for a best-of-1 view even when a gameGrid is present", () => {
+    // A single-game match suppresses the grid via showGameGrid; the query still
+    // projects a (one-cell) gameGrid, so the flag is what hides it.
+    scoreboardDisplayPage.render({
+      scoreboard: buildScoreboardView({
+        showGameGrid: false,
+        gameGrid: buildGameGridView(),
+      }),
+    });
+
+    expect(scoreboardDisplayPage.gameGrid.queryGrid()).not.toBeInTheDocument();
+  });
+
   it("labels the region via useId, pointing aria-labelledby at the heading id", () => {
     scoreboardDisplayPage.render();
 

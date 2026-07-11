@@ -101,6 +101,17 @@ describe('FirstMatchCard', () => {
     expect(screen.getByRole('button', { name: /start scoring/i })).toBeEnabled()
   })
 
+  it('summarises a best-of-1 pick as "Single game", not "Best of 1"', async () => {
+    renderFirstMatchCard()
+
+    await pickNguyen()
+    await userEvent.click(screen.getByRole('radio', { name: /^1/ }))
+
+    expect(screen.getByText('Single game · rated')).toBeInTheDocument()
+    expect(screen.queryByText(/Best of 1/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/first to 1/)).not.toBeInTheDocument()
+  })
+
   it('clears the opponent and resets rated on Change', async () => {
     renderFirstMatchCard()
     await pickNguyen()

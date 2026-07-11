@@ -685,7 +685,9 @@ function ScoreEntryInner({
       ? 'Save updates the score for this game.'
       : gameNumber < bestOf
         ? `Save this game to continue to game ${gameNumber + 1}.`
-        : 'Final game. Save to post the result.'
+        : bestOf === 1
+          ? 'Save to post the result.'
+          : 'Final game. Save to post the result.'
   const submitLabel = wouldFinalize
     ? finalizeMutation.isPending
       ? data.affects_rating
@@ -698,7 +700,9 @@ function ScoreEntryInner({
       ? 'Save changes →'
       : gameNumber < bestOf
         ? 'Save game & next →'
-        : 'Save final game →'
+        : bestOf === 1
+          ? 'Save & post →'
+          : 'Save final game →'
 
   return (
     <>
@@ -706,8 +710,8 @@ function ScoreEntryInner({
         <div className="entry-head">
           <h2>{heading}</h2>
           <div className="hint">
-            Type <kbd>0</kbd>–<kbd>9</kbd> &nbsp;·&nbsp; <kbd>Enter</kbd> for
-            next / save game
+            Type <kbd>0</kbd>–<kbd>9</kbd> &nbsp;·&nbsp; <kbd>Enter</kbd>{' '}
+            {bestOf === 1 ? 'to save' : 'for next / save game'}
           </div>
         </div>
 
@@ -779,15 +783,17 @@ function ScoreEntryInner({
           clearDisabled={deleteMutation.isPending}
         />
 
-        <Scoreline
-          data={data}
-          activeGameNumber={gameNumber}
-          decider={decider}
-          matchId={matchId}
-          mySideNumber={mySideNumber}
-          onClearCell={onClearCell}
-          clearDisabled={inputsLocked || cellDeleteMutation.isPending}
-        />
+        {bestOf > 1 && (
+          <Scoreline
+            data={data}
+            activeGameNumber={gameNumber}
+            decider={decider}
+            matchId={matchId}
+            mySideNumber={mySideNumber}
+            onClearCell={onClearCell}
+            clearDisabled={inputsLocked || cellDeleteMutation.isPending}
+          />
+        )}
       </div>
 
       <AlertDialog
