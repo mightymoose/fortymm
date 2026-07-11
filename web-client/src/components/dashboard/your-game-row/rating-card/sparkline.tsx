@@ -1,4 +1,5 @@
 import { C } from '@/components/dashboard/dashboard-tokens'
+import { sparklineGeometry } from '@/lib/sparkline'
 
 export interface SparklineProps {
   data: number[]
@@ -28,20 +29,10 @@ export const Sparkline = ({
   color = C.ball500,
   fluid = false,
 }: SparklineProps) => {
-  const min = Math.min(...data)
-  const max = Math.max(...data)
-  const range = max - min || 1
-  const pad = 2
-  const points = data.map((v, i) => {
-    const x = pad + (i / (data.length - 1)) * (w - pad * 2)
-    const y = h - pad - ((v - min) / range) * (h - pad * 2)
-    return [x, y] as const
-  })
-  const path = points
-    .map((p, i) => `${i === 0 ? 'M' : 'L'}${p[0].toFixed(1)} ${p[1].toFixed(1)}`)
-    .join(' ')
-  const last = points[points.length - 1]
-  const areaPath = `${path} L${last[0]} ${h} L${pad} ${h} Z`
+  const { points, path, last } = sparklineGeometry(data, w, h)
+  // Close the fill: down from the last point to the baseline, back along it to
+  // under the first point (which sits at the helper's left inset), and shut.
+  const areaPath = `${path} L${last[0]} ${h} L${points[0][0]} ${h} Z`
   const gradId = `dash-spark-${color.replace(/[^a-z0-9]/gi, '')}`
   // Position the end-point dot as a fraction of the box; since the overlay is a
   // sibling of the (possibly stretched) SVG, percentages keep it pinned to the

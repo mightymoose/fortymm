@@ -534,18 +534,19 @@ describe("MatchDetails — page wiring", () => {
     const h2hCard = container.querySelector(".md-h2h")!;
     expect(screen.getByText("3 MEETINGS")).toBeInTheDocument();
     // Win counts: left = me = 2, right = opp = 1.
-    const counts = h2hCard.querySelectorAll(".md-h2h__count");
-    expect(counts[0]).toHaveTextContent("2");
-    expect(counts[1]).toHaveTextContent("1");
+    expect(h2hCard.querySelector(".md-h2h__count--l")).toHaveTextContent(/^2$/);
+    expect(h2hCard.querySelector(".md-h2h__count--r")).toHaveTextContent(/^1$/);
     // Three rows, newest first; the loss row tints the opponent's (right)
     // score, the win row tints mine (left).
     const rows = h2hCard.querySelectorAll(".md-h2h__row");
     expect(rows).toHaveLength(3);
-    const scoreSides = (row: Element) =>
-      row.querySelectorAll(".md-h2h__score-side");
-    expect(scoreSides(rows[0])[1]).toHaveClass("md-h2h__score-side--win");
-    expect(scoreSides(rows[0])[0]).not.toHaveClass("md-h2h__score-side--win");
-    expect(scoreSides(rows[1])[0]).toHaveClass("md-h2h__score-side--win");
+    const leftScore = (row: Element) =>
+      row.querySelector(".md-h2h__score-side--l");
+    const rightScore = (row: Element) =>
+      row.querySelector(".md-h2h__score-side--r");
+    expect(rightScore(rows[0])).toHaveClass("md-h2h__score-side--win");
+    expect(leftScore(rows[0])).not.toHaveClass("md-h2h__score-side--win");
+    expect(leftScore(rows[1])).toHaveClass("md-h2h__score-side--win");
   });
 
   it("shows the rating change card when ratings moved", async () => {
