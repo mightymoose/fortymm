@@ -113,3 +113,68 @@ Show field validation errors inline, directly below the field, in red. Set
 ```
 
 Do not use toasts, alerts, or other patterns for field-level validation errors.
+
+## Read-only surfaces
+
+When a surface is editable by some users and merely viewable by others (today:
+the tournament surfaces, gated by the server-computed `canEdit` flag on the
+tournament payload), **render a view — do not disable the form.** The reasoning
+is in [ADR 0015](../docs/adr/0015-read-only-is-a-view-not-a-disabled-form.md);
+the tooling is:
+
+- **`ReadOnlyValue`** (`src/components/tournaments/read-only-value.tsx`) is the
+  read-only counterpart to `Field`'s control slot — it renders the value as text
+  with the same row rhythm, and an em-dash (`—`) when the value is unset. Branch
+  at the control: `{canEdit ? <Input … /> : <ReadOnlyValue>{draft.name}</ReadOnlyValue>}`.
+  A read-only surface must put **no** `<input>` / `<select>` / `<textarea>` /
+  `<switch>` in the accessibility tree.
+- **Hide mutating affordances — never disable them.** Save, Delete, Revert, and
+  the add/remove row buttons are wrapped in `{canEdit && …}`, not given a
+  `disabled` prop. A disabled button is an unexplained dead end.
+- **Drop the form's furniture too, at `Field`.** Pass `readOnly` to `Field` and it
+  suppresses the **hint** and the **required asterisk**. A hint explains how to
+  fill in a control and an asterisk marks one you must complete — both are
+  nonsense next to a value nobody can edit. Suppressing them *in `Field`* rather
+  than at each call site means a newly-added field can't reintroduce them by
+  forgetting to.
+- **Swap organizer-voiced copy.** Imperatives written for the person in control
+  ("Edit event", "Click any event to edit") get neutral copy when `!canEdit`.
+- **Every read-only-capable component carries a guard test** asserting that with
+  `canEdit: false` it renders zero interactive controls. **Sweep the DOM, not just
+  ARIA roles** — a role-only sweep silently under-proves:
+
+  | Control | Role you'd guess | Role it actually has |
+  | --- | --- | --- |
+  | `<Input type="number">` | `textbox` | **`spinbutton`** |
+  | `<Input type="date">` / `type="time"` | `textbox` | **none at all** |
+  | `ToggleGroupItem` | `button` | **`radio`** |
+
+  The toggle case is the nastiest, because an **explicit `role` overrides the
+  implicit one**: `ToggleGroupItem` renders `<button role="radio">`, so
+  `queryAllByRole('button')` never matches it. A whole live toggle group sails
+  through a role sweep — measured, not theorised: with the status ToggleGroup left
+  live in the read-only branch, the four-role sweep found **0** controls and
+  passed, while the DOM sweep found **5**.
+
+  So a sweep of `textbox`/`combobox`/`switch`/`button` can pass with live date,
+  number, and toggle inputs still on screen — a false green of exactly the kind
+  this rule exists to prevent. Assert on the DOM instead, scoped to the
+  component's root (and make sure that root actually wraps every field):
+
+  ```tsx
+  it('renders no interactive controls for a non-owner', () => {
+    render(<BasicsSection event={anEvent()} canEdit={false} onChange={vi.fn()} />)
+    expect(
+      page.root().querySelectorAll(
+        'input, select, textarea, button, [role="switch"], [role="radio"], [tabindex], [contenteditable]',
+      ),
+    ).toHaveLength(0)
+  })
+  ```
+
+  This is what keeps the rule true as fields are added — it fails loudly the
+  moment someone reaches for `disabled` out of habit. A role sweep may be kept
+  *alongside* it, but never instead of it.
+
+Hiding a control is a UX decision, **never** a security boundary: the API
+independently 403s every owner-only endpoint, and must continue to.
