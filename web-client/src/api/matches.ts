@@ -9,6 +9,7 @@ import {
   ApiError,
   api,
   conflictDetail,
+  isNegotiationConflict,
   resolveBaseUrl,
   unwrap,
 } from './client'
@@ -700,6 +701,27 @@ export function useProposeResult(matchId: string) {
         }),
       ),
     onSuccess: (data) => applyBoardWriteCache(queryClient, matchId, data),
+    // The NEGOTIATION-conflict 409 (`_negotiation_conflict`, "a result already
+    // exists") means the opponent already posted a standing result out from under
+    // this screen. The entered score is fine; there's nothing left to propose.
+    // Refetch the observed match so score-entry's own early-return
+    // (`standing_result`/`completed`) can route the poster to match detail, where
+    // they can Accept. This is the minimal "Option A" replacing the #800 reconcile
+    // interstitial that ADR-0005 (#827) deleted — no interstitial, just re-sync +
+    // the existing redirect.
+    //
+    // Gate on `isNegotiationConflict` specifically, NOT every 409: the other two
+    // propose 409s carry a plain-STRING detail — the lock race ("a result is
+    // already being posted…") and the terminal guard ("no longer open to
+    // results") — where a concurrent post may not have committed yet, so a
+    // refetch can return a still-`in_progress` match with no `standing_result`
+    // and the redirect would never fire. Those (and a 422/500/transport drop)
+    // must stay put so score-entry surfaces them with a live retry.
+    onError: (error) => {
+      if (error instanceof ApiError && isNegotiationConflict(error)) {
+        queryClient.invalidateQueries({ queryKey: matchQueryKey(matchId) })
+      }
+    },
   })
 }
 
