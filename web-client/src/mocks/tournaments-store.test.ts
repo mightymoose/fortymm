@@ -403,6 +403,30 @@ describe('the rest of the event surface still holds', () => {
     expect(result.event.entered).toBe(1)
     expect(event(EMPTY_SINGLES).entrants).toHaveLength(1)
   })
+
+  // ADR-0935: a null cap is "no cap". Create stores it as null; an omitted cap
+  // is also "no cap" (null), never `undefined`.
+  it('creates an uncapped event (null max_players)', () => {
+    const result = createEvent(TOURNAMENT, {
+      name: 'Uncapped Singles',
+      format: 'singles',
+      draw_type: 'single-elim',
+      max_players: null,
+      entry_fee: 0,
+      slot: { date: '2026-06-14', start: '09:00', end: '12:00' },
+      match_settings: { rated: false, length_games: 3 },
+    })
+    if (!result.ok) throw new Error('create failed')
+    expect(result.event.max_players).toBeNull()
+  })
+
+  // An explicit null clears the cap; `??` would have kept the old value. This is
+  // the store half of the no-cap round-trip.
+  it('clears the cap when a PATCH sends max_players: null', () => {
+    const result = updateEvent(TOURNAMENT, EMPTY_SINGLES, { max_players: null })
+    if (!result.ok) throw new Error('update failed')
+    expect(result.event.max_players).toBeNull()
+  })
 })
 
 // The lifecycle (ADR-0017). The store enforces the SERVER's edge table, not a

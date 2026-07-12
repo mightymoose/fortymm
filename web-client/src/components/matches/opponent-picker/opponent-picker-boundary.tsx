@@ -40,12 +40,27 @@ function OpponentPickerError({ resetErrorBoundary }: FallbackProps) {
  * The picker's `query` / `showSearch` state lives *above* this boundary (in
  * `OpponentPicker`), so a reset remounts the children without dropping the
  * typed search (#96).
+ *
+ * `resetKeys` is how the caller says "this is a different view now": the picker
+ * passes its `showSearch`, so switching between the recent grid and search
+ * clears a failed view's error instead of pinning the fallback over the view
+ * the user just moved to (#895). "Try again" stays the in-place recovery.
  */
-export function OpponentPickerBoundary({ children }: { children: ReactNode }) {
+export function OpponentPickerBoundary({
+  children,
+  resetKeys,
+}: {
+  children: ReactNode
+  resetKeys?: unknown[]
+}) {
   return (
     <QueryErrorResetBoundary>
       {({ reset }) => (
-        <ErrorBoundary FallbackComponent={OpponentPickerError} onReset={reset}>
+        <ErrorBoundary
+          FallbackComponent={OpponentPickerError}
+          onReset={reset}
+          resetKeys={resetKeys}
+        >
           {children}
         </ErrorBoundary>
       )}

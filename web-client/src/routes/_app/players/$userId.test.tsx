@@ -237,11 +237,20 @@ function renderProfile(initialEntry = '/players/p-1', existing?: QueryClient) {
     path: '/players',
     component: () => <div>players list</div>,
   })
+  // …and every row of that card is itself a typed <Link> to its match (#989).
+  // (The opponent's name inside the row is a <Link to="/players/$userId"> too,
+  // #1005 — it resolves against `profileRoute` above, the page's own route.)
+  const matchDetail = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/matches/$matchId',
+    component: () => <div>match detail</div>,
+  })
   const router = createRouter({
     routeTree: rootRoute.addChildren([
       playersListRoute,
       profileRoute,
       historyRoute,
+      matchDetail,
     ]),
     history: createMemoryHistory({ initialEntries: [initialEntry] }),
     context: { queryClient },

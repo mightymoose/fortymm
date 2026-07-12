@@ -34,6 +34,22 @@ const scoped = (container: Container) => ({
   getOptions() {
     return container.queryAllByRole('option')
   },
+  /**
+   * The options carrying the *visual* highlight (the `.active` class) — the
+   * keyboard/hover cursor. Deliberately separate from `getSelectedOptions`:
+   * highlighted is not selected (#894).
+   */
+  getHighlightedOptions() {
+    return container
+      .queryAllByRole('option')
+      .filter((o: HTMLElement) => o.classList.contains('active'))
+  },
+  /** The options announced to assistive tech as *selected* (#894). */
+  getSelectedOptions() {
+    return container
+      .queryAllByRole('option')
+      .filter((o: HTMLElement) => o.getAttribute('aria-selected') === 'true')
+  },
   findOption(name: string | RegExp) {
     return container.findByRole('option', { name })
   },

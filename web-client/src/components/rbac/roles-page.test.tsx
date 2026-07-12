@@ -1,4 +1,6 @@
-import { waitFor } from '@/test/utilities'
+import { http, HttpResponse } from 'msw'
+import { screen, waitFor } from '@/test/utilities'
+import { server } from '@/mocks/server'
 import { rolesPage } from './roles-page.page'
 import { DEFAULT_ROLE_ID, PERM_VIEW, buildRolesSeed } from './roles-page.factory'
 
@@ -137,5 +139,85 @@ describe('RolesPage — a role nobody special', () => {
     await rolesPage.findRoleRow('Owner')
 
     expect(rolesPage.queryDefaultBadge()).not.toBeInTheDocument()
+  })
+})
+
+// #937: a name the server rejects (a duplicate → 409, an over-long name → 422)
+// must surface inline on the name field with the dialog left open — not vanish
+// behind a global toast. The modal closes only on success.
+describe('RolesPage — creating a role', () => {
+  async function openCreateModal() {
+    const user = rolesPage.user()
+    await user.click(await rolesPage.findNewRoleButton())
+    // The name input's presence is how a test knows the modal is open; its
+    // later absence is the only success signal (the modal closes on success).
+    await rolesPage.findNameInput()
+    return user
+  }
+
+  it('creates a role from a valid name and closes the modal on success', async () => {
+    const state = rolesPage.render()
+    const user = await openCreateModal()
+
+    await user.type(await rolesPage.findNameInput(), 'Volunteer scorer')
+    await user.click(await rolesPage.findCreateButton())
+
+    await waitFor(() => {
+      expect([...state.roles.values()].map((r) => r.name)).toContain('Volunteer scorer')
+    })
+    await waitFor(() => {
+      expect(rolesPage.queryNameInput()).not.toBeInTheDocument()
+    })
+  })
+
+  it('surfaces a server 409 (duplicate) inline and keeps the dialog open', async () => {
+    // `Owner` already exists in the seed, so the create hits the engine's real
+    // 409 ("role name already exists") — no client-side refine short-circuits it.
+    const state = rolesPage.render()
+    const user = await openCreateModal()
+
+    await user.type(await rolesPage.findNameInput(), 'Owner')
+    await user.click(await rolesPage.findCreateButton())
+
+    expect(await screen.findByText(/already exists/i)).toBeInTheDocument()
+    // Dialog stays open, and no phantom second `Owner` was persisted.
+    expect(rolesPage.queryNameInput()).toBeInTheDocument()
+    expect([...state.roles.values()].filter((r) => r.name === 'Owner')).toHaveLength(1)
+  })
+
+  it('surfaces a server 422 (too long) inline and keeps the dialog open', async () => {
+    rolesPage.render()
+    // A short name passes the client schema, so the POST fires and the server's
+    // 422 detail is what surfaces inline — proving the catch handles it, not the
+    // client-side max() rule.
+    server.use(
+      http.post('*/v1/roles', () =>
+        HttpResponse.json({ detail: 'Role name exceeds the 255 character limit.' }, { status: 422 }),
+      ),
+    )
+    const user = await openCreateModal()
+
+    await user.type(await rolesPage.findNameInput(), 'Weekend crew')
+    await user.click(await rolesPage.findCreateButton())
+
+    expect(await screen.findByText(/exceeds the 255 character limit/i)).toBeInTheDocument()
+    expect(rolesPage.queryNameInput()).toBeInTheDocument()
+  })
+
+  it('caps the name input length with maxLength', async () => {
+    rolesPage.render()
+    await openCreateModal()
+
+    expect(await rolesPage.findNameInput()).toHaveAttribute('maxlength', '255')
+  })
+
+  it('blocks an empty submit inline without closing', async () => {
+    rolesPage.render()
+    const user = await openCreateModal()
+
+    await user.click(await rolesPage.findCreateButton())
+
+    expect(await screen.findByText(/name is required/i)).toBeInTheDocument()
+    expect(rolesPage.queryNameInput()).toBeInTheDocument()
   })
 })

@@ -937,6 +937,41 @@ function detail(message: string, status = 422) {
   return HttpResponse.json({ detail: message }, { status })
 }
 
+/** Mirror the server's event-body constraints (ADR-0935) so an invalid event is
+ * a 422 the editor surfaces inline, not a value the store silently accepts:
+ *   • name — required, at most 255 chars.
+ *   • max_players — when present, a positive integer (`null` = no cap is fine).
+ *   • entry_fee — when present, non-negative.
+ * Returns a 422 response for the first violation, or `null` when the body is OK.
+ * Applies to both create and PATCH (a PATCH omits fields, so each check is
+ * skipped when its field is absent — except `name`, which create requires). */
+function validateEventBody(
+  body:
+    | components['schemas']['TournamentEventCreate']
+    | components['schemas']['TournamentEventUpdate']
+    | undefined,
+): Response | null {
+  if (!body) return detail('Event body is required.', 422)
+  if ('name' in body && body.name !== undefined) {
+    const name = body.name?.trim() ?? ''
+    if (!name) return detail('Name is required.', 422)
+    if (name.length > 255) {
+      return detail('Name must be 255 characters or fewer.', 422)
+    }
+  }
+  if (body.max_players !== undefined && body.max_players !== null) {
+    if (!Number.isInteger(body.max_players) || body.max_players <= 0) {
+      return detail('Player limit must be a positive whole number.', 422)
+    }
+  }
+  if (body.entry_fee !== undefined && body.entry_fee !== null) {
+    if (body.entry_fee < 0) {
+      return detail('Entry fee can’t be negative.', 422)
+    }
+  }
+  return null
+}
+
 function enforceScorable(seed: SeedMatch): Response | null {
   if (
     seed.status === 'completed' ||
@@ -1585,8 +1620,12 @@ export const handlers = [
       const body = (await readJson(request)) as
         | components['schemas']['TournamentEventCreate']
         | undefined
-      if (!body || !body.name?.trim()) return detail('Name is required.', 422)
-      const result = createTournamentEvent(String(params.tournamentId), body)
+      const invalid = validateEventBody(body)
+      if (invalid) return invalid
+      const result = createTournamentEvent(
+        String(params.tournamentId),
+        body as components['schemas']['TournamentEventCreate'],
+      )
       if (!result.ok) {
         return detail(
           result.status === 403
@@ -1653,6 +1692,8 @@ export const handlers = [
       const body = (await readJson(request)) as
         | components['schemas']['TournamentEventUpdate']
         | undefined
+      const invalid = validateEventBody(body)
+      if (invalid) return invalid
       const result = updateTournamentEvent(
         String(params.tournamentId),
         String(params.eventId),

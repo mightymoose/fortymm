@@ -23,6 +23,62 @@ describe('BasicsSection', () => {
     )
   })
 
+  // Clearing the cap is "no cap" (ADR-0935), not `0`/`NaN` — the blank field
+  // must emit `null`, so it round-trips to the API as `max_players: null`.
+  it('emits a null player limit when the field is cleared', () => {
+    const onChange = vi.fn()
+    basicsSectionPage.render({ event: buildEvent({ maxPlayers: 64 }), onChange })
+    fireEvent.change(basicsSectionPage.getPlayerLimitInput(), {
+      target: { value: '' },
+    })
+    expect(onChange).toHaveBeenCalledWith(
+      expect.objectContaining({ maxPlayers: null }),
+    )
+  })
+
+  // Blank fee is *missing* (a required error upstream), marked here as `NaN` so
+  // it can't be mistaken for a legitimate free event (`0`).
+  it('emits NaN when the entry fee is cleared, and a real 0 when typed', () => {
+    const onChange = vi.fn()
+    basicsSectionPage.render({ event: buildEvent({ entryFee: 45 }), onChange })
+
+    fireEvent.change(basicsSectionPage.getEntryFeeInput(), {
+      target: { value: '' },
+    })
+    expect(onChange).toHaveBeenCalledWith(
+      expect.objectContaining({ entryFee: NaN }),
+    )
+
+    onChange.mockClear()
+    fireEvent.change(basicsSectionPage.getEntryFeeInput(), {
+      target: { value: '0' },
+    })
+    expect(onChange).toHaveBeenCalledWith(
+      expect.objectContaining({ entryFee: 0 }),
+    )
+  })
+
+  // The section renders the editor's form errors below the offending field.
+  it('renders inline field errors passed from the form', () => {
+    basicsSectionPage.render({
+      event: buildEvent(),
+      errors: {
+        name: 'Event name must be 255 characters or fewer.',
+        maxPlayers: 'Player limit must be at least 1, or blank for no cap.',
+        entryFee: 'Entry fee is required.',
+      },
+    })
+    expect(
+      basicsSectionPage.queryFieldError(/255 characters or fewer/),
+    ).toBeInTheDocument()
+    expect(
+      basicsSectionPage.queryFieldError(/at least 1, or blank for no cap/),
+    ).toBeInTheDocument()
+    expect(
+      basicsSectionPage.queryFieldError(/Entry fee is required/),
+    ).toBeInTheDocument()
+  })
+
   // The furniture the *editor* keeps. Paired with the read-only case below, so
   // "a viewer sees no asterisk" cannot be satisfied by deleting the asterisk.
   it('marks the required fields and explains the player limit to the creator', () => {
@@ -103,11 +159,11 @@ describe('BasicsSection', () => {
       expect(basicsSectionPage.getFieldValue('Entry fee')).toHaveTextContent('0')
     })
 
-    // `Number('')` is `NaN`, so a cleared numeric field reaches the view as NaN.
-    // It is unset — an em-dash — never the literal string "NaN", and never 0.
+    // A cleared player limit is `null` (no cap, ADR-0935) and a cleared entry
+    // fee is `NaN`; both are unset — an em-dash — never "NaN", and never 0.
     it('renders a cleared player limit and entry fee as an em-dash', () => {
       basicsSectionPage.render({
-        event: buildEvent({ maxPlayers: NaN, entryFee: NaN }),
+        event: buildEvent({ maxPlayers: null, entryFee: NaN }),
         canEdit: false,
       })
       expect(basicsSectionPage.getFieldValue('Player limit')).toHaveTextContent(

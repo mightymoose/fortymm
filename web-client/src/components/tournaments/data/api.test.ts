@@ -308,6 +308,13 @@ describe('eventToCreateBody', () => {
     ])
   })
 
+  // A blank player limit is "no cap" (ADR-0935): it must reach the wire as an
+  // explicit `null`, never `0` and never omitted.
+  it('carries max_players: null for an uncapped event', () => {
+    const body = eventToCreateBody({ ...event, maxPlayers: null })
+    expect(body.max_players).toBeNull()
+  })
+
   it('round-trips through apiToEvent back to the prototype shape', () => {
     const wire = eventToCreateBody(event)
     const roundTripped = apiToEvent({
@@ -316,6 +323,9 @@ describe('eventToCreateBody', () => {
       // the *create* body — coalesce so the value satisfies the *read* shape.
       predicates: wire.predicates ?? [],
       pools: wire.pools ?? [],
+      // `max_players` is optional on the create body (`null`/absent = no cap,
+      // ADR-0935); the read shape is `number | null`.
+      max_players: wire.max_players ?? null,
       id: event.id,
       tournament_id: 't-1',
       // The registrations are server-owned and absent from the create body;
@@ -360,6 +370,15 @@ describe('eventToUpdateBody', () => {
         table_ids: ['t1', 't2'],
       },
     ])
+  })
+
+  // Clearing the cap sends an explicit `null` — the PATCH handler distinguishes
+  // "clear the cap" (null present) from "leave it alone" (key absent), so this
+  // must not be omitted (ADR-0935).
+  it('carries max_players: null when the cap is cleared', () => {
+    const body = eventToUpdateBody({ ...event, maxPlayers: null })
+    expect('max_players' in body).toBe(true)
+    expect(body.max_players).toBeNull()
   })
 
   it('omits the server-owned entered count so a PATCH never clobbers it', () => {

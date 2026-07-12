@@ -1,3 +1,5 @@
+import { useEffect, useRef, type MutableRefObject } from 'react'
+
 import { useRecentOpponents, type Player } from '@/api/matches'
 import { useSession } from '@/api/session'
 import { UserAvatar } from '@/components/ui/user-avatar'
@@ -13,6 +15,15 @@ export interface RecentOpponentsProps {
   onPick: (player: Player) => void
   /** Switch to the full player search. */
   onSearchAll: () => void
+  /**
+   * Focus "Search all players" once, when the grid comes *back* — i.e. after
+   * the user leaves search mode via the back control, which unmounts the
+   * control they just pressed (#895). Same one-shot ref the typeahead uses for
+   * its input: owned above the error boundary and cleared on use, so an
+   * error-recovery remount doesn't yank focus (#131). Fires only once the grid
+   * has loaded, since the button doesn't exist under the skeleton.
+   */
+  focusOnMountRef?: MutableRefObject<boolean>
 }
 
 function RecentSkeleton() {
@@ -41,6 +52,7 @@ function RecentSkeleton() {
 export const RecentOpponents = ({
   onPick,
   onSearchAll,
+  focusOnMountRef,
 }: RecentOpponentsProps) => {
   // Wait for the session before fetching players — otherwise a first-visit
   // direct-load races the session cookie and 401s into the error boundary
@@ -50,6 +62,14 @@ export const RecentOpponents = ({
   const recent = useRecentOpponents({ enabled: session.isSuccess })
   const players = recent.data ?? []
   const isLoading = recent.isPending
+  const searchAllRef = useRef<HTMLButtonElement>(null)
+
+  useEffect(() => {
+    if (!isLoading && focusOnMountRef?.current) {
+      focusOnMountRef.current = false
+      searchAllRef.current?.focus()
+    }
+  }, [isLoading, focusOnMountRef])
 
   return (
     <div>
@@ -59,6 +79,7 @@ export const RecentOpponents = ({
             now sees an empty grid, and search is their way forward (#167). */}
         {!isLoading && (
           <button
+            ref={searchAllRef}
             type="button"
             className="search-btn"
             onClick={onSearchAll}

@@ -39,6 +39,14 @@ const scoped = (container: Container) => ({
   findSaveButton() {
     return container.findByRole('button', { name: /save changes/i })
   },
+  /** The "New role" button that opens the create modal. */
+  findNewRoleButton() {
+    return container.findByRole('button', { name: /new role/i })
+  },
+  /** The create modal's submit button. */
+  findCreateButton() {
+    return container.findByRole('button', { name: /create role/i })
+  },
   /** The checkbox that grants `permName` to the selected role. */
   findPermToggle(permName: string) {
     return container.findByTestId(`perm-toggle-${permName}`)

@@ -122,7 +122,7 @@ describe('RecentMatchesDisplay', () => {
     ).toHaveTextContent('+12')
   })
 
-  it('links every named opponent to their profile — and the solo row to nowhere', async () => {
+  it('links every named opponent to their profile — and the solo row to no PLAYER', async () => {
     // The card's rows are the page's most obvious next step: the people you have
     // been playing. They were plain text. Every *named* one is now a link — and
     // the solo row, which names nobody, is deliberately not: its opponent id is
@@ -145,12 +145,17 @@ describe('RecentMatchesDisplay', () => {
       '/players/p-12',
     )
 
+    // The solo row's Opponent cell is plain text — but the ROW is still a link,
+    // to its match (#989), so the claim is not "no anchors in this row". It is
+    // that nothing in the row points at a *player*: the thing a naive
+    // nullable-id fix gets wrong.
     expect(
       recentMatchesDisplayPage.queryOpponentLink('No opponent'),
     ).toBeNull()
     expect(
-      recentMatchesDisplayPage.getRow('No opponent').querySelectorAll('a'),
-    ).toHaveLength(0)
+      recentMatchesDisplayPage.getRow('No opponent').innerHTML,
+    ).not.toContain('/players/')
+    expect(recentMatchesDisplayPage.getRowLinks('No opponent')).toHaveLength(1)
   })
 
   it('links to the full history, naming the all-inclusive total', async () => {

@@ -1,5 +1,6 @@
 import { Link } from '@tanstack/react-router'
 
+import { MatchRowLink } from '@/components/matches/match-row-link/match-row-link'
 import { UserAvatar } from '@/components/ui/user-avatar'
 import { cn } from '@/lib/utils'
 
@@ -14,8 +15,8 @@ export interface RecentMatchRowProps {
 }
 
 /**
- * The Opponent cell: a **link to that player's profile** — the card named its
- * opponents in plain text, which left the page's most obvious next step
+ * The Opponent cell: a **link to that player's profile** (#1005) — the card named
+ * its opponents in plain text, which left the page's most obvious next step
  * unreachable.
  *
  * A **solo** match has nobody on the other side, so there is nothing to link to
@@ -24,6 +25,14 @@ export interface RecentMatchRowProps {
  * only its `player` variant carries an id, so the link cannot be built for the
  * variant that has none. A naive `to="/players/$userId"` fed a nullable id sends
  * the reader to `/players/null`.
+ *
+ * It wears `match-row-inline-link` because the *row* is a link too, to the match
+ * (#989), and that link's stretched `::after` paints over every cell — including
+ * this one. The class lifts the name above the overlay (`match-row-link.css`), so
+ * a click on the name goes to the profile and a click anywhere else in the row
+ * goes to the match. Take the class off and the name still *announces* as a link
+ * and still tabs and Enters correctly — it simply becomes unclickable, which is
+ * the failure this exists to prevent.
  */
 const OpponentCell = ({ opponent }: { opponent: RecentMatchOpponentView }) => {
   if (opponent.kind === 'solo') {
@@ -38,7 +47,7 @@ const OpponentCell = ({ opponent }: { opponent: RecentMatchOpponentView }) => {
     <Link
       to="/players/$userId"
       params={{ userId: opponent.id }}
-      className="player-name recent-matches__opponent-link"
+      className="player-name recent-matches__opponent-link match-row-inline-link"
     >
       {opponent.name}
     </Link>
@@ -59,10 +68,18 @@ const OpponentCell = ({ opponent }: { opponent: RecentMatchOpponentView }) => {
  * The Δ cell prints an em dash for any row that moved no rating — undecided *or*
  * unrated. Never "+0".
  *
- * The opponent's name is a link to their profile (`OpponentCell` above) — except
- * on a solo match, which has no player on the other side.
+ * A row carries **two** links, because a row is a match *and* a person:
  *
- * Pure view-in, DOM-out: every label was derived in `selectRecentMatches`.
+ * - the **row** opens its match — the "When" cell is a real `<a href>`
+ *   (`MatchRowLink`) whose `::after` is stretched across the whole row, so the row
+ *   clicks through end-to-end and a screen reader hears it named for the match
+ *   ("Match against ada.lovelace, Mar 14") rather than for a person (#989);
+ * - the **opponent's name** opens that player's profile (`OpponentCell` above),
+ *   lifted above the stretched overlay so it takes its own clicks (#1005). Except
+ *   on a solo match, which has no player on the other side.
+ *
+ * Pure view-in, DOM-out: every label — including both links' targets and the row
+ * link's accessible name — was derived in `selectRecentMatches`.
  */
 export const RecentMatchRow = ({ row }: RecentMatchRowProps) => (
   <tr className="recent-matches__row">
@@ -134,9 +151,11 @@ export const RecentMatchRow = ({ row }: RecentMatchRowProps) => (
       )}
     </td>
     <td>
-      <span className="time-cell">
-        <span className="strong">{row.when}</span>
-      </span>
+      <MatchRowLink
+        route={row.detailRoute}
+        ariaLabel={row.ariaLabel}
+        when={row.when}
+      />
     </td>
   </tr>
 )

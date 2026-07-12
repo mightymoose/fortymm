@@ -19,10 +19,17 @@ const scoped = (container: Container) => ({
   getFormatTrigger() {
     return container.getByRole('combobox', { name: 'Format' })
   },
-  /** The "Hard cap…" helper text under Player limit — form furniture, and so
-   * absent from the read-only view (ADR 0015). */
+  /** The player-limit helper text — form furniture, and so absent from the
+   * read-only view (ADR 0015). */
   queryPlayerLimitHint() {
-    return container.queryByText(/Hard cap\. Waitlist opens past this\./)
+    return container.queryByText(/Blank = no cap\. Waitlist opens past this\./)
+  },
+  getEntryFeeInput() {
+    return container.getByLabelText(/Entry fee/)
+  },
+  /** An inline field error rendered below a control (the red hint slot). */
+  queryFieldError(message: string | RegExp) {
+    return container.queryByText(message)
   },
   /** Every interactive control in the section, swept by role. Supplement only —
    * `getFormElements()` is the guarantee. */

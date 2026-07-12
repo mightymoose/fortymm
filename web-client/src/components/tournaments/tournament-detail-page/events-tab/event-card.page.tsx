@@ -43,6 +43,11 @@ const scoped = (container: Container) => ({
   queryAllButtons() {
     return container.queryAllByRole('button')
   },
+  /** The capacity fill bar. Rendered only for a capped event; an uncapped
+   * event (ADR-0935) has no denominator to fill against, so this is absent. */
+  queryCapacityBar() {
+    return container.queryByTestId('capacity-bar')
+  },
 })
 
 /**

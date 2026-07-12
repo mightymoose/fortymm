@@ -36,8 +36,10 @@ export interface TournamentDetailPageProps {
   onUpdate: (tournament: Tournament) => void
   /** Persist an edited table catalogue (add/remove from the Tables tab). */
   onChangeCatalogue: (catalogue: TournamentTable[]) => void
-  onCreateEvent: (event: TournamentEvent) => void
-  onUpdateEvent: (event: TournamentEvent) => void
+  /** Persist a new/edited event. Returns a promise the editor awaits so it can
+   * close only on success and surface a rejection inline (#933, #934). */
+  onCreateEvent: (event: TournamentEvent) => Promise<void>
+  onUpdateEvent: (event: TournamentEvent) => Promise<void>
   onDeleteEvent: (eventId: string) => void
   onBack: () => void
 }
@@ -102,11 +104,13 @@ export const TournamentDetailPage = ({
     setEditorEvent(emptyEvent(tournament))
     setEditorOpen(true)
   }
-  const saveEvent = (ev: TournamentEvent) => {
-    if (ev.id.startsWith('new')) onCreateEvent({ ...ev, id: genId('ev') })
-    else onUpdateEvent(ev)
-    setEditorOpen(false)
-  }
+  // Return the mutation's promise and DON'T close here — the editor awaits this
+  // and closes itself only when it resolves, so a rejected save keeps the panel
+  // open with the typed values intact (#933, #934).
+  const saveEvent = (ev: TournamentEvent) =>
+    ev.id.startsWith('new')
+      ? onCreateEvent({ ...ev, id: genId('ev') })
+      : onUpdateEvent(ev)
 
   return (
     <div>

@@ -1,5 +1,6 @@
 import { HttpResponse } from 'msw'
 
+import { matchDetailRoute } from '@/api/matches'
 import { playerByIdQueryOptions, type PlayerMatchRow } from '@/api/players'
 import { buildPlayerDetail } from '@/mocks/factories/players/player-detail.factory'
 import {
@@ -305,5 +306,51 @@ describe('recentMatchesQuery', () => {
     expect(recentMatchesQuery('p-1').queryKey).toEqual(
       playerByIdQueryOptions('p-1').queryKey,
     )
+  })
+
+  it('points each row at ITS match, through the typed route factory (#989)', async () => {
+    // The row is a link now, and the target is derived data — so it is derived
+    // here, from `matchDetailRoute`, rather than hand-written as a path in the
+    // row component. A real match id: the `$matchId` route guard
+    // (`src/lib/match-id.ts`) only accepts a UUID.
+    const id = '5b1d3f7a-2c94-4e08-8a6d-19f4b7c02e35'
+    const row = await selectRow(buildPlayerMatchRow({ id }))
+
+    expect(row.detailRoute).toEqual(matchDetailRoute(id))
+    expect(row.detailRoute).toEqual({
+      to: '/matches/$matchId',
+      params: { matchId: id },
+    })
+  })
+
+  it('names the link after the MATCH — the opponent and the day it was played', async () => {
+    // The anchor sits on the date cell, not on the opponent's name: a link
+    // announced as "ada.lovelace" promises a profile and delivers a match. So the
+    // label says what actually opens.
+    const row = await selectRow(buildPlayerMatchRow())
+
+    expect(row.ariaLabel).toBe('Match against ada.lovelace, Mar 14')
+  })
+
+  it('names a solo match’s link "Solo match" — nobody is "against" the sentinel side', async () => {
+    const row = await selectRow(buildSoloMatchRow())
+
+    expect(row.ariaLabel).toBe('Solo match, Mar 14')
+    expect(row.ariaLabel).not.toContain('No opponent')
+  })
+
+  it('keeps the link’s spoken date and the printed one the same', async () => {
+    // Both come off the one `when` the row already carries, so a match dated in
+    // the reader's zone cannot be announced in another. (The Chicago/Tokyo pair
+    // above pins the zone itself; this pins that the label follows it.)
+    const bundle = buildPlayerDetail({
+      matches: buildPlayerMatchList([
+        buildPlayerMatchRow({ created_at: '2026-07-12T00:15:00Z' }),
+      ]),
+    })
+
+    const chicago = selectRecentMatches(bundle, 'America/Chicago').rows[0]
+    expect(chicago.when).toBe('Jul 11')
+    expect(chicago.ariaLabel).toContain('Jul 11')
   })
 })

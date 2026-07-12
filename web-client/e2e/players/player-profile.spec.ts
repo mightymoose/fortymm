@@ -275,6 +275,109 @@ test.describe('Player profile (desktop)', () => {
   })
 
   /* ------------------------------------------------------------------ */
+  /*  #1005 × #989 — a row is a match AND a person, so it has two links  */
+  /* ------------------------------------------------------------------ */
+
+  /*
+   * The row link (#989) stretches its anchor's `::after` over every cell, and the
+   * opponent's name (#1005) sits inside one of them. Left alone, the overlay wins
+   * the hit-test and the name — still announced, still tabbable, still Enter-able
+   * — is silently unclickable. `.match-row-inline-link` lifts it back out
+   * (`match-row-link.css`).
+   *
+   * Nothing below can be caught in vitest: jsdom has no layout, so it cannot
+   * hit-test, and a `toHaveAttribute('href')` assertion passes just as happily on
+   * a link nobody can click. Only a real browser settles it — which is why these
+   * live here, and why they click by *coordinate* rather than by locator.
+   */
+
+  const SOLO = 'No opponent'
+  const OKAFOR_VS_SILVA = '/matches/aaaaaaaa-0000-4000-8000-000000000001'
+  const OKAFOR_SOLO = '/matches/aaaaaaaa-0000-4000-8000-000000000002'
+
+  test('Recent matches: the NAME opens the player, the rest of the row opens the match', async ({
+    page,
+  }) => {
+    const profile = await PlayerProfilePage.create(page)
+    await profile.openProfile(OKAFOR.id)
+
+    const row = profile.recentMatchRow(SILVA.username)
+    // Two links, two destinations — each named for the one it actually goes to.
+    await expect(row.getByRole('link')).toHaveCount(2)
+    await expect(
+      row.getByRole('link', { name: `Match against ${SILVA.username},` }),
+    ).toHaveAttribute('href', OKAFOR_VS_SILVA)
+    await expect(
+      row.getByRole('link', { name: SILVA.username, exact: true }),
+    ).toHaveAttribute('href', `/players/${SILVA.id}`)
+
+    // Click the SCORE cell — no link of its own, so this can only be the row's
+    // stretched anchor answering. It must be the match, not the profile.
+    await profile.clickRowBody(row, 1)
+    await expect(page).toHaveURL(OKAFOR_VS_SILVA)
+  })
+
+  test('Recent matches: a solo row’s "No opponent" is not clickable, and the row still opens the match', async ({
+    page,
+  }) => {
+    const profile = await PlayerProfilePage.create(page)
+    await profile.openProfile(OKAFOR.id)
+
+    const row = profile.recentMatchRow(SOLO)
+    // One link only: there is nobody to link to, so the name stays plain text —
+    // and emphatically not a link to `/players/null`.
+    await expect(row.getByRole('link')).toHaveCount(1)
+    await expect(row.getByRole('link', { name: SOLO })).toHaveCount(0)
+
+    // Clicking the words "No opponent" is a click on the row, and the row is the
+    // match. It must not be a dead spot, and it must not go to a player.
+    await profile.clickRowBody(row, 0)
+    await expect(page).toHaveURL(OKAFOR_SOLO)
+  })
+
+  test('Match history: the NAME opens the player, the rest of the row opens the match', async ({
+    page,
+  }) => {
+    const profile = await PlayerProfilePage.create(page)
+    await profile.openHistory(OKAFOR.id)
+
+    const row = profile.historyRow(SILVA.username)
+    await expect(row.getByRole('link')).toHaveCount(2)
+    await expect(profile.historyOpponentLink(SILVA.username)).toHaveAttribute(
+      'href',
+      `/players/${SILVA.id}`,
+    )
+
+    // The score cell (the third here: Date | Opponent | Score | Result).
+    await profile.clickRowBody(row, 2)
+    await expect(page).toHaveURL(OKAFOR_VS_SILVA)
+
+    // …and the name really goes to the person.
+    await profile.openHistory(OKAFOR.id)
+    await profile.historyOpponentLink(SILVA.username).click()
+    await expect(page).toHaveURL(`/players/${SILVA.id}`)
+    await expect(profile.heading(SILVA.username)).toBeVisible()
+  })
+
+  test('Match history: a solo row’s "No opponent" is not clickable, and the row still opens the match', async ({
+    page,
+  }) => {
+    const profile = await PlayerProfilePage.create(page)
+    await profile.openHistory(OKAFOR.id)
+
+    const row = profile.historyRow(SOLO)
+    await expect(row.getByRole('link')).toHaveCount(1)
+    await expect(row.getByRole('link', { name: SOLO })).toHaveCount(0)
+    await expect(
+      page.locator('a[href*="/players/null"], a[href*="/players/undefined"]'),
+      'the naive nullable-id fix would link here',
+    ).toHaveCount(0)
+
+    await profile.clickRowBody(row, 1) // the Opponent cell — the words themselves
+    await expect(page).toHaveURL(OKAFOR_SOLO)
+  })
+
+  /* ------------------------------------------------------------------ */
   /*  #1003 — the head-to-head empty state keeps its heading            */
   /* ------------------------------------------------------------------ */
 

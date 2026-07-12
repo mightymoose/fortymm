@@ -32,6 +32,12 @@ Work from the plan in context. If the user passed a path (a PRD, a plan doc in
 decision docs — `CONTEXT.md` (glossary), `docs/adr/` (ADRs), `CONTEXT-MAP.md` if
 present — so chores can point at the decisions they depend on.
 
+Note the **GitHub issue number(s)** this arc closes — the source issue if the plan
+came from one, plus any others the plan explicitly resolves. These go in the work
+order's `Tickets:` header (`—` if none) so `/do-chores` can move their project-board
+cards to *In Progress* and `/epic` to *Done*. If it's ambiguous which issues the arc
+closes, ask the user rather than guessing.
+
 ### 2. Discover the agents
 
 List `.claude/agents/*.md` and read each one's `name` + `description`. Those

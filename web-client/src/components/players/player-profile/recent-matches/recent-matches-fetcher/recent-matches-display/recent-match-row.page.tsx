@@ -1,3 +1,7 @@
+import {
+  MATCH_DETAIL_ROUTE,
+  matchRowLinkPage,
+} from '@/components/matches/match-row-link/match-row-link.page'
 import { renderWithRoutes } from '@/test/router'
 import { screen, within, type Container } from '@/test/utilities'
 
@@ -23,12 +27,18 @@ const cellsOf = (container: Container, opponent: string) =>
 const opponentCellOf = (container: Container, opponent: string) =>
   cellsOf(container, opponent)[0]
 
+/** The "When" cell — the last one. It holds the row's link to its match. */
+const whenCellOf = (container: Container, opponent: string) =>
+  cellsOf(container, opponent)[3]
+
 const scoped = (container: Container) => ({
   /** One match's row, by opponent ("No opponent" for a solo match). */
   getRow(opponent: string) {
     return rowOf(container, opponent)
   },
-  /** The router paints asynchronously, so a test starts here. */
+  /** The same row, awaited — the harness mounts a router (both the opponent's
+   * name and the date cell are typed `<Link>`s) and it resolves asynchronously,
+   * so a test's first query has to be a `find…`. */
   async findRow(opponent: string): Promise<HTMLElement> {
     await container.findByText(opponent)
     return rowOf(container, opponent)
@@ -38,13 +48,17 @@ const scoped = (container: Container) => ({
     return (name?.closest('tr') as HTMLElement | null) ?? null
   },
   /**
-   * The opponent's name **as a link** to their profile — the row's one
-   * navigation, and the thing the card used to withhold.
+   * The opponent's name **as a link** to their profile — the thing the card used
+   * to withhold (#1005).
    *
    * `null` for a solo match, which has no player on the other side to link to.
    * Asked for by *role*, not by class or href: what matters is that the name is
    * a link at all — a `<span>` styled to look like one is still a dead end, and
    * an `<a>` with no `href` is not in the accessibility tree either.
+   *
+   * Scoped to the Opponent cell and named for the *person*, so it can never
+   * accidentally match the row's other link — the stretched anchor to the match,
+   * which sits in the "When" cell and is named for the *match*.
    */
   queryOpponentLink(opponent: string): HTMLElement | null {
     return within(opponentCellOf(container, opponent)).queryByRole('link', {
@@ -83,19 +97,52 @@ const scoped = (container: Container) => ({
   getDeltaCell(opponent: string) {
     return cellsOf(container, opponent)[2]
   },
-  /** The "When" cell, e.g. "Mar 14". */
+  /** The "When" cell, e.g. "Mar 14". It holds the row's link to the match. */
   getWhenCell(opponent: string) {
-    return cellsOf(container, opponent)[3]
+    return whenCellOf(container, opponent)
   },
+  /**
+   * The row's link to its match — a real `<a href="/matches/<id>">`, stretched
+   * across the row (#989). Assert its **href**: "a link exists" was never the
+   * claim.
+   *
+   * Scoped to the **"When" cell**, not to the whole row. A row holds two links
+   * now, and this is the one on the date. (It was a bare row-wide
+   * `getByRole('link')` while a row held only this one; the opponent's name is a
+   * link too since #1005 — a different destination, correctly named for it — so
+   * the row-wide query is ambiguous, and the cell is the honest scope. *Which*
+   * cell the anchor sits in is part of the contract anyway, and the
+   * "puts the anchor on the DATE cell" test pins it.)
+   */
+  getDetailLink(opponent: string) {
+    return within(whenCellOf(container, opponent)).getByRole('link')
+  },
+  /**
+   * **Every** link in the row. Two, for a match against a person: the row's
+   * stretched anchor to the match, and the opponent's name to their profile. One,
+   * for a solo match — there is nobody to link to.
+   *
+   * Two links a screen reader hears, going to two genuinely different places, each
+   * named for its own, is the design. The failure this guards against is *one*
+   * link heard four times — once per cell — which is why the row's anchor is
+   * stretched by a `::after` rather than repeated in every `<td>`.
+   */
+  getRowLinks(opponent: string) {
+    return within(rowOf(container, opponent)).queryAllByRole('link')
+  },
+  /** The link's accessors from its own page object (`getMatchLink(ariaLabel)`),
+   * scoped to this container — the link's contract stays pinned by its tests. */
+  ...matchRowLinkPage.within(container),
 })
 
 /**
  * Test page-object for `RecentMatchRow` — one row of the Recent matches card.
- * The component renders a `<tr>`, so `render` supplies the surrounding table.
  *
- * The opponent's name is a typed `<Link>` to their profile, so the row mounts
- * under a memory router registering that route. The router resolves
- * **asynchronously**: start tests with `await recentMatchRowPage.findRow(…)`.
+ * The component renders a `<tr>`, so `render` supplies the surrounding table —
+ * and, since the row holds two typed `<Link>`s (the "When" cell to the match,
+ * #989; the opponent's name to their profile, #1005), a memory router registering
+ * both routes for them to resolve against. The router resolves **asynchronously**:
+ * start tests with `await recentMatchRowPage.findRow(…)`.
  *
  * Parent page objects (the card's display) spread `within(container)` to reuse
  * these accessors against every row at once.
@@ -103,13 +150,13 @@ const scoped = (container: Container) => ({
 export const recentMatchRowPage = {
   render(overrides: Partial<RecentMatchRowProps> = {}) {
     const props = buildRecentMatchRowProps(overrides)
-    renderWithRoutes(
+    return renderWithRoutes(
       <table>
         <tbody>
           <RecentMatchRow {...props} />
         </tbody>
       </table>,
-      { linkTargets: [PROFILE_ROUTE] },
+      { linkTargets: [PROFILE_ROUTE, MATCH_DETAIL_ROUTE] },
     )
   },
 

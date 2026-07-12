@@ -1034,18 +1034,34 @@ body.dark.fortymm-theme {
     display: flex;
   }
 
+  /* Below this breakpoint the sidebar is a *drawer*, and a closed drawer must
+     be gone — not merely parked offscreen. `transform: translateX(-100%)` alone
+     left all 48 of its controls (the close button and every nav link) focusable,
+     tabbable and in the accessibility tree, so a keyboard or screen-reader user
+     could walk into a menu that is visually shut (#887).
+
+     `visibility: hidden` is what takes them out of both. It's used here rather
+     than `inert` on the element because the fix has to be scoped to *this* media
+     query: above 960px the very same <aside> is the permanent desktop sidebar,
+     and an attribute would blank that out too. Visibility is transitionable and
+     interpolates as a step — `visible` the instant the drawer opens, and held
+     `visible` for the full slide-out before it flips — so the animation is
+     unchanged in both directions. */
   .app-shell__sidebar {
     position: fixed;
     left: 0;
     top: 0;
     height: 100vh;
     transform: translateX(-100%);
+    visibility: hidden;
     transition: transform 200ms cubic-bezier(0.2, 0.8, 0.2, 1),
-      box-shadow 200ms cubic-bezier(0.2, 0.8, 0.2, 1);
+      box-shadow 200ms cubic-bezier(0.2, 0.8, 0.2, 1),
+      visibility 200ms cubic-bezier(0.2, 0.8, 0.2, 1);
     box-shadow: none;
   }
   .app-shell__sidebar.is-open {
     transform: translateX(0);
+    visibility: visible;
     box-shadow: 24px 0 60px rgba(0, 0, 0, 0.6);
   }
   .app-shell__sidebar-close {

@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import {
   RouterProvider,
@@ -25,12 +25,20 @@ const MatchHistoryError = Route.options.errorComponent!
  * the half of ADR-1001 most likely to be missed. */
 const MatchHistoryNotFound = Route.options.notFoundComponent
 
+/**
+ * A distinct, well-formed match id. Match ids are **UUIDs** on the wire, and the
+ * `$matchId` route guard (`src/lib/match-id.ts`) rejects anything else — so the
+ * rows every row-link assertion is made against have to carry real ones.
+ */
+const matchId = (n: number) =>
+  `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
+
 /** A page worth of opponent rows — only the fields the history table reads. */
 function matchRows(count: number, page: number, pageSize: number) {
   const start = (page - 1) * pageSize
   return Array.from({ length: Math.max(0, Math.min(pageSize, count - start)) })
     .map((_, i) => ({
-      id: `m-${start + i}`,
+      id: matchId(start + i),
       opponent: { id: `opp-${start + i}`, username: `opp.${start + i}` },
       games: [{ mine: 11, theirs: 7 }],
       result: 'W' as const,
@@ -90,11 +98,19 @@ function renderHistory(initialEntry: string) {
     notFoundComponent: MatchHistoryNotFound,
     validateSearch: Route.options.validateSearch,
   })
+  // Every row is a typed <Link> to its match (#989), so the detail route must be
+  // in the tree for those links to resolve.
+  const matchDetailRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/matches/$matchId',
+    component: () => <div>match detail</div>,
+  })
   const router = createRouter({
     routeTree: rootRoute.addChildren([
       playersListRoute,
       profileRoute,
       historyRoute,
+      matchDetailRoute,
     ]),
     history: createMemoryHistory({ initialEntries: [initialEntry] }),
   })
@@ -113,7 +129,7 @@ describe('player match history', () => {
     // all belong here. 26 total → 25 on page 1, so the page is full.
     const rows = [
       {
-        id: 'm-live',
+        id: matchId(101),
         opponent: { id: 'opp-l', username: 'opp.live' },
         games: [],
         result: null,
@@ -122,7 +138,7 @@ describe('player match history', () => {
         awaiting_acceptance: false,
       },
       {
-        id: 'm-solo',
+        id: matchId(102),
         // The solo sentinel side: no opponent id, no username.
         opponent: { id: null, username: null },
         games: [{ mine: 11, theirs: 4 }],
@@ -132,7 +148,7 @@ describe('player match history', () => {
         awaiting_acceptance: false,
       },
       {
-        id: 'm-voided',
+        id: matchId(103),
         opponent: { id: 'opp-v', username: 'opp.voided' },
         games: [],
         result: null,
@@ -141,7 +157,7 @@ describe('player match history', () => {
         awaiting_acceptance: false,
       },
       {
-        id: 'm-pending',
+        id: matchId(104),
         opponent: { id: 'opp-p', username: 'opp.pending' },
         games: [],
         result: null,
@@ -290,12 +306,91 @@ describe('player match history', () => {
     expect(screen.queryByText(/no matches yet/i)).not.toBeInTheDocument()
   })
 
+  it('links every row through to its match, and every opponent to their profile (#989, #1005)', async () => {
+    // The issue: the history rows weren't clickable at all. They are now — and
+    // through a genuine `<a href="/matches/<uuid>">`, not a `role="link"` `<tr>`
+    // with an onClick, which cannot be cmd-clicked, middle-clicked or opened in
+    // a new tab. So the assertion is the URL, per row, not "a link exists".
+    //
+    // A row holds TWO links, and this is where that is worth checking end-to-end,
+    // against the real route tree: the date cell opens the match (#989) and the
+    // opponent's name opens that player (#1005). Two destinations, two names.
+    // Neither promises what the other delivers, which is why the row's anchor is
+    // NOT wrapped around the opponent's name.
+    const rows = [
+      ...matchRows(2, 1, 25),
+      {
+        id: matchId(102),
+        opponent: { id: null, username: null },
+        games: [{ mine: 11, theirs: 4 }],
+        result: 'W' as const,
+        status: 'completed' as const,
+        created_at: '2026-06-04T12:00:00Z',
+        awaiting_acceptance: false,
+      },
+    ]
+    server.use(
+      http.get('*/v1/session', () => HttpResponse.json(sessionResponse())),
+      http.get('*/v1/players/:playerId', () =>
+        HttpResponse.json(profileBundle(rows.length)),
+      ),
+      http.get('*/v1/players/:playerId/matches', () =>
+        HttpResponse.json({
+          items: rows,
+          page: 1,
+          page_size: 25,
+          total: rows.length,
+        }),
+      ),
+    )
+
+    renderHistory('/players/p-1/matches')
+
+    // The match link lives in the DATE cell (the first) — scoped there rather
+    // than row-wide, because the row's other cell holds a link to the opponent.
+    const firstRow = (await screen.findByText('opp.0')).closest('tr')!
+    const dateCell = (row: HTMLElement) =>
+      within(row).getAllByRole('cell')[0] as HTMLElement
+    const firstLink = within(dateCell(firstRow)).getByRole('link')
+    expect(firstLink).toHaveAttribute('href', `/matches/${matchId(0)}`)
+
+    // Each row points at its OWN match — a hardcoded target would pass above.
+    const secondRow = screen.getByText('opp.1').closest('tr')!
+    expect(within(dateCell(secondRow)).getByRole('link')).toHaveAttribute(
+      'href',
+      `/matches/${matchId(1)}`,
+    )
+
+    // Two anchors per row, and no more: the match link is stretched across the
+    // row with a `::after` — a screen reader hears it ONCE, not once per cell —
+    // and the opponent's name is the second, going somewhere else entirely. Each
+    // is named for its own destination.
+    const firstRowLinks = within(firstRow).getAllByRole('link')
+    expect(firstRowLinks).toHaveLength(2)
+    expect(firstLink.getAttribute('aria-label')).toMatch(
+      /^Match against opp\.0, /,
+    )
+    expect(
+      within(firstRow).getByRole('link', { name: 'opp.0' }),
+    ).toHaveAttribute('href', '/players/opp-0')
+
+    // The solo sentinel row (ADR-0008) is a real match too — it opens, and it is
+    // not announced as a match "against No opponent". It has nobody to link to,
+    // so its Opponent cell is plain text: one anchor, the match's.
+    const soloRow = screen.getByText('No opponent').closest('tr')!
+    const soloLink = within(dateCell(soloRow)).getByRole('link')
+    expect(soloLink).toHaveAttribute('href', `/matches/${matchId(102)}`)
+    expect(soloLink.getAttribute('aria-label')).toMatch(/^Solo match, /)
+    expect(within(soloRow).getAllByRole('link')).toHaveLength(1)
+    expect(soloRow.innerHTML).not.toContain('/players/')
+  })
+
   it('labels an awaiting-confirmation match "AWAITING", not "LIVE" (#364)', async () => {
     // Two in_progress rows: one genuinely live (no signature), one with a
     // posted-but-unconfirmed result. They must render distinct chips.
     const rows = [
       {
-        id: 'm-awaiting',
+        id: matchId(105),
         opponent: { id: 'opp-a', username: 'opp.awaiting' },
         games: [{ mine: 11, theirs: 9 }],
         result: null,
@@ -304,7 +399,7 @@ describe('player match history', () => {
         awaiting_acceptance: true,
       },
       {
-        id: 'm-live',
+        id: matchId(101),
         opponent: { id: 'opp-l', username: 'opp.live' },
         games: [],
         result: null,
@@ -443,7 +538,7 @@ describe('player match history per-game score chips', () => {
     // opponent's side of one) can't accidentally pass.
     const rows = [
       {
-        id: 'm-scored',
+        id: matchId(106),
         opponent: { id: 'opp-s', username: 'opp.scored' },
         games: [
           { mine: 11, theirs: 7 },
@@ -456,7 +551,7 @@ describe('player match history per-game score chips', () => {
         awaiting_acceptance: false,
       },
       {
-        id: 'm-unscored',
+        id: matchId(107),
         opponent: { id: 'opp-u', username: 'opp.unscored' },
         games: [],
         result: null,

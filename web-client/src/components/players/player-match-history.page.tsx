@@ -23,9 +23,13 @@ import {
 
 type PlayerMatchRow = components['schemas']['PlayerMatchRow']
 
-/** The route the "Back to profile" link opens. Registered as a stub so the
- * typed `<Link>` resolves. */
+/** The route the "Back to profile" link opens — and the one every row's opponent
+ * name opens too (#1005). Registered as a stub so the typed `<Link>`s resolve. */
 export const PLAYER_PROFILE_ROUTE = '/players/$userId'
+
+/** Every row is a typed `<Link>` to its match (#989), so its route has to be in
+ * the tree as well, or the row throws on render. */
+export const MATCH_DETAIL_ROUTE = '/matches/$matchId'
 
 /** The pages the table actually asked the API for, in order — so a test can
  * prove the pager fetched page 2 rather than re-sliced page 1 in the client. */
@@ -235,7 +239,9 @@ export const playerMatchHistoryPage = {
       )
     }
 
-    renderWithRoutes(<RoutedHistory />, { linkTargets: [PLAYER_PROFILE_ROUTE] })
+    renderWithRoutes(<RoutedHistory />, {
+      linkTargets: [PLAYER_PROFILE_ROUTE, MATCH_DETAIL_ROUTE],
+    })
   },
 
   within(container: Container = screen) {

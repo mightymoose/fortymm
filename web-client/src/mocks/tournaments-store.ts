@@ -622,7 +622,8 @@ export function createEvent(
     name: body.name,
     format: body.format,
     draw_type: body.draw_type,
-    max_players: body.max_players,
+    // A missing cap is "no cap" (ADR-0935), stored as null — never undefined.
+    max_players: body.max_players ?? null,
     entry_fee: body.entry_fee,
     // A brand-new event has no entrants, so its derived count is 0. There is no
     // `entered` to set — that's the point.
@@ -654,7 +655,11 @@ export function updateEvent(
     name: patch.name ?? event.name,
     format: patch.format ?? event.format,
     draw_type: patch.draw_type ?? event.draw_type,
-    max_players: patch.max_players ?? event.max_players,
+    // An explicit `null` clears the cap (ADR-0935); only an *absent* key leaves
+    // the stored cap untouched. `??` would conflate the two, silently keeping a
+    // cap the editor meant to remove.
+    max_players:
+      'max_players' in patch ? (patch.max_players ?? null) : event.max_players,
     entry_fee: patch.entry_fee ?? event.entry_fee,
     // Entrants are not in the PATCH body — an editor edit never touches the
     // registrations, so the derived count survives the edit untouched.

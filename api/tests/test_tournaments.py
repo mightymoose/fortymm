@@ -20,15 +20,18 @@ import pytest_asyncio
 from fastapi import HTTPException
 from httpx import AsyncClient
 from sqlalchemy import func, select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from app.models import (
     Tournament,
     TournamentEntry,
     TournamentEntryStatus,
+    TournamentEvent,
     TournamentStatus,
     User,
 )
+from app.models.tournament import DrawType, EventFormat
 from app.schemas.tournament import TournamentTransitionCreate
 from app.tournaments import (
     TOURNAMENT_CREATE,
@@ -386,6 +389,77 @@ async def test_create_event_round_trips_jsonb(
             "table_ids": ["t1", "t2"],
         }
     ]
+
+
+async def test_create_event_with_null_max_players_is_uncapped(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+):
+    """A ``null`` ``max_players`` means the event is uncapped (ADR-0935). The
+    request succeeds, the response echoes ``null``, and the column actually holds
+    NULL — not a fabricated ``0`` sentinel."""
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+
+    response = await client.post(
+        f"/v1/tournaments/{created['id']}/events",
+        json=_event_payload(max_players=None),
+    )
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["max_players"] is None
+
+    # Read the row back: the response is serialized from the refreshed ORM object,
+    # so this confirms NULL landed in the column, not a coerced 0.
+    row = (
+        await db_session.execute(
+            select(TournamentEvent).where(TournamentEvent.id == uuid.UUID(body["id"]))
+        )
+    ).scalar_one()
+    assert row.max_players is None
+
+
+async def test_create_event_with_zero_max_players_is_422(
+    authed_client: tuple[AsyncClient, User],
+):
+    """A cap of ``0`` admits nobody — it is nonsense, not "no cap". The schema's
+    ``gt=0`` rejects it at the boundary (ADR-0935); "no cap" is spelled ``null``."""
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+
+    response = await client.post(
+        f"/v1/tournaments/{created['id']}/events",
+        json=_event_payload(max_players=0),
+    )
+    assert response.status_code == 422, response.text
+
+
+async def test_event_negative_entry_fee_violates_db_check(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+):
+    """The ``entry_fee >= 0`` CHECK is the load-bearing guard: even bypassing the
+    Pydantic schema and writing straight through the ORM, a negative fee is
+    refused by the database (ADR-0935)."""
+    client, user = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+
+    event = TournamentEvent(
+        tournament_id=uuid.UUID(created["id"]),
+        name="Bad Fee",
+        format=EventFormat.singles,
+        draw_type=DrawType.single_elim,
+        max_players=8,
+        entry_fee=-1,
+        slot={"date": "2026-06-13", "start": "09:00", "end": "18:00"},
+        match_settings={"rated": True, "length_games": 5},
+        predicates=[],
+        pools=[],
+    )
+    db_session.add(event)
+    with pytest.raises(IntegrityError):
+        await db_session.commit()
+    await db_session.rollback()
 
 
 async def test_detail_lists_created_event(

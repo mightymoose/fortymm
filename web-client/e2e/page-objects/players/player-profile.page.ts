@@ -86,7 +86,61 @@ export class PlayerProfilePage {
     return this.recentMatches.getByRole('link', { name: username, exact: true })
   }
 
+  /**
+   * One row of the Recent-matches card, found by who the match was against
+   * ("No opponent" for a solo one) — the way a reader tells rows apart.
+   *
+   * A row carries **two** links, to two different places: the row itself opens
+   * the match (#989) and the opponent's name opens that player (#1005). The
+   * helpers below reach each of them, and `clickRowBody` reaches *neither*
+   * directly — it clicks a cell that holds no link at all, which is the only way
+   * to prove the stretched row anchor is really underneath the whole row.
+   */
+  recentMatchRow(opponent: string): Locator {
+    return this.recentMatches
+      .locator('tbody tr')
+      .filter({ hasText: opponent })
+      .first()
+  }
+
   /* ---------------- the match history ---------------- */
+
+  /** The history table's rows, found the same way. */
+  historyRow(opponent: string): Locator {
+    return this.page
+      .locator('table.matches tbody tr')
+      .filter({ hasText: opponent })
+      .first()
+  }
+
+  /** An opponent name in the history table — a link since #1005. */
+  historyOpponentLink(username: string): Locator {
+    return this.page
+      .locator('table.matches')
+      .getByRole('link', { name: username, exact: true })
+  }
+
+  /**
+   * Click a row **where no link is** — the middle of the given cell — with real
+   * mouse coordinates, so the browser hit-tests it for real.
+   *
+   * `locator.click()` cannot express this: it refuses outright, reporting that
+   * the row's stretched anchor "intercepts pointer events". That refusal *is* the
+   * overlay working — but a refusal is not a navigation, and what has to be
+   * proven is where the click actually lands. So the click is dispatched at a
+   * point and whatever the browser says is topmost there receives it.
+   */
+  async clickRowBody(row: Locator, cellIndex: number): Promise<void> {
+    const cell = row.locator('td').nth(cellIndex)
+    // `page.mouse` takes **viewport** coordinates, and `boundingBox()` reports
+    // them — so a row below the fold has to be scrolled to first, or the click
+    // lands on whatever happens to occupy those coordinates instead (the Recent
+    // matches card is a long way down the profile).
+    await cell.scrollIntoViewIfNeeded()
+    const box = await cell.boundingBox()
+    if (!box) throw new Error(`Cell ${cellIndex} of the row has no box`)
+    await this.page.mouse.click(box.x + box.width / 2, box.y + box.height / 2)
+  }
 
   /** The pager's readout — "Showing 1–2 of 2 matches" (#1006). */
   get footerInfo(): Locator {

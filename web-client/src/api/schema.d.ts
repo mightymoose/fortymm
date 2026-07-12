@@ -2959,7 +2959,7 @@ export interface components {
             format: components["schemas"]["EventFormat"];
             draw_type: components["schemas"]["DrawType"];
             /** Max Players */
-            max_players: number;
+            max_players?: number | null;
             /** Entry Fee */
             entry_fee: number;
             slot: components["schemas"]["Slot"];
@@ -2986,7 +2986,7 @@ export interface components {
             format: components["schemas"]["EventFormat"];
             draw_type: components["schemas"]["DrawType"];
             /** Max Players */
-            max_players: number;
+            max_players: number | null;
             /** Entry Fee */
             entry_fee: number;
             slot: components["schemas"]["Slot"];
@@ -3020,12 +3020,14 @@ export interface components {
         /**
          * TournamentEventUpdate
          * @description Partial update for an event. Absent fields are unchanged. Every column
-         *     these fields back — ``name``/``format``/``draw_type``/``max_players``/
+         *     these fields back except ``max_players`` — ``name``/``format``/``draw_type``/
          *     ``entry_fee``/``slot``/``match_settings``/``predicates``/``pools`` — is NOT
-         *     NULL, so an explicit ``null`` on any of them is rejected (422);
-         *     ``predicates``/``pools`` replace wholesale when present. ``entered`` is not
-         *     updatable — it is derived from the event's active entries, not stored — so
-         *     sending it is a 422 via ``extra="forbid"``.
+         *     NULL, so an explicit ``null`` on any of *those* is rejected (422).
+         *     ``max_players`` is nullable: an explicit ``null`` clears the cap, making the
+         *     event uncapped (ADR-0935); when a value is supplied it must be positive
+         *     (``gt=0``). ``predicates``/``pools`` replace wholesale when present.
+         *     ``entered`` is not updatable — it is derived from the event's active entries,
+         *     not stored — so sending it is a 422 via ``extra="forbid"``.
          */
         TournamentEventUpdate: {
             /** Name */

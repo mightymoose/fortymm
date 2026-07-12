@@ -43,6 +43,30 @@ function PopoverAnchor({
   return <PopoverPrimitive.Anchor data-slot="popover-anchor" {...props} />
 }
 
+/**
+ * The dismiss control for a popover — the counterpart of `DialogClose`. Radix
+ * closes the popover on click, so a call site only supplies the button:
+ *
+ * ```tsx
+ * <PopoverClose asChild>
+ *   <Button variant="ghost" size="icon-sm" aria-label="Close alpha notice">
+ *     <XIcon />
+ *   </Button>
+ * </PopoverClose>
+ * ```
+ *
+ * A popover is non-modal here (`PopoverContent` passes no `modal` prop, so
+ * Radix defaults to `modal={false}`), which means clicking outside and Escape
+ * dismiss it — but neither is a *visible* affordance. Touch users and anyone
+ * scanning for an "x" get nothing, so a popover that covers content owes them
+ * this (#891).
+ */
+function PopoverClose({
+  ...props
+}: React.ComponentProps<typeof PopoverPrimitive.Close>) {
+  return <PopoverPrimitive.Close data-slot="popover-close" {...props} />
+}
+
 function PopoverHeader({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
@@ -79,6 +103,7 @@ function PopoverDescription({
 export {
   Popover,
   PopoverAnchor,
+  PopoverClose,
   PopoverContent,
   PopoverDescription,
   PopoverHeader,

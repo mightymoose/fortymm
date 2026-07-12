@@ -1,9 +1,12 @@
+import { matchDetailRoute } from '@/api/matches'
 import {
   playerByIdQueryOptions,
   type PlayerDetail,
   type PlayerMatchRow,
   type RatingRange,
 } from '@/api/players'
+import type { MatchDetailRoute } from '@/components/matches/match-row-link/match-row-link'
+import { matchRowAriaLabel } from '@/components/matches/match-row-link/match-row-naming'
 import { formatRatingDelta, formatRatingDeltaAria } from '@/lib/rating'
 
 /** The em dash the card prints wherever a number would lie: an unfinished
@@ -77,6 +80,22 @@ export type RecentMatchOpponentView =
   | { kind: 'player'; id: string; name: string }
   | { kind: 'solo'; name: typeof NO_OPPONENT }
 
+/**
+ * One row of the card — and it carries **two** destinations, on purpose.
+ *
+ * A row is a match *and* a person, and the reader can want either. So the row
+ * exposes both, each named for where it actually goes:
+ *
+ * - the **row** (its stretched anchor, on the date cell) opens the **match** —
+ *   `detailRoute` + `ariaLabel`, "Match against ada.lovelace, Mar 14" (#989);
+ * - the **opponent's name** opens that **player's profile** — `opponent`, when it
+ *   is a `player` (#1005).
+ *
+ * That is two links a screen reader hears per row, not one heard twice: they are
+ * different destinations, and each is named for its own. The name is *not* folded
+ * into the row link precisely because "ada.lovelace", announced as a link, would
+ * promise a profile and deliver a match.
+ */
 export type RecentMatchRowView = {
   id: string
   /** The opponent, and whether there is one: a `player` is linked to their
@@ -88,6 +107,14 @@ export type RecentMatchRowView = {
   delta: RecentMatchDeltaView | null
   /** e.g. "Mar 14". `—` when the timestamp is unreadable. */
   when: string
+  /** The `{to,params}` target of the row's link — the match's detail page. Built
+   * here, from the typed `matchDetailRoute` factory, so the row component never
+   * hand-writes a path (the same way `MatchListRowView` carries one). */
+  detailRoute: MatchDetailRoute
+  /** The **row** link's accessible name, e.g. "Match against ada.lovelace,
+   * Mar 14". It names the match, because that is where the row goes; the
+   * opponent's own name is a separate link, to their profile. */
+  ariaLabel: string
 }
 
 export type RecentMatchesView = {
@@ -193,7 +220,7 @@ const selectDelta = (
 }
 
 /**
- * The opponent cell, and with it the row's one navigation.
+ * The opponent cell, and with it the row's *second* navigation.
  *
  * The id is **already on the wire** — the card simply dropped it, which is what
  * made every opponent's name a dead end. Projecting it is the whole fix; the
@@ -214,14 +241,32 @@ const selectOpponent = (
     ? { kind: 'player', id: opponent.id, name: opponent.username }
     : { kind: 'solo', name: NO_OPPONENT }
 
-const selectRow = (row: PlayerMatchRow, timeZone?: string): RecentMatchRowView => ({
-  id: row.id,
-  opponent: selectOpponent(row.opponent),
-  status: selectStatus(row),
-  score: selectScore(row),
-  delta: selectDelta(row.rating_change),
-  when: selectWhen(row.created_at, timeZone),
-})
+const selectRow = (
+  row: PlayerMatchRow,
+  timeZone?: string,
+): RecentMatchRowView => {
+  const opponent = selectOpponent(row.opponent)
+  const when = selectWhen(row.created_at, timeZone)
+  return {
+    id: row.id,
+    opponent,
+    status: selectStatus(row),
+    score: selectScore(row),
+    delta: selectDelta(row.rating_change),
+    when,
+    // The row is a link to its match (#989). Both halves of that link are
+    // *derived data*, so they belong here rather than in the row component: the
+    // target comes off the typed route factory, and the accessible name is
+    // composed from the same two labels the row already prints — so the thing a
+    // screen reader hears can never drift from the thing on screen.
+    detailRoute: matchDetailRoute(row.id),
+    ariaLabel: matchRowAriaLabel({
+      opponent: opponent.name,
+      isSolo: opponent.kind === 'solo',
+      when,
+    }),
+  }
+}
 
 /**
  * `timeZone` names the zone the match days are dated in. **Omit it in production**
