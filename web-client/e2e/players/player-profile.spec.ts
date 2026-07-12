@@ -98,11 +98,25 @@ const KNOWN_PROFILE_A11Y_DEBT: KnownAxeViolation[] = [
 
 /** The not-found body renders *inside* the `_app` layout, which already is an
  * `AppShell`. A component that wrapped itself in a second one would double every
- * landmark — a spike measured two `<main>`s from exactly that naive fix. */
+ * landmark — a spike measured two `<main>`s from exactly that naive fix.
+ *
+ * **`<main>` is the load-bearing assertion, and it is the only one that can be an
+ * exact count.** Below 960px the sidebar is a *drawer*: the `<aside>` is in the
+ * DOM but out of the accessibility tree until the hamburger opens it, so a phone
+ * legitimately exposes **zero** `complementary` landmarks. An earlier version of
+ * this helper demanded exactly one and failed on the 375px run for a reason that
+ * had nothing to do with app shells.
+ *
+ * So the sidebar gets a *ceiling*, not an equality. That still catches the bug
+ * this guard exists for — a doubled shell renders two of everything, and two is
+ * over the ceiling on either viewport — while staying true of a phone. */
 async function expectExactlyOneAppShell(profile: PlayerProfilePage) {
   await expect(profile.mainLandmarks, 'one <main> landmark').toHaveCount(1)
-  await expect(profile.sidebars, 'one sidebar').toHaveCount(1)
   await expect(profile.headers, 'one topbar header').toHaveCount(1)
+  expect(
+    await profile.sidebars.count(),
+    'never two sidebars (a phone exposes none — the nav is a drawer)',
+  ).toBeLessThanOrEqual(1)
 }
 
 /** The designed not-found state, whichever route threw it. */
