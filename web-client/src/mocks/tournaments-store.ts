@@ -484,9 +484,9 @@ type OwnedResult =
   | { ok: false; status: 403 | 404 }
 
 /** Load a tournament and check it is the caller's: the mock's
- * `_get_tournament_or_404` + `_require_owner` (`api/app/tournaments.py`), in one
- * step, because every owner-only mutation asks the same two questions in the same
- * order — does it exist (**404**), and is it mine (**403**)?
+ * `_get_owned_tournament_or_404` (`api/app/tournaments.py`), which welds the same
+ * two questions together for the same reason — every owner-only mutation asks them
+ * in the same order: does it exist (**404**), and is it mine (**403**)?
  *
  * The order is load-bearing and is the server's: a stranger must not be able to
  * tell a tournament they cannot touch from one that does not exist at all. Written
