@@ -13,7 +13,11 @@ import {
 } from '@/mocks/factories/players/player-detail.factory'
 import { waitFor } from '@/test/utilities'
 
-import { headToHeadCardQuery, type HeadToHeadView } from './head-to-head-card-query'
+import {
+  headToHeadCardQuery,
+  selectHeadToHead,
+  type HeadToHeadView,
+} from './head-to-head-card-query'
 import { headToHeadCardQueryPage } from './head-to-head-card-query.page'
 
 /** Resolve the query against one bundle and hand back the projected view. */
@@ -74,27 +78,43 @@ describe('headToHeadCardQuery', () => {
     })
   })
 
-  it('formats when the pair last met in the reader’s LOCAL day — never in UTC', async () => {
+  it('formats when the pair last met in the READER’s day — never in UTC', () => {
     // The evening you last played somebody is a LOCAL fact, like every other match
     // date on the page (the Recent-matches card, the full history, the match detail
     // page). A meeting at 9:30pm in Chicago is already tomorrow in UTC, and dating
     // it in UTC put "Last met Mar 15" under a match the history page dates Mar 14.
-    // The suite runs pinned to UTC (`vite.config.ts`); this one test sits west of
-    // it, which is the whole point — under UTC there is nothing to get wrong.
-    vi.stubEnv('TZ', 'America/Chicago')
-    try {
-      const view = await selectFrom({
-        head_to_head: buildPlayerHeadToHead({
-          versus_viewer: buildViewerHeadToHead({
-            last_meeting: '2025-03-15T02:30:00Z',
-          }),
+    //
+    // ONE instant, read from two zones: 02:30 UTC on Mar 15 is still the evening of
+    // Mar 14 in Chicago, and already Mar 15 in Tokyo. That pins the claim — "the day
+    // is computed in the given zone" — with no ambient `TZ` and no `vi.stubEnv`: the
+    // zone is an argument. (Stubbed via the environment, this test passed under vitest
+    // and failed under Stryker's runner, which doesn't honour a mid-test
+    // `process.env.TZ`.) Formatting in UTC reds the Chicago line; hardwiring one zone
+    // reds the other.
+    const bundle = buildPlayerDetail({
+      head_to_head: buildPlayerHeadToHead({
+        versus_viewer: buildViewerHeadToHead({
+          last_meeting: '2025-03-15T02:30:00Z',
         }),
-      })
+      }),
+    })
 
-      expect(view.versusViewer?.lastMeeting).toBe('Last met Mar 14, 2025')
-    } finally {
-      vi.unstubAllEnvs()
-    }
+    expect(selectHeadToHead(bundle, 'America/Chicago').versusViewer?.lastMeeting).toBe(
+      'Last met Mar 14, 2025',
+    )
+    expect(selectHeadToHead(bundle, 'Asia/Tokyo').versusViewer?.lastMeeting).toBe(
+      'Last met Mar 15, 2025',
+    )
+  })
+
+  it('hands the projection to `select` unwrapped, so the reader’s own zone is the one used', () => {
+    // The counterpart: the test above proves the projection honours the zone it is
+    // GIVEN; this proves production gives it none. An omitted `timeZone` is what `Intl`
+    // reads as "the runtime's zone", so React Query calling `select(data)` with the bare
+    // projection is exactly what dates "Last met" in the reader's day. Wrapping it —
+    // `select: (p) => selectHeadToHead(p, 'UTC')` — brings the bug back, and on a UTC CI
+    // box no rendered assertion could tell the difference. This can.
+    expect(headToHeadCardQuery('p-1').select).toBe(selectHeadToHead)
   })
 
   it('omits an unreadable last-met date rather than printing "Invalid Date"', async () => {

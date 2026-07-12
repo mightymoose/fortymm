@@ -18,6 +18,7 @@ import { waitFor } from '@/test/utilities'
 
 import {
   recentMatchesQuery,
+  selectRecentMatches,
   type RecentMatchRowView,
   type RecentMatchesView,
 } from './recent-matches-query'
@@ -215,7 +216,7 @@ describe('recentMatchesQuery', () => {
     expect(view.total).toBe(0)
   })
 
-  it('dates a match in the reader’s LOCAL day — never in UTC', async () => {
+  it('dates a match in the READER’s day — never in UTC', () => {
     // The day you played a match is a LOCAL fact, and every other surface renders
     // it that way (the full history page, the match detail page). This card used to
     // format in UTC, so a match played at 7:15pm in Chicago — already tomorrow in
@@ -224,18 +225,34 @@ describe('recentMatchesQuery', () => {
     //
     // (Contrast the hero's "Member since", which stays UTC on purpose: a join
     // *month* is a fact about the account, not about the reader's evening.)
-    // The suite runs pinned to UTC (`vite.config.ts`); this one test sits west of
-    // it, which is the whole point — under UTC there is nothing to get wrong.
-    vi.stubEnv('TZ', 'America/Chicago')
-    try {
-      const row = await selectRow(
+    //
+    // ONE instant, read from two zones — 00:15 UTC on Jul 12 is still the evening of
+    // Jul 11 in Chicago, and already Jul 12 in Tokyo. So this pins the claim itself
+    // ("the day is computed in the given zone") rather than a day-label that only
+    // reads correctly from certain longitudes: format in UTC and Chicago reds; hardwire
+    // any single zone and the other reds. And it says so with NO ambient `TZ` and no
+    // `vi.stubEnv` — the zone is an argument. (An env-stubbed version of this test
+    // passed under vitest and failed under Stryker's runner, which doesn't honour a
+    // mid-test `process.env.TZ`; a test that can only run in one runner is not a test.)
+    const bundle = buildPlayerDetail({
+      matches: buildPlayerMatchList([
         buildPlayerMatchRow({ created_at: '2026-07-12T00:15:00Z' }),
-      )
+      ]),
+    })
 
-      expect(row.when).toBe('Jul 11')
-    } finally {
-      vi.unstubAllEnvs()
-    }
+    expect(selectRecentMatches(bundle, 'America/Chicago').rows[0].when).toBe('Jul 11')
+    expect(selectRecentMatches(bundle, 'Asia/Tokyo').rows[0].when).toBe('Jul 12')
+  })
+
+  it('hands the projection to `select` unwrapped, so the reader’s own zone is the one used', () => {
+    // The counterpart to the test above: it proves the projection honours the zone it
+    // is GIVEN, and this proves production gives it none. An omitted `timeZone` is what
+    // `Intl` reads as "the runtime's zone", so React Query calling `select(data)` with
+    // the bare projection is precisely what makes the card date in the reader's day.
+    // Wrapping it — `select: (p) => selectRecentMatches(p, 'UTC')` — is how the original
+    // bug would come back, and no rendered assertion can catch that on a UTC CI box,
+    // where local and UTC are the same day. This can.
+    expect(recentMatchesQuery('p-1').select).toBe(selectRecentMatches)
   })
 
   it('prints an em dash rather than "Invalid Date" for an unreadable timestamp', async () => {

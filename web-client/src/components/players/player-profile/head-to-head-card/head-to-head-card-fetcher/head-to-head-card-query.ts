@@ -77,16 +77,25 @@ const formatMeetings = (meetings: number): string =>
   `${meetings} ${meetings === 1 ? 'meeting' : 'meetings'}`
 
 /**
- * "Last met Mar 14, 2025" — in the reader's **local** timezone, like every other
- * match date on the page (the Recent-matches card, the full history, the match
- * detail page). A meeting is a match, and the evening you played it is a local
- * fact: dated in UTC, a 9:30pm game in Chicago read "Last met Mar 15" while the
- * history page dated the very same match Mar 14.
+ * "Last met Mar 14, 2025" — dated in `timeZone`, which **defaults to the reader's
+ * local zone**, like every other match date on the page (the Recent-matches card,
+ * the full history, the match detail page). A meeting is a match, and the evening
+ * you played it is a local fact: dated in UTC, a 9:30pm game in Chicago read
+ * "Last met Mar 15" while the history page dated the very same match Mar 14.
+ *
+ * The zone is a **parameter, not ambient state**. Production passes none —
+ * `undefined` is precisely what `Intl` reads as "the runtime's zone" — while a test
+ * names one, so the day it asserts is a fact about the code rather than about the
+ * machine running it (the process's ambient `TZ` is not something a mutation runner
+ * lets a test change mid-flight).
  *
  * Formatted per call, not through a hoisted `Intl.DateTimeFormat`, which would
  * cache whatever timezone was current when the module loaded.
  */
-const formatLastMeeting = (iso: string | null | undefined): string | null => {
+const formatLastMeeting = (
+  iso: string | null | undefined,
+  timeZone?: string,
+): string | null => {
   if (iso == null) return null
   const at = new Date(iso)
   if (Number.isNaN(at.getTime())) return null
@@ -94,12 +103,14 @@ const formatLastMeeting = (iso: string | null | undefined): string | null => {
     month: 'short',
     day: 'numeric',
     year: 'numeric',
+    timeZone,
   })
   return `Last met ${day}`
 }
 
 const selectViewerRecord = (
   versus: ViewerHeadToHead | null | undefined,
+  timeZone?: string,
 ): ViewerRecordView | null => {
   // Optional *and* nullable on the wire, so both spellings of "absent" have to
   // mean the same thing: this is your own profile.
@@ -113,7 +124,9 @@ const selectViewerRecord = (
     // these two is the bug this whole module exists to not have.
     record: formatRecord(versus.wins, versus.losses),
     meetings: neverMet ? null : formatMeetings(versus.meetings),
-    lastMeeting: neverMet ? null : formatLastMeeting(versus.last_meeting),
+    lastMeeting: neverMet
+      ? null
+      : formatLastMeeting(versus.last_meeting, timeZone),
   }
 }
 
@@ -146,8 +159,15 @@ const selectFrequentOpponent = (
  * league (`CONTEXT.md` § *Meeting*), so this block comes back identical whichever
  * ladder was asked for — exactly like `career`. The league still rides in the
  * query key below, because the key is the *bundle's*, not this card's.
+ *
+ * `timeZone` dates the "Last met" line. **Omit it in production** — that is what
+ * makes it read in the reader's own local day (see `formatLastMeeting`); tests pass
+ * one so the day they assert doesn't depend on the machine.
  */
-export const selectHeadToHead = (player: PlayerDetail): HeadToHeadView => ({
+export const selectHeadToHead = (
+  player: PlayerDetail,
+  timeZone?: string,
+): HeadToHeadView => ({
   playerName: player.username,
   // Through the *shared* predicate: the page's card ORDER now turns on the same
   // bit (Head-to-head leads on somebody else's profile, Career on your own —
@@ -155,7 +175,7 @@ export const selectHeadToHead = (player: PlayerDetail): HeadToHeadView => ({
   // would be a page that says "Frequent opponents" in the "You vs them" position.
   versusViewer: isOwnProfile(player)
     ? null
-    : selectViewerRecord(player.head_to_head.versus_viewer),
+    : selectViewerRecord(player.head_to_head.versus_viewer, timeZone),
   frequentOpponents: player.head_to_head.frequent_opponents.map(
     selectFrequentOpponent,
   ),
@@ -172,6 +192,11 @@ export const selectHeadToHead = (player: PlayerDetail): HeadToHeadView => ({
  * *bundle's* key, so a card that dropped it would fork the page into two requests
  * — one for `?league=<x>` and one for the default ladder — and the profile's
  * one-request test would catch it.
+ *
+ * The projection goes to `select` **by reference**: React Query calls it as
+ * `select(data)`, leaving `timeZone` undefined — the reader's own zone. A test pins
+ * that identity, because wrapping it to pass a zone is how "Last met" would drift
+ * away from the dates on the rest of the page.
  */
 export const headToHeadCardQuery = (
   playerId: string,

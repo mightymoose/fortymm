@@ -87,7 +87,7 @@ export type RecentMatchesView = {
 }
 
 /**
- * "Mar 14" — in the reader's **local** timezone.
+ * "Mar 14" — dated in `timeZone`, which **defaults to the reader's local zone**.
  *
  * The day you played a match is a *local* fact, and it must agree with every other
  * surface that dates the same match: the full history page
@@ -99,14 +99,26 @@ export type RecentMatchesView = {
  * (The hero's "Member since" *is* UTC on purpose, and stays that way: a join month
  * is a fact about the account, not about the reader's evening.)
  *
+ * The zone is a **parameter, not ambient state**. Production passes none —
+ * `undefined` is exactly what `Intl` reads as "the runtime's zone", so the reader
+ * still gets their own local day (and `recentMatchesQuery` below passes the
+ * projection to `select` by reference, so there is nowhere for a zone to sneak in).
+ * A test names the zone instead, and can then assert a real, *zone-independent*
+ * claim — the same instant is Jul 11 in Chicago and Jul 12 in Tokyo — rather than
+ * betting on the process's ambient `TZ`, which a mutation runner does not honour.
+ *
  * Formatted per call rather than through a hoisted `Intl.DateTimeFormat`: a
  * formatter built at module load resolves — and then caches — the timezone that was
  * current when it was constructed.
  */
-const selectWhen = (iso: string): string => {
+const selectWhen = (iso: string, timeZone?: string): string => {
   const at = new Date(iso)
   if (Number.isNaN(at.getTime())) return NO_VALUE
-  return at.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+  return at.toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    timeZone,
+  })
 }
 
 const selectStatus = (row: PlayerMatchRow): RecentMatchStatusView => {
@@ -162,23 +174,32 @@ const selectDelta = (
   }
 }
 
-const selectRow = (row: PlayerMatchRow): RecentMatchRowView => ({
+const selectRow = (row: PlayerMatchRow, timeZone?: string): RecentMatchRowView => ({
   id: row.id,
   opponent: row.opponent.username ?? 'No opponent',
   isSolo: row.opponent.username === null,
   status: selectStatus(row),
   score: selectScore(row),
   delta: selectDelta(row.rating_change),
-  when: selectWhen(row.created_at),
+  when: selectWhen(row.created_at, timeZone),
 })
 
-export const selectRecentMatches = (player: PlayerDetail): RecentMatchesView => {
+/**
+ * `timeZone` names the zone the match days are dated in. **Omit it in production**
+ * — that is what makes the card read in the reader's own local day (see
+ * `selectWhen`). Tests pass one so the day they assert is a fact about the code,
+ * not about the machine running it.
+ */
+export const selectRecentMatches = (
+  player: PlayerDetail,
+  timeZone?: string,
+): RecentMatchesView => {
   const total = player.match_total
   return {
     playerId: player.id,
     // Straight through, unfiltered: the bundle already sent the six most recent,
     // and every state in them belongs on the card.
-    rows: player.matches.items.map(selectRow),
+    rows: player.matches.items.map((row) => selectRow(row, timeZone)),
     total,
     viewAllLabel: `View all ${total} ${total === 1 ? 'match' : 'matches'}`,
   }
@@ -192,6 +213,12 @@ export const selectRecentMatches = (player: PlayerDetail): RecentMatchesView => 
  * matches the bundle already carries, off the very cache entry the hero reads
  * (the match-details projection pattern). The full paginated history is a
  * different surface with a different query (`/players/$userId/matches`).
+ *
+ * The projection is handed to `select` **by reference**, on purpose: React Query
+ * calls it as `select(data)`, so its `timeZone` is `undefined` and the dates come
+ * out in the reader's own zone. Wrapping it — `select: (p) => selectRecentMatches(p, …)`
+ * — would be the way to hand this card a zone the rest of the page doesn't use,
+ * which is the bug. A test pins the identity.
  */
 export const recentMatchesQuery = (
   playerId: string,
