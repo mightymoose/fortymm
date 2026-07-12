@@ -732,10 +732,10 @@ function ScoreEntryInner({
         <div className="entry-head">
           <h2>{heading}</h2>
           {/* No "0–9" here: games are to 11, and naming the digit keys reads as
-              a cap on the score itself (#896). */}
+              a cap on the score itself (#896). Kept short enough to stay on one
+              line at 1024px, where the sidebar squeezes this header. */}
           <div className="hint">
-            Use number keys &nbsp;·&nbsp; <kbd>Enter</kbd>{' '}
-            {bestOf === 1 ? 'to save' : 'to continue or save'}
+            Use number keys &nbsp;·&nbsp; <kbd>Enter</kbd> to save
           </div>
         </div>
 

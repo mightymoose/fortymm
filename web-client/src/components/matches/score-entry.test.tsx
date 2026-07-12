@@ -996,8 +996,6 @@ describe('ScoreEntry — create', () => {
       screen.getByRole('button', { name: /save & post/i }),
     ).toBeInTheDocument()
 
-    // The keyboard hint says "to save" — the multi-game copy is "to continue
-    // or save", which this would not match.
     const hint = container.querySelector('.hint')
     expect(hint?.textContent).toMatch(/to save/)
 
@@ -1021,7 +1019,7 @@ describe('ScoreEntry — create', () => {
 
     const hint = container.querySelector('.hint')
     expect(hint?.textContent).toMatch(/number keys/)
-    expect(hint?.textContent).toMatch(/to continue or save/)
+    expect(hint?.textContent).toMatch(/to save/)
     // No digit may appear: naming any range implies a cap on a score that goes to 11.
     expect(hint?.textContent).not.toMatch(/\d/)
   })
