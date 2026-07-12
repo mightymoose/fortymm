@@ -1003,6 +1003,35 @@ export interface paths {
         patch: operations["update_tournament_v1_tournaments__tournament_id__patch"];
         trace?: never;
     };
+    "/v1/tournaments/{tournament_id}/transitions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Tournament Transition
+         * @description Move a tournament along its lifecycle, and answer with the moved tournament.
+         *
+         *     The lifecycle runs forward only, and exactly three transitions exist:
+         *     `draft` → `published` (publish), `published` → `live` (go live), and
+         *     `live` → `archived` (archive). Anything else is a `409`, including walking
+         *     backwards, skipping a stage, moving out of the terminal `archived`, and
+         *     re-asserting the status the tournament already holds — a request to publish
+         *     an already-published tournament is a stale client, not a no-op.
+         *
+         *     Owner-only, like every other tournament mutation.
+         */
+        post: operations["create_tournament_transition_v1_tournaments__tournament_id__transitions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/tournaments/{tournament_id}/events": {
         parameters: {
             query?: never;
@@ -1056,6 +1085,12 @@ export interface paths {
          *     someone else. Entering a player who is not you is a director's job, and a
          *     different endpoint.
          *
+         *     Registration is open only while the tournament is **`published`** — its status
+         *     *is* its registration window (ADR-0017). Entering an event of a `draft`
+         *     tournament (not announced yet), a `live` one (the field is fixed; the draw is
+         *     cut from it), or an `archived` one (it is over) is a `409` — not a `403`: you
+         *     are permitted, the tournament is simply in the wrong state.
+         *
          *     Entering an event you are already in is a `409`; withdrawing first frees you
          *     to enter it again. Doubles and teams events are a `400`: an entry is one row
          *     per player, with nowhere to record a partner or a team.
@@ -1086,9 +1121,21 @@ export interface paths {
          *     uniqueness guard is a *partial* index over active entries only, the player is
          *     free to enter the same event again afterwards.
          *
-         *     You may only withdraw your own entry; someone else's is a `403`. Withdrawing
-         *     an entry that is already withdrawn is a no-op, not an error: this is `DELETE`,
-         *     and asking for a state the resource is already in is a success.
+         *     You may only withdraw your own entry; someone else's is a `403`.
+         *
+         *     Withdrawal, like entry, is open only while the tournament is **`published`** —
+         *     its status *is* its registration window (ADR-0017). Withdrawing an *active*
+         *     entry from a `live` tournament would pull a player out from under a draw cut
+         *     from the field they were part of, so it is a `409`, as it is for a `draft`
+         *     tournament (registration has not opened) and an `archived` one (it is over).
+         *     A `409`, not a `403`: you are permitted, the tournament is simply in the wrong
+         *     state.
+         *
+         *     **Withdrawing an entry that is already withdrawn is a `204` in every status**,
+         *     `live` and `archived` included — a no-op, not an error: this is `DELETE`, and
+         *     asking for a state the resource is already in is a success. The status gate is
+         *     on the state *change*, not on the call; an entry that is already withdrawn has
+         *     nothing left to lock.
          */
         delete: operations["withdraw_from_event_v1_tournaments__tournament_id__events__event_id__entries__entry_id__delete"];
         options?: never;
@@ -2818,14 +2865,19 @@ export interface components {
             /** Pruned */
             pruned: number;
         };
-        /** TournamentCreate */
+        /**
+         * TournamentCreate
+         * @description A new tournament. It carries **no** ``status``: a tournament is born
+         *     ``draft`` (the column's default) and moves only across a guarded lifecycle
+         *     edge, via ``POST /v1/tournaments/{id}/transitions`` (ADR-0017). Sending a
+         *     ``status`` here is a 422 — ``extra="forbid"`` — rather than a tournament that
+         *     is born ``live``.
+         */
         TournamentCreate: {
             /** Name */
             name: string;
             /** Description */
             description?: string | null;
-            /** @default draft */
-            status: components["schemas"]["TournamentStatus"];
             /** Start Date */
             start_date?: string | null;
             /** End Date */
@@ -3048,21 +3100,38 @@ export interface components {
             court: string;
         };
         /**
+         * TournamentTransitionCreate
+         * @description The edge a caller wants the tournament to travel: the status to move *to*.
+         *
+         *     ``to`` alone, with no ``from``: the tournament already knows where it is, and
+         *     a client that told us would only be telling us what it *believed* — a stale
+         *     tab's belief at that. The current status is read from the row, and whether the
+         *     (current, ``to``) pair is an edge at all is the server's judgement (ADR-0017).
+         */
+        TournamentTransitionCreate: {
+            to: components["schemas"]["TournamentStatus"];
+        };
+        /**
          * TournamentUpdate
          * @description Partial update. A field that is *absent* is left unchanged; an explicit
-         *     value replaces the current one. The columns backing ``name``, ``status``,
-         *     ``address``, and ``table_catalogue`` are NOT NULL, so for those an explicit
-         *     ``null`` is rejected (422) rather than allowed to reach the DB — "omitted"
-         *     and "cleared" are different. ``description``/``start_date``/``end_date`` are
-         *     nullable columns and may be cleared. ``table_catalogue`` replaces wholesale
-         *     when present.
+         *     value replaces the current one. The columns backing ``name``, ``address``,
+         *     and ``table_catalogue`` are NOT NULL, so for those an explicit ``null`` is
+         *     rejected (422) rather than allowed to reach the DB — "omitted" and "cleared"
+         *     are different. ``description``/``start_date``/``end_date`` are nullable
+         *     columns and may be cleared. ``table_catalogue`` replaces wholesale when
+         *     present.
+         *
+         *     ``status`` is **not** updatable and is absent here on purpose: the lifecycle
+         *     runs forward only across guarded edges, so the one way it moves is
+         *     ``POST /v1/tournaments/{id}/transitions`` (ADR-0017). A guard on that route
+         *     that left a ``status`` field on this one would have guarded nothing, so
+         *     sending ``status`` here is a 422 via ``extra="forbid"``.
          */
         TournamentUpdate: {
             /** Name */
             name?: string | null;
             /** Description */
             description?: string | null;
-            status?: components["schemas"]["TournamentStatus"] | null;
             /** Start Date */
             start_date?: string | null;
             /** End Date */
@@ -5113,6 +5182,43 @@ export interface operations {
         responses: {
             /** @description Successful Response */
             200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TournamentRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_tournament_transition_v1_tournaments__tournament_id__transitions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tournament_id: string;
+            };
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TournamentTransitionCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
                 headers: {
                     [name: string]: unknown;
                 };

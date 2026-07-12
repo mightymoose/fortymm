@@ -1,5 +1,5 @@
 import uuid
-from typing import Any
+from typing import Any, Literal, assert_never
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import select
@@ -13,6 +13,7 @@ from app.models import (
     TournamentEntry,
     TournamentEntryStatus,
     TournamentEvent,
+    TournamentStatus,
     User,
 )
 from app.rbac import require_permission
@@ -24,6 +25,7 @@ from app.schemas.tournament import (
     TournamentEventRead,
     TournamentEventUpdate,
     TournamentRead,
+    TournamentTransitionCreate,
     TournamentUpdate,
 )
 from app.sessions import get_current_user
@@ -49,6 +51,30 @@ require_create = require_permission(TOURNAMENT_CREATE)
 # Returns the signed-in user, so the enter route gets its gate and its caller
 # from one dependency — and cannot enter anyone other than that caller.
 require_enter = require_permission(TOURNAMENT_ENTER)
+
+# The tournament lifecycle, in full (ADR-0017):
+#
+#     draft ──publish──▶ published ──go live──▶ live ──archive──▶ archived
+#
+# Legality is a property of the EDGE, not of the target — "may I be published?"
+# has no answer without knowing where you are now — so the rule is a set of
+# ordered (from, to) pairs, and this set is the whole rule. Every pair absent
+# from it is a 409: backwards (published → draft), skipping a stage (draft →
+# live), out of the terminal ``archived``, and re-asserting the status a
+# tournament already holds (published → published is a *conflict*, not an
+# idempotent no-op: the only caller that sends it is a stale one, and answering
+# 200 would tell it that it did something when somebody else did).
+#
+# One table, at one dispatch point, is also where slice B (#785) hangs the
+# go-live precondition ("requires a generated draw") — a per-target rule that
+# would otherwise have to be remembered in a route of its own.
+LEGAL_TRANSITIONS: frozenset[tuple[TournamentStatus, TournamentStatus]] = frozenset(
+    {
+        (TournamentStatus.draft, TournamentStatus.published),
+        (TournamentStatus.published, TournamentStatus.live),
+        (TournamentStatus.live, TournamentStatus.archived),
+    }
+)
 
 router = APIRouter(prefix="/v1")
 
@@ -157,6 +183,44 @@ async def _get_tournament_or_404(
 ) -> Tournament:
     tournament = (
         await db.execute(select(Tournament).where(Tournament.id == tournament_id))
+    ).scalar_one_or_none()
+    if tournament is None:
+        raise HTTPException(status_code=404, detail="Tournament not found.")
+    return tournament
+
+
+async def _get_tournament_for_update_or_404(
+    db: AsyncSession, tournament_id: uuid.UUID
+) -> Tournament:
+    """The same 404, with the row locked for the rest of the transaction.
+
+    Every route that *judges a tournament's status and then writes* loads it
+    through here — the transition, entering an event, withdrawing an active entry
+    — because without the lock the judgment and the write happen in two different
+    instants. Postgres runs READ COMMITTED, so an unlocked ``SELECT`` answers from
+    the snapshot of that statement alone: a player's entry can pass the
+    ``published`` check, the owner's go-live can commit, and the ``INSERT`` can
+    then land *behind* it. Both requests succeed and the field is no longer the
+    one the tournament went live with — precisely the invariant going live exists
+    to establish, and the one the draw (#785) is cut from. The mirror of it lets a
+    player withdraw out from under a tournament that has just gone live, and it
+    lets two concurrent identical transitions both read ``published``, both find a
+    legal edge, and both answer 201 — turning the 409 ADR-0017 promises for a
+    re-asserted status into a silent no-op.
+
+    ``FOR UPDATE`` closes the window: the status read here cannot change under the
+    caller until its transaction ends, and a second writer blocks and then re-reads
+    the *committed* status rather than the one it saw first. All three mutating
+    routes take this lock, on the TOURNAMENT row, before any other — one lock, one
+    order, so they queue behind each other and no pair of them can deadlock.
+
+    Read routes deliberately keep ``_get_tournament_or_404``: a reader has nothing
+    to serialize against, and no business making writers queue behind it.
+    """
+    tournament = (
+        await db.execute(
+            select(Tournament).where(Tournament.id == tournament_id).with_for_update()
+        )
     ).scalar_one_or_none()
     if tournament is None:
         raise HTTPException(status_code=404, detail="Tournament not found.")
@@ -281,10 +345,14 @@ async def create_tournament(
 ) -> TournamentRead:
     # Persist the value-objects as plain JSONB; the dicts produced by
     # ``model_dump`` don't propagate beyond this write boundary.
+    #
+    # No ``status``: it isn't on the create schema (ADR-0017), so it isn't set
+    # here either. A tournament is born ``draft`` from the column's server
+    # default — one source for the starting status, rather than a schema default
+    # that a request could override — and the ``refresh`` below reads it back.
     tournament = Tournament(
         name=payload.name,
         description=payload.description,
-        status=payload.status,
         start_date=payload.start_date,
         end_date=payload.end_date,
         address=payload.address.model_dump(),
@@ -392,6 +460,83 @@ async def delete_tournament(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
+# ----- lifecycle routes ----------------------------------------------------
+
+
+@router.post(
+    "/tournaments/{tournament_id}/transitions",
+    response_model=TournamentRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_tournament_transition(
+    tournament_id: uuid.UUID,
+    payload: TournamentTransitionCreate,
+    db: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+) -> TournamentRead:
+    """Move a tournament along its lifecycle, and answer with the moved tournament.
+
+    The lifecycle runs forward only, and exactly three transitions exist:
+    `draft` → `published` (publish), `published` → `live` (go live), and
+    `live` → `archived` (archive). Anything else is a `409`, including walking
+    backwards, skipping a stage, moving out of the terminal `archived`, and
+    re-asserting the status the tournament already holds — a request to publish
+    an already-published tournament is a stale client, not a no-op.
+
+    Owner-only, like every other tournament mutation.
+    """
+    # Load first (404), then ownership (403), and only then judge the edge (409)
+    # — the ordering the owner-only routes above already keep. It is the ordering
+    # that makes each code mean one thing: a stranger poking at someone else's
+    # tournament gets the same 403 whichever edge they ask for, so the response
+    # never leaks what status a tournament they cannot touch is in.
+    #
+    # Locked, because the status this handler reads is the status it is about to
+    # overwrite: two identical requests racing here would otherwise both read the
+    # same ``from``, both find the edge legal, and both answer 201 — and "the
+    # status you already hold is a conflict, not a no-op" would hold only when
+    # nobody was in a hurry. The loser now blocks, re-reads the status the winner
+    # committed, and gets the 409 it is owed. Same lock the entry routes take, so
+    # an entry cannot slip in behind a go-live either.
+    tournament = await _get_tournament_for_update_or_404(db, tournament_id)
+    _require_owner(tournament, current_user)
+
+    if (tournament.status, payload.to) not in LEGAL_TRANSITIONS:
+        # The pair, not the target: the same ``to`` that is legal from one status
+        # is a conflict from another. Both details name the tournament rather than
+        # the schema, because a player reads them in a toast.
+        #
+        # The self-transition gets its own sentence. It is the common refusal in
+        # practice — a stale tab clicking "Start tournament" on a tournament that
+        # is already live is exactly the ``live → live`` the edge table refuses —
+        # and the two-ended phrasing degenerates into tautology there ("this
+        # tournament is live; it cannot be moved to live"), which tells the player
+        # nothing. What they actually need is the fact that somebody already did
+        # it. Every other illegal edge keeps the two-ended shape: a caller asking
+        # for a genuinely illegal jump needs both ends named, since the target
+        # alone doesn't say why it was refused.
+        detail = (
+            f"This tournament is already {tournament.status.value}."
+            if tournament.status == payload.to
+            else (
+                f"This tournament is {tournament.status.value}; "
+                f"it cannot be moved to {payload.to.value}."
+            )
+        )
+        raise HTTPException(status_code=409, detail=detail)
+
+    tournament.status = payload.to
+    await db.commit()
+    await db.refresh(tournament)
+    # The owner is the current user (``_require_owner`` just said so), so the
+    # creator's username and can_edit are both known without another query.
+    return _serialize(
+        tournament,
+        created_by_username=current_user.username,
+        current_user_id=current_user.id,
+    )
+
+
 # ----- event routes --------------------------------------------------------
 
 
@@ -477,6 +622,124 @@ async def delete_event(
 # ----- entry routes --------------------------------------------------------
 
 
+# A tournament's status IS its registration window (ADR-0017): ``published`` is
+# open, and the other three are shut for three different reasons — a draft is not
+# announced yet, a live tournament's field is fixed (the draw is cut from it), and
+# an archived one is over.
+#
+# The closed statuses are named as a Literal rather than the whole enum so the set
+# stays exhaustive under change: mypy narrows ``tournament.status`` past the
+# ``is not published`` guard, so a fourth closed status added to the enum tomorrow
+# is a type error at the call site until it is handled — and ``assert_never`` makes
+# a missing branch in here one too. That is the "if you must map an enum, do it in
+# one place with an exhaustive match" rule; a dict keyed by status would answer a
+# new member with a KeyError at runtime instead.
+ClosedRegistrationStatus = Literal[
+    TournamentStatus.draft,
+    TournamentStatus.live,
+    TournamentStatus.archived,
+]
+
+
+def _registration_closed_detail(status: ClosedRegistrationStatus) -> str:
+    """Why registration is refused, in words a player can read.
+
+    The status is not merely echoed back: "not yet" and "too late" are different
+    things to be told, and a client that only knew "you cannot enter" could not
+    say which.
+
+    Both entering and withdrawing an active entry are refused for the *same*
+    reason — the registration window is shut — so both say it with this one
+    function rather than drifting into two half-maintained copies of the same
+    three sentences. Each sentence leads with the fact about the *tournament*
+    ("has not been published yet", "is already under way", "has ended"), which is
+    what a player on either side of the window needs to be told.
+    """
+    match status:
+        case TournamentStatus.draft:
+            return (
+                "This tournament has not been published yet, "
+                "so its events are not open for entry."
+            )
+        case TournamentStatus.live:
+            return "This tournament is already under way, so its entries are locked."
+        case TournamentStatus.archived:
+            return "This tournament has ended, so its events can no longer be entered."
+        case _:
+            assert_never(status)
+
+
+def _registration_refusal_detail(status: TournamentStatus) -> str:
+    """The words for a refusal, for *any* status a refusal can arrive in.
+
+    This is the total function ``_registration_closed_detail`` deliberately is not.
+    The narrow one only speaks about the statuses that are closed *because of the
+    status* — and mypy's narrowing past the ``published`` test below is what keeps
+    its ``Literal`` exhaustive, so a fourth closed status added to the enum is a
+    type error until somebody writes the sentence a player should read. Losing that
+    would be the real cost of making the copy helper total.
+
+    So the totality is bought here instead, and only here: ``published`` falls
+    through to a generic sentence. That branch is unreachable today — ``published``
+    *is* the open status — but it stops being unreachable the moment
+    ``_registration_open`` grows a second condition (an entry deadline, a capacity
+    cap, #784), and a ``published``-but-closed tournament reaches the refusal path
+    for a reason that has nothing to do with its status. The generic sentence is
+    the honest one to say then: the status is not why the window is shut, so naming
+    it would mislead. When such a rule lands, its author gives it its own sentence
+    — but a guard must never depend on that having happened yet. Refusing vaguely
+    is a bug report; permitting the write would be a corrupted field.
+    """
+    if status is not TournamentStatus.published:
+        return _registration_closed_detail(status)
+    return "Registration for this tournament is closed."
+
+
+def _registration_open(t: Tournament) -> bool:
+    """Whether a tournament's registration window is open right now (ignoring who
+    is asking, and what they want to do with it).
+
+    This is the whole rule, and it is one line: a tournament's status IS its
+    registration window (ADR-0017), so the window is open in ``published`` and shut
+    in the other three.
+
+    Single source of truth shared by every guard that has to know — entering,
+    withdrawing an active entry, and whatever comes next (a director entering a
+    player for someone else, #784; a ``can_enter`` flag on the BFF read) — so a
+    third caller cannot quietly grow a fourth opinion about when registration is
+    open. The routes ask ``_enforce_registration_open``; the *decision* lives here,
+    exactly once.
+    """
+    return t.status is TournamentStatus.published
+
+
+def _enforce_registration_open(t: Tournament) -> None:
+    """Raise the 409 unless the registration window is open.
+
+    ``_registration_open`` owns the *decision*; this only turns a refusal into a
+    status code and words, so no caller of this can disagree with a caller of the
+    predicate about whether entry is open.
+
+    409, not 403 (ADR-0017): the caller is permitted and the entry is their own — it
+    is the tournament that is in the wrong state. "Not you" would be a lie; the truth
+    is "not now".
+
+    Exactly two branches, and only one of them returns: open, or raise. The refusal
+    does **not** re-derive "is it closed?" from the status — a guard that decides to
+    refuse and then asks a second question before refusing can fall through both and
+    permit the write it was asked to stop, and a guard must never fail in the
+    permissive direction. Finding the words for the refusal is a separate job, and
+    ``_registration_refusal_detail`` is total, so there is no status it can be handed
+    that leaves it with nothing to say.
+    """
+    if _registration_open(t):
+        return
+    raise HTTPException(
+        status_code=409,
+        detail=_registration_refusal_detail(t.status),
+    )
+
+
 @router.post(
     "/tournaments/{tournament_id}/events/{event_id}/entries",
     response_model=TournamentEntrantRead,
@@ -495,6 +758,12 @@ async def enter_event(
     someone else. Entering a player who is not you is a director's job, and a
     different endpoint.
 
+    Registration is open only while the tournament is **`published`** — its status
+    *is* its registration window (ADR-0017). Entering an event of a `draft`
+    tournament (not announced yet), a `live` one (the field is fixed; the draw is
+    cut from it), or an `archived` one (it is over) is a `409` — not a `403`: you
+    are permitted, the tournament is simply in the wrong state.
+
     Entering an event you are already in is a `409`; withdrawing first frees you
     to enter it again. Doubles and teams events are a `400`: an entry is one row
     per player, with nowhere to record a partner or a team.
@@ -504,7 +773,14 @@ async def enter_event(
     # a player entering themselves is by definition not the tournament's owner,
     # so the authorization is the ``tournament.enter`` gate above plus the fact
     # that ``current_user`` is the only user this handler can enter.
-    await _get_tournament_or_404(db, tournament_id)
+    #
+    # The tournament is loaded *locked*, and locked first: it is the row whose
+    # status decides this request, and it must not change between the check below
+    # and the INSERT — otherwise an entry passes the ``published`` gate and then
+    # commits behind the owner's go-live, into a field that was supposed to be
+    # sealed. Whichever of the two gets the lock first, the other sees its
+    # committed outcome.
+    tournament = await _get_tournament_for_update_or_404(db, tournament_id)
     event = await _get_event_or_404(db, tournament_id, event_id)
     if event.format is not EventFormat.singles:
         # Not a policy — a modelling limit (ADR-0016). One row per user cannot
@@ -518,6 +794,23 @@ async def enter_event(
                 f"not {event.format.value}."
             ),
         )
+
+    # Ordering: the format 400 first, then the status 409 — the permanent refusal
+    # before the transient one. It is a judgment call, not a forced move (asking
+    # "is registration open at all?" before "is this event's shape enterable?" is
+    # defensible too), so here is the reason. A 409 means "not now", and invites
+    # the caller back once the tournament is published — but a doubles event will
+    # never be enterable through this route, in any status, so a caller sent away
+    # to retry would only be refused again, this time with the 400 they should
+    # have been given in the first place. Answer with the fact that will not
+    # change. It also keeps one clean rule for the whole handler: every "this
+    # request cannot work" check precedes every "the state conflicts" check, so
+    # both 409s (this one, and the already-entered one at commit) sit last.
+    #
+    # Refusing HERE, before the INSERT (rather than inserting and rolling back), is
+    # what makes "no row is written" a property of the code and not of a transaction
+    # that happened to abort.
+    _enforce_registration_open(tournament)
 
     entry = TournamentEntry(event_id=event.id, user_id=current_user.id)
     db.add(entry)
@@ -562,25 +855,66 @@ async def withdraw_from_event(
     uniqueness guard is a *partial* index over active entries only, the player is
     free to enter the same event again afterwards.
 
-    You may only withdraw your own entry; someone else's is a `403`. Withdrawing
-    an entry that is already withdrawn is a no-op, not an error: this is `DELETE`,
-    and asking for a state the resource is already in is a success.
+    You may only withdraw your own entry; someone else's is a `403`.
+
+    Withdrawal, like entry, is open only while the tournament is **`published`** —
+    its status *is* its registration window (ADR-0017). Withdrawing an *active*
+    entry from a `live` tournament would pull a player out from under a draw cut
+    from the field they were part of, so it is a `409`, as it is for a `draft`
+    tournament (registration has not opened) and an `archived` one (it is over).
+    A `409`, not a `403`: you are permitted, the tournament is simply in the wrong
+    state.
+
+    **Withdrawing an entry that is already withdrawn is a `204` in every status**,
+    `live` and `archived` included — a no-op, not an error: this is `DELETE`, and
+    asking for a state the resource is already in is a success. The status gate is
+    on the state *change*, not on the call; an entry that is already withdrawn has
+    nothing left to lock.
     """
     # Load-then-authorize, as everywhere else here: the tournament, the event
     # under it, and the entry under that event must all exist before ownership is
     # considered — so a wrong (tournament, event, entry) triple is a 404, and 403
     # means "this entry is real, but it isn't yours".
-    await _get_tournament_or_404(db, tournament_id)
+    #
+    # The tournament comes back locked, and first — the same lock, in the same
+    # order, as the enter and transition routes take (which is what keeps the three
+    # of them free of any deadlock cycle). Without it, a withdrawal could pass the
+    # ``published`` gate and commit *after* the tournament went live, pulling a
+    # player out of the very field the draw is cut from.
+    tournament = await _get_tournament_for_update_or_404(db, tournament_id)
     event = await _get_event_or_404(db, tournament_id, event_id)
     entry = await _get_entry_or_404(db, event.id, entry_id)
     if entry.user_id != current_user.id:
         # The ``tournament.enter`` gate says "may self-register at all"; it cannot
         # say *whose* entry this is. Withdrawing another player from an event is a
         # director's job (#784), on a different endpoint with its own permission.
+        #
+        # Ordering: this 403 precedes the status 409 below, so withdrawing someone
+        # else's entry from a *live* tournament is "not yours", not "not now".
+        # "Not yours" is the fact that will not change: come back when the
+        # tournament is published and the entry is still not theirs to withdraw,
+        # whereas a 409 would invite exactly that pointless retry. Same rule the
+        # 404s above follow, and the same rule the enter route follows with its
+        # doubles 400 — every permanent refusal is answered before any transient
+        # one.
         raise HTTPException(
             status_code=403,
             detail="You can only withdraw your own entry.",
         )
+
+    # The gate is on the state CHANGE, not on the call (ADR-0017). Going live locks
+    # the field the draw is cut from, so flipping an ``entered`` entry to
+    # ``withdrawn`` outside the registration window is refused — the same window, and
+    # the same 409, the enter route asks about, which is why both ask the one
+    # enforcer rather than each restating what "open" means.
+    #
+    # But an entry that is *already* withdrawn has nothing left to lock, so it is
+    # deliberately not gated: this ``entered`` guard is what preserves the idempotent
+    # 204 that ADR-0016 designed, in ``live`` and ``archived`` too. Drop it and this
+    # route starts answering 409 to a request that would change nothing — a conflict
+    # with no conflict in it.
+    if entry.status is TournamentEntryStatus.entered:
+        _enforce_registration_open(tournament)
 
     # Idempotent by construction: withdrawing is an assignment, not a decrement,
     # so applying it to an already-withdrawn entry writes the value it already

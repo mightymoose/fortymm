@@ -4,6 +4,7 @@ import { cn } from '@/lib/utils'
 import { myEntrant } from '../../data/helpers'
 import { FORMAT_OPTIONS } from '../../data/options'
 import type { Entrant, TournamentEvent } from '../../data/types'
+import { LeadReason } from './lead-reason'
 
 /**
  * How many entrants a card lists before it collapses the rest into a "+N more"
@@ -198,22 +199,23 @@ const RosterBody = ({
 
     case 'empty':
       return (
-        <p className="mt-1.5 text-[13px] text-[color:var(--fg-3)]">
-          <span className="font-medium text-[color:var(--fg-2)]">
-            No one has entered yet.
-          </span>{' '}
-          Players who enter this event will be listed here.
-        </p>
+        <LeadReason
+          className="mt-1.5"
+          lead="No one has entered yet."
+          reason="Players who enter this event will be listed here."
+        />
       )
 
     case 'entry-closed':
       return (
-        <p className="mt-1.5 text-[13px] text-[color:var(--fg-3)]">
-          <span className="font-medium text-[color:var(--fg-2)]">
-            {state.formatLabel} events can&apos;t be entered yet.
-          </span>{' '}
-          Entry is open for singles only, so no one can sign up for this event.
-        </p>
+        <LeadReason
+          className="mt-1.5"
+          // A straight apostrophe, as the JSX `&apos;` this replaced rendered: the
+          // roster copy is asserted verbatim (`entrants-list.page.tsx`, and the
+          // e2e spec), and a typographic ’ would be a different string.
+          lead={`${state.formatLabel} events can't be entered yet.`}
+          reason="Entry is open for singles only, so no one can sign up for this event."
+        />
       )
 
     default: {

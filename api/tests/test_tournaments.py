@@ -10,23 +10,34 @@ carry the double-submit CSRF token via ``CSRF_EVENT_HOOKS`` (baked into both the
 ``api_client`` fixture and ``make_client``).
 """
 
+import asyncio
 import uuid
 from collections.abc import AsyncIterator, Sequence
 from typing import Any
 
 import pytest
 import pytest_asyncio
+from fastapi import HTTPException
 from httpx import AsyncClient
-from sqlalchemy import select, text
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
+from sqlalchemy import func, select, text
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from app.models import (
     Tournament,
     TournamentEntry,
     TournamentEntryStatus,
+    TournamentStatus,
     User,
 )
-from app.tournaments import TOURNAMENT_CREATE, TOURNAMENT_VIEW, list_tournaments
+from app.schemas.tournament import TournamentTransitionCreate
+from app.tournaments import (
+    TOURNAMENT_CREATE,
+    TOURNAMENT_VIEW,
+    _get_tournament_for_update_or_404,
+    _get_tournament_or_404,
+    create_tournament_transition,
+    list_tournaments,
+)
 from tests._helpers import (
     counted_statements,
     grant_permissions,
@@ -133,15 +144,50 @@ async def test_create_tournament_returns_201(
     assert body["created_by_user_id"] == str(user.id)
 
 
-async def test_create_with_published_status_emits_wire_value(
+async def test_create_is_born_draft_from_the_column_default(
     authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
 ):
+    """A tournament created through the normal route is ``draft`` — and it is the
+    *column's* server default that says so, not a schema default: the create
+    schema has no ``status`` field to default (ADR-0017)."""
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+
+    assert created["status"] == "draft"
+    # Read the row back too, not just the response: the response is serialized
+    # from the refreshed ORM object, so this is what actually landed in the column.
+    row = (
+        await db_session.execute(
+            select(Tournament).where(Tournament.id == uuid.UUID(created["id"]))
+        )
+    ).scalar_one()
+    assert row.status is TournamentStatus.draft
+
+
+async def test_create_with_a_status_is_422_and_creates_nothing(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+):
+    """Creating a tournament that is born ``live`` (or born anything) is refused.
+
+    ``status`` is not on the create schema, and the schema is ``extra="forbid"``,
+    so the field is rejected at the boundary rather than obeyed — the lifecycle
+    starts at ``draft`` and moves only across a guarded edge. It was accepted
+    before #783: this request used to answer 201 with a ``published`` tournament.
+    """
     client, _ = authed_client
     response = await client.post(
         "/v1/tournaments", json=_create_payload(status="published")
     )
-    assert response.status_code == 201
-    assert response.json()["status"] == "published"
+
+    assert response.status_code == 422, response.text
+    # Refused at the boundary means no row: a 422 that had already written one
+    # would be a 422 in name only.
+    count = (
+        await db_session.execute(select(func.count()).select_from(Tournament))
+    ).scalar_one()
+    assert count == 0
 
 
 async def test_list_includes_created_tournament_with_can_edit(
@@ -200,7 +246,6 @@ async def test_patch_by_creator_updates_fields(
         f"/v1/tournaments/{created['id']}",
         json={
             "name": "Bay Area Major",
-            "status": "live",
             "start_date": "2026-08-01",
             "end_date": "2026-08-02",
             "address": new_address,
@@ -209,10 +254,11 @@ async def test_patch_by_creator_updates_fields(
     assert response.status_code == 200
     body = response.json()
     assert body["name"] == "Bay Area Major"
-    assert body["status"] == "live"
     assert body["start_date"] == "2026-08-01"
     assert body["end_date"] == "2026-08-02"
     assert body["address"] == new_address
+    # Editing the tournament does not touch where it is in its lifecycle.
+    assert body["status"] == "draft"
 
 
 async def test_patch_explicit_null_name_returns_422(
@@ -226,15 +272,29 @@ async def test_patch_explicit_null_name_returns_422(
     assert response.status_code == 422
 
 
-async def test_patch_explicit_null_status_returns_422(
+@pytest.mark.parametrize("value", ["live", "published", None], ids=str)
+async def test_patch_with_a_status_is_422_and_leaves_the_status_unchanged(
     authed_client: tuple[AsyncClient, User],
+    value: str | None,
 ):
+    """``PATCH`` cannot move the lifecycle — with any value, including ``null``.
+
+    ``status`` is not a field of the update schema at all (ADR-0017), so
+    ``extra="forbid"`` refuses it: the transitions endpoint is the only door. It
+    was an ordinary optional field before #783, and this same request answered 200
+    with a ``live`` tournament — which is why the status is re-read afterwards
+    rather than trusted to the 422: a handler that wrote the value and *then*
+    failed would pass a status-code-only assertion.
+    """
     client, _ = authed_client
     created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+
     response = await client.patch(
-        f"/v1/tournaments/{created['id']}", json={"status": None}
+        f"/v1/tournaments/{created['id']}", json={"status": value}
     )
-    assert response.status_code == 422
+
+    assert response.status_code == 422, response.text
+    assert await _status_of(client, created["id"]) == "draft"
 
 
 async def test_patch_explicit_null_address_returns_422(
@@ -847,3 +907,348 @@ async def test_non_creator_with_permission_can_read_but_not_modify(
                 f"/v1/tournaments/{target['id']}/events/{target_event['id']}"
             )
         ).status_code == 403
+
+
+# ----- lifecycle transitions ------------------------------------------------
+#
+# The three legal edges, written out here rather than imported from
+# ``app.tournaments.LEGAL_TRANSITIONS``: a test that reads its expectations out of
+# the table under test would agree with that table however wrong it got. These are
+# the edges ADR-0017 decided on, stated independently.
+# A list, in lifecycle order, so it can be parametrized over directly: a set would
+# hand pytest its three cases in whatever order the enum members happened to hash in
+# that process.
+_LEGAL_EDGES = [
+    (TournamentStatus.draft, TournamentStatus.published),
+    (TournamentStatus.published, TournamentStatus.live),
+    (TournamentStatus.live, TournamentStatus.archived),
+]
+# Every ordered pair of the four statuses is either legal or a conflict, so the
+# two lists below are built as a partition of all 4x4 = 16 — including the four
+# self-transitions, which ADR-0017 makes conflicts rather than idempotent no-ops.
+# Deriving the illegal thirteen by subtraction (rather than typing them out) is
+# what guarantees the matrix has no hole: a new status added to the enum lands in
+# one list or the other automatically.
+_ALL_EDGES = [(a, b) for a in TournamentStatus for b in TournamentStatus]
+_ILLEGAL_EDGES = [edge for edge in _ALL_EDGES if edge not in _LEGAL_EDGES]
+# The thirteen refusals split into two shapes of sentence, so they are split into
+# two lists here. Same partition-by-subtraction discipline: a self-transition is
+# one whose ends are equal, and everything else is what's left.
+_SELF_EDGES = [edge for edge in _ILLEGAL_EDGES if edge[0] == edge[1]]
+_NON_SELF_ILLEGAL_EDGES = [edge for edge in _ILLEGAL_EDGES if edge[0] != edge[1]]
+
+
+def _edge_params(
+    edges: Sequence[tuple[TournamentStatus, TournamentStatus]],
+) -> list[Any]:
+    """``(start, target)`` cases named ``draft_to_published``, so a failure in the
+    matrix names the edge that broke rather than an index."""
+    return [
+        pytest.param(start, target, id=f"{start.value}_to_{target.value}")
+        for start, target in edges
+    ]
+
+
+async def _set_status(
+    db_session: AsyncSession, tournament_id: str, status: TournamentStatus
+) -> None:
+    """Put a tournament into ``status`` by writing the column directly.
+
+    A test cannot ask the API for a ``live`` starting point: the transition route
+    is the only thing that moves a tournament, and reaching ``live`` through it
+    means walking the very edges under test — so a bug that wrongly *allowed* an
+    edge would quietly build its own precondition. Writing the row states the
+    precondition instead of assuming it. (It also survives #783/1b, which removes
+    ``status`` from the create schema.)
+    """
+    tournament = (
+        await db_session.execute(
+            select(Tournament).where(Tournament.id == uuid.UUID(tournament_id))
+        )
+    ).scalar_one()
+    tournament.status = status
+    await db_session.commit()
+
+
+async def _status_of(client: AsyncClient, tournament_id: str) -> str:
+    """Re-read the persisted status through the API.
+
+    Deliberately not through the ``db_session`` fixture: the route commits on its
+    own session, so the seeded row sitting in ``db_session``'s identity map would
+    hand back a stale value and a genuinely-persisted move would read as a failure.
+    """
+    response = await client.get(f"/v1/tournaments/{tournament_id}")
+    assert response.status_code == 200
+    status_value: str = response.json()["status"]
+    return status_value
+
+
+@pytest.mark.parametrize(("start", "target"), _edge_params(_LEGAL_EDGES))
+async def test_transition_legal_edge_moves_the_tournament_and_persists(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    start: TournamentStatus,
+    target: TournamentStatus,
+):
+    """Each of the three forward edges is accepted, answers with the moved
+    tournament, and the move is still there on the next read."""
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    await _set_status(db_session, created["id"], start)
+
+    response = await client.post(
+        f"/v1/tournaments/{created['id']}/transitions", json={"to": target.value}
+    )
+
+    assert response.status_code == 201, response.text
+    assert response.json()["status"] == target.value
+    assert await _status_of(client, created["id"]) == target.value
+
+
+@pytest.mark.parametrize(("start", "target"), _edge_params(_ILLEGAL_EDGES))
+async def test_transition_illegal_edge_conflicts_and_leaves_status_unchanged(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    start: TournamentStatus,
+    target: TournamentStatus,
+):
+    """The other thirteen ordered pairs are all refused — backwards edges, skipped
+    stages, anything out of the terminal ``archived``, and every self-transition —
+    and the tournament is left exactly where it was."""
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    await _set_status(db_session, created["id"], start)
+
+    response = await client.post(
+        f"/v1/tournaments/{created['id']}/transitions", json={"to": target.value}
+    )
+
+    assert response.status_code == 409, response.text
+    assert await _status_of(client, created["id"]) == start.value
+    # What the refusal *says* is pinned by the two copy tests below, one per shape
+    # of sentence. Asserting here merely that the detail mentions both ends would
+    # be vacuous for the four self-transitions, where both ends are the same word.
+
+
+@pytest.mark.parametrize(("start", "target"), _edge_params(_SELF_EDGES))
+async def test_self_transition_says_the_tournament_is_already_in_that_status(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    start: TournamentStatus,
+    target: TournamentStatus,
+):
+    """Re-asserting the status a tournament already holds is refused with the fact
+    the caller is missing — that somebody already did it — not with a tautology.
+
+    This is the refusal players actually meet: a second tab clicking "Start
+    tournament" on a tournament that has since gone live sends ``live → live``.
+    "This tournament is live; it cannot be moved to live" is true, unhelpful, and
+    reads as nonsense under the toast title "Couldn't start the tournament".
+    """
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    await _set_status(db_session, created["id"], start)
+
+    response = await client.post(
+        f"/v1/tournaments/{created['id']}/transitions", json={"to": target.value}
+    )
+
+    assert response.status_code == 409, response.text
+    detail = response.json()["detail"]
+    assert detail == f"This tournament is already {start.value}."
+    # The tautological shape is gone, not merely reworded around.
+    assert "cannot be moved" not in detail
+
+
+@pytest.mark.parametrize(("start", "target"), _edge_params(_NON_SELF_ILLEGAL_EDGES))
+async def test_non_self_illegal_transition_names_both_ends_of_the_edge(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    start: TournamentStatus,
+    target: TournamentStatus,
+):
+    """The other nine refusals — backwards edges, skipped stages, anything out of
+    the terminal ``archived`` — keep the two-ended sentence.
+
+    A caller asking for a genuinely illegal jump needs both ends named: the target
+    alone doesn't say why it was refused, because the same target is legal from a
+    different status.
+    """
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    await _set_status(db_session, created["id"], start)
+
+    response = await client.post(
+        f"/v1/tournaments/{created['id']}/transitions", json={"to": target.value}
+    )
+
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"] == (
+        f"This tournament is {start.value}; it cannot be moved to {target.value}."
+    )
+
+
+async def test_transition_by_non_owner_is_403_before_the_edge_is_judged(
+    db_session: AsyncSession,
+    authed_client: tuple[AsyncClient, User],
+):
+    """A permitted non-creator cannot move someone else's tournament.
+
+    The requested edge is an *illegal* one (a self-transition), which is what makes
+    this a test of ordering and not just of the code: if the handler judged the
+    edge before ownership it would answer 409, so 403 proves the ownership check
+    short-circuits first — a stranger learns nothing about what state a tournament
+    they cannot touch is in.
+    """
+    owner_client, _ = authed_client
+    target = (await owner_client.post("/v1/tournaments", json=_create_payload())).json()
+
+    async with make_client() as other_client:
+        other = await start_session(other_client, db_session)
+        await _grant_tournament_perms(db_session, other)
+
+        response = await other_client.post(
+            f"/v1/tournaments/{target['id']}/transitions", json={"to": "draft"}
+        )
+
+        assert response.status_code == 403
+        # And a *legal* edge is refused just the same — it isn't their tournament.
+        assert (
+            await other_client.post(
+                f"/v1/tournaments/{target['id']}/transitions", json={"to": "published"}
+            )
+        ).status_code == 403
+        assert await _status_of(owner_client, target["id"]) == "draft"
+
+
+async def test_transition_on_missing_tournament_returns_404(
+    authed_client: tuple[AsyncClient, User],
+):
+    """A tournament that doesn't exist is a 404 — the row is loaded before either
+    ownership or the edge gets a say."""
+    client, _ = authed_client
+    response = await client.post(
+        "/v1/tournaments/00000000-0000-0000-0000-000000000000/transitions",
+        json={"to": "published"},
+    )
+    assert response.status_code == 404
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        pytest.param({"to": "cancelled"}, id="unknown_status"),
+        pytest.param({"to": None}, id="null_status"),
+        pytest.param({}, id="missing_to"),
+        pytest.param({"to": "published", "from": "draft"}, id="extra_field"),
+    ],
+)
+async def test_transition_with_an_invalid_body_returns_422(
+    authed_client: tuple[AsyncClient, User],
+    body: dict[str, Any],
+):
+    """``to`` is a ``TournamentStatus``, so a status outside the enum never reaches
+    the edge table — it is a 422 at the boundary. ``extra="forbid"`` rejects a
+    ``from`` as well: the tournament's current status is the server's to read, not
+    the client's to assert."""
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+
+    response = await client.post(
+        f"/v1/tournaments/{created['id']}/transitions", json=body
+    )
+
+    assert response.status_code == 422
+    # A 422 alone would pass against a handler that wrote the status and only then
+    # validated. Refusing at the boundary has to mean nothing moved.
+    assert await _status_of(client, created["id"]) == "draft"
+
+
+# ----- the row lock behind the lifecycle -------------------------------------
+#
+# A tournament's status is read by one statement and overwritten by another, and
+# Postgres runs READ COMMITTED — so without a lock the two sit in different
+# instants and every "the status decides this" rule has a window under it. The
+# tests below pin the lock two ways: that it is *asked for* (and only on the
+# writing paths), and that it *works* (two real sessions, one genuinely blocking
+# on the other).
+
+
+async def test_only_the_mutating_loader_takes_the_row_lock(
+    db_session: AsyncSession,
+    engine: AsyncEngine,
+    authed_client: tuple[AsyncClient, User],
+):
+    """``_get_tournament_for_update_or_404`` emits ``SELECT … FOR UPDATE``;
+    ``_get_tournament_or_404`` — the loader the read routes use — does not.
+
+    Both halves are load-bearing. A locking loader that quietly stopped locking
+    would reopen the entry-after-go-live race in silence; and a lock added to the
+    *read* loader would make every page view queue behind (and hold up) writers,
+    for a reader that has nothing to serialize against.
+    """
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    tournament_id = uuid.UUID(created["id"])
+
+    async with counted_statements(engine) as (session, statements):
+        await _get_tournament_for_update_or_404(session, tournament_id)
+    assert any("FOR UPDATE" in s for s in statements), statements
+
+    async with counted_statements(engine) as (session, statements):
+        await _get_tournament_or_404(session, tournament_id)
+    assert not any("FOR UPDATE" in s for s in statements), statements
+
+
+async def test_two_identical_transitions_racing_leave_exactly_one_winner(
+    db_session: AsyncSession,
+    engine: AsyncEngine,
+    authed_client: tuple[AsyncClient, User],
+):
+    """Two identical ``draft → published`` requests fired at once: one 201, one 409.
+
+    ADR-0017 makes re-asserting a status a *conflict*, not an idempotent no-op —
+    "the only caller that sends it is a stale one". Unlocked, that guarantee held
+    only when nobody was in a hurry: both requests would read ``draft``, both find
+    the edge legal, and both answer 201, so a client could be told it published a
+    tournament somebody else had already published. The row lock serializes them —
+    the loser blocks, re-reads the status the winner *committed*, and gets the 409
+    it is owed.
+
+    Driven on two separate sessions (the handler called directly, as
+    ``test_concurrent_accept_and_counter_serialize`` does for matches): the shared
+    ``db_session`` override runs both requests on one connection, where a lock
+    cannot block and the race cannot appear.
+    """
+    client, owner = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    tournament_id = uuid.UUID(created["id"])
+    owner_id = owner.id
+    make_session = async_sessionmaker(engine, expire_on_commit=False)
+
+    async def publish() -> int | str:
+        async with make_session() as session:
+            actor = (
+                await session.execute(select(User).where(User.id == owner_id))
+            ).scalar_one()
+            try:
+                moved = await create_tournament_transition(
+                    tournament_id,
+                    TournamentTransitionCreate(to=TournamentStatus.published),
+                    session,
+                    actor,
+                )
+                return moved.status.value
+            except HTTPException as exc:
+                return exc.status_code
+
+    outcomes = await asyncio.gather(publish(), publish())
+
+    assert sorted(outcomes, key=str) == [409, "published"], outcomes
+    async with make_session() as verify:
+        final = (
+            await verify.execute(
+                select(Tournament).where(Tournament.id == tournament_id)
+            )
+        ).scalar_one()
+        assert final.status is TournamentStatus.published

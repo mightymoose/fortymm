@@ -15,6 +15,7 @@ import {
   mockEventWithdrawEndpoint,
   mockTournamentCreateEndpoint,
   mockTournamentDetailEndpoint,
+  mockTournamentTransitionEndpoint,
   mockTournamentUpdateEndpoint,
   mockTournamentsListEndpoint,
 } from '@/mocks/endpoints/tournaments/tournaments.endpoint'
@@ -25,17 +26,31 @@ import {
 } from '@/mocks/factories/tournaments/tournament.factory'
 import { server } from '@/mocks/server'
 import { resetTournamentsStore } from '@/mocks/tournaments-store'
+import { ApiError } from '@/api/client'
 import type { components } from '@/api/schema'
 import {
   useCreateTournament,
   useEnterEvent,
   useTournament,
   useTournaments,
+  useTransitionTournament,
   useUpdateTournament,
   useWithdrawEntry,
 } from './api'
+import { LIFECYCLE_EDGE, type LifecycleEdge } from './lifecycle'
 
 type TournamentUpdate = components['schemas']['TournamentUpdate']
+
+/** The edge OUT of `from` — which is what the transition mutation takes: an edge,
+ * not a bare target status. It carries both the `to` for the body and the verb the
+ * failure toast names the click with, and those are two facts about one edge (there
+ * is exactly one lifecycle table). This is also how a real caller gets one: the
+ * header renders the edge its tournament's status offers. */
+function edgeFrom(from: 'draft' | 'published' | 'live'): LifecycleEdge {
+  const edge = LIFECYCLE_EDGE[from]
+  if (!edge) throw new Error(`no edge out of ${from}`)
+  return edge
+}
 
 vi.mock('sonner', async () => {
   const actual = await vi.importActual<typeof import('sonner')>('sonner')
@@ -113,9 +128,10 @@ describe('useCreateTournament', () => {
 
     const { result } = renderHook(() => useCreateTournament())
 
+    // No `status`: `TournamentCreate` has no such field (ADR-0017) — the server
+    // makes it a draft.
     const created = await result.current.mutateAsync({
       name: 'Autumn Cup',
-      status: 'draft',
       address: {
         venue: 'Oakland Arena',
         street: '7000 Coliseum Way',
@@ -146,10 +162,12 @@ function setupClient() {
   return { invalidateSpy, wrapper }
 }
 
+// A tournament-level edit, exactly as `tournamentToUpdateBody` builds it: no
+// `status` — the patch schema has no such field (ADR-0017), and the lifecycle
+// moves only through `POST /v1/tournaments/{id}/transitions`.
 const updatePatch: TournamentUpdate = {
   name: 'Renamed Open',
   description: 'Updated.',
-  status: 'published',
   start_date: '2026-06-13',
   end_date: '2026-06-14',
   address: {
@@ -212,6 +230,194 @@ describe('useUpdateTournament', () => {
         description: 'You do not have permission to edit this tournament.',
       }),
     )
+  })
+})
+
+describe('useTransitionTournament', () => {
+  /** The moved tournament, as the API answers a 201: a bare `TournamentRead`. */
+  function movedTo(status: 'published' | 'live' | 'archived') {
+    const { events, ...read } = buildTournamentDetailRead({ id: 't-1', status })
+    void events
+    return read
+  }
+
+  it('posts { to } to the transitions resource — never a status-carrying PATCH', async () => {
+    let seen: { url: string; body: unknown } | null = null
+    mockTournamentTransitionEndpoint(server, async ({ request }) => {
+      seen = { url: request.url, body: await request.json() }
+      return HttpResponse.json(movedTo('published'), { status: 201 })
+    })
+
+    const { result } = renderHook(() => useTransitionTournament('t-1'))
+    const moved = await result.current.mutateAsync(edgeFrom('draft'))
+
+    expect(seen!.url).toContain('/v1/tournaments/t-1/transitions')
+    // `to` alone on the WIRE — the mutation takes the whole edge, but only its
+    // target is sent: the tournament already knows where it *is*, and a stale
+    // client that also sent `from` would only be reporting what it believed
+    // (ADR-0017).
+    expect(seen!.body).toEqual({ to: 'published' })
+    expect(moved.status).toBe('published')
+  })
+
+  it('invalidates the list and the detail — the list cards render the status pill too', async () => {
+    mockTournamentTransitionEndpoint(server, () =>
+      HttpResponse.json(movedTo('live'), { status: 201 }),
+    )
+    const { invalidateSpy, wrapper } = setupClient()
+
+    const { result } = renderHookRaw(() => useTransitionTournament('t-1'), {
+      wrapper,
+    })
+    result.current.mutate(edgeFrom('published'))
+
+    await waitForRaw(() => expect(result.current.isSuccess).toBe(true))
+
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['tournaments'] })
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: ['tournaments', 't-1'],
+    })
+  })
+
+  // The stale-tab race (ADR-0017's reason for 409-ing a re-assertion): tab A
+  // published; THIS tab still reads `draft`, so it still offers Publish. The
+  // refusal has to be VISIBLE — a swallowed 409 is a button that does nothing —
+  // and the verb names the edge the user clicked, not the wire call.
+  it('surfaces an illegal-edge 409 as an error toast naming what they clicked', async () => {
+    // The server sees `published → published` — a self-transition — so it answers
+    // the sentence that says what happened, not the tautology naming both ends.
+    mockTournamentTransitionEndpoint(server, () =>
+      HttpResponse.json(
+        { detail: 'This tournament is already published.' },
+        { status: 409 },
+      ),
+    )
+    const { wrapper } = setupClient()
+
+    const { result } = renderHookRaw(() => useTransitionTournament('t-1'), {
+      wrapper,
+    })
+    // The edge this stale tab is still offering: it reads `draft`, so it offers
+    // Publish — which the server has already been published out from under.
+    result.current.mutate(edgeFrom('draft'))
+
+    await waitForRaw(() => expect(result.current.isError).toBe(true))
+
+    expect(toast.error).toHaveBeenCalledWith(
+      "Couldn't publish the tournament",
+      expect.objectContaining({
+        // The description is the server's detail, passed through — this is the
+        // sentence the stale tab is there to read.
+        description: 'This tournament is already published.',
+      }),
+    )
+    // A 409 here is a genuine refusal — nothing moved. Unlike the entry 409 (which
+    // means "you are already in"), it must NOT be downgraded to an info note.
+    expect(toast.info).not.toHaveBeenCalled()
+  })
+
+  it('invalidates on the 409 too, so the stale view catches up to the status it was refused', async () => {
+    mockTournamentTransitionEndpoint(server, () =>
+      HttpResponse.json(
+        { detail: 'This tournament is already published.' },
+        { status: 409 },
+      ),
+    )
+    const { invalidateSpy, wrapper } = setupClient()
+
+    const { result } = renderHookRaw(() => useTransitionTournament('t-1'), {
+      wrapper,
+    })
+    result.current.mutate(edgeFrom('draft'))
+
+    await waitForRaw(() => expect(result.current.isError).toBe(true))
+
+    // Without this, the tab keeps offering Publish on a tournament the server has
+    // just told it is already published — the same freeze #943 found on entries.
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['tournaments'] })
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: ['tournaments', 't-1'],
+    })
+  })
+
+  it('names the edge in the failure toast: ending a tournament reads as ending it', async () => {
+    mockTournamentTransitionEndpoint(server, () =>
+      HttpResponse.json({ detail: 'Server error.' }, { status: 500 }),
+    )
+    const { wrapper } = setupClient()
+
+    const { result } = renderHookRaw(() => useTransitionTournament('t-1'), {
+      wrapper,
+    })
+    // The edge out of `live` — "End tournament". Its verb is what the toast says.
+    result.current.mutate(edgeFrom('live'))
+
+    await waitForRaw(() => expect(result.current.isError).toBe(true))
+
+    expect(toast.error).toHaveBeenCalledWith(
+      "Couldn't end the tournament",
+      expect.objectContaining({ description: 'Server error.' }),
+    )
+  })
+})
+
+// The lifecycle end to end through the stateful dev store, which enforces the
+// SAME edge table as the server: a mock that let an illegal edge through would
+// let a broken UI look fine in dev and in vitest alike.
+describe('the lifecycle, against the stateful mock store', () => {
+  beforeEach(() => resetTournamentsStore())
+
+  const DRAFT = 'summer-slam-2026' // seeded `draft`, owned by the dev user
+
+  it('walks draft → published → live → archived, and the detail reads back each move', async () => {
+    const { wrapper } = setupClient()
+    const { result } = renderHookRaw(
+      () => ({
+        detail: useTournament(DRAFT),
+        move: useTransitionTournament(DRAFT),
+      }),
+      { wrapper },
+    )
+
+    await waitForRaw(() => expect(result.current.detail.data).toBeTruthy())
+    expect(result.current.detail.data!.status).toBe('draft')
+
+    // Each step takes the edge the status it is standing on offers — which is
+    // exactly what the header hands the mutation.
+    await act(() => result.current.move.mutateAsync(edgeFrom('draft')))
+    await waitForRaw(() =>
+      expect(result.current.detail.data!.status).toBe('published'),
+    )
+
+    await act(() => result.current.move.mutateAsync(edgeFrom('published')))
+    await waitForRaw(() => expect(result.current.detail.data!.status).toBe('live'))
+
+    await act(() => result.current.move.mutateAsync(edgeFrom('live')))
+    await waitForRaw(() =>
+      expect(result.current.detail.data!.status).toBe('archived'),
+    )
+  })
+
+  it('refuses to skip a stage — draft → live is a 409, and the status does not move', async () => {
+    const { wrapper } = setupClient()
+    const { result } = renderHookRaw(
+      () => ({
+        detail: useTournament(DRAFT),
+        move: useTransitionTournament(DRAFT),
+      }),
+      { wrapper },
+    )
+
+    await waitForRaw(() => expect(result.current.detail.data).toBeTruthy())
+
+    // The published→live edge, posted at a tournament that is still a DRAFT: a
+    // stale tab holding the edge it last saw. `to: 'live'` from `draft` skips a
+    // stage, and the server refuses it.
+    result.current.move.mutate(edgeFrom('published'))
+    await waitForRaw(() => expect(result.current.move.isError).toBe(true))
+
+    expect((result.current.move.error as ApiError).status).toBe(409)
+    await waitForRaw(() => expect(result.current.detail.data!.status).toBe('draft'))
   })
 })
 
@@ -306,6 +512,57 @@ describe('useEnterEvent', () => {
     )
     expect(toast.error).not.toHaveBeenCalled()
   })
+
+  // The OTHER 409 (ADR-0017), and the reason a bare `status === 409` check is not
+  // enough any more: `POST …/entries` refuses a CLOSED REGISTRATION WINDOW with a
+  // 409 too. The stale tab is the director's fault, not the player's — they had
+  // the page open, the director started the tournament from another tab, and the
+  // Enter button they are looking at is now a button the server refuses.
+  //
+  // Telling them "You were already entered in this event" there is FALSE: they are
+  // not entered, they cannot enter, and the card is about to say so. That is the
+  // bug these three rows pin — they all took the benign path before.
+  it.each([
+    {
+      status: 'live',
+      detail: 'This tournament is already under way, so its entries are locked.',
+    },
+    {
+      status: 'archived',
+      detail: 'This tournament has ended, so its events can no longer be entered.',
+    },
+    {
+      status: 'draft',
+      detail:
+        'This tournament has not been published yet, so its events are not open for entry.',
+    },
+  ])(
+    'reports a closed-window 409 ($status) as the refusal it is — never as "already entered"',
+    async ({ detail }) => {
+      // The server's own words (`_registration_closed_detail`, `api/app/tournaments.py`).
+      mockEventEnterEndpoint(server, () =>
+        HttpResponse.json({ detail }, { status: 409 }),
+      )
+      const { wrapper } = setupClient()
+
+      const { result } = renderHookRaw(() => useEnterEvent('t-1'), { wrapper })
+      result.current.mutate('ev-1')
+
+      await waitForRaw(() => expect(result.current.isError).toBe(true))
+
+      // Our title (entries are closed — the fact), the server's sentence for the
+      // reason: it is the only side that knows WHICH closed status this is, and
+      // "not yet" and "too late" are different things to be told.
+      expect(toast.error).toHaveBeenCalledWith(
+        'Entries are closed for this event',
+        expect.objectContaining({ description: detail }),
+      )
+      // THE assertion. The benign note is for the duplicate-entry 409 alone; firing
+      // it here would tell a player who is NOT entered that they are — over a card
+      // that (once the settle-reconcile lands) shows the lock.
+      expect(toast.info).not.toHaveBeenCalled()
+    },
+  )
 
   it('still surfaces a GENUINE failure (a 400, a 5xx) as an error toast', async () => {
     // The benign-409 carve-out must not become a swallow-everything: a doubles

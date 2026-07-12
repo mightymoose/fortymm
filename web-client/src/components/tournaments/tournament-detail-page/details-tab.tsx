@@ -5,10 +5,8 @@ import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
-import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 
-import { labelFor } from '../data/options'
-import type { Address, Tournament, TournamentStatus } from '../data/types'
+import type { Address, Tournament } from '../data/types'
 import { Field } from '../field'
 import { SectionHeader } from './section-header'
 
@@ -20,17 +18,17 @@ export interface DetailsTabProps {
   onUpdate: (tournament: Tournament) => void
 }
 
-const STATUS_OPTIONS: { value: TournamentStatus; label: string }[] = [
-  { value: 'draft', label: 'Draft' },
-  { value: 'published', label: 'Published' },
-  { value: 'live', label: 'Live' },
-  { value: 'archived', label: 'Archived' },
-]
-
-/** The Details tab: the creator edits the tournament's name, description,
- * status, and venue address — changes stage in a draft and commit on Save.
- * Everyone else reads the same fields as rendered values (ADR 0015): a viewer
- * gets a rendering of the data, only an editor gets controls.
+/** The Details tab: the creator edits the tournament's name, description, and
+ * venue address — changes stage in a draft and commit on Save. Everyone else
+ * reads the same fields as rendered values (ADR 0015): a viewer gets a rendering
+ * of the data, only an editor gets controls.
+ *
+ * **Status is not here, and is not a field.** It used to be an owner-editable
+ * four-way toggle, which offered every illegal jump the lifecycle forbids
+ * (draft → archived, live → draft). A status moves only across a guarded edge
+ * (ADR-0017), so the one affordance for it is the header's Publish / Start / End
+ * button — a picker of all four statuses would be a picker of mostly-409s. The
+ * status is still *shown* on this page: it is the badge in the hero.
  *
  * Each row hands `Field` both its control and the value it holds, and passes one
  * `readOnly={!canEdit}`; `Field` picks between them and drops the form's
@@ -143,31 +141,6 @@ export const DetailsTab = ({
                   placeholder="Two-day open. USATT-sanctioned."
                   onChange={(e) => update({ description: e.target.value })}
                 />
-              )}
-            </Field>
-            {/* The label, not the wire value: a reader sees "Published", the
-                same word the toggle would have shown as selected. */}
-            <Field
-              label="Status"
-              readOnly={!canEdit}
-              value={labelFor(STATUS_OPTIONS, draft.status, draft.status)}
-            >
-              {(id) => (
-                <ToggleGroup
-                  type="single"
-                  aria-labelledby={`${id}-label`}
-                  value={draft.status}
-                  onValueChange={(v) =>
-                    v && update({ status: v as TournamentStatus })
-                  }
-                  className="w-fit"
-                >
-                  {STATUS_OPTIONS.map((o) => (
-                    <ToggleGroupItem key={o.value} value={o.value}>
-                      {o.label}
-                    </ToggleGroupItem>
-                  ))}
-                </ToggleGroup>
               )}
             </Field>
           </div>

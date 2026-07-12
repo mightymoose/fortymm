@@ -4,15 +4,11 @@ import {
   Hash,
   Layers,
   MapPin,
-  Radio,
-  Rocket,
-  Square,
   Table2,
   Trophy,
   Users,
 } from 'lucide-react'
 
-import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 
 import { ConfirmDeleteDialog } from './confirm-delete-dialog'
@@ -24,6 +20,7 @@ import {
   fmtDateRange,
   genId,
 } from './data/helpers'
+import { lifecycleEdgeFor } from './data/lifecycle'
 import type {
   Tournament,
   TournamentEvent,
@@ -35,6 +32,7 @@ import { DetailsTab } from './tournament-detail-page/details-tab'
 import { EventEditor } from './tournament-detail-page/event-editor'
 import { EventsTab } from './tournament-detail-page/events-tab'
 import { HeroStat } from './tournament-detail-page/hero-stat'
+import { LifecycleActions } from './tournament-detail-page/lifecycle-actions'
 import { ScheduleTab } from './tournament-detail-page/schedule-tab'
 import { TablesTab } from './tournament-detail-page/tables-tab'
 
@@ -117,38 +115,17 @@ export const TournamentDetailPage = ({
             { label: tournament.name },
           ]}
           title={tournament.name}
+          // The lifecycle affordance owns its own writes: it posts the edge to
+          // `…/transitions` rather than routing a status through `onUpdate`, which
+          // patches the tournament's *fields* and carries no status at all
+          // (ADR-0017). `lifecycleEdgeFor` is the same accessor the component
+          // renders from, so a viewer — and an archived tournament, which has no
+          // edge out of it — leaves the action slot genuinely empty (a falsy
+          // action: `PageHeading` wraps a truthy one in a spacing div) rather than
+          // filling it with a wrapper around a component that renders nothing.
           action={
-            // Lifecycle actions mutate the tournament — only the owner sees
-            // them; a non-creator gets the read-only header.
-            canEdit && (
-            <div className="flex items-center gap-2">
-              {tournament.status === 'draft' && (
-                <Button
-                  onClick={() => onUpdate({ ...tournament, status: 'published' })}
-                >
-                  <Rocket size={16} />
-                  Publish
-                </Button>
-              )}
-              {tournament.status === 'published' && (
-                <Button
-                  className="border border-[color:rgba(0,226,154,0.35)] bg-[color:rgba(0,226,154,0.1)] text-[color:var(--serve-500)] hover:bg-[color:rgba(0,226,154,0.18)]"
-                  onClick={() => onUpdate({ ...tournament, status: 'live' })}
-                >
-                  <Radio size={16} />
-                  Start tournament
-                </Button>
-              )}
-              {tournament.status === 'live' && (
-                <Button
-                  variant="ghost"
-                  onClick={() => onUpdate({ ...tournament, status: 'archived' })}
-                >
-                  <Square size={16} />
-                  End tournament
-                </Button>
-              )}
-            </div>
+            lifecycleEdgeFor(tournament) && (
+              <LifecycleActions tournament={tournament} />
             )
           }
         />

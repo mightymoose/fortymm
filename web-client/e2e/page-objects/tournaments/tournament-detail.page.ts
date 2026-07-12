@@ -7,6 +7,15 @@ import {
   type TournamentsStoreOptions,
 } from './tournaments-store'
 
+/** The three lifecycle buttons, by the label the user reads — one per edge of
+ * `draft → published → live → archived` (ADR-0017). Spelled out here rather than
+ * imported from the app's `LIFECYCLE_EDGE` table on purpose: a page object that
+ * read the labels out of the component could not notice them changing. */
+export type LifecycleLabel = 'Publish' | 'Start tournament' | 'End tournament'
+
+/** The status pill's copy — likewise the user's words, not the wire's. */
+export type StatusLabel = 'Draft' | 'Published' | 'Live' | 'Archived'
+
 /**
  * Page object for the tournament detail page's **Events tab** (the default tab,
  * so no navigation beyond the URL).
@@ -40,8 +49,55 @@ export class TournamentDetailPage {
     return this.page.locator('[data-slot=card]').filter({ hasText: eventName })
   }
 
+  // ----- the lifecycle header (ADR-0017) -----------------------------------
+
+  /** The status pill in the detail hero. Its text IS the status, in the words the
+   * user reads ("Published", "Live") — never the wire's `published`. */
+  get statusBadge(): Locator {
+    return this.page.getByTestId('tournament-status-badge')
+  }
+
+  /** The header's lifecycle button for one edge. Exactly one is offered at a
+   * time, and only to an owner. */
+  lifecycleButton(label: LifecycleLabel): Locator {
+    return this.page.getByRole('button', { name: label, exact: true })
+  }
+
+  /** ANY lifecycle button — the locator for the two states in which the header
+   * must offer *none*: an archived tournament (no edge out of it), and a viewer
+   * (every transition is owner-only). `toHaveCount(0)` against a per-edge locator
+   * would only prove the absence of the one edge it named. */
+  get anyLifecycleButton(): Locator {
+    return this.page.getByRole('button', {
+      name: /^(Publish|Start tournament|End tournament)$/,
+    })
+  }
+
+  /** Assert the pill reads exactly this status, and that the header offers
+   * exactly the button that status has an edge for — the two halves of one claim
+   * ("the view moved"), which drift apart if a spec only ever checks the badge. */
+  async expectLifecycle(status: StatusLabel, action: LifecycleLabel | 'none') {
+    await expect(this.statusBadge).toHaveText(status)
+    if (action === 'none') {
+      await expect(this.anyLifecycleButton).toHaveCount(0)
+      return
+    }
+    await expect(this.lifecycleButton(action)).toBeVisible()
+    await expect(this.anyLifecycleButton).toHaveCount(1)
+  }
+
+  // ----- the event card's entry control ------------------------------------
+
   enterButton(eventName: string): Locator {
     return this.page.getByRole('button', { name: `Enter ${eventName}` })
+  }
+
+  /** The closed-window notice on one event card — the designed state the entry
+   * control renders instead of a button when the tournament is not `published`.
+   * Scoped to the card: every event card shows one, so an unscoped testid would
+   * match four. */
+  registrationNotice(eventName: string): Locator {
+    return this.eventCard(eventName).getByTestId('registration-notice')
   }
 
   withdrawButton(eventName: string): Locator {

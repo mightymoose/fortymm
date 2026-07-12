@@ -75,6 +75,26 @@ export const mockTournamentUpdateEndpoint = (
   resolver: TournamentUpdateResolver,
 ) => backend.use(http.patch('*/v1/tournaments/:tournamentId', resolver))
 
+/** Resolver for the transitions endpoint — the moved `TournamentRead` (201), or
+ * an error envelope: 409 (not a legal edge, including re-asserting the status the
+ * tournament already holds), 403 (non-owner), 404 (missing). */
+export type TournamentTransitionResolver = HttpResponseResolver<
+  { tournamentId: string },
+  components['schemas']['TournamentTransitionCreate'],
+  TournamentWriteBody
+>
+
+/** POST /v1/tournaments/{id}/transitions — move the tournament along its
+ * lifecycle (ADR-0017). The lifecycle's ONLY door: `status` is not on the
+ * create/update bodies. */
+export const mockTournamentTransitionEndpoint = (
+  backend: Backend,
+  resolver: TournamentTransitionResolver,
+) =>
+  backend.use(
+    http.post('*/v1/tournaments/:tournamentId/transitions', resolver),
+  )
+
 /** Resolver for the delete endpoint — a 204 with no body, or an error envelope
  * on a 4xx (403 non-creator / 404 already deleted). */
 export type TournamentDeleteResolver = HttpResponseResolver<

@@ -80,10 +80,10 @@ export const EventsTab = ({
               // Self-registration is a *player's* affordance, not the owner's:
               // it is gated on `tournament.enter`, not on `canEdit`. The control
               // decides for itself whether it applies (permission, singles) and
-              // renders nothing when it doesn't.
-              action={
-                <EnterEventControl tournamentId={tournament.id} event={ev} />
-              }
+              // renders nothing when it doesn't — and it takes the whole
+              // tournament, not just its id, because whether registration is open
+              // at all is a property of the tournament's STATUS (ADR-0017).
+              action={<EnterEventControl tournament={tournament} event={ev} />}
             />
           ))}
         </div>

@@ -1,4 +1,10 @@
 import userEvent from '@testing-library/user-event'
+import { HttpResponse } from 'msw'
+
+import { mockTournamentTransitionEndpoint } from '@/mocks/endpoints/tournaments/tournaments.endpoint'
+import { buildTournamentDetailRead } from '@/mocks/factories/tournaments/tournament.factory'
+import { server } from '@/mocks/server'
+import { waitFor } from '@/test/utilities'
 
 import { buildEvent, buildTournament } from './data/seed.factory'
 import { tournamentDetailPagePage } from './tournament-detail-page.page'
@@ -43,16 +49,33 @@ describe('TournamentDetailPage', () => {
     ).toBeNull()
   })
 
-  it('publishes a draft tournament', async () => {
+  // Publish is a REQUEST, and this asserts the request. The predecessor asserted
+  // the `onUpdate` prop spy instead — and stayed green through the whole window in
+  // which Publish did nothing at all: `status` had left `TournamentUpdate`, so the
+  // patch it built silently dropped it. A prop spy proves the component called its
+  // prop; it cannot tell a working button from an inert one. Watch the wire.
+  it('publishes a draft tournament through the transitions endpoint', async () => {
+    const seen: { url: string; body: unknown }[] = []
+    mockTournamentTransitionEndpoint(server, async ({ request }) => {
+      seen.push({ url: request.url, body: await request.json() })
+      const { events, ...read } = buildTournamentDetailRead()
+      void events
+      return HttpResponse.json(read, { status: 201 })
+    })
     const onUpdate = vi.fn()
     tournamentDetailPagePage.render({
-      tournament: buildTournament({ status: 'draft' }),
+      tournament: buildTournament({ id: 't-1', status: 'draft' }),
       onUpdate,
     })
+
     await userEvent.click(tournamentDetailPagePage.getLifecycleButton(/Publish/))
-    expect(onUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({ status: 'published' }),
-    )
+
+    await waitFor(() => expect(seen).toHaveLength(1))
+    expect(seen[0].url).toContain('/v1/tournaments/t-1/transitions')
+    expect(seen[0].body).toEqual({ to: 'published' })
+    // …and NOT through the tournament PATCH: `onUpdate` writes the tournament's
+    // fields, and carries no status (ADR-0017).
+    expect(onUpdate).not.toHaveBeenCalled()
   })
 
   it('opens the event editor and creates a new event', async () => {

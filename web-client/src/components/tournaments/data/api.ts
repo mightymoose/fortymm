@@ -17,6 +17,7 @@ import { toast } from 'sonner'
 import { ApiError, api, unwrap } from '@/api/client'
 import { notifyError } from '@/lib/notify-error'
 import type { components } from '@/api/schema'
+import type { LifecycleEdge } from './lifecycle'
 import type {
   Entrant,
   Pool,
@@ -103,14 +104,19 @@ export function apiToTournament(t: TournamentDetailRead): Tournament {
 
 /** Build the `TournamentCreate` body from a prototype draft (the "New
  * tournament" modal). The modal collects no tables, so `table_catalogue` is the
- * empty array the bare-create endpoint expects. */
+ * empty array the bare-create endpoint expects.
+ *
+ * **No `status`.** A tournament is born `draft` — the server's column default
+ * decides, the client does not ask (ADR-0017: status left the write schemas, so
+ * the lifecycle only ever moves across a guarded edge). The draft the modal
+ * hands us still carries a `status` because `Tournament` is the *read* model;
+ * this builder simply does not propagate it. */
 export function draftToCreateBody(
   draft: Omit<Tournament, 'id'>,
 ): TournamentCreate {
   return {
     name: draft.name,
     description: draft.description,
-    status: draft.status,
     start_date: draft.startDate,
     end_date: draft.endDate,
     address: draft.address,
@@ -122,7 +128,11 @@ export function draftToCreateBody(
  * `Tournament` and the full table catalogue. Events are NOT included — they
  * have their own endpoints. The catalogue is sent as-is (the Tables tab edits
  * it directly: assign IS catalogue here, since the API has no separate global
- * table list), so a Tables-tab edit round-trips the label/court, not just ids. */
+ * table list), so a Tables-tab edit round-trips the label/court, not just ids.
+ *
+ * **No `status`.** An edit carries no status, so editing a tournament's name or
+ * dates can never move its lifecycle (ADR-0017). Moving it is
+ * `POST /v1/tournaments/{id}/transitions`, which is a mutation of its own. */
 export function tournamentToUpdateBody(
   t: Tournament,
   catalogue: TournamentTable[],
@@ -130,7 +140,6 @@ export function tournamentToUpdateBody(
   return {
     name: t.name,
     description: t.description,
-    status: t.status,
     start_date: t.startDate,
     end_date: t.endDate,
     address: t.address,
@@ -259,6 +268,27 @@ export function useTables(id: string): TournamentTable[] {
 }
 
 // ----- mutations -----------------------------------------------------------
+//
+// INVALIDATION MAP — every mutation in this module invalidates exactly this set:
+//
+// | mutation                | invalidates                              | when      |
+// | ----------------------- | ---------------------------------------- | --------- |
+// | useCreateTournament     | ['tournaments']                          | onSuccess |
+// | useUpdateTournament     | ['tournaments'], ['tournaments', id]     | onSuccess |
+// | useTransitionTournament | ['tournaments'], ['tournaments', id]     | onSettled |
+// | useDeleteTournament     | ['tournaments'], ['tournaments', id]     | onSuccess |
+// | useCreateEvent          | ['tournaments'], ['tournaments', id]     | onSuccess |
+// | useUpdateEvent          | ['tournaments'], ['tournaments', id]     | onSuccess |
+// | useDeleteEvent          | ['tournaments'], ['tournaments', id]     | onSuccess |
+// | useEnterEvent           | ['tournaments'], ['tournaments', id]     | onSettled |
+// | useWithdrawEntry        | ['tournaments'], ['tournaments', id]     | onSettled |
+//
+// There are only two keys, because there are only two queries: the list and one
+// tournament's detail (events, entrants and the table catalogue all arrive nested
+// in the detail — see the queries above). Create is the one mutation that touches
+// only the list: it has no detail entry to stale yet. The three `onSettled` rows
+// reconcile on FAILURE as well as success, which is deliberate — see the notes on
+// each.
 
 /** Create a bare tournament. Returns the created id for navigation.
  *
@@ -275,8 +305,9 @@ export function useCreateTournament() {
   })
 }
 
-/** Patch tournament-level fields (name/status/dates/description/address/
- * table_catalogue) — never events. */
+/** Patch tournament-level fields (name/dates/description/address/
+ * table_catalogue) — never events, and never `status` (ADR-0017: the lifecycle
+ * moves only through `POST /v1/tournaments/{id}/transitions`). */
 export function useUpdateTournament() {
   const qc = useQueryClient()
   return useMutation({
@@ -293,6 +324,51 @@ export function useUpdateTournament() {
       ),
     onSuccess: (_data, input) => invalidateTournament(qc, input.id),
     onError: notifyError('update the tournament'),
+  })
+}
+
+// ----- the lifecycle (ADR-0017) --------------------------------------------
+
+/** Move a tournament along its lifecycle: `POST /v1/tournaments/{id}/transitions`
+ * with the status to move **to**. This is the *only* way a status changes —
+ * `TournamentUpdate` has no `status` field (ADR-0017), so the header's Publish /
+ * Start / End buttons come here and nowhere else.
+ *
+ * The mutation's variable is the **edge** (`LIFECYCLE_EDGE`, `./lifecycle`), not a
+ * bare target status, because the two things this needs — the `to` for the body and
+ * the *verb* for a failure toast ("Couldn't publish the tournament", never
+ * "Couldn't POST a transition") — are two facts about one edge. Taking the edge is
+ * what lets there be ONE lifecycle table: a verb map keyed by target status would
+ * be a second one, and would need an unreachable `draft` row to stay total.
+ *
+ * On the wire the caller sends only `to`: the tournament already knows where it is,
+ * and a client that also sent `from` would only be reporting what it *believed* — a
+ * stale tab's belief at that. Whether (current, `to`) is an edge at all is the
+ * server's judgement, and an illegal one is a **409**.
+ *
+ * That 409 is a *genuine* failure — nothing moved — so it toasts, unlike the
+ * already-entered 409 below (which means "you are already in", and is benign). But
+ * like the entry mutations it reconciles **`onSettled`, not `onSuccess`**: since the
+ * UI only ever offers the edge that is legal from the status it last read, a 409 can
+ * only mean this view is stale (the classic case: publish in tab A, then click
+ * Publish in tab B). Re-reading the tournament is what corrects the badge and
+ * swaps the button for the one that *is* legal now — invalidating on success only
+ * would leave the stale tab offering the very button it was just refused. */
+export function useTransitionTournament(tournamentId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (edge: LifecycleEdge): Promise<TournamentRead> =>
+      unwrap(
+        'move the tournament',
+        await api.POST('/v1/tournaments/{tournament_id}/transitions', {
+          params: { path: { tournament_id: tournamentId } },
+          body: { to: edge.to },
+        }),
+      ),
+    // Reconcile on BOTH paths — the 409 IS the stale-view signal.
+    onSettled: () => invalidateTournament(qc, tournamentId),
+    // The verb is the edge the user asked for, so the toast names their click.
+    onError: (error, edge) => notifyError(edge.verb)(error),
   })
 }
 
@@ -375,24 +451,51 @@ export function useDeleteEvent(tournamentId: string) {
 //
 // Both mutations invalidate **`onSettled`, not `onSuccess`** — they reconcile
 // whether they succeeded or failed. A failed entry is precisely the moment the
-// screen is most likely to be lying: the 409 the server answers means "your view
-// and my state disagree" (someone — usually you, in another tab — already entered
-// you), so the only sane response is to re-read the server. Invalidating only on
+// screen is most likely to be lying: a 409 the server answers means "your view and
+// my state disagree" — either someone (usually you, in another tab) already entered
+// you, or the director moved the tournament on and the window is shut (ADR-0017) —
+// so the only sane response is to re-read the server. Invalidating only on
 // success left the stale tab frozen on `0 / 64` + **Enter** + "No one has entered
 // yet" after the very request that proved all three wrong (#943). Withdraw's
 // stale-tab race happens to land on its *success* path (a repeat withdrawal is an
 // idempotent 204), so it looked fine — but that was luck, not design; it settles
 // into the same reconcile here on purpose.
 
-/** True for the entry endpoint's "You have already entered this event." — the
- * only 409 `POST …/entries` raises (its partial unique index on the *active*
- * entries; see `enter_event` in `api/app/tournaments.py`). It is not really a
- * failure: it means the player IS entered, so the reconciled view is the answer,
- * and shouting a red error over a screen that now says "Withdraw" would be the
- * lie. Anything else — 400, 403, 5xx, network-down — is a genuine error and still
- * toasts. */
-function isAlreadyEntered(error: unknown): boolean {
-  return error instanceof ApiError && error.status === 409
+/** The exact sentence the entry endpoint answers a duplicate entry with (its
+ * partial unique index on the *active* entries — `enter_event` in
+ * `api/app/tournaments.py`). Matched byte-for-byte, on purpose: see below. */
+const ALREADY_ENTERED_DETAIL = 'You have already entered this event.'
+
+/** Which of `POST …/entries`' TWO 409s this is — or `null` when it is not a 409
+ * at all (a 400, 403, 5xx, network-down: all genuine errors that still toast).
+ *
+ * The route raises two, and they mean opposite things to the player:
+ *
+ * - **already-entered** — the duplicate-entry index fired. Benign: it means the
+ *   player IS entered, so the reconciled view is the answer, and shouting a red
+ *   error over a card that now says "Withdraw" would be the lie.
+ * - **registration-closed** — the registration window is shut (ADR-0017: entry
+ *   requires `published`). The stale-tab case: the director started the tournament
+ *   in another tab while this one still showed **Enter**. The player is NOT
+ *   entered, and telling them they already are would be false.
+ *
+ * **`detail` is the only discriminator the API gives us.** Both are a FastAPI
+ * `HTTPException(status_code=409, detail=<str>)`, which serialises to a bare
+ * `{"detail": "<sentence>"}` — no `code`, no structured body (unlike the score-write
+ * and negotiation 409s, which carry objects; see `conflictDetail` /
+ * `isNegotiationConflict` in `@/api/client`). So we match the already-entered
+ * sentence exactly and treat **every other 409 as a closed window**. That direction
+ * is the safe one: if the server ever rewords either sentence, an unrecognised 409
+ * is reported as a refusal in the server's own words — never as a false "you are
+ * already in", which is the bug this replaced. (A machine-readable `code` on the
+ * entry 409s would let this stop reading copy; until then, this is the seam.) */
+type EntryConflict = 'already-entered' | 'registration-closed'
+
+function entryConflict(error: unknown): EntryConflict | null {
+  if (!(error instanceof ApiError) || error.status !== 409) return null
+  return error.detail === ALREADY_ENTERED_DETAIL
+    ? 'already-entered'
+    : 'registration-closed'
 }
 
 /** Enter the *signed-in* player into an event. There is no request body — the
@@ -400,11 +503,19 @@ function isAlreadyEntered(error: unknown): boolean {
  * a separate, later endpoint). Resolves to the created `Entrant`, whose `id` is
  * the entry id a later withdrawal is addressed to.
  *
- * A non-singles event is a 400 and surfaces as an error toast. A duplicate entry
- * is a 409, which is treated as *benign*: the tournament is re-read (as on every
- * settle) and the player gets a quiet, informational "you were already entered"
- * note over the now-truthful card, not an error. A caller that wants to handle
- * the 409 itself can still await `mutateAsync` and inspect the `ApiError`. */
+ * A non-singles event is a 400 and surfaces as an error toast. The two 409s
+ * (`entryConflict` above) are told apart, because they are opposite news:
+ *
+ * - a **duplicate** entry is *benign* — the tournament is re-read (as on every
+ *   settle) and the player gets a quiet, informational "you were already entered"
+ *   note over the now-truthful card, not an error;
+ * - a **closed window** is a genuine refusal — the player is not entered and, from
+ *   this page, cannot be. It says so, in the server's words ("This tournament is
+ *   already under way…"), while the same reconcile swaps the Enter button they
+ *   clicked for the locked notice that is now true.
+ *
+ * A caller that wants to handle either 409 itself can still await `mutateAsync` and
+ * inspect the `ApiError`. */
 export function useEnterEvent(tournamentId: string) {
   const qc = useQueryClient()
   const toastError = notifyError('enter the event')
@@ -426,13 +537,26 @@ export function useEnterEvent(tournamentId: string) {
     // Reconcile on BOTH paths — see the note above.
     onSettled: () => invalidateTournament(qc, tournamentId),
     onError: (error) => {
-      if (isAlreadyEntered(error)) {
-        toast.info('You were already entered in this event', {
-          description: "We've refreshed it with the latest entries.",
-        })
-        return
+      switch (entryConflict(error)) {
+        case 'already-entered':
+          toast.info('You were already entered in this event', {
+            description: "We've refreshed it with the latest entries.",
+          })
+          return
+        case 'registration-closed':
+          // The window shut under a stale tab. Our title (the fact: entries are
+          // closed), the server's sentence for the reason — it is the one thing
+          // that knows *which* closed status this is, and those sentences are
+          // written for the player to read (`_registration_closed_detail`).
+          toast.error('Entries are closed for this event', {
+            description:
+              (error instanceof ApiError ? error.detail : null) ??
+              "This tournament's registration window is shut. We've refreshed it with the latest status.",
+          })
+          return
+        case null:
+          toastError(error)
       }
-      toastError(error)
     },
   })
 }

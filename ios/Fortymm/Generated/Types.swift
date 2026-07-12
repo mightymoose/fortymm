@@ -543,6 +543,22 @@ internal protocol APIProtocol: Sendable {
     /// - Remark: HTTP `DELETE /v1/tournaments/{tournament_id}`.
     /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/delete(delete_tournament_v1_tournaments__tournament_id__delete)`.
     func deleteTournamentV1TournamentsTournamentIdDelete(_ input: Operations.DeleteTournamentV1TournamentsTournamentIdDelete.Input) async throws -> Operations.DeleteTournamentV1TournamentsTournamentIdDelete.Output
+    /// Create Tournament Transition
+    ///
+    /// Move a tournament along its lifecycle, and answer with the moved tournament.
+    ///
+    /// The lifecycle runs forward only, and exactly three transitions exist:
+    /// `draft` → `published` (publish), `published` → `live` (go live), and
+    /// `live` → `archived` (archive). Anything else is a `409`, including walking
+    /// backwards, skipping a stage, moving out of the terminal `archived`, and
+    /// re-asserting the status the tournament already holds — a request to publish
+    /// an already-published tournament is a stale client, not a no-op.
+    ///
+    /// Owner-only, like every other tournament mutation.
+    ///
+    /// - Remark: HTTP `POST /v1/tournaments/{tournament_id}/transitions`.
+    /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/transitions/post(create_tournament_transition_v1_tournaments__tournament_id__transitions_post)`.
+    func createTournamentTransitionV1TournamentsTournamentIdTransitionsPost(_ input: Operations.CreateTournamentTransitionV1TournamentsTournamentIdTransitionsPost.Input) async throws -> Operations.CreateTournamentTransitionV1TournamentsTournamentIdTransitionsPost.Output
     /// Create Event
     ///
     /// - Remark: HTTP `POST /v1/tournaments/{tournament_id}/events`.
@@ -567,6 +583,12 @@ internal protocol APIProtocol: Sendable {
     /// someone else. Entering a player who is not you is a director's job, and a
     /// different endpoint.
     ///
+    /// Registration is open only while the tournament is **`published`** — its status
+    /// *is* its registration window (ADR-0017). Entering an event of a `draft`
+    /// tournament (not announced yet), a `live` one (the field is fixed; the draw is
+    /// cut from it), or an `archived` one (it is over) is a `409` — not a `403`: you
+    /// are permitted, the tournament is simply in the wrong state.
+    ///
     /// Entering an event you are already in is a `409`; withdrawing first frees you
     /// to enter it again. Doubles and teams events are a `400`: an entry is one row
     /// per player, with nowhere to record a partner or a team.
@@ -583,9 +605,21 @@ internal protocol APIProtocol: Sendable {
     /// uniqueness guard is a *partial* index over active entries only, the player is
     /// free to enter the same event again afterwards.
     ///
-    /// You may only withdraw your own entry; someone else's is a `403`. Withdrawing
-    /// an entry that is already withdrawn is a no-op, not an error: this is `DELETE`,
-    /// and asking for a state the resource is already in is a success.
+    /// You may only withdraw your own entry; someone else's is a `403`.
+    ///
+    /// Withdrawal, like entry, is open only while the tournament is **`published`** —
+    /// its status *is* its registration window (ADR-0017). Withdrawing an *active*
+    /// entry from a `live` tournament would pull a player out from under a draw cut
+    /// from the field they were part of, so it is a `409`, as it is for a `draft`
+    /// tournament (registration has not opened) and an `archived` one (it is over).
+    /// A `409`, not a `403`: you are permitted, the tournament is simply in the wrong
+    /// state.
+    ///
+    /// **Withdrawing an entry that is already withdrawn is a `204` in every status**,
+    /// `live` and `archived` included — a no-op, not an error: this is `DELETE`, and
+    /// asking for a state the resource is already in is a success. The status gate is
+    /// on the state *change*, not on the call; an entry that is already withdrawn has
+    /// nothing left to lock.
     ///
     /// - Remark: HTTP `DELETE /v1/tournaments/{tournament_id}/events/{event_id}/entries/{entry_id}`.
     /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/events/{event_id}/entries/{entry_id}/delete(withdraw_from_event_v1_tournaments__tournament_id__events__event_id__entries__entry_id__delete)`.
@@ -1529,6 +1563,32 @@ extension APIProtocol {
             headers: headers
         ))
     }
+    /// Create Tournament Transition
+    ///
+    /// Move a tournament along its lifecycle, and answer with the moved tournament.
+    ///
+    /// The lifecycle runs forward only, and exactly three transitions exist:
+    /// `draft` → `published` (publish), `published` → `live` (go live), and
+    /// `live` → `archived` (archive). Anything else is a `409`, including walking
+    /// backwards, skipping a stage, moving out of the terminal `archived`, and
+    /// re-asserting the status the tournament already holds — a request to publish
+    /// an already-published tournament is a stale client, not a no-op.
+    ///
+    /// Owner-only, like every other tournament mutation.
+    ///
+    /// - Remark: HTTP `POST /v1/tournaments/{tournament_id}/transitions`.
+    /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/transitions/post(create_tournament_transition_v1_tournaments__tournament_id__transitions_post)`.
+    internal func createTournamentTransitionV1TournamentsTournamentIdTransitionsPost(
+        path: Operations.CreateTournamentTransitionV1TournamentsTournamentIdTransitionsPost.Input.Path,
+        headers: Operations.CreateTournamentTransitionV1TournamentsTournamentIdTransitionsPost.Input.Headers = .init(),
+        body: Operations.CreateTournamentTransitionV1TournamentsTournamentIdTransitionsPost.Input.Body
+    ) async throws -> Operations.CreateTournamentTransitionV1TournamentsTournamentIdTransitionsPost.Output {
+        try await createTournamentTransitionV1TournamentsTournamentIdTransitionsPost(Operations.CreateTournamentTransitionV1TournamentsTournamentIdTransitionsPost.Input(
+            path: path,
+            headers: headers,
+            body: body
+        ))
+    }
     /// Create Event
     ///
     /// - Remark: HTTP `POST /v1/tournaments/{tournament_id}/events`.
@@ -1581,6 +1641,12 @@ extension APIProtocol {
     /// someone else. Entering a player who is not you is a director's job, and a
     /// different endpoint.
     ///
+    /// Registration is open only while the tournament is **`published`** — its status
+    /// *is* its registration window (ADR-0017). Entering an event of a `draft`
+    /// tournament (not announced yet), a `live` one (the field is fixed; the draw is
+    /// cut from it), or an `archived` one (it is over) is a `409` — not a `403`: you
+    /// are permitted, the tournament is simply in the wrong state.
+    ///
     /// Entering an event you are already in is a `409`; withdrawing first frees you
     /// to enter it again. Doubles and teams events are a `400`: an entry is one row
     /// per player, with nowhere to record a partner or a team.
@@ -1605,9 +1671,21 @@ extension APIProtocol {
     /// uniqueness guard is a *partial* index over active entries only, the player is
     /// free to enter the same event again afterwards.
     ///
-    /// You may only withdraw your own entry; someone else's is a `403`. Withdrawing
-    /// an entry that is already withdrawn is a no-op, not an error: this is `DELETE`,
-    /// and asking for a state the resource is already in is a success.
+    /// You may only withdraw your own entry; someone else's is a `403`.
+    ///
+    /// Withdrawal, like entry, is open only while the tournament is **`published`** —
+    /// its status *is* its registration window (ADR-0017). Withdrawing an *active*
+    /// entry from a `live` tournament would pull a player out from under a draw cut
+    /// from the field they were part of, so it is a `409`, as it is for a `draft`
+    /// tournament (registration has not opened) and an `archived` one (it is over).
+    /// A `409`, not a `403`: you are permitted, the tournament is simply in the wrong
+    /// state.
+    ///
+    /// **Withdrawing an entry that is already withdrawn is a `204` in every status**,
+    /// `live` and `archived` included — a no-op, not an error: this is `DELETE`, and
+    /// asking for a state the resource is already in is a success. The status gate is
+    /// on the state *change*, not on the call; an entry that is already withdrawn has
+    /// nothing left to lock.
     ///
     /// - Remark: HTTP `DELETE /v1/tournaments/{tournament_id}/events/{event_id}/entries/{entry_id}`.
     /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/events/{event_id}/entries/{entry_id}/delete(withdraw_from_event_v1_tournaments__tournament_id__events__event_id__entries__entry_id__delete)`.
@@ -6189,14 +6267,18 @@ internal enum Components {
                 case pruned
             }
         }
+        /// A new tournament. It carries **no** ``status``: a tournament is born
+        /// ``draft`` (the column's default) and moves only across a guarded lifecycle
+        /// edge, via ``POST /v1/tournaments/{id}/transitions`` (ADR-0017). Sending a
+        /// ``status`` here is a 422 — ``extra="forbid"`` — rather than a tournament that
+        /// is born ``live``.
+        ///
         /// - Remark: Generated from `#/components/schemas/TournamentCreate`.
         internal struct TournamentCreate: Codable, Hashable, Sendable {
             /// - Remark: Generated from `#/components/schemas/TournamentCreate/name`.
             internal var name: Swift.String
             /// - Remark: Generated from `#/components/schemas/TournamentCreate/description`.
             internal var description: Swift.String?
-            /// - Remark: Generated from `#/components/schemas/TournamentCreate/status`.
-            internal var status: Components.Schemas.TournamentStatus?
             /// - Remark: Generated from `#/components/schemas/TournamentCreate/start_date`.
             internal var startDate: Swift.String?
             /// - Remark: Generated from `#/components/schemas/TournamentCreate/end_date`.
@@ -6210,7 +6292,6 @@ internal enum Components {
             /// - Parameters:
             ///   - name:
             ///   - description:
-            ///   - status:
             ///   - startDate:
             ///   - endDate:
             ///   - address:
@@ -6218,7 +6299,6 @@ internal enum Components {
             internal init(
                 name: Swift.String,
                 description: Swift.String? = nil,
-                status: Components.Schemas.TournamentStatus? = nil,
                 startDate: Swift.String? = nil,
                 endDate: Swift.String? = nil,
                 address: Components.Schemas.Address,
@@ -6226,7 +6306,6 @@ internal enum Components {
             ) {
                 self.name = name
                 self.description = description
-                self.status = status
                 self.startDate = startDate
                 self.endDate = endDate
                 self.address = address
@@ -6235,7 +6314,6 @@ internal enum Components {
             internal enum CodingKeys: String, CodingKey {
                 case name
                 case description
-                case status
                 case startDate = "start_date"
                 case endDate = "end_date"
                 case address
@@ -6250,10 +6328,6 @@ internal enum Components {
                 self.description = try container.decodeIfPresent(
                     Swift.String.self,
                     forKey: .description
-                )
-                self.status = try container.decodeIfPresent(
-                    Components.Schemas.TournamentStatus.self,
-                    forKey: .status
                 )
                 self.startDate = try container.decodeIfPresent(
                     Swift.String.self,
@@ -6274,7 +6348,6 @@ internal enum Components {
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "name",
                     "description",
-                    "status",
                     "start_date",
                     "end_date",
                     "address",
@@ -6983,13 +7056,51 @@ internal enum Components {
                 ])
             }
         }
+        /// The edge a caller wants the tournament to travel: the status to move *to*.
+        ///
+        /// ``to`` alone, with no ``from``: the tournament already knows where it is, and
+        /// a client that told us would only be telling us what it *believed* — a stale
+        /// tab's belief at that. The current status is read from the row, and whether the
+        /// (current, ``to``) pair is an edge at all is the server's judgement (ADR-0017).
+        ///
+        /// - Remark: Generated from `#/components/schemas/TournamentTransitionCreate`.
+        internal struct TournamentTransitionCreate: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/TournamentTransitionCreate/to`.
+            internal var to: Components.Schemas.TournamentStatus
+            /// Creates a new `TournamentTransitionCreate`.
+            ///
+            /// - Parameters:
+            ///   - to:
+            internal init(to: Components.Schemas.TournamentStatus) {
+                self.to = to
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case to
+            }
+            internal init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.to = try container.decode(
+                    Components.Schemas.TournamentStatus.self,
+                    forKey: .to
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "to"
+                ])
+            }
+        }
         /// Partial update. A field that is *absent* is left unchanged; an explicit
-        /// value replaces the current one. The columns backing ``name``, ``status``,
-        /// ``address``, and ``table_catalogue`` are NOT NULL, so for those an explicit
-        /// ``null`` is rejected (422) rather than allowed to reach the DB — "omitted"
-        /// and "cleared" are different. ``description``/``start_date``/``end_date`` are
-        /// nullable columns and may be cleared. ``table_catalogue`` replaces wholesale
-        /// when present.
+        /// value replaces the current one. The columns backing ``name``, ``address``,
+        /// and ``table_catalogue`` are NOT NULL, so for those an explicit ``null`` is
+        /// rejected (422) rather than allowed to reach the DB — "omitted" and "cleared"
+        /// are different. ``description``/``start_date``/``end_date`` are nullable
+        /// columns and may be cleared. ``table_catalogue`` replaces wholesale when
+        /// present.
+        ///
+        /// ``status`` is **not** updatable and is absent here on purpose: the lifecycle
+        /// runs forward only across guarded edges, so the one way it moves is
+        /// ``POST /v1/tournaments/{id}/transitions`` (ADR-0017). A guard on that route
+        /// that left a ``status`` field on this one would have guarded nothing, so
+        /// sending ``status`` here is a 422 via ``extra="forbid"``.
         ///
         /// - Remark: Generated from `#/components/schemas/TournamentUpdate`.
         internal struct TournamentUpdate: Codable, Hashable, Sendable {
@@ -6997,26 +7108,6 @@ internal enum Components {
             internal var name: Swift.String?
             /// - Remark: Generated from `#/components/schemas/TournamentUpdate/description`.
             internal var description: Swift.String?
-            /// - Remark: Generated from `#/components/schemas/TournamentUpdate/status`.
-            internal struct StatusPayload: Codable, Hashable, Sendable {
-                /// - Remark: Generated from `#/components/schemas/TournamentUpdate/status/value1`.
-                internal var value1: Components.Schemas.TournamentStatus
-                /// Creates a new `StatusPayload`.
-                ///
-                /// - Parameters:
-                ///   - value1:
-                internal init(value1: Components.Schemas.TournamentStatus) {
-                    self.value1 = value1
-                }
-                internal init(from decoder: any Swift.Decoder) throws {
-                    self.value1 = try decoder.decodeFromSingleValueContainer()
-                }
-                internal func encode(to encoder: any Swift.Encoder) throws {
-                    try encoder.encodeToSingleValueContainer(self.value1)
-                }
-            }
-            /// - Remark: Generated from `#/components/schemas/TournamentUpdate/status`.
-            internal var status: Components.Schemas.TournamentUpdate.StatusPayload?
             /// - Remark: Generated from `#/components/schemas/TournamentUpdate/start_date`.
             internal var startDate: Swift.String?
             /// - Remark: Generated from `#/components/schemas/TournamentUpdate/end_date`.
@@ -7048,7 +7139,6 @@ internal enum Components {
             /// - Parameters:
             ///   - name:
             ///   - description:
-            ///   - status:
             ///   - startDate:
             ///   - endDate:
             ///   - address:
@@ -7056,7 +7146,6 @@ internal enum Components {
             internal init(
                 name: Swift.String? = nil,
                 description: Swift.String? = nil,
-                status: Components.Schemas.TournamentUpdate.StatusPayload? = nil,
                 startDate: Swift.String? = nil,
                 endDate: Swift.String? = nil,
                 address: Components.Schemas.TournamentUpdate.AddressPayload? = nil,
@@ -7064,7 +7153,6 @@ internal enum Components {
             ) {
                 self.name = name
                 self.description = description
-                self.status = status
                 self.startDate = startDate
                 self.endDate = endDate
                 self.address = address
@@ -7073,7 +7161,6 @@ internal enum Components {
             internal enum CodingKeys: String, CodingKey {
                 case name
                 case description
-                case status
                 case startDate = "start_date"
                 case endDate = "end_date"
                 case address
@@ -7088,10 +7175,6 @@ internal enum Components {
                 self.description = try container.decodeIfPresent(
                     Swift.String.self,
                     forKey: .description
-                )
-                self.status = try container.decodeIfPresent(
-                    Components.Schemas.TournamentUpdate.StatusPayload.self,
-                    forKey: .status
                 )
                 self.startDate = try container.decodeIfPresent(
                     Swift.String.self,
@@ -7112,7 +7195,6 @@ internal enum Components {
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "name",
                     "description",
-                    "status",
                     "start_date",
                     "end_date",
                     "address",
@@ -17869,6 +17951,205 @@ internal enum Operations {
             }
         }
     }
+    /// Create Tournament Transition
+    ///
+    /// Move a tournament along its lifecycle, and answer with the moved tournament.
+    ///
+    /// The lifecycle runs forward only, and exactly three transitions exist:
+    /// `draft` → `published` (publish), `published` → `live` (go live), and
+    /// `live` → `archived` (archive). Anything else is a `409`, including walking
+    /// backwards, skipping a stage, moving out of the terminal `archived`, and
+    /// re-asserting the status the tournament already holds — a request to publish
+    /// an already-published tournament is a stale client, not a no-op.
+    ///
+    /// Owner-only, like every other tournament mutation.
+    ///
+    /// - Remark: HTTP `POST /v1/tournaments/{tournament_id}/transitions`.
+    /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/transitions/post(create_tournament_transition_v1_tournaments__tournament_id__transitions_post)`.
+    internal enum CreateTournamentTransitionV1TournamentsTournamentIdTransitionsPost {
+        internal static let id: Swift.String = "create_tournament_transition_v1_tournaments__tournament_id__transitions_post"
+        internal struct Input: Sendable, Hashable {
+            /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/transitions/POST/path`.
+            internal struct Path: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/transitions/POST/path/tournament_id`.
+                internal var tournamentId: Swift.String
+                /// Creates a new `Path`.
+                ///
+                /// - Parameters:
+                ///   - tournamentId:
+                internal init(tournamentId: Swift.String) {
+                    self.tournamentId = tournamentId
+                }
+            }
+            internal var path: Operations.CreateTournamentTransitionV1TournamentsTournamentIdTransitionsPost.Input.Path
+            /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/transitions/POST/header`.
+            internal struct Headers: Sendable, Hashable {
+                internal var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.CreateTournamentTransitionV1TournamentsTournamentIdTransitionsPost.AcceptableContentType>]
+                /// Creates a new `Headers`.
+                ///
+                /// - Parameters:
+                ///   - accept:
+                internal init(accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.CreateTournamentTransitionV1TournamentsTournamentIdTransitionsPost.AcceptableContentType>] = .defaultValues()) {
+                    self.accept = accept
+                }
+            }
+            internal var headers: Operations.CreateTournamentTransitionV1TournamentsTournamentIdTransitionsPost.Input.Headers
+            /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/transitions/POST/requestBody`.
+            internal enum Body: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/transitions/POST/requestBody/content/application\/json`.
+                case json(Components.Schemas.TournamentTransitionCreate)
+            }
+            internal var body: Operations.CreateTournamentTransitionV1TournamentsTournamentIdTransitionsPost.Input.Body
+            /// Creates a new `Input`.
+            ///
+            /// - Parameters:
+            ///   - path:
+            ///   - headers:
+            ///   - body:
+            internal init(
+                path: Operations.CreateTournamentTransitionV1TournamentsTournamentIdTransitionsPost.Input.Path,
+                headers: Operations.CreateTournamentTransitionV1TournamentsTournamentIdTransitionsPost.Input.Headers = .init(),
+                body: Operations.CreateTournamentTransitionV1TournamentsTournamentIdTransitionsPost.Input.Body
+            ) {
+                self.path = path
+                self.headers = headers
+                self.body = body
+            }
+        }
+        internal enum Output: Sendable, Hashable {
+            internal struct Created: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/transitions/POST/responses/201/content`.
+                internal enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/transitions/POST/responses/201/content/application\/json`.
+                    case json(Components.Schemas.TournamentRead)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    internal var json: Components.Schemas.TournamentRead {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                internal var body: Operations.CreateTournamentTransitionV1TournamentsTournamentIdTransitionsPost.Output.Created.Body
+                /// Creates a new `Created`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                internal init(body: Operations.CreateTournamentTransitionV1TournamentsTournamentIdTransitionsPost.Output.Created.Body) {
+                    self.body = body
+                }
+            }
+            /// Successful Response
+            ///
+            /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/transitions/post(create_tournament_transition_v1_tournaments__tournament_id__transitions_post)/responses/201`.
+            ///
+            /// HTTP response code: `201 created`.
+            case created(Operations.CreateTournamentTransitionV1TournamentsTournamentIdTransitionsPost.Output.Created)
+            /// The associated value of the enum case if `self` is `.created`.
+            ///
+            /// - Throws: An error if `self` is not `.created`.
+            /// - SeeAlso: `.created`.
+            internal var created: Operations.CreateTournamentTransitionV1TournamentsTournamentIdTransitionsPost.Output.Created {
+                get throws {
+                    switch self {
+                    case let .created(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "created",
+                            response: self
+                        )
+                    }
+                }
+            }
+            internal struct UnprocessableContent: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/transitions/POST/responses/422/content`.
+                internal enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/transitions/POST/responses/422/content/application\/json`.
+                    case json(Components.Schemas.HTTPValidationError)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    internal var json: Components.Schemas.HTTPValidationError {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                internal var body: Operations.CreateTournamentTransitionV1TournamentsTournamentIdTransitionsPost.Output.UnprocessableContent.Body
+                /// Creates a new `UnprocessableContent`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                internal init(body: Operations.CreateTournamentTransitionV1TournamentsTournamentIdTransitionsPost.Output.UnprocessableContent.Body) {
+                    self.body = body
+                }
+            }
+            /// Validation Error
+            ///
+            /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/transitions/post(create_tournament_transition_v1_tournaments__tournament_id__transitions_post)/responses/422`.
+            ///
+            /// HTTP response code: `422 unprocessableContent`.
+            case unprocessableContent(Operations.CreateTournamentTransitionV1TournamentsTournamentIdTransitionsPost.Output.UnprocessableContent)
+            /// The associated value of the enum case if `self` is `.unprocessableContent`.
+            ///
+            /// - Throws: An error if `self` is not `.unprocessableContent`.
+            /// - SeeAlso: `.unprocessableContent`.
+            internal var unprocessableContent: Operations.CreateTournamentTransitionV1TournamentsTournamentIdTransitionsPost.Output.UnprocessableContent {
+                get throws {
+                    switch self {
+                    case let .unprocessableContent(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "unprocessableContent",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Undocumented response.
+            ///
+            /// A response with a code that is not documented in the OpenAPI document.
+            case undocumented(statusCode: Swift.Int, OpenAPIRuntime.UndocumentedPayload)
+        }
+        internal enum AcceptableContentType: AcceptableProtocol {
+            case json
+            case other(Swift.String)
+            internal init?(rawValue: Swift.String) {
+                switch rawValue.lowercased() {
+                case "application/json":
+                    self = .json
+                default:
+                    self = .other(rawValue)
+                }
+            }
+            internal var rawValue: Swift.String {
+                switch self {
+                case let .other(string):
+                    return string
+                case .json:
+                    return "application/json"
+                }
+            }
+            internal static var allCases: [Self] {
+                [
+                    .json
+                ]
+            }
+        }
+    }
     /// Create Event
     ///
     /// - Remark: HTTP `POST /v1/tournaments/{tournament_id}/events`.
@@ -18431,6 +18712,12 @@ internal enum Operations {
     /// someone else. Entering a player who is not you is a director's job, and a
     /// different endpoint.
     ///
+    /// Registration is open only while the tournament is **`published`** — its status
+    /// *is* its registration window (ADR-0017). Entering an event of a `draft`
+    /// tournament (not announced yet), a `live` one (the field is fixed; the draw is
+    /// cut from it), or an `archived` one (it is over) is a `409` — not a `403`: you
+    /// are permitted, the tournament is simply in the wrong state.
+    ///
     /// Entering an event you are already in is a `409`; withdrawing first frees you
     /// to enter it again. Doubles and teams events are a `400`: an entry is one row
     /// per player, with nowhere to record a partner or a team.
@@ -18628,9 +18915,21 @@ internal enum Operations {
     /// uniqueness guard is a *partial* index over active entries only, the player is
     /// free to enter the same event again afterwards.
     ///
-    /// You may only withdraw your own entry; someone else's is a `403`. Withdrawing
-    /// an entry that is already withdrawn is a no-op, not an error: this is `DELETE`,
-    /// and asking for a state the resource is already in is a success.
+    /// You may only withdraw your own entry; someone else's is a `403`.
+    ///
+    /// Withdrawal, like entry, is open only while the tournament is **`published`** —
+    /// its status *is* its registration window (ADR-0017). Withdrawing an *active*
+    /// entry from a `live` tournament would pull a player out from under a draw cut
+    /// from the field they were part of, so it is a `409`, as it is for a `draft`
+    /// tournament (registration has not opened) and an `archived` one (it is over).
+    /// A `409`, not a `403`: you are permitted, the tournament is simply in the wrong
+    /// state.
+    ///
+    /// **Withdrawing an entry that is already withdrawn is a `204` in every status**,
+    /// `live` and `archived` included — a no-op, not an error: this is `DELETE`, and
+    /// asking for a state the resource is already in is a success. The status gate is
+    /// on the state *change*, not on the call; an entry that is already withdrawn has
+    /// nothing left to lock.
     ///
     /// - Remark: HTTP `DELETE /v1/tournaments/{tournament_id}/events/{event_id}/entries/{entry_id}`.
     /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/events/{event_id}/entries/{entry_id}/delete(withdraw_from_event_v1_tournaments__tournament_id__events__event_id__entries__entry_id__delete)`.
