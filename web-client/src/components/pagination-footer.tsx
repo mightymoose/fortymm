@@ -22,14 +22,29 @@ export interface PaginationFooterProps {
   total: number
   pageSize: number
   totalPages: number
+  /**
+   * What the readout counts — "…of 26 **matches**", "…of 40 **players**".
+   * Required on purpose: this footer is shared across pages, and a default
+   * would let a new caller silently ship someone else's copy.
+   */
+  noun: string
 }
 
+/**
+ * The list-page pagination footer: a "Showing 1–25 of 26 {noun}" readout plus
+ * the first/prev/numbered/next/last pager. Shared by `/matches`, `/players`,
+ * and the player match-history page.
+ *
+ * It renders the `.footer` / `.footer-info` / `.mono` class names but imports
+ * no CSS of its own — each consuming page's stylesheet supplies them.
+ */
 export const PaginationFooter = ({
   page,
   setPage,
   total,
   pageSize,
   totalPages,
+  noun,
 }: PaginationFooterProps) => {
   // Clamp a stale/out-of-range `page` to a valid one so the range math can
   // never render start > end — e.g. the frame before the parent's redirect
@@ -46,7 +61,7 @@ export const PaginationFooter = ({
     <div className="footer">
       <div className="footer-info">
         Showing <span className="mono">{first}–{last}</span> of{' '}
-        <span className="mono">{total}</span> matches
+        <span className="mono">{total}</span> {noun}
       </div>
       <div className="footer-spacer" />
       <Pagination className="mx-0 w-auto justify-end">
