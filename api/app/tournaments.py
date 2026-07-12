@@ -17,7 +17,7 @@ from app.models import (
     TournamentStatus,
     User,
 )
-from app.rbac import require_permission
+from app.rbac import require_permission, user_has_permission
 from app.schemas.tournament import (
     EventEntryFull,
     EventEntryOpen,
@@ -26,6 +26,7 @@ from app.schemas.tournament import (
     TournamentCreate,
     TournamentDetailRead,
     TournamentEntrantRead,
+    TournamentEntryCreate,
     TournamentEventCreate,
     TournamentEventRead,
     TournamentEventUpdate,
@@ -59,15 +60,24 @@ from app.tournament_queries import (
 # Player self-registration is the exception that needs its own permission: a
 # player entering *themselves* is not the tournament's owner, so it cannot go
 # through ``_require_owner``.
+#
+# The two ENTRY routes hold BOTH of those authorizations at once, because a single
+# endpoint serves both actors (ADR-0784): a player entering themselves is gated on
+# ``tournament.enter``, and a director entering somebody else — or withdrawing an
+# entry that is not their own — is gated on ownership. Which gate applies is decided
+# by the request, so neither can be a router dependency (a dependency runs before the
+# handler has seen the body, and would refuse an owner for lacking a grant that has
+# nothing to do with what they are doing). Both routes therefore take
+# ``get_current_user`` and ask ``_require_enter_permission`` / ``_require_owner`` in
+# the arm of the fork that owns them. The authorizations are disjoint — a stranger
+# self-registering is not the owner; an owner adding somebody else is not
+# self-registering — so this is a fork, not a tangle.
 TOURNAMENT_VIEW = "tournament.view"
 TOURNAMENT_CREATE = "tournament.create"
 TOURNAMENT_ENTER = "tournament.enter"
 
 require_view = require_permission(TOURNAMENT_VIEW)
 require_create = require_permission(TOURNAMENT_CREATE)
-# Returns the signed-in user, so the enter route gets its gate and its caller
-# from one dependency — and cannot enter anyone other than that caller.
-require_enter = require_permission(TOURNAMENT_ENTER)
 
 # The tournament lifecycle, in full (ADR-0017):
 #
@@ -360,12 +370,58 @@ async def _get_entry_or_404(
     return entry
 
 
+async def _get_entrant_or_404(db: AsyncSession, user_id: uuid.UUID) -> User:
+    """The player a director named in the body — the one they are entering (ADR-0784).
+
+    Tombstoned (merged-away) users are excluded, exactly as ``/v1/players/search``
+    excludes them: a ghost is a user no listing, search or auth query will ever return,
+    so entering one would put a player in the draw who cannot sign in, cannot be
+    notified and cannot play. The merge re-points every *existing* entry onto the
+    survivor; the way to keep new ones off the tombstone is to refuse to write them.
+
+    A 404 rather than a 422: the id is well-formed, it simply names nobody enterable.
+    It is raised only *after* ``_require_owner``, so a stranger poking at the endpoint
+    learns nothing about which user ids exist.
+    """
+    user = (
+        await db.execute(
+            select(User).where(
+                User.id == user_id,
+                User.merged_into_user_id.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+    if user is None:
+        raise HTTPException(status_code=404, detail="Player not found.")
+    return user
+
+
 def _require_owner(t: Tournament, current_user: User) -> None:
     if t.created_by_user_id != current_user.id:
         raise HTTPException(
             status_code=403,
             detail="You can only modify tournaments you created.",
         )
+
+
+async def _require_enter_permission(db: AsyncSession, current_user: User) -> None:
+    """The self-registration arm's gate: the caller must hold ``tournament.enter``.
+
+    Byte-for-byte what ``Depends(require_permission(TOURNAMENT_ENTER))`` raised when
+    it was a router dependency — the same query (``user_has_permission``), the same
+    403, the same ``"Forbidden."`` — because it is the same authorization. What moved
+    is only *where* it is asked: a dependency cannot see the request body, and the
+    body is what says whether this caller is self-registering at all (ADR-0784). An
+    owner entering somebody else must not be refused for lacking a permission about
+    entering *themselves*.
+
+    So it is asked FIRST, before the tournament is even loaded, on the self path — the
+    dependency's position, kept. The director's ownership check is the mirror image
+    and is deliberately asked *last*, after the 404s, because ownership is a fact about
+    a tournament that has to exist before it can be owned.
+    """
+    if not await user_has_permission(db, current_user.id, TOURNAMENT_ENTER):
+        raise HTTPException(status_code=403, detail="Forbidden.")
 
 
 def _enforce_league_editable(t: Tournament) -> None:
@@ -1063,40 +1119,80 @@ async def _enforce_rating_eligible(
 async def enter_event(
     tournament_id: uuid.UUID,
     event_id: uuid.UUID,
+    payload: TournamentEntryCreate | None = None,
     db: AsyncSession = Depends(get_session),
-    current_user: User = Depends(require_enter),
+    current_user: User = Depends(get_current_user),
 ) -> TournamentEntrantRead:
-    """Register the signed-in player in a singles event.
+    """Enter a player in a singles event — yourself, or (as the tournament's owner)
+    somebody else.
 
-    Self-registration only: the entry created is always the caller's own, which
-    is why the request carries no body — there is no field in which to name
-    someone else. Entering a player who is not you is a director's job, and a
-    different endpoint.
+    **The body is optional, and its presence chooses the actor** (ADR-0784):
+
+    * **no body** → you are entering *yourself*. Requires the `tournament.enter`
+      permission. This is the request every player already sends, and it is unchanged.
+    * **`user_id`** → you are the **director** entering that player. Requires that you
+      **own** the tournament; anyone else naming a `user_id` that is not their own is a
+      `403`. An id that names no (live) player is a `404`.
+
+    Naming *your own* `user_id` is self-registration, not a director entry: same
+    permission, and the entry records no adder.
 
     Registration is open only while the tournament is **`published`** — its status
     *is* its registration window (ADR-0017). Entering an event of a `draft`
     tournament (not announced yet), a `live` one (the field is fixed; the draw is
     cut from it), or an `archived` one (it is over) is a `409` — not a `403`: you
-    are permitted, the tournament is simply in the wrong state.
+    are permitted, the tournament is simply in the wrong state. **That holds for the
+    director too**: there is no override, so a director can neither add a walk-in nor
+    remove a no-show once the tournament is live.
 
-    An event's **eligibility rules** are decided against your rating on the
-    tournament's league, and you must satisfy **every** one of them: failing a rule
+    An event's **eligibility rules** are decided against the entrant's rating on the
+    tournament's league, and they must satisfy **every** one of them: failing a rule
     (the 1650-rated player entering the "Under 1500" event) is a `409`. A player who
     holds **no rating** on that league — nobody has a rating until they finish a rated
     match — **passes every rule**, so a brand-new player is not shut out of the
     beginners' event that exists for them.
 
-    Entering an event you are already in is a `409`; withdrawing first frees you
+    Entering an event the player is already in is a `409`; withdrawing first frees them
     to enter it again. Entering an event that already holds its `max_players`
     entrants is a `409` too — someone withdrawing frees the slot. Doubles and teams
     events are a `400`: an entry is one row per player, with nowhere to record a
     partner or a team.
+
+    **A director's entry is judged by exactly these rules.** The same evaluator, the
+    same capacity lock, the same four refusal codes: a director adding a player to a
+    full event, or one over the event's rating cap, is refused precisely as the player
+    would be.
     """
+    # ----- the fork (ADR-0784) ----------------------------------------------
+    #
+    # One line, decided from the body alone, before anything is loaded: WHO is being
+    # entered. Everything downstream reads ``entrant`` and does not care how it got
+    # there — the eligibility evaluator, the capacity lock and the four refusal codes
+    # are the same rules for a director as for a player, which is the whole reason this
+    # is one endpoint and not two (a twin route would make the next refusal a thing to
+    # add twice).
+    #
+    # Naming your OWN ``user_id`` is self-registration. It has to be: "the player
+    # entered themselves" is spelled ``added_by_user_id = NULL``, and letting an owner
+    # write ``added_by == user_id`` would create a second, contradictory encoding of
+    # the same fact — one the entrants list would render as "added by the director" on
+    # an entry whose director is the player. (``merge_user``'s CASE already collapses
+    # that shape when a merge would otherwise produce it; the route must not mint it in
+    # the first place. Deliberately no ``CHECK`` constraint enforces this: the INSERT
+    # below catches ``IntegrityError`` and reads it as ``already_entered``, so a
+    # constraint violation here would surface as a false "already entered" refusal.)
+    entrant_id = current_user.id if payload is None else payload.user_id
+    self_registration = entrant_id == current_user.id
+    if self_registration:
+        # Asked here, at the top, exactly where the router dependency used to run:
+        # a player who does not hold ``tournament.enter`` is refused before the
+        # handler learns anything about the tournament. The director's arm is gated
+        # by ownership instead, and its check comes *after* the 404s below — you
+        # cannot own a tournament that does not exist.
+        await _require_enter_permission(db, current_user)
+
     # Load first, then decide — the same 404-before-anything-else ordering the
-    # owner-only routes use. This route has no ownership check to run afterwards:
-    # a player entering themselves is by definition not the tournament's owner,
-    # so the authorization is the ``tournament.enter`` gate above plus the fact
-    # that ``current_user`` is the only user this handler can enter.
+    # owner-only routes use.
     #
     # The tournament is loaded *locked*, and locked first: it is the row whose
     # status decides this request, and it must not change between the check below
@@ -1106,6 +1202,20 @@ async def enter_event(
     # committed outcome.
     tournament = await _get_tournament_for_update_or_404(db, tournament_id)
     event = await _get_event_or_404(db, tournament_id, event_id)
+
+    if self_registration:
+        # The caller is the entrant, and nobody added them — that is what NULL means.
+        entrant, added_by_user_id = current_user, None
+    else:
+        # The director's arm. Ownership is the gate (403 for anyone else naming
+        # somebody else's id), and it is judged after the 404s above so that a
+        # stranger's refusal never leaks whether the tournament or event exists.
+        _require_owner(tournament, current_user)
+        entrant, added_by_user_id = (
+            await _get_entrant_or_404(db, entrant_id),
+            current_user.id,
+        )
+
     if event.format is not EventFormat.singles:
         # Not a policy — a modelling limit (ADR-0016). One row per user cannot
         # express a doubles pairing or a team, so rather than record half a pair
@@ -1148,7 +1258,13 @@ async def enter_event(
     # INSERT (see below). The rating it judged against comes back out, because the
     # entrant this route answers with carries it — the number that admitted you and the
     # number reported beside your name are the same number, read once.
-    rating = await _enforce_rating_eligible(db, tournament, event, current_user)
+    #
+    # ``entrant``, not ``current_user``: the rules judge the person being ENTERED. A
+    # director adding a 1650 player to the "Under 1500" event is refused with the same
+    # ``rating_ineligible`` code that player would have got, and judging the DIRECTOR's
+    # rating here would silently make ownership an eligibility bypass — a ``force`` flag
+    # nobody voted for, arriving through a typo.
+    rating = await _enforce_rating_eligible(db, tournament, event, entrant)
 
     # Capacity, counted UNDER THE LOCK taken above (ADR-0783, §4) — the count and the
     # INSERT below are one serialised unit, which is the only reason two entrants
@@ -1162,7 +1278,14 @@ async def enter_event(
     # window, which is the fact that governs every event of that tournament.
     await _enforce_event_has_room(db, event)
 
-    entry = TournamentEntry(event_id=event.id, user_id=current_user.id)
+    # ``added_by_user_id`` is the fork's one lasting trace: NULL on the self path (the
+    # player entered themselves), the director's id on the other (ADR-0784). It is a
+    # fact about the past that cannot be reconstructed later, so it is stored now.
+    entry = TournamentEntry(
+        event_id=event.id,
+        user_id=entrant.id,
+        added_by_user_id=added_by_user_id,
+    )
     db.add(entry)
     try:
         await db.commit()
@@ -1174,6 +1297,11 @@ async def enter_event(
         # error, so nothing about the schema reaches the response body. Because
         # the index is partial, a player whose only prior entry is *withdrawn*
         # does not land here — they enter again, cleanly.
+        #
+        # It is the index, and only the index, that can raise here — which is why
+        # ``added_by_user_id`` deliberately carries no CHECK constraint (see the fork
+        # above): a second constraint on this INSERT would be reported to the client as
+        # a false "you have already entered this event".
         await db.rollback()
         raise entry_refused(
             EntryRefusal.already_entered,
@@ -1182,8 +1310,11 @@ async def enter_event(
 
     return TournamentEntrantRead(
         id=entry.id,
-        user_id=current_user.id,
-        username=current_user.username,
+        # The ENTRANT — who is the caller on the self path and somebody else on the
+        # director's. The 201 describes the row that was written, not the person who
+        # wrote it, so a director's POST answers with the player they just entered.
+        user_id=entrant.id,
+        username=entrant.username,
         seed=entry.seed,
         # The rating the eligibility guard above already read on this tournament's
         # ladder — not a fresh one. The entrant that comes back from the POST is the
@@ -1201,16 +1332,19 @@ async def withdraw_from_event(
     event_id: uuid.UUID,
     entry_id: uuid.UUID,
     db: AsyncSession = Depends(get_session),
-    current_user: User = Depends(require_enter),
+    current_user: User = Depends(get_current_user),
 ) -> Response:
-    """Withdraw the signed-in player's own entry from an event.
+    """Withdraw an entry from an event — your own, or (as the tournament's owner) any
+    entry in it.
 
     The entry is **soft-deleted**: its status flips to `withdrawn` and the row
     survives, so the event keeps its withdrawal history — and, because the
     uniqueness guard is a *partial* index over active entries only, the player is
     free to enter the same event again afterwards.
 
-    You may only withdraw your own entry; someone else's is a `403`.
+    **Who may withdraw an entry** (ADR-0784) mirrors who may create one: the player
+    themselves (with the `tournament.enter` permission), or the tournament's **owner**,
+    for any entry in it. Anybody else is a `403`.
 
     Withdrawal, like entry, is open only while the tournament is **`published`** —
     its status *is* its registration window (ADR-0017). Withdrawing an *active*
@@ -1218,7 +1352,9 @@ async def withdraw_from_event(
     from the field they were part of, so it is a `409`, as it is for a `draft`
     tournament (registration has not opened) and an `archived` one (it is over).
     A `409`, not a `403`: you are permitted, the tournament is simply in the wrong
-    state.
+    state. **The owner obeys that window too** — withdrawal stays symmetric with entry,
+    so a director can no more remove a no-show from a live tournament than add a
+    walk-in to one.
 
     **Withdrawing an entry that is already withdrawn is a `204` in every status**,
     `live` and `archived` included — a no-op, not an error: this is `DELETE`, and
@@ -1229,7 +1365,7 @@ async def withdraw_from_event(
     # Load-then-authorize, as everywhere else here: the tournament, the event
     # under it, and the entry under that event must all exist before ownership is
     # considered — so a wrong (tournament, event, entry) triple is a 404, and 403
-    # means "this entry is real, but it isn't yours".
+    # means "this entry is real, but it isn't yours to take back".
     #
     # The tournament comes back locked, and first — the same lock, in the same
     # order, as the enter, transition and PATCH routes take (which is what keeps the
@@ -1239,10 +1375,22 @@ async def withdraw_from_event(
     tournament = await _get_tournament_for_update_or_404(db, tournament_id)
     event = await _get_event_or_404(db, tournament_id, event_id)
     entry = await _get_entry_or_404(db, event.id, entry_id)
-    if entry.user_id != current_user.id:
-        # The ``tournament.enter`` gate says "may self-register at all"; it cannot
-        # say *whose* entry this is. Withdrawing another player from an event is a
-        # director's job (#784), on a different endpoint with its own permission.
+
+    # The same fork the enter route makes, read off the ENTRY rather than off a body:
+    # this is the caller's own entry, or it is somebody's the owner is removing
+    # (ADR-0784). Two authorizations, disjoint, and neither is a router dependency —
+    # which entry it is cannot be known until the row is loaded.
+    if entry.user_id == current_user.id:
+        # Withdrawing your own entry is the mirror of self-registering, and it is gated
+        # the same way: ``tournament.enter``. (The owner's arm below deliberately does
+        # NOT require it — managing the field of a tournament you created is a property
+        # of ownership, not a role grant.)
+        await _require_enter_permission(db, current_user)
+    elif tournament.created_by_user_id != current_user.id:
+        # Not yours, and not your tournament. The message stays true for everyone who
+        # can ever read it: the only caller refused here is a non-owner reaching for an
+        # entry that is not theirs, and for them their own entry really is all they may
+        # withdraw.
         #
         # Ordering: this 403 precedes the status 409 below, so withdrawing someone
         # else's entry from a *live* tournament is "not yours", not "not now".

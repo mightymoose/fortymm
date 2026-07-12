@@ -184,9 +184,21 @@ _Avoid_: home league, main league, global league.
 
 **Entry**:
 A player's place in one tournament **event**. Soft-deleted on withdrawal, so a
-player may re-enter (ADR-0016).
+player may re-enter (ADR-0016). An entry knows **who created it**: `NULL` means the
+player entered themselves, otherwise it names the director who added them
+(ADR-0784). Those are the only two ways an entry comes to exist, and the second is
+not a different endpoint — it is the same one, told who to enter.
 _Avoid_: registration, signup, ticket (an entry is the row; *registration* is the
 window it may be created in).
+
+**Director entry**:
+The tournament **owner** adding a player to an event on their behalf — a phone
+entry, or someone without an account yet. It runs through the *same* endpoint, the
+same eligibility evaluator, the same capacity lock and the same **refusal codes** as
+a player's own (ADR-0784): absent an override, a director's mistake is caught by
+exactly the rules that catch a stranger's. An owner naming their *own* id is not a
+director entry — that is self-registration, and it is spelled `NULL`.
+_Avoid_: admin add, force add (there is no override yet — see #985).
 
 **Entrant**:
 A player holding an **active** entry — `status = entered`. The count of entrants is
@@ -197,7 +209,10 @@ it counts.
 **Registration window**:
 The span in which entries may be created, which is exactly the tournament being
 `published` (ADR-0017). A `draft` has not opened, a `live` one has locked, an
-`archived` one has ended. Entering *and* withdrawing both obey it.
+`archived` one has ended. Entering *and* withdrawing both obey it — **including the
+director's** (ADR-0784). So once a tournament is `live` nobody can be added or
+removed, not even by the owner: that is deliberate, and it is why #985 (the
+override, for walk-ins and no-shows) exists.
 _Avoid_: open, deadline (there is no date; the window is a function of the status).
 
 **Eligibility**:

@@ -210,6 +210,55 @@ async def merge_user(
         {"from_id": from_user_id, "to_id": to_user_id},
     )
 
+    # Now the *other* users FK on the same table: ``added_by_user_id`` — who put
+    # this player in the event (ADR-0784). The guest may have been a DIRECTOR who
+    # entered other people; the entries they created are still perfectly valid
+    # registrations of real players, so there is nothing here to delete. What must
+    # not survive is the pointer: the guest is about to become a tombstone, and an
+    # entry left saying "added by <ghost>" would render as an adder who no longer
+    # exists. The adder and the survivor are the same human — so the adder FOLLOWS
+    # the merge, exactly as tournament *ownership* does above.
+    #
+    # Must run AFTER the ``user_id`` re-point, because it reads the post-merge
+    # ``user_id`` — which is what the CASE is for. If the guest director is merged
+    # into the very player they entered (I create a tournament as a guest, add
+    # "Rita" from search, then sign in and turn out to BE Rita), then after the
+    # merge one person both added and is the entry: that is self-registration, and
+    # self-registration is spelled NULL. Writing ``added_by = user_id`` instead
+    # would leave two different encodings of "entered themselves" in the column and
+    # let "added by the director" appear on a director-less entry. Collapse it.
+    # (``test_merge_collapses_a_guest_who_both_added_and_is_the_entry`` is what pins
+    # that ordering: reorder these two statements and both direction tests go red.)
+    #
+    # The WHERE catches **both** ids, and the second one is not decoration — it is
+    # the mirror of the case above, and it is the merge's own doing. Take a director
+    # D with a real account who enters a GUEST player P (``user_id = P``,
+    # ``added_by = D``); P then signs in and turns out to BE D. The re-point above
+    # rewrites ``user_id`` to D — and a WHERE that only looked for ``:from_id``
+    # would not match this row at all, leaving ``added_by == user_id == D``: the very
+    # contradictory encoding this CASE exists to prevent, *manufactured by the merge*
+    # rather than merely passed through it. Matching ``:to_id`` as well lets the same
+    # CASE collapse it to NULL. The extra rows that predicate sweeps in — an entry
+    # already added by the survivor, whose entrant is somebody else — are re-pointed
+    # from ``to_id`` to ``to_id``, which is a no-op by construction.
+    #
+    # So the invariant is: after this statement, no row whose ``user_id`` or
+    # ``added_by_user_id`` was touched by this merge can say ``added_by == user_id``.
+    #
+    # Note this deliberately does NOT re-point rows whose *entry* was dropped by
+    # the dedup DELETE above — they no longer exist, so there is nothing to point.
+    await db.execute(
+        text(
+            """
+            UPDATE tournament_entries
+            SET added_by_user_id =
+                CASE WHEN user_id = :to_id THEN NULL ELSE :to_id END
+            WHERE added_by_user_id IN (:from_id, :to_id)
+            """
+        ),
+        {"from_id": from_user_id, "to_id": to_user_id},
+    )
+
     # Preserve the audit trail by re-pointing rather than letting the FK's
     # ON DELETE SET NULL null it out when the ephemeral user is deleted.
     await db.execute(

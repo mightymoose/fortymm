@@ -34,7 +34,19 @@ from app.uniqueness import name_taken
 RBAC_PERMISSION = "authorization.manage"
 
 
-async def _user_has_permission(db: AsyncSession, user_id: uuid.UUID, name: str) -> bool:
+async def user_has_permission(db: AsyncSession, user_id: uuid.UUID, name: str) -> bool:
+    """Does ``user_id`` hold ``name``, through any role they have?
+
+    Public, because ``require_permission`` is not always the right shape to ask it
+    in. A route whose authorization *forks on the request* — ``POST …/entries``,
+    where an absent ``user_id`` is a player self-registering (permission) and a
+    present one is the owner entering somebody (ownership, ADR-0784) — cannot hang
+    the permission off the router: the dependency runs before the handler has seen
+    the body, and would refuse the owner for lacking a grant that has nothing to do
+    with the thing they are doing. Such a route asks the question itself, in the arm
+    of the fork it belongs to — with *this* function, so there is still exactly one
+    definition of "holds the permission" and the fork cannot grow a second opinion.
+    """
     result = await db.execute(
         select(Permission.id)
         .join(RolePermission, RolePermission.permission_id == Permission.id)
@@ -50,7 +62,7 @@ def require_permission(name: str) -> Callable[..., Awaitable[User]]:
         user: User = Depends(get_current_user),
         db: AsyncSession = Depends(get_session),
     ) -> User:
-        if not await _user_has_permission(db, user.id, name):
+        if not await user_has_permission(db, user.id, name):
             raise HTTPException(status_code=403, detail="Forbidden.")
         return user
 

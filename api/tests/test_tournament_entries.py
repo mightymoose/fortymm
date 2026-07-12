@@ -75,12 +75,18 @@ async def _make_event(
     max_players: int = 64,
     predicates: list[dict[str, Any]] | None = None,
     league: League | None = None,
+    owner: User | None = None,
 ) -> TournamentEvent:
     """An event of ``format`` under a tournament in ``status``, owned by its own
     throwaway director. Written straight to the database rather than through the
     create routes: those are owner-only and permission-gated, and dragging that
     setup in would blur which grant the entry route is actually being tested
     against.
+
+    ``owner`` defaults to a throwaway director *nobody in the test is signed in as* —
+    which is what keeps the self-registration tests honest: the entrant is never
+    accidentally the owner, so none of them can be passing through the director's arm
+    of the fork (ADR-0784). The director tests pass the owner they mean.
 
     ``status`` defaults to ``published`` because that is the one status in which
     registration is open (ADR-0017): every test here that enters or withdraws needs
@@ -104,7 +110,8 @@ async def _make_event(
     the way of every test that is about something else. The eligibility tests pass the
     rule they mean, and ``league`` lets them say which ladder it is judged on.
     """
-    director = await make_user(db_session, f"director-{uuid.uuid4().hex[:8]}")
+    if owner is None:
+        owner = await make_user(db_session, f"director-{uuid.uuid4().hex[:8]}")
     # Every tournament names the ladder its eligibility is judged on (ADR-0783);
     # the column is NOT NULL. Most tests here don't turn on *which* league, so it is
     # the default one the autouse fixture seeds — the eligibility tests that do care
@@ -124,7 +131,7 @@ async def _make_event(
             "country": "USA",
         },
         league_id=league.id,
-        created_by_user_id=director.id,
+        created_by_user_id=owner.id,
     )
     db_session.add(tournament)
     await db_session.flush()
@@ -159,7 +166,20 @@ async def doubles_event(db_session: AsyncSession) -> TournamentEvent:
 
 @pytest_asyncio.fixture
 async def player(db_session: AsyncSession) -> User:
-    return await make_user(db_session, f"player-{uuid.uuid4().hex[:8]}")
+    """A player who may enter — a real ``tournament.enter`` grant, through real RBAC
+    rows.
+
+    Most tests use them only as a *seeded* entrant, for whom the grant is irrelevant.
+    It is here for the ones that drive ``enter_event`` / ``withdraw_from_event`` as
+    functions (the lock races below): the self-registration arm of the fork asks for
+    that permission *inside* the handler (ADR-0784 — it cannot be a router dependency,
+    because the dependency runs before the body that says which arm this is), so a
+    player without it is refused before the lock is ever taken, and the race the test
+    means to stage never happens.
+    """
+    user = await make_user(db_session, f"player-{uuid.uuid4().hex[:8]}")
+    await grant_permissions(db_session, user, (TOURNAMENT_ENTER,))
+    return user
 
 
 async def _active_entries(
@@ -222,6 +242,10 @@ async def test_an_entry_persists_with_its_defaults(
     assert entry.status is TournamentEntryStatus.entered
     assert entry.seed is None
     assert entry.created_at.tzinfo is not None
+    # NULL is the encoding of self-registration, and it is the *default* — a row
+    # written without naming an adder says "the player entered themselves"
+    # (ADR-0784), which is what every entry made before directors existed is.
+    assert entry.added_by_user_id is None
 
 
 async def test_a_second_active_entry_for_the_same_player_is_rejected(
@@ -357,6 +381,52 @@ async def test_deleting_a_user_with_an_entry_is_restricted(
     await db_session.rollback()
 
 
+async def test_an_entry_records_the_director_who_added_it(
+    db_session: AsyncSession, event: TournamentEvent, player: User
+) -> None:
+    """The other half of the ``added_by_user_id`` contract (ADR-0784): a non-null
+    adder is a director entry, and it is a distinct row-state from the NULL of
+    self-registration. No route reaches this yet (chore 9a) — the column exists so
+    that when one does, the fact is recordable rather than lost."""
+    director = await make_user(db_session, f"director-{uuid.uuid4().hex[:8]}")
+
+    entry = TournamentEntry(
+        event_id=event.id, user_id=player.id, added_by_user_id=director.id
+    )
+    db_session.add(entry)
+    await db_session.commit()
+    await db_session.refresh(entry)
+
+    assert entry.added_by_user_id == director.id
+    assert entry.user_id == player.id
+
+
+async def test_deleting_the_director_who_added_an_entry_is_restricted(
+    db_session: AsyncSession, event: TournamentEvent, player: User
+) -> None:
+    """``added_by_user_id`` is ``ON DELETE RESTRICT``, not ``SET NULL``.
+
+    ``SET NULL`` would be the tempting choice for a nullable audit column, and it
+    is the wrong one *here* precisely because NULL is not "unknown": it means
+    "the player entered themselves". Nulling this column on a delete would not
+    lose a fact, it would rewrite one — the entry would start claiming a
+    self-registration that never happened. So the database refuses the delete, and
+    the merge path (which tombstones rather than deletes) re-points it explicitly.
+    """
+    director = await make_user(db_session, f"director-{uuid.uuid4().hex[:8]}")
+    db_session.add(
+        TournamentEntry(
+            event_id=event.id, user_id=player.id, added_by_user_id=director.id
+        )
+    )
+    await db_session.commit()
+
+    with pytest.raises(IntegrityError):
+        await db_session.execute(delete(User).where(User.id == director.id))
+        await db_session.commit()
+    await db_session.rollback()
+
+
 # ----- the self-registration route ------------------------------------------
 
 
@@ -393,6 +463,10 @@ async def test_entering_a_singles_event_returns_201_and_persists_the_row(
 
     (row,) = await _active_entries(db_session, event.id)
     assert row.user_id == user.id
+    # Self-registration records NO adder (ADR-0784). The route hard-codes the
+    # caller as the entrant, so the one thing that must be true of the row it
+    # writes is that nobody "added" the player — they added themselves.
+    assert row.added_by_user_id is None
     # The response addresses the row it created: ``id`` is the *entry's* id, which
     # is what a client will withdraw through (``DELETE …/entries/{entry_id}``).
     assert body["id"] == str(row.id)
@@ -1141,7 +1215,9 @@ async def test_an_entry_cannot_land_after_the_tournament_has_gone_live(
                 await session.execute(select(User).where(User.id == player_id))
             ).scalar_one()
             try:
-                await enter_event(tournament_id, event_id, session, entrant)
+                # ``None`` is the body: self-registration (ADR-0784). The director's
+                # arm of the same handler takes a ``TournamentEntryCreate``.
+                await enter_event(tournament_id, event_id, None, session, entrant)
                 return "entered"
             except HTTPException as exc:
                 return exc.status_code
@@ -1333,7 +1409,7 @@ async def test_the_capacity_count_is_taken_under_the_tournament_row_lock(
         entrant = (
             await session.execute(select(User).where(User.id == player_id))
         ).scalar_one()
-        await enter_event(tournament_id, event_id, session, entrant)
+        await enter_event(tournament_id, event_id, None, session, entrant)
 
     lock = _statement_index(
         statements, lambda s: "FOR UPDATE" in s, label="the tournament row lock"
@@ -1389,6 +1465,11 @@ async def test_two_entrants_racing_for_the_last_slot_yield_exactly_one_entry(
     event = await _make_event(db_session, max_players=1)
     tournament_id, event_id = event.tournament_id, event.id
     rival = await make_user(db_session, f"rival-{uuid.uuid4().hex[:8]}")
+    # Both contenders hold ``tournament.enter``: the self-registration arm of the fork
+    # checks it inside the handler now (ADR-0784), and a contender without it would be
+    # refused before it ever reached the lock — which would leave the "two entrants,
+    # one slot" race with only one entrant in it, and green for the wrong reason.
+    await grant_permissions(db_session, rival, (TOURNAMENT_ENTER,))
     contenders = [player.id, rival.id]
     make_session = async_sessionmaker(engine, expire_on_commit=False)
 
@@ -1398,7 +1479,7 @@ async def test_two_entrants_racing_for_the_last_slot_yield_exactly_one_entry(
                 await session.execute(select(User).where(User.id == user_id))
             ).scalar_one()
             try:
-                await enter_event(tournament_id, event_id, session, entrant)
+                await enter_event(tournament_id, event_id, None, session, entrant)
                 return "entered"
             except HTTPException as exc:
                 # The refusal's *code*, not just its status: a 409 that came from
@@ -1712,3 +1793,407 @@ async def test_the_rating_refusal_outranks_the_event_full_refusal(
 
     assert response.status_code == 409, response.text
     assert response.json()["detail"]["code"] == "rating_ineligible"
+
+
+# ----- the director's half of the same endpoint (ADR-0784) --------------------
+#
+# ``POST …/entries`` takes an OPTIONAL body, and its presence chooses the actor: no
+# ``user_id`` is a player self-registering (gated on ``tournament.enter``), a
+# ``user_id`` is the tournament's OWNER entering somebody (gated on ownership). Same
+# endpoint, deliberately — a twin route would mean the next refusal has to be added
+# twice and the two call sites of the eligibility evaluator can drift, which is the
+# exact class of bug ADR-0968 exists to delete.
+#
+# So the load-bearing claims of this section are not really "the director can add a
+# player". They are: the director's entry runs through the SAME evaluator, the SAME
+# capacity lock and the SAME four refusal codes as a player's — absent a ``force``
+# flag (deliberately deferred, #985), that IS the whole safety model — and
+# self-registration is byte-for-byte what it was.
+
+
+@pytest_asyncio.fixture
+async def director_client(
+    api_client: AsyncClient, db_session: AsyncSession
+) -> AsyncIterator[tuple[AsyncClient, User]]:
+    """A real session holding **no permissions at all** — its only authority is that
+    it OWNS the tournaments the tests below build for it.
+
+    The empty grant is the point. A director entering somebody else is authorized by
+    ownership, not by ``tournament.enter``: that permission says "may self-register",
+    and refusing an owner for lacking it would be refusing them a grant that has
+    nothing to do with what they are doing. If the enter route's permission check were
+    still a router dependency — running before the handler has seen the body, and so
+    before anything knows which arm of the fork this is — every test in this section
+    would 403.
+    """
+    user = await start_session(api_client, db_session)
+    yield api_client, user
+
+
+async def _entrants_of(client: AsyncClient, event: TournamentEvent) -> list[dict]:
+    """The event's entrants as the read path reports them. Needs ``tournament.view``."""
+    response = await client.get(f"/v1/tournaments/{event.tournament_id}")
+    assert response.status_code == 200, response.text
+    (found,) = [e for e in response.json()["events"] if e["id"] == str(event.id)]
+    return [dict(entrant) for entrant in found["entrants"]]
+
+
+async def test_the_owner_enters_another_player_who_appears_as_an_entrant(
+    director_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    player: User,
+) -> None:
+    """**The chore, in one test.** The owner names a ``user_id``; that player is
+    entered, is answered as the created entrant, and shows up in the entrants list.
+
+    Two things beyond the 201 are worth naming. The owner holds **no**
+    ``tournament.enter`` grant (see ``director_client``) and is admitted anyway —
+    ownership is the authorization for this arm. And the row records **who added it**:
+    ``added_by_user_id`` is the director, not NULL, because "a director entered them"
+    and "they entered themselves" are different facts and the column is where the
+    difference lives (ADR-0784).
+    """
+    client, owner = director_client
+    await grant_permissions(db_session, owner, (TOURNAMENT_VIEW,))
+    event = await _make_event(db_session, owner=owner)
+
+    response = await client.post(_entries_url(event), json={"user_id": str(player.id)})
+
+    assert response.status_code == 201, response.text
+    body = response.json()
+    # The 201 describes the row that was written — the PLAYER — not the person who
+    # wrote it. A director's POST that answered with the director would be a lie the
+    # client would render as an entrant.
+    assert body["user_id"] == str(player.id)
+    assert body["username"] == player.username
+
+    (row,) = await _active_entries(db_session, event.id)
+    assert row.user_id == player.id
+    assert row.added_by_user_id == owner.id
+    assert body["id"] == str(row.id)
+
+    assert [e["user_id"] for e in await _entrants_of(client, event)] == [str(player.id)]
+
+
+async def test_a_non_owner_naming_another_players_user_id_is_a_403(
+    entrant_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    player: User,
+) -> None:
+    """A stranger cannot enter somebody else, and holding ``tournament.enter`` does not
+    help: that permission is the *self-registration* gate, and this request is not a
+    self-registration.
+
+    403, not 409: "you are not the director of this tournament" is a fact about who is
+    asking, and it will not change when somebody withdraws. And nothing is written —
+    ``_all_entries`` is unfiltered, so a handler that inserted and only then checked
+    ownership fails here.
+    """
+    client, _ = entrant_client
+    event = await _make_event(db_session)
+    event_id = event.id
+
+    response = await client.post(_entries_url(event), json={"user_id": str(player.id)})
+
+    assert response.status_code == 403, response.text
+    assert await _all_entries(db_session, event_id) == []
+
+
+async def test_the_owner_withdraws_an_entry_that_is_not_their_own(
+    director_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    player: User,
+) -> None:
+    """The withdraw route unifies the same way (ADR-0784): your own entry, **or any
+    entry if you own the tournament**.
+
+    The owner holds no ``tournament.enter`` here either — withdrawing a player from a
+    tournament you created is a property of ownership. Soft-delete, as always: the row
+    survives, ``withdrawn``, and the entrants list drops them.
+    """
+    client, owner = director_client
+    await grant_permissions(db_session, owner, (TOURNAMENT_VIEW,))
+    event = await _make_event(db_session, owner=owner)
+    entry_id = await _seed_entry(db_session, event, player)
+
+    response = await client.delete(_entry_url(event, entry_id))
+
+    assert response.status_code == 204, response.text
+    assert (
+        await _reread(db_session, entry_id)
+    ).status is TournamentEntryStatus.withdrawn
+    assert await _entrants_of(client, event) == []
+
+
+async def test_the_owner_entering_themselves_by_user_id_records_no_adder(
+    director_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """The degenerate self-add, **normalised**: an owner who names their OWN ``user_id``
+    is self-registering, and self-registration is spelled ``added_by_user_id = NULL``.
+
+    Writing ``added_by == user_id`` instead would be a second, contradictory encoding of
+    "the player entered themselves" — one the entrants list would render as "added by
+    the director" on an entry whose director *is* the player. ``merge_user`` already
+    collapses that shape when a merge would otherwise produce it; the route must not
+    mint it in the first place.
+
+    It follows that the owner needs ``tournament.enter`` here — because this *is* the
+    self-registration path, not a director entry. Same guard, same row, whether the body
+    is absent or names you.
+    """
+    client, owner = director_client
+    await grant_permissions(db_session, owner, (TOURNAMENT_ENTER,))
+    event = await _make_event(db_session, owner=owner)
+
+    response = await client.post(_entries_url(event), json={"user_id": str(owner.id)})
+
+    assert response.status_code == 201, response.text
+    (row,) = await _active_entries(db_session, event.id)
+    assert row.user_id == owner.id
+    assert row.added_by_user_id is None, (
+        "an owner entering themselves IS self-registration — it must not be stored as "
+        "added_by == user_id, a second encoding of the same fact"
+    )
+
+
+async def test_naming_your_own_user_id_is_self_registration_for_a_non_owner_too(
+    entrant_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    event: TournamentEvent,
+) -> None:
+    """The fork turns on WHO is named, not on who owns the tournament: a plain player
+    who spells out their own ``user_id`` is self-registering — 201 on the strength of
+    ``tournament.enter``, with no adder recorded — and is emphatically not refused by
+    the director arm's ownership check.
+
+    The identity test is what makes ``added_by == user_id`` unrepresentable *by any
+    caller*, not merely by the owner."""
+    client, user = entrant_client
+
+    response = await client.post(_entries_url(event), json={"user_id": str(user.id)})
+
+    assert response.status_code == 201, response.text
+    (row,) = await _active_entries(db_session, event.id)
+    assert (row.user_id, row.added_by_user_id) == (user.id, None)
+
+
+async def test_the_owner_still_needs_the_enter_permission_to_enter_themselves(
+    director_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """The self-registration gate is intact, and owning the tournament does not
+    substitute for it: an owner with no ``tournament.enter`` who POSTs with **no body**
+    is refused exactly as any other player would be.
+
+    This is the test that catches the tempting simplification — "the owner may do
+    anything to their own tournament" — which would quietly hand the director an
+    entry path that skips the permission every other self-registration goes through.
+    """
+    client, owner = director_client
+    event = await _make_event(db_session, owner=owner)
+    event_id = event.id
+
+    response = await client.post(_entries_url(event))
+
+    assert response.status_code == 403, response.text
+    assert await _all_entries(db_session, event_id) == []
+
+
+async def test_a_directors_entry_into_a_full_event_is_refused_with_event_full(
+    director_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    player: User,
+) -> None:
+    """**No ``force``, and this is what that means** (ADR-0784): a director adding a
+    player to an event that already holds ``max_players`` is refused with the *same*
+    ``event_full`` code the player would have got, and no row is written.
+
+    Absent an override flag, running the director through the same guards IS the entire
+    safety model. A route that skipped capacity "because the director knows best" would
+    overfill the field the draw is cut from — silently, and only for the one caller
+    whose mistakes nobody else can catch.
+    """
+    client, owner = director_client
+    event = await _make_event(db_session, owner=owner, max_players=1)
+    event_id = event.id
+    sitting = await make_user(db_session, f"sitting-{uuid.uuid4().hex[:8]}")
+    await _seed_entry(db_session, event, sitting)
+
+    response = await client.post(_entries_url(event), json={"user_id": str(player.id)})
+
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"]["code"] == "event_full"
+    assert len(await _all_entries(db_session, event_id)) == 1
+
+
+async def test_a_directors_entry_over_the_rating_cap_is_rating_ineligible(
+    director_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    player: User,
+    default_league: League,
+) -> None:
+    """The other half of "no ``force``": the event's rating rules judge the player being
+    ENTERED, and a director adding a 1650 player to the "Under 1500" event is refused
+    with the same ``rating_ineligible`` code.
+
+    The director themselves is unrated — so a handler that judged the *caller's* rating
+    (the obvious copy-paste of the self-registration line) would sail through, because
+    an unrated player passes every rule (ADR-0783 §3). That is the bug this test is
+    shaped to catch: eligibility as an accidental function of who is holding the phone.
+    """
+    client, owner = director_client
+    await _rate(db_session, player, default_league, 1650.0)
+    event = await _make_event(db_session, owner=owner, predicates=CAP_UNDER_1500)
+    event_id = event.id
+
+    response = await client.post(_entries_url(event), json={"user_id": str(player.id)})
+
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"]["code"] == "rating_ineligible"
+    assert await _all_entries(db_session, event_id) == []
+
+
+@pytest.mark.parametrize(
+    "tournament_status",
+    [TournamentStatus.draft, TournamentStatus.live, TournamentStatus.archived],
+)
+async def test_a_director_obeys_the_registration_window_a_player_obeys(
+    director_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    player: User,
+    tournament_status: TournamentStatus,
+) -> None:
+    """The director gets no window of their own: the tournament's status is the
+    registration window (ADR-0017) for them too, so adding a player outside
+    ``published`` is the same ``registration_closed`` 409.
+
+    ``live`` is the case with teeth, and it is **deliberate rather than an oversight**:
+    it means #784 does not solve walk-ins. The override that would — and the no-show
+    withdrawal beside it — is one coherent ticket (#985), not a flag smuggled in here.
+    """
+    client, owner = director_client
+    event = await _make_event(db_session, owner=owner, status=tournament_status)
+    event_id = event.id
+
+    response = await client.post(_entries_url(event), json={"user_id": str(player.id)})
+
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"]["code"] == "registration_closed"
+    assert await _all_entries(db_session, event_id) == []
+
+
+async def test_the_owner_cannot_withdraw_an_entry_once_the_tournament_is_live(
+    director_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    player: User,
+) -> None:
+    """Withdrawal stays **symmetric** with entry: the owner obeys the same window, so a
+    no-show cannot be removed from a live tournament either.
+
+    The asymmetric alternative — the owner may withdraw at any time, but only add during
+    registration — is the more useful product and was still rejected: it is an override
+    leaking back in through the withdraw door, with different rules and no flag to name
+    it (ADR-0784). 409, and the entry is untouched.
+    """
+    client, owner = director_client
+    event = await _make_event(db_session, owner=owner, status=TournamentStatus.live)
+    entry_id = await _seed_entry(db_session, event, player)
+
+    response = await client.delete(_entry_url(event, entry_id))
+
+    assert response.status_code == 409, response.text
+    assert (await _reread(db_session, entry_id)).status is TournamentEntryStatus.entered
+
+
+async def test_entering_a_user_id_that_names_nobody_is_a_404(
+    director_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """A well-formed id that names no player: a 404 about the *player*, not a 500 from
+    the FK, and not a 422 (the request's shape is fine — it is the world that has no
+    such user)."""
+    client, owner = director_client
+    event = await _make_event(db_session, owner=owner)
+    event_id = event.id
+
+    response = await client.post(
+        _entries_url(event), json={"user_id": str(uuid.uuid4())}
+    )
+
+    assert response.status_code == 404, response.text
+    assert await _all_entries(db_session, event_id) == []
+
+
+async def test_a_tombstoned_user_cannot_be_entered(
+    director_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    player: User,
+) -> None:
+    """A merged-away guest is a ghost — no listing, search or auth query will ever
+    return them — so entering one would seed the draw with a player who cannot sign in,
+    be notified, or turn up. The lookup excludes them exactly as ``/v1/players/search``
+    does, and the refusal is the same 404 as an id that names nobody: as far as this
+    endpoint is concerned, nobody is who they name."""
+    client, owner = director_client
+    survivor = await make_user(db_session, f"survivor-{uuid.uuid4().hex[:8]}")
+    player.merged_into_user_id = survivor.id
+    await db_session.commit()
+    event = await _make_event(db_session, owner=owner)
+    event_id, ghost_id = event.id, player.id
+
+    response = await client.post(_entries_url(event), json={"user_id": str(ghost_id)})
+
+    assert response.status_code == 404, response.text
+    assert await _all_entries(db_session, event_id) == []
+
+
+async def test_a_director_entering_the_same_player_twice_is_already_entered(
+    director_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    player: User,
+) -> None:
+    """The duplicate guard is the same partial unique index, reached through the same
+    caught ``IntegrityError``: the director's second attempt is an ``already_entered``
+    409, not a 500 and not a second row.
+
+    It is also why ``added_by_user_id`` deliberately carries **no** CHECK constraint
+    (ADR-0784): a constraint violation on this INSERT would be caught here and reported
+    as "you have already entered this event" — a refusal that would be simply false.
+    """
+    client, owner = director_client
+    event = await _make_event(db_session, owner=owner)
+    url, event_id = _entries_url(event), event.id
+    body = {"user_id": str(player.id)}
+
+    assert (await client.post(url, json=body)).status_code == 201
+
+    duplicate = await client.post(url, json=body)
+
+    assert duplicate.status_code == 409, duplicate.text
+    assert duplicate.json()["detail"]["code"] == "already_entered"
+    assert len(await _active_entries(db_session, event_id)) == 1
+
+
+async def test_an_unknown_field_in_the_entry_body_is_a_422(
+    director_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    player: User,
+) -> None:
+    """``extra="forbid"`` on the request model, and the one worth naming: ``force``.
+
+    A client that sends ``{"user_id": …, "force": true}`` expecting the override to
+    exist gets a 422, not a silently-ignored flag and an entry that was quietly judged
+    by the rules it thought it was bypassing. The override is #985's to design; until
+    then, the honest answer to a request for it is "no such field".
+    """
+    client, owner = director_client
+    event = await _make_event(db_session, owner=owner)
+    event_id = event.id
+
+    response = await client.post(
+        _entries_url(event), json={"user_id": str(player.id), "force": True}
+    )
+
+    assert response.status_code == 422, response.text
+    assert await _all_entries(db_session, event_id) == []
