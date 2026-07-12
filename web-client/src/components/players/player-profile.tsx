@@ -169,7 +169,13 @@ export function PlayerProfile({
   }
 
   return (
-    <div className="player-profile dark fortymm-theme">
+    // `--overview` is what makes the six sections *cards* (and centres the page
+    // in a content column). It is a modifier rather than a base style because
+    // the full-history route at `/players/$userId/matches` wears the same
+    // `.player-profile` root and the same `__section` / `__section-header`
+    // classes — for its table chrome — and must stay the flush, full-bleed pane
+    // it is. See `player-match-history.css`.
+    <div className="player-profile player-profile--overview dark fortymm-theme">
       <header className="player-profile__hero">
         <div className="player-profile__hero-row">
           <ProfileHero playerId={playerId} leagueId={leagueId} range={range} />

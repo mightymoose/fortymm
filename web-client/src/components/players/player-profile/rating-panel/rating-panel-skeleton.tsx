@@ -24,13 +24,16 @@ export const RatingPanelSkeleton = () => (
         </div>
       ))}
     </div>
-    <span className="player-profile__form" aria-hidden="true">
-      {Array.from({ length: 10 }, (_, i) => (
-        <span
-          className="player-profile__form-chip player-profile__form-chip--skeleton"
-          key={i}
-        />
-      ))}
-    </span>
+    <div className="player-profile__form-row" aria-hidden="true">
+      <span className="player-profile__form-label">Form</span>
+      <span className="player-profile__form">
+        {Array.from({ length: 10 }, (_, i) => (
+          <span
+            className="player-profile__form-chip player-profile__form-chip--skeleton"
+            key={i}
+          />
+        ))}
+      </span>
+    </div>
   </section>
 )

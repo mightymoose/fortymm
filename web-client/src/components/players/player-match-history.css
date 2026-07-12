@@ -1,7 +1,7 @@
 /* Full match-history surface (`/players/$userId/matches`). It wears the same
  * `.player-profile` root class as the profile — which is what supplies the
- * table, chip and pagination-footer styles — and swaps the profile's tall
- * Bebas hero for this compact header. */
+ * table, chip and pagination-footer styles — and swaps the profile's hero card
+ * for this compact header. */
 
 /* The fixed-height pane. This page — a long table under a pinned pagination
  * footer — is the surface that actually wants it, so it now asks for it by name
@@ -11,6 +11,21 @@
 .player-profile--pane {
   height: calc(100vh - var(--topbar-h, 64px));
   overflow: hidden;
+}
+
+/* The content column. The profile centres and pads itself at its root (see
+ * `.player-profile--overview`, player-profile.css), so the shared
+ * `.player-profile__body` no longer carries the column for both surfaces — the
+ * pane asks for it here, by its own name. Stated positively and in its own
+ * stylesheet on purpose: as a `:not(--overview)` over in the profile's file, this
+ * page's gutter would be defined by the *absence* of another page's modifier,
+ * and renaming that modifier would silently send this page edge-to-edge. */
+@media (min-width: 960px) {
+  .player-profile--pane .player-profile__body {
+    max-width: 1240px;
+    margin: 0 auto;
+    padding: 24px clamp(20px, 4vw, 40px) 48px;
+  }
 }
 
 .player-history__header {

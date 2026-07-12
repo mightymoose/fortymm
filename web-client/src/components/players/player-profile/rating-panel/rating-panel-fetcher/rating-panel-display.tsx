@@ -62,7 +62,16 @@ export const RatingPanelDisplay = ({ standing }: RatingPanelDisplayProps) => {
         </dl>
       )}
 
-      {standing.form && <FormChips form={standing.form} />}
+      {standing.form && (
+        <div className="player-profile__form-row">
+          {/* `FormChips` already carries the run's accessible name ("Last 10"),
+              so the visible caption is decoration for the eye only. */}
+          <span className="player-profile__form-label" aria-hidden="true">
+            Form
+          </span>
+          <FormChips form={standing.form} />
+        </div>
+      )}
     </section>
   )
 }
