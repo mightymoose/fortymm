@@ -12,7 +12,19 @@ import { sessionResponse } from '../../../src/test/factories'
 type TournamentDetailRead = components['schemas']['TournamentDetailRead']
 type TournamentEventRead = components['schemas']['TournamentEventRead']
 type TournamentEntrantRead = components['schemas']['TournamentEntrantRead']
+/** The wire's status enum — the specs drive the store with it, so it is the
+ * generated schema's, not a re-typed union of four strings. */
+export type TournamentStatus = TournamentDetailRead['status']
 type UnreadCountResponse = components['schemas']['UnreadCountResponse']
+
+/** Every status a tournament can be in, in lifecycle order — so a spec that
+ * sweeps "each of the four" cannot quietly sweep three. */
+export const STATUSES: readonly TournamentStatus[] = [
+  'draft',
+  'published',
+  'live',
+  'archived',
+]
 
 /** The app shell's notification bell polls this on every page, tournaments
  * included. It is nothing to do with entries — but with MSW off, an unanswered
@@ -97,9 +109,12 @@ function crowd(size: number): TournamentEntrantRead[] {
  * The fourth — a roster *longer than the card lists* — is opt-in (`crowded`),
  * because its dozen entrants would move the tournament-level Entries total that
  * the journey spec asserts on. */
-function seed(crowded: boolean): TournamentDetailRead {
+function seed(options: TournamentsStoreOptions): TournamentDetailRead {
+  const crowded = options.crowded ?? false
   return buildTournamentDetailRead({
     id: TOURNAMENT_ID,
+    status: options.status ?? 'published',
+    can_edit: options.canEdit ?? true,
     events: [
       buildTournamentEventRead({
         id: 'ev-open-singles',
@@ -147,6 +162,50 @@ export interface TournamentsStoreOptions {
   /** Add `EVENT.CROWDED` — a singles event already holding more entrants than a
    * card can list, so entering it puts me past the truncation cut-off. */
   crowded?: boolean
+  /** The status the tournament is in when the page loads. Defaults to
+   * `published` — the one status whose registration window is OPEN, and the one
+   * every enter/withdraw spec is written against (ADR-0017). */
+  status?: TournamentStatus
+  /** Does the signed-in player own it? Defaults to `true` (the owner, who is
+   * offered the lifecycle buttons). `false` is the viewer: same page, no
+   * transitions — the server 403s them, so the UI must not offer them. */
+  canEdit?: boolean
+  /** Events ME is already entered in when the page loads — by event name. The
+   * only way to reach "an entered player on a *live* tournament", since entering
+   * one through the UI is (rightly) refused. */
+  enteredIn?: string[]
+}
+
+/**
+ * The lifecycle's edge table, mirroring the server's `LEGAL_TRANSITIONS`
+ * (`api/app/tournaments.py`, ADR-0017): the three forward edges are the whole
+ * rule, and **every other (from, to) pair is a 409** — backwards, skipping a
+ * stage, out of the terminal `archived`, and re-asserting the status a
+ * tournament already holds.
+ *
+ * It is written out as pairs rather than derived from the client's own
+ * `LIFECYCLE_EDGE`: a stub that imported the app's table could never disagree
+ * with it, so a spec built on one would prove the app consistent with itself
+ * instead of consistent with the server.
+ */
+const LEGAL_TRANSITIONS: ReadonlyArray<readonly [TournamentStatus, TournamentStatus]> =
+  [
+    ['draft', 'published'],
+    ['published', 'live'],
+    ['live', 'archived'],
+  ]
+
+/** Why registration is refused, in the API's exact words
+ * (`_registration_closed_detail`). `published` is absent because it is the one
+ * status that refuses nothing. */
+const REGISTRATION_CLOSED_DETAIL: Record<
+  Exclude<TournamentStatus, 'published'>,
+  string
+> = {
+  draft:
+    'This tournament has not been published yet, so its events are not open for entry.',
+  live: 'This tournament is already under way, so its entries are locked.',
+  archived: 'This tournament has ended, so its events can no longer be entered.',
 }
 
 interface RecordedRequest {
@@ -167,7 +226,26 @@ export class TournamentsStore {
   readonly unhandled: RecordedRequest[] = []
 
   constructor(private readonly options: TournamentsStoreOptions = {}) {
-    this.detail = seed(options.crowded ?? false)
+    this.detail = seed(options)
+    // Seeded entries bypass the status gate on purpose: they are entries the
+    // player made while the window was open, and the tournament has moved on
+    // since. That is the only way a `live` tournament can hold an entrant of
+    // mine — which is exactly the state the "locked, not Withdraw" case is about.
+    for (const name of options.enteredIn ?? []) {
+      this.addEntry(this.eventNamed(name).id)
+    }
+  }
+
+  /** The tournament's status as the *server* now holds it — for asserting the
+   * walk really moved it, rather than that the badge changed. */
+  get status(): TournamentStatus {
+    return this.detail.status
+  }
+
+  private eventNamed(eventName: string): TournamentEventRead {
+    const event = this.detail.events.find((e) => e.name === eventName)
+    if (!event) throw new Error(`no such event in the seed: ${eventName}`)
+    return event
   }
 
   /** The event as the *server* would report it: the `entered` count derived from
@@ -199,9 +277,21 @@ export class TournamentsStore {
    * 409 — exactly as `enter()` below does.
    */
   enterElsewhere(eventName: string): TournamentEntrantRead {
-    const event = this.detail.events.find((e) => e.name === eventName)
-    if (!event) throw new Error(`no such event in the seed: ${eventName}`)
-    return this.addEntry(event.id)
+    return this.addEntry(this.eventNamed(eventName).id)
+  }
+
+  /**
+   * Move the tournament along its lifecycle *behind this page's back* — the
+   * director's other tab, or their phone (#780). No request is recorded: nothing
+   * the page under test did caused it, and from its point of view the world has
+   * simply moved on without it.
+   *
+   * The button it is still showing therefore names an edge that no longer exists,
+   * and clicking it is a request the server refuses with a **409** — the stale-view
+   * case that `POST …/transitions` reconciles from.
+   */
+  transitionElsewhere(to: TournamentStatus) {
+    this.detail = { ...this.detail, status: to }
   }
 
   /** Mint one active entry for ME on an event. A fresh entry id each time — as on
@@ -283,6 +373,10 @@ export class TournamentsStore {
       return json(route, 200, this.readDetail())
     }
 
+    if (method === 'POST' && path === `/v1/tournaments/${TOURNAMENT_ID}/transitions`) {
+      return this.transition(route, request.postDataJSON())
+    }
+
     const enter = path.match(/^\/v1\/tournaments\/([^/]+)\/events\/([^/]+)\/entries$/)
     if (method === 'POST' && enter) {
       return this.enter(route, enter[2])
@@ -299,15 +393,50 @@ export class TournamentsStore {
     return json(route, 404, { detail: `unmocked ${method} ${path}` })
   }
 
+  /**
+   * `POST …/transitions` — the ONE way a status moves (ADR-0017). Mirrors the
+   * server's three refusals, in its order: 403 for a non-owner (`can_edit`), then
+   * 409 for an edge that is not in the table.
+   *
+   * The 409's `detail` is the API's, verbatim, because it is what the user is
+   * shown — the toast's description is the error's message, so a stub that
+   * invented its own wording would test the toast against a string the server
+   * never sends.
+   */
+  private async transition(route: Route, body: unknown) {
+    const to = (body as { to?: TournamentStatus } | null)?.to
+    if (!to) return json(route, 422, { detail: 'a transition needs a target' })
+
+    if (!this.detail.can_edit) {
+      return json(route, 403, {
+        detail: 'You can only modify tournaments you created.',
+      })
+    }
+
+    const from = this.detail.status
+    if (!LEGAL_TRANSITIONS.some(([f, t]) => f === from && t === to)) {
+      return json(route, 409, {
+        detail: `This tournament is ${from}; it cannot be moved to ${to}.`,
+      })
+    }
+
+    this.detail = { ...this.detail, status: to }
+    return json(route, 200, this.readDetail())
+  }
+
   /** `POST …/entries` — self-registration. No request body: the caller is always
    * the entrant. Mirrors the API's refusals so the spec cannot pass against a
-   * stub more permissive than the server (400 non-singles, 409 duplicate). */
+   * stub more permissive than the server (400 non-singles, 409 window shut, 409
+   * duplicate) — in the API's order: the permanent refusal first, then the
+   * "not now" ones. */
   private async enter(route: Route, eventId: string) {
     const event = this.detail.events.find((e) => e.id === eventId)
     if (!event) return json(route, 404, { detail: 'event not found' })
     if (event.format !== 'singles') {
       return json(route, 400, { detail: 'only singles events can be entered' })
     }
+    const closed = this.registrationClosed()
+    if (closed) return json(route, 409, { detail: closed })
     if (event.entrants.some((e) => e.user_id === ME.userId)) {
       // The server's partial unique index, in miniature: at most one *active*
       // entry per player per event. The API's wording, verbatim — a stale tab
@@ -327,16 +456,32 @@ export class TournamentsStore {
     if (!event) return json(route, 404, { detail: 'event not found' })
 
     const entrant = event.entrants.find((e) => e.id === entryId)
+    // Idempotent in EVERY status, gate or no gate (ADR-0017): an entry that is
+    // already withdrawn has nothing left to lock, so this stays a 204 rather than
+    // becoming the 409 a blunt gate would make it.
     if (!entrant) return noContent(route)
     if (entrant.user_id !== ME.userId) {
       return json(route, 403, { detail: 'not your entry' })
     }
+    // …but withdrawing a LIVE entry is refused once the window shuts: pulling a
+    // player out from under a draw cut from the field they were in is precisely
+    // what going live forbids.
+    const closed = this.registrationClosed()
+    if (closed) return json(route, 409, { detail: closed })
 
     this.mutateEvent(eventId, (e) => ({
       ...e,
       entrants: e.entrants.filter((x) => x.id !== entryId),
     }))
     return noContent(route)
+  }
+
+  /** The refusal a *state change* to an entry earns right now, or `null` while
+   * the window is open. Only `published` is open — the status IS the state of the
+   * registration window (ADR-0017). */
+  private registrationClosed(): string | null {
+    const status = this.detail.status
+    return status === 'published' ? null : REGISTRATION_CLOSED_DETAIL[status]
   }
 
   private mutateEvent(
