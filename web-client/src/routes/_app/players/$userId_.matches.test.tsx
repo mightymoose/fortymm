@@ -1,4 +1,5 @@
 import { act, render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import {
   RouterProvider,
   createMemoryHistory,
@@ -10,11 +11,19 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { http, HttpResponse } from 'msw'
 import { describe, expect, it } from 'vitest'
 
+import { playerNotFoundPage } from '@/components/players/player-not-found.page'
 import { server } from '@/mocks/server'
 import { sessionResponse } from '@/test/factories'
 import { Route } from './$userId_.matches'
 
 const MatchHistoryRoute = Route.options.component!
+const MatchHistoryError = Route.options.errorComponent!
+/** The SHIPPED not-found boundary. This sub-route reads the same profile bundle
+ * as the profile route, so it 404s the same way — and it does **not** inherit the
+ * profile route's boundary (it is a sibling, not a child). A route that forgets
+ * its own renders TanStack's generic "Something went wrong!" instead, which is
+ * the half of ADR-1001 most likely to be missed. */
+const MatchHistoryNotFound = Route.options.notFoundComponent
 
 /** A page worth of opponent rows — only the fields the history table reads. */
 function matchRows(count: number, page: number, pageSize: number) {
@@ -65,14 +74,28 @@ function renderHistory(initialEntry: string) {
     path: '/players/$userId',
     component: () => null,
   })
+  // The not-found state's one recovery action is a typed <Link to="/players">.
+  const playersListRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/players',
+    component: () => <div>players list</div>,
+  })
   const historyRoute = createRoute({
     getParentRoute: () => rootRoute,
     path: '/players/$userId/matches',
     component: MatchHistoryRoute,
+    // Both of the shipped boundaries — read off the real route, so a route that
+    // drops one is caught here rather than in a browser.
+    errorComponent: MatchHistoryError,
+    notFoundComponent: MatchHistoryNotFound,
     validateSearch: Route.options.validateSearch,
   })
   const router = createRouter({
-    routeTree: rootRoute.addChildren([profileRoute, historyRoute]),
+    routeTree: rootRoute.addChildren([
+      playersListRoute,
+      profileRoute,
+      historyRoute,
+    ]),
     history: createMemoryHistory({ initialEntries: [initialEntry] }),
   })
   render(
@@ -312,6 +335,92 @@ describe('player match history', () => {
     expect(screen.getByText('LIVE')).toBeInTheDocument()
     // The awaiting row must NOT be labelled LIVE.
     expect(screen.getAllByText('LIVE')).toHaveLength(1)
+  })
+})
+
+/**
+ * The error taxonomy on the **sub-route** (ADR-1001) — the half most likely to be
+ * forgotten. It is a sibling of `/players/$userId`, not a child, so it inherits
+ * nothing: it reads the same 404-converting profile bundle and therefore needs a
+ * `notFoundComponent` of its very own.
+ */
+describe('player match history — a missing player is a not-found, not an error', () => {
+  const notFoundPage = playerNotFoundPage.within(screen)
+
+  /** The player 404s. The matches list is stubbed too: the page mounts (the
+   * heading query is still pending) before the not-found lands, so it *will* ask
+   * — and MSW's `onUnhandledRequest: 'error'` would fail the test on the way past
+   * the thing we're actually asserting. */
+  function mockMissingPlayer() {
+    server.use(
+      http.get('*/v1/session', () => HttpResponse.json(sessionResponse())),
+      http.get('*/v1/players/:playerId', () =>
+        HttpResponse.json({ detail: 'Player not found.' }, { status: 404 }),
+      ),
+      http.get('*/v1/players/:playerId/matches', () =>
+        HttpResponse.json({ items: [], page: 1, page_size: 25, total: 0 }),
+      ),
+    )
+  }
+
+  it('renders the designed not-found page for an unknown player id', async () => {
+    mockMissingPlayer()
+
+    renderHistory('/players/00000000-0000-0000-0000-000000000000/matches')
+
+    expect(await notFoundPage.findHeadline()).toHaveTextContent(
+      'Player not found.',
+    )
+    // Not the error boundary, and not TanStack's generic "Something went wrong!"
+    // — which is what this route rendered before it declared its own boundary.
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(screen.queryByText(/something went wrong!/i)).not.toBeInTheDocument()
+    // …and no orphaned match-history furniture behind it.
+    expect(screen.queryByText(/match history/i)).not.toBeInTheDocument()
+    expect(document.querySelector('table.matches')).toBeNull()
+  })
+
+  it('is not a dead end here either — Back to players works', async () => {
+    const user = userEvent.setup()
+    mockMissingPlayer()
+
+    const { router } = renderHistory('/players/nobody/matches')
+    await notFoundPage.findHeadline()
+
+    const actions = notFoundPage.getActions()
+    expect(actions).toHaveLength(1)
+    expect(actions[0]).toHaveAccessibleName('Back to players')
+
+    await user.click(actions[0])
+
+    expect(await screen.findByText('players list')).toBeInTheDocument()
+    expect(router.state.location.pathname).toBe('/players')
+  })
+
+  it('still sends a 5xx here to the error boundary, with its Try again', async () => {
+    // Same regression guard as on the profile: a broken server is not a missing
+    // player, and it must stay retryable.
+    server.use(
+      http.get('*/v1/session', () => HttpResponse.json(sessionResponse())),
+      http.get(
+        '*/v1/players/:playerId',
+        () => new HttpResponse(null, { status: 500 }),
+      ),
+      http.get('*/v1/players/:playerId/matches', () =>
+        HttpResponse.json({ items: [], page: 1, page_size: 25, total: 0 }),
+      ),
+    )
+
+    renderHistory('/players/p-1/matches')
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('Couldn’t load this player.')
+    expect(
+      screen.getByRole('button', { name: 'Try again' }),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole('heading', { level: 1, name: 'Player not found.' }),
+    ).not.toBeInTheDocument()
   })
 })
 

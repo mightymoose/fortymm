@@ -1,54 +1,94 @@
 import { useRouter } from '@tanstack/react-router'
 
-import { ApiError } from '@/api/client'
-import { Button } from '@/components/ui/button'
-
-/**
- * Route-level fallback for `throwOnError` player-profile fetch failures.
- * 4xx → "Player not found" (no point retrying the same id); 5xx → "Try again".
- *
- * Shared by the profile route and its match-history sub-route — both hang off
- * the same `playerByIdQueryOptions` query, so they fail the same way.
- */
-export function PlayerRouteError({
-  error,
-  reset,
-}: {
+export interface PlayerRouteErrorProps {
   error: Error
   reset: () => void
-}) {
+}
+
+/**
+ * Route-level fallback for player-profile fetch failures — **everything that is
+ * genuinely an error**: 5xx, network-down, a decode failure, a render throw,
+ * 401, 403.
+ *
+ * It no longer owns "Player not found". A 404 is not an error, it is a designed
+ * state: the profile bundle's `queryFn` converts it into a router `notFound()`,
+ * and the routes' `notFoundComponent` (`PlayerNotFound`) renders it with copy
+ * that names the missing thing and a link back to the players list. See
+ * `docs/adr/1001-a-missing-resource-is-a-not-found-not-an-error.md`.
+ *
+ * So this boundary has **one branch, and it is always retryable**. That is the
+ * point of the split, and it is deliberate for the two statuses that are still
+ * 4xx and still land here:
+ *
+ * - **401.** A *session-ended* 401 never reaches a boundary at all — the API
+ *   client's global handler (`setSessionEndedHandler`, wired in `main.tsx`)
+ *   catches it and routes to `/login`. A bare 401 is an ordinary auth failure,
+ *   which a retry after the session settles can genuinely clear.
+ * - **403.** Effectively unreachable on a `GET /v1/players/{id}` (the endpoint is
+ *   authenticated, not authorized per-player; CSRF 403s only mutating requests) —
+ *   but if one ever appears it is a *server-side* refusal, not a missing player.
+ *
+ * Neither may be told "Player not found.", and neither may be left without a way
+ * out — that dead end (the old `{!notFound && …}`) is exactly the bug #1001 filed.
+ * The test file pins both statuses explicitly, because with a single branch that
+ * correctness otherwise holds only *by construction*: nothing would catch a future
+ * change that reintroduced branching and stranded a 401 in an actionless dead end
+ * again.
+ *
+ * **The styling is the design system's page-level error state (`md-error-state`),
+ * not the match list's.** This markup used to reach for `.empty` / `.empty-title`
+ * / `.empty-sub` / `.empty-clear`, which are defined *only* under a
+ * `.match-list-page` ancestor (`components/matches/match-list/match-list.css`).
+ * The profile route has no such ancestor, so every one of those class names
+ * matched nothing and the error state painted as naked, unpadded text jammed
+ * against the sidebar — the *same* paint bug #1001 filed, on the half that is not
+ * a 404. `md-error-state` is declared in `src/index.css` under `.fortymm-theme`,
+ * which is on `<body>`, so it applies anywhere in the app; it is the treatment
+ * `AppError` and `MatchDetailsError` (the boundary reference implementation)
+ * already use, and it is the same "Error and Empty States" language as the
+ * not-found page beside it — mono eyebrow, display headline, one sentence, one
+ * action. `data-tone="alert"` is what tints the headline for an error rather than
+ * the neutral not-found.
+ *
+ * The `error` prop is typed `Error` because that is what TanStack hands an
+ * `errorComponent`, but nothing here dereferences it: a `notFound()` is a plain
+ * object, not an `Error`, so anything on this path must tolerate a non-Error
+ * throw. (It should never arrive here — `CatchNotFound` is mounted *inside*
+ * `CatchBoundary`, so it catches first — but this component is not the place to
+ * be surprised by it.)
+ *
+ * Shared by the profile route and its match-history sub-route: both hang off the
+ * same `playerByIdQueryOptions` query, so they fail the same way.
+ */
+export function PlayerRouteError({ reset }: PlayerRouteErrorProps) {
   const router = useRouter()
-  // `ApiError` is what `unwrap` throws for non-2xx responses, and it carries the
-  // status — so narrow on the class rather than duck-typing a `status` off an
-  // `unknown` shape. Anything else that reaches this boundary (a render error, a
-  // network throw) has no status, and gets the retryable branch.
-  //
-  // Treat 4xx as "no such player": retrying the same id would fail the same way.
-  const status = error instanceof ApiError ? error.status : 0
-  const notFound = status >= 400 && status < 500
   return (
-    <div role="alert" className="empty">
-      <div className="empty-title">
-        {notFound ? 'Player not found.' : 'Couldn’t load this player.'}
+    <div role="alert" className="md-error-state" data-tone="alert">
+      <div className="md-error-state__code">
+        <span className="md-error-state__dot" aria-hidden="true" />
+        Error
       </div>
-      <div className="empty-sub">
-        {notFound
-          ? 'The URL might be off, or this player has been removed.'
-          : 'Something went wrong reaching the server.'}
-      </div>
-      {!notFound && (
-        <Button
-          variant="ghost"
-          size="sm"
-          className="empty-clear"
+      <h1 className="md-error-state__title">Couldn’t load this player.</h1>
+      <p className="md-error-state__sub">
+        Something went wrong reaching the server — could be us, could be the
+        network. The player is probably fine; try again in a moment.
+      </p>
+      <div className="md-error-state__actions">
+        <button
+          type="button"
+          className="md-btn md-btn--primary"
           onClick={() => {
+            // Reset the router's error boundary, then re-run the loaders so the
+            // failed profile bundle refetches. Both halves matter: `reset()`
+            // alone re-renders the boundary with the same failed query, and
+            // `invalidate()` alone leaves the boundary up.
             reset()
-            router.invalidate()
+            void router.invalidate()
           }}
         >
           Try again
-        </Button>
-      )}
+        </button>
+      </div>
     </div>
   )
 }
