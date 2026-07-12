@@ -1021,6 +1021,7 @@ describe('ScoreEntry — create', () => {
 
     const hint = container.querySelector('.hint')
     expect(hint?.textContent).toMatch(/number keys/)
+    expect(hint?.textContent).toMatch(/to continue or save/)
     // No digit may appear: naming any range implies a cap on a score that goes to 11.
     expect(hint?.textContent).not.toMatch(/\d/)
   })
