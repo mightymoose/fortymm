@@ -15,11 +15,21 @@ export const EMPTY_STATE_LINK_TARGETS = [
   '/notifications/settings',
 ]
 
+/** The headline both empty states share. Declared once: every harness that
+ * needs it — router-mounted or not, this component's or the view's — reads it
+ * from here rather than re-typing the copy. */
+const HEADLINE = 'All caught up.'
+
 const scoped = (container: Container) => ({
-  /** The headline, shared by both empty states. Async: the router resolves its
-   * initial match asynchronously, so nothing is in the DOM on first paint. */
+  /** The headline under a router — async, since the router resolves its initial
+   * match after first paint, so nothing is in the DOM yet. */
   findHeadline() {
-    return container.findByText('All caught up.')
+    return container.findByText(HEADLINE)
+  },
+  /** The headline in a plain (router-free) render — see the view's page object,
+   * whose link-free states mount without one. */
+  queryHeadline() {
+    return container.queryByText(HEADLINE)
   },
   queryGoPlayCopy() {
     return container.queryByText('Nothing here. Go play.')

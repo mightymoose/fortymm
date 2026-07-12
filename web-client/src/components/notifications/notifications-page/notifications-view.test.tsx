@@ -1,3 +1,4 @@
+import { notificationTaxonomy } from '@/test/factories'
 import { buildNotificationsItems } from './notifications-view.factory'
 import { notificationsViewPage } from './notifications-view.page'
 
@@ -72,7 +73,22 @@ describe('NotificationsView', () => {
 
   it('shows the empty state when a filter matches nothing', () => {
     notificationsViewPage.render({ filter: 'match_reminder' })
-    expect(notificationsViewPage.queryEmptyState()).toBeInTheDocument()
+    expect(notificationsViewPage.queryHeadline()).toBeInTheDocument()
+  })
+
+  it('falls back to a generic label for a filter the taxonomy does not name', () => {
+    // The taxonomy is server-driven, so a filter can outlive the category that
+    // named it (a dropped type, a hand-edited URL). Name it generically rather
+    // than printing "Nothing under undefined."
+    notificationsViewPage.render({
+      filter: 'match_reminder',
+      categoryTypes: notificationTaxonomy().types.filter(
+        (type) => type.key !== 'match_reminder',
+      ),
+    })
+    expect(
+      notificationsViewPage.queryFilterCopy('this filter'),
+    ).toBeInTheDocument()
   })
 
   // What only the *view* knows is which empty it is looking at. The CTAs

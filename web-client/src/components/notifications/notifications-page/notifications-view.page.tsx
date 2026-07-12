@@ -22,9 +22,6 @@ const scoped = (container: Container) => ({
   queryUnreadBadge() {
     return container.queryByText(/\d+ unread/)
   },
-  queryEmptyState() {
-    return container.queryByText('All caught up.')
-  },
   queryTitle(title: string) {
     return container.queryByText(title)
   },
