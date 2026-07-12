@@ -44,31 +44,36 @@ export const CareerCardDisplay = ({ career }: CareerCardDisplayProps) => {
       </div>
 
       <div className="career-card__body">
-        <WinRateRing ring={career.ring} />
+        {/* Ring and record read together — they are the same fact twice, once as
+            a shape and once as a pair of numbers. The tiles are a separate,
+            lesser register and sit under both, spanning the card. */}
+        <div className="career-card__headline">
+          <WinRateRing ring={career.ring} />
 
-        <div className="career-card__figures">
-          <p className="career-card__record">{career.record}</p>
+          <div className="career-card__figures">
+            <p className="career-card__record">{career.record}</p>
 
-          {career.streak ? (
-            <span
-              className={cn(
-                'career-card__streak',
-                `career-card__streak--${career.streak.tone}`,
-              )}
-            >
-              {career.streak.label}
-            </span>
-          ) : (
-            <span className="career-card__streak career-card__streak--none">
-              No current streak
-            </span>
-          )}
-
-          <div className="career-card__tiles">
-            {career.tiles.map((tile) => (
-              <CareerTile key={tile.label} tile={tile} />
-            ))}
+            {career.streak ? (
+              <span
+                className={cn(
+                  'career-card__streak',
+                  `career-card__streak--${career.streak.tone}`,
+                )}
+              >
+                {career.streak.label}
+              </span>
+            ) : (
+              <span className="career-card__streak career-card__streak--none">
+                No current streak
+              </span>
+            )}
           </div>
+        </div>
+
+        <div className="career-card__tiles">
+          {career.tiles.map((tile) => (
+            <CareerTile key={tile.label} tile={tile} />
+          ))}
         </div>
       </div>
     </section>
