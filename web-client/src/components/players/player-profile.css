@@ -1611,9 +1611,10 @@
  * chose, which on a phone can be longer than the line. `anywhere` lets it break
  * mid-token rather than run off the side of the card. */
 .head-to-head__versus-line {
-  font-family: var(--font-display);
-  font-size: 20px;
-  line-height: 1.3;
+  font-family: var(--font-ui);
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.35;
   color: var(--fg-1);
   overflow-wrap: anywhere;
 }
