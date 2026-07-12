@@ -106,10 +106,14 @@ confusing ways to fail.
 
 Registration stays open while `published`, so a draw can be **stale** by
 go-live — cut before the last entrant arrived. The `published → live` edge
-therefore validates, inside the existing go-live row-lock, that every event's
-draw exists **and** its fixtures cover exactly the event's active entrants,
-409ing with the offending events otherwise. This is the precondition ADR-0017
-reserved space for.
+therefore validates, inside the existing go-live row-lock, that the tournament
+has **at least one event** and that every event's draw exists **and** its
+fixtures cover exactly the event's active entrants, 409ing with the offending
+events otherwise. This is the precondition ADR-0017 reserved space for. (The
+≥1-event guard closes the hole the #782 hand-off flagged: with zero events the
+per-event check is vacuously satisfied, and an empty tournament could go live.
+Publishing an empty tournament stays legal — announcing early is fine; starting
+nothing is not.)
 
 Materialization (a fixture with both sides known becoming a real propose/accept
 match, C1) is gated on the tournament being `live`, and **the go-live
