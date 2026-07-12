@@ -1078,31 +1078,45 @@ export interface paths {
         put?: never;
         /**
          * Enter Event
-         * @description Register the signed-in player in a singles event.
+         * @description Enter a player in a singles event — yourself, or (as the tournament's owner)
+         *     somebody else.
          *
-         *     Self-registration only: the entry created is always the caller's own, which
-         *     is why the request carries no body — there is no field in which to name
-         *     someone else. Entering a player who is not you is a director's job, and a
-         *     different endpoint.
+         *     **The body is optional, and its presence chooses the actor** (ADR-0784):
+         *
+         *     * **no body** → you are entering *yourself*. Requires the `tournament.enter`
+         *       permission. This is the request every player already sends, and it is unchanged.
+         *     * **`user_id`** → you are the **director** entering that player. Requires that you
+         *       **own** the tournament; anyone else naming a `user_id` that is not their own is a
+         *       `403`. An id that names no (live) player is a `404`.
+         *
+         *     Naming *your own* `user_id` is self-registration, not a director entry: same
+         *     permission, and the entry records no adder.
          *
          *     Registration is open only while the tournament is **`published`** — its status
          *     *is* its registration window (ADR-0017). Entering an event of a `draft`
          *     tournament (not announced yet), a `live` one (the field is fixed; the draw is
          *     cut from it), or an `archived` one (it is over) is a `409` — not a `403`: you
-         *     are permitted, the tournament is simply in the wrong state.
+         *     are permitted, the tournament is simply in the wrong state. **That holds for the
+         *     director too**: there is no override, so a director can neither add a walk-in nor
+         *     remove a no-show once the tournament is live.
          *
-         *     An event's **eligibility rules** are decided against your rating on the
-         *     tournament's league, and you must satisfy **every** one of them: failing a rule
+         *     An event's **eligibility rules** are decided against the entrant's rating on the
+         *     tournament's league, and they must satisfy **every** one of them: failing a rule
          *     (the 1650-rated player entering the "Under 1500" event) is a `409`. A player who
          *     holds **no rating** on that league — nobody has a rating until they finish a rated
          *     match — **passes every rule**, so a brand-new player is not shut out of the
          *     beginners' event that exists for them.
          *
-         *     Entering an event you are already in is a `409`; withdrawing first frees you
+         *     Entering an event the player is already in is a `409`; withdrawing first frees them
          *     to enter it again. Entering an event that already holds its `max_players`
          *     entrants is a `409` too — someone withdrawing frees the slot. Doubles and teams
          *     events are a `400`: an entry is one row per player, with nowhere to record a
          *     partner or a team.
+         *
+         *     **A director's entry is judged by exactly these rules.** The same evaluator, the
+         *     same capacity lock, the same four refusal codes: a director adding a player to a
+         *     full event, or one over the event's rating cap, is refused precisely as the player
+         *     would be.
          */
         post: operations["enter_event_v1_tournaments__tournament_id__events__event_id__entries_post"];
         delete?: never;
@@ -1123,14 +1137,17 @@ export interface paths {
         post?: never;
         /**
          * Withdraw From Event
-         * @description Withdraw the signed-in player's own entry from an event.
+         * @description Withdraw an entry from an event — your own, or (as the tournament's owner) any
+         *     entry in it.
          *
          *     The entry is **soft-deleted**: its status flips to `withdrawn` and the row
          *     survives, so the event keeps its withdrawal history — and, because the
          *     uniqueness guard is a *partial* index over active entries only, the player is
          *     free to enter the same event again afterwards.
          *
-         *     You may only withdraw your own entry; someone else's is a `403`.
+         *     **Who may withdraw an entry** (ADR-0784) mirrors who may create one: the player
+         *     themselves (with the `tournament.enter` permission), or the tournament's **owner**,
+         *     for any entry in it. Anybody else is a `403`.
          *
          *     Withdrawal, like entry, is open only while the tournament is **`published`** —
          *     its status *is* its registration window (ADR-0017). Withdrawing an *active*
@@ -1138,7 +1155,9 @@ export interface paths {
          *     from the field they were part of, so it is a `409`, as it is for a `draft`
          *     tournament (registration has not opened) and an `archived` one (it is over).
          *     A `409`, not a `403`: you are permitted, the tournament is simply in the wrong
-         *     state.
+         *     state. **The owner obeys that window too** — withdrawal stays symmetric with entry,
+         *     so a director can no more remove a no-show from a live tournament than add a
+         *     walk-in to one.
          *
          *     **Withdrawing an entry that is already withdrawn is a `204` in every status**,
          *     `live` and `archived` included — a no-op, not an error: this is `DELETE`, and
@@ -3071,6 +3090,41 @@ export interface components {
             seed: number | null;
             /** Rating */
             rating: number | null;
+        };
+        /**
+         * TournamentEntryCreate
+         * @description *Who* to enter — the body of ``POST …/entries``, and the whole of it.
+         *
+         *     **The body is optional, and its presence selects the actor** (ADR-0784):
+         *
+         *     * **omitted** → you are entering *yourself*. Self-registration, gated on the
+         *       ``tournament.enter`` permission — the request every player already sends, which
+         *       carries no body at all and must keep working unchanged.
+         *     * **``user_id`` present** → a *director* is entering somebody, which only the
+         *       tournament's **owner** may do.
+         *
+         *     One endpoint, not two, because both actors must run the same eligibility
+         *     evaluator, take the same capacity lock and produce the same four refusal codes
+         *     (``EntryRefusal``, ADR-0968). A twin route would make the *next* refusal a thing
+         *     to add twice, and the two call sites of the evaluator a thing to keep from
+         *     drifting.
+         *
+         *     Naming **your own** ``user_id`` is self-registration, not a director entry — the
+         *     same guard, and the same ``added_by_user_id = NULL`` on the row. "The player
+         *     entered themselves" has exactly one encoding, and ``added_by == user_id`` is not
+         *     it (see ``TournamentEntry.added_by_user_id``).
+         *
+         *     There is deliberately **no ``force``**: a director's entry is refused by the same
+         *     rules a player's is — a full event and a rating cap catch a director's typo exactly
+         *     as they catch a stranger's. Absent an override, that *is* the safety model, and the
+         *     override is a ticket of its own (#985), not a flag smuggled in here.
+         */
+        TournamentEntryCreate: {
+            /**
+             * User Id
+             * Format: uuid
+             */
+            user_id: string;
         };
         /**
          * TournamentEventCreate
@@ -5516,7 +5570,11 @@ export interface operations {
                 session?: string | null;
             };
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["TournamentEntryCreate"] | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             201: {

@@ -576,45 +576,62 @@ internal protocol APIProtocol: Sendable {
     func deleteEventV1TournamentsTournamentIdEventsEventIdDelete(_ input: Operations.DeleteEventV1TournamentsTournamentIdEventsEventIdDelete.Input) async throws -> Operations.DeleteEventV1TournamentsTournamentIdEventsEventIdDelete.Output
     /// Enter Event
     ///
-    /// Register the signed-in player in a singles event.
+    /// Enter a player in a singles event — yourself, or (as the tournament's owner)
+    /// somebody else.
     ///
-    /// Self-registration only: the entry created is always the caller's own, which
-    /// is why the request carries no body — there is no field in which to name
-    /// someone else. Entering a player who is not you is a director's job, and a
-    /// different endpoint.
+    /// **The body is optional, and its presence chooses the actor** (ADR-0784):
+    ///
+    /// * **no body** → you are entering *yourself*. Requires the `tournament.enter`
+    ///   permission. This is the request every player already sends, and it is unchanged.
+    /// * **`user_id`** → you are the **director** entering that player. Requires that you
+    ///   **own** the tournament; anyone else naming a `user_id` that is not their own is a
+    ///   `403`. An id that names no (live) player is a `404`.
+    ///
+    /// Naming *your own* `user_id` is self-registration, not a director entry: same
+    /// permission, and the entry records no adder.
     ///
     /// Registration is open only while the tournament is **`published`** — its status
     /// *is* its registration window (ADR-0017). Entering an event of a `draft`
     /// tournament (not announced yet), a `live` one (the field is fixed; the draw is
     /// cut from it), or an `archived` one (it is over) is a `409` — not a `403`: you
-    /// are permitted, the tournament is simply in the wrong state.
+    /// are permitted, the tournament is simply in the wrong state. **That holds for the
+    /// director too**: there is no override, so a director can neither add a walk-in nor
+    /// remove a no-show once the tournament is live.
     ///
-    /// An event's **eligibility rules** are decided against your rating on the
-    /// tournament's league, and you must satisfy **every** one of them: failing a rule
+    /// An event's **eligibility rules** are decided against the entrant's rating on the
+    /// tournament's league, and they must satisfy **every** one of them: failing a rule
     /// (the 1650-rated player entering the "Under 1500" event) is a `409`. A player who
     /// holds **no rating** on that league — nobody has a rating until they finish a rated
     /// match — **passes every rule**, so a brand-new player is not shut out of the
     /// beginners' event that exists for them.
     ///
-    /// Entering an event you are already in is a `409`; withdrawing first frees you
+    /// Entering an event the player is already in is a `409`; withdrawing first frees them
     /// to enter it again. Entering an event that already holds its `max_players`
     /// entrants is a `409` too — someone withdrawing frees the slot. Doubles and teams
     /// events are a `400`: an entry is one row per player, with nowhere to record a
     /// partner or a team.
+    ///
+    /// **A director's entry is judged by exactly these rules.** The same evaluator, the
+    /// same capacity lock, the same four refusal codes: a director adding a player to a
+    /// full event, or one over the event's rating cap, is refused precisely as the player
+    /// would be.
     ///
     /// - Remark: HTTP `POST /v1/tournaments/{tournament_id}/events/{event_id}/entries`.
     /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/events/{event_id}/entries/post(enter_event_v1_tournaments__tournament_id__events__event_id__entries_post)`.
     func enterEventV1TournamentsTournamentIdEventsEventIdEntriesPost(_ input: Operations.EnterEventV1TournamentsTournamentIdEventsEventIdEntriesPost.Input) async throws -> Operations.EnterEventV1TournamentsTournamentIdEventsEventIdEntriesPost.Output
     /// Withdraw From Event
     ///
-    /// Withdraw the signed-in player's own entry from an event.
+    /// Withdraw an entry from an event — your own, or (as the tournament's owner) any
+    /// entry in it.
     ///
     /// The entry is **soft-deleted**: its status flips to `withdrawn` and the row
     /// survives, so the event keeps its withdrawal history — and, because the
     /// uniqueness guard is a *partial* index over active entries only, the player is
     /// free to enter the same event again afterwards.
     ///
-    /// You may only withdraw your own entry; someone else's is a `403`.
+    /// **Who may withdraw an entry** (ADR-0784) mirrors who may create one: the player
+    /// themselves (with the `tournament.enter` permission), or the tournament's **owner**,
+    /// for any entry in it. Anybody else is a `403`.
     ///
     /// Withdrawal, like entry, is open only while the tournament is **`published`** —
     /// its status *is* its registration window (ADR-0017). Withdrawing an *active*
@@ -622,7 +639,9 @@ internal protocol APIProtocol: Sendable {
     /// from the field they were part of, so it is a `409`, as it is for a `draft`
     /// tournament (registration has not opened) and an `archived` one (it is over).
     /// A `409`, not a `403`: you are permitted, the tournament is simply in the wrong
-    /// state.
+    /// state. **The owner obeys that window too** — withdrawal stays symmetric with entry,
+    /// so a director can no more remove a no-show from a live tournament than add a
+    /// walk-in to one.
     ///
     /// **Withdrawing an entry that is already withdrawn is a `204` in every status**,
     /// `live` and `archived` included — a no-op, not an error: this is `DELETE`, and
@@ -1643,53 +1662,72 @@ extension APIProtocol {
     }
     /// Enter Event
     ///
-    /// Register the signed-in player in a singles event.
+    /// Enter a player in a singles event — yourself, or (as the tournament's owner)
+    /// somebody else.
     ///
-    /// Self-registration only: the entry created is always the caller's own, which
-    /// is why the request carries no body — there is no field in which to name
-    /// someone else. Entering a player who is not you is a director's job, and a
-    /// different endpoint.
+    /// **The body is optional, and its presence chooses the actor** (ADR-0784):
+    ///
+    /// * **no body** → you are entering *yourself*. Requires the `tournament.enter`
+    ///   permission. This is the request every player already sends, and it is unchanged.
+    /// * **`user_id`** → you are the **director** entering that player. Requires that you
+    ///   **own** the tournament; anyone else naming a `user_id` that is not their own is a
+    ///   `403`. An id that names no (live) player is a `404`.
+    ///
+    /// Naming *your own* `user_id` is self-registration, not a director entry: same
+    /// permission, and the entry records no adder.
     ///
     /// Registration is open only while the tournament is **`published`** — its status
     /// *is* its registration window (ADR-0017). Entering an event of a `draft`
     /// tournament (not announced yet), a `live` one (the field is fixed; the draw is
     /// cut from it), or an `archived` one (it is over) is a `409` — not a `403`: you
-    /// are permitted, the tournament is simply in the wrong state.
+    /// are permitted, the tournament is simply in the wrong state. **That holds for the
+    /// director too**: there is no override, so a director can neither add a walk-in nor
+    /// remove a no-show once the tournament is live.
     ///
-    /// An event's **eligibility rules** are decided against your rating on the
-    /// tournament's league, and you must satisfy **every** one of them: failing a rule
+    /// An event's **eligibility rules** are decided against the entrant's rating on the
+    /// tournament's league, and they must satisfy **every** one of them: failing a rule
     /// (the 1650-rated player entering the "Under 1500" event) is a `409`. A player who
     /// holds **no rating** on that league — nobody has a rating until they finish a rated
     /// match — **passes every rule**, so a brand-new player is not shut out of the
     /// beginners' event that exists for them.
     ///
-    /// Entering an event you are already in is a `409`; withdrawing first frees you
+    /// Entering an event the player is already in is a `409`; withdrawing first frees them
     /// to enter it again. Entering an event that already holds its `max_players`
     /// entrants is a `409` too — someone withdrawing frees the slot. Doubles and teams
     /// events are a `400`: an entry is one row per player, with nowhere to record a
     /// partner or a team.
     ///
+    /// **A director's entry is judged by exactly these rules.** The same evaluator, the
+    /// same capacity lock, the same four refusal codes: a director adding a player to a
+    /// full event, or one over the event's rating cap, is refused precisely as the player
+    /// would be.
+    ///
     /// - Remark: HTTP `POST /v1/tournaments/{tournament_id}/events/{event_id}/entries`.
     /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/events/{event_id}/entries/post(enter_event_v1_tournaments__tournament_id__events__event_id__entries_post)`.
     internal func enterEventV1TournamentsTournamentIdEventsEventIdEntriesPost(
         path: Operations.EnterEventV1TournamentsTournamentIdEventsEventIdEntriesPost.Input.Path,
-        headers: Operations.EnterEventV1TournamentsTournamentIdEventsEventIdEntriesPost.Input.Headers = .init()
+        headers: Operations.EnterEventV1TournamentsTournamentIdEventsEventIdEntriesPost.Input.Headers = .init(),
+        body: Operations.EnterEventV1TournamentsTournamentIdEventsEventIdEntriesPost.Input.Body? = nil
     ) async throws -> Operations.EnterEventV1TournamentsTournamentIdEventsEventIdEntriesPost.Output {
         try await enterEventV1TournamentsTournamentIdEventsEventIdEntriesPost(Operations.EnterEventV1TournamentsTournamentIdEventsEventIdEntriesPost.Input(
             path: path,
-            headers: headers
+            headers: headers,
+            body: body
         ))
     }
     /// Withdraw From Event
     ///
-    /// Withdraw the signed-in player's own entry from an event.
+    /// Withdraw an entry from an event — your own, or (as the tournament's owner) any
+    /// entry in it.
     ///
     /// The entry is **soft-deleted**: its status flips to `withdrawn` and the row
     /// survives, so the event keeps its withdrawal history — and, because the
     /// uniqueness guard is a *partial* index over active entries only, the player is
     /// free to enter the same event again afterwards.
     ///
-    /// You may only withdraw your own entry; someone else's is a `403`.
+    /// **Who may withdraw an entry** (ADR-0784) mirrors who may create one: the player
+    /// themselves (with the `tournament.enter` permission), or the tournament's **owner**,
+    /// for any entry in it. Anybody else is a `403`.
     ///
     /// Withdrawal, like entry, is open only while the tournament is **`published`** —
     /// its status *is* its registration window (ADR-0017). Withdrawing an *active*
@@ -1697,7 +1735,9 @@ extension APIProtocol {
     /// from the field they were part of, so it is a `409`, as it is for a `draft`
     /// tournament (registration has not opened) and an `archived` one (it is over).
     /// A `409`, not a `403`: you are permitted, the tournament is simply in the wrong
-    /// state.
+    /// state. **The owner obeys that window too** — withdrawal stays symmetric with entry,
+    /// so a director can no more remove a no-show from a live tournament than add a
+    /// walk-in to one.
     ///
     /// **Withdrawing an entry that is already withdrawn is a `204` in every status**,
     /// `live` and `archived` included — a no-op, not an error: this is `DELETE`, and
@@ -6653,6 +6693,57 @@ internal enum Components {
                 case username
                 case seed
                 case rating
+            }
+        }
+        /// *Who* to enter — the body of ``POST …/entries``, and the whole of it.
+        ///
+        /// **The body is optional, and its presence selects the actor** (ADR-0784):
+        ///
+        /// * **omitted** → you are entering *yourself*. Self-registration, gated on the
+        ///   ``tournament.enter`` permission — the request every player already sends, which
+        ///   carries no body at all and must keep working unchanged.
+        /// * **``user_id`` present** → a *director* is entering somebody, which only the
+        ///   tournament's **owner** may do.
+        ///
+        /// One endpoint, not two, because both actors must run the same eligibility
+        /// evaluator, take the same capacity lock and produce the same four refusal codes
+        /// (``EntryRefusal``, ADR-0968). A twin route would make the *next* refusal a thing
+        /// to add twice, and the two call sites of the evaluator a thing to keep from
+        /// drifting.
+        ///
+        /// Naming **your own** ``user_id`` is self-registration, not a director entry — the
+        /// same guard, and the same ``added_by_user_id = NULL`` on the row. "The player
+        /// entered themselves" has exactly one encoding, and ``added_by == user_id`` is not
+        /// it (see ``TournamentEntry.added_by_user_id``).
+        ///
+        /// There is deliberately **no ``force``**: a director's entry is refused by the same
+        /// rules a player's is — a full event and a rating cap catch a director's typo exactly
+        /// as they catch a stranger's. Absent an override, that *is* the safety model, and the
+        /// override is a ticket of its own (#985), not a flag smuggled in here.
+        ///
+        /// - Remark: Generated from `#/components/schemas/TournamentEntryCreate`.
+        internal struct TournamentEntryCreate: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/TournamentEntryCreate/user_id`.
+            internal var userId: Swift.String
+            /// Creates a new `TournamentEntryCreate`.
+            ///
+            /// - Parameters:
+            ///   - userId:
+            internal init(userId: Swift.String) {
+                self.userId = userId
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case userId = "user_id"
+            }
+            internal init(from decoder: any Swift.Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                self.userId = try container.decode(
+                    Swift.String.self,
+                    forKey: .userId
+                )
+                try decoder.ensureNoAdditionalProperties(knownKeys: [
+                    "user_id"
+                ])
             }
         }
         /// A new event. Its two numbers are bounded by what their columns can hold —
@@ -18964,31 +19055,45 @@ internal enum Operations {
     }
     /// Enter Event
     ///
-    /// Register the signed-in player in a singles event.
+    /// Enter a player in a singles event — yourself, or (as the tournament's owner)
+    /// somebody else.
     ///
-    /// Self-registration only: the entry created is always the caller's own, which
-    /// is why the request carries no body — there is no field in which to name
-    /// someone else. Entering a player who is not you is a director's job, and a
-    /// different endpoint.
+    /// **The body is optional, and its presence chooses the actor** (ADR-0784):
+    ///
+    /// * **no body** → you are entering *yourself*. Requires the `tournament.enter`
+    ///   permission. This is the request every player already sends, and it is unchanged.
+    /// * **`user_id`** → you are the **director** entering that player. Requires that you
+    ///   **own** the tournament; anyone else naming a `user_id` that is not their own is a
+    ///   `403`. An id that names no (live) player is a `404`.
+    ///
+    /// Naming *your own* `user_id` is self-registration, not a director entry: same
+    /// permission, and the entry records no adder.
     ///
     /// Registration is open only while the tournament is **`published`** — its status
     /// *is* its registration window (ADR-0017). Entering an event of a `draft`
     /// tournament (not announced yet), a `live` one (the field is fixed; the draw is
     /// cut from it), or an `archived` one (it is over) is a `409` — not a `403`: you
-    /// are permitted, the tournament is simply in the wrong state.
+    /// are permitted, the tournament is simply in the wrong state. **That holds for the
+    /// director too**: there is no override, so a director can neither add a walk-in nor
+    /// remove a no-show once the tournament is live.
     ///
-    /// An event's **eligibility rules** are decided against your rating on the
-    /// tournament's league, and you must satisfy **every** one of them: failing a rule
+    /// An event's **eligibility rules** are decided against the entrant's rating on the
+    /// tournament's league, and they must satisfy **every** one of them: failing a rule
     /// (the 1650-rated player entering the "Under 1500" event) is a `409`. A player who
     /// holds **no rating** on that league — nobody has a rating until they finish a rated
     /// match — **passes every rule**, so a brand-new player is not shut out of the
     /// beginners' event that exists for them.
     ///
-    /// Entering an event you are already in is a `409`; withdrawing first frees you
+    /// Entering an event the player is already in is a `409`; withdrawing first frees them
     /// to enter it again. Entering an event that already holds its `max_players`
     /// entrants is a `409` too — someone withdrawing frees the slot. Doubles and teams
     /// events are a `400`: an entry is one row per player, with nowhere to record a
     /// partner or a team.
+    ///
+    /// **A director's entry is judged by exactly these rules.** The same evaluator, the
+    /// same capacity lock, the same four refusal codes: a director adding a player to a
+    /// full event, or one over the event's rating cap, is refused precisely as the player
+    /// would be.
     ///
     /// - Remark: HTTP `POST /v1/tournaments/{tournament_id}/events/{event_id}/entries`.
     /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/events/{event_id}/entries/post(enter_event_v1_tournaments__tournament_id__events__event_id__entries_post)`.
@@ -19027,17 +19132,44 @@ internal enum Operations {
                 }
             }
             internal var headers: Operations.EnterEventV1TournamentsTournamentIdEventsEventIdEntriesPost.Input.Headers
+            /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/events/{event_id}/entries/POST/requestBody`.
+            internal enum Body: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/events/{event_id}/entries/POST/requestBody/json`.
+                internal struct JsonPayload: Codable, Hashable, Sendable {
+                    /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/events/{event_id}/entries/POST/requestBody/json/value1`.
+                    internal var value1: Components.Schemas.TournamentEntryCreate
+                    /// Creates a new `JsonPayload`.
+                    ///
+                    /// - Parameters:
+                    ///   - value1:
+                    internal init(value1: Components.Schemas.TournamentEntryCreate) {
+                        self.value1 = value1
+                    }
+                    internal init(from decoder: any Swift.Decoder) throws {
+                        self.value1 = try .init(from: decoder)
+                    }
+                    internal func encode(to encoder: any Swift.Encoder) throws {
+                        try self.value1.encode(to: encoder)
+                    }
+                }
+                /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/events/{event_id}/entries/POST/requestBody/content/application\/json`.
+                case json(Operations.EnterEventV1TournamentsTournamentIdEventsEventIdEntriesPost.Input.Body.JsonPayload)
+            }
+            internal var body: Operations.EnterEventV1TournamentsTournamentIdEventsEventIdEntriesPost.Input.Body?
             /// Creates a new `Input`.
             ///
             /// - Parameters:
             ///   - path:
             ///   - headers:
+            ///   - body:
             internal init(
                 path: Operations.EnterEventV1TournamentsTournamentIdEventsEventIdEntriesPost.Input.Path,
-                headers: Operations.EnterEventV1TournamentsTournamentIdEventsEventIdEntriesPost.Input.Headers = .init()
+                headers: Operations.EnterEventV1TournamentsTournamentIdEventsEventIdEntriesPost.Input.Headers = .init(),
+                body: Operations.EnterEventV1TournamentsTournamentIdEventsEventIdEntriesPost.Input.Body? = nil
             ) {
                 self.path = path
                 self.headers = headers
+                self.body = body
             }
         }
         internal enum Output: Sendable, Hashable {
@@ -19176,14 +19308,17 @@ internal enum Operations {
     }
     /// Withdraw From Event
     ///
-    /// Withdraw the signed-in player's own entry from an event.
+    /// Withdraw an entry from an event — your own, or (as the tournament's owner) any
+    /// entry in it.
     ///
     /// The entry is **soft-deleted**: its status flips to `withdrawn` and the row
     /// survives, so the event keeps its withdrawal history — and, because the
     /// uniqueness guard is a *partial* index over active entries only, the player is
     /// free to enter the same event again afterwards.
     ///
-    /// You may only withdraw your own entry; someone else's is a `403`.
+    /// **Who may withdraw an entry** (ADR-0784) mirrors who may create one: the player
+    /// themselves (with the `tournament.enter` permission), or the tournament's **owner**,
+    /// for any entry in it. Anybody else is a `403`.
     ///
     /// Withdrawal, like entry, is open only while the tournament is **`published`** —
     /// its status *is* its registration window (ADR-0017). Withdrawing an *active*
@@ -19191,7 +19326,9 @@ internal enum Operations {
     /// from the field they were part of, so it is a `409`, as it is for a `draft`
     /// tournament (registration has not opened) and an `archived` one (it is over).
     /// A `409`, not a `403`: you are permitted, the tournament is simply in the wrong
-    /// state.
+    /// state. **The owner obeys that window too** — withdrawal stays symmetric with entry,
+    /// so a director can no more remove a no-show from a live tournament than add a
+    /// walk-in to one.
     ///
     /// **Withdrawing an entry that is already withdrawn is a `204` in every status**,
     /// `live` and `archived` included — a no-op, not an error: this is `DELETE`, and

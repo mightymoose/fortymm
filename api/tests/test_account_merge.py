@@ -486,8 +486,17 @@ async def _enter(
     user: User,
     *,
     status: TournamentEntryStatus = TournamentEntryStatus.entered,
+    added_by: User | None = None,
 ) -> TournamentEntry:
-    entry = TournamentEntry(event_id=event.id, user_id=user.id, status=status)
+    """``added_by=None`` is not "unspecified" — it is self-registration, the
+    default state of every entry (ADR-0784). Pass a user to make it a *director*
+    entry: that user put this player in the event."""
+    entry = TournamentEntry(
+        event_id=event.id,
+        user_id=user.id,
+        status=status,
+        added_by_user_id=added_by.id if added_by is not None else None,
+    )
     db.add(entry)
     await db.commit()
     await db.refresh(entry)
@@ -543,6 +552,197 @@ async def test_merge_repoints_tournament_entry_onto_survivor(
     assert len(active) == 1, "the event's active-entry count must not change"
     # Nothing left pointing at the tombstone.
     assert not [e for e in entries if e.user_id == ephemeral.id]
+
+
+async def test_merge_repoints_the_entry_adder_onto_survivor(
+    db_session: AsyncSession,
+):
+    """The *second* users FK on ``tournament_entries``: ``added_by_user_id``, who
+    put this player in the event (ADR-0784).
+
+    A guest DIRECTOR entered somebody, then signed in. The entry itself is not in
+    question — a real player is really entered, and their ``user_id`` is not the
+    guest's to move. What must not survive is the *pointer*: the guest is about to
+    become a tombstone, and an unhandled FK would leave the entry saying "added by
+    <ghost>" — a user that no listing, search or auth query will ever return. The
+    adder and the survivor are the same human, so the adder follows the merge.
+    """
+    director_guest = await _make_ephemeral(db_session, "drifting-grouse")
+    director = await _make_verified(db_session, "rita@example.com")
+    player = await _make_verified(db_session, "pete@example.com")
+    event = await _make_event(db_session, director_guest)
+
+    entry = await _enter(db_session, event, player, added_by=director_guest)
+
+    await merge_user(db_session, from_user_id=director_guest.id, to_user_id=director.id)
+    await db_session.commit()
+
+    await db_session.refresh(entry)
+    assert entry.added_by_user_id == director.id, (
+        "the adder must point at the LIVE survivor, not the tombstoned guest"
+    )
+    # The entrant is a third party and is untouched: this merge is about who
+    # *added* them, not about who they are.
+    assert entry.user_id == player.id
+    assert entry.status is TournamentEntryStatus.entered
+
+    entries = await _entries_for(db_session, event)
+    assert not [e for e in entries if e.added_by_user_id == director_guest.id]
+
+
+async def test_merge_nulls_the_adder_when_the_director_turns_out_to_be_the_entrant(
+    db_session: AsyncSession,
+):
+    """The degenerate case of the re-point, and the reason it is a ``CASE`` rather
+    than a flat ``SET added_by_user_id = :to_id``.
+
+    I run a tournament as a guest and add "Rita" (an existing account) from the
+    player search. Then I sign in — and I *am* Rita. Post-merge, one person both
+    added the entry and is the entry. That is self-registration, and
+    self-registration is spelled ``NULL`` (ADR-0784). A flat re-point would instead
+    write ``added_by_user_id == user_id``, a second, contradictory encoding of "she
+    entered herself" that the entrants list would render as "added by the
+    director" — a director who is the player.
+    """
+    director_guest = await _make_ephemeral(db_session, "drifting-grouse")
+    rita = await _make_verified(db_session, "rita@example.com")
+    event = await _make_event(db_session, director_guest)
+
+    entry = await _enter(db_session, event, rita, added_by=director_guest)
+
+    await merge_user(db_session, from_user_id=director_guest.id, to_user_id=rita.id)
+    await db_session.commit()
+
+    await db_session.refresh(entry)
+    assert entry.user_id == rita.id
+    assert entry.added_by_user_id is None, (
+        "one person adding themselves IS self-registration — collapse it to NULL"
+    )
+
+
+async def test_merge_leaves_the_adder_alone_when_the_ENTRANT_is_the_one_merged(
+    db_session: AsyncSession,
+):
+    """The mirror image, and the guard against the re-point over-firing: here it is
+    the *player* who was a guest, and the director is a bystander. The entry's
+    ``user_id`` moves to the survivor; the record of who added them must not be
+    touched — least of all nulled, which would erase a director entry into a
+    self-registration that never happened."""
+    player_guest = await _make_ephemeral(db_session, "drifting-grouse")
+    player = await _make_verified(db_session, "pete@example.com")
+    director = await _make_verified(db_session, "rita@example.com")
+    event = await _make_event(db_session, director)
+
+    entry = await _enter(db_session, event, player_guest, added_by=director)
+
+    await merge_user(db_session, from_user_id=player_guest.id, to_user_id=player.id)
+    await db_session.commit()
+
+    await db_session.refresh(entry)
+    assert entry.user_id == player.id
+    assert entry.added_by_user_id == director.id
+
+
+async def test_merge_collapses_a_guest_who_both_added_and_is_the_entry(
+    db_session: AsyncSession,
+):
+    """**The statement ORDER inside ``merge_user`` is load-bearing, and this is the only
+    test that pins it.**
+
+    ``merge_user`` re-points ``tournament_entries.user_id`` onto the survivor, and only
+    *then* runs the ``CASE`` over ``added_by_user_id`` — a CASE whose condition
+    (``user_id = :to_id``) reads the **post-merge** ``user_id``. Swap the two statements
+    and every other test in this file still passes, because in all of them the entry's
+    ``user_id`` is either already the survivor's or is never the adder's.
+
+    The shape that tells the two orders apart is the one where the guest is **both** the
+    entrant and the adder — ``user_id == added_by == from_id``:
+
+    * **Correct order.** ``user_id`` becomes ``to_id``; the CASE then sees
+      ``user_id = to_id`` and writes **NULL** — one person adding themselves *is*
+      self-registration, and self-registration is spelled NULL (ADR-0784).
+    * **Reversed.** The CASE runs while ``user_id`` is still the guest's, so it does not
+      match ``to_id`` and writes ``added_by = to_id``; the re-point then sets
+      ``user_id = to_id`` as well. The merge has *manufactured* ``added_by == user_id``
+      — the second, contradictory encoding of "they entered themselves" that the CASE
+      exists to prevent, rendered by the entrants list as "added by the director" on an
+      entry whose director is the player.
+
+    The row is written **directly**, and deliberately so: the entry route refuses to
+    mint this shape (an owner naming their own ``user_id`` is self-registration, stored
+    NULL — ``test_the_owner_entering_themselves_by_user_id_records_no_adder``), and
+    there is no CHECK constraint standing behind it either, because the entry route maps
+    ``IntegrityError`` to a ``already_entered`` 409 and a constraint violation would
+    surface to a player as a false "you have already entered this event". Normalising in
+    the handler is what keeps the column clean; *this* is what keeps the merge from
+    quietly undoing that.
+    """
+    guest = await _make_ephemeral(db_session, "drifting-grouse")
+    verified = await _make_verified(db_session, "rita@example.com")
+    event = await _make_event(db_session, guest)
+
+    # The guest is the entrant AND the adder: user_id == added_by_user_id == from_id.
+    entry = await _enter(db_session, event, guest, added_by=guest)
+
+    await merge_user(db_session, from_user_id=guest.id, to_user_id=verified.id)
+    await db_session.commit()
+
+    await db_session.refresh(entry)
+    assert entry.user_id == verified.id
+    assert entry.added_by_user_id is None, (
+        "the CASE must read the POST-merge user_id: run it before the user_id re-point "
+        "and it writes added_by = user_id, the very encoding it exists to collapse"
+    )
+    assert entry.added_by_user_id != entry.user_id
+
+
+async def test_merge_collapses_the_adder_when_the_ENTRANT_merges_into_the_director(
+    db_session: AsyncSession,
+):
+    """The **mirror** of the case above, and the one the merge could *manufacture*.
+
+    There, the guest was both the entrant and the adder before the merge. Here neither
+    id is contradictory to begin with — the merge makes it so:
+
+    * Director **D** (a real account) enters **guest player P** through
+      ``POST …/entries`` (ADR-0784), so the row is ``user_id = P``, ``added_by = D``.
+      Both perfectly ordinary; this is the shape the director's arm of the entry route
+      writes every time it is used.
+    * P signs in — and turns out to BE D (the director had a guest session of their own
+      on the club laptop). ``merge_user(from=P, to=D)``.
+    * The ``user_id`` re-point rewrites ``user_id`` to D. ``added_by`` is *already* D.
+
+    One person is now both the entrant and the adder, so — exactly as in the case above
+    — this is self-registration and must be spelled ``NULL``. A CASE guarded by
+    ``WHERE added_by_user_id = :from_id`` alone never even looks at this row (its adder
+    is the *survivor*, not the guest), and leaves ``added_by == user_id``: the second,
+    contradictory encoding of "she entered herself", written by the merge itself.
+    ``WHERE added_by_user_id IN (:from_id, :to_id)`` is what closes it.
+
+    Note what this is NOT: the entrant merging into a *bystander* director must leave
+    the adder alone (``test_merge_leaves_the_adder_alone_when_the_ENTRANT_is_the_one_
+    merged``). The difference is whether the director and the survivor are the same
+    person — which is the only thing that makes "added by the director" a lie.
+    """
+    player_guest = await _make_ephemeral(db_session, "drifting-grouse")
+    director = await _make_verified(db_session, "rita@example.com")
+    event = await _make_event(db_session, director)
+
+    # The row the director's entry route writes: a real player, added by a real
+    # director. Nothing contradictory about it — yet.
+    entry = await _enter(db_session, event, player_guest, added_by=director)
+
+    # ...and the guest player turns out to be the director.
+    await merge_user(db_session, from_user_id=player_guest.id, to_user_id=director.id)
+    await db_session.commit()
+
+    await db_session.refresh(entry)
+    assert entry.user_id == director.id
+    assert entry.added_by_user_id is None, (
+        "the merge just made the adder and the entrant one person — that is "
+        "self-registration, and it is spelled NULL, never added_by == user_id"
+    )
+    assert entry.added_by_user_id != entry.user_id
 
 
 async def test_merge_dedups_entry_when_both_users_entered_same_event(

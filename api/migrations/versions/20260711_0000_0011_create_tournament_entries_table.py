@@ -55,6 +55,19 @@ def upgrade() -> None:
             sa.ForeignKey("users.id", ondelete="RESTRICT"),
             nullable=False,
         ),
+        # Who put this player in the event. NULL means the player entered
+        # themselves; a user id means a director entered them (ADR-0784). NULL is
+        # the *encoding of self-registration*, not "unknown" — which is why the FK
+        # is RESTRICT rather than SET NULL: nulling it on a user delete would not
+        # lose a fact, it would rewrite one. (Account merge tombstones rather than
+        # deletes, so ON DELETE never fires there; ``merge_user`` re-points this
+        # column explicitly.)
+        sa.Column(
+            "added_by_user_id",
+            postgresql.UUID(as_uuid=True),
+            sa.ForeignKey("users.id", ondelete="RESTRICT"),
+            nullable=True,
+        ),
         sa.Column("seed", sa.Integer(), nullable=True),
         sa.Column(
             "status",
@@ -85,9 +98,19 @@ def upgrade() -> None:
         "ix_tournament_entries_event_id", "tournament_entries", ["event_id"]
     )
     op.create_index("ix_tournament_entries_user_id", "tournament_entries", ["user_id"])
+    # merge_user re-points this column by `WHERE added_by_user_id = :from_id` on
+    # every guest sign-in, so it is a lookup key, not merely an FK.
+    op.create_index(
+        "ix_tournament_entries_added_by_user_id",
+        "tournament_entries",
+        ["added_by_user_id"],
+    )
 
 
 def downgrade() -> None:
+    op.drop_index(
+        "ix_tournament_entries_added_by_user_id", table_name="tournament_entries"
+    )
     op.drop_index("ix_tournament_entries_user_id", table_name="tournament_entries")
     op.drop_index("ix_tournament_entries_event_id", table_name="tournament_entries")
     op.drop_index(

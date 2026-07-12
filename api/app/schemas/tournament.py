@@ -516,6 +516,39 @@ class TournamentTransitionCreate(BaseModel):
     to: TournamentStatus
 
 
+class TournamentEntryCreate(BaseModel):
+    """*Who* to enter — the body of ``POST …/entries``, and the whole of it.
+
+    **The body is optional, and its presence selects the actor** (ADR-0784):
+
+    * **omitted** → you are entering *yourself*. Self-registration, gated on the
+      ``tournament.enter`` permission — the request every player already sends, which
+      carries no body at all and must keep working unchanged.
+    * **``user_id`` present** → a *director* is entering somebody, which only the
+      tournament's **owner** may do.
+
+    One endpoint, not two, because both actors must run the same eligibility
+    evaluator, take the same capacity lock and produce the same four refusal codes
+    (``EntryRefusal``, ADR-0968). A twin route would make the *next* refusal a thing
+    to add twice, and the two call sites of the evaluator a thing to keep from
+    drifting.
+
+    Naming **your own** ``user_id`` is self-registration, not a director entry — the
+    same guard, and the same ``added_by_user_id = NULL`` on the row. "The player
+    entered themselves" has exactly one encoding, and ``added_by == user_id`` is not
+    it (see ``TournamentEntry.added_by_user_id``).
+
+    There is deliberately **no ``force``**: a director's entry is refused by the same
+    rules a player's is — a full event and a rating cap catch a director's typo exactly
+    as they catch a stranger's. Absent an override, that *is* the safety model, and the
+    override is a ticket of its own (#985), not a flag smuggled in here.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    user_id: uuid.UUID
+
+
 class TournamentEventCreate(BaseModel):
     """A new event. Its two numbers are bounded by what their columns can hold —
     ``EventMaxPlayers`` and ``EventEntryFee``, shared verbatim with
