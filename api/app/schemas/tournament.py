@@ -104,7 +104,8 @@ class TournamentEventRead(BaseModel):
     name: str
     format: EventFormat
     draw_type: DrawType
-    max_players: int
+    # ``null`` means the event is uncapped — there is no entrant limit (ADR-0935).
+    max_players: int | None
     # Typed ``float`` so JSON emits a number, not a Decimal string. The
     # Numeric(8,2) column coerces cleanly into float at the read boundary.
     entry_fee: float
@@ -226,7 +227,9 @@ class TournamentEventCreate(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     format: EventFormat
     draw_type: DrawType
-    max_players: int = Field(gt=0)
+    # Optional: omit (or send ``null``) for an uncapped event; when supplied the
+    # cap must be positive (ADR-0935). ``0`` is never a valid cap (admits nobody).
+    max_players: int | None = Field(default=None, gt=0)
     entry_fee: float = Field(ge=0)
     slot: Slot
     match_settings: MatchSettings
@@ -236,12 +239,14 @@ class TournamentEventCreate(BaseModel):
 
 class TournamentEventUpdate(BaseModel):
     """Partial update for an event. Absent fields are unchanged. Every column
-    these fields back — ``name``/``format``/``draw_type``/``max_players``/
+    these fields back except ``max_players`` — ``name``/``format``/``draw_type``/
     ``entry_fee``/``slot``/``match_settings``/``predicates``/``pools`` — is NOT
-    NULL, so an explicit ``null`` on any of them is rejected (422);
-    ``predicates``/``pools`` replace wholesale when present. ``entered`` is not
-    updatable — it is derived from the event's active entries, not stored — so
-    sending it is a 422 via ``extra="forbid"``."""
+    NULL, so an explicit ``null`` on any of *those* is rejected (422).
+    ``max_players`` is nullable: an explicit ``null`` clears the cap, making the
+    event uncapped (ADR-0935); when a value is supplied it must be positive
+    (``gt=0``). ``predicates``/``pools`` replace wholesale when present.
+    ``entered`` is not updatable — it is derived from the event's active entries,
+    not stored — so sending it is a 422 via ``extra="forbid"``."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -259,7 +264,6 @@ class TournamentEventUpdate(BaseModel):
         "name",
         "format",
         "draw_type",
-        "max_players",
         "entry_fee",
         "slot",
         "match_settings",
@@ -269,6 +273,8 @@ class TournamentEventUpdate(BaseModel):
     )
     @classmethod
     def _reject_explicit_null(cls, value: Any) -> Any:
+        # ``max_players`` is deliberately absent here: it is a nullable column and
+        # an explicit ``null`` is meaningful — it clears the cap (ADR-0935).
         if value is None:
             raise ValueError("must not be null")
         return value

@@ -24,12 +24,46 @@ describe('EventCard', () => {
     expect(document.body).toHaveTextContent('USATT rating < 1500')
   })
 
-  it('shows entries out of the player cap', () => {
-    eventCardPage.render({
-      event: buildEvent({ entrants: buildEntrants(52), maxPlayers: 64 }),
+  describe('the entries capacity', () => {
+    it('shows entries out of the player cap, with a fill bar', () => {
+      eventCardPage.render({
+        event: buildEvent({ entrants: buildEntrants(52), maxPlayers: 64 }),
+      })
+      expect(document.body).toHaveTextContent('52')
+      expect(document.body).toHaveTextContent('/ 64')
+      expect(eventCardPage.queryCapacityBar()).toBeInTheDocument()
     })
-    expect(document.body).toHaveTextContent('52')
-    expect(document.body).toHaveTextContent('/ 64')
+
+    it('marks a capped event full once it reaches its cap', () => {
+      eventCardPage.render({
+        event: buildEvent({ entrants: buildEntrants(64), maxPlayers: 64 }),
+      })
+      expect(document.body).toHaveTextContent('/ 64')
+      expect(eventCardPage.queryCapacityBar()).toBeInTheDocument()
+      // The "full" numeral and fill both flip to the warn tint at capacity.
+      expect(
+        document.querySelectorAll('.text-\\[color\\:var\\(--warn\\)\\]').length,
+      ).toBeGreaterThan(0)
+    })
+
+    // An uncapped event (ADR-0935: `maxPlayers === null`) has no ceiling to
+    // count against — bare entered count, no denominator, no bar, never full.
+    it('shows an uncapped event as a bare entered count with no denominator or bar, never full', () => {
+      eventCardPage.render({
+        event: buildEvent({ entrants: buildEntrants(200), maxPlayers: null }),
+      })
+      // The numeral and "entered" label are sibling spans laid out with a CSS
+      // gap, so the DOM text runs together: "200entered".
+      expect(document.body).toHaveTextContent('200entered')
+      // No "/ max" denominator, and no "/ " with a blank max either.
+      expect(document.body).not.toHaveTextContent('/')
+      // No capacity fill bar.
+      expect(eventCardPage.queryCapacityBar()).toBeNull()
+      // Never full, however many are in: no warn-tinted numeral/fill.
+      expect(
+        document.querySelectorAll('.text-\\[color\\:var\\(--warn\\)\\]').length,
+      ).toBe(0)
+    })
   })
 
   it('shows the time slot as a window', () => {

@@ -389,6 +389,10 @@ export function useDeleteTournament() {
   })
 }
 
+/** Create an event. No global `onError` toast: the event editor awaits this via
+ * `mutateAsync` and surfaces a 4xx inline on the form (keeping the panel open),
+ * so a global toast here would double up (#933, #934; same convention as
+ * `useCreateTournament`). */
 export function useCreateEvent(tournamentId: string) {
   const qc = useQueryClient()
   return useMutation({
@@ -401,10 +405,11 @@ export function useCreateEvent(tournamentId: string) {
         }),
       ),
     onSuccess: () => invalidateTournament(qc, tournamentId),
-    onError: notifyError('create the event'),
   })
 }
 
+/** Patch an event. Like `useCreateEvent`, no global `onError` toast — the editor
+ * surfaces a 4xx inline and keeps the panel open (#933, #934). */
 export function useUpdateEvent(tournamentId: string) {
   const qc = useQueryClient()
   return useMutation({
@@ -420,7 +425,6 @@ export function useUpdateEvent(tournamentId: string) {
         }),
       ),
     onSuccess: () => invalidateTournament(qc, tournamentId),
-    onError: notifyError('update the event'),
   })
 }
 

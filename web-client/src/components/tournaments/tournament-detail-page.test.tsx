@@ -128,15 +128,24 @@ describe('TournamentDetailPage', () => {
   })
 
   it('opens the event editor and creates a new event', async () => {
-    const onCreateEvent = vi.fn()
+    const onCreateEvent = vi.fn().mockResolvedValue(undefined)
     tournamentDetailPagePage.render({
       tournament: buildTournament({ events: [] }),
       onCreateEvent,
     })
 
     await userEvent.click(tournamentDetailPagePage.getNewEventButton())
+    // A new event starts with a blank (required) name — give it one so the form
+    // validates and the create actually fires.
+    await userEvent.type(
+      tournamentDetailPagePage.getEditorNameInput(),
+      'Consolation Bracket',
+    )
     await userEvent.click(tournamentDetailPagePage.getEditorSaveButton())
-    expect(onCreateEvent).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(onCreateEvent).toHaveBeenCalledTimes(1))
+    expect(onCreateEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'Consolation Bracket' }),
+    )
   })
 
   // `published`, not `draft`: a non-creator can no longer be looking at a draft at

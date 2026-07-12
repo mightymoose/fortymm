@@ -46,10 +46,14 @@ export const EventCard = ({
   onOpen,
   action,
 }: EventCardProps) => {
-  const fillPct = ev.maxPlayers
-    ? Math.min(100, Math.round((ev.entered / ev.maxPlayers) * 100))
-    : 0
-  const isFull = ev.entered >= ev.maxPlayers
+  // An uncapped event (`maxPlayers === null`, ADR-0935) has no denominator, no
+  // capacity fill bar, and can never be full — however many have entered.
+  const uncapped = ev.maxPlayers === null
+  const fillPct =
+    ev.maxPlayers === null
+      ? 0
+      : Math.min(100, Math.round((ev.entered / ev.maxPlayers) * 100))
+  const isFull = ev.maxPlayers !== null && ev.entered >= ev.maxPlayers
   // Falling back to the stored key, not to `null`: a card must never blank out a
   // row, so an unknown key shows *something* (cf. the read-only `Field`s, which
   // pass `null` and let the em-dash say "unset").
@@ -132,18 +136,25 @@ export const EventCard = ({
                 {ev.entered}
               </span>
               <span className="font-mono text-[13px] text-[color:var(--fg-3)]">
-                / {ev.maxPlayers}
+                {uncapped ? 'entered' : `/ ${ev.maxPlayers}`}
               </span>
             </div>
-            <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-[color:var(--bg-panel)]">
+            {/* No fill bar for an uncapped event — there is no denominator to
+                fill against (ADR-0935). */}
+            {!uncapped && (
               <div
-                className={cn(
-                  'h-full',
-                  isFull ? 'bg-[color:var(--warn)]' : 'bg-[color:var(--ball-500)]',
-                )}
-                style={{ width: `${fillPct}%` }}
-              />
-            </div>
+                data-testid="capacity-bar"
+                className="mt-1.5 h-1 overflow-hidden rounded-full bg-[color:var(--bg-panel)]"
+              >
+                <div
+                  className={cn(
+                    'h-full',
+                    isFull ? 'bg-[color:var(--warn)]' : 'bg-[color:var(--ball-500)]',
+                  )}
+                  style={{ width: `${fillPct}%` }}
+                />
+              </div>
+            )}
           </div>
 
           <div className="flex items-center gap-2">

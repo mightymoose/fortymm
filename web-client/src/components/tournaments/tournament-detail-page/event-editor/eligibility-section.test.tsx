@@ -1,6 +1,6 @@
 import userEvent from '@testing-library/user-event'
 
-import { screen } from '@/test/utilities'
+import { fireEvent, screen } from '@/test/utilities'
 
 import { buildEvent, buildPredicate } from '../../data/seed.factory'
 import { eligibilitySectionPage } from './eligibility-section.page'
@@ -23,15 +23,43 @@ describe('EligibilitySection', () => {
     expect(document.body).toHaveTextContent('Open to all players')
   })
 
-  it('appends a rule when Add rule is clicked', async () => {
-    const onChange = vi.fn()
-    eligibilitySectionPage.render({
-      event: buildEvent({ predicates: [buildPredicate()] }),
-      onChange,
+  // The three mutations, each asserted against the live form state the section
+  // now drives via `useFieldArray` (chore 1e) — not a bridged `onChange` spy.
+  describe('the rule list drives the form', () => {
+    it('appends a rule to the form when Add rule is clicked', async () => {
+      eligibilitySectionPage.render({
+        event: buildEvent({ predicates: [buildPredicate()] }),
+      })
+
+      await userEvent.click(eligibilitySectionPage.getAddRuleButton())
+      expect(eligibilitySectionPage.getPredicates()).toHaveLength(2)
     })
 
-    await userEvent.click(eligibilitySectionPage.getAddRuleButton())
-    expect(onChange.mock.calls.at(-1)?.[0].predicates).toHaveLength(2)
+    it('writes an edited rule value into the form', () => {
+      eligibilitySectionPage.render({
+        event: buildEvent({
+          predicates: [buildPredicate({ field: 'rating', op: '<', value: 1500 })],
+        }),
+      })
+
+      fireEvent.change(eligibilitySectionPage.getValueInput(), {
+        target: { value: '1800' },
+      })
+      expect(eligibilitySectionPage.getPredicates()[0].value).toBe(1800)
+    })
+
+    it('removes a rule from the form', async () => {
+      eligibilitySectionPage.render({
+        event: buildEvent({ predicates: twoRules() }),
+      })
+      expect(eligibilitySectionPage.getPredicates()).toHaveLength(2)
+
+      // Remove the first rule; the second must be what survives.
+      await userEvent.click(eligibilitySectionPage.getRemoveRuleButtons()[0])
+      const remaining = eligibilitySectionPage.getPredicates()
+      expect(remaining).toHaveLength(1)
+      expect(remaining[0].id).toBe('pr-2')
+    })
   })
 
   // The viewer's subtitle is a strict *prefix* of the organizer's, so neither

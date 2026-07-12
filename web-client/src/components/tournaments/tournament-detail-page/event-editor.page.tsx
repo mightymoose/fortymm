@@ -17,6 +17,19 @@ const scoped = (container: Container) => ({
   getSaveButton() {
     return container.getByRole('button', { name: /Create event|Save changes/ })
   },
+  getNameInput() {
+    return container.getByLabelText(/Event name/)
+  },
+  getPlayerLimitInput() {
+    return container.getByLabelText(/Player limit/)
+  },
+  getEntryFeeInput() {
+    return container.getByLabelText(/Entry fee/)
+  },
+  /** An inline validation/server error rendered below a Basics field. */
+  queryError(message: string | RegExp) {
+    return container.queryByText(message)
+  },
   /** The save/create action — absent for a non-creator (`canEdit: false`),
    * who gets a read-only view. */
   querySaveButton() {
