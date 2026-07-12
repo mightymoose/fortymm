@@ -27,24 +27,21 @@ export const STATUSES: readonly TournamentStatus[] = [
   'archived',
 ]
 
-/** The statuses in which a tournament has been ANNOUNCED — the API's
- * `ANNOUNCED_STATUSES` (#967), and the only statuses a NON-OWNER can ever have on
- * screen: a draft is owner-only to read, so a stranger's GET of one is a 404 and
- * the detail page never renders at all.
+/** The statuses in which a tournament has been ANNOUNCED — the only statuses a
+ * NON-OWNER can ever have on screen: a draft is owner-only to read, so a stranger's
+ * GET of one is a 404 and the detail page never renders at all.
  *
  * The viewer sweeps run over this list rather than over `STATUSES`, because a
  * viewer + `draft` fixture would be a world the server cannot produce — the spec
  * would be stubbing a response the API refuses to give, and asserting the UI is
  * well-behaved in a state it can never be in.
  *
- * An allow-list, matching the server's spelling rather than `!== 'draft'`: a
- * pre-publish status added tomorrow stays invisible to non-owners until it is put
- * here on purpose. */
-export const ANNOUNCED_STATUSES: readonly TournamentStatus[] = [
-  'published',
-  'live',
-  'archived',
-]
+ * Re-exported from the mock store, NOT re-typed here: there it is derived from the
+ * exhaustiveness-checked `Record<TournamentStatus, boolean>` that mirrors the API's
+ * `ANNOUNCED_STATUSES` (#967), so a new status is a compile error at the source
+ * instead of a sweep that silently shrinks. (The store imports only types, so
+ * pulling it into the Playwright process is inert — no MSW comes with it.) */
+export { ANNOUNCED_STATUSES } from '../../../src/mocks/tournaments-store'
 
 /** The app shell's notification bell polls this on every page, tournaments
  * included. It is nothing to do with entries — but with MSW off, an unanswered

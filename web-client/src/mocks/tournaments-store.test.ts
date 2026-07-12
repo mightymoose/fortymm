@@ -521,10 +521,10 @@ describe('draft visibility', () => {
   const FOREIGN_PUBLISHED = 'club-champs-2026' // seeded `published`, u-office
   const OWN_DRAFT = 'summer-slam-2026' // seeded `draft`, the dev user's
 
-  it("omits another organiser's draft from the list", () => {
-    const ids = listTournaments().map((t) => t.id)
+  const listedIds = () => listTournaments().map((t) => t.id)
 
-    expect(ids).not.toContain(FOREIGN_DRAFT)
+  it("omits another organiser's draft from the list", () => {
+    expect(listedIds()).not.toContain(FOREIGN_DRAFT)
   })
 
   // The row IS in the store — so the assertion above is about the predicate, not
@@ -558,31 +558,17 @@ describe('draft visibility', () => {
   // The other half of the predicate, and the half a `status !== 'draft'` filter or a
   // blanket "hide what I can't edit" would break: MY draft is still mine to see.
   it('still lists and serves the dev user’s OWN draft', () => {
-    expect(listTournaments().map((t) => t.id)).toContain(OWN_DRAFT)
+    expect(listedIds()).toContain(OWN_DRAFT)
     expect(findTournament(OWN_DRAFT)!.status).toBe('draft')
   })
 
+  // The only row on which the ANNOUNCED allow-list is load-bearing is a row the dev
+  // user does NOT own — on an owned one the ownership clause short-circuits true in
+  // every status, so a sweep over the dev user's own tournament would go green even
+  // if the allow-list were all-false. This is that row, and the allow-list's
+  // per-status behaviour is pinned properly on the API side.
   it("still serves another organiser's ANNOUNCED tournament, read-only", () => {
-    expect(listTournaments().map((t) => t.id)).toContain(FOREIGN_PUBLISHED)
+    expect(listedIds()).toContain(FOREIGN_PUBLISHED)
     expect(findTournament(FOREIGN_PUBLISHED)!.can_edit).toBe(false)
   })
-
-  // Announced is an allow-list, so a foreign tournament becomes visible the moment
-  // it is announced — and every announced status is visible, not just `published`.
-  // (Driven through the seeded foreign row's OWNER-side twin: the store has no
-  // foreign transition, so this walks the dev user's own draft forward and checks
-  // the predicate admits each status it reaches.)
-  it.each(['published', 'live', 'archived'] as const)(
-    'treats %s as announced',
-    (status) => {
-      const path: TournamentStatus[] = ['published', 'live', 'archived']
-      for (const step of path.slice(0, path.indexOf(status) + 1)) {
-        const moved = transitionTournament(OWN_DRAFT, step)
-        if (!moved.ok) throw new Error(`setup failed: could not reach ${status}`)
-      }
-
-      expect(findTournament(OWN_DRAFT)!.status).toBe(status)
-      expect(listTournaments().map((t) => t.id)).toContain(OWN_DRAFT)
-    },
-  )
 })

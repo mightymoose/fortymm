@@ -33,8 +33,8 @@ from app.schemas.tournament import TournamentTransitionCreate
 from app.tournaments import (
     TOURNAMENT_CREATE,
     TOURNAMENT_VIEW,
+    _get_owned_tournament_or_404,
     _get_tournament_for_update_or_404,
-    _get_tournament_or_404,
     create_tournament_transition,
     list_tournaments,
 )
@@ -1343,15 +1343,18 @@ async def test_only_the_mutating_loader_takes_the_row_lock(
     engine: AsyncEngine,
     authed_client: tuple[AsyncClient, User],
 ):
-    """``_get_tournament_for_update_or_404`` emits ``SELECT … FOR UPDATE``;
-    ``_get_tournament_or_404`` — the loader the read routes use — does not.
+    """Of the module's two loaders, only one locks:
+    ``_get_tournament_for_update_or_404`` emits ``SELECT … FOR UPDATE``, and
+    ``_get_owned_tournament_or_404`` — the loader behind the owner-only writes —
+    does not.
 
     Both halves are load-bearing. A locking loader that quietly stopped locking
-    would reopen the entry-after-go-live race in silence; and a lock added to the
-    *read* loader would make every page view queue behind (and hold up) writers,
-    for a reader that has nothing to serialize against.
+    would reopen the entry-after-go-live race in silence; and a lock spreading to
+    the *other* loader would make PATCH/DELETE (and, were a read route ever to
+    reach for it, every page view) queue behind writers they have nothing to
+    serialize against.
     """
-    client, _ = authed_client
+    client, owner = authed_client
     created = (await client.post("/v1/tournaments", json=_create_payload())).json()
     tournament_id = uuid.UUID(created["id"])
 
@@ -1360,7 +1363,7 @@ async def test_only_the_mutating_loader_takes_the_row_lock(
     assert any("FOR UPDATE" in s for s in statements), statements
 
     async with counted_statements(engine) as (session, statements):
-        await _get_tournament_or_404(session, tournament_id)
+        await _get_owned_tournament_or_404(session, tournament_id, owner)
     assert not any("FOR UPDATE" in s for s in statements), statements
 
 

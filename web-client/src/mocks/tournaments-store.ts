@@ -343,6 +343,20 @@ const ANNOUNCED: Record<TournamentStatus, boolean> = {
   archived: true,
 }
 
+/** The same allow-list as a list, for the callers that need to *iterate* the
+ * announced statuses rather than ask about one — today the web-client e2e suite,
+ * whose viewer sweeps must run over exactly the statuses a non-owner can ever have
+ * on screen.
+ *
+ * DERIVED, never re-typed. A hand-written second copy of these three strings is
+ * unchecked by the type system and rots silently: the day a status is added,
+ * `ANNOUNCED` above is a compile error (good) while a literal `['published',
+ * 'live', 'archived']` elsewhere just keeps passing, and the sweep that thought it
+ * covered every announced status quietly covers all but the new one. */
+export const ANNOUNCED_STATUSES: readonly TournamentStatus[] = (
+  Object.keys(ANNOUNCED) as TournamentStatus[]
+).filter((s) => ANNOUNCED[s])
+
 /** Which tournaments the dev user may see AT ALL: the announced ones, plus their
  * own — whatever status their own is in (`_visible_to`, `api/app/tournaments.py`).
  *
