@@ -30,6 +30,7 @@ from app.models import (
     UserLeagueRating,
 )
 from app.ratings import RatingStrategyKey, parse_strategy_key
+from app.ratings.rated import is_rated_member, is_rating_change
 from app.ratings.stats import (
     current_streak_for_user,
     league_peak_rating,
@@ -160,7 +161,7 @@ async def get_dashboard(
         _build_recent_result(match, current_user.id, rating_changes.get(match.id))
         for match in completed
     ]
-    rating = await _build_rating(db, current_user.id, completed_match_count)
+    rating = await _build_rating(db, current_user.id)
 
     return DashboardResponse(
         attention=attention,
@@ -280,15 +281,33 @@ def _build_recent_result(
     )
 
 
-async def _build_rating(
-    db: AsyncSession, user_id: uuid.UUID, completed_match_count: int
-) -> DashboardRating | None:
-    """Resolve the user's headline rating row.
+async def _build_rating(db: AsyncSession, user_id: uuid.UUID) -> DashboardRating | None:
+    """Resolve the user's headline rating row — or ``None``, and no card at all.
 
-    Picks the default league's rating if there is one, otherwise the oldest
-    rated row. Manual-strategy leagues and unrated rows (rating_value=None)
-    return None — the widget stays hidden until the league is actually scoring
-    you.
+    Picks the default league's rating if they hold one there, otherwise the oldest
+    league they DO hold one in. "Hold" is ``is_rated_member()``: the widget stays
+    hidden until the league is actually scoring you, which is what this docstring
+    has always claimed and what the row filter now makes true.
+
+    It was not true. Joining a league seeds a 1500 row, so a guest who had never
+    played anything got the full card — current 1500, peak 1500, RD 350, a
+    one-point sparkline — every number of which is the strategy's PRIOR rather than
+    anything they did. The percentile was suppressed for them (#382) precisely
+    because it was the most obviously absurd of the five; the fix is the same one
+    the profile now makes, applied once and to all of them: a player who has never
+    finished a rated match has no rating, so there is no rating card. They see the
+    same "Unrated" story here as on their profile instead of a fabricated one.
+
+    (The alternative — keep the card and null out ``peak``/``percentile`` — would
+    make ``DashboardRating.peak`` nullable, i.e. an OpenAPI change, and would still
+    print a rating of 1500 next to a profile that says Unrated. Hiding the card
+    needs no schema change: ``rating`` is already ``DashboardRating | None`` for
+    manual-strategy leagues, and the client already renders that.)
+
+    ``completed_match_count`` is no longer a parameter: it was a PROXY for "is this
+    player rated" (#382), and we now have the predicate itself. A rated player has,
+    by definition, completed a rated match — so the old gate could no longer fire,
+    and a dead guard that looks live is worse than no guard.
     """
     rating_row = await _resolve_user_rating(db, user_id)
     if rating_row is None or rating_row.rating_value is None:
@@ -301,15 +320,7 @@ async def _build_rating(
     league_id = rating_row.league_id
     spark, delta = await _spark_and_delta(db, user_id, league_id)
     peak = await league_peak_rating(db, user_id, league_id, current)
-    # A user who has never completed a match sits at the seed rating (1500, RD
-    # 350) — fully unrated. Ranking them against league peers reads as a
-    # concrete claim ("Top 92%") about a player the system can't place yet, so
-    # suppress the percentile until they've actually played. (#382)
-    percentile = (
-        None
-        if completed_match_count == 0
-        else await league_percentile(db, league_id, current)
-    )
+    percentile = await league_percentile(db, league_id, current)
     streak = await current_streak_for_user(db, user_id)
 
     return DashboardRating(
@@ -331,10 +342,16 @@ async def _build_rating(
 async def _resolve_user_rating(
     db: AsyncSession, user_id: uuid.UUID
 ) -> UserLeagueRating | None:
-    # Default league first; if the user has no row there, fall back to the
-    # oldest rating row so we still light up something. Eager-load the league
-    # and strategy so the caller can read is_automatic without an extra round
-    # trip.
+    # The default league's rating first; failing that, the oldest league the user
+    # is actually rated in, so a player who only plays on a side ladder still gets
+    # a card — for THAT ladder. Eager-load the league and strategy so the caller
+    # can read is_automatic without an extra round trip.
+    #
+    # Both reads are gated on ``is_rated_member()``, so "no row" and "a row holding
+    # nothing but the seed the league handed them on join" answer the same way:
+    # ``None``, and no card. Without it the default-league branch always hits — every
+    # user is seeded there the moment their session is minted — and the fallback
+    # below was dead code for everyone.
     options = (
         selectinload(UserLeagueRating.league).selectinload(League.rating_strategy),
     )
@@ -345,6 +362,7 @@ async def _resolve_user_rating(
             .where(
                 UserLeagueRating.user_id == user_id,
                 League.is_default.is_(True),
+                is_rated_member(),
             )
             .options(*options)
             .limit(1)
@@ -355,7 +373,10 @@ async def _resolve_user_rating(
     return (
         await db.execute(
             select(UserLeagueRating)
-            .where(UserLeagueRating.user_id == user_id)
+            .where(
+                UserLeagueRating.user_id == user_id,
+                is_rated_member(),
+            )
             .options(*options)
             .order_by(UserLeagueRating.created_at.asc())
             .limit(1)
@@ -370,7 +391,14 @@ async def _spark_and_delta(
     (last 30 days, oldest-first) and the last-match delta from them. Ordering
     DESC + reversing avoids the latent bug where ``LIMIT 30 ORDER BY ASC``
     would silently truncate today's points on a power user with >30 events in
-    the window."""
+    the window.
+
+    ``is_rating_change()``: the ``initial`` seed row is not a point on this line,
+    for the same reason it is not one on the profile's chart — it is the prior the
+    league handed the player on join, not a rating they held. The sparkline and the
+    chart plot the same table for the same purpose, and must not disagree about
+    what a rating point is. A player one rated match old therefore has a
+    single-point spark (their result), not a two-point line rising out of 1500."""
     cutoff = datetime.now(UTC) - timedelta(days=SPARK_WINDOW_DAYS)
     rows = (
         await db.execute(
@@ -382,6 +410,7 @@ async def _spark_and_delta(
             .where(
                 RatingHistory.user_id == user_id,
                 RatingHistory.league_id == league_id,
+                is_rating_change(),
             )
             .order_by(RatingHistory.created_at.desc())
             .limit(SPARK_MAX_POINTS)

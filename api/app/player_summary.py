@@ -30,6 +30,7 @@ from app.models import (
     User,
     UserLeagueRating,
 )
+from app.ratings.rated import is_rated_member
 from app.schemas.player import PlayerSummary
 
 # How many recent W/L results to surface as the "form" string on
@@ -46,8 +47,21 @@ FORM_WINDOW = 10
 async def load_player_ratings(
     db: AsyncSession, league_id: uuid.UUID, user_ids: Iterable[uuid.UUID]
 ) -> dict[uuid.UUID, float | None]:
-    """One round trip: returns ``user_id -> rating`` in this league. Users with
-    no rating row are absent (so ``.get()`` yields ``None``)."""
+    """One round trip: returns ``user_id -> rating`` in this league. An UNRATED
+    player is absent (so ``.get()`` yields ``None``).
+
+    THE ``is_rated_member()`` GATE IS THE WHOLE POINT OF THIS FUNCTION, and it is
+    why "no rating row" is not the test: joining a league seeds a 1500 row, so
+    every member of a glicko2 ladder has one, and a read of ``rating_value`` alone
+    hands a brand-new guest the seed as though they had played for it. A player
+    holds a rating here only once something has MOVED that row (``app.ratings.rated``).
+
+    This is the deepest gate on the read side, and the reason the rest of the hero
+    falls out for free: ``rank`` is ranked over the same population, and ``peak`` /
+    ``rank_of`` / ``percentile`` / ``rating_delta`` all key off this ``rating``
+    being present (``player_standing``). No field can disagree with another about
+    whether the player is Unrated, because they all ask the same question once.
+    """
     ids = list(user_ids)
     if not ids:
         return {}
@@ -56,6 +70,7 @@ async def load_player_ratings(
             select(UserLeagueRating.user_id, UserLeagueRating.rating_value).where(
                 UserLeagueRating.league_id == league_id,
                 UserLeagueRating.user_id.in_(ids),
+                is_rated_member(),
             )
         )
     ).all()
@@ -72,14 +87,25 @@ async def _load_player_ranks(
     higher)``, so equal ratings share a rank and the next rank skips
     (…, 7, 7, 9, …), exactly what SQL ``RANK()`` computes.
 
-    The window is evaluated over the ENTIRE non-merged, rated league population
-    and only THEN filtered to ``user_ids`` — never over ``user_ids`` alone — so
-    a player's rank is a global fact, invariant under the roster's search or
-    pagination (the #841 regression). Tombstoned (merged-away) users are
-    excluded from the population so a ghost never inflates a real rank.
+    The window is evaluated over the ENTIRE rated league population and only THEN
+    filtered to ``user_ids`` — never over ``user_ids`` alone — so a player's rank
+    is a global fact, invariant under the roster's search or pagination (the #841
+    regression).
 
-    Users with no rating in the league are absent from the result (so
-    ``.get()`` yields ``None``): no rating, no rank.
+    UNRATED members are absent from the result (so ``.get()`` yields ``None``):
+    no rating, no rank — "not a large number at the bottom of the list"
+    (CONTEXT.md, "Rank"). They are excluded from the POPULATION as well as from
+    the answer, which is the same thing said twice on purpose: a ladder of a
+    hundred seeded-but-never-played guests must not push the two players who have
+    actually played each other down to ranks 51 and 52.
+
+    ``is_rated_member()`` is the WHOLE population filter — it carries the tombstone
+    exclusion (a merged-away ghost is not a rung, so it cannot inflate a real rank)
+    as well as the rated one, which is why there is no ``User`` join left here. It
+    is the same predicate ``load_player_ratings``, ``league_rated_population`` and
+    ``league_percentile`` ask, so rank, rating, the "of N" behind it and the "Top
+    N%" beside it are read off ONE ladder by construction — not by four WHERE
+    clauses agreeing to.
     """
     ids = list(user_ids)
     if not ids:
@@ -90,12 +116,9 @@ async def _load_player_ranks(
             func.rank()
             .over(order_by=UserLeagueRating.rating_value.desc())
             .label("rank"),
-        )
-        .join(User, User.id == UserLeagueRating.user_id)
-        .where(
+        ).where(
             UserLeagueRating.league_id == league_id,
-            User.merged_into_user_id.is_(None),
-            UserLeagueRating.rating_value.is_not(None),
+            is_rated_member(),
         )
     ).subquery()
 

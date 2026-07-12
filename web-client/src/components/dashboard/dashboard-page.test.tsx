@@ -291,7 +291,7 @@ describe('DashboardPage', () => {
 })
 
 describe('DashboardPage · first-match (zero completed matches, nothing pending)', () => {
-  it('renders the hero, provisional-rating, and empty-matches cards instead of the normal layout', async () => {
+  it('renders the hero, unrated, and empty-matches cards instead of the normal layout', async () => {
     server.use(
       http.get('*/v1/dashboard', () =>
         HttpResponse.json(
@@ -310,7 +310,7 @@ describe('DashboardPage · first-match (zero completed matches, nothing pending)
     expect(
       await screen.findByRole('heading', { name: /log your first match/i }),
     ).toBeInTheDocument()
-    expect(screen.getByText('1500')).toBeInTheDocument()
+    expect(screen.getByText('Unrated')).toBeInTheDocument()
     expect(screen.getByText('No matches yet. Go play.')).toBeInTheDocument()
     expect(
       screen.queryByRole('region', { name: /needs your attention/i }),
@@ -318,6 +318,40 @@ describe('DashboardPage · first-match (zero completed matches, nothing pending)
     expect(
       screen.queryByText('Not in a rated league yet.'),
     ).not.toBeInTheDocument()
+  })
+
+  it('never puts a rating number in front of a player who has never played (#950)', async () => {
+    // The regression: this dashboard hardcoded `1500 · PROVISIONAL` while the
+    // player's own profile, the roster, their leagues card and the opponent
+    // picker all — correctly — said Unrated. Joining a league seeds
+    // `rating_value = 1500` on session-mint, before a ball is hit; that seed is
+    // the strategy's prior, not a rating anyone earned, and the API now sends
+    // `rating: null` here (CONTEXT.md § Rating).
+    //
+    // The assertion is on the *shape*, not on the literal 1500: any run of 3-4
+    // digits is rating-shaped, so re-hardcoding 1600 — or quoting a league's
+    // `initial_rating_value` back at the player — reds this too.
+    server.use(
+      http.get('*/v1/dashboard', () =>
+        HttpResponse.json(
+          dashboardResponse({
+            completed_match_count: 0,
+            rating: null,
+            recent_results: [],
+            attention: [],
+            attention_total_count: 0,
+            waiting_count: 0,
+          }),
+        ),
+      ),
+    )
+    const { container } = renderDashboard()
+
+    await screen.findByRole('heading', { name: /log your first match/i })
+    expect(container.textContent).not.toMatch(/\b\d{3,4}\b/)
+    expect(screen.queryByText(/provisional/i)).not.toBeInTheDocument()
+    // …and it does say the true thing in the number's place.
+    expect(screen.getByText('Unrated')).toBeInTheDocument()
   })
 
   it('stays on the normal dashboard when an attention item exists despite zero completed matches', async () => {

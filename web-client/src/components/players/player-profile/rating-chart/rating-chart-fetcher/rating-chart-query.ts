@@ -93,6 +93,10 @@ const PEAK_LABEL_GAP = 4.5
 /** The label's font-size in viewBox units (`.rating-chart__peak-label`), which is
  * also how far a baseline must sit below the top edge to render un-clipped. */
 const PEAK_LABEL_SIZE = 9
+/** Half a four-digit rating's width, in viewBox units — generously, since the
+ * label is only *centred* on the dot while there is room for both of its halves.
+ * (At font-size 9, a digit runs a little over 5 units wide.) */
+const PEAK_LABEL_HALF_WIDTH = 12
 
 export type ChartCoord = { x: number; y: number }
 
@@ -126,8 +130,16 @@ export type ChartView = {
    *
    * `labelY` is the baseline the rating is printed at: **above** the dot when
    * there is room, **below** it when the peak sits at the top of the plot and
-   * there is not. See `peakLabelBaseline`. */
-  peak: (ChartCoord & { rating: string; labelY: number }) | null
+   * there is not. See `peakLabelBaseline`. `labelAnchor` is the same decision in
+   * x: the label is centred on the dot only when both its halves fit inside the
+   * plot, and grows inward off the edge when they don't. See `peakLabelAnchor`. */
+  peak:
+    | (ChartCoord & {
+        rating: string
+        labelY: number
+        labelAnchor: PeakLabelAnchor
+      })
+    | null
   /** Rating labels up the left-hand side, bottom-first. */
   yTicks: ChartAxisTick[]
   /** Date labels along the bottom. */
@@ -164,6 +176,33 @@ export function peakLabelBaseline(dotY: number): number {
   // the baseline is at least its own height below it.
   if (above >= PEAK_LABEL_SIZE) return above
   return round(dotY + PEAK_DOT_RADIUS + PEAK_LABEL_GAP + PEAK_LABEL_SIZE)
+}
+
+/** Where the peak's label sits **horizontally**, given its dot's x. */
+export type PeakLabelAnchor = 'start' | 'middle' | 'end'
+
+/**
+ * Which way the peak's label grows out of its dot.
+ *
+ * The vertical half of this was solved (`peakLabelBaseline`) and the horizontal
+ * half was not: the label was *always* centred on the dot, so a peak at the right
+ * edge of the plot — which is what a player whose latest match IS their high-water
+ * mark has, x ≈ 590 of a plot that ends at 590 — pushed half a four-digit rating
+ * off the end of the viewBox and straight through the "Today" axis label.
+ *
+ * So the label is anchored, not centred, whenever centring would not fit: it grows
+ * **left** (`end`) off a peak against the right edge, **right** (`start`) off one
+ * against the left edge — the anchor's vertex, which is drawn at `PLOT.left` — and
+ * is centred everywhere in between, which is the usual case. Anchoring rather than
+ * clamping the x keeps the label attached to the dot it names; a clamped centre
+ * would slide the text away from its own marker. The baseline is untouched by
+ * this, so the label still clears the dot vertically either way.
+ */
+export function peakLabelAnchor(dotX: number): PeakLabelAnchor {
+  const plotRight = CHART_WIDTH - PLOT.right
+  if (dotX + PEAK_LABEL_HALF_WIDTH > plotRight) return 'end'
+  if (dotX - PEAK_LABEL_HALF_WIDTH < PLOT.left) return 'start'
+  return 'middle'
 }
 
 /** A drawn vertex: a rating at an instant, in milliseconds. */
@@ -260,9 +299,28 @@ function peakVertex(
   return { at: Date.parse(inWindow.at), rating: inWindow.rating }
 }
 
-/** "12 Mar" — enough to place a point in the year without crowding the axis. */
-const formatDay = (at: number): string =>
-  new Date(at).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
+/**
+ * The x-axis's left-hand date — enough to place the edge in time without crowding
+ * the axis.
+ *
+ * "Jun 11" while the edge is in the current year; **"Jul 11, 2025"** once it isn't.
+ * The year is not decoration there: the 1y window's left edge is a year ago *to the
+ * day*, so without it the axis read "Jul 11 … Today" — a label indistinguishable
+ * from today's own date. (Keying on the year rather than on the range also catches
+ * the 30d/90d windows that reach back across a new year, which are ambiguous for
+ * exactly the same reason.)
+ *
+ * Local, like every other date the profile prints.
+ */
+const formatDay = (at: number, now: number): string => {
+  const date = new Date(at)
+  const sameYear = date.getFullYear() === new Date(now).getFullYear()
+  return date.toLocaleDateString(undefined, {
+    day: 'numeric',
+    month: 'short',
+    ...(sameYear ? {} : { year: 'numeric' }),
+  })
+}
 
 /**
  * The chart, projected out of one window of rating history.
@@ -336,6 +394,7 @@ export function selectRatingChart(
   // the anchor the line starts at. See `peakVertex`.
   const peakPoint = peakVertex(window, xMin)
   const peakY = peakPoint ? y(peakPoint.rating) : 0
+  const peakX = peakPoint ? x(peakPoint.at) : 0
 
   return {
     line,
@@ -347,10 +406,11 @@ export function selectRatingChart(
     },
     peak: peakPoint
       ? {
-          x: x(peakPoint.at),
+          x: peakX,
           y: peakY,
           rating: formatRating(peakPoint.rating),
           labelY: peakLabelBaseline(peakY),
+          labelAnchor: peakLabelAnchor(peakX),
         }
       : null,
     yTicks: [
@@ -360,7 +420,7 @@ export function selectRatingChart(
     xTicks: [
       // The left-hand label names the edge the line actually starts at, which is
       // the window's start in every case but the transient one above.
-      { label: formatDay(xMin), at: x(xMin) },
+      { label: formatDay(xMin, now), at: x(xMin) },
       { label: 'Today', at: x(xMax) },
     ],
     summary: summarize(window, range),
@@ -380,9 +440,15 @@ function summarize(window: RatingHistoryWindow, range: RatingRange): string {
   const phrase = RANGE_PHRASE[range]
   const change = window.change
   if (change == null) return `No rated matches in ${phrase}`
-  if (Math.round(change) === 0) return `No change over ${phrase}`
-  const direction = change > 0 ? 'Up' : 'Down'
-  return `${direction} ${formatRatingDelta(change)} over ${phrase}`
+  const rounded = Math.round(change)
+  if (rounded === 0) return `No change over ${phrase}`
+  const direction = rounded > 0 ? 'Up' : 'Down'
+  // The **magnitude**, not the signed figure: the word already carries the sign,
+  // and "Down -129" is a double negative that reads as a rise. (The chip beside it
+  // keeps the signed "+127"/"-129" — that is a different convention, and there the
+  // sign is the only thing saying which way it went.) This sentence is also the
+  // chart's `aria-label`, so the picture's alt text said "Down -129" too.
+  return `${direction} ${Math.abs(rounded)} over ${phrase}`
 }
 
 /** The chip — or nothing at all. Never a "+0" (ADR-0915). */

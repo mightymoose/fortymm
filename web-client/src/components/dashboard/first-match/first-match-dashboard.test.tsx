@@ -34,15 +34,15 @@ function renderFirstMatchDashboard() {
 }
 
 // Wiring only: each card's own content and behavior is pinned by its own
-// test file (first-match-card, starting-rating-card, no-matches-card).
+// test file (first-match-card, unrated-card, no-matches-card).
 describe('FirstMatchDashboard', () => {
-  it('composes the hero, rating, and empty-matches cards', async () => {
+  it('composes the hero, unrated, and empty-matches cards', async () => {
     renderFirstMatchDashboard()
 
     expect(
       await screen.findByRole('heading', { name: /log your first match/i }),
     ).toBeInTheDocument()
-    expect(screen.getByText('1500')).toBeInTheDocument()
+    expect(screen.getByText('Unrated')).toBeInTheDocument()
     expect(screen.getByText('No matches yet. Go play.')).toBeInTheDocument()
   })
 })

@@ -183,6 +183,29 @@ describe('recentMatchesQuery', () => {
     expect(view.total).toBe(0)
   })
 
+  it('dates a match in the reader’s LOCAL day — never in UTC', async () => {
+    // The day you played a match is a LOCAL fact, and every other surface renders
+    // it that way (the full history page, the match detail page). This card used to
+    // format in UTC, so a match played at 7:15pm in Chicago — already tomorrow in
+    // UTC — was dated a day ahead of both, and two matches played fifteen minutes
+    // apart could land on two different days *in the same table*.
+    //
+    // (Contrast the hero's "Member since", which stays UTC on purpose: a join
+    // *month* is a fact about the account, not about the reader's evening.)
+    // The suite runs pinned to UTC (`vite.config.ts`); this one test sits west of
+    // it, which is the whole point — under UTC there is nothing to get wrong.
+    vi.stubEnv('TZ', 'America/Chicago')
+    try {
+      const row = await selectRow(
+        buildPlayerMatchRow({ created_at: '2026-07-12T00:15:00Z' }),
+      )
+
+      expect(row.when).toBe('Jul 11')
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
   it('prints an em dash rather than "Invalid Date" for an unreadable timestamp', async () => {
     const row = await selectRow(buildPlayerMatchRow({ created_at: 'not-a-date' }))
 

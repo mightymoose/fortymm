@@ -3,9 +3,10 @@ from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 
 from httpx import AsyncClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.leagues import get_default_league
+from app.leagues import get_default_league, seed_user_league_rating
 from app.models import (
     League,
     LeagueMembership,
@@ -32,7 +33,13 @@ from app.ratings.stats import (
     best_win_streak,
 )
 from app.schemas.rating import RatingPoint
-from tests._helpers import make_client, make_user, start_session
+from tests._helpers import (
+    accept_standing_result,
+    make_client,
+    make_user,
+    opponent_session,
+    start_session,
+)
 
 # A fixed anchor so recency-ordering assertions don't depend on wall-clock time.
 BASE_TIME = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
@@ -348,7 +355,7 @@ async def test_search_includes_rating_for_default_league(
 ):
     await start_session(api_client, db_session)
     rival = await make_user(db_session, "ratedrival")
-    await make_user(db_session, "freshface")
+    freshface = await make_user(db_session, "freshface")
 
     league = await get_default_league(db_session)
     db_session.add(
@@ -360,6 +367,12 @@ async def test_search_includes_rating_for_default_league(
             rating_state={"rating": 1750.0, "rd": 200.0, "volatility": 0.06},
         )
     )
+    db_session.add(_provenance(rival, league, 1750.0))
+    # `freshface` is seeded EXACTLY as production seeds a new member on join — a
+    # 1500 row and an `initial` event — so the picker's chip is a real test of the
+    # rating read and not of a NULL column: the typeahead must show them Unrated,
+    # not hand them the league's prior as a rating.
+    seed_user_league_rating(db_session, league.id, freshface.id, league.rating_strategy)
     await db_session.commit()
 
     response = await api_client.get("/v1/players/search", params={"q": "face"})
@@ -449,10 +462,22 @@ async def _rate(
     rating_value: float | None,
     league: League | None = None,
 ) -> None:
-    """Attach a ``UserLeagueRating`` to ``user`` (default league unless another
-    is named — a rating belongs to exactly one ladder). A ``None``
-    ``rating_value`` models a player who has a rating row but has never
-    finished a rated match (unranked)."""
+    """Attach a bare ``UserLeagueRating`` SNAPSHOT to ``user`` (default league
+    unless another is named — a rating belongs to exactly one ladder).
+
+    THIS ALONE DOES NOT MAKE THEM RATED, and it is not meant to: it is precisely
+    the shape production seeds a member with when they JOIN a league (a
+    ``rating_value``, nothing having moved it). The read side asks whether
+    anything has (``app.ratings.rated``), so a player seeded only through here
+    still reads Unrated — no rating, no rank, no peak, no confidence.
+
+    Use it where the rating's PROVENANCE is seeded separately and would be
+    double-counted otherwise: the chart tests below pair it with ``_rated_win``,
+    which writes the match-sourced history rows their timeline is made of. To
+    hand a player a rating outright — the roster, rank and hero tests — use
+    ``_earn_rating``, which writes the provenance too. A ``None``
+    ``rating_value`` is the manual-strategy shape: a row awaiting its import.
+    """
     league = league or await get_default_league(db_session)
     db_session.add(
         UserLeagueRating(
@@ -462,6 +487,64 @@ async def _rate(
             rating_value=rating_value,
         )
     )
+    await db_session.commit()
+
+
+def _provenance(
+    user: User,
+    league: League,
+    rating_value: float,
+    *,
+    state: dict | None = None,
+    source: RatingHistorySource = RatingHistorySource.manual,
+) -> RatingHistory:
+    """The rating-history row that makes a seeded number an actual RATING.
+
+    Production writes a 1500 ``UserLeagueRating`` and an ``initial`` history event
+    the moment a user JOINS a league — i.e. at session-mint, before they have
+    played a thing. So "has a rating row" is true of every member, and the read
+    side deliberately asks a different question: has anything MOVED that row?
+    (``app.ratings.rated`` — a history row whose source is not ``initial``.)
+
+    A test that hands a player a ``rating_value`` and stops has therefore built a
+    shape production never produces — a rating with no provenance — and any
+    "is this player rated?" assertion written over it is vacuous. That fiction is
+    exactly why this suite stayed green while the QA stack rendered a guest who had
+    never played anything at 1500, peak 1500, rank #2 of 5.
+
+    A ``manual`` override is the cheapest production shape that carries provenance:
+    an admin wrote this number. Tests whose subject is the rating TIMELINE seed a
+    rated match instead (``_rated_win``) — a manual row is a legitimate point on
+    the chart and would move their line.
+    """
+    return RatingHistory(
+        league_id=league.id,
+        user_id=user.id,
+        match_id=None,
+        rating_strategy_id=league.rating_strategy_id,
+        rating_value=rating_value,
+        rating_state=state or {"rating": rating_value, "rd": 200.0, "volatility": 0.06},
+        previous_rating_value=None,
+        source=source,
+        # Far enough back to be nobody's chart window: these players' ratings are
+        # a premise, not a timeline.
+        created_at=BASE_TIME - timedelta(days=730),
+    )
+
+
+async def _earn_rating(
+    db_session: AsyncSession,
+    user: User,
+    rating_value: float,
+    league: League | None = None,
+) -> None:
+    """Give ``user`` a rating they actually HOLD on a ladder: the
+    ``UserLeagueRating`` snapshot AND the history row that moved it
+    (``_provenance``). The seeding shape for every test whose player is meant to
+    be rated — rating, rank, rank_of, peak, percentile, confidence."""
+    league = league or await get_default_league(db_session)
+    await _rate(db_session, user, rating_value, league)
+    db_session.add(_provenance(user, league, rating_value))
     await db_session.commit()
 
 
@@ -558,6 +641,13 @@ def _rank_for(items: list[dict], username: str):
     raise KeyError(username)
 
 
+def _rating_for_item(items: list[dict], username: str):
+    for player in items:
+        if player["username"] == username:
+            return player["rating"]
+    raise KeyError(username)
+
+
 async def test_list_players_rank_is_none_for_unrated_player(
     api_client: AsyncClient, db_session: AsyncSession
 ):
@@ -566,7 +656,7 @@ async def test_list_players_rank_is_none_for_unrated_player(
     await start_session(api_client, db_session)
     rated = await make_user(db_session, "rank.rated")
     unrated = await make_user(db_session, "rank.unrated")
-    await _rate(db_session, rated, 1600.0)
+    await _earn_rating(db_session, rated, 1600.0)
     # `unrated` gets no rating row at all → absent from the rank population.
     assert unrated is not None
 
@@ -586,9 +676,9 @@ async def test_list_players_rank_ties_share_and_next_rank_skips(
     top_a = await make_user(db_session, "tie.aaa")
     top_b = await make_user(db_session, "tie.bbb")
     lower = await make_user(db_session, "tie.ccc")
-    await _rate(db_session, top_a, 1800.0)
-    await _rate(db_session, top_b, 1800.0)
-    await _rate(db_session, lower, 1500.0)
+    await _earn_rating(db_session, top_a, 1800.0)
+    await _earn_rating(db_session, top_b, 1800.0)
+    await _earn_rating(db_session, lower, 1500.0)
 
     response = await api_client.get("/v1/players", params={"q": "tie."})
     assert response.status_code == 200
@@ -613,11 +703,11 @@ async def test_list_players_rank_is_global_across_filter_and_pagination(
     mid = await make_user(db_session, "glob.mid")
     fourth = await make_user(db_session, "glob.fourth")
     fifth = await make_user(db_session, "glob.fifth")
-    await _rate(db_session, top, 2000.0)
-    await _rate(db_session, second, 1900.0)
-    await _rate(db_session, mid, 1800.0)
-    await _rate(db_session, fourth, 1700.0)
-    await _rate(db_session, fifth, 1600.0)
+    await _earn_rating(db_session, top, 2000.0)
+    await _earn_rating(db_session, second, 1900.0)
+    await _earn_rating(db_session, mid, 1800.0)
+    await _earn_rating(db_session, fourth, 1700.0)
+    await _earn_rating(db_session, fifth, 1600.0)
 
     # Unfiltered: mid is globally rank 3.
     unfiltered = await api_client.get("/v1/players", params={"page_size": 100})
@@ -651,9 +741,9 @@ async def test_list_players_rank_ignores_merged_ghost(
     real_top = await make_user(db_session, "real.top")
     real_second = await make_user(db_session, "real.second")
     # The ghost outrates everyone, but it's a tombstone.
-    await _rate(db_session, ghost, 3000.0)
-    await _rate(db_session, real_top, 2000.0)
-    await _rate(db_session, real_second, 1500.0)
+    await _earn_rating(db_session, ghost, 3000.0)
+    await _earn_rating(db_session, real_top, 2000.0)
+    await _earn_rating(db_session, real_second, 1500.0)
 
     ghost.merged_into_user_id = survivor.id
     await db_session.commit()
@@ -718,34 +808,33 @@ async def test_list_players_sorts_by_rating_descending_with_nulls_last(
 ):
     """The /players list orders by rating so the top of the roster is the
     most-skilled. Unrated players are sorted last so the leaderboard never
-    starts with NULL."""
+    starts with NULL.
+
+    ``rated.none`` is seeded the way PRODUCTION seeds a member who has never played
+    — the league's 1500 prior, sitting in a real ``UserLeagueRating`` row — and the
+    two rated players straddle it deliberately. Sort on the raw column and they
+    land between ``rated.high`` and ``rated.low``: a guest who has never touched a
+    bat, wedged into the ladder above a player rated 1400, showing a blank rating
+    cell and no rank. The order below is only reachable if the sort key is the
+    rating the row will actually RENDER."""
     await start_session(api_client, db_session)
     league = await get_default_league(db_session)
     high = await make_user(db_session, "rated.high")
     low = await make_user(db_session, "rated.low")
     unrated = await make_user(db_session, "rated.none")
-    db_session.add_all(
-        [
-            UserLeagueRating(
-                league_id=league.id,
-                user_id=high.id,
-                rating_strategy_id=league.rating_strategy_id,
-                rating_value=2000.0,
-            ),
-            UserLeagueRating(
-                league_id=league.id,
-                user_id=low.id,
-                rating_strategy_id=league.rating_strategy_id,
-                rating_value=1500.0,
-            ),
-        ]
-    )
+    await _earn_rating(db_session, high, 2000.0)
+    await _earn_rating(db_session, low, 1400.0)
+    seed_user_league_rating(db_session, league.id, unrated.id, league.rating_strategy)
     await db_session.commit()
 
     response = await api_client.get("/v1/players", params={"q": "rated."})
-    usernames = [p["username"] for p in response.json()["items"]]
+    items = response.json()["items"]
+    usernames = [p["username"] for p in items]
     assert usernames == ["rated.high", "rated.low", "rated.none"]
-    assert unrated is not None  # silences unused warning
+    # …and the last row is Unrated, not "1500 with no rank".
+    assert _rating_for_item(items, "rated.none") is None
+    assert _rank_for(items, "rated.none") is None
+    assert _rating_for_item(items, "rated.low") == 1400.0
 
 
 async def test_list_players_pagination_respects_page_and_page_size(
@@ -1103,6 +1192,13 @@ async def _rated_cohort(
             for i, user in enumerate(users)
         ]
     )
+    # Each one holds their rating, rather than merely having been handed the
+    # league's seed: an unrated member is not part of the population `rank_of`
+    # counts, so a cohort seeded without provenance would be a ladder of ghosts —
+    # and every rank/percentile assertion measured against it would be vacuous.
+    db_session.add_all(
+        [_provenance(user, league, base + i) for i, user in enumerate(users)]
+    )
     await db_session.commit()
     return users
 
@@ -1318,7 +1414,7 @@ async def test_get_player_unrated_has_no_standing_at_all(
     target = await make_user(db_session, "unrated.target")
     rival = await make_user(db_session, "unrated.rival")
     # Rated peers exist, so a non-null `rank_of` can't be excused as "no ladder".
-    await _rate(db_session, rival, 1600.0)
+    await _earn_rating(db_session, rival, 1600.0)
     await _record_match_with_winner(
         db_session, target, rival, created_at=BASE_TIME, affects_rating=False
     )
@@ -1335,40 +1431,47 @@ async def test_get_player_unrated_has_no_standing_at_all(
 async def test_get_player_rank_of_is_the_size_of_the_rated_ladder(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    """``rank_of`` is the DENOMINATOR of the hero's "#2 of 4" — the size of the
+    """``rank_of`` is the DENOMINATOR of the hero's "#2 of 3" — the size of the
     exact population the rank is drawn from: non-merged, RATED members of this
     league.
 
-    Six users exist here, but only four are on the ladder: three rated players
-    plus the viewer (who joined the default league when their session was minted,
-    which seeds them a rating row and so a rung of their own). The two the ladder
-    refuses are a tombstoned (merged-away) ghost — which, admitted, would also
-    push the target from rank 2 to 3 — and a member whose rating row has never
-    been scored. So ``rank_of`` is 4: not 6 (counting every user), not 5 (letting
-    either of those two in).
+    Six users exist here and only THREE are on the ladder. The three the ladder
+    refuses are the interesting part:
 
-    ``rank <= rank_of`` is the invariant that makes the pair honest."""
+    * a tombstoned (merged-away) ghost, which — admitted — would also push the
+      target from rank 2 to 3;
+    * a member whose rating row has never been scored (a manual ladder awaiting
+      its import): a NULL rating;
+    * THE VIEWER, who joined the default league the instant their session was
+      minted and was seeded a 1500 row by it, and who has never played a match.
+      A rating row is not a rating (``app.ratings.rated``). Count them and the
+      league quietly grows a rung for every guest who ever loaded the site — the
+      "#2 of 5" a QA pass caught the profile reporting on a ladder of two real
+      players.
+
+    So ``rank_of`` is 3: not 6 (every user), not 5, not 4 (letting the seeded
+    viewer in). ``rank <= rank_of`` is the invariant that makes the pair honest."""
     await start_session(api_client, db_session)
     top = await make_user(db_session, "ladder.top")
     target = await make_user(db_session, "ladder.target")
     bottom = await make_user(db_session, "ladder.bottom")
     ratingless = await make_user(db_session, "ladder.ratingless")
     ghost = await make_user(db_session, "ladder.ghost")
-    await _rate(db_session, top, 1700.0)
-    await _rate(db_session, target, 1600.0)
-    await _rate(db_session, bottom, 1500.0)
+    await _earn_rating(db_session, top, 1700.0)
+    await _earn_rating(db_session, target, 1600.0)
+    await _earn_rating(db_session, bottom, 1500.0)
     # A rating row that has never been scored — on the roster, off the ladder.
     await _rate(db_session, ratingless, None)
     # Outrates everyone, but it's a tombstone: not a player, not a rank.
-    await _rate(db_session, ghost, 3000.0)
+    await _earn_rating(db_session, ghost, 3000.0)
     ghost.merged_into_user_id = top.id
     await db_session.commit()
 
     body = (await api_client.get(f"/v1/players/{target.id}")).json()
     assert body["rank"] == 2
-    # top + target + bottom + the viewer = four rungs. The ghost and the
-    # rating-less member are the two the ladder refuses.
-    assert body["rank_of"] == 4
+    # top + target + bottom. The ghost, the rating-less member and the
+    # never-played viewer are the three the ladder refuses.
+    assert body["rank_of"] == 3
     assert body["rank"] <= body["rank_of"]
 
 
@@ -1388,13 +1491,15 @@ async def test_get_player_withholds_percentile_until_the_ladder_is_big_enough(
     The floor is read from the constant, not hardcoded: the number is provisional
     and this test must follow it. A mutant that drops the gate reds on the first
     half; one that never emits a percentile reds on the second."""
-    # The viewer occupies a rung too — minting their session joins them to the
-    # default league, which seeds them a rating row.
+    # The viewer does NOT occupy a rung: minting their session joins them to the
+    # default league and seeds them a 1500 row, but they have never played a rated
+    # match, so they are unrated and outside the population (`app.ratings.rated`).
+    # Count them and the ladder tips over the floor an entire player early.
     await start_session(api_client, db_session)
     target = await make_user(db_session, "pct.target")
-    await _rate(db_session, target, 1700.0)
-    # viewer + target + peers == one short of the floor.
-    await _rated_cohort(db_session, "pct.peer", PERCENTILE_MIN_RATED_PLAYERS - 3)
+    await _earn_rating(db_session, target, 1700.0)
+    # target + peers == one short of the floor.
+    await _rated_cohort(db_session, "pct.peer", PERCENTILE_MIN_RATED_PLAYERS - 2)
 
     body = (await api_client.get(f"/v1/players/{target.id}")).json()
     assert body["rank"] == 1
@@ -1455,7 +1560,7 @@ async def test_list_players_roster_serves_the_same_ten_result_form(
     await start_session(api_client, db_session)
     target = await make_user(db_session, "roster.form")
     rival = await make_user(db_session, "roster.rival")
-    await _rate(db_session, target, 1600.0)
+    await _earn_rating(db_session, target, 1600.0)
     for day in range(7):
         await _record_match_with_winner(
             db_session, target, rival, created_at=BASE_TIME + timedelta(days=day)
@@ -1783,8 +1888,8 @@ async def test_get_player_career_is_cross_league_while_the_rating_is_not(
 
     await _join_league(db_session, target, home_league)
     await _join_league(db_session, target, side_league)
-    await _rate(db_session, target, 1520.0, league=home_league)
-    await _rate(db_session, target, 1950.0, league=side_league)
+    await _earn_rating(db_session, target, 1520.0, league=home_league)
+    await _earn_rating(db_session, target, 1950.0, league=side_league)
 
     # Two wins on the home ladder…
     await _record_match_with_winner(db_session, target, rival, created_at=BASE_TIME)
@@ -1979,18 +2084,25 @@ async def _rate_glicko2(
     ``_rate`` is the weaker sibling: it leaves ``rating_state`` null, which is
     why the tests below all seed through this one — confidence is read out of the
     state, not the column.
+
+    Carries its ``_provenance`` row like ``_earn_rating`` does, and must: a player
+    holding nothing but the seed the league gave them is UNRATED, and an unrated
+    player has no confidence to report — the card would be reporting the 1500/350
+    prior back to them as a finding ("somewhere between 814 and 2186").
     """
     league = league or await get_default_league(db_session)
     assert league is not None
+    state = {"rating": rating, "rd": rd, "volatility": volatility}
     db_session.add(
         UserLeagueRating(
             league_id=league.id,
             user_id=user.id,
             rating_strategy_id=league.rating_strategy_id,
             rating_value=rating,
-            rating_state={"rating": rating, "rd": rd, "volatility": volatility},
+            rating_state=state,
         )
     )
+    db_session.add(_provenance(user, league, rating, state=state))
     await db_session.commit()
 
 
@@ -2150,6 +2262,20 @@ async def test_get_player_confidence_is_null_for_a_manually_rated_player(
             rating_state={"rating": 1600.0},
         )
     )
+    # An IMPORT is this ladder's provenance — the whole point of a manual strategy
+    # is that the number arrives from outside rather than from a match here. It is
+    # a rating they hold (the hero shows 1600, `is_rated_member()` says so), which
+    # is what makes this test's subject — that it carries no CONFIDENCE — the thing
+    # under test, rather than an accident of the player reading as Unrated.
+    db_session.add(
+        _provenance(
+            target,
+            manual_league,
+            1600.0,
+            state={"rating": 1600.0},
+            source=RatingHistorySource.import_,
+        )
+    )
     await db_session.commit()
 
     response = await api_client.get(
@@ -2271,10 +2397,10 @@ async def test_get_player_every_league_scoped_fact_follows_the_requested_league(
     * `confidence`→ ``_player_confidence``
     * `career`    → ``player_career``, which must take NO league at all
 
-    The viewer is themselves a rated member of the default league (a session mints
-    a guest and joins them, seeding a 1500 rating), so they occupy a rung of the
-    home ladder and count in its population. That is correct, and the arithmetic
-    below accounts for it."""
+    The viewer is a member of the default league (a session mints a guest and joins
+    them, seeding a 1500 rating row) but has never played a rated match, so they are
+    UNRATED and occupy no rung of the home ladder — the arithmetic below counts them
+    out of its population deliberately."""
     await start_session(api_client, db_session)
     home = await get_default_league(db_session)
     assert home is not None
@@ -2286,11 +2412,11 @@ async def test_get_player_every_league_scoped_fact_follows_the_requested_league(
     await _join_league(db_session, target, away)
 
     # Two ladders sized so the percentile gate opens on BOTH (a small league
-    # withholds it) while the populations still differ: the home ladder also
-    # carries the viewer's own rung, the away one does not.
-    home_pop = PERCENTILE_MIN_RATED_PLAYERS  # cohort + the target + the viewer
+    # withholds it) while the populations still differ — a `rank_of` that read the
+    # wrong league would be caught by the difference alone.
+    home_pop = PERCENTILE_MIN_RATED_PLAYERS  # cohort + the target
     away_pop = PERCENTILE_MIN_RATED_PLAYERS + 2  # cohort + the target
-    await _rated_cohort(db_session, "switch.home", home_pop - 2, base=1400.0)
+    await _rated_cohort(db_session, "switch.home", home_pop - 1, base=1400.0)
     await _rated_cohort(
         db_session, "switch.away", away_pop - 1, league=away, base=1600.0
     )
@@ -2433,8 +2559,8 @@ async def test_get_player_leagues_lists_every_membership_with_its_rating_on_it(
     target = await make_user(db_session, "leagues.target")
     await _join_league(db_session, target, home)
     await _join_league(db_session, target, away)
-    await _rate(db_session, target, 1520.0, league=home)
-    await _rate(db_session, target, 1950.0, league=away)
+    await _earn_rating(db_session, target, 1520.0, league=home)
+    await _earn_rating(db_session, target, 1950.0, league=away)
 
     body = (await api_client.get(f"/v1/players/{target.id}")).json()
 
@@ -2475,7 +2601,7 @@ async def test_get_player_leagues_keeps_a_league_the_player_has_no_rating_in(
     target = await make_user(db_session, "leagues.unrated")
     await _join_league(db_session, target, home)
     await _join_league(db_session, target, away)
-    await _rate(db_session, target, 1520.0, league=home)
+    await _earn_rating(db_session, target, 1520.0, league=home)
     # No rating row on the side ladder at all — they have only just joined it.
 
     body = (await api_client.get(f"/v1/players/{target.id}")).json()
@@ -2494,7 +2620,11 @@ async def test_get_player_leagues_is_a_single_row_for_a_player_in_only_the_defau
     correct, not a bug to be optimised away by hiding the card (ADR-0915).
 
     The viewer here is a real signed-in user (a guest minted by the session), not
-    a hand-built row: this is the shape production actually serves."""
+    a hand-built row: this is the shape production actually serves — and it is the
+    shape that made the card lie. Joining seeds a 1500 ``UserLeagueRating``, so a
+    card keyed on "has a rating row" showed this brand-new guest a 1500 on the very
+    ladder whose hero, two inches up the page, correctly said Unrated. The row still
+    renders (they DO belong to the league); its rating is ``null``."""
     session_user = await start_session(api_client, db_session)
     home = await get_default_league(db_session)
     assert home is not None
@@ -2505,12 +2635,14 @@ async def test_get_player_leagues_is_a_single_row_for_a_player_in_only_the_defau
             "id": str(home.id),
             "name": home.name,
             "is_default": True,
-            # Joining the default league seeds a rating row — so the caller is
-            # themselves a rated player on the ladder they are looking at.
-            "rating": 1500.0,
+            # Belongs to the ladder; holds no rating on it. The seed is a prior,
+            # not a rating (`app.ratings.rated`).
+            "rating": None,
         }
     ]
     assert body["career"]["league_count"] == 1
+    # …and the hero agrees with the card, which is the whole point of one gate.
+    assert body["rating"] is None
 
 
 # ----- head-to-head (viewer-aware) ------------------------------------------
@@ -3730,3 +3862,336 @@ async def test_unknown_league_is_still_a_404_where_the_league_is_the_resource(
     for response in (roster, recent, search):
         assert response.status_code == 404, response.request.url
         assert response.json()["detail"] == "League not found."
+
+
+# ---------------------------------------------------------------------------
+# UNRATED means "has never finished a rated match" — NOT "has no rating row"
+#
+# Joining a league seeds a rating row: `seed_user_league_rating` writes 1500 and
+# an `initial` history event the moment a user joins, which for the default
+# league is when their SESSION IS MINTED. So `rating_value IS NOT NULL` is true
+# of every member who ever loaded the site, and a read side that mistook it for
+# "has a rating" rendered a brand-new guest at 1500, peak 1500, "#2 of 5" above
+# real players, with a Rating-over-time chart of one dot and a confidence card
+# offering "somewhere between 814 and 2186" — which is the seed's own RD of 350
+# saying it knows nothing, dressed up as a finding.
+#
+# THE PLAYERS BELOW ARE BUILT THE WAY PRODUCTION BUILDS THEM: minted through
+# `GET /v1/session` (so they carry the real seed row and its `initial` event) and
+# matched through the real create/propose/accept endpoints (so the rating rows
+# are written by `result_acceptance`, not by hand). The old tests hand-seeded a
+# `rating_value = NULL` row — a shape production never produces — which is why
+# they were green while the QA stack showed the bug in thirty seconds.
+# ---------------------------------------------------------------------------
+
+
+async def _guest(db_session: AsyncSession, username: str) -> tuple[AsyncClient, User]:
+    """A real, production-shaped player: a session-minted guest, joined to the
+    default league and seeded with its 1500 prior + an ``initial`` history row.
+    The caller owns the client."""
+    client = make_client()
+    user = await start_session(client, db_session)
+    user.username = username
+    await db_session.commit()
+    return client, user
+
+
+async def _assert_carries_the_production_seed(
+    db_session: AsyncSession, user: User
+) -> None:
+    """The premise of every test below, asserted rather than assumed: this player
+    holds the exact row production hands out on join — a 1500 ``rating_value`` and
+    an ``initial`` rating-history event.
+
+    Without this, a fix that "worked" only because the fixture forgot to seed a
+    rating at all would pass, and the bug would still be live. It is the guard the
+    old suite was missing."""
+    league = await get_default_league(db_session)
+    assert league is not None
+    row = (
+        await db_session.execute(
+            select(UserLeagueRating).where(
+                UserLeagueRating.user_id == user.id,
+                UserLeagueRating.league_id == league.id,
+            )
+        )
+    ).scalar_one()
+    assert row.rating_value == 1500.0
+    sources = (
+        (
+            await db_session.execute(
+                select(RatingHistory.source).where(
+                    RatingHistory.user_id == user.id,
+                    RatingHistory.league_id == league.id,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert RatingHistorySource.initial in sources
+
+
+async def _play(
+    client: AsyncClient,
+    opp_client: AsyncClient,
+    opponent_id: uuid.UUID,
+    *,
+    rated: bool,
+    i_win: bool = True,
+) -> str:
+    """Play one match to completion through the REAL endpoints, so a rated one is
+    finalized by ``result_acceptance`` exactly as it is in production — it writes
+    the ``UserLeagueRating`` snapshot AND the match-sourced ``rating_history`` row
+    — and an unrated one writes neither.
+
+    An UNRATED match skips the acceptance gate and finalizes straight from
+    ``/results`` (#485); a rated one needs the opponent to accept. Both end
+    ``completed``, which is the point: the two players below have identical MATCH
+    histories and completely different RATING ones."""
+    created = await client.post(
+        "/v1/matches",
+        json={
+            "opponent_user_id": str(opponent_id),
+            "best_of": 1,
+            "rated": rated,
+        },
+    )
+    assert created.status_code == 201, created.text
+    match_id = created.json()["id"]
+    s1, s2 = (11, 4) if i_win else (4, 11)
+    posted = await client.post(
+        f"/v1/matches/{match_id}/results",
+        json={"games": [{"game_number": 1, "side_1_points": s1, "side_2_points": s2}]},
+    )
+    assert posted.status_code == 201, posted.text
+    if rated:
+        await accept_standing_result(opp_client, match_id)
+    else:
+        assert posted.json()["status"] == "completed"
+    return match_id
+
+
+async def test_get_player_never_played_anything_is_unrated_seed_row_and_all(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """THE bug, pinned: a guest whose session was minted seconds ago — no matches,
+    no results, nothing — is UNRATED, and every rating-flavoured field on their
+    profile is ``null``.
+
+    They are not a hand-built fiction: they hold the 1500 row and the ``initial``
+    event the league gave them on join (asserted, not assumed), which is exactly
+    what made the old read say 1500. A rated peer is on the ladder throughout, so
+    a ``null`` ``rank_of`` cannot be excused as "there is no ladder yet", and the
+    peer's own rank of 1 proves the ladder is real and being ranked.
+
+    Every ``null`` below is a separate mutant: a peak of 1500 presents the prior as
+    an achievement; a rank hands them a rung above real players (the QA report's "#2
+    of 5"); a confidence card reports the seed's RD of 350 back as a finding."""
+    viewer = await start_session(api_client, db_session)
+    fresh_client, fresh = await _guest(db_session, "never.played")
+    peer = await make_user(db_session, "never.peer")
+    await _earn_rating(db_session, peer, 1600.0)
+    await _assert_carries_the_production_seed(db_session, fresh)
+
+    body = (await api_client.get(f"/v1/players/{fresh.id}")).json()
+    await fresh_client.aclose()
+
+    # The hero: unrated, top to bottom.
+    assert body["rating"] is None
+    assert body["rank"] is None
+    assert body["rank_of"] is None
+    assert body["percentile"] is None
+    assert body["peak"] is None
+    assert body["rating_delta"] is None
+    # The confidence card does not render.
+    assert body["confidence"] is None
+    # Nor does the chart: the seed is a prior, not a played result, so there is no
+    # line to draw — not a one-dot chart at 1500.
+    assert body["rating_history"] == {
+        "anchor": None,
+        "points": [],
+        "peak": None,
+        "change": None,
+    }
+    # The Leagues card agrees with the hero rather than contradicting it inches
+    # below: they belong to the ladder, they hold no rating on it.
+    assert [row["rating"] for row in body["leagues"]] == [None]
+
+    # …while everything that is NOT a rating still renders. They have a (empty)
+    # career and a (empty) history, and the page is not broken.
+    assert body["career"]["decided"] == 0
+    assert body["matches"]["items"] == []
+    assert body["match_total"] == 0
+    assert body["wins"] == 0 and body["losses"] == 0
+
+    # The ladder is real and is being ranked — the nulls above are about this
+    # player, not about an empty league.
+    peer_body = (await api_client.get(f"/v1/players/{peer.id}")).json()
+    assert peer_body["rating"] == 1600.0
+    assert peer_body["rank"] == 1
+    assert peer_body["rank_of"] == 1  # …and the fresh guest is NOT a rung on it
+    assert viewer.id != fresh.id
+
+
+async def test_get_player_with_only_unrated_matches_has_a_career_but_no_rating(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """A player with a pile of UNRATED matches has a real career and a real match
+    history — and still no rating. (The QA report's second player: 27 matches,
+    27 unrated, rendered at 1500 with a rank.)
+
+    CONTEXT.md splits these deliberately: a *rating* is moved only by RATED
+    matches, while *match history* counts every kind of match and *career* counts
+    every decided one. So the two halves of this profile must disagree — a
+    populated career beside an empty rating — and a fix that reached too far (say,
+    gating the career on being rated) reds on the second half here."""
+    await start_session(api_client, db_session)
+    target_client, target = await _guest(db_session, "unrated.career")
+    async with opponent_session(db_session, "unrated.rival") as (rival_client, rival):
+        await _play(target_client, rival_client, rival.id, rated=False, i_win=True)
+        await _play(target_client, rival_client, rival.id, rated=False, i_win=True)
+        await _play(target_client, rival_client, rival.id, rated=False, i_win=False)
+    await _assert_carries_the_production_seed(db_session, target)
+
+    body = (await api_client.get(f"/v1/players/{target.id}")).json()
+    await target_client.aclose()
+
+    # No rated match ever finished → no rating, and nothing hanging off one.
+    assert body["rating"] is None
+    assert body["rank"] is None
+    assert body["rank_of"] is None
+    assert body["peak"] is None
+    assert body["percentile"] is None
+    assert body["rating_delta"] is None
+    assert body["confidence"] is None
+    assert body["rating_history"]["points"] == []
+    assert body["rating_history"]["anchor"] is None
+
+    # …and yet: a career, a record, form, and every match in the history.
+    assert body["career"]["decided"] == 3
+    assert body["wins"] == 2
+    assert body["losses"] == 1
+    assert body["form"] == "LWW"  # newest first
+    assert body["match_total"] == 3
+    assert len(body["matches"]["items"]) == 3
+
+
+async def test_get_player_one_completed_rated_match_makes_them_rated(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """The other side of the gate, so it is a GATE and not a blanket: ONE completed
+    rated match and every field the two tests above assert ``null`` comes back.
+
+    The match is finalized through the real propose/accept endpoints, so the rating
+    is written by ``result_acceptance`` — the value is Glicko-2's, not a fixture's,
+    which is why nothing below hardcodes it. Deleting the read-side gate makes the
+    two tests above fail; deleting the RATING makes this one fail. Only the actual
+    predicate satisfies both."""
+    await start_session(api_client, db_session)
+    target_client, target = await _guest(db_session, "rated.now")
+    async with opponent_session(db_session, "rated.rival") as (rival_client, rival):
+        await _play(target_client, rival_client, rival.id, rated=True, i_win=True)
+
+    body = (await api_client.get(f"/v1/players/{target.id}")).json()
+    await target_client.aclose()
+
+    # A rating they PLAYED for: Glicko-2 lifts the winner above the 1500 prior.
+    assert body["rating"] is not None
+    assert body["rating"] > 1500.0
+    # Rank 1 of the two players who have now finished a rated match — the loser is
+    # the other rung. Every guest with a seed row is still off the ladder.
+    assert body["rank"] == 1
+    assert body["rank_of"] == 2
+    assert body["peak"] == body["rating"]
+    # The Δ their last rated match moved them, from the seed they started at.
+    assert body["rating_delta"]["before"] == 1500.0
+    assert body["rating_delta"]["after"] == body["rating"]
+    assert body["rating_delta"]["delta"] > 0
+    # The confidence card renders now — and is talking about a rating that exists.
+    assert body["confidence"] is not None
+    assert body["confidence"]["deviation"] < 350.0
+    # The chart has exactly ONE point: the match. Not two — the seed is not a point,
+    # and it is not the anchor either (they held no rating when the window opened).
+    history = body["rating_history"]
+    assert [point["rating"] for point in history["points"]] == [body["rating"]]
+    assert history["anchor"] is None
+    # The Leagues card carries the same rating the hero does.
+    assert [row["rating"] for row in body["leagues"]] == [body["rating"]]
+
+
+async def test_list_players_does_not_rank_a_guest_who_has_never_played(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """The roster gets the same gate — it shares ``PlayerSummary``, and it was
+    ranking never-played guests above real players.
+
+    Two players finish a rated match: Glicko-2 puts the winner near 1660 and the
+    loser near 1340, i.e. STRADDLING the 1500 seed. A bystander who has never
+    played anything then sits between them on `rating_value` alone — so the buggy
+    read sorts them into the middle of the roster and ranks them #2, pushing the
+    player who actually lost a rated match down to #3. Every assertion below is a
+    different way of saying that must not happen."""
+    await start_session(api_client, db_session)
+    winner_client, winner = await _guest(db_session, "roster.winner")
+    async with opponent_session(db_session, "roster.loser") as (loser_client, loser):
+        await _play(winner_client, loser_client, loser.id, rated=True, i_win=True)
+    bystander_client, bystander = await _guest(db_session, "roster.bystander")
+    await _assert_carries_the_production_seed(db_session, bystander)
+    await winner_client.aclose()
+    await bystander_client.aclose()
+
+    items = (await api_client.get("/v1/players", params={"q": "roster."})).json()[
+        "items"
+    ]
+
+    # The bystander is on the ROSTER — they are a player, they are listed…
+    assert {row["username"] for row in items} == {
+        "roster.winner",
+        "roster.loser",
+        "roster.bystander",
+    }
+    # …but not on the LADDER: no rating, and so no rank.
+    assert _rating_for_item(items, "roster.bystander") is None
+    assert _rank_for(items, "roster.bystander") is None
+    # The two who played straddle the seed, and rank 1-2 with nobody in between.
+    assert _rating_for_item(items, "roster.winner") > 1500.0
+    assert _rating_for_item(items, "roster.loser") < 1500.0
+    assert _rank_for(items, "roster.winner") == 1
+    assert _rank_for(items, "roster.loser") == 2
+    # And the sort agrees with the ranks: the unrated guest is last, not wedged
+    # into the middle of the ladder at the seed value.
+    assert [row["username"] for row in items] == [
+        "roster.winner",
+        "roster.loser",
+        "roster.bystander",
+    ]
+
+
+async def test_rating_history_endpoint_is_empty_for_a_player_who_never_played(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """The chart endpoint is directly reachable, so it carries the gate itself
+    rather than relying on the FE never asking.
+
+    The ``initial`` seed row is a real ``rating_history`` row — it is what the
+    per-match views read a player's pre-match rating from, and it stays written.
+    It is simply not a POINT: plotting it drew this player a rating line for a
+    rating they have never held. Empty window, no anchor, no change."""
+    await start_session(api_client, db_session)
+    fresh_client, fresh = await _guest(db_session, "chart.never")
+    await _assert_carries_the_production_seed(db_session, fresh)
+    await fresh_client.aclose()
+
+    for window in ("30d", "90d", "1y"):
+        body = (
+            await api_client.get(
+                f"/v1/players/{fresh.id}/rating-history", params={"range": window}
+            )
+        ).json()
+        assert body == {
+            "anchor": None,
+            "points": [],
+            "peak": None,
+            "change": None,
+        }, window

@@ -66,6 +66,12 @@ export default defineConfig({
     },
     setupFiles: ['./src/test/setup.ts'],
     css: true,
+    // Dates render in the reader's LOCAL zone (a match is played on a local day),
+    // so an unpinned runner would date the same fixture differently on a laptop in
+    // Chicago and on a CI box in UTC. Pin the suite to one zone — the one CI
+    // already runs in — and let the tests that are *about* the local/UTC split
+    // override `process.env.TZ` themselves.
+    env: { TZ: 'UTC' },
     // Unit tests live under src/; Playwright specs under e2e/ are a separate
     // suite. Scope include explicitly so runners that don't honor `exclude`
     // (e.g. Stryker's sandboxed vitest) never try to run the .spec.ts e2e files.

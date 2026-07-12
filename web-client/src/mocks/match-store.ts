@@ -780,8 +780,17 @@ export function projectRecentResult(seed: SeedMatch): DashboardRecentResult | nu
  * chronological order, applying each seed's deterministic delta. The result
  * mirrors what the real BFF builds out of `rating_history` and
  * `user_league_ratings`, so the wired RatingCard renders against the same
- * shape MSW and prod return. */
-export function projectRating(seeds: SeedMatch[]): DashboardRating {
+ * shape MSW and prod return.
+ *
+ * **`null` when no rated match has been finished** (#950). This mock used to
+ * hand every caller a card starting at `MOCK_BASE_RATING` — current 1500, peak
+ * 1500, a one-point sparkline — for a user who had played nothing, which is a
+ * shape the API does not send and never did claim to: joining a league seeds
+ * `rating_value` as the strategy's *prior*, and `DashboardResponse.rating` is
+ * `null` for a player who has never finished a rated match (`CONTEXT.md` §
+ * *Rating*). A mock that models a rating the server withholds is how a 1500 on a
+ * brand-new dashboard survived the entire suite; it now models the withholding. */
+export function projectRating(seeds: SeedMatch[]): DashboardRating | null {
   const completed = seeds
     .filter(
       (s): s is SeedMatch & { completed_at: string } =>
@@ -791,6 +800,10 @@ export function projectRating(seeds: SeedMatch[]): DashboardRating {
         s.affects_rating,
     )
     .sort((a, b) => a.completed_at.localeCompare(b.completed_at))
+
+  // Never finished a rated match ⇒ no rating, and so no rating card at all —
+  // not a card seeded at the strategy's prior.
+  if (completed.length === 0) return null
 
   let current = MOCK_BASE_RATING
   let peak = MOCK_BASE_RATING
@@ -815,7 +828,11 @@ export function projectRating(seeds: SeedMatch[]): DashboardRating {
     current,
     delta: lastDelta,
     peak,
-    percentile: gamesPlayed > 0 ? 72 : null,
+    // Unconditional now: the zero-match case returned above, and a rated player
+    // has a ladder position. (This ternary used to be the one place that noticed
+    // an unplayed player had no business holding a percentile — #382 — while the
+    // other four figures printed the prior anyway.)
+    percentile: 72,
     spark_data: sparkData,
     streak: projectStreak(seeds),
     stats: [

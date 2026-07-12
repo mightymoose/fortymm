@@ -85,18 +85,27 @@ export type RecentMatchesView = {
   viewAllLabel: string
 }
 
-/** "Mar 14". Formatted in UTC so the day can't slip either way depending on
- * where the reader sits. */
-const dayAndMonth = new Intl.DateTimeFormat('en-US', {
-  month: 'short',
-  day: 'numeric',
-  timeZone: 'UTC',
-})
-
+/**
+ * "Mar 14" — in the reader's **local** timezone.
+ *
+ * The day you played a match is a *local* fact, and it must agree with every other
+ * surface that dates the same match: the full history page
+ * (`player-match-history.tsx`) and the match-detail page both render local. This
+ * card formatted in UTC, so a match played at 7:15pm in Chicago — already tomorrow
+ * in UTC — was dated a day ahead of both of them, and two matches played fifteen
+ * minutes apart could land on two different days *in the same table*.
+ *
+ * (The hero's "Member since" *is* UTC on purpose, and stays that way: a join month
+ * is a fact about the account, not about the reader's evening.)
+ *
+ * Formatted per call rather than through a hoisted `Intl.DateTimeFormat`: a
+ * formatter built at module load resolves — and then caches — the timezone that was
+ * current when it was constructed.
+ */
 const selectWhen = (iso: string): string => {
   const at = new Date(iso)
   if (Number.isNaN(at.getTime())) return NO_VALUE
-  return dayAndMonth.format(at)
+  return at.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 }
 
 const selectStatus = (row: PlayerMatchRow): RecentMatchStatusView => {

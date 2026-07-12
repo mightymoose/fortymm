@@ -67,15 +67,6 @@ export type HeadToHeadView = {
   frequentOpponents: FrequentOpponentView[]
 }
 
-/** "Mar 14, 2025". UTC, so the day can't slip either way depending on where the
- * reader sits — the same choice the hero's "Member since" makes. */
-const meetingDay = new Intl.DateTimeFormat('en-US', {
-  month: 'short',
-  day: 'numeric',
-  year: 'numeric',
-  timeZone: 'UTC',
-})
-
 /** An **en dash** between the two numbers, not a hyphen: "1–4" is a range, and
  * this is the one place on the page where getting the two numbers the right way
  * round is the entire point. */
@@ -85,11 +76,26 @@ const formatRecord = (wins: number, losses: number): string =>
 const formatMeetings = (meetings: number): string =>
   `${meetings} ${meetings === 1 ? 'meeting' : 'meetings'}`
 
+/**
+ * "Last met Mar 14, 2025" — in the reader's **local** timezone, like every other
+ * match date on the page (the Recent-matches card, the full history, the match
+ * detail page). A meeting is a match, and the evening you played it is a local
+ * fact: dated in UTC, a 9:30pm game in Chicago read "Last met Mar 15" while the
+ * history page dated the very same match Mar 14.
+ *
+ * Formatted per call, not through a hoisted `Intl.DateTimeFormat`, which would
+ * cache whatever timezone was current when the module loaded.
+ */
 const formatLastMeeting = (iso: string | null | undefined): string | null => {
   if (iso == null) return null
   const at = new Date(iso)
   if (Number.isNaN(at.getTime())) return null
-  return `Last met ${meetingDay.format(at)}`
+  const day = at.toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  })
+  return `Last met ${day}`
 }
 
 const selectViewerRecord = (

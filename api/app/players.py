@@ -24,6 +24,7 @@ from app.player_summary import (
     summarize_players,
 )
 from app.ratings.history import player_rating_history
+from app.ratings.rated import is_rated_member
 from app.ratings.stats import player_confidence, player_standing
 from app.schemas.player import (
     PlayerDetail,
@@ -214,6 +215,14 @@ async def list_players(
             and_(
                 UserLeagueRating.user_id == User.id,
                 UserLeagueRating.league_id == league.id,
+                # The SORT KEY must be the rating the row is going to RENDER
+                # (`summarize_players` reads it through the same gate), or the
+                # roster sorts an Unrated guest into the ladder at the 1500 the
+                # league seeded them with — above every real player rated below
+                # it, holding a blank rating cell and no rank. An unrated member
+                # fails the ON clause, joins to NULL, and sorts last, which is
+                # what `nulls_last()` was always meant to be catching.
+                is_rated_member(),
             ),
         )
         .order_by(

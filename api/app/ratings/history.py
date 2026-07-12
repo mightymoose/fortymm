@@ -34,6 +34,7 @@ from sqlalchemy import ColumnElement, Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Match, RatingHistory
+from app.ratings.rated import is_rating_change
 from app.schemas.rating import RatingHistoryWindow, RatingPoint, RatingWindow
 
 # The most points one window will draw with. A chart is under a thousand pixels
@@ -71,15 +72,17 @@ def _at() -> ColumnElement[datetime]:
     """The instant a rating change happened — the axis the timeline is ordered on.
 
     ``Match.completed_at`` (ADR-0012): the completion instant is stamped once and
-    never moved by a later edit, unlike ``Match.updated_at``. Manual / import /
-    initial changes have no match, and keep their own wall-clock ``created_at`` —
-    the same axis, just recorded rather than played (ADR-0012 again), which is why
-    this is a COALESCE and the join below is an OUTER one.
+    never moved by a later edit, unlike ``Match.updated_at``. Manual / import
+    changes have no match, and keep their own wall-clock ``created_at`` — the same
+    axis, just recorded rather than played (ADR-0012 again), which is why this is a
+    COALESCE and the join below is an OUTER one.
 
     Including those match-less rows is load-bearing, not generosity: they are real
     rating changes, and dropping them would let a manual override applied after the
     player's last match vanish from the line — leaving ``points[-1]`` no longer at
-    the player's current rating, and so ``change`` quietly wrong.
+    the player's current rating, and so ``change`` quietly wrong. The ``initial``
+    seed row is the one match-less kind that is NOT a change, and ``_timeline``
+    excludes it.
     """
     return func.coalesce(Match.completed_at, RatingHistory.created_at)
 
@@ -87,10 +90,27 @@ def _at() -> ColumnElement[datetime]:
 def _timeline(
     user_id: uuid.UUID, league_id: uuid.UUID
 ) -> Select[tuple[float, uuid.UUID | None, datetime]]:
-    """This player's rating changes ON THIS LADDER, as (rating, match, instant).
+    """This player's rating CHANGES ON THIS LADDER, as (rating, match, instant).
 
     League-scoped: a rating is a fact about one ladder (CONTEXT.md, "League"), so
     a chart of the FortyMM ladder must never plot a point earned on a USATT one.
+
+    THE SEED IS NOT A POINT. ``is_rating_change()`` drops the ``initial`` row the
+    league writes when a player JOINS it (``seed_user_league_rating``): 1500 is the
+    strategy's prior, not a rating the player ever held — at that instant they were
+    Unrated, by CONTEXT.md's own definition ("a player who has never finished a
+    rated match has no rating"). Plotted, it drew a brand-new guest a one-dot
+    "Rating over time" chart of a rating they had never played for; carried in as an
+    anchor, it made a first-timer's window read "+134 over 90 days" measured from a
+    number they were simply handed. Excluding it is what makes ``_anchor_point``'s
+    ``None`` case ("they held no rating at that instant") actually true, and it means
+    a player with nothing but the seed gets an EMPTY window — no anchor, no points,
+    no peak, no change — which is the honest shape for someone with no rating.
+
+    The other match-less rows (``manual``, ``import``) STAY, and the join stays an
+    OUTER one for them: those are real rating changes — an admin override, an
+    imported USATT baseline — and dropping one would leave ``points[-1]`` no longer
+    at the player's current rating, and so ``change`` quietly wrong.
     """
     at = _at()
     return (
@@ -99,6 +119,7 @@ def _timeline(
         .where(
             RatingHistory.user_id == user_id,
             RatingHistory.league_id == league_id,
+            is_rating_change(),
         )
     )
 
@@ -111,7 +132,10 @@ async def _anchor_point(
 
     ``None`` when they had no rating at that instant (they had not finished a
     rated match yet), which is the only honest answer: there is nothing to carry
-    in.
+    in. That case is REACHED, not hypothetical — the seed a player joins with is
+    not a rating change (see ``_timeline``), so a player whose first rated match
+    landed inside the window has no anchor, and ``_fold`` measures their ``change``
+    from their first in-window point instead of from a 1500 they never earned.
     """
     at = _at()
     row = (

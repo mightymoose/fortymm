@@ -38,10 +38,10 @@ from app.models import (
     MatchSidePlayer,
     MatchStatus,
     RatingHistory,
-    User,
     UserLeagueRating,
 )
 from app.ratings.confidence import rating_interval
+from app.ratings.rated import is_rated_member, is_rating_change
 from app.ratings.state import Glicko2State, parse_rating_state
 from app.schemas.player import PlayerSummary
 from app.schemas.rating import RatingChange, RatingConfidence, RatingInterval
@@ -59,9 +59,13 @@ STREAK_SCAN_LIMIT = 100
 # guess — the *principle* (withhold it while the league is too small) is what is
 # settled, so move it freely.
 #
-# Deliberately applied in `player_standing` and not inside `league_percentile`:
-# the dashboard's rating card is the helper's other caller and its behavior is
-# out of scope.
+# Applied in `player_standing` and not inside `league_percentile` itself, so it is
+# the PROFILE's editorial policy about when a percentile is worth printing — not
+# part of the helper's arithmetic. The dashboard's card, the helper's other caller,
+# renders one from the first rated match; whether it should adopt this floor too is
+# a product question, and keeping the floor out of the shared helper is what leaves
+# it answerable. (What the two callers DO now share is the population itself —
+# `is_rated_member()` — which is arithmetic, not policy.)
 PERCENTILE_MIN_RATED_PLAYERS = 50
 
 
@@ -81,16 +85,27 @@ async def league_peak_rating(
     league_id: uuid.UUID,
     current: float,
 ) -> float:
-    """The highest rating the user has ever held in this league.
+    """The highest rating the user has ever HELD in this league.
 
-    ``current`` is the floor: a user whose rating has never been written to the
-    history (their seed row) peaks at where they stand today.
+    HELD, not "was ever written next to their name": ``is_rating_change()`` drops
+    the ``initial`` seed row, because 1500 is the prior the league hands out on
+    join and at that instant the player was Unrated — they never held it. Count it
+    and a player who lost their first rated match and sits at 1450 is told their
+    peak is 1500: a high they are supposed to have fallen from, which they never
+    reached. That is the same lie as an unrated guest's "PEAK 1500", one match
+    later.
+
+    ``current`` remains the floor — belt and braces. Callers ask this only of a
+    rated player (``is_rated_member()``), who therefore has at least one change row,
+    so the ``None`` branch is unreachable for them; it stands so that a caller who
+    one day asks about an unrated player gets today's value rather than a crash.
     """
     history_peak = (
         await db.execute(
             select(func.max(RatingHistory.rating_value)).where(
                 RatingHistory.league_id == league_id,
                 RatingHistory.user_id == user_id,
+                is_rating_change(),
             )
         )
     ).scalar()
@@ -106,20 +121,19 @@ async def league_rated_population(db: AsyncSession, league_id: uuid.UUID) -> int
     means something in a four-hundred-player one, so the profile hero renders
     "#3 of 42" (CONTEXT.md, "Rank").
 
-    The population is EXACTLY the one ranks are computed over (non-merged, rated
-    members of this league), so ``rank <= league_rated_population`` always holds.
-    Keep this WHERE clause in step with ``player_summary._load_player_ranks`` — a
-    tombstoned ghost or an unrated member leaking in here would make the
-    denominator disagree with the numerator.
+    The population is EXACTLY the one ranks are computed over, because it is the
+    same predicate and not a WHERE clause that agrees with it —
+    ``is_rated_member()``, shared with ``player_summary._load_player_ranks`` and
+    ``league_percentile``. So ``rank <= league_rated_population`` always holds. A
+    tombstoned ghost or a seeded-but-never-played member leaking in here would make
+    the denominator disagree with the numerator, which is exactly what "#2 of 5" on
+    a ladder of two real players and three fresh guests was.
     """
     return (
         await db.execute(
-            select(func.count(UserLeagueRating.id))
-            .join(User, User.id == UserLeagueRating.user_id)
-            .where(
+            select(func.count(UserLeagueRating.id)).where(
                 UserLeagueRating.league_id == league_id,
-                User.merged_into_user_id.is_(None),
-                UserLeagueRating.rating_value.is_not(None),
+                is_rated_member(),
             )
         )
     ).scalar_one()
@@ -164,11 +178,21 @@ async def latest_rated_match_change(
 async def league_percentile(
     db: AsyncSession, league_id: uuid.UUID, my_rating: float
 ) -> int | None:
-    """ "Top N%" rank within the league: the share of rated members at or above
+    """ "Top N%" rank within the league: the share of RATED MEMBERS at or above
     the user's rating, so the strongest player reads a *small* percentage (e.g.
     "Top 1%") and weaker players a larger one. Clamped to at least 1 so the top
     player never reads "Top 0%". Returns None for leagues of one — nothing to
-    compare to."""
+    compare to.
+
+    "Rated members" is ``is_rated_member()``, the SAME population
+    ``league_rated_population`` counts and ``_load_player_ranks`` ranks over — so
+    the "Top 8%" and the "#3 of 42" printed beside it are two readings of one
+    ladder. They were not: this was the one read in this file with no tombstone
+    exclusion (#944), and none of them excluded the seeded-but-never-played, who
+    sit at exactly 1500 — mid-pack — and so corrupted the numerator and the
+    denominator at once. On a real league (every guest who ever loaded the site
+    holds a 1500 row) that made "Top 1%" reachable by beating nobody.
+    """
     total, at_or_above = (
         await db.execute(
             select(
@@ -178,7 +202,7 @@ async def league_percentile(
                 ),
             ).where(
                 UserLeagueRating.league_id == league_id,
-                UserLeagueRating.rating_value.is_not(None),
+                is_rated_member(),
             )
         )
     ).one()
@@ -334,9 +358,15 @@ async def player_confidence(
     ``None`` — the card does not render at all — in three cases, none of which
     is an error:
 
-    * the player has no rating row in this league, or no rating in it (they have
-      never finished a rated match; the hero already says "Unrated"). Nothing to
-      be confident *about*;
+    * the player is UNRATED on this ladder: no rating row, a NULL rating in it, or
+      — the case that matters, because it is every fresh guest — a row holding
+      nothing but the 1500 the league seeded them with when they joined. Nothing
+      has moved it, they have never finished a rated match, the hero says
+      "Unrated", and there is nothing to be confident *about*. The gate is
+      ``is_rated_member()``, the same predicate ``rating`` and ``rank`` are read
+      through, so the card cannot appear beside a hero that says Unrated —
+      "Provisional · somewhere between 814 and 2186" is the seed's own RD of 350
+      talking, i.e. the system stating it knows nothing, dressed up as a finding;
     * the rating came from a MANUAL strategy — an imported USATT number carries
       no deviation, so it has no confidence to report. This is why the state is
       parsed rather than indexed: ``state["rd"]`` on a manual row is a
@@ -357,6 +387,7 @@ async def player_confidence(
             .where(
                 UserLeagueRating.user_id == user_id,
                 UserLeagueRating.league_id == league_id,
+                is_rated_member(),
             )
             # Many-to-one (``user_league_ratings.rating_strategy_id``): a
             # LEFT JOIN folded into this query, not a second SELECT.

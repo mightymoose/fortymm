@@ -1712,7 +1712,7 @@
 /* On a phone the SVG is the same 600×180 viewBox squeezed into ~350 CSS pixels,
  * so its 9-unit type lands at about 5px — unreadable, and the gridlines behind it
  * are just noise at that size. Drop the scaffolding and keep the line, the peak
- * and the dot: the sentence above the chart ("Up +127 over the last 90 days") is
+ * and the dot: the sentence above the chart ("Up 127 over the last 90 days") is
  * already the number a phone reader actually wants, and it is what a screen reader
  * gets in place of the drawing either way.
  *

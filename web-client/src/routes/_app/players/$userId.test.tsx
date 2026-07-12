@@ -505,7 +505,7 @@ describe('player profile — the rating chart', () => {
     renderProfile()
 
     await chart.findChartCard()
-    expect(chart.getChartSummary()).toBe('Up +127 over the last 90 days')
+    expect(chart.getChartSummary()).toBe('Up 127 over the last 90 days')
     expect(chart.queryChartLine()).toBeInTheDocument()
     await waitFor(() => expect(histories).toEqual([]))
     expect(bundles).toEqual(['90d'])
@@ -528,7 +528,7 @@ describe('player profile — the rating chart', () => {
     await chart.findChartCard()
     // The 30-day window's numbers — not the 90-day window's +127.
     await waitFor(() =>
-      expect(chart.getChartSummary()).toBe('Down -12 over the last 30 days'),
+      expect(chart.getChartSummary()).toBe('Down 12 over the last 30 days'),
     )
     expect(chart.getSelectedRangeTab()).toHaveTextContent('30d')
     expect(bundles).toEqual(['30d'])
@@ -553,7 +553,7 @@ describe('player profile — the rating chart', () => {
     const { router } = renderProfile()
 
     await chart.findChartCard()
-    expect(chart.getChartSummary()).toBe('Up +127 over the last 90 days')
+    expect(chart.getChartSummary()).toBe('Up 127 over the last 90 days')
 
     await userEvent.click(chart.getRangeTab('30d'))
 
@@ -566,7 +566,7 @@ describe('player profile — the rating chart', () => {
     expect(chart.queryChangeChip()).toBeNull()
 
     await waitFor(() =>
-      expect(chart.getChartSummary()).toBe('Down -12 over the last 30 days'),
+      expect(chart.getChartSummary()).toBe('Down 12 over the last 30 days'),
     )
     expect(chart.queryChangeChip()).toHaveTextContent('-12')
     // ONE narrow request, for exactly the range clicked…
@@ -587,14 +587,14 @@ describe('player profile — the rating chart', () => {
     await chart.findChartCard()
     await userEvent.click(chart.getRangeTab('30d'))
     await waitFor(() =>
-      expect(chart.getChartSummary()).toBe('Down -12 over the last 30 days'),
+      expect(chart.getChartSummary()).toBe('Down 12 over the last 30 days'),
     )
 
     await userEvent.click(chart.getRangeTab('90d'))
 
     // Back to the window the bundle seeded: it is still in the cache, and fresh.
     await waitFor(() =>
-      expect(chart.getChartSummary()).toBe('Up +127 over the last 90 days'),
+      expect(chart.getChartSummary()).toBe('Up 127 over the last 90 days'),
     )
     expect(histories).toEqual(['30d'])
   })
@@ -633,7 +633,7 @@ describe('player profile — the rating chart', () => {
 
     await chart.findChartCard()
     await waitFor(() =>
-      expect(chart.getChartSummary()).toBe('Up +314 over the last year'),
+      expect(chart.getChartSummary()).toBe('Up 314 over the last year'),
     )
     expect(chart.getSelectedRangeTab()).toHaveTextContent('1y')
   })
@@ -646,7 +646,7 @@ describe('player profile — the rating chart', () => {
     renderProfile('/players/p-1?range=lol')
 
     await chart.findChartCard()
-    expect(chart.getChartSummary()).toBe('Up +127 over the last 90 days')
+    expect(chart.getChartSummary()).toBe('Up 127 over the last 90 days')
     expect(chart.getSelectedRangeTab()).toHaveTextContent('90d')
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
@@ -701,7 +701,7 @@ describe('player profile — the chart’s window is the window it says it is', 
     const first = renderProfile('/players/p-1?range=30d')
     await chart.findChartCard()
     await waitFor(() =>
-      expect(chart.getChartSummary()).toBe('Down -12 over the last 30 days'),
+      expect(chart.getChartSummary()).toBe('Down 12 over the last 30 days'),
     )
     first.unmount()
 
@@ -710,7 +710,7 @@ describe('player profile — the chart’s window is the window it says it is', 
 
     await chart.findChartCard()
     await waitFor(() =>
-      expect(chart.getChartSummary()).toBe('Up +127 over the last 90 days'),
+      expect(chart.getChartSummary()).toBe('Up 127 over the last 90 days'),
     )
     // Whatever it took to get there, it was never the other window's line: "Down
     // -12 over the last 90 days" is the exact sentence the old seeding produced.

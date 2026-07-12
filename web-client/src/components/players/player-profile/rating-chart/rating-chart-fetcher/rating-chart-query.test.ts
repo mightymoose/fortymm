@@ -54,7 +54,7 @@ describe('selectRatingChart', () => {
     // and it is drawn at the window's left edge, x = the plot's origin.
     expect(xs(view.line)[0]).toBe(42)
     expect(yCoords[0]).toBeGreaterThan(yCoords[1]) // 1560 sits below 1602 (y grows downward)
-    expect(view.summary).toBe('Up +127 over the last 90 days')
+    expect(view.summary).toBe('Up 127 over the last 90 days')
   })
 
   it('runs FLAT to today at the current rating — a rating does not decay while you rest', () => {
@@ -107,7 +107,11 @@ describe('selectRatingChart', () => {
     expect(view.summary).toBe('No change over the last 90 days')
   })
 
-  it('says DOWN, with a signed figure, for a losing window', () => {
+  it('says DOWN for a losing window — and never "Down -43", which reads as a rise', () => {
+    // The word carries the sign; the number carries the magnitude. Spelling both
+    // out gave the sentence — which is also the chart's `aria-label`, i.e. the
+    // picture's alt text — a double negative. The CHIP beside it keeps its signed
+    // "-43": there the sign is the only thing saying which way the rating went.
     const view = selectRatingChart(buildFallingRatingWindow(), '90d', NOW)
 
     expect(view.change).toEqual({
@@ -115,7 +119,15 @@ describe('selectRatingChart', () => {
       aria: 'Lost 43 rating',
       tone: 'down',
     })
-    expect(view.summary).toBe('Down -43 over the last 90 days')
+    expect(view.summary).toBe('Down 43 over the last 90 days')
+    expect(view.summary).not.toContain('-')
+  })
+
+  it('says UP with the same bare magnitude — the two sentences are symmetrical', () => {
+    const view = selectRatingChart(buildRatingHistoryWindow(), '90d', NOW)
+
+    expect(view.summary).toBe('Up 127 over the last 90 days')
+    expect(view.change?.label).toBe('+127') // …while the chip stays signed.
   })
 
   it('names the window it was asked for — 30 days, 90 days, a year', () => {
@@ -127,6 +139,18 @@ describe('selectRatingChart', () => {
     expect(selectRatingChart(window, '1y', NOW).summary).toBe(
       'No rated matches in the last year',
     )
+  })
+
+  it('dates the 1y window’s left edge WITH ITS YEAR — "Jul 11" a year ago is not today', () => {
+    // The 1y window opens a year ago *to the day*, so a bare "Jul 11 … Today" put a
+    // label on the axis that is indistinguishable from today's own date. The shorter
+    // windows are unambiguous within the current year and stay bare.
+    const oneYear = selectRatingChart(buildRatingHistoryWindow(), '1y', NOW)
+    const ninetyDays = selectRatingChart(buildRatingHistoryWindow(), '90d', NOW)
+
+    expect(oneYear.xTicks[0].label).toContain('2025')
+    expect(oneYear.xTicks[1].label).toBe('Today')
+    expect(ninetyDays.xTicks[0].label).not.toMatch(/\d{4}/)
   })
 
   it('marks the window’s peak — which is NOT the profile’s all-time peak', () => {
@@ -240,6 +264,49 @@ describe('selectRatingChart', () => {
     expect(peak!.y).toBeGreaterThan(12) // not on the ceiling: the padding lifts it off
     expect(peak!.labelY).toBe(peak!.y - 8) // dot radius (3.5) + the gap (4.5)
     expect(peak!.labelY).toBeLessThan(peak!.y) // above (y grows downward)
+    // …and, sitting mid-plot, it is centred on its dot: both halves fit.
+    expect(peak!.labelAnchor).toBe('middle')
+  })
+
+  it('keeps the peak’s label INSIDE the plot when the peak is the LATEST point', () => {
+    // The player whose most recent match IS their high-water mark: the dot lands on
+    // the plot's right edge (x = 590 of a 600-wide viewBox), and a label *centred*
+    // there hangs half a four-digit rating off the end of the SVG and through the
+    // "Today" axis label. Anchored at its end, the text grows left off the dot and
+    // stays inside.
+    const view = selectRatingChart(
+      buildRatingHistoryWindow({
+        anchor: buildRatingPoint({ at: at(100), rating: 1600 }),
+        points: [
+          buildRatingPoint({ at: at(40), rating: 1620 }),
+          buildRatingPoint({ at: at(0), rating: 1700 }),
+        ],
+        peak: buildRatingPoint({ at: at(0), rating: 1700 }),
+        change: 100,
+      }),
+      '90d',
+      NOW,
+    )
+
+    const peak = view.peak
+    expect(peak!.x).toBe(590) // CHART_WIDTH - PLOT.right — hard against the edge
+    expect(peak!.labelAnchor).toBe('end')
+    // The vertical placement is untouched by the horizontal fix: this peak is the
+    // top of the y-domain, so its label still flips BELOW the dot rather than
+    // running off the top of the viewBox.
+    expect(peak!.y).toBe(12)
+    expect(peak!.labelY).toBeGreaterThan(peak!.y + 3.5)
+  })
+
+  it('keeps the peak’s label INSIDE the plot when the peak is the ANCHOR, on the left edge', () => {
+    // The mirror image, and the one the falling window already produces: the peak is
+    // the anchor, drawn at x = PLOT.left. Centred, the label would spill left into
+    // the y-axis gutter and its digits over the rating labels; anchored at its start
+    // it grows right, into the plot.
+    const view = selectRatingChart(buildFallingRatingWindow(), '90d', NOW)
+
+    expect(view.peak!.x).toBe(42) // PLOT.left
+    expect(view.peak!.labelAnchor).toBe('start')
   })
 
   it('survives a player with no rating at all — no NaNs on the axes', () => {

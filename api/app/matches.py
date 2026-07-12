@@ -50,6 +50,7 @@ from app.notifications.service import NotificationService
 from app.notifications.taxonomy import NotificationCategory
 from app.players import escape_like
 from app.rate_limiting import RedisRateLimiter
+from app.ratings.rated import is_rating_change
 from app.result_acceptance import (
     PostedGamesNotDecisiveError,
     StandingResultConflictError,
@@ -1391,7 +1392,19 @@ async def _load_pre_match_rating(
     before: datetime,
 ) -> tuple[float | None, list[float]]:
     """Returns ``(most-recent-value, chronological-list)``. Strict ``<`` on
-    ``before`` so this match's own rating row never leaks in."""
+    ``before`` so this match's own rating row never leaks in.
+
+    ``is_rating_change()`` is the same "who is actually rated" predicate the roster,
+    the profile hero and the leagues card read through — applied HERE AT ``before``,
+    which is what makes this the point-in-time version of it. The question the
+    snapshot asks is not "is this player rated *now*" but "what was their rating
+    *going into this match*", and the two answers differ: a player who is rated today
+    was Unrated before their first rated match. Filtering the ``initial`` seed out of
+    a window that already ends at ``before`` answers exactly that — a player with no
+    real rating change before this match has no pre-match rating (``None``,
+    "Unrated"), rather than the 1500 prior their league-join seeded them with (#950).
+    A rating they had genuinely earned by that instant still reads as itself, and the
+    seed likewise stops being plotted as the sparkline's first point."""
     rows = (
         (
             await db.execute(
@@ -1400,6 +1413,7 @@ async def _load_pre_match_rating(
                     RatingHistory.user_id == user_id,
                     RatingHistory.league_id == league_id,
                     RatingHistory.created_at < before,
+                    is_rating_change(),
                 )
                 .order_by(RatingHistory.created_at.desc())
                 .limit(RATING_HISTORY_LIMIT)

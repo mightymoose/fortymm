@@ -41,7 +41,7 @@ describe('RatingChartFetcher', () => {
     await ratingChartFetcherPage.findChartCard()
     expect(ratingChartFetcherPage.queryChartLine()).toBeInTheDocument()
     expect(ratingChartFetcherPage.getChartSummary()).toBe(
-      'Up +127 over the last 90 days',
+      'Up 127 over the last 90 days',
     )
     // Give a stray fetch every chance to land before we claim there wasn't one.
     await waitFor(() => expect(historyCalls).toEqual([]))
@@ -70,7 +70,7 @@ describe('RatingChartFetcher', () => {
     await ratingChartFetcherPage.findChartCard()
     expect(bundleRanges).toEqual(['30d'])
     expect(ratingChartFetcherPage.getChartSummary()).toBe(
-      'Down -43 over the last 30 days',
+      'Down 43 over the last 30 days',
     )
     await waitFor(() => expect(historyCalls).toEqual([]))
   })

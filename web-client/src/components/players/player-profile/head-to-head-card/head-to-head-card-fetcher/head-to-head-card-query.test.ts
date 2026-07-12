@@ -74,18 +74,27 @@ describe('headToHeadCardQuery', () => {
     })
   })
 
-  it('formats when the pair last met, in UTC', async () => {
-    // UTC so the day can't slip either way depending on where the reader sits —
-    // the same choice the hero's "Member since" makes.
-    const view = await selectFrom({
-      head_to_head: buildPlayerHeadToHead({
-        versus_viewer: buildViewerHeadToHead({
-          last_meeting: '2025-03-14T23:30:00Z',
+  it('formats when the pair last met in the reader’s LOCAL day — never in UTC', async () => {
+    // The evening you last played somebody is a LOCAL fact, like every other match
+    // date on the page (the Recent-matches card, the full history, the match detail
+    // page). A meeting at 9:30pm in Chicago is already tomorrow in UTC, and dating
+    // it in UTC put "Last met Mar 15" under a match the history page dates Mar 14.
+    // The suite runs pinned to UTC (`vite.config.ts`); this one test sits west of
+    // it, which is the whole point — under UTC there is nothing to get wrong.
+    vi.stubEnv('TZ', 'America/Chicago')
+    try {
+      const view = await selectFrom({
+        head_to_head: buildPlayerHeadToHead({
+          versus_viewer: buildViewerHeadToHead({
+            last_meeting: '2025-03-15T02:30:00Z',
+          }),
         }),
-      }),
-    })
+      })
 
-    expect(view.versusViewer?.lastMeeting).toBe('Last met Mar 14, 2025')
+      expect(view.versusViewer?.lastMeeting).toBe('Last met Mar 14, 2025')
+    } finally {
+      vi.unstubAllEnvs()
+    }
   })
 
   it('omits an unreadable last-met date rather than printing "Invalid Date"', async () => {

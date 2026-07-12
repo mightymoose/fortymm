@@ -29,7 +29,7 @@ const scoped = (container: Container) => ({
   queryChartLine(): HTMLElement | null {
     return within(this.getChartCard()).queryByRole('img')
   },
-  /** The card's sentence: "Up +127 over the last 90 days", "No rated matches in
+  /** The card's sentence: "Up 127 over the last 90 days", "No rated matches in
    * the last 90 days", or — while another window loads — the range it is waiting
    * for. */
   getChartSummary(): string {

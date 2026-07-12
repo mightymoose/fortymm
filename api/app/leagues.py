@@ -13,6 +13,7 @@ from app.models import (
     RatingStrategy,
     UserLeagueRating,
 )
+from app.ratings.rated import is_rated_member
 from app.schemas.player import PlayerLeague
 
 
@@ -132,11 +133,17 @@ async def player_leagues(db: AsyncSession, user_id: uuid.UUID) -> list[PlayerLea
 
     ONE round trip, whatever the number of memberships: the rating is outer-joined
     onto the membership rather than fetched per league, so a player in twenty
-    ladders costs the same query as a player in one. A member with no rating row
-    on a ladder (a manual-strategy league awaiting its import) outer-joins to
-    ``None`` rather than dropping out of the list — belonging to a league and
-    holding a rating in it are different facts, and the card must still show the
-    league.
+    ladders costs the same query as a player in one. A member with no rating on a
+    ladder outer-joins to ``None`` rather than dropping out of the list —
+    belonging to a league and holding a rating in it are different facts, and the
+    card must still show the league.
+
+    "No rating" is ``is_rated_member()``, the same gate the hero's ``rating`` is
+    read through (``app.ratings.rated``) — NOT "no rating row", which the ON clause
+    used to mean. Joining a ladder seeds a 1500 row, so the old read lit up every
+    league a player had merely *joined* with a rating they had never played for —
+    and on the profile that sat inches from a hero correctly saying "Unrated". A
+    manual-strategy league awaiting its import still shows ``None``, as before.
 
     Membership is the source of truth, exactly as in ``count_league_memberships``
     — so ``len(player_leagues(...)) == count_league_memberships(...)`` always, and
@@ -161,6 +168,7 @@ async def player_leagues(db: AsyncSession, user_id: uuid.UUID) -> list[PlayerLea
                 and_(
                     UserLeagueRating.league_id == League.id,
                     UserLeagueRating.user_id == user_id,
+                    is_rated_member(),
                 ),
             )
             .where(LeagueMembership.user_id == user_id)

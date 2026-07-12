@@ -29,7 +29,7 @@ export interface RatingChartSvgProps {
  * a desktop and survive a 390px phone.
  *
  * `aria-hidden` on the drawing, with the sentence above it as the accessible
- * text: a screen-reader user gets "Up +127 over the last 90 days", which is the
+ * text: a screen-reader user gets "Up 127 over the last 90 days", which is the
  * chart's whole content, rather than a walk through forty `<path>` elements.
  */
 export const RatingChartSvg = ({ chart, summary }: RatingChartSvgProps) => {
@@ -108,14 +108,19 @@ export const RatingChartSvg = ({ chart, summary }: RatingChartSvgProps) => {
             cy={chart.peak.y}
             r="3.5"
           />
-          {/* `labelY`, not `peak.y - 8`: when the peak sits at the top of the
-            * plot there is no room above the dot, and the view model flips the
-            * label below it rather than drawing it through the dot. */}
+          {/* Both of the label's coordinates are decisions, and both are made in
+            * the view model. `labelY`, not `peak.y - 8`: when the peak sits at the
+            * top of the plot there is no room above the dot, and the label flips
+            * below it rather than drawing itself through the dot. `labelAnchor`,
+            * not a fixed "middle": a peak on the plot's right edge — the player
+            * whose latest match is their high-water mark — hung half its digits off
+            * the end of the viewBox and through the "Today" label, so the text
+            * grows inward off an edge instead of straddling it. */}
           <text
             className="rating-chart__peak-label"
             x={chart.peak.x}
             y={chart.peak.labelY}
-            textAnchor="middle"
+            textAnchor={chart.peak.labelAnchor}
           >
             {chart.peak.rating}
           </text>

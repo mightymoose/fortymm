@@ -82,9 +82,46 @@ export const mockPlayers = [
   player({ username: 'park.j', rating: null }),
 ]
 
-// The recent-opponents endpoint is capped at six chips; the dev/test mock just
-// serves the first slice in roster order.
-export const mockRecentOpponents = mockPlayers.slice(0, 6)
+/**
+ * The roster players who have **never played a match** — the shape production is
+ * full of, and the one the mock world could not express, which is how a
+ * never-played player reached the real stack rendering a 1500 rating, a 1500
+ * peak, a rank above real players and a confidence card guessing they were
+ * "somewhere between 814 and 2186".
+ *
+ * Joining a league seeds a rating internally, so `rating_value` is never null in
+ * the database — but that seed is a *prior*, not a played result, and the API
+ * does not send it. For a player who has finished no rated match, `rating`,
+ * `rank`, `rank_of`, `percentile`, `peak`, `rating_delta` and `confidence` are
+ * all `null`, `rating_history` is a wholly empty window and their league row
+ * carries a `null` rating. And for one who has finished *nothing at all* — this
+ * set — the record is empty too: no wins, no losses, no form, an empty career and
+ * no matches. They have met nobody, so they have no head-to-head record either.
+ *
+ * Everything below derives from this one set, so the mock cannot quietly hand a
+ * never-played player a record (or a rating) again. `park.j` is that player under
+ * `npm run dev`: open their profile and every Unrated state on the page is
+ * reachable by eye.
+ */
+const NEVER_PLAYED_USERNAMES = new Set(['park.j'])
+
+/** Whether this roster player has ever played a match at all. See
+ * `NEVER_PLAYED_USERNAMES` — the mock's model of the API's "unrated" rule. */
+function hasPlayed(p: { username: string }): boolean {
+  return !NEVER_PLAYED_USERNAMES.has(p.username)
+}
+
+/** The picker's recent-opponents grid — **opponents the caller has actually
+ * played**, capped at six chips (mirrors `list_recent_opponents` in
+ * `api/app/players.py`, which "returns only real opponents … so the picker never
+ * presents strangers as recent opponents", #167).
+ *
+ * A player who has played nobody can therefore never appear here — filtering them
+ * out is the contract, not an accident of the slice. They are still reachable in
+ * the picker through **search**, which is where a `null`-rating chip shows up in
+ * dev: type "park" on /matches/new and the chip reads "REGISTERED PLAYER" instead
+ * of a rating. */
+export const mockRecentOpponents = mockPlayers.filter(hasPlayed).slice(0, 6)
 
 // Re-exported so consumers can import the store from one place.
 export { mockMatches }
@@ -236,6 +273,25 @@ function summarizePlayer(p: {
       form: recent.join(''),
     }
   }
+  // A player who has never played has no record to synthesize. Their W-L and form
+  // are read off the matches they actually have — which is none, so: no wins, no
+  // losses, and an EMPTY form string rather than ten fabricated dots. Career, the
+  // roster's dots column and the match list all fall out of the same rows, so
+  // they cannot disagree with each other the way a hash-synthesized record did
+  // (a career claiming 20 decided matches over an empty match list).
+  //
+  // Deriving rather than hard-coding zeroes also keeps them honest if you start a
+  // match against them in `npm run dev`: the row lands in their history and their
+  // record follows it.
+  if (!hasPlayed(p)) {
+    return {
+      id: p.id,
+      username: p.username,
+      rating,
+      rank,
+      ...recordFromRows(projectPlayerMatches(p)),
+    }
+  }
   const seed = djb2(p.username)
   const wins = 5 + (seed % 25)
   const losses = 2 + ((seed * 7) % 12)
@@ -250,6 +306,28 @@ function summarizePlayer(p: {
     wins,
     losses,
     form,
+  }
+}
+
+/** A player's record as their *matches* tell it: wins, losses and the form window
+ * (newest first, decided matches only — an undecided match is not a result). The
+ * one place W-L and form are computed from rows, so a profile's career can never
+ * disagree with the match list printed beneath it. */
+function recordFromRows(rows: PlayerMatchRow[]): {
+  wins: number
+  losses: number
+  form: string
+} {
+  const decided = rows.filter(
+    (row): row is PlayerMatchRow & { result: 'W' | 'L' } => row.result !== null,
+  )
+  return {
+    wins: decided.filter((row) => row.result === 'W').length,
+    losses: decided.filter((row) => row.result === 'L').length,
+    form: decided
+      .slice(0, FORM_WINDOW)
+      .map((row) => row.result)
+      .join(''),
   }
 }
 
@@ -486,16 +564,49 @@ function playerHeadToHead(p: {
     }
   }
 
-  // The profiled player's most-met opponents — top three, as the API caps it.
-  const frequent = roster
-    .filter((other) => other.id !== p.id)
-    .map((other) => record(other, 0))
-    .sort((a, b) => b.meetings - a.meetings)
-    .slice(0, 3)
-
+  // Asked for YOURSELF there is no `versus_viewer` at all — you cannot have a
+  // record against yourself. This check comes FIRST, and deliberately: a viewer
+  // who had never played would otherwise fall into the never-met branch below and
+  // be handed a zeroed record against *themselves*, with a "Start a match" CTA
+  // pointing at their own profile. Rita is rated today, so that is latent — but it
+  // is exactly the state you land in the moment the mock "you" is made unrated.
+  const frequentOpponents = () =>
+    roster
+      .filter((other) => other.id !== p.id && hasPlayed(other))
+      .map((other) => record(other, 0))
+      .sort((a, b) => b.meetings - a.meetings)
+      .slice(0, 3)
   if (p.id === MOCK_CURRENT_PLAYER_ID) {
-    return { versus_viewer: null, frequent_opponents: frequent }
+    return {
+      versus_viewer: null,
+      frequent_opponents: hasPlayed(p) ? frequentOpponents() : [],
+    }
   }
+
+  // A meeting is a DECIDED match, so a player who has never played has met
+  // nobody — and nobody has met them. The block is still present (never `null`):
+  // the card renders its "You haven't played X yet" invitation and the
+  // Start-a-match CTA off it, which is the whole point of a profile you reached
+  // by link. Their `versus_viewer` is a zeroed, never-met record, and their
+  // frequent-opponents list is empty.
+  if (!hasPlayed(p)) {
+    return {
+      versus_viewer: {
+        opponent: { id: p.id, username: p.username },
+        wins: 0,
+        losses: 0,
+        meetings: 0,
+        last_meeting: null,
+      },
+      frequent_opponents: [],
+    }
+  }
+
+  // The profiled player's most-met opponents — top three, as the API caps it.
+  // Never-played players are excluded for the same reason: you cannot have met
+  // someone who has played nobody, so they must not surface as anyone's frequent
+  // opponent.
+  const frequent = frequentOpponents()
 
   // The viewer's own record AGAINST this player — read from the viewer's side, so
   // `opponent` is the player whose profile this is.

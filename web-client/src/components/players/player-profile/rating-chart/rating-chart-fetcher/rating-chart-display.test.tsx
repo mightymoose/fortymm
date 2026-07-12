@@ -12,7 +12,7 @@ describe('RatingChartDisplay', () => {
     expect(ratingChartDisplayPage.queryChartLine()).toBeInTheDocument()
     expect(ratingChartDisplayPage.queryChangeChip()).toHaveTextContent('+127')
     expect(ratingChartDisplayPage.getChartSummary()).toBe(
-      'Up +127 over the last 90 days',
+      'Up 127 over the last 90 days',
     )
   })
 
