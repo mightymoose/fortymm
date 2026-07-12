@@ -3,14 +3,23 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_session
-from app.models import Tournament, TournamentEvent, User
+from app.models import (
+    EventFormat,
+    Tournament,
+    TournamentEntry,
+    TournamentEntryStatus,
+    TournamentEvent,
+    User,
+)
 from app.rbac import require_permission
 from app.schemas.tournament import (
     TournamentCreate,
     TournamentDetailRead,
+    TournamentEntrantRead,
     TournamentEventCreate,
     TournamentEventRead,
     TournamentEventUpdate,
@@ -18,19 +27,28 @@ from app.schemas.tournament import (
     TournamentUpdate,
 )
 from app.sessions import get_current_user
+from app.tournament_queries import active_entrants_by_event
 
-# Reads are gated on ``tournament.view`` and creation on ``tournament.create``
-# (both granted to the Beta-tester role in ``scripts/seed_rbac.py``). The
-# mutating routes — PATCH, DELETE, and every event mutation — carry NO
-# permission gate: they're owner-only, available solely to the user who created
-# the tournament (``_require_owner``). There is deliberately no
+# Reads are gated on ``tournament.view``, creation on ``tournament.create``, and
+# entering an event as a player on ``tournament.enter`` (all three granted to the
+# Beta-tester role in ``scripts/seed_rbac.py``). The owner-facing mutating routes
+# — PATCH, DELETE, and every event mutation — carry NO permission gate: they're
+# owner-only, available solely to the user who created the tournament
+# (``_require_owner``). There is deliberately no
 # ``tournament.edit``/``tournament.delete``/``tournament.publish`` permission;
 # managing a tournament you created is a property of ownership, not a role grant.
+# Player self-registration is the exception that needs its own permission: a
+# player entering *themselves* is not the tournament's owner, so it cannot go
+# through ``_require_owner``.
 TOURNAMENT_VIEW = "tournament.view"
 TOURNAMENT_CREATE = "tournament.create"
+TOURNAMENT_ENTER = "tournament.enter"
 
 require_view = require_permission(TOURNAMENT_VIEW)
 require_create = require_permission(TOURNAMENT_CREATE)
+# Returns the signed-in user, so the enter route gets its gate and its caller
+# from one dependency — and cannot enter anyone other than that caller.
+require_enter = require_permission(TOURNAMENT_ENTER)
 
 router = APIRouter(prefix="/v1")
 
@@ -79,12 +97,44 @@ def _serialize(
     )
 
 
+def _serialize_event(
+    e: TournamentEvent,
+    *,
+    entrants: list[TournamentEntrantRead],
+) -> TournamentEventRead:
+    # ``entrants`` is not on the ORM row in the shape the read model wants (it
+    # needs the entrant's username, and only the *active* entries), so the fields
+    # are listed explicitly rather than validated straight off the attributes —
+    # which would also fire a lazy load. The event's ``entered`` count is not
+    # listed at all: it is a computed field over ``entrants`` (ADR-0016), so
+    # there is nothing here that could disagree with the list.
+    return TournamentEventRead.model_validate(
+        {
+            "id": e.id,
+            "tournament_id": e.tournament_id,
+            "name": e.name,
+            "format": e.format,
+            "draw_type": e.draw_type,
+            "max_players": e.max_players,
+            "entry_fee": e.entry_fee,
+            "slot": e.slot,
+            "match_settings": e.match_settings,
+            "predicates": e.predicates,
+            "pools": e.pools,
+            "created_at": e.created_at,
+            "updated_at": e.updated_at,
+            "entrants": entrants,
+        }
+    )
+
+
 def _serialize_detail(
     t: Tournament,
     *,
     created_by_username: str,
     current_user_id: uuid.UUID,
     events: list[TournamentEvent],
+    entrants_by_event: dict[uuid.UUID, list[TournamentEntrantRead]],
 ) -> TournamentDetailRead:
     # The full aggregate: tournament fields plus its events (each event's JSONB
     # value-objects validate into Pydantic models here, at this single boundary).
@@ -95,7 +145,9 @@ def _serialize_detail(
                 created_by_username=created_by_username,
                 current_user_id=current_user_id,
             ),
-            "events": [TournamentEventRead.model_validate(e) for e in events],
+            "events": [
+                _serialize_event(e, entrants=entrants_by_event[e.id]) for e in events
+            ],
         }
     )
 
@@ -129,6 +181,26 @@ async def _get_event_or_404(
     return event
 
 
+async def _get_entry_or_404(
+    db: AsyncSession, event_id: uuid.UUID, entry_id: uuid.UUID
+) -> TournamentEntry:
+    # Scoped by event id as well as entry id, the same way _get_event_or_404 is
+    # scoped by tournament: an entry that exists but hangs off a *different* event
+    # is not addressable through this URL, so the mismatch is a 404 rather than a
+    # withdrawal from the event the caller didn't name.
+    entry = (
+        await db.execute(
+            select(TournamentEntry).where(
+                TournamentEntry.id == entry_id,
+                TournamentEntry.event_id == event_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Entry not found.")
+    return entry
+
+
 def _require_owner(t: Tournament, current_user: User) -> None:
     if t.created_by_user_id != current_user.id:
         raise HTTPException(
@@ -150,9 +222,13 @@ async def list_tournaments(
     current_user: User = Depends(get_current_user),
 ) -> list[TournamentDetailRead]:
     # The list page's cards render event-derived stats (event count, total
-    # entries, table count), so the list returns the full aggregate — events
-    # included — rather than a thinner summary. Two queries, no N+1: the
-    # tournaments+usernames join, then all their events grouped in memory.
+    # entries, table count), so the list returns the full aggregate — events and
+    # their entrants included — rather than a thinner summary. THREE queries, no
+    # N+1, whatever the number of tournaments or events: the tournaments+usernames
+    # join, then all their events, then all those events' active entrants in one
+    # batch. A per-event entry count would be the N+1 this shape exists to avoid,
+    # and a statement-count tripwire in tests/test_tournaments.py fails if one
+    # comes back.
     rows = (
         await db.execute(
             select(Tournament, User.username)
@@ -164,8 +240,9 @@ async def list_tournaments(
     events_by_tournament: dict[uuid.UUID, list[TournamentEvent]] = {
         tid: [] for tid in tournament_ids
     }
+    events: list[TournamentEvent] = []
     if tournament_ids:
-        events = (
+        events = list(
             (
                 await db.execute(
                     select(TournamentEvent)
@@ -178,12 +255,14 @@ async def list_tournaments(
         )
         for event in events:
             events_by_tournament[event.tournament_id].append(event)
+    entrants_by_event = await active_entrants_by_event(db, [e.id for e in events])
     return [
         _serialize_detail(
             tournament,
             created_by_username=username,
             current_user_id=current_user.id,
             events=events_by_tournament[tournament.id],
+            entrants_by_event=entrants_by_event,
         )
         for tournament, username in rows
     ]
@@ -245,8 +324,10 @@ async def get_tournament(
     if row is None:
         raise HTTPException(status_code=404, detail="Tournament not found.")
     tournament, username = row
-    # A second query loads this tournament's events in creation order.
-    events = (
+    # A second query loads this tournament's events in creation order, and a
+    # third batches every one of those events' active entrants — the same
+    # one-statement-per-collection shape the list endpoint uses.
+    events = list(
         (
             await db.execute(
                 select(TournamentEvent)
@@ -257,11 +338,13 @@ async def get_tournament(
         .scalars()
         .all()
     )
+    entrants_by_event = await active_entrants_by_event(db, [e.id for e in events])
     return _serialize_detail(
         tournament,
         created_by_username=username,
         current_user_id=current_user.id,
-        events=list(events),
+        events=events,
+        entrants_by_event=entrants_by_event,
     )
 
 
@@ -332,7 +415,6 @@ async def create_event(
         draw_type=payload.draw_type,
         max_players=payload.max_players,
         entry_fee=payload.entry_fee,
-        entered=0,
         slot=payload.slot.model_dump(),
         match_settings=payload.match_settings.model_dump(),
         predicates=[p.model_dump() for p in payload.predicates],
@@ -341,7 +423,9 @@ async def create_event(
     db.add(event)
     await db.commit()
     await db.refresh(event)
-    return TournamentEventRead.model_validate(event)
+    # A just-created event has no entries, so its entrants are empty and its
+    # derived ``entered`` count is 0 — no query needed to learn that.
+    return _serialize_event(event, entrants=[])
 
 
 @router.patch(
@@ -365,7 +449,11 @@ async def update_event(
         setattr(event, key, value)
     await db.commit()
     await db.refresh(event)
-    return TournamentEventRead.model_validate(event)
+    # An edited event keeps whatever entrants it already had — reload them rather
+    # than answering with an empty list (and a ``entered`` of 0) that would be a
+    # lie for any event people have entered.
+    entrants = (await active_entrants_by_event(db, [event.id]))[event.id]
+    return _serialize_event(event, entrants=entrants)
 
 
 @router.delete(
@@ -382,5 +470,125 @@ async def delete_event(
     _require_owner(tournament, current_user)
     event = await _get_event_or_404(db, tournament_id, event_id)
     await db.delete(event)
+    await db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# ----- entry routes --------------------------------------------------------
+
+
+@router.post(
+    "/tournaments/{tournament_id}/events/{event_id}/entries",
+    response_model=TournamentEntrantRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def enter_event(
+    tournament_id: uuid.UUID,
+    event_id: uuid.UUID,
+    db: AsyncSession = Depends(get_session),
+    current_user: User = Depends(require_enter),
+) -> TournamentEntrantRead:
+    """Register the signed-in player in a singles event.
+
+    Self-registration only: the entry created is always the caller's own, which
+    is why the request carries no body — there is no field in which to name
+    someone else. Entering a player who is not you is a director's job, and a
+    different endpoint.
+
+    Entering an event you are already in is a `409`; withdrawing first frees you
+    to enter it again. Doubles and teams events are a `400`: an entry is one row
+    per player, with nowhere to record a partner or a team.
+    """
+    # Load first, then decide — the same 404-before-anything-else ordering the
+    # owner-only routes use. This route has no ownership check to run afterwards:
+    # a player entering themselves is by definition not the tournament's owner,
+    # so the authorization is the ``tournament.enter`` gate above plus the fact
+    # that ``current_user`` is the only user this handler can enter.
+    await _get_tournament_or_404(db, tournament_id)
+    event = await _get_event_or_404(db, tournament_id, event_id)
+    if event.format is not EventFormat.singles:
+        # Not a policy — a modelling limit (ADR-0016). One row per user cannot
+        # express a doubles pairing or a team, so rather than record half a pair
+        # we refuse. ``is not singles`` rather than ``== doubles`` so a new format
+        # is rejected by default instead of silently falling through.
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Only singles events can be entered directly, "
+                f"not {event.format.value}."
+            ),
+        )
+
+    entry = TournamentEntry(event_id=event.id, user_id=current_user.id)
+    db.add(entry)
+    try:
+        await db.commit()
+    except IntegrityError:
+        # The partial unique index on (event_id, user_id) WHERE status='entered'
+        # is what rejected this, and letting the database decide is the point: a
+        # pre-flight SELECT would leave a window in which two concurrent requests
+        # both see "not entered" and both insert. ``from None`` drops the DBAPI
+        # error, so nothing about the schema reaches the response body. Because
+        # the index is partial, a player whose only prior entry is *withdrawn*
+        # does not land here — they enter again, cleanly.
+        await db.rollback()
+        raise HTTPException(
+            status_code=409, detail="You have already entered this event."
+        ) from None
+
+    return TournamentEntrantRead(
+        id=entry.id,
+        user_id=current_user.id,
+        username=current_user.username,
+        seed=entry.seed,
+    )
+
+
+@router.delete(
+    "/tournaments/{tournament_id}/events/{event_id}/entries/{entry_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def withdraw_from_event(
+    tournament_id: uuid.UUID,
+    event_id: uuid.UUID,
+    entry_id: uuid.UUID,
+    db: AsyncSession = Depends(get_session),
+    current_user: User = Depends(require_enter),
+) -> Response:
+    """Withdraw the signed-in player's own entry from an event.
+
+    The entry is **soft-deleted**: its status flips to `withdrawn` and the row
+    survives, so the event keeps its withdrawal history — and, because the
+    uniqueness guard is a *partial* index over active entries only, the player is
+    free to enter the same event again afterwards.
+
+    You may only withdraw your own entry; someone else's is a `403`. Withdrawing
+    an entry that is already withdrawn is a no-op, not an error: this is `DELETE`,
+    and asking for a state the resource is already in is a success.
+    """
+    # Load-then-authorize, as everywhere else here: the tournament, the event
+    # under it, and the entry under that event must all exist before ownership is
+    # considered — so a wrong (tournament, event, entry) triple is a 404, and 403
+    # means "this entry is real, but it isn't yours".
+    await _get_tournament_or_404(db, tournament_id)
+    event = await _get_event_or_404(db, tournament_id, event_id)
+    entry = await _get_entry_or_404(db, event.id, entry_id)
+    if entry.user_id != current_user.id:
+        # The ``tournament.enter`` gate says "may self-register at all"; it cannot
+        # say *whose* entry this is. Withdrawing another player from an event is a
+        # director's job (#784), on a different endpoint with its own permission.
+        raise HTTPException(
+            status_code=403,
+            detail="You can only withdraw your own entry.",
+        )
+
+    # Idempotent by construction: withdrawing is an assignment, not a decrement,
+    # so applying it to an already-withdrawn entry writes the value it already
+    # holds. SQLAlchemy emits no UPDATE for an unchanged attribute, and the
+    # response is the same 204 either way. Nor can this UPDATE violate the partial
+    # unique index — it only ever *removes* a row from the index's predicate — so,
+    # unlike the enter route, there is no IntegrityError here to catch and no
+    # database error that could reach the response body.
+    entry.status = TournamentEntryStatus.withdrawn
     await db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)

@@ -929,6 +929,64 @@ export interface paths {
         patch: operations["update_event_v1_tournaments__tournament_id__events__event_id__patch"];
         trace?: never;
     };
+    "/v1/tournaments/{tournament_id}/events/{event_id}/entries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Enter Event
+         * @description Register the signed-in player in a singles event.
+         *
+         *     Self-registration only: the entry created is always the caller's own, which
+         *     is why the request carries no body — there is no field in which to name
+         *     someone else. Entering a player who is not you is a director's job, and a
+         *     different endpoint.
+         *
+         *     Entering an event you are already in is a `409`; withdrawing first frees you
+         *     to enter it again. Doubles and teams events are a `400`: an entry is one row
+         *     per player, with nowhere to record a partner or a team.
+         */
+        post: operations["enter_event_v1_tournaments__tournament_id__events__event_id__entries_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/tournaments/{tournament_id}/events/{event_id}/entries/{entry_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Withdraw From Event
+         * @description Withdraw the signed-in player's own entry from an event.
+         *
+         *     The entry is **soft-deleted**: its status flips to `withdrawn` and the row
+         *     survives, so the event keeps its withdrawal history — and, because the
+         *     uniqueness guard is a *partial* index over active entries only, the player is
+         *     free to enter the same event again afterwards.
+         *
+         *     You may only withdraw your own entry; someone else's is a `403`. Withdrawing
+         *     an entry that is already withdrawn is a no-op, not an error: this is `DELETE`,
+         *     and asking for a state the resource is already in is a success.
+         */
+        delete: operations["withdraw_from_event_v1_tournaments__tournament_id__events__event_id__entries__entry_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/health": {
         parameters: {
             query?: never;
@@ -2416,6 +2474,31 @@ export interface components {
             /** Events */
             events: components["schemas"]["TournamentEventRead"][];
         };
+        /**
+         * TournamentEntrantRead
+         * @description One *active* entry in an event. Withdrawn entries are not entrants: they
+         *     appear in neither this list nor the ``entered`` count.
+         *
+         *     ``id`` is the *entry's* id, not the player's: it is the address a client
+         *     withdraws through (``DELETE …/entries/{entry_id}``), so an entrant that a
+         *     client can see is an entrant it can act on.
+         */
+        TournamentEntrantRead: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * User Id
+             * Format: uuid
+             */
+            user_id: string;
+            /** Username */
+            username: string;
+            /** Seed */
+            seed: number | null;
+        };
         /** TournamentEventCreate */
         TournamentEventCreate: {
             /** Name */
@@ -2453,8 +2536,6 @@ export interface components {
             max_players: number;
             /** Entry Fee */
             entry_fee: number;
-            /** Entered */
-            entered: number;
             slot: components["schemas"]["Slot"];
             match_settings: components["schemas"]["MatchSettings"];
             /** Predicates */
@@ -2471,6 +2552,17 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+            /** Entrants */
+            entrants: components["schemas"]["TournamentEntrantRead"][];
+            /**
+             * Entered
+             * @description The registration count. Derived — there is no stored counter (ADR-0016).
+             *
+             *     It is ``len(entrants)`` rather than a field of its own precisely so the
+             *     count and the list it counts cannot disagree: an event that says it has
+             *     52 entrants but lists 51 is not a representable state.
+             */
+            readonly entered: number;
         };
         /**
          * TournamentEventUpdate
@@ -2478,8 +2570,8 @@ export interface components {
          *     these fields back — ``name``/``format``/``draw_type``/``max_players``/
          *     ``entry_fee``/``slot``/``match_settings``/``predicates``/``pools`` — is NOT
          *     NULL, so an explicit ``null`` on any of them is rejected (422);
-         *     ``predicates``/``pools`` replace wholesale when present. ``entered`` is a
-         *     server-managed registration count and is intentionally NOT updatable here —
+         *     ``predicates``/``pools`` replace wholesale when present. ``entered`` is not
+         *     updatable — it is derived from the event's active entries, not stored — so
          *     sending it is a 422 via ``extra="forbid"``.
          */
         TournamentEventUpdate: {
@@ -4660,6 +4752,73 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["TournamentEventRead"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    enter_event_v1_tournaments__tournament_id__events__event_id__entries_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tournament_id: string;
+                event_id: string;
+            };
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TournamentEntrantRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    withdraw_from_event_v1_tournaments__tournament_id__events__event_id__entries__entry_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tournament_id: string;
+                event_id: string;
+                entry_id: string;
+            };
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

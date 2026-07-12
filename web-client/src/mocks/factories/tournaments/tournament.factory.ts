@@ -2,6 +2,7 @@ import type { components } from '@/api/schema'
 
 type TournamentDetailRead = components['schemas']['TournamentDetailRead']
 type TournamentEventRead = components['schemas']['TournamentEventRead']
+type TournamentEntrantRead = components['schemas']['TournamentEntrantRead']
 type TournamentTable = components['schemas']['TournamentTable']
 
 /** A single physical table, `T1` on court 1. */
@@ -11,15 +12,47 @@ export function buildTournamentTable(
   return { id: 't1', label: 'T1', court: '1', ...overrides }
 }
 
+/** One active entrant. `id` is the ENTRY's id — the address a withdrawal is
+ * sent to (`DELETE …/entries/{entry_id}`) — not the player's. */
+export function buildTournamentEntrantRead(
+  overrides: Partial<TournamentEntrantRead> = {},
+): TournamentEntrantRead {
+  return {
+    id: 'entry-1',
+    user_id: 'u-rita',
+    username: 'rita.kovac',
+    seed: null,
+    ...overrides,
+  }
+}
+
+/** `count` distinct entrants (`entry-1`/`player.1`, `entry-2`/`player.2`, …) —
+ * for the cases that care about how MANY entrants an event has, not who. */
+export function buildTournamentEntrantReads(
+  count: number,
+): TournamentEntrantRead[] {
+  return Array.from({ length: count }, (_, i) =>
+    buildTournamentEntrantRead({
+      id: `entry-${i + 1}`,
+      user_id: `u-${i + 1}`,
+      username: `player.${i + 1}`,
+    }),
+  )
+}
+
 /**
  * A rated Bo5 "Open Singles" event with one morning pool, as returned by the
  * tournament detail/list endpoints. Defaults are internally consistent so a
  * bare call is a meaningful row.
+ *
+ * `entered` is NOT an override: like the server (ADR-0016) it is derived from
+ * `entrants`, so this factory cannot mint an event whose count disagrees with
+ * its list. Want an event with 22 entries? Give it 22 `entrants`.
  */
 export function buildTournamentEventRead(
-  overrides: Partial<TournamentEventRead> = {},
+  overrides: Partial<Omit<TournamentEventRead, 'entered'>> = {},
 ): TournamentEventRead {
-  return {
+  const event = {
     id: 'ev-open-singles',
     tournament_id: 'bay-area-open-2026',
     name: 'Open Singles',
@@ -27,7 +60,7 @@ export function buildTournamentEventRead(
     draw_type: 'rr-then-ko',
     max_players: 64,
     entry_fee: 45,
-    entered: 52,
+    entrants: [],
     slot: { date: '2026-06-13', start: '09:00', end: '18:00' },
     match_settings: { rated: true, length_games: 5 },
     predicates: [],
@@ -42,7 +75,8 @@ export function buildTournamentEventRead(
     created_at: '2026-06-01T09:05:00Z',
     updated_at: '2026-06-09T12:00:00Z',
     ...overrides,
-  }
+  } satisfies Omit<TournamentEventRead, 'entered'>
+  return { ...event, entered: event.entrants.length }
 }
 
 /**

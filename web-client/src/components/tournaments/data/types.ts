@@ -63,6 +63,18 @@ export interface Pool {
   tableIds: string[]
 }
 
+/** One *active* entry in an event. Withdrawn entries are not entrants — they
+ * appear in neither this list nor the `entered` count (ADR-0016).
+ *
+ * `id` is the ENTRY's id, not the player's: it's the address a withdrawal is
+ * sent to, so an entrant you can see is an entrant you can act on. */
+export interface Entrant {
+  id: string
+  userId: string
+  username: string
+  seed: number | null
+}
+
 export interface TournamentEvent {
   id: string
   name: string
@@ -70,7 +82,11 @@ export interface TournamentEvent {
   drawType: DrawType
   maxPlayers: number
   entryFee: number
+  /** The registration count. Server-derived from the active entries — it is
+   * `entrants.length`, never a stored counter, so the count and the list it
+   * counts cannot disagree. Read it; never write it. */
   entered: number
+  entrants: Entrant[]
   slot: Slot
   predicates: Predicate[]
   match: MatchSettings

@@ -6,9 +6,51 @@ import {
   formatPredicate,
   predicateSentence,
   findPoolConflicts,
+  myEntrant,
 } from './helpers'
-import { buildPool, buildTournament, buildEvent } from './seed.factory'
+import {
+  buildEntrant,
+  buildPool,
+  buildTournament,
+  buildEvent,
+} from './seed.factory'
 import type { Predicate } from './types'
+
+describe('myEntrant', () => {
+  const mine = buildEntrant({
+    id: 'entry-me',
+    userId: 'u-me',
+    username: 'rita.kovac',
+  })
+  const theirs = buildEntrant({
+    id: 'entry-them',
+    userId: 'u-2',
+    username: 'lee.wong',
+  })
+
+  it('finds my own entry — the id a withdrawal is addressed to', () => {
+    const event = buildEvent({ entrants: [theirs, mine] })
+
+    expect(myEntrant(event, 'rita.kovac')).toEqual(mine)
+  })
+
+  it('is undefined when I am not entered, so the control offers Enter', () => {
+    const event = buildEvent({ entrants: [theirs] })
+
+    expect(myEntrant(event, 'rita.kovac')).toBeUndefined()
+  })
+
+  it('is undefined for an event nobody has entered', () => {
+    expect(myEntrant(buildEvent({ entrants: [] }), 'rita.kovac')).toBeUndefined()
+  })
+
+  it('is undefined without a username (no session yet) rather than guessing', () => {
+    const event = buildEvent({ entrants: [mine] })
+
+    expect(myEntrant(event, undefined)).toBeUndefined()
+    expect(myEntrant(event, null)).toBeUndefined()
+  })
+})
 
 describe('fmtDateRange', () => {
   it('collapses a same-month span to one month label', () => {

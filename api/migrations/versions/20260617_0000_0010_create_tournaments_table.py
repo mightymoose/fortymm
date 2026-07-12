@@ -126,12 +126,11 @@ def upgrade() -> None:
         sa.Column("draw_type", draw_type_enum, nullable=False),
         sa.Column("max_players", sa.Integer(), nullable=False),
         sa.Column("entry_fee", sa.Numeric(precision=8, scale=2), nullable=False),
-        sa.Column(
-            "entered",
-            sa.Integer(),
-            nullable=False,
-            server_default=sa.text("0"),
-        ),
+        # No ``entered`` column: an event's entry count is DERIVED from a live
+        # count of its active ``tournament_entries`` rows (ADR-0016). A stored
+        # counter is a second copy of the truth that can drift from the rows it
+        # counts — edited out of this migration in place, per the pre-deploy
+        # convention in api/CLAUDE.md.
         sa.Column("slot", postgresql.JSONB(), nullable=False),
         sa.Column("match_settings", postgresql.JSONB(), nullable=False),
         sa.Column(

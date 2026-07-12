@@ -1,7 +1,7 @@
 import enum
 import uuid
 from datetime import date, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import (
     Date,
@@ -20,6 +20,9 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
+
+if TYPE_CHECKING:
+    from app.models.tournament_entry import TournamentEntry
 
 
 class TournamentStatus(enum.Enum):
@@ -150,9 +153,9 @@ class TournamentEvent(Base):
     )
     max_players: Mapped[int] = mapped_column(Integer, nullable=False)
     entry_fee: Mapped[float] = mapped_column(Numeric(8, 2), nullable=False)
-    entered: Mapped[int] = mapped_column(
-        Integer, nullable=False, server_default=text("0")
-    )
+    # There is deliberately no ``entered`` column. The registration count is
+    # derived from the live ``entries`` below (ADR-0016) — a stored counter is a
+    # second copy of the truth that can drift from the rows it counts.
     slot: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     match_settings: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     predicates: Mapped[list[dict[str, Any]]] = mapped_column(
@@ -172,3 +175,10 @@ class TournamentEvent(Base):
     )
 
     tournament: Mapped["Tournament"] = relationship(back_populates="events")
+
+    entries: Mapped[list["TournamentEntry"]] = relationship(
+        back_populates="event",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="TournamentEntry.created_at",
+    )

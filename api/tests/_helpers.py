@@ -4,7 +4,7 @@ The leading underscore keeps pytest from auto-collecting this as a test module;
 fixtures still belong in ``conftest.py``.
 """
 
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
@@ -14,7 +14,7 @@ from sqlalchemy import event, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from app.main import app as fastapi_app
-from app.models import User
+from app.models import Permission, Role, RolePermission, User, UserRole
 from app.notifications.apns import Environment, SendOutcome, SendResult
 from app.notifications.dependencies import get_push_sender
 from app.notifications.jobs import DELIVER_NOTIFICATION_JOB
@@ -83,6 +83,34 @@ async def make_user(db_session: AsyncSession, username: str) -> User:
     await db_session.commit()
     await db_session.refresh(user)
     return user
+
+
+async def grant_permissions(
+    db_session: AsyncSession, user: User, names: Sequence[str]
+) -> None:
+    """Grant ``names`` to ``user`` through real RBAC rows, so tests exercise the
+    genuine permission gate rather than overriding it.
+
+    Each Permission row is reused if an earlier call already created it, and the
+    user gets a role of their own carrying exactly ``names`` — so two users in
+    one test can hold different subsets (view-only vs view+enter, say), which is
+    what proves a route is gated on the permission it claims and not merely on
+    "is signed in".
+    """
+    role = Role(name=f"grant-{user.id}", description="Per-user test grant.")
+    db_session.add(role)
+    await db_session.flush()
+    for name in names:
+        permission = (
+            await db_session.execute(select(Permission).where(Permission.name == name))
+        ).scalar_one_or_none()
+        if permission is None:
+            permission = Permission(name=name, description=name)
+            db_session.add(permission)
+            await db_session.flush()
+        db_session.add(RolePermission(role_id=role.id, permission_id=permission.id))
+    db_session.add(UserRole(user_id=user.id, role_id=role.id))
+    await db_session.commit()
 
 
 def make_client() -> AsyncClient:

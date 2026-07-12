@@ -133,3 +133,46 @@ export const mockEventDeleteEndpoint = (
   backend.use(
     http.delete('*/v1/tournaments/:tournamentId/events/:eventId', resolver),
   )
+
+/** Resolver for the enter-event endpoint — the created `TournamentEntrantRead`
+ * (201), or an error envelope: 409 (already entered), 400 (not a singles event),
+ * 403 (no `tournament.enter` permission). The request has **no body**: the caller
+ * is the entrant. */
+export type EventEnterResolver = HttpResponseResolver<
+  { tournamentId: string; eventId: string },
+  never,
+  components['schemas']['TournamentEntrantRead'] | ErrorBody
+>
+
+/** POST /v1/tournaments/{id}/events/{eventId}/entries — enter the event. */
+export const mockEventEnterEndpoint = (
+  backend: Backend,
+  resolver: EventEnterResolver,
+) =>
+  backend.use(
+    http.post(
+      '*/v1/tournaments/:tournamentId/events/:eventId/entries',
+      resolver,
+    ),
+  )
+
+/** Resolver for the withdraw endpoint — a 204 with no body (including when the
+ * entry was already withdrawn: withdrawal is idempotent), or an error envelope
+ * on a 403 (someone else's entry) / 404. */
+export type EventWithdrawResolver = HttpResponseResolver<
+  { tournamentId: string; eventId: string; entryId: string },
+  never,
+  ErrorBody | null
+>
+
+/** DELETE /v1/tournaments/{id}/events/{eventId}/entries/{entryId} — withdraw. */
+export const mockEventWithdrawEndpoint = (
+  backend: Backend,
+  resolver: EventWithdrawResolver,
+) =>
+  backend.use(
+    http.delete(
+      '*/v1/tournaments/:tournamentId/events/:eventId/entries/:entryId',
+      resolver,
+    ),
+  )

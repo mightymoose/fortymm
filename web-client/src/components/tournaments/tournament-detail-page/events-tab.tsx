@@ -1,11 +1,13 @@
 import { Plus, Trophy } from 'lucide-react'
 
+import { useSession } from '@/api/session'
 import { Button } from '@/components/ui/button'
 
 import type { Tournament, TournamentEvent } from '../data/types'
 import { EmptyState } from '../empty-state'
 import { SectionHeader } from './section-header'
 import { EventCard } from './events-tab/event-card'
+import { EnterEventControl } from './events-tab/enter-event-control'
 
 export interface EventsTabProps {
   tournament: Tournament
@@ -24,6 +26,13 @@ export const EventsTab = ({
   onOpenEvent,
   onNewEvent,
 }: EventsTabProps) => {
+  // Who the viewer is, read once for the whole tab and handed to every card: the
+  // roster needs it to pin the player's own chip into a truncated list (#781),
+  // and "which entrant is me" is a join on the USERNAME — the session carries no
+  // user id (see `myEntrant`). `EnterEventControl` reads the same session for the
+  // same join, so the chip and the Enter/Withdraw control can never disagree.
+  const username = useSession().data?.data.user.username
+
   return (
     <div>
       <SectionHeader
@@ -66,7 +75,15 @@ export const EventsTab = ({
               key={ev.id}
               event={ev}
               canEdit={canEdit}
+              username={username}
               onOpen={() => onOpenEvent(ev)}
+              // Self-registration is a *player's* affordance, not the owner's:
+              // it is gated on `tournament.enter`, not on `canEdit`. The control
+              // decides for itself whether it applies (permission, singles) and
+              // renders nothing when it doesn't.
+              action={
+                <EnterEventControl tournamentId={tournament.id} event={ev} />
+              }
             />
           ))}
         </div>

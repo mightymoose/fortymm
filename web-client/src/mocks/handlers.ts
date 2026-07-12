@@ -28,10 +28,12 @@ import {
   createTournament,
   deleteEvent as deleteTournamentEvent,
   deleteTournament as deleteTournamentSeed,
+  enterEvent as enterTournamentEvent,
   findTournament,
   listTournaments,
   updateEvent as updateTournamentEvent,
   updateTournament,
+  withdrawEntry as withdrawTournamentEntry,
 } from './tournaments-store'
 import { PERM } from '@/lib/permissions'
 
@@ -42,14 +44,16 @@ export const mockSession = sessionResponse({
     // its children on their own permission. Grant ADMIN_VIEW so the section
     // expands, AUTH_MANAGE for the RBAC pages, TOURNAMENT_VIEW +
     // TOURNAMENT_CREATE so the Tournaments item appears, its page loads, and the
-    // "New tournament" action shows, and NOTIFICATIONS_BROADCAST so the
-    // Broadcast item appears and its (now permission-gated) tool renders under
-    // `npm run dev`.
+    // "New tournament" action shows, TOURNAMENT_ENTER so the dev user is a beta
+    // tester who can self-register into a singles event, and
+    // NOTIFICATIONS_BROADCAST so the Broadcast item appears and its (now
+    // permission-gated) tool renders under `npm run dev`.
     permissions: [
       PERM.ADMIN_VIEW,
       PERM.AUTH_MANAGE,
       PERM.TOURNAMENT_VIEW,
       PERM.TOURNAMENT_CREATE,
+      PERM.TOURNAMENT_ENTER,
       PERM.NOTIFICATIONS_BROADCAST,
     ],
   },
@@ -972,6 +976,50 @@ export const handlers = [
         )
       }
       return HttpResponse.json(result.event, { status: 201 })
+    },
+  ),
+  // Entries (ADR-0016). Self-registration only: there is no request body — the
+  // caller IS the entrant. Registered before the bare `:eventId` routes so MSW
+  // never mistakes an entries path for an event path. A withdrawal is addressed
+  // by the *entry's* id (the `id` on each entrant), and is idempotent.
+  http.post(
+    '*/v1/tournaments/:tournamentId/events/:eventId/entries',
+    async ({ params }) => {
+      await delay(250)
+      const result = enterTournamentEvent(
+        String(params.tournamentId),
+        String(params.eventId),
+      )
+      if (!result.ok) {
+        if (result.status === 400) {
+          return detail('Only singles events can be entered.', 400)
+        }
+        if (result.status === 409) {
+          return detail('You have already entered this event.', 409)
+        }
+        return detail('Event not found.', 404)
+      }
+      return HttpResponse.json(result.entrant, { status: 201 })
+    },
+  ),
+  http.delete(
+    '*/v1/tournaments/:tournamentId/events/:eventId/entries/:entryId',
+    async ({ params }) => {
+      await delay(250)
+      const result = withdrawTournamentEntry(
+        String(params.tournamentId),
+        String(params.eventId),
+        String(params.entryId),
+      )
+      if (!result.ok) {
+        return detail(
+          result.status === 403
+            ? 'You can only withdraw your own entry.'
+            : 'Event not found.',
+          result.status,
+        )
+      }
+      return new HttpResponse(null, { status: 204 })
     },
   ),
   http.patch(

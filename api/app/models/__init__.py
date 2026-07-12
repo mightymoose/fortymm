@@ -27,6 +27,7 @@ from app.models.tournament import (
     TournamentEvent,
     TournamentStatus,
 )
+from app.models.tournament_entry import TournamentEntry, TournamentEntryStatus
 from app.models.user import User
 from app.models.user_league_rating import UserLeagueRating
 from app.models.user_role import UserRole
@@ -59,6 +60,8 @@ __all__ = [
     "Role",
     "RolePermission",
     "Tournament",
+    "TournamentEntry",
+    "TournamentEntryStatus",
     "TournamentEvent",
     "TournamentStatus",
     "User",
