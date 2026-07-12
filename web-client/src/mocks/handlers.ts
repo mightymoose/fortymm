@@ -1,6 +1,20 @@
 import { delay, http, HttpResponse } from 'msw'
+import {
+  DEFAULT_RATING_RANGE,
+  RATING_RANGES,
+  type RatingHistoryWindow,
+  type RatingRange,
+} from '@/api/players'
 import type { components } from '@/api/schema'
 import { healthCheck, player, sessionResponse } from '@/test/factories'
+import {
+  FORTYMM_LEAGUE_ID,
+  USATT_LEAGUE_ID,
+} from './factories/players/player-league.factory'
+import {
+  buildEstablishedRatingChange,
+  buildRatingChange,
+} from './factories/players/rating-change.factory'
 import {
   acceptSeed,
   proposeSeed,
@@ -37,8 +51,14 @@ import {
 } from './tournaments-store'
 import { PERM } from '@/lib/permissions'
 
+// The signed-in mock user's id, shared by the session, the roster's "me" row
+// and match-store's MOCK_CURRENT_USER — so the user menu's "Your profile" link
+// (which reads `session.user.id`) lands on a mock profile that exists.
+const MOCK_CURRENT_PLAYER_ID = 'u-me'
+
 export const mockSession = sessionResponse({
   user: {
+    id: MOCK_CURRENT_PLAYER_ID,
     username: 'rita.kovac',
     // The Administration nav *section* is gated on ADMIN_VIEW (app-shell), and
     // its children on their own permission. Grant ADMIN_VIEW so the section
@@ -70,9 +90,46 @@ export const mockPlayers = [
   player({ username: 'park.j', rating: null }),
 ]
 
-// The recent-opponents endpoint is capped at six chips; the dev/test mock just
-// serves the first slice in roster order.
-export const mockRecentOpponents = mockPlayers.slice(0, 6)
+/**
+ * The roster players who have **never played a match** — the shape production is
+ * full of, and the one the mock world could not express, which is how a
+ * never-played player reached the real stack rendering a 1500 rating, a 1500
+ * peak, a rank above real players and a confidence card guessing they were
+ * "somewhere between 814 and 2186".
+ *
+ * Joining a league seeds a rating internally, so `rating_value` is never null in
+ * the database — but that seed is a *prior*, not a played result, and the API
+ * does not send it. For a player who has finished no rated match, `rating`,
+ * `rank`, `rank_of`, `percentile`, `peak`, `rating_delta` and `confidence` are
+ * all `null`, `rating_history` is a wholly empty window and their league row
+ * carries a `null` rating. And for one who has finished *nothing at all* — this
+ * set — the record is empty too: no wins, no losses, no form, an empty career and
+ * no matches. They have met nobody, so they have no head-to-head record either.
+ *
+ * Everything below derives from this one set, so the mock cannot quietly hand a
+ * never-played player a record (or a rating) again. `park.j` is that player under
+ * `npm run dev`: open their profile and every Unrated state on the page is
+ * reachable by eye.
+ */
+const NEVER_PLAYED_USERNAMES = new Set(['park.j'])
+
+/** Whether this roster player has ever played a match at all. See
+ * `NEVER_PLAYED_USERNAMES` — the mock's model of the API's "unrated" rule. */
+function hasPlayed(p: { username: string }): boolean {
+  return !NEVER_PLAYED_USERNAMES.has(p.username)
+}
+
+/** The picker's recent-opponents grid — **opponents the caller has actually
+ * played**, capped at six chips (mirrors `list_recent_opponents` in
+ * `api/app/players.py`, which "returns only real opponents … so the picker never
+ * presents strangers as recent opponents", #167).
+ *
+ * A player who has played nobody can therefore never appear here — filtering them
+ * out is the contract, not an accident of the slice. They are still reachable in
+ * the picker through **search**, which is where a `null`-rating chip shows up in
+ * dev: type "park" on /matches/new and the chip reads "REGISTERED PLAYER" instead
+ * of a rating. */
+export const mockRecentOpponents = mockPlayers.filter(hasPlayed).slice(0, 6)
 
 // Re-exported so consumers can import the store from one place.
 export { mockMatches }
@@ -113,9 +170,23 @@ function matchesListFilter(m: SeedMatch, statusFilter: string): boolean {
 // derives plausible W-L + form deterministically so reloads stay stable.
 
 type PlayerSummary = components['schemas']['PlayerSummary']
+type PlayerDetail = components['schemas']['PlayerDetail']
+type PlayerCareer = components['schemas']['PlayerCareer']
 type PlayerMatchRow = components['schemas']['PlayerMatchRow']
 
-const MOCK_CURRENT_PLAYER_ID = 'u-me' // matches MOCK_CURRENT_USER.id in match-store
+/** Mirrors `FORM_WINDOW` in `api/app/players.py` — the wire carries TEN recent
+ * results, because the profile is where a player is actually studied. `form`
+ * lives on the shared `PlayerSummary`, so the `/players` roster receives all ten
+ * too and slices the first five for its dots column. Synthesizing five here
+ * would hide that slice from every test (the real API sends ten). */
+const FORM_WINDOW = 10
+
+/** Mirrors `PERCENTILE_MIN_RATED_PLAYERS` in `api/app/players.py`: below this
+ * many rated players the API withholds `percentile` entirely, because "top 8%"
+ * in a twelve-player league only ever means "you are first". The mock roster is
+ * far smaller than this, so mock profiles carry `percentile: null` — exactly
+ * what the real API sends today. */
+const PERCENTILE_MIN_RATED_PLAYERS = 50
 
 function mockPlayerRoster() {
   const me = {
@@ -194,10 +265,10 @@ function summarizePlayer(p: {
       const target = Math.ceil(m.best_of / 2)
       if (s1 >= target) {
         wins += 1
-        if (recent.length < 5) recent.push('W')
+        if (recent.length < FORM_WINDOW) recent.push('W')
       } else if (s2 >= target) {
         losses += 1
-        if (recent.length < 5) recent.push('L')
+        if (recent.length < FORM_WINDOW) recent.push('L')
       }
     }
     return {
@@ -210,10 +281,29 @@ function summarizePlayer(p: {
       form: recent.join(''),
     }
   }
+  // A player who has never played has no record to synthesize. Their W-L and form
+  // are read off the matches they actually have — which is none, so: no wins, no
+  // losses, and an EMPTY form string rather than ten fabricated dots. Career, the
+  // roster's dots column and the match list all fall out of the same rows, so
+  // they cannot disagree with each other the way a hash-synthesized record did
+  // (a career claiming 20 decided matches over an empty match list).
+  //
+  // Deriving rather than hard-coding zeroes also keeps them honest if you start a
+  // match against them in `npm run dev`: the row lands in their history and their
+  // record follows it.
+  if (!hasPlayed(p)) {
+    return {
+      id: p.id,
+      username: p.username,
+      rating,
+      rank,
+      ...recordFromRows(projectPlayerMatches(p)),
+    }
+  }
   const seed = djb2(p.username)
   const wins = 5 + (seed % 25)
   const losses = 2 + ((seed * 7) % 12)
-  const form = Array.from({ length: 5 }, (_, i) =>
+  const form = Array.from({ length: FORM_WINDOW }, (_, i) =>
     (seed + i * 3) % 3 === 0 ? 'L' : 'W',
   ).join('')
   return {
@@ -227,29 +317,451 @@ function summarizePlayer(p: {
   }
 }
 
-/** Mirrors the backend's `LIST_DEFAULT_PAGE_SIZE` in `api/app/players.py`
- * and the FE's `PAGE_SIZE` in `player-profile.tsx`. If those drift, the
- * FE's `initialData` cache-key won't match the bundle's `page_size` and
- * we'll waste a second fetch on mount — the whole point of bundling. */
-const BUNDLED_MATCHES_PAGE_SIZE = 25
+/** A player's record as their *matches* tell it: wins, losses and the form window
+ * (newest first, decided matches only — an undecided match is not a result). The
+ * one place W-L and form are computed from rows, so a profile's career can never
+ * disagree with the match list printed beneath it. */
+function recordFromRows(rows: PlayerMatchRow[]): {
+  wins: number
+  losses: number
+  form: string
+} {
+  const decided = rows.filter(
+    (row): row is PlayerMatchRow & { result: 'W' | 'L' } => row.result !== null,
+  )
+  return {
+    wins: decided.filter((row) => row.result === 'W').length,
+    losses: decided.filter((row) => row.result === 'L').length,
+    form: decided
+      .slice(0, FORM_WINDOW)
+      .map((row) => row.result)
+      .join(''),
+  }
+}
 
-/** PlayerDetail = PlayerSummary + first-page matches. The profile endpoint
- * (`/v1/players/{id}`) returns this so the FE paints the profile page in one
- * round trip; pagination beyond page 1 falls through to
- * `/v1/players/{id}/matches`. */
-function playerDetail(p: {
+/** Mirrors the backend's `PROFILE_RECENT_MATCHES` in `api/app/players.py` —
+ * the profile bundle is an *overview*: it embeds only the six most recent
+ * matches. The full 25-per-page history is its own surface
+ * (`/players/{id}/matches`), fed by `/v1/players/{id}/matches`. */
+const PROFILE_RECENT_MATCHES = 6
+
+/** The hero's standing block — profile-only (it deliberately does NOT ride on
+ * `PlayerSummary`, which the roster also serializes). Mirrors `_load_standing`
+ * in `api/app/players.py`:
+ *
+ * - an **unrated** player (never finished a rated match) has no rank, and so no
+ *   peak, no ladder position and no rating delta — `null` all the way down;
+ * - a rated player's rank is reported *out of the rated population* (`rank_of`),
+ *   so the hero can read "#3 of 42" instead of a flattering naked "#3";
+ * - `rating_delta` is `null`, never a zero-delta object, when there is no
+ *   preceding rated match to have moved the rating.
+ */
+/** The API's confidence cut points (`app.ratings.confidence`), mirrored: both are
+ * inclusive floors on the Glicko-2 deviation, and the interval is `rating ±
+ * 1.96·RD`. There is deliberately no confidence *percentage* — that number does
+ * not exist. */
+const PROVISIONAL_RD_FLOOR = 160
+const FIRMING_UP_RD_FLOOR = 90
+const INTERVAL_Z = 1.96
+
+/** A rated mock player's confidence, seeded off their name so it is stable across
+ * reloads. Spreads the three levels across the roster so `npm run dev` shows a
+ * Provisional, a Firming up and a Settled card rather than a page of clones. */
+function playerConfidence(
+  rating: number,
+  seed: number,
+): components['schemas']['RatingConfidence'] {
+  const deviation = 45 + (seed % 180)
+  const level =
+    deviation >= PROVISIONAL_RD_FLOOR
+      ? 'provisional'
+      : deviation >= FIRMING_UP_RD_FLOOR
+        ? 'firming_up'
+        : 'settled'
+  const half = Math.round(INTERVAL_Z * deviation)
+  return {
+    level,
+    deviation,
+    volatility: 0.06 + (seed % 10) / 1000,
+    interval: { low: rating - half, high: rating + half },
+  }
+}
+
+function playerStanding(summary: PlayerSummary, rows: PlayerMatchRow[]) {
+  const ratedPopulation = rosterRankById().size
+  if (summary.rating == null || summary.rank == null) {
+    // No rating means nothing to be confident *about* — the profile's confidence
+    // card must not render at all for them.
+    return {
+      peak: null,
+      rank_of: null,
+      percentile: null,
+      rating_delta: null,
+      confidence: null,
+    }
+  }
+  const seed = djb2(summary.username)
+  return {
+    peak: summary.rating + (seed % 40),
+    rank_of: ratedPopulation,
+    // The mock roster is a dozen players — far below the threshold at which a
+    // percentile means anything, so the API would withhold it. Mirror that.
+    percentile:
+      ratedPopulation >= PERCENTILE_MIN_RATED_PLAYERS
+        ? Math.max(
+            1,
+            Math.round((summary.rank / ratedPopulation) * 100),
+          )
+        : null,
+    // Read straight off the player's own rows (newest first), not synthesized
+    // beside them: the hero's Δ chip and the top row of the Recent-matches card
+    // are two views of the SAME match, and a mock that made them up separately
+    // could show a chip for a match whose Δ column says `—`. When that most-recent
+    // rated match was the player's *first*, this is an ESTABLISHED change (null
+    // `delta`) and the chip is suppressed entirely — they got rated, they did not
+    // gain or lose (#952).
+    rating_delta: rows.find((r) => r.rating_change !== null)?.rating_change ?? null,
+    confidence: playerConfidence(summary.rating, seed),
+  }
+}
+
+/** The player's **cross-league** career (ADR-0915) — a fact about the *person*,
+ * so it deliberately ignores the requested league. Mirrors `_load_career` in
+ * `api/app/career.py`:
+ *
+ * - `decided` counts only *decided* matches (a win or a loss), which is why it
+ *   is smaller than the all-inclusive `match_total` whenever a match is in play.
+ *   The two numbers sit side by side on the profile and differ on purpose;
+ * - `win_rate` and `games_won_pct` are **shares in [0, 1]** — 0.686, never 68.6
+ *   — despite the `_pct` name the API kept;
+ * - a player who has decided nothing gets `null` shares and `null` streaks, not
+ *   zeroes: a 0% would claim they lose every match they play.
+ */
+function playerCareer(summary: PlayerSummary): PlayerCareer {
+  const decided = summary.wins + summary.losses
+  if (decided === 0) {
+    return {
+      decided: 0,
+      wins: 0,
+      losses: 0,
+      win_rate: null,
+      games_won_pct: null,
+      current_streak: null,
+      best_streak: null,
+      // Their league count, like everyone's, is a count of *memberships* — not of
+      // the leagues they have played a match in. A player joins the default league
+      // on sign-up, so this is never 0, and it must agree with `leagues.length` on
+      // the same bundle whatever their record. Hard-coding a 1 here would put two
+      // rows in the Leagues card under a Career card reading "1 league".
+      league_count: MOCK_LEAGUES.length,
+    }
+  }
+  const seed = djb2(summary.username)
+  // Form is newest-first, so the current streak is its leading run of one
+  // outcome — it breaks the moment the other one lands.
+  const results = summary.form.split('')
+  const kind = results[0] === 'L' ? ('L' as const) : ('W' as const)
+  let run = 0
+  while (run < results.length && results[run] === kind) run += 1
+  // The real API scans the whole history for the best *winning* run; the mock
+  // synthesizes one deterministically, never shorter than the current one.
+  const bestWinRun = Math.max(kind === 'W' ? run : 0, 3 + (seed % 5))
+  return {
+    decided,
+    wins: summary.wins,
+    losses: summary.losses,
+    win_rate: summary.wins / decided,
+    // A share in [0, 1], deliberately not equal to the match win rate: games
+    // won is a finer read on dominance than whole matches.
+    games_won_pct: Math.round((0.4 + (seed % 35) / 100) * 1000) / 1000,
+    current_streak: run > 0 ? { kind, n: run } : null,
+    // No wins, no winning run to have been anyone's best.
+    best_streak:
+      summary.wins > 0 ? { kind: 'W' as const, n: bestWinRun } : null,
+    // Career is CROSS-LEAGUE (ADR-0915), so this counts every ladder the player
+    // belongs to — and it must agree with `leagues.length` on the same bundle,
+    // exactly as the API guarantees (both are counted off league *memberships*).
+    // The mock roster puts everyone in both leagues, so the Leagues card is a
+    // switcher you can actually drive in `npm run dev`.
+    league_count: MOCK_LEAGUES.length,
+  }
+}
+
+/** The mock leagues. Ids are **uuids**, as the wire carries them — the profile
+ * route validates `?league=` as one, so a `'usatt'`-style id here would be caught
+ * at the boundary and silently degrade to the default league.
+ *
+ * Every mock player belongs to both. In production today every player is in
+ * exactly one (there is no join-league endpoint yet), and the card correctly
+ * renders a single row for them — but a one-league mock would leave the switcher
+ * undrivable in dev. */
+const MOCK_LEAGUES = [
+  { id: FORTYMM_LEAGUE_ID, name: 'FortyMM', is_default: true },
+  { id: USATT_LEAGUE_ID, name: 'USATT', is_default: false },
+] as const
+
+const DEFAULT_MOCK_LEAGUE = MOCK_LEAGUES[0]
+
+/** A player's rating **on one ladder**. There is no such thing as their rating
+ * "in general" (ADR-0915) — so the second league runs a fixed offset below the
+ * default one, and switching leagues visibly rebinds the hero, the rating panel
+ * and the confidence card rather than redrawing the same numbers. An unrated
+ * player is unrated everywhere. */
+function leagueRating(
+  base: number | null | undefined,
+  leagueId: string,
+): number | null {
+  if (base == null) return null
+  return leagueId === DEFAULT_MOCK_LEAGUE.id ? base : base - 45
+}
+
+/** The Leagues card's rows: every league this player belongs to, each carrying
+ * THEIR rating on it. The list is deliberately NOT scoped to the requested
+ * league — it is the same on every request for this player; which row is
+ * *selected* is the client's business (ADR-0915). */
+function playerLeagues(base: number | null | undefined) {
+  return MOCK_LEAGUES.map((league) => ({
+    id: league.id,
+    name: league.name,
+    is_default: league.is_default,
+    rating: leagueRating(base, league.id),
+  }))
+}
+
+/**
+ * The profile's **viewer-aware** head-to-head block (ADR-0915) — the one part of
+ * the bundle whose answer depends on *who is asking*. Mirrors `_load_head_to_head`
+ * in `api/app/head_to_head.py`:
+ *
+ * - asked for **yourself**, there is no `versus_viewer` at all. You cannot have a
+ *   record against yourself, and the profile must not offer to start a match with
+ *   you — so the API omits the block and the card degrades to your frequent
+ *   opponents. The mock viewer is always `MOCK_CURRENT_PLAYER_ID`, so opening
+ *   `/players/u-me` in `npm run dev` shows exactly that;
+ * - asked for **anyone else**, it is present — *even when the pair have never
+ *   met*, which is the common case in production (a guest session is minted for
+ *   anyone who lands on a profile link, and a guest has played nobody). Zero
+ *   meetings is a first-class value here, never a `null`: the card's
+ *   "You haven't played X yet" + Start-a-match CTA is rendered off it, and needs
+ *   the `opponent` to prefill the match with.
+ *
+ * One roster player (`silva.r`) is deliberately seeded as never-met so that empty
+ * state — the app's best conversion moment — is reachable under `npm run dev`
+ * without clearing a cookie.
+ *
+ * `meetings` is `wins + losses`, derived rather than stored (the API refuses to
+ * carry a field and its own derivation), so it is derived here too.
+ */
+function playerHeadToHead(p: {
   id: string
   username: string
-  rating?: number | null
-}) {
-  const summary = summarizePlayer(p)
+}): components['schemas']['PlayerHeadToHead'] {
+  const roster = mockPlayerRoster()
+  const seed = djb2(p.username)
+  const record = (
+    opponent: { id: string; username: string },
+    salt: number,
+  ) => {
+    const wins = (djb2(opponent.username) + salt) % 7
+    const losses = (seed + salt) % 5
+    return {
+      opponent: { id: opponent.id, username: opponent.username },
+      wins,
+      losses,
+      meetings: wins + losses,
+    }
+  }
+
+  // Asked for YOURSELF there is no `versus_viewer` at all — you cannot have a
+  // record against yourself. This check comes FIRST, and deliberately: a viewer
+  // who had never played would otherwise fall into the never-met branch below and
+  // be handed a zeroed record against *themselves*, with a "Start a match" CTA
+  // pointing at their own profile. Rita is rated today, so that is latent — but it
+  // is exactly the state you land in the moment the mock "you" is made unrated.
+  const frequentOpponents = () =>
+    roster
+      .filter((other) => other.id !== p.id && hasPlayed(other))
+      .map((other) => record(other, 0))
+      .sort((a, b) => b.meetings - a.meetings)
+      .slice(0, 3)
+  if (p.id === MOCK_CURRENT_PLAYER_ID) {
+    return {
+      versus_viewer: null,
+      frequent_opponents: hasPlayed(p) ? frequentOpponents() : [],
+    }
+  }
+
+  // A meeting is a DECIDED match, so a player who has never played has met
+  // nobody — and nobody has met them. The block is still present (never `null`):
+  // the card renders its "You haven't played X yet" invitation and the
+  // Start-a-match CTA off it, which is the whole point of a profile you reached
+  // by link. Their `versus_viewer` is a zeroed, never-met record, and their
+  // frequent-opponents list is empty.
+  if (!hasPlayed(p)) {
+    return {
+      versus_viewer: {
+        opponent: { id: p.id, username: p.username },
+        wins: 0,
+        losses: 0,
+        meetings: 0,
+        last_meeting: null,
+      },
+      frequent_opponents: [],
+    }
+  }
+
+  // The profiled player's most-met opponents — top three, as the API caps it.
+  // Never-played players are excluded for the same reason: you cannot have met
+  // someone who has played nobody, so they must not surface as anyone's frequent
+  // opponent.
+  const frequent = frequentOpponents()
+
+  // The viewer's own record AGAINST this player — read from the viewer's side, so
+  // `opponent` is the player whose profile this is.
+  const neverMet = p.username === 'silva.r'
+  const wins = neverMet ? 0 : 1 + (seed % 4)
+  const losses = neverMet ? 0 : seed % 5
+  return {
+    versus_viewer: {
+      opponent: { id: p.id, username: p.username },
+      wins,
+      losses,
+      meetings: wins + losses,
+      last_meeting: neverMet
+        ? null
+        : new Date(Date.UTC(2025, seed % 12, 1 + (seed % 27))).toISOString(),
+    },
+    frequent_opponents: frequent,
+  }
+}
+
+/** How many days each range's calendar window spans (mirrors `window_start` in
+ * `api/app/ratings/history.py`). */
+const RANGE_DAYS: Record<RatingRange, number> = {
+  '30d': 30,
+  '90d': 90,
+  '1y': 365,
+}
+
+/** A range the caller may have sent as anything at all. Anything but the three
+ * the API accepts degrades to the default, as FastAPI's `Literal` would 422 it and
+ * the client's search schema never puts one on the wire. */
+function parseRange(raw: string | null): RatingRange {
+  return RATING_RANGES.find((range) => range === raw) ?? DEFAULT_RATING_RANGE
+}
+
+const isoDaysAgo = (days: number): string =>
+  new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString()
+
+/**
+ * The player's rating over one CALENDAR window — the profile's chart (ADR-0915).
+ * Mirrors `player_rating_history` in `api/app/ratings/history.py`, and holds the
+ * three things the real endpoint's shape turns on:
+ *
+ * - the **anchor is dated OUTSIDE the window**: it is the player's rating *as of
+ *   the window start*, carried in from their last match before it. It is what
+ *   makes "up +127 over 90 days" true, so a mock that started the line at the
+ *   first in-window point would let a chart that ignores the anchor look right;
+ * - `change` is measured **from that anchor** to the latest point;
+ * - an **unrated** player gets a wholly empty window — no anchor, no points, no
+ *   change. Not a zeroed one: they have no rating timeline at all, and the profile
+ *   draws them no chart.
+ *
+ * The window is relative to *now* and deterministic per (player, range), so
+ * flipping the range tab in `npm run dev` visibly redraws the line rather than
+ * re-serving the same one.
+ */
+function playerRatingHistory(
+  summary: PlayerSummary,
+  range: RatingRange,
+): RatingHistoryWindow {
+  const rating = summary.rating
+  if (rating == null) {
+    return { anchor: null, points: [], peak: null, change: null }
+  }
+  const days = RANGE_DAYS[range]
+  const seed = djb2(`${summary.username}:${range}`)
+  const count = 5 + (seed % 6)
+  // The window's net movement, and so the anchor it must have started from.
+  const net = 20 + (seed % 90)
+  const anchorRating = rating - net
+  const anchor = {
+    at: isoDaysAgo(days + 4 + (seed % 25)),
+    rating: anchorRating,
+    match_id: `m-anchor-${summary.id}`,
+  }
+  const points = Array.from({ length: count }, (_, i) => {
+    const progress = (i + 1) / count
+    const wobble = (((seed >> i) % 21) - 10) * (i === count - 1 ? 0 : 1)
+    return {
+      // The last point is the player's CURRENT rating: the line's right-hand end
+      // and the hero's big number are the same fact.
+      rating:
+        i === count - 1
+          ? rating
+          : Math.round(anchorRating + net * progress + wobble),
+      at: isoDaysAgo(Math.max(1, days * (1 - progress))),
+      match_id: `m-${summary.id}-${i}`,
+    }
+  })
+  const peak = points.reduce((best, point) =>
+    point.rating > best.rating ? point : best,
+  )
+  return { anchor, points, peak, change: rating - anchorRating }
+}
+
+/** PlayerDetail = PlayerSummary + the hero's standing (member-since, peak,
+ * rank-of-ladder, percentile, rating delta) + the cross-league career block +
+ * the player's leagues + the viewer-aware head-to-head + the chart's window + the
+ * six most recent matches + the all-inclusive `match_total` behind the
+ * "View all N matches" link.
+ *
+ * `leagueId` is the ladder the **rating half** of the bundle is about, defaulting
+ * to the default league when the caller names none. Career ignores it, and so
+ * do the head-to-head and the match list.
+ *
+ * `range` is the chart's calendar window, embedded so the profile's first paint
+ * costs ONE request — the client seeds the chart's own cache from it and calls
+ * `/rating-history` only when the user flips range (ADR-0915). */
+function playerDetail(
+  p: {
+    id: string
+    username: string
+    rating?: number | null
+  },
+  leagueId: string = DEFAULT_MOCK_LEAGUE.id,
+  range: RatingRange = DEFAULT_RATING_RANGE,
+): PlayerDetail {
+  // The rating half of the bundle is scoped to the requested league; everything
+  // below reads off this league-scoped summary.
+  const summary = summarizePlayer({
+    ...p,
+    rating: leagueRating(p.rating, leagueId),
+  })
   const rows = projectPlayerMatches({ id: p.id, username: p.username })
+  const seed = djb2(p.username)
   return {
     ...summary,
+    // A stable join date: month + year is all the hero shows.
+    member_since: new Date(
+      Date.UTC(2023 + (seed % 3), seed % 12, 1 + (seed % 27)),
+    ).toISOString(),
+    ...playerStanding(summary, rows),
+    // Cross-league, so it reads off the player's *unscoped* record — ask for this
+    // player in either league and the career block comes back identical.
+    career: playerCareer(summarizePlayer(p)),
+    leagues: playerLeagues(p.rating),
+    // Viewer-aware, and deliberately NOT league-scoped: a meeting is a decided
+    // match in any league (ADR-0915).
+    head_to_head: playerHeadToHead(p),
+    // League-scoped like the rest of the rating half — it reads off the SAME
+    // league-scoped summary, so the line ends where the hero's rating does.
+    rating_history: playerRatingHistory(summary, range),
+    match_total: rows.length,
     matches: {
-      items: rows.slice(0, BUNDLED_MATCHES_PAGE_SIZE),
+      items: rows.slice(0, PROFILE_RECENT_MATCHES),
       page: 1,
-      page_size: BUNDLED_MATCHES_PAGE_SIZE,
+      page_size: PROFILE_RECENT_MATCHES,
       total: rows.length,
     },
   }
@@ -288,10 +800,10 @@ function projectPlayerMatches(player: {
     ? mockMatches
     : mockMatches.filter((m) => m.opponent?.id === player.id)
 
-  return myMatches
+  const projected = myMatches
     .slice()
     .sort((a, b) => b.created_at.localeCompare(a.created_at))
-    .map((m): PlayerMatchRow => {
+    .map((m) => {
       // The "perspective" player is on side 1 if they're the current user,
       // side 2 otherwise (since mocks always put rita on side 1).
       const onSide1 = isMe
@@ -301,7 +813,7 @@ function projectPlayerMatches(player: {
       const opponentId = onSide1
         ? (m.opponent?.id ?? null)
         : MOCK_CURRENT_PLAYER_ID
-      const sets = m.games
+      const games = m.games
         .filter((g): g is typeof g & { score: NonNullable<typeof g.score> } =>
           g.score !== null,
         )
@@ -310,27 +822,55 @@ function projectPlayerMatches(player: {
           theirs: onSide1 ? g.score.side_2_points : g.score.side_1_points,
         }))
       const target = Math.ceil(m.best_of / 2)
-      let s1 = 0
-      let s2 = 0
-      for (const s of sets) {
-        if (s.mine > s.theirs) s1 += 1
-        else if (s.theirs > s.mine) s2 += 1
+      let gamesWonByMe = 0
+      let gamesWonByThem = 0
+      for (const g of games) {
+        if (g.mine > g.theirs) gamesWonByMe += 1
+        else if (g.theirs > g.mine) gamesWonByThem += 1
       }
       let result: 'W' | 'L' | null = null
       if (m.status === 'completed') {
-        if (s1 >= target) result = 'W'
-        else if (s2 >= target) result = 'L'
+        if (gamesWonByMe >= target) result = 'W'
+        else if (gamesWonByThem >= target) result = 'L'
       }
-      return {
-        id: m.id,
-        status: m.status,
-        created_at: m.created_at,
-        opponent: { id: opponentId, username: opponentUsername },
-        sets,
-        result,
-        awaiting_acceptance: false,
-      }
+      return { m, games, result, opponentId, opponentUsername }
     })
+
+  // The player's **first** decided match — the rows are newest-first, so it is
+  // the last of them. That match ESTABLISHED their rating; it did not move one
+  // (#952). Modelling it is the whole reason this mock can catch the bug: a mock
+  // that only ever emits moves is a mock that cannot.
+  const firstDecidedId =
+    [...projected].reverse().find((p) => p.result !== null)?.m.id ?? null
+
+  return projected.map(({ m, games, result, opponentId, opponentUsername }): PlayerMatchRow => {
+    // The rating this match moved, for the Recent-matches card's Δ column.
+    // `null` — never a zero-delta object — for anything undecided (live, up
+    // next, awaiting, voided) or unrated, so the dev view exercises the em-dash
+    // path the way the real API does.
+    const ratingBefore = 1600 + (djb2(m.id) % 120)
+    const moved = 6 + (djb2(m.id) % 13)
+    const delta = result === 'W' ? moved : -moved
+    const after = ratingBefore + delta
+    const rating_change =
+      result === null
+        ? null
+        : m.id === firstDecidedId
+          ? // Their first: `before` and `delta` are both null. The Δ column reads
+            // `—`, and the match page reads `Unrated → {after}`.
+            buildEstablishedRatingChange({ after })
+          : buildRatingChange({ before: ratingBefore, after })
+    return {
+      id: m.id,
+      status: m.status,
+      created_at: m.created_at,
+      opponent: { id: opponentId, username: opponentUsername },
+      games,
+      result,
+      awaiting_acceptance: false,
+      rating_change,
+    }
+  })
 }
 
 async function readJson(request: Request): Promise<unknown> {
@@ -482,7 +1022,7 @@ export const handlers = [
         .slice(0, 10),
     )
   }),
-  http.get('*/v1/players/:playerId', async ({ params }) => {
+  http.get('*/v1/players/:playerId', async ({ params, request }) => {
     await delay(200)
     const playerId = String(params.playerId)
     const player = mockPlayerRoster().find((p) => p.id === playerId)
@@ -492,7 +1032,55 @@ export const handlers = [
         { status: 404 },
       )
     }
-    return HttpResponse.json(playerDetail(player))
+    // `?league_id=` selects the ladder the rating half of the bundle is about
+    // (ADR-0915). An unknown one is a 404 here exactly as it is in the API
+    // (`resolve_league`) — the client never sends a malformed one, because the
+    // route's search schema catches it before it reaches the wire.
+    const url = new URL(request.url)
+    const leagueId = url.searchParams.get('league_id')
+    if (leagueId && !MOCK_LEAGUES.some((league) => league.id === leagueId)) {
+      return HttpResponse.json(
+        { detail: 'League not found.' },
+        { status: 404 },
+      )
+    }
+    // `?range=` names the chart's window, embedded in the bundle so the profile's
+    // first paint is one request. Answering the DEFAULT window whatever was asked
+    // for would break exactly that: the client seeds the chart's cache from this
+    // block for the range it asked for, so a mock that ignored the param would
+    // hand a 90-day window to a 30-day chart.
+    return HttpResponse.json(
+      playerDetail(
+        player,
+        leagueId ?? undefined,
+        parseRange(url.searchParams.get('range')),
+      ),
+    )
+  }),
+  // The chart's own endpoint — the one narrow request a range flip makes. Same
+  // shape as the bundle's embedded `rating_history` block, on purpose: the client
+  // seeds this cache from that one.
+  http.get('*/v1/players/:playerId/rating-history', async ({ params, request }) => {
+    await delay(200)
+    const playerId = String(params.playerId)
+    const found = mockPlayerRoster().find((p) => p.id === playerId)
+    if (!found) {
+      return HttpResponse.json({ detail: 'Player not found.' }, { status: 404 })
+    }
+    const url = new URL(request.url)
+    const leagueId = url.searchParams.get('league_id')
+    if (leagueId && !MOCK_LEAGUES.some((league) => league.id === leagueId)) {
+      return HttpResponse.json({ detail: 'League not found.' }, { status: 404 })
+    }
+    // A rating is a fact about ONE ladder (ADR-0915), so the window is read off
+    // the league-scoped summary — the same one the bundle's block comes from.
+    const summary = summarizePlayer({
+      ...found,
+      rating: leagueRating(found.rating, leagueId ?? DEFAULT_MOCK_LEAGUE.id),
+    })
+    return HttpResponse.json(
+      playerRatingHistory(summary, parseRange(url.searchParams.get('range'))),
+    )
   }),
   http.get('*/v1/players/:playerId/matches', async ({ params, request }) => {
     await delay(300)

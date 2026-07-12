@@ -8,19 +8,12 @@
   background: var(--bg-app);
   color: var(--fg-1);
   font-family: var(--font-ui);
-  /* Fixed-height viewport so the matches list can scroll independently and
-   * the pagination footer sticks to the bottom — same pattern as
-   * `.match-list-page` in routes/matches/index.css. The 64px fallback
-   * matches the value set by AppShell so that the layout still works if the
-   * component is ever rendered outside both AppShell and `--standalone`. */
-  height: calc(100vh - var(--topbar-h, 64px));
-  overflow: hidden;
-}
-
-/* Public route renders without AppShell, so there's no 64px topbar to
- * account for — zero out the var so the same `calc(...)` reads 100vh. */
-.player-profile--standalone {
-  --topbar-h: 0px;
+  /* The profile is a normal scrolling document. It used to be a fixed-height
+   * pane (`height: calc(100vh - topbar)` + `overflow: hidden`) wrapped around an
+   * independently-scrolling table — an overview of stacked cards has no use for
+   * that, and it capped the page at one viewport. The full match-history route
+   * still wants the pane, and asks for it explicitly with
+   * `.player-profile--pane` (player-match-history.css). */
 }
 
 /* ============ Hero ============ */
@@ -43,11 +36,27 @@
   background-size: auto, 40px 40px;
 }
 
+/* Identity on the left, standing on the right. Each half is its own
+ * self-fetching card, so they wrap independently on a narrow viewport. */
 .player-profile__hero-row {
   display: grid;
-  grid-template-columns: auto 1fr auto;
+  grid-template-columns: 1fr auto;
   align-items: center;
   gap: clamp(20px, 4vw, 28px);
+}
+
+@media (max-width: 720px) {
+  .player-profile__hero-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* The identity card: avatar + name block. */
+.player-profile__identity {
+  display: flex;
+  align-items: center;
+  gap: clamp(16px, 3vw, 24px);
+  min-width: 0;
 }
 
 .player-profile__avatar-ring {
@@ -93,42 +102,119 @@
   color: var(--ball-500);
 }
 
-.player-profile__sub {
-  color: var(--fg-2);
-  font-family: var(--font-ui);
-  font-weight: 500;
-  font-size: 14px;
-  margin-top: 10px;
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
-.player-profile__sub-flag {
-  font-size: 18px;
-  line-height: 1;
-}
-
-.player-profile__sub-handle {
-  font-family: var(--font-mono);
-  color: var(--fg-3);
-  letter-spacing: 0.04em;
-}
-
-.player-profile__sub-sep {
-  width: 3px;
-  height: 3px;
-  border-radius: 50%;
-  background: var(--ink-500);
-  display: inline-block;
-}
-
-.player-profile__hero-rating {
+/* ============ Standing (rating · Δ · rank · peak · form) ============ */
+.player-profile__standing {
   display: flex;
   flex-direction: column;
   align-items: flex-end;
+  gap: 10px;
+}
+
+@media (max-width: 720px) {
+  .player-profile__standing {
+    align-items: flex-start;
+  }
+}
+
+.player-profile__standing > .player-profile__overline {
+  margin-bottom: 0;
+}
+
+.player-profile__rating-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* The Δ from the player's most recent rated match. Rendered only when there IS
+ * one — a player with no rating history gets no chip, never a "+0". */
+.player-profile__delta {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+}
+
+.player-profile__delta--win {
+  color: var(--serve-500);
+  background: rgba(0, 226, 154, 0.12);
+  border-color: rgba(0, 226, 154, 0.4);
+}
+
+.player-profile__delta--loss {
+  color: var(--loss);
+  background: rgba(255, 77, 109, 0.1);
+  border-color: rgba(255, 77, 109, 0.4);
+}
+
+/* Rank ("#3 of 42"), peak, percentile. Only the lines the player actually has. */
+.player-profile__stats {
+  display: flex;
+  align-items: baseline;
+  gap: 18px;
+  margin: 0;
+  flex-wrap: wrap;
+}
+
+.player-profile__stat {
+  display: flex;
+  align-items: baseline;
   gap: 6px;
+}
+
+.player-profile__stat-k {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+}
+
+.player-profile__stat-v {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--fg-1);
+}
+
+/* Ten results, newest first. (The /players roster shows five of the same wire
+ * field — that slice lives there.) */
+.player-profile__form {
+  display: inline-flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.player-profile__form-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  border: 1px solid transparent;
+}
+
+.player-profile__form-chip--w {
+  color: var(--serve-500);
+  background: rgba(0, 226, 154, 0.12);
+  border-color: rgba(0, 226, 154, 0.35);
+}
+
+.player-profile__form-chip--l {
+  color: var(--loss);
+  background: rgba(255, 77, 109, 0.1);
+  border-color: rgba(255, 77, 109, 0.3);
 }
 
 .player-profile__hero-rating-chip {
@@ -145,17 +231,24 @@
   background: rgba(255, 122, 26, 0.06);
 }
 
-.player-profile__hero-rating-meta {
+/* A player who has never finished a rated match reads "Unrated" in the same
+ * slot — a word, not a number, so it wears the muted tone rather than the
+ * ball-orange rating chrome. */
+.player-profile__hero-rating-chip--unrated {
   font-family: var(--font-ui);
-  font-size: 12px;
-  font-weight: 500;
+  font-size: clamp(18px, 2.5vw, 24px);
+  font-weight: 600;
+  letter-spacing: 0.04em;
   color: var(--fg-3);
-  margin-top: 2px;
+  border-color: var(--border-subtle);
+  background: transparent;
 }
 
-.player-profile__hero-rating-meta-mono {
-  font-family: var(--font-mono);
-  font-variant-numeric: tabular-nums;
+.player-profile__member-since {
+  margin: 10px 0 0;
+  font-family: var(--font-ui);
+  font-size: 14px;
+  font-weight: 500;
   color: var(--fg-2);
 }
 
@@ -194,39 +287,45 @@
   animation: player-profile-shimmer 1.4s ease-in-out infinite;
 }
 
+.player-profile__stat-skeleton {
+  display: block;
+  width: 76px;
+  height: 14px;
+  border-radius: 4px;
+  background: var(--bg-raised);
+  animation: player-profile-shimmer 1.4s ease-in-out infinite;
+}
+
+.player-profile__form-chip--skeleton {
+  background: var(--bg-raised);
+  border-color: var(--bg-raised);
+  animation: player-profile-shimmer 1.4s ease-in-out infinite;
+}
+
 @keyframes player-profile-shimmer {
   0%, 100% { opacity: 0.45; }
   50% { opacity: 0.75; }
 }
 
-/* ----- Hero W-L stats line ----- */
-.player-profile__sub-record {
-  font-family: var(--font-ui);
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--fg-1);
-  display: inline-flex;
-  align-items: baseline;
-  gap: 2px;
-}
-
-.player-profile__sub-record-mono {
-  font-family: var(--font-mono);
-  font-variant-numeric: tabular-nums;
-}
-
-/* Loading variant of the hero. */
-.player-profile__name--loading {
-  color: var(--fg-3);
-  letter-spacing: 0.04em;
-  font-size: clamp(28px, 4vw, 36px);
-  font-family: var(--font-mono);
-  text-transform: none;
-}
+/* The hero's W–L line is gone: the record belongs to the Career card, which
+ * lands with the career aggregate (slice 4). The hero says where a player
+ * *stands* — rating, rank, peak, form — not what their lifetime record is. */
 
 /* ============ Body / matches ============ */
 /* No padding — table.matches takes the full width like /matches and
- * /players. Section heading sits in its own padded row above. */
+ * /players. Section heading sits in its own padded row above.
+ *
+ * ONE COLUMN by default: the cards stack, full-bleed, in the order the
+ * composition root hands them over — which is viewer-dependent (ADR-0915, and
+ * `profile-order.ts`). That order is DOM order and not a CSS `order:`, so on a
+ * phone what you read, what you tab through and what a screen reader announces
+ * are the same sequence.
+ *
+ * The desktop grid below is layered on top of this as a `min-width` override, so
+ * the phone stack is what you get by default and by fallback — and the DOM stays
+ * in the phone's reading order at *every* width. See the grid's own comment for
+ * why the columns are painted with explicit placement rather than by reordering
+ * the DOM. */
 .player-profile__body {
   width: 100%;
   box-sizing: border-box;
@@ -243,6 +342,119 @@
   flex-direction: column;
   flex: 1;
   min-height: 0;
+}
+
+/* ============ Desktop: the mockup's two-column grid ============ */
+/* Wide (1.72fr) primary column: the rating chart, then recent matches.
+ * Narrow (1fr) secondary column: career, confidence, leagues, head-to-head.
+ *
+ * The DOM order is NOT this order — it is the phone's, and it is
+ * viewer-dependent (`profile-order.ts`): on somebody else's profile head-to-head
+ * comes first and the chart fourth. So the two columns are painted with
+ * **explicit grid placement** (`grid-column` + `grid-row` per card), which lets
+ * the eye see two columns while the DOM keeps the one reading/tab/screen-reader
+ * order 9a established. Three consequences worth knowing:
+ *
+ * - The cards are placed by their own root class (`.rating-chart`, `.career-card`
+ *   …), which every card's *skeleton* carries too — so the grid holds its shape
+ *   while the bundle is still in flight instead of assembling itself as cards
+ *   land.
+ * - Auto-placement is useless here: with the interleaved DOM order it walks a
+ *   row cursor forward and leaves a hole at the top of the left column. Every
+ *   card therefore names its row.
+ * - Explicit rows mean the two columns SHARE row bands, and a row is as tall as
+ *   the tallest card in it — so where the slack lands is a *choice*, and a wrong
+ *   one puts a hole in the middle of a column. Recent matches therefore spans
+ *   from row 2 to the end (`2 / -1`) instead of naming one row: the four right-
+ *   hand cards keep a row each and stay tight against one another, while the
+ *   left column's shortfall collects *below* recent matches, at the foot of the
+ *   page. (Row 1 is shared by the chart and career, which are within a few pixels
+ *   of each other, so the columns start on the same line.) `align-items: start`
+ *   keeps every card at its content height rather than stretching it to its band.
+ *
+ * An **unrated** player is the layout's awkward case, and it holds: the confidence
+ * card renders NOTHING (there is no confidence without a rating), so its row
+ * collapses to zero height — but the gutters either side of it do not, so career
+ * and leagues end up two gaps (~40px) apart rather than one. Measured in a
+ * browser: it reads as breathing room, not as a hole, and the explicit rows keep
+ * leagues and head-to-head where they are instead of sliding up into a
+ * chart-shaped gap. The same player's chart collapses to its short "Unrated"
+ * panel, which leaves the left column open under it until recent matches starts
+ * on row 2 — the price of sharing row 1 with career, and the reason the two
+ * columns start on the same line at all.
+ *
+ * The hero above stays full-bleed; it is the body that is centred and capped. */
+@media (min-width: 960px) {
+  .player-profile__body {
+    display: grid;
+    grid-template-columns: 1.72fr 1fr;
+    /* Four explicit rows — one per card in the narrow column. They have to be
+     * explicit for `-1` to mean anything: with an implicit grid, `grid-row: 2 /
+     * -1` resolves its end line back to the start of the (empty) explicit grid
+     * and quietly lands the card in row 1, on top of the chart. */
+    grid-template-rows: repeat(4, auto);
+    gap: 20px;
+    align-items: start;
+    /* `box-sizing: border-box` is inherited from the base rule and must stay: the
+     * body is `width: 100%`, so a content-box here would add the page padding on
+     * top of that 100% and push the narrow column off the right edge. */
+    max-width: 1240px;
+    margin: 0 auto;
+    padding: 24px clamp(20px, 4vw, 40px) 48px;
+  }
+
+  /* A grid item is not a flex item: the `flex: 1` / `flex: 0 0 auto` the cards
+   * carry for the stacked layout stop applying, and each card sizes to its
+   * content. */
+  .player-profile__body > .player-profile__section {
+    min-width: 0;
+  }
+
+  /* The stacked layout separates the cards with a rule under each. In a gapped
+   * grid that rule reads as a line floating in whitespace, so the cards are
+   * separated by the gap alone — including the bottom one, which the stacked
+   * layout special-cases. */
+  .player-profile__body > .player-profile__section,
+  .player-profile__body > .recent-matches {
+    border-bottom: none;
+  }
+
+  /* ----- The wide, primary column ----- */
+  .player-profile__body > .rating-chart {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  /* Rows 2 to the end: recent matches takes the whole band the three lower
+   * right-hand cards occupy, so any slack between the two columns' heights falls
+   * *below* it — at the foot of the page, where an unequal column is just an
+   * unequal column. Pinned to row 2 rather than spanning from row 1, the chart
+   * and career top out on the same line and the two columns start together. */
+  .player-profile__body > .recent-matches {
+    grid-column: 1;
+    grid-row: 2 / -1;
+  }
+
+  /* ----- The narrow, secondary column ----- */
+  .player-profile__body > .career-card {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .player-profile__body > .confidence-card {
+    grid-column: 2;
+    grid-row: 2;
+  }
+
+  .player-profile__body > .leagues-card {
+    grid-column: 2;
+    grid-row: 3;
+  }
+
+  .player-profile__body > .head-to-head {
+    grid-column: 2;
+    grid-row: 4;
+  }
 }
 
 .player-profile__section-header {
@@ -315,13 +527,13 @@
   border-color: rgba(255, 196, 61, 0.4);
 }
 
-/* ----- Per-set score chips ----- */
-.player-profile__sets {
+/* ----- Per-game score chips ----- */
+.player-profile__games {
   display: inline-flex;
   gap: 6px;
 }
 
-.player-profile__set {
+.player-profile__game {
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -331,17 +543,17 @@
   min-width: 34px;
 }
 
-.player-profile__set--won {
+.player-profile__game--won {
   background: rgba(0, 226, 154, 0.1);
   border-color: rgba(0, 226, 154, 0.25);
 }
 
-.player-profile__set--lost {
+.player-profile__game--lost {
   background: rgba(255, 77, 109, 0.06);
   border-color: rgba(255, 77, 109, 0.2);
 }
 
-.player-profile__set-mine {
+.player-profile__game-mine {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   font-size: 14px;
@@ -349,15 +561,15 @@
   line-height: 1.1;
 }
 
-.player-profile__set--won .player-profile__set-mine {
+.player-profile__game--won .player-profile__game-mine {
   color: var(--serve-500);
 }
 
-.player-profile__set--lost .player-profile__set-mine {
+.player-profile__game--lost .player-profile__game-mine {
   color: var(--fg-2);
 }
 
-.player-profile__set-theirs {
+.player-profile__game-theirs {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   font-size: 11px;
@@ -366,11 +578,11 @@
   margin-top: 1px;
 }
 
-.player-profile__set--won .player-profile__set-theirs {
+.player-profile__game--won .player-profile__game-theirs {
   color: var(--fg-3);
 }
 
-.player-profile__set--lost .player-profile__set-theirs {
+.player-profile__game--lost .player-profile__game-theirs {
   color: var(--loss);
 }
 
@@ -511,4 +723,1082 @@
 
 .player-profile .footer-spacer {
   flex: 1;
+}
+
+/* ----- Recent matches card (the profile's six-row overview) -----
+ * The grid is Opponent | Score | Δ | When — there is no result-chip column
+ * (ADR-0915). A match that hasn't finished carries its state on the status dot
+ * and in the score cell, so both have to read at a glance. */
+
+/* Content-sized and separated, exactly like Career, Leagues, confidence and
+ * head-to-head — which it did not have to be while it was always the LAST card
+ * on the page. It is not any more: on somebody else's profile it sits second,
+ * directly under head-to-head (ADR-0915). Inheriting `.player-profile__section`'s
+ * `flex: 1` there would let it swallow the body's spare height as a gap in the
+ * middle of the page, and having no bottom border would glue it to the card
+ * underneath. (The `flex: 1` still belongs to `.player-profile__section` itself:
+ * the full-history route's scrolling pane is built on it.) */
+.recent-matches {
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--border-subtle);
+  /* Lets the card be NARROWER than the table inside it. A flex item's automatic
+   * minimum size is its content's — `min-width: auto` — so without this the card
+   * refuses to shrink below the table's min-content width, the scroll container
+   * below is handed a box wider than the phone, and the `overflow-x` never fires:
+   * the page scrolls sideways instead of the table. This is the usual reason an
+   * overflow wrapper "does nothing". */
+  min-width: 0;
+}
+
+/* Whichever card the viewer-dependent order happens to leave at the bottom, the
+ * page must not end on a rule hanging under the last one. */
+.player-profile__body > .player-profile__section:last-child {
+  border-bottom: none;
+}
+
+/* The table's own scroll container. Four `white-space: nowrap` columns are wider
+ * than a phone, and wide content must scroll INSIDE its box — a profile that
+ * scrolls sideways under the thumb is unusable next to a table, which is where
+ * this app is read. The card sits in a one-column stack on a phone and in the
+ * wide column of the desktop grid; both hand it a definite width, and this keeps
+ * the table inside it either way. */
+.recent-matches__table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+  /* `position: relative` is load-bearing, not habit. An overflow box only clips
+   * the descendants it is a **containing block** for, and the Δ column's
+   * `.sr-only` label is `position: absolute` — so against a static wrapper it
+   * escapes the clip, plants itself at its static position out in the wide table,
+   * and drags the document's scrollWidth out past the viewport on its own. The
+   * page then scrolls sideways even though the table is scrolling correctly
+   * inside its box. Measured: 553px vs a 390px viewport, from a 1px-wide span
+   * nobody can see. */
+  position: relative;
+}
+
+.recent-matches__table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-family: var(--font-ui);
+}
+
+.recent-matches__table thead th {
+  text-align: left;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+  padding: 12px clamp(20px, 5vw, 40px);
+  border-bottom: 1px solid var(--border-subtle);
+  white-space: nowrap;
+  user-select: none;
+}
+
+.recent-matches__table tbody td {
+  padding: 12px clamp(20px, 5vw, 40px);
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: 14px;
+  color: var(--fg-1);
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.recent-matches__row {
+  transition: background 120ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.recent-matches__row:hover {
+  background: var(--bg-hover);
+}
+
+/* The status dot: the only thing left carrying won/lost/live/awaiting once the
+ * result chip is gone. */
+.recent-matches__dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--fg-3);
+}
+
+.recent-matches__dot--won {
+  background: var(--serve-500);
+}
+
+.recent-matches__dot--lost {
+  background: var(--loss);
+}
+
+.recent-matches__dot--awaiting {
+  background: var(--warn);
+}
+
+.recent-matches__dot--live {
+  background: var(--ball-500);
+  animation: recent-matches-pulse 1.6s ease-in-out infinite;
+}
+
+/* Up next: agreed, not started. Hollow — nothing has happened yet. */
+.recent-matches__dot--up_next {
+  background: transparent;
+  border: 1px solid var(--fg-3);
+}
+
+.recent-matches__dot--voided {
+  background: var(--fg-4, var(--fg-3));
+  opacity: 0.6;
+}
+
+@keyframes recent-matches-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .recent-matches__dot--live {
+    animation: none;
+  }
+}
+
+/* "Live" / "Awaiting" / "—" where a scoreline would go. */
+.recent-matches__score-text {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  color: var(--fg-3);
+}
+
+/* The Δ cell for a row that moved no rating. An em dash, never a "+0". */
+.recent-matches__delta-none {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--fg-3);
+}
+
+.recent-matches__opponent--solo {
+  color: var(--fg-3);
+  font-style: italic;
+}
+
+.recent-matches__view-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+  margin: 14px clamp(20px, 5vw, 40px);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--fg-2);
+  text-decoration: none;
+  transition: color 120ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.recent-matches__view-all:hover {
+  color: var(--ball-500);
+}
+
+.recent-matches__empty {
+  padding: 40px clamp(20px, 5vw, 40px);
+  text-align: center;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--fg-2);
+}
+
+.recent-matches__skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0 clamp(20px, 5vw, 40px);
+}
+
+.recent-matches__skeleton-row {
+  height: 44px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: linear-gradient(
+    90deg,
+    var(--bg-hover) 0%,
+    var(--bg-panel) 50%,
+    var(--bg-hover) 100%
+  );
+  opacity: 0.5;
+}
+
+/* ----- Career card (the cross-league lifetime record) -----
+ * A fact about the *person*, not about a ladder (ADR-0915): nothing in here is
+ * league-scoped, so the league switcher must not move any of it.
+ *
+ * Its total reads "47 decided · 2 leagues" — deliberately a *different* number
+ * from the "View all 50 matches" link on the Recent-matches card below it, which
+ * counts the all-inclusive history. The word "decided" is doing load-bearing
+ * work; don't drop it to save space. */
+
+.career-card {
+  /* Unlike the matches section, the card is content-sized — it must not stretch
+   * to eat the page's spare height. */
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--border-subtle);
+  padding-bottom: 24px;
+}
+
+.career-card__total {
+  color: var(--fg-3);
+}
+
+.career-card__body {
+  display: flex;
+  align-items: center;
+  gap: clamp(20px, 4vw, 36px);
+  padding: 0 clamp(20px, 5vw, 40px);
+  flex-wrap: wrap;
+}
+
+/* ----- The win-rate ring ----- */
+.career-card__ring {
+  position: relative;
+  flex: 0 0 auto;
+  width: 116px;
+  height: 116px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.career-card__ring-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  fill: none;
+  stroke-width: 7;
+}
+
+.career-card__ring-track {
+  stroke: var(--bg-raised);
+}
+
+.career-card__ring-arc {
+  stroke: var(--serve-500);
+  stroke-linecap: round;
+  transition: stroke-dashoffset 400ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .career-card__ring-arc {
+    transition: none;
+  }
+}
+
+/* The figure in the middle: "68.6%" — or "—" for a player who has decided
+ * nothing. Never a "0%": that would say they lose every match they play. */
+.career-card__ring-figure {
+  font-family: var(--font-display);
+  font-size: 26px;
+  line-height: 1;
+  color: var(--fg-1);
+  letter-spacing: 0.01em;
+}
+
+.career-card__ring-caption {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+  margin-top: 4px;
+}
+
+.career-card__ring--skeleton {
+  border-radius: 50%;
+  background: var(--bg-raised);
+  animation: player-profile-shimmer 1.4s ease-in-out infinite;
+}
+
+/* ----- Record, streak pill, tiles ----- */
+.career-card__figures {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  flex: 1;
+}
+
+.career-card__record {
+  font-family: var(--font-display);
+  font-size: 28px;
+  line-height: 1;
+  color: var(--fg-1);
+  letter-spacing: 0.02em;
+  margin: 0;
+}
+
+.career-card__streak {
+  align-self: flex-start;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 4px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border-subtle);
+  color: var(--fg-2);
+}
+
+.career-card__streak--win {
+  color: var(--serve-500);
+  border-color: color-mix(in srgb, var(--serve-500) 40%, transparent);
+  background: color-mix(in srgb, var(--serve-500) 10%, transparent);
+}
+
+.career-card__streak--loss {
+  color: var(--loss);
+  border-color: color-mix(in srgb, var(--loss) 40%, transparent);
+  background: color-mix(in srgb, var(--loss) 10%, transparent);
+}
+
+/* A player with no decided match has no streak at all — the pill says so
+ * rather than showing a zero. */
+.career-card__streak--none {
+  color: var(--fg-3);
+}
+
+.career-card__tiles {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+.career-card__tile {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 108px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-panel);
+}
+
+.career-card__tile-k {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+}
+
+.career-card__tile-v {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--fg-1);
+}
+
+.career-card__tile--skeleton {
+  height: 52px;
+  background: var(--bg-raised);
+  animation: player-profile-shimmer 1.4s ease-in-out infinite;
+}
+
+.career-card__skeleton-line {
+  display: block;
+  width: 140px;
+  height: 20px;
+  border-radius: 4px;
+  background: var(--bg-raised);
+  animation: player-profile-shimmer 1.4s ease-in-out infinite;
+}
+
+.career-card__skeleton-line--pill {
+  width: 108px;
+  height: 14px;
+  border-radius: 999px;
+}
+
+/* ============ Rating confidence card ============ */
+/* How settled the rating is, and the range the player might really be in
+ * (CONTEXT.md, "Rating confidence"). The interval sits on the face; RD and
+ * volatility hide in the drawer. There is no percentage — no bar, no meter, no
+ * 0–100 anything — because that number does not exist. Don't add one. */
+.confidence-card {
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--border-subtle);
+  padding-bottom: 24px;
+}
+
+.confidence-card__body {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 0 clamp(20px, 5vw, 40px);
+}
+
+/* The status dot + the level, in words. */
+.confidence-card__level {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-display);
+  font-size: 20px;
+  line-height: 1;
+  color: var(--fg-1);
+}
+
+.confidence-card__dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+
+/* Warm to cool as the rating settles down. */
+.confidence-card__dot--provisional {
+  background: var(--warn);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 22%, transparent);
+}
+
+.confidence-card__dot--firming_up {
+  background: var(--ball-500);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ball-500) 22%, transparent);
+}
+
+.confidence-card__dot--settled {
+  background: var(--serve-500);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--serve-500) 22%, transparent);
+}
+
+.confidence-card__explanation {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--fg-3);
+  max-width: 52ch;
+}
+
+/* The 95% interval — the card's one rigorous statement, and the reason it is
+ * worth trusting. It belongs here, in front of the reader, never in the drawer. */
+.confidence-card__interval {
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--fg-2);
+}
+
+.confidence-card__bound {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--fg-1);
+}
+
+/* The Glicko-2 internals, collapsed: they are the machinery BEHIND confidence,
+ * not names for it. */
+.confidence-card__drawer {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--fg-3);
+}
+
+.confidence-card__drawer-summary {
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+}
+
+.confidence-card__drawer-summary:hover {
+  color: var(--fg-2);
+}
+
+.confidence-card__details {
+  display: flex;
+  gap: 24px;
+  margin-top: 10px;
+}
+
+.confidence-card__detail-label {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+}
+
+.confidence-card__detail-value {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  color: var(--fg-1);
+  margin-top: 4px;
+}
+
+.confidence-card__skeleton-line {
+  display: block;
+  width: 320px;
+  max-width: 100%;
+  height: 14px;
+  border-radius: 4px;
+  background: var(--bg-raised);
+  animation: player-profile-shimmer 1.4s ease-in-out infinite;
+}
+
+.confidence-card__skeleton-line--level {
+  width: 128px;
+  height: 20px;
+}
+
+.confidence-card__skeleton-line--interval {
+  width: 260px;
+}
+
+/* ============ Leagues card (the league switcher) ============
+ *
+ * Not a passive list: every row is a link that rebinds the rating half of the
+ * page to that ladder (ADR-0915). So the rows must *look* pressable — hover and
+ * focus states, a cursor — and the selected one must be unmistakable, because it
+ * is the answer to "which league are these numbers about?" that the hero, the
+ * rating panel and the confidence card all depend on. */
+
+.leagues-card {
+  /* Content-sized, like the Career card — it must not stretch to eat the page's
+   * spare height. */
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--border-subtle);
+  padding-bottom: 24px;
+}
+
+.leagues-card__rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 clamp(20px, 5vw, 40px);
+  margin: 0;
+  list-style: none;
+}
+
+.leagues-card__row-item {
+  display: block;
+}
+
+.leagues-card__row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 12px 16px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  background: var(--bg-raised);
+  color: var(--fg-1);
+  text-decoration: none;
+  transition:
+    border-color 120ms ease,
+    background 120ms ease;
+}
+
+.leagues-card__row:hover {
+  border-color: color-mix(in srgb, var(--ball-500) 45%, transparent);
+  background: color-mix(in srgb, var(--ball-500) 6%, var(--bg-raised));
+}
+
+.leagues-card__row:focus-visible {
+  outline: 2px solid var(--ball-500);
+  outline-offset: 2px;
+}
+
+/* The selected ladder — the one every rating on this page is about. Tinted AND
+ * outlined, so it doesn't rely on a single cue. */
+.leagues-card__row--selected {
+  border-color: var(--ball-500);
+  background: color-mix(in srgb, var(--ball-500) 12%, var(--bg-raised));
+}
+
+.leagues-card__dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  background: var(--fg-3);
+}
+
+.leagues-card__row--selected .leagues-card__dot {
+  background: var(--ball-500);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ball-500) 22%, transparent);
+}
+
+/* A league name is data, so it can be long — and a row that cannot shrink around
+ * it drags the DEFAULT badge and the rating off the side of the phone, taking the
+ * page with them. It ellipsises instead; the rating on the trailing edge is the
+ * one thing on the row that must never be pushed out of sight. */
+.leagues-card__name {
+  font-size: 15px;
+  font-weight: 600;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.leagues-card__badge {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  padding: 2px 8px;
+  flex: 0 0 auto;
+}
+
+/* The player's rating ON this ladder — pushed to the trailing edge, mono, so the
+ * numbers line up down the column and read as comparable. An em dash sits here
+ * when they hold no rating on this league. */
+.leagues-card__rating {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 15px;
+  color: var(--fg-1);
+  flex: 0 0 auto;
+  padding-left: 4px;
+}
+
+.leagues-card__row--skeleton {
+  display: block;
+  height: 45px;
+  border-color: transparent;
+  animation: player-profile-shimmer 1.4s ease-in-out infinite;
+}
+
+/* ============ Head-to-head ============ */
+/* The page's most viewer-aware card (ADR-0915), and the one that is genuinely two
+ * cards: on somebody else's profile it LEADS with the viewer's own record against
+ * them — a head-to-head is only meaningful read from a stated side (CONTEXT.md) —
+ * with the player's frequent opponents demoted below it. On your own profile there
+ * is no record and no CTA (you cannot play yourself), so only the list remains. */
+.head-to-head {
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--border-subtle);
+  padding-bottom: 24px;
+}
+
+.head-to-head__body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 0 clamp(20px, 5vw, 40px);
+}
+
+/* ----- You vs them: the lead ----- */
+.head-to-head__versus {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* "You're 3–2 against <name>" — and the name is a single unbroken token the user
+ * chose, which on a phone can be longer than the line. `anywhere` lets it break
+ * mid-token rather than run off the side of the card. */
+.head-to-head__versus-line {
+  font-family: var(--font-display);
+  font-size: 20px;
+  line-height: 1.3;
+  color: var(--fg-1);
+  overflow-wrap: anywhere;
+}
+
+/* The two numbers that are the entire point of the card. Mono so they read as a
+ * record and not as prose, and tinted so the eye lands on them first. */
+.head-to-head__versus-record {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  color: var(--ball-500);
+}
+
+.head-to-head__versus-name {
+  font-weight: 600;
+}
+
+.head-to-head__versus-meta {
+  font-size: 13px;
+  color: var(--fg-3);
+}
+
+.head-to-head__dot {
+  color: var(--fg-3);
+  opacity: 0.6;
+}
+
+/* ----- Never met: the invitation ----- */
+/* A guest — anyone who lands on a shared profile link — is ALWAYS in this state,
+ * so it is the first thing a brand-new visitor sees and the app's best conversion
+ * moment. Quiet copy, one loud action. */
+.head-to-head__invite {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--ball-500) 6%, var(--bg-raised));
+}
+
+.head-to-head__invite-copy {
+  font-size: 15px;
+  color: var(--fg-1);
+}
+
+.head-to-head__cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  background: var(--ball-500);
+  color: var(--bg-base);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  transition: filter 120ms ease;
+}
+
+.head-to-head__cta:hover {
+  filter: brightness(1.08);
+}
+
+.head-to-head__cta:focus-visible {
+  outline: 2px solid var(--ball-500);
+  outline-offset: 2px;
+}
+
+/* ----- Their frequent opponents: the secondary context ----- */
+.head-to-head__frequent {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.head-to-head__frequent-title {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+}
+
+.head-to-head__rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.head-to-head__row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0;
+}
+
+/* `flex: 0 1 auto`, not `0 0 auto`: a name is user-supplied and can be far longer
+ * than the phone is wide, and a row that refuses to shrink around it pushes the
+ * whole page sideways (the same class of bug as the un-wrapped matches table
+ * above). It shrinks to the 120px floor — which still lines the bars up for the
+ * ordinary short name — and the name itself ellipsises rather than the profile
+ * scrolling. */
+.head-to-head__opponent {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--fg-1);
+  flex: 0 1 auto;
+  min-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The record said again, geometrically: how much of this rivalry the player has
+ * won. Decorative — the record beside it is what a screen reader reads. */
+.head-to-head__bar {
+  flex: 1 1 auto;
+  height: 6px;
+  min-width: 40px;
+  border-radius: 999px;
+  background: var(--bg-raised);
+  overflow: hidden;
+}
+
+.head-to-head__bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--ball-500);
+}
+
+.head-to-head__record {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  color: var(--fg-1);
+  flex: 0 0 auto;
+}
+
+.head-to-head__meetings {
+  font-size: 12px;
+  color: var(--fg-3);
+  flex: 0 0 auto;
+  min-width: 78px;
+  text-align: right;
+}
+
+.head-to-head__empty {
+  font-size: 14px;
+  color: var(--fg-3);
+}
+
+/* ----- Skeleton ----- */
+.head-to-head__skeleton-line {
+  display: block;
+  height: 14px;
+  width: 100%;
+  border-radius: 6px;
+  background: var(--bg-raised);
+  animation: player-profile-shimmer 1.4s ease-in-out infinite;
+}
+
+.head-to-head__skeleton-line--lead {
+  height: 22px;
+  width: 62%;
+}
+
+/* ============ Rating chart (ADR-0915) ============
+ * The one card on the profile with its own query, its own error state — and the
+ * only drawing. It scales by `viewBox` alone: no measured widths, no resize
+ * observer, so the same 600x180 line is a full-width panel on a desktop and
+ * survives a 390px phone. */
+.rating-chart {
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--border-subtle);
+  padding-bottom: 20px;
+}
+
+/* The heading, the change chip and the range tabs share one row — until they
+ * can't. `.player-profile__section-header` is a nowrap flex row, so without this
+ * the tabs (which wrap internally, but only within whatever width is left over)
+ * squeeze the heading rather than dropping below it. On a phone they take their
+ * own line. */
+.rating-chart__header {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  row-gap: 10px;
+}
+
+/* The signed change — and there is deliberately no "+0" variant, because that
+ * chip does not exist (ADR-0915): an empty window renders no chip at all. */
+.rating-chart__chip {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 2px 8px;
+  border-radius: 999px;
+}
+
+.rating-chart__chip--up {
+  color: var(--win);
+  background: color-mix(in srgb, var(--win) 14%, transparent);
+}
+
+.rating-chart__chip--down {
+  color: var(--loss);
+  background: color-mix(in srgb, var(--loss) 14%, transparent);
+}
+
+/* The range tabs sit at the right-hand end of the header row, and wrap under it
+ * on a narrow viewport rather than squeezing the heading out. */
+.rating-chart__tabs {
+  display: flex;
+  gap: 4px;
+  margin-left: auto;
+  flex-wrap: wrap;
+}
+
+.rating-chart__tab {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border-subtle);
+  text-decoration: none;
+  transition:
+    color 120ms ease,
+    background 120ms ease,
+    border-color 120ms ease;
+}
+
+.rating-chart__tab:hover {
+  color: var(--fg-1);
+  border-color: var(--ball-500);
+}
+
+.rating-chart__tab--selected {
+  color: var(--bg-app);
+  background: var(--ball-500);
+  border-color: var(--ball-500);
+}
+
+.rating-chart__summary {
+  padding: 0 clamp(20px, 5vw, 40px);
+  margin: 0 0 10px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--fg-3);
+  min-height: 20px;
+}
+
+.rating-chart__plot {
+  padding: 0 clamp(20px, 5vw, 40px);
+}
+
+.rating-chart__canvas {
+  transition: opacity 160ms ease;
+}
+
+/* A range still loading: the previous line stays, dimmed. It is the truth about
+ * the *previous* window — busy, not gone. */
+.rating-chart__canvas--loading {
+  opacity: 0.45;
+}
+
+.rating-chart__svg {
+  width: 100%;
+  height: auto;
+  display: block;
+  overflow: visible;
+}
+
+.rating-chart__gridline {
+  stroke: var(--border-subtle);
+  stroke-width: 1;
+  stroke-dasharray: 3 5;
+}
+
+.rating-chart__y-label,
+.rating-chart__x-label {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  fill: var(--fg-3);
+}
+
+/* On a phone the SVG is the same 600×180 viewBox squeezed into ~350 CSS pixels,
+ * so its 9-unit type lands at about 5px — unreadable, and the gridlines behind it
+ * are just noise at that size. Drop the scaffolding and keep the line, the peak
+ * and the dot: the sentence above the chart ("Up 127 over the last 90 days") is
+ * already the number a phone reader actually wants, and it is what a screen reader
+ * gets in place of the drawing either way.
+ *
+ * A viewport query, not a container query: the SVG has no width of its own to
+ * query — it fills whatever it is given, which is the page. */
+@media (max-width: 480px) {
+  .rating-chart__gridline,
+  .rating-chart__y-label,
+  .rating-chart__x-label {
+    display: none;
+  }
+}
+
+.rating-chart__line {
+  fill: none;
+  stroke: var(--ball-500);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.rating-chart__area {
+  stroke: none;
+}
+
+.rating-chart__peak-dot {
+  fill: var(--bg-app);
+  stroke: var(--fg-2);
+  stroke-width: 1.5;
+}
+
+.rating-chart__peak-label {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 600;
+  fill: var(--fg-2);
+}
+
+.rating-chart__current-dot {
+  fill: var(--ball-500);
+  stroke: var(--bg-app);
+  stroke-width: 2;
+}
+
+/* The card's OWN error, in place of the SVG (ADR-0915). A failed range flip is
+ * not a failed page: the hero, career, confidence, leagues, head-to-head and
+ * recent matches stay exactly where they are. */
+.rating-chart__error {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 24px 0;
+}
+
+.rating-chart__error-title {
+  margin: 0;
+  font-size: 14px;
+  color: var(--fg-2);
+}
+
+.rating-chart__pending,
+.rating-chart__skeleton-plot {
+  display: block;
+  width: 100%;
+  height: 120px;
+  border-radius: 10px;
+  background: var(--bg-raised);
+  animation: player-profile-shimmer 1.4s ease-in-out infinite;
+}
+
+.rating-chart__pending-bar {
+  display: block;
+}
+
+/* No rating, no chart (CONTEXT.md, "Rating"): the slot says what would end that,
+ * rather than drawing an axis with nothing on it. */
+.rating-chart__unrated {
+  padding: 8px clamp(20px, 5vw, 40px) 4px;
+}
+
+/* No `…__unrated-title` rule, and no element for one: the panel is deliberately a
+ * single sentence. The hero is the page's one canonical "Unrated" — see
+ * `unrated-panel.tsx`. */
+.rating-chart__unrated-body {
+  margin: 0;
+  font-size: 13px;
+  color: var(--fg-3);
 }

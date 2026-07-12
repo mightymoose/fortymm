@@ -581,10 +581,115 @@ export interface paths {
         };
         /**
          * Get Player
-         * @description Authed profile bundle for `/players/$userId` — hero + first page of
-         *     matches in one response.
+         * @description Authed profile bundle for `/players/$userId` — the overview in one
+         *     response: hero + the six most recent matches + the all-inclusive
+         *     `match_total` behind the "View all N matches" link. The full paginated
+         *     history is served by `/v1/players/{id}/matches`.
+         *
+         *     `league_id` selects the ladder the RATING HALF of the page is about,
+         *     defaulting to the default league when it is omitted — and also when it names
+         *     a league that does not exist. The league is a LENS on this player, not the
+         *     resource being addressed (ADR-0915): a stale bookmark to a deleted ladder
+         *     degrades to the default one rather than 404ing a player who is perfectly
+         *     fine. `player_id` is the resource, and an unknown one is still a 404.
+         *     Everything about where this player stands follows the league: `rating` and
+         *     `rank` out of `rank_of` (so it reads "#3 of 42", never a naked "#3"), their
+         *     all-time `peak`, the `rating_delta` their most recent rated match moved, their
+         *     recent `form`, a `percentile` (only once the league is large enough for it to
+         *     mean anything), and `confidence`. An unrated player has none of them.
+         *
+         *     `confidence` says how settled that rating is on this ladder: a `level`
+         *     (`provisional` / `firming_up` / `settled`), the 95% `interval` around the
+         *     rating ("somewhere between 1551 and 1823"), and the Glicko-2 `deviation` and
+         *     `volatility` behind them. It is `null` — the card does not render — for an
+         *     unrated player, and for one whose rating was supplied externally by a manual
+         *     strategy, which carries no deviation to be confident about.
+         *
+         *     `leagues` lists every league this player belongs to with their rating on each
+         *     — the Leagues card, which is the page's league *switcher*. It is the same
+         *     list whichever league was asked for; the client marks the selected row (and
+         *     falls back to the one flagged `is_default` when no `league_id` was named).
+         *
+         *     `career` is the exception: it is CROSS-LEAGUE and ignores `league_id`
+         *     entirely. Rating, rank, peak, form and percentile are facts about a *ladder*;
+         *     a player's lifetime record — decided matches, W-L, win rate, games-won share,
+         *     current and best streak — is a fact about the *person* (ADR-0915). Ask for
+         *     the same player in two different leagues and only the rating half changes.
+         *     `career.decided` counts decided matches alone, so it is smaller than
+         *     `match_total` whenever one of their matches is still in play.
+         *
+         *     `head_to_head` is VIEWER-AWARE — the one block here that depends on who is
+         *     asking (ADR-0915), so two callers get different bytes for the same profile
+         *     and no cache in front of this endpoint may share them. `versus_viewer` is the
+         *     CALLER's own record against this player, written from the caller's side ("you
+         *     are 1-4 against them", not "they are 4-1 against you"): `null` when the caller
+         *     *is* this player, and present with zero meetings — never `null`, never an
+         *     error — when they have simply never played, which is what a brand-new guest
+         *     always sees. `frequent_opponents` is this player's most-met opponents, read
+         *     from *their* side. A meeting is a *decided* match between two named players,
+         *     rated or not, in any league: a match still in play is not a record, and a solo
+         *     "No opponent" match can never be one.
+         *
+         *     `rating_history` is the rating chart's data for the calendar window named by
+         *     `range` (`30d` / `90d` / `1y`, defaulting to `90d`) — the same shape
+         *     `GET /v1/players/{id}/rating-history` returns, embedded so the profile paints
+         *     its chart without a second request. The client seeds that endpoint's cache from
+         *     this block and calls it only when the user changes range (ADR-0915). Note the
+         *     `anchor` inside it is a point from OUTSIDE the window, on purpose.
          */
         get: operations["get_player_v1_players__player_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/players/{player_id}/rating-history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Player Rating History
+         * @description The player's rating over a CALENDAR window — the profile's rating chart
+         *     (ADR-0915). `range` is `30d`, `90d` (the default) or `1y`; `league_id` names
+         *     the ladder, defaulting to the default league, because a rating is a fact about
+         *     one ladder and never about a player "in general". As on the profile bundle it
+         *     is a lens and not the resource, so a `league_id` naming no league degrades to
+         *     the default ladder rather than 404ing; an unknown `player_id` is still a 404.
+         *
+         *     The chart is drawn from three things:
+         *
+         *     * `anchor` — the player's rating **as of the window start**, read from their
+         *       last rating change *at or before* it. It is therefore A POINT FROM OUTSIDE
+         *       THE REQUESTED WINDOW, with an `at` older than the window's left edge, and
+         *       that is deliberate: rating history exists only where matches completed, so
+         *       the window's left edge is almost never a match. Without it, a player whose
+         *       first match in the window landed on day forty would be told their ninety-day
+         *       change was only the movement since day forty. `null` when they held no rating
+         *       at that instant — there is nothing to carry in — and the line then starts at
+         *       the first in-window point.
+         *     * `points` — every rating change inside the window, oldest first. A **voided**
+         *       match is absent, not zeroed: voiding deletes its rating-history rows, so it
+         *       leaves the rating timeline entirely (CONTEXT.md, "Voided match") and the
+         *       chart can change shape retroactively. An EMPTY list is a first-class answer,
+         *       never an error: a rated player with nothing in the last ninety days gets
+         *       their anchor and no points, and the chart draws a flat line at their current
+         *       rating.
+         *     * `change` — the net movement across the window, measured from the `anchor`
+         *       (or, with no anchor, from the first in-window point) to the latest one.
+         *       `null`, never `+0`, for an empty window: nothing was played, so there is no
+         *       delta to report.
+         *
+         *     `peak` is the highest point WITHIN THE WINDOW, and is a different number from
+         *     the profile's `peak`, which is the player's all-time high on the ladder. Do not
+         *     read either for the other.
+         */
+        get: operations["get_player_rating_history_v1_players__player_id__rating_history_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -602,11 +707,15 @@ export interface paths {
         };
         /**
          * List Player Matches
-         * @description Paginated per-player match history backing page 2+ of the authed
-         *     profile page (`/players/$userId`); page 1 ships inline in the
-         *     `/v1/players/{id}` bundle. Newest-first by ``created_at``. Sets are
-         *     projected from the player's perspective so the FE renders them without
-         *     flipping sides.
+         * @description Paginated per-player match history backing the full-history route
+         *     (`/players/$userId/matches`), 25 to a page. The profile overview embeds only
+         *     the six most recent inline (`GET /v1/players/{id}`) and links here for the
+         *     rest.
+         *
+         *     The history is all-inclusive (ADR-0008): every match the player is a side
+         *     of, any status, rated or not, solo "No opponent" matches included.
+         *     Newest-first by ``created_at``. Games are projected from the player's
+         *     perspective so the FE renders them without flipping sides.
          */
         get: operations["list_player_matches_v1_players__player_id__matches_get"];
         put?: never;
@@ -1183,7 +1292,7 @@ export interface components {
             /** Current */
             current: number;
             /** Delta */
-            delta: number;
+            delta: number | null;
             /** Peak */
             peak: number;
             /** Percentile */
@@ -1279,6 +1388,56 @@ export interface components {
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
+        };
+        /**
+         * HeadToHeadOpponent
+         * @description The other player in a head-to-head — a *named* player, always.
+         *
+         *     Both fields are required, unlike `PlayerMatchOpponent`, whose `id` and
+         *     `username` are nullable to model the player-less sentinel side of a solo
+         *     match. That difference is the point: a solo match has nobody on the other
+         *     side, so it can never be a **meeting** (CONTEXT.md), and a head-to-head
+         *     against nobody is not a state this schema can represent.
+         */
+        HeadToHeadOpponent: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Username */
+            username: string;
+        };
+        /**
+         * HeadToHeadRecord
+         * @description One player's record of **meetings** against one named opponent, read
+         *     from a stated side (CONTEXT.md, "Head-to-head"): `wins` and `losses` are the
+         *     subject's, never the opponent's. `A 4-1 B` and `B 1-4 A` are the same record
+         *     said two ways, so every consumer of this model has to know whose side it
+         *     speaks for — the field it hangs off says which (`versus_viewer` is the
+         *     *caller's*; `frequent_opponents` is the *profiled player's*).
+         */
+        HeadToHeadRecord: {
+            opponent: components["schemas"]["HeadToHeadOpponent"];
+            /**
+             * Wins
+             * @default 0
+             */
+            wins: number;
+            /**
+             * Losses
+             * @default 0
+             */
+            losses: number;
+            /**
+             * Meetings
+             * @description How many times the pair have played. DERIVED, not stored: a meeting
+             *     is a *decided* match (CONTEXT.md), and a decided match is a win for one
+             *     side and a loss for the other — so `meetings` is exactly
+             *     `wins + losses`, and carrying it as its own field would let the two
+             *     drift (api/CLAUDE.md, "don't carry a field and its own derivation").
+             */
+            readonly meetings: number;
         };
         /** HealthResponse */
         HealthResponse: {
@@ -2006,15 +2165,45 @@ export interface components {
             description?: string | null;
         };
         /**
-         * PlayerDetail
-         * @description Profile-page bundle: the hero (`PlayerSummary` fields) plus the
-         *     first page of matches inline. Saves a round trip on initial load —
-         *     `GET /v1/players/{id}` returns this so the profile page paints with one
-         *     request.
+         * PlayerCareer
+         * @description A player's lifetime record ACROSS EVERY LEAGUE they play in (CONTEXT.md,
+         *     "Career"; ADR-0915).
          *
-         *     Pagination beyond page 1 still hits `GET /v1/players/{id}/matches`
-         *     directly; the FE seeds page 1's cache from this `matches` field via
-         *     TanStack Query's `initialData`.
+         *     Career is a fact about the *person*. It deliberately ignores the league the
+         *     profile was requested for — unlike `rating`, `rank`, `peak` and `percentile`,
+         *     which are facts about one *ladder*. Ask for the same player in two different
+         *     leagues and the ratings differ while this block is identical.
+         */
+        PlayerCareer: {
+            /** Decided */
+            decided: number;
+            /** Wins */
+            wins: number;
+            /** Losses */
+            losses: number;
+            /** Win Rate */
+            win_rate?: number | null;
+            /** Games Won Pct */
+            games_won_pct?: number | null;
+            current_streak?: components["schemas"]["PlayerStreak"] | null;
+            best_streak?: components["schemas"]["PlayerStreak"] | null;
+            /** League Count */
+            league_count: number;
+        };
+        /**
+         * PlayerDetail
+         * @description Profile-page bundle: the hero (`PlayerSummary` fields + the standing
+         *     block below) plus the player's six most recent matches inline. Saves a round
+         *     trip on initial load — `GET /v1/players/{id}` returns this so the profile
+         *     overview paints with one request.
+         *
+         *     The profile is an *overview*: it shows a Recent-matches card, not the whole
+         *     table. The full paginated history lives at its own route, backed by
+         *     `GET /v1/players/{id}/matches` (ADR-0915).
+         *
+         *     The standing fields (`peak`, `rank_of`, `percentile`, `rating_delta`) are
+         *     league-scoped, like `rating` and `rank` — and profile-only: they deliberately
+         *     do not ride on `PlayerSummary`, which the roster also serializes.
          */
         PlayerDetail: {
             /**
@@ -2043,7 +2232,72 @@ export interface components {
             form: string;
             /** Rank */
             rank?: number | null;
+            /**
+             * Member Since
+             * Format: date-time
+             */
+            member_since: string;
+            rating_delta?: components["schemas"]["RatingChange"] | null;
+            /** Peak */
+            peak?: number | null;
+            /** Rank Of */
+            rank_of?: number | null;
+            confidence?: components["schemas"]["RatingConfidence"] | null;
+            /** Percentile */
+            percentile?: number | null;
             matches: components["schemas"]["PlayerMatchListResponse"];
+            /** Match Total */
+            match_total: number;
+            career: components["schemas"]["PlayerCareer"];
+            /** Leagues */
+            leagues: components["schemas"]["PlayerLeague"][];
+            head_to_head: components["schemas"]["PlayerHeadToHead"];
+            rating_history: components["schemas"]["RatingHistoryWindow"];
+        };
+        /**
+         * PlayerHeadToHead
+         * @description The profile's head-to-head card, VIEWER-AWARE (ADR-0915): the same player
+         *     returns a different block to two different callers.
+         *
+         *     A **meeting** is a *decided* match between two named players — rated or not,
+         *     in any league (CONTEXT.md). A match still in play is not a record, and a
+         *     voided one has stopped being one.
+         */
+        PlayerHeadToHead: {
+            versus_viewer?: components["schemas"]["ViewerHeadToHead"] | null;
+            /**
+             * Frequent Opponents
+             * @default []
+             */
+            frequent_opponents: components["schemas"]["HeadToHeadRecord"][];
+        };
+        /**
+         * PlayerLeague
+         * @description One league this player belongs to, and the rating they carry ON IT — a row
+         *     of the profile's Leagues card, which is also the page's league switcher
+         *     (ADR-0915).
+         *
+         *     A player's rating is a fact about a *ladder*: there is no such thing as their
+         *     rating "in general" (CONTEXT.md, "League"). So the same player may read 1687
+         *     here and 1642 in the next row, and the card is what makes that legible.
+         *
+         *     The list itself is NOT scoped to the requested league — it is the same on
+         *     every request for this player. Which row is *selected* is derived by the
+         *     client from the league it asked for, and `is_default` is what lets it derive
+         *     that when it asked for none (CONTEXT.md, "Default league").
+         */
+        PlayerLeague: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Name */
+            name: string;
+            /** Is Default */
+            is_default: boolean;
+            /** Rating */
+            rating?: number | null;
         };
         /**
          * PlayerListResponse
@@ -2058,6 +2312,16 @@ export interface components {
             page_size: number;
             /** Total */
             total: number;
+        };
+        /**
+         * PlayerMatchGame
+         * @description A single game's score from the headline player's perspective.
+         */
+        PlayerMatchGame: {
+            /** Mine */
+            mine: number;
+            /** Theirs */
+            theirs: number;
         };
         /**
          * PlayerMatchListResponse
@@ -2104,8 +2368,8 @@ export interface components {
              */
             created_at: string;
             opponent: components["schemas"]["PlayerMatchOpponent"];
-            /** Sets */
-            sets: components["schemas"]["PlayerMatchSet"][];
+            /** Games */
+            games: components["schemas"]["PlayerMatchGame"][];
             /** Result */
             result?: ("W" | "L") | null;
             /**
@@ -2113,16 +2377,7 @@ export interface components {
              * @default false
              */
             awaiting_acceptance: boolean;
-        };
-        /**
-         * PlayerMatchSet
-         * @description A single game's score from the headline player's perspective.
-         */
-        PlayerMatchSet: {
-            /** Mine */
-            mine: number;
-            /** Theirs */
-            theirs: number;
+            rating_change?: components["schemas"]["RatingChange"] | null;
         };
         /**
          * PlayerRead
@@ -2145,11 +2400,30 @@ export interface components {
             rating?: number | null;
         };
         /**
+         * PlayerStreak
+         * @description A run of consecutive same-outcome decided matches: ``n`` wins (``W``) or
+         *     ``n`` losses (``L``). Never zero-length — the absence of a streak is the
+         *     field being ``null``, not ``n=0`` (CONTEXT.md, "Streak").
+         *
+         *     Structurally identical to `DashboardStreak`, deliberately: merging them
+         *     would rename a component the dashboard's generated clients already bind to,
+         *     for no gain to either surface.
+         */
+        PlayerStreak: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "W" | "L";
+            /** N */
+            n: number;
+        };
+        /**
          * PlayerSummary
          * @description Pre-shaped for the `/players` list and the profile-page hero.
          *
          *     Carries everything those surfaces render: the username + the default-
-         *     league rating + a career W-L from completed matches + a 5-character form
+         *     league rating + a career W-L from completed matches + a 10-character form
          *     string (newest first) so the UI can render the form-dots without a
          *     follow-up query.
          */
@@ -2215,15 +2489,137 @@ export interface components {
         };
         /**
          * RatingChange
-         * @description A user's rating delta on a single completed match.
+         * @description What one completed match did to a player's rating — and there are two kinds
+         *     of that, not one.
+         *
+         *     A player who was already rated MOVED: ``1338 → 1503``, ``delta`` ``+165``.
+         *
+         *     A player whose FIRST rated match this is was **ESTABLISHED** by it: they were
+         *     Unrated going in (CONTEXT.md, "Rating": a player who has never finished a rated
+         *     match has no rating), and they came out at 1268. They did not *lose* 232 points
+         *     of the 1500 their league-join seeded them with — they never held it. So
+         *     ``before`` is ``None`` and there is NO delta: nothing moved, a rating came into
+         *     existence. `Unrated → 1268`.
+         *
+         *     The seeded 1500 is real in the WRITE side and stays there: the Glicko-2 update
+         *     genuinely starts from the strategy's initial state, and ``previous_rating_value``
+         *     records it faithfully. This model is where the read side declines to narrate
+         *     that prior as a rating the player fell from — the same refusal
+         *     ``app.ratings.rated`` makes for rating / rank / peak / confidence. The caller
+         *     supplies the one fact the row cannot know on its own (``had_rating_before``, an
+         *     earlier change exists), because "was I rated?" is a question about the player's
+         *     history, not about this row.
+         *
+         *     ``delta`` is COMPUTED, never stored beside its own inputs (api/CLAUDE.md): a
+         *     ``RatingChange(before=None, delta=-232.0)`` — precisely the phantom of #952 — is
+         *     not constructible.
          */
         RatingChange: {
             /** Before */
             before: number | null;
             /** After */
             after: number;
-            /** Delta */
-            delta: number;
+            /**
+             * Delta
+             * @description How far the rating MOVED, or ``None`` when it was established rather than
+             *     moved.
+             *
+             *     Two distinct nulls reach a client and they mean different things: a null
+             *     *``RatingChange``* is "this match moved no rating at all" (unrated, undecided
+             *     or voided); a null ``delta`` INSIDE a present change is "this is the rating
+             *     you got, and there was nothing before it to measure from". A ``0.0`` here
+             *     would claim a rated match moved a rating by nothing.
+             *
+             *     The arithmetic itself is ``app.domain.rating.rating_delta`` — never inlined
+             *     here — so this wire model and the match-details domain
+             *     (``app.domain.match.extras.RatingChange.delta``) cannot drift into
+             *     disagreeing about the same player's movement.
+             */
+            readonly delta: number | null;
+        };
+        /**
+         * RatingConfidence
+         * @description How settled a player's rating is on one ladder (CONTEXT.md, "Rating
+         *     confidence").
+         *
+         *     `interval` is the rigorous statement and belongs on the card's face;
+         *     `deviation` (Glicko-2 RD) and `volatility` (sigma) are the internals BEHIND
+         *     confidence, not names for it — the client keeps them in a drawer.
+         *
+         *     There is deliberately NO confidence PERCENTAGE. That number does not exist:
+         *     it would be an arbitrary rescaling of RD onto a 0-100 axis, saying nothing
+         *     the level and the interval don't say better. Do not add one.
+         */
+        RatingConfidence: {
+            /** Deviation */
+            deviation: number;
+            /** Volatility */
+            volatility: number;
+            interval: components["schemas"]["RatingInterval"];
+            /**
+             * Level
+             * @description provisional / firming_up / settled, keyed off `deviation` alone.
+             *
+             *     Derived, never stored: a `RatingConfidence(level="settled",
+             *     deviation=350.0)` — a rating that claims to be settled while the system
+             *     has no idea where the player belongs — is not constructible. The cut
+             *     points live in one place, `app.ratings.confidence`.
+             * @enum {string}
+             */
+            readonly level: "provisional" | "firming_up" | "settled";
+        };
+        /**
+         * RatingHistoryWindow
+         * @description A player's rating over one CALENDAR window — the profile's rating chart
+         *     (ADR-0915).
+         *
+         *     The chart plots rating against *calendar time*, not against the player's
+         *     match sequence, and the `rating_history` audit cannot pay for that on its own:
+         *     it holds rows only where matches completed, so the window's left edge is
+         *     almost never a match. Hence `anchor`.
+         */
+        RatingHistoryWindow: {
+            anchor?: components["schemas"]["RatingPoint"] | null;
+            /**
+             * Points
+             * @default []
+             */
+            points: components["schemas"]["RatingPoint"][];
+            peak?: components["schemas"]["RatingPoint"] | null;
+            /** Change */
+            change?: number | null;
+        };
+        /**
+         * RatingInterval
+         * @description The 95% interval around a rating — "we think this player is somewhere
+         *     between 1551 and 1823". Whole rating points, low first.
+         */
+        RatingInterval: {
+            /** Low */
+            low: number;
+            /** High */
+            high: number;
+        };
+        /**
+         * RatingPoint
+         * @description One instant on a player's **rating timeline** (CONTEXT.md): what their
+         *     rating became, and when it became that.
+         *
+         *     `at` is the *completion* instant of the match that moved it (ADR-0012) — not
+         *     when the audit row happened to be written, which a recompute rewrites. For a
+         *     manual / import / initial change there is no match, so `at` is the moment the
+         *     change was recorded and `match_id` is `null`.
+         */
+        RatingPoint: {
+            /**
+             * At
+             * Format: date-time
+             */
+            at: string;
+            /** Rating */
+            rating: number;
+            /** Match Id */
+            match_id?: string | null;
         };
         /** RbacUserCreate */
         RbacUserCreate: {
@@ -2360,6 +2756,11 @@ export interface components {
         };
         /** SessionUser */
         SessionUser: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
             /** Username */
             username: string;
             /** Permissions */
@@ -2695,6 +3096,42 @@ export interface components {
             input?: unknown;
             /** Context */
             ctx?: Record<string, never>;
+        };
+        /**
+         * ViewerHeadToHead
+         * @description The CALLER's own record against the profiled player — "you are 1-4
+         *     against them", not "they are 4-1 against you".
+         *
+         *     Present with **zero meetings** for a caller who has never played them, which
+         *     is the common case, not an error: a guest session is minted for anyone who
+         *     lands on a profile link, and a guest has played nobody (ADR-0915). The card
+         *     renders "You haven't played X yet" plus a Start-a-match CTA off exactly this
+         *     state, and needs `opponent` populated to prefill it — so the empty record is
+         *     a first-class value, and never `null` in place of one.
+         */
+        ViewerHeadToHead: {
+            opponent: components["schemas"]["HeadToHeadOpponent"];
+            /**
+             * Wins
+             * @default 0
+             */
+            wins: number;
+            /**
+             * Losses
+             * @default 0
+             */
+            losses: number;
+            /** Last Meeting */
+            last_meeting?: string | null;
+            /**
+             * Meetings
+             * @description How many times the pair have played. DERIVED, not stored: a meeting
+             *     is a *decided* match (CONTEXT.md), and a decided match is a win for one
+             *     side and a loss for the other — so `meetings` is exactly
+             *     `wins + losses`, and carrying it as its own field would let the two
+             *     drift (api/CLAUDE.md, "don't carry a field and its own derivation").
+             */
+            readonly meetings: number;
         };
         /** MatchDetails */
         app__schemas__match__MatchDetails: {
@@ -4000,6 +4437,7 @@ export interface operations {
         parameters: {
             query?: {
                 league_id?: string | null;
+                range?: "30d" | "90d" | "1y";
             };
             header?: never;
             path: {
@@ -4018,6 +4456,42 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PlayerDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_player_rating_history_v1_players__player_id__rating_history_get: {
+        parameters: {
+            query?: {
+                league_id?: string | null;
+                range?: "30d" | "90d" | "1y";
+            };
+            header?: never;
+            path: {
+                player_id: string;
+            };
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RatingHistoryWindow"];
                 };
             };
             /** @description Validation Error */

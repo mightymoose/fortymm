@@ -80,22 +80,102 @@ export async function findUserId(
   return match.id
 }
 
-/** Create an unrated two-party match with `creator` on side 1 and `opponentId`
- * on side 2. Unrated keeps the guests out of the rating system; the conflict
- * path is independent of rating. Returns the new match id. */
+/** Create a two-party match with `creator` on side 1 and `opponentId` on side 2.
+ *
+ * **Unrated by default** — that keeps the guests out of the rating system, which
+ * is what the conflict path wants (it is independent of rating). Pass
+ * `{ rated: true }` when the *point* is the rating: only a rated two-human match
+ * writes `rating_history`, and only a player with rating history has a chart to
+ * draw (see `playRatedMatch`). Returns the new match id. */
 export async function createMatch(
   creator: Guest,
   opponentId: string,
   bestOf: number,
+  options: { rated?: boolean } = {},
 ): Promise<string> {
   const res = await creator.ctx.post(`${API}/matches`, {
     headers: { [CSRF_HEADER]: creator.csrf },
-    data: { opponent_user_id: opponentId, best_of: bestOf, rated: false },
+    data: {
+      opponent_user_id: opponentId,
+      best_of: bestOf,
+      rated: options.rated ?? false,
+    },
   })
   if (res.status() !== 201) {
     throw new Error(`create match failed: ${res.status()} ${await res.text()}`)
   }
   return ((await res.json()) as { id: string }).id
+}
+
+/** One game of a proposed board. */
+export interface ResultGame {
+  readonly game_number: number
+  readonly side_1_points: number
+  readonly side_2_points: number
+}
+
+/** Propose a result (`POST .../results`) — the first verb of the propose/accept
+ * negotiation. The proposed board becomes the canonical game snapshot; on a
+ * **rated** two-human match the result stays *standing* until the opposing side
+ * accepts. Returns the standing result's id, which is the concurrency token the
+ * acceptance must name. */
+export async function proposeResult(
+  proposer: Guest,
+  matchId: string,
+  games: ReadonlyArray<ResultGame>,
+): Promise<string> {
+  const res = await proposer.ctx.post(`${API}/matches/${matchId}/results`, {
+    headers: { [CSRF_HEADER]: proposer.csrf },
+    data: { games },
+  })
+  if (res.status() !== 201) {
+    throw new Error(`propose result failed: ${res.status()} ${await res.text()}`)
+  }
+  return standingResultId(await res.json())
+}
+
+/** Accept a standing proposal (`POST .../results/{id}/acceptance`) — the second
+ * verb. Only the **opposing** side may accept (the proposer already consented by
+ * proposing). This is what completes the match and, on a rated one, runs the
+ * rating update: the two players' `rating_history` rows are written here. */
+export async function acceptResult(
+  acceptor: Guest,
+  matchId: string,
+  resultId: string,
+): Promise<void> {
+  const res = await acceptor.ctx.post(
+    `${API}/matches/${matchId}/results/${resultId}/acceptance`,
+    { headers: { [CSRF_HEADER]: acceptor.csrf } },
+  )
+  if (res.status() !== 201) {
+    throw new Error(`accept result failed: ${res.status()} ${await res.text()}`)
+  }
+}
+
+/**
+ * Play a whole **rated** match to completion: `winner` beats `loser` 11–5 in a
+ * best-of-1, and `loser` accepts the result.
+ *
+ * The seed behind any spec that needs a player with a *rating chart to draw*.
+ * Every user is seeded an `initial` rating-history row when they join the default
+ * league, so a brand-new guest already has one point on their timeline — but only
+ * a decided **rated** match adds a second, which is what makes the window's net
+ * change a real number rather than zero.
+ *
+ * Both sides come out rated (a rating update writes a row for each), so either
+ * player's profile is a usable subject. Returns the match id.
+ */
+export async function playRatedMatch(
+  winner: Guest,
+  loser: Guest,
+  loserId: string,
+): Promise<string> {
+  const matchId = await createMatch(winner, loserId, 1, { rated: true })
+  const resultId = await proposeResult(winner, matchId, [
+    { game_number: 1, side_1_points: 11, side_2_points: 5 },
+  ])
+  await acceptResult(loser, matchId, resultId)
+  return matchId
 }
 
 /** First write of a game's score (`POST .../scores/new`) — needs no version
@@ -149,6 +229,24 @@ export async function editGameScore(
 function usernameFrom(sessionJson: unknown): string {
   return (sessionJson as { data: { user: { username: string } } }).data.user
     .username
+}
+
+function standingResultId(details: unknown): string {
+  const negotiation = (
+    details as {
+      negotiation?: { standing_result?: { id?: string } | null }
+    }
+  ).negotiation
+  const id = negotiation?.standing_result?.id
+  if (id == null) {
+    // A rated two-human match must leave the result standing for the opposing
+    // side. If it self-accepted, the match wasn't rated (or wasn't two-party) —
+    // fail loudly rather than seeding a match with no rating update.
+    throw new Error(
+      'no standing result on the proposed match — was it created with { rated: true }?',
+    )
+  }
+  return id
 }
 
 function versionOf(details: unknown, gameNumber: number): number {

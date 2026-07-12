@@ -20,17 +20,22 @@ from app.domain.rating import rating_delta
 @dataclass(frozen=True)
 class RatingChange:
     """A player's rating delta on the match being viewed. ``before`` is ``None``
-    for a player who had no rating in the league going in.
+    for a player who had no rating in the league going in — resolved by
+    ``app.ratings.rated.reported_rating_before``, since the raw stored
+    ``previous_rating_value`` for a first rated match is the 1500 the league seeded
+    them with, not a rating they held.
 
     ``delta`` is *derived*, never stored: it is by definition
     ``app.domain.rating.rating_delta(before, after)``, so a ``RatingChange`` that
-    disagrees with its own endpoints cannot be constructed."""
+    disagrees with its own endpoints cannot be constructed. It is ``None`` — not
+    ``0.0`` — for that first rated match: the match ESTABLISHED the rating rather
+    than moving it, and a zero would render as "+0" (#952)."""
 
     before: float | None
     after: float
 
     @property
-    def delta(self) -> float:
+    def delta(self) -> float | None:
         return rating_delta(self.before, self.after)
 
 

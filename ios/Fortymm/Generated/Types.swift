@@ -313,19 +313,115 @@ internal protocol APIProtocol: Sendable {
     func listPlayersV1PlayersGet(_ input: Operations.ListPlayersV1PlayersGet.Input) async throws -> Operations.ListPlayersV1PlayersGet.Output
     /// Get Player
     ///
-    /// Authed profile bundle for `/players/$userId` — hero + first page of
-    /// matches in one response.
+    /// Authed profile bundle for `/players/$userId` — the overview in one
+    /// response: hero + the six most recent matches + the all-inclusive
+    /// `match_total` behind the "View all N matches" link. The full paginated
+    /// history is served by `/v1/players/{id}/matches`.
+    ///
+    /// `league_id` selects the ladder the RATING HALF of the page is about,
+    /// defaulting to the default league when it is omitted — and also when it names
+    /// a league that does not exist. The league is a LENS on this player, not the
+    /// resource being addressed (ADR-0915): a stale bookmark to a deleted ladder
+    /// degrades to the default one rather than 404ing a player who is perfectly
+    /// fine. `player_id` is the resource, and an unknown one is still a 404.
+    /// Everything about where this player stands follows the league: `rating` and
+    /// `rank` out of `rank_of` (so it reads "#3 of 42", never a naked "#3"), their
+    /// all-time `peak`, the `rating_delta` their most recent rated match moved, their
+    /// recent `form`, a `percentile` (only once the league is large enough for it to
+    /// mean anything), and `confidence`. An unrated player has none of them.
+    ///
+    /// `confidence` says how settled that rating is on this ladder: a `level`
+    /// (`provisional` / `firming_up` / `settled`), the 95% `interval` around the
+    /// rating ("somewhere between 1551 and 1823"), and the Glicko-2 `deviation` and
+    /// `volatility` behind them. It is `null` — the card does not render — for an
+    /// unrated player, and for one whose rating was supplied externally by a manual
+    /// strategy, which carries no deviation to be confident about.
+    ///
+    /// `leagues` lists every league this player belongs to with their rating on each
+    /// — the Leagues card, which is the page's league *switcher*. It is the same
+    /// list whichever league was asked for; the client marks the selected row (and
+    /// falls back to the one flagged `is_default` when no `league_id` was named).
+    ///
+    /// `career` is the exception: it is CROSS-LEAGUE and ignores `league_id`
+    /// entirely. Rating, rank, peak, form and percentile are facts about a *ladder*;
+    /// a player's lifetime record — decided matches, W-L, win rate, games-won share,
+    /// current and best streak — is a fact about the *person* (ADR-0915). Ask for
+    /// the same player in two different leagues and only the rating half changes.
+    /// `career.decided` counts decided matches alone, so it is smaller than
+    /// `match_total` whenever one of their matches is still in play.
+    ///
+    /// `head_to_head` is VIEWER-AWARE — the one block here that depends on who is
+    /// asking (ADR-0915), so two callers get different bytes for the same profile
+    /// and no cache in front of this endpoint may share them. `versus_viewer` is the
+    /// CALLER's own record against this player, written from the caller's side ("you
+    /// are 1-4 against them", not "they are 4-1 against you"): `null` when the caller
+    /// *is* this player, and present with zero meetings — never `null`, never an
+    /// error — when they have simply never played, which is what a brand-new guest
+    /// always sees. `frequent_opponents` is this player's most-met opponents, read
+    /// from *their* side. A meeting is a *decided* match between two named players,
+    /// rated or not, in any league: a match still in play is not a record, and a solo
+    /// "No opponent" match can never be one.
+    ///
+    /// `rating_history` is the rating chart's data for the calendar window named by
+    /// `range` (`30d` / `90d` / `1y`, defaulting to `90d`) — the same shape
+    /// `GET /v1/players/{id}/rating-history` returns, embedded so the profile paints
+    /// its chart without a second request. The client seeds that endpoint's cache from
+    /// this block and calls it only when the user changes range (ADR-0915). Note the
+    /// `anchor` inside it is a point from OUTSIDE the window, on purpose.
     ///
     /// - Remark: HTTP `GET /v1/players/{player_id}`.
     /// - Remark: Generated from `#/paths//v1/players/{player_id}/get(get_player_v1_players__player_id__get)`.
     func getPlayerV1PlayersPlayerIdGet(_ input: Operations.GetPlayerV1PlayersPlayerIdGet.Input) async throws -> Operations.GetPlayerV1PlayersPlayerIdGet.Output
+    /// Get Player Rating History
+    ///
+    /// The player's rating over a CALENDAR window — the profile's rating chart
+    /// (ADR-0915). `range` is `30d`, `90d` (the default) or `1y`; `league_id` names
+    /// the ladder, defaulting to the default league, because a rating is a fact about
+    /// one ladder and never about a player "in general". As on the profile bundle it
+    /// is a lens and not the resource, so a `league_id` naming no league degrades to
+    /// the default ladder rather than 404ing; an unknown `player_id` is still a 404.
+    ///
+    /// The chart is drawn from three things:
+    ///
+    /// * `anchor` — the player's rating **as of the window start**, read from their
+    ///   last rating change *at or before* it. It is therefore A POINT FROM OUTSIDE
+    ///   THE REQUESTED WINDOW, with an `at` older than the window's left edge, and
+    ///   that is deliberate: rating history exists only where matches completed, so
+    ///   the window's left edge is almost never a match. Without it, a player whose
+    ///   first match in the window landed on day forty would be told their ninety-day
+    ///   change was only the movement since day forty. `null` when they held no rating
+    ///   at that instant — there is nothing to carry in — and the line then starts at
+    ///   the first in-window point.
+    /// * `points` — every rating change inside the window, oldest first. A **voided**
+    ///   match is absent, not zeroed: voiding deletes its rating-history rows, so it
+    ///   leaves the rating timeline entirely (CONTEXT.md, "Voided match") and the
+    ///   chart can change shape retroactively. An EMPTY list is a first-class answer,
+    ///   never an error: a rated player with nothing in the last ninety days gets
+    ///   their anchor and no points, and the chart draws a flat line at their current
+    ///   rating.
+    /// * `change` — the net movement across the window, measured from the `anchor`
+    ///   (or, with no anchor, from the first in-window point) to the latest one.
+    ///   `null`, never `+0`, for an empty window: nothing was played, so there is no
+    ///   delta to report.
+    ///
+    /// `peak` is the highest point WITHIN THE WINDOW, and is a different number from
+    /// the profile's `peak`, which is the player's all-time high on the ladder. Do not
+    /// read either for the other.
+    ///
+    /// - Remark: HTTP `GET /v1/players/{player_id}/rating-history`.
+    /// - Remark: Generated from `#/paths//v1/players/{player_id}/rating-history/get(get_player_rating_history_v1_players__player_id__rating_history_get)`.
+    func getPlayerRatingHistoryV1PlayersPlayerIdRatingHistoryGet(_ input: Operations.GetPlayerRatingHistoryV1PlayersPlayerIdRatingHistoryGet.Input) async throws -> Operations.GetPlayerRatingHistoryV1PlayersPlayerIdRatingHistoryGet.Output
     /// List Player Matches
     ///
-    /// Paginated per-player match history backing page 2+ of the authed
-    /// profile page (`/players/$userId`); page 1 ships inline in the
-    /// `/v1/players/{id}` bundle. Newest-first by ``created_at``. Sets are
-    /// projected from the player's perspective so the FE renders them without
-    /// flipping sides.
+    /// Paginated per-player match history backing the full-history route
+    /// (`/players/$userId/matches`), 25 to a page. The profile overview embeds only
+    /// the six most recent inline (`GET /v1/players/{id}`) and links here for the
+    /// rest.
+    ///
+    /// The history is all-inclusive (ADR-0008): every match the player is a side
+    /// of, any status, rated or not, solo "No opponent" matches included.
+    /// Newest-first by ``created_at``. Games are projected from the player's
+    /// perspective so the FE renders them without flipping sides.
     ///
     /// - Remark: HTTP `GET /v1/players/{player_id}/matches`.
     /// - Remark: Generated from `#/paths//v1/players/{player_id}/matches/get(list_player_matches_v1_players__player_id__matches_get)`.
@@ -1075,8 +1171,61 @@ extension APIProtocol {
     }
     /// Get Player
     ///
-    /// Authed profile bundle for `/players/$userId` — hero + first page of
-    /// matches in one response.
+    /// Authed profile bundle for `/players/$userId` — the overview in one
+    /// response: hero + the six most recent matches + the all-inclusive
+    /// `match_total` behind the "View all N matches" link. The full paginated
+    /// history is served by `/v1/players/{id}/matches`.
+    ///
+    /// `league_id` selects the ladder the RATING HALF of the page is about,
+    /// defaulting to the default league when it is omitted — and also when it names
+    /// a league that does not exist. The league is a LENS on this player, not the
+    /// resource being addressed (ADR-0915): a stale bookmark to a deleted ladder
+    /// degrades to the default one rather than 404ing a player who is perfectly
+    /// fine. `player_id` is the resource, and an unknown one is still a 404.
+    /// Everything about where this player stands follows the league: `rating` and
+    /// `rank` out of `rank_of` (so it reads "#3 of 42", never a naked "#3"), their
+    /// all-time `peak`, the `rating_delta` their most recent rated match moved, their
+    /// recent `form`, a `percentile` (only once the league is large enough for it to
+    /// mean anything), and `confidence`. An unrated player has none of them.
+    ///
+    /// `confidence` says how settled that rating is on this ladder: a `level`
+    /// (`provisional` / `firming_up` / `settled`), the 95% `interval` around the
+    /// rating ("somewhere between 1551 and 1823"), and the Glicko-2 `deviation` and
+    /// `volatility` behind them. It is `null` — the card does not render — for an
+    /// unrated player, and for one whose rating was supplied externally by a manual
+    /// strategy, which carries no deviation to be confident about.
+    ///
+    /// `leagues` lists every league this player belongs to with their rating on each
+    /// — the Leagues card, which is the page's league *switcher*. It is the same
+    /// list whichever league was asked for; the client marks the selected row (and
+    /// falls back to the one flagged `is_default` when no `league_id` was named).
+    ///
+    /// `career` is the exception: it is CROSS-LEAGUE and ignores `league_id`
+    /// entirely. Rating, rank, peak, form and percentile are facts about a *ladder*;
+    /// a player's lifetime record — decided matches, W-L, win rate, games-won share,
+    /// current and best streak — is a fact about the *person* (ADR-0915). Ask for
+    /// the same player in two different leagues and only the rating half changes.
+    /// `career.decided` counts decided matches alone, so it is smaller than
+    /// `match_total` whenever one of their matches is still in play.
+    ///
+    /// `head_to_head` is VIEWER-AWARE — the one block here that depends on who is
+    /// asking (ADR-0915), so two callers get different bytes for the same profile
+    /// and no cache in front of this endpoint may share them. `versus_viewer` is the
+    /// CALLER's own record against this player, written from the caller's side ("you
+    /// are 1-4 against them", not "they are 4-1 against you"): `null` when the caller
+    /// *is* this player, and present with zero meetings — never `null`, never an
+    /// error — when they have simply never played, which is what a brand-new guest
+    /// always sees. `frequent_opponents` is this player's most-met opponents, read
+    /// from *their* side. A meeting is a *decided* match between two named players,
+    /// rated or not, in any league: a match still in play is not a record, and a solo
+    /// "No opponent" match can never be one.
+    ///
+    /// `rating_history` is the rating chart's data for the calendar window named by
+    /// `range` (`30d` / `90d` / `1y`, defaulting to `90d`) — the same shape
+    /// `GET /v1/players/{id}/rating-history` returns, embedded so the profile paints
+    /// its chart without a second request. The client seeds that endpoint's cache from
+    /// this block and calls it only when the user changes range (ADR-0915). Note the
+    /// `anchor` inside it is a point from OUTSIDE the window, on purpose.
     ///
     /// - Remark: HTTP `GET /v1/players/{player_id}`.
     /// - Remark: Generated from `#/paths//v1/players/{player_id}/get(get_player_v1_players__player_id__get)`.
@@ -1091,13 +1240,66 @@ extension APIProtocol {
             headers: headers
         ))
     }
+    /// Get Player Rating History
+    ///
+    /// The player's rating over a CALENDAR window — the profile's rating chart
+    /// (ADR-0915). `range` is `30d`, `90d` (the default) or `1y`; `league_id` names
+    /// the ladder, defaulting to the default league, because a rating is a fact about
+    /// one ladder and never about a player "in general". As on the profile bundle it
+    /// is a lens and not the resource, so a `league_id` naming no league degrades to
+    /// the default ladder rather than 404ing; an unknown `player_id` is still a 404.
+    ///
+    /// The chart is drawn from three things:
+    ///
+    /// * `anchor` — the player's rating **as of the window start**, read from their
+    ///   last rating change *at or before* it. It is therefore A POINT FROM OUTSIDE
+    ///   THE REQUESTED WINDOW, with an `at` older than the window's left edge, and
+    ///   that is deliberate: rating history exists only where matches completed, so
+    ///   the window's left edge is almost never a match. Without it, a player whose
+    ///   first match in the window landed on day forty would be told their ninety-day
+    ///   change was only the movement since day forty. `null` when they held no rating
+    ///   at that instant — there is nothing to carry in — and the line then starts at
+    ///   the first in-window point.
+    /// * `points` — every rating change inside the window, oldest first. A **voided**
+    ///   match is absent, not zeroed: voiding deletes its rating-history rows, so it
+    ///   leaves the rating timeline entirely (CONTEXT.md, "Voided match") and the
+    ///   chart can change shape retroactively. An EMPTY list is a first-class answer,
+    ///   never an error: a rated player with nothing in the last ninety days gets
+    ///   their anchor and no points, and the chart draws a flat line at their current
+    ///   rating.
+    /// * `change` — the net movement across the window, measured from the `anchor`
+    ///   (or, with no anchor, from the first in-window point) to the latest one.
+    ///   `null`, never `+0`, for an empty window: nothing was played, so there is no
+    ///   delta to report.
+    ///
+    /// `peak` is the highest point WITHIN THE WINDOW, and is a different number from
+    /// the profile's `peak`, which is the player's all-time high on the ladder. Do not
+    /// read either for the other.
+    ///
+    /// - Remark: HTTP `GET /v1/players/{player_id}/rating-history`.
+    /// - Remark: Generated from `#/paths//v1/players/{player_id}/rating-history/get(get_player_rating_history_v1_players__player_id__rating_history_get)`.
+    internal func getPlayerRatingHistoryV1PlayersPlayerIdRatingHistoryGet(
+        path: Operations.GetPlayerRatingHistoryV1PlayersPlayerIdRatingHistoryGet.Input.Path,
+        query: Operations.GetPlayerRatingHistoryV1PlayersPlayerIdRatingHistoryGet.Input.Query = .init(),
+        headers: Operations.GetPlayerRatingHistoryV1PlayersPlayerIdRatingHistoryGet.Input.Headers = .init()
+    ) async throws -> Operations.GetPlayerRatingHistoryV1PlayersPlayerIdRatingHistoryGet.Output {
+        try await getPlayerRatingHistoryV1PlayersPlayerIdRatingHistoryGet(Operations.GetPlayerRatingHistoryV1PlayersPlayerIdRatingHistoryGet.Input(
+            path: path,
+            query: query,
+            headers: headers
+        ))
+    }
     /// List Player Matches
     ///
-    /// Paginated per-player match history backing page 2+ of the authed
-    /// profile page (`/players/$userId`); page 1 ships inline in the
-    /// `/v1/players/{id}` bundle. Newest-first by ``created_at``. Sets are
-    /// projected from the player's perspective so the FE renders them without
-    /// flipping sides.
+    /// Paginated per-player match history backing the full-history route
+    /// (`/players/$userId/matches`), 25 to a page. The profile overview embeds only
+    /// the six most recent inline (`GET /v1/players/{id}`) and links here for the
+    /// rest.
+    ///
+    /// The history is all-inclusive (ADR-0008): every match the player is a side
+    /// of, any status, rated or not, solo "No opponent" matches included.
+    /// Newest-first by ``created_at``. Games are projected from the player's
+    /// perspective so the FE renders them without flipping sides.
     ///
     /// - Remark: HTTP `GET /v1/players/{player_id}/matches`.
     /// - Remark: Generated from `#/paths//v1/players/{player_id}/matches/get(list_player_matches_v1_players__player_id__matches_get)`.
@@ -1922,7 +2124,7 @@ internal enum Components {
             /// - Remark: Generated from `#/components/schemas/DashboardRating/current`.
             internal var current: Swift.Double
             /// - Remark: Generated from `#/components/schemas/DashboardRating/delta`.
-            internal var delta: Swift.Double
+            internal var delta: Swift.Double?
             /// - Remark: Generated from `#/components/schemas/DashboardRating/peak`.
             internal var peak: Swift.Double
             /// - Remark: Generated from `#/components/schemas/DashboardRating/percentile`.
@@ -1969,7 +2171,7 @@ internal enum Components {
                 leagueName: Swift.String,
                 strategyKey: Swift.String,
                 current: Swift.Double,
-                delta: Swift.Double,
+                delta: Swift.Double? = nil,
                 peak: Swift.Double,
                 percentile: Swift.Int? = nil,
                 sparkData: [Swift.Double],
@@ -2237,6 +2439,85 @@ internal enum Components {
             }
             internal enum CodingKeys: String, CodingKey {
                 case detail
+            }
+        }
+        /// The other player in a head-to-head — a *named* player, always.
+        ///
+        /// Both fields are required, unlike `PlayerMatchOpponent`, whose `id` and
+        /// `username` are nullable to model the player-less sentinel side of a solo
+        /// match. That difference is the point: a solo match has nobody on the other
+        /// side, so it can never be a **meeting** (CONTEXT.md), and a head-to-head
+        /// against nobody is not a state this schema can represent.
+        ///
+        /// - Remark: Generated from `#/components/schemas/HeadToHeadOpponent`.
+        internal struct HeadToHeadOpponent: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/HeadToHeadOpponent/id`.
+            internal var id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/HeadToHeadOpponent/username`.
+            internal var username: Swift.String
+            /// Creates a new `HeadToHeadOpponent`.
+            ///
+            /// - Parameters:
+            ///   - id:
+            ///   - username:
+            internal init(
+                id: Swift.String,
+                username: Swift.String
+            ) {
+                self.id = id
+                self.username = username
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case id
+                case username
+            }
+        }
+        /// One player's record of **meetings** against one named opponent, read
+        /// from a stated side (CONTEXT.md, "Head-to-head"): `wins` and `losses` are the
+        /// subject's, never the opponent's. `A 4-1 B` and `B 1-4 A` are the same record
+        /// said two ways, so every consumer of this model has to know whose side it
+        /// speaks for — the field it hangs off says which (`versus_viewer` is the
+        /// *caller's*; `frequent_opponents` is the *profiled player's*).
+        ///
+        /// - Remark: Generated from `#/components/schemas/HeadToHeadRecord`.
+        internal struct HeadToHeadRecord: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/HeadToHeadRecord/opponent`.
+            internal var opponent: Components.Schemas.HeadToHeadOpponent
+            /// - Remark: Generated from `#/components/schemas/HeadToHeadRecord/wins`.
+            internal var wins: Swift.Int?
+            /// - Remark: Generated from `#/components/schemas/HeadToHeadRecord/losses`.
+            internal var losses: Swift.Int?
+            /// How many times the pair have played. DERIVED, not stored: a meeting
+            /// is a *decided* match (CONTEXT.md), and a decided match is a win for one
+            /// side and a loss for the other — so `meetings` is exactly
+            /// `wins + losses`, and carrying it as its own field would let the two
+            /// drift (api/CLAUDE.md, "don't carry a field and its own derivation").
+            ///
+            /// - Remark: Generated from `#/components/schemas/HeadToHeadRecord/meetings`.
+            internal var meetings: Swift.Int
+            /// Creates a new `HeadToHeadRecord`.
+            ///
+            /// - Parameters:
+            ///   - opponent:
+            ///   - wins:
+            ///   - losses:
+            ///   - meetings: How many times the pair have played. DERIVED, not stored: a meeting
+            internal init(
+                opponent: Components.Schemas.HeadToHeadOpponent,
+                wins: Swift.Int? = nil,
+                losses: Swift.Int? = nil,
+                meetings: Swift.Int
+            ) {
+                self.opponent = opponent
+                self.wins = wins
+                self.losses = losses
+                self.meetings = meetings
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case opponent
+                case wins
+                case losses
+                case meetings
             }
         }
         /// - Remark: Generated from `#/components/schemas/HealthResponse`.
@@ -4181,14 +4462,121 @@ internal enum Components {
                 case description
             }
         }
-        /// Profile-page bundle: the hero (`PlayerSummary` fields) plus the
-        /// first page of matches inline. Saves a round trip on initial load —
-        /// `GET /v1/players/{id}` returns this so the profile page paints with one
-        /// request.
+        /// A player's lifetime record ACROSS EVERY LEAGUE they play in (CONTEXT.md,
+        /// "Career"; ADR-0915).
         ///
-        /// Pagination beyond page 1 still hits `GET /v1/players/{id}/matches`
-        /// directly; the FE seeds page 1's cache from this `matches` field via
-        /// TanStack Query's `initialData`.
+        /// Career is a fact about the *person*. It deliberately ignores the league the
+        /// profile was requested for — unlike `rating`, `rank`, `peak` and `percentile`,
+        /// which are facts about one *ladder*. Ask for the same player in two different
+        /// leagues and the ratings differ while this block is identical.
+        ///
+        /// - Remark: Generated from `#/components/schemas/PlayerCareer`.
+        internal struct PlayerCareer: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/PlayerCareer/decided`.
+            internal var decided: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/PlayerCareer/wins`.
+            internal var wins: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/PlayerCareer/losses`.
+            internal var losses: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/PlayerCareer/win_rate`.
+            internal var winRate: Swift.Double?
+            /// - Remark: Generated from `#/components/schemas/PlayerCareer/games_won_pct`.
+            internal var gamesWonPct: Swift.Double?
+            /// - Remark: Generated from `#/components/schemas/PlayerCareer/current_streak`.
+            internal struct CurrentStreakPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/PlayerCareer/current_streak/value1`.
+                internal var value1: Components.Schemas.PlayerStreak
+                /// Creates a new `CurrentStreakPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                internal init(value1: Components.Schemas.PlayerStreak) {
+                    self.value1 = value1
+                }
+                internal init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                internal func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/PlayerCareer/current_streak`.
+            internal var currentStreak: Components.Schemas.PlayerCareer.CurrentStreakPayload?
+            /// - Remark: Generated from `#/components/schemas/PlayerCareer/best_streak`.
+            internal struct BestStreakPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/PlayerCareer/best_streak/value1`.
+                internal var value1: Components.Schemas.PlayerStreak
+                /// Creates a new `BestStreakPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                internal init(value1: Components.Schemas.PlayerStreak) {
+                    self.value1 = value1
+                }
+                internal init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                internal func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/PlayerCareer/best_streak`.
+            internal var bestStreak: Components.Schemas.PlayerCareer.BestStreakPayload?
+            /// - Remark: Generated from `#/components/schemas/PlayerCareer/league_count`.
+            internal var leagueCount: Swift.Int
+            /// Creates a new `PlayerCareer`.
+            ///
+            /// - Parameters:
+            ///   - decided:
+            ///   - wins:
+            ///   - losses:
+            ///   - winRate:
+            ///   - gamesWonPct:
+            ///   - currentStreak:
+            ///   - bestStreak:
+            ///   - leagueCount:
+            internal init(
+                decided: Swift.Int,
+                wins: Swift.Int,
+                losses: Swift.Int,
+                winRate: Swift.Double? = nil,
+                gamesWonPct: Swift.Double? = nil,
+                currentStreak: Components.Schemas.PlayerCareer.CurrentStreakPayload? = nil,
+                bestStreak: Components.Schemas.PlayerCareer.BestStreakPayload? = nil,
+                leagueCount: Swift.Int
+            ) {
+                self.decided = decided
+                self.wins = wins
+                self.losses = losses
+                self.winRate = winRate
+                self.gamesWonPct = gamesWonPct
+                self.currentStreak = currentStreak
+                self.bestStreak = bestStreak
+                self.leagueCount = leagueCount
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case decided
+                case wins
+                case losses
+                case winRate = "win_rate"
+                case gamesWonPct = "games_won_pct"
+                case currentStreak = "current_streak"
+                case bestStreak = "best_streak"
+                case leagueCount = "league_count"
+            }
+        }
+        /// Profile-page bundle: the hero (`PlayerSummary` fields + the standing
+        /// block below) plus the player's six most recent matches inline. Saves a round
+        /// trip on initial load — `GET /v1/players/{id}` returns this so the profile
+        /// overview paints with one request.
+        ///
+        /// The profile is an *overview*: it shows a Recent-matches card, not the whole
+        /// table. The full paginated history lives at its own route, backed by
+        /// `GET /v1/players/{id}/matches` (ADR-0915).
+        ///
+        /// The standing fields (`peak`, `rank_of`, `percentile`, `rating_delta`) are
+        /// league-scoped, like `rating` and `rank` — and profile-only: they deliberately
+        /// do not ride on `PlayerSummary`, which the roster also serializes.
         ///
         /// - Remark: Generated from `#/components/schemas/PlayerDetail`.
         internal struct PlayerDetail: Codable, Hashable, Sendable {
@@ -4206,8 +4594,66 @@ internal enum Components {
             internal var form: Swift.String?
             /// - Remark: Generated from `#/components/schemas/PlayerDetail/rank`.
             internal var rank: Swift.Int?
+            /// - Remark: Generated from `#/components/schemas/PlayerDetail/member_since`.
+            internal var memberSince: Foundation.Date
+            /// - Remark: Generated from `#/components/schemas/PlayerDetail/rating_delta`.
+            internal struct RatingDeltaPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/PlayerDetail/rating_delta/value1`.
+                internal var value1: Components.Schemas.RatingChange
+                /// Creates a new `RatingDeltaPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                internal init(value1: Components.Schemas.RatingChange) {
+                    self.value1 = value1
+                }
+                internal init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                internal func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/PlayerDetail/rating_delta`.
+            internal var ratingDelta: Components.Schemas.PlayerDetail.RatingDeltaPayload?
+            /// - Remark: Generated from `#/components/schemas/PlayerDetail/peak`.
+            internal var peak: Swift.Double?
+            /// - Remark: Generated from `#/components/schemas/PlayerDetail/rank_of`.
+            internal var rankOf: Swift.Int?
+            /// - Remark: Generated from `#/components/schemas/PlayerDetail/confidence`.
+            internal struct ConfidencePayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/PlayerDetail/confidence/value1`.
+                internal var value1: Components.Schemas.RatingConfidence
+                /// Creates a new `ConfidencePayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                internal init(value1: Components.Schemas.RatingConfidence) {
+                    self.value1 = value1
+                }
+                internal init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                internal func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/PlayerDetail/confidence`.
+            internal var confidence: Components.Schemas.PlayerDetail.ConfidencePayload?
+            /// - Remark: Generated from `#/components/schemas/PlayerDetail/percentile`.
+            internal var percentile: Swift.Int?
             /// - Remark: Generated from `#/components/schemas/PlayerDetail/matches`.
             internal var matches: Components.Schemas.PlayerMatchListResponse
+            /// - Remark: Generated from `#/components/schemas/PlayerDetail/match_total`.
+            internal var matchTotal: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/PlayerDetail/career`.
+            internal var career: Components.Schemas.PlayerCareer
+            /// - Remark: Generated from `#/components/schemas/PlayerDetail/leagues`.
+            internal var leagues: [Components.Schemas.PlayerLeague]
+            /// - Remark: Generated from `#/components/schemas/PlayerDetail/head_to_head`.
+            internal var headToHead: Components.Schemas.PlayerHeadToHead
+            /// - Remark: Generated from `#/components/schemas/PlayerDetail/rating_history`.
+            internal var ratingHistory: Components.Schemas.RatingHistoryWindow
             /// Creates a new `PlayerDetail`.
             ///
             /// - Parameters:
@@ -4218,7 +4664,18 @@ internal enum Components {
             ///   - losses:
             ///   - form:
             ///   - rank:
+            ///   - memberSince:
+            ///   - ratingDelta:
+            ///   - peak:
+            ///   - rankOf:
+            ///   - confidence:
+            ///   - percentile:
             ///   - matches:
+            ///   - matchTotal:
+            ///   - career:
+            ///   - leagues:
+            ///   - headToHead:
+            ///   - ratingHistory:
             internal init(
                 id: Swift.String,
                 username: Swift.String,
@@ -4227,7 +4684,18 @@ internal enum Components {
                 losses: Swift.Int? = nil,
                 form: Swift.String? = nil,
                 rank: Swift.Int? = nil,
-                matches: Components.Schemas.PlayerMatchListResponse
+                memberSince: Foundation.Date,
+                ratingDelta: Components.Schemas.PlayerDetail.RatingDeltaPayload? = nil,
+                peak: Swift.Double? = nil,
+                rankOf: Swift.Int? = nil,
+                confidence: Components.Schemas.PlayerDetail.ConfidencePayload? = nil,
+                percentile: Swift.Int? = nil,
+                matches: Components.Schemas.PlayerMatchListResponse,
+                matchTotal: Swift.Int,
+                career: Components.Schemas.PlayerCareer,
+                leagues: [Components.Schemas.PlayerLeague],
+                headToHead: Components.Schemas.PlayerHeadToHead,
+                ratingHistory: Components.Schemas.RatingHistoryWindow
             ) {
                 self.id = id
                 self.username = username
@@ -4236,7 +4704,18 @@ internal enum Components {
                 self.losses = losses
                 self.form = form
                 self.rank = rank
+                self.memberSince = memberSince
+                self.ratingDelta = ratingDelta
+                self.peak = peak
+                self.rankOf = rankOf
+                self.confidence = confidence
+                self.percentile = percentile
                 self.matches = matches
+                self.matchTotal = matchTotal
+                self.career = career
+                self.leagues = leagues
+                self.headToHead = headToHead
+                self.ratingHistory = ratingHistory
             }
             internal enum CodingKeys: String, CodingKey {
                 case id
@@ -4246,7 +4725,114 @@ internal enum Components {
                 case losses
                 case form
                 case rank
+                case memberSince = "member_since"
+                case ratingDelta = "rating_delta"
+                case peak
+                case rankOf = "rank_of"
+                case confidence
+                case percentile
                 case matches
+                case matchTotal = "match_total"
+                case career
+                case leagues
+                case headToHead = "head_to_head"
+                case ratingHistory = "rating_history"
+            }
+        }
+        /// The profile's head-to-head card, VIEWER-AWARE (ADR-0915): the same player
+        /// returns a different block to two different callers.
+        ///
+        /// A **meeting** is a *decided* match between two named players — rated or not,
+        /// in any league (CONTEXT.md). A match still in play is not a record, and a
+        /// voided one has stopped being one.
+        ///
+        /// - Remark: Generated from `#/components/schemas/PlayerHeadToHead`.
+        internal struct PlayerHeadToHead: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/PlayerHeadToHead/versus_viewer`.
+            internal struct VersusViewerPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/PlayerHeadToHead/versus_viewer/value1`.
+                internal var value1: Components.Schemas.ViewerHeadToHead
+                /// Creates a new `VersusViewerPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                internal init(value1: Components.Schemas.ViewerHeadToHead) {
+                    self.value1 = value1
+                }
+                internal init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                internal func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/PlayerHeadToHead/versus_viewer`.
+            internal var versusViewer: Components.Schemas.PlayerHeadToHead.VersusViewerPayload?
+            /// - Remark: Generated from `#/components/schemas/PlayerHeadToHead/frequent_opponents`.
+            internal var frequentOpponents: [Components.Schemas.HeadToHeadRecord]?
+            /// Creates a new `PlayerHeadToHead`.
+            ///
+            /// - Parameters:
+            ///   - versusViewer:
+            ///   - frequentOpponents:
+            internal init(
+                versusViewer: Components.Schemas.PlayerHeadToHead.VersusViewerPayload? = nil,
+                frequentOpponents: [Components.Schemas.HeadToHeadRecord]? = nil
+            ) {
+                self.versusViewer = versusViewer
+                self.frequentOpponents = frequentOpponents
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case versusViewer = "versus_viewer"
+                case frequentOpponents = "frequent_opponents"
+            }
+        }
+        /// One league this player belongs to, and the rating they carry ON IT — a row
+        /// of the profile's Leagues card, which is also the page's league switcher
+        /// (ADR-0915).
+        ///
+        /// A player's rating is a fact about a *ladder*: there is no such thing as their
+        /// rating "in general" (CONTEXT.md, "League"). So the same player may read 1687
+        /// here and 1642 in the next row, and the card is what makes that legible.
+        ///
+        /// The list itself is NOT scoped to the requested league — it is the same on
+        /// every request for this player. Which row is *selected* is derived by the
+        /// client from the league it asked for, and `is_default` is what lets it derive
+        /// that when it asked for none (CONTEXT.md, "Default league").
+        ///
+        /// - Remark: Generated from `#/components/schemas/PlayerLeague`.
+        internal struct PlayerLeague: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/PlayerLeague/id`.
+            internal var id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/PlayerLeague/name`.
+            internal var name: Swift.String
+            /// - Remark: Generated from `#/components/schemas/PlayerLeague/is_default`.
+            internal var isDefault: Swift.Bool
+            /// - Remark: Generated from `#/components/schemas/PlayerLeague/rating`.
+            internal var rating: Swift.Double?
+            /// Creates a new `PlayerLeague`.
+            ///
+            /// - Parameters:
+            ///   - id:
+            ///   - name:
+            ///   - isDefault:
+            ///   - rating:
+            internal init(
+                id: Swift.String,
+                name: Swift.String,
+                isDefault: Swift.Bool,
+                rating: Swift.Double? = nil
+            ) {
+                self.id = id
+                self.name = name
+                self.isDefault = isDefault
+                self.rating = rating
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case id
+                case name
+                case isDefault = "is_default"
+                case rating
             }
         }
         /// Paginated `/v1/players` response backing the `/players` list page.
@@ -4284,6 +4870,31 @@ internal enum Components {
                 case page
                 case pageSize = "page_size"
                 case total
+            }
+        }
+        /// A single game's score from the headline player's perspective.
+        ///
+        /// - Remark: Generated from `#/components/schemas/PlayerMatchGame`.
+        internal struct PlayerMatchGame: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/PlayerMatchGame/mine`.
+            internal var mine: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/PlayerMatchGame/theirs`.
+            internal var theirs: Swift.Int
+            /// Creates a new `PlayerMatchGame`.
+            ///
+            /// - Parameters:
+            ///   - mine:
+            ///   - theirs:
+            internal init(
+                mine: Swift.Int,
+                theirs: Swift.Int
+            ) {
+                self.mine = mine
+                self.theirs = theirs
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case mine
+                case theirs
             }
         }
         /// Paginated per-player match list backing the profile page's match
@@ -4364,8 +4975,8 @@ internal enum Components {
             internal var createdAt: Foundation.Date
             /// - Remark: Generated from `#/components/schemas/PlayerMatchRow/opponent`.
             internal var opponent: Components.Schemas.PlayerMatchOpponent
-            /// - Remark: Generated from `#/components/schemas/PlayerMatchRow/sets`.
-            internal var sets: [Components.Schemas.PlayerMatchSet]
+            /// - Remark: Generated from `#/components/schemas/PlayerMatchRow/games`.
+            internal var games: [Components.Schemas.PlayerMatchGame]
             /// - Remark: Generated from `#/components/schemas/PlayerMatchRow/result`.
             internal enum ResultPayload: String, Codable, Hashable, Sendable, CaseIterable {
                 case w = "W"
@@ -4375,6 +4986,26 @@ internal enum Components {
             internal var result: Components.Schemas.PlayerMatchRow.ResultPayload?
             /// - Remark: Generated from `#/components/schemas/PlayerMatchRow/awaiting_acceptance`.
             internal var awaitingAcceptance: Swift.Bool?
+            /// - Remark: Generated from `#/components/schemas/PlayerMatchRow/rating_change`.
+            internal struct RatingChangePayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/PlayerMatchRow/rating_change/value1`.
+                internal var value1: Components.Schemas.RatingChange
+                /// Creates a new `RatingChangePayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                internal init(value1: Components.Schemas.RatingChange) {
+                    self.value1 = value1
+                }
+                internal init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                internal func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/PlayerMatchRow/rating_change`.
+            internal var ratingChange: Components.Schemas.PlayerMatchRow.RatingChangePayload?
             /// Creates a new `PlayerMatchRow`.
             ///
             /// - Parameters:
@@ -4382,59 +5013,38 @@ internal enum Components {
             ///   - status:
             ///   - createdAt:
             ///   - opponent:
-            ///   - sets:
+            ///   - games:
             ///   - result:
             ///   - awaitingAcceptance:
+            ///   - ratingChange:
             internal init(
                 id: Swift.String,
                 status: Components.Schemas.MatchStatus,
                 createdAt: Foundation.Date,
                 opponent: Components.Schemas.PlayerMatchOpponent,
-                sets: [Components.Schemas.PlayerMatchSet],
+                games: [Components.Schemas.PlayerMatchGame],
                 result: Components.Schemas.PlayerMatchRow.ResultPayload? = nil,
-                awaitingAcceptance: Swift.Bool? = nil
+                awaitingAcceptance: Swift.Bool? = nil,
+                ratingChange: Components.Schemas.PlayerMatchRow.RatingChangePayload? = nil
             ) {
                 self.id = id
                 self.status = status
                 self.createdAt = createdAt
                 self.opponent = opponent
-                self.sets = sets
+                self.games = games
                 self.result = result
                 self.awaitingAcceptance = awaitingAcceptance
+                self.ratingChange = ratingChange
             }
             internal enum CodingKeys: String, CodingKey {
                 case id
                 case status
                 case createdAt = "created_at"
                 case opponent
-                case sets
+                case games
                 case result
                 case awaitingAcceptance = "awaiting_acceptance"
-            }
-        }
-        /// A single game's score from the headline player's perspective.
-        ///
-        /// - Remark: Generated from `#/components/schemas/PlayerMatchSet`.
-        internal struct PlayerMatchSet: Codable, Hashable, Sendable {
-            /// - Remark: Generated from `#/components/schemas/PlayerMatchSet/mine`.
-            internal var mine: Swift.Int
-            /// - Remark: Generated from `#/components/schemas/PlayerMatchSet/theirs`.
-            internal var theirs: Swift.Int
-            /// Creates a new `PlayerMatchSet`.
-            ///
-            /// - Parameters:
-            ///   - mine:
-            ///   - theirs:
-            internal init(
-                mine: Swift.Int,
-                theirs: Swift.Int
-            ) {
-                self.mine = mine
-                self.theirs = theirs
-            }
-            internal enum CodingKeys: String, CodingKey {
-                case mine
-                case theirs
+                case ratingChange = "rating_change"
             }
         }
         /// A user the current player can pick as a match opponent.
@@ -4473,10 +5083,46 @@ internal enum Components {
                 case rating
             }
         }
+        /// A run of consecutive same-outcome decided matches: ``n`` wins (``W``) or
+        /// ``n`` losses (``L``). Never zero-length — the absence of a streak is the
+        /// field being ``null``, not ``n=0`` (CONTEXT.md, "Streak").
+        ///
+        /// Structurally identical to `DashboardStreak`, deliberately: merging them
+        /// would rename a component the dashboard's generated clients already bind to,
+        /// for no gain to either surface.
+        ///
+        /// - Remark: Generated from `#/components/schemas/PlayerStreak`.
+        internal struct PlayerStreak: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/PlayerStreak/kind`.
+            internal enum KindPayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case w = "W"
+                case l = "L"
+            }
+            /// - Remark: Generated from `#/components/schemas/PlayerStreak/kind`.
+            internal var kind: Components.Schemas.PlayerStreak.KindPayload
+            /// - Remark: Generated from `#/components/schemas/PlayerStreak/n`.
+            internal var n: Swift.Int
+            /// Creates a new `PlayerStreak`.
+            ///
+            /// - Parameters:
+            ///   - kind:
+            ///   - n:
+            internal init(
+                kind: Components.Schemas.PlayerStreak.KindPayload,
+                n: Swift.Int
+            ) {
+                self.kind = kind
+                self.n = n
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case kind
+                case n
+            }
+        }
         /// Pre-shaped for the `/players` list and the profile-page hero.
         ///
         /// Carries everything those surfaces render: the username + the default-
-        /// league rating + a career W-L from completed matches + a 5-character form
+        /// league rating + a career W-L from completed matches + a 10-character form
         /// string (newest first) so the UI can render the form-dots without a
         /// follow-up query.
         ///
@@ -4737,7 +5383,30 @@ internal enum Components {
                 ])
             }
         }
-        /// A user's rating delta on a single completed match.
+        /// What one completed match did to a player's rating — and there are two kinds
+        /// of that, not one.
+        ///
+        /// A player who was already rated MOVED: ``1338 → 1503``, ``delta`` ``+165``.
+        ///
+        /// A player whose FIRST rated match this is was **ESTABLISHED** by it: they were
+        /// Unrated going in (CONTEXT.md, "Rating": a player who has never finished a rated
+        /// match has no rating), and they came out at 1268. They did not *lose* 232 points
+        /// of the 1500 their league-join seeded them with — they never held it. So
+        /// ``before`` is ``None`` and there is NO delta: nothing moved, a rating came into
+        /// existence. `Unrated → 1268`.
+        ///
+        /// The seeded 1500 is real in the WRITE side and stays there: the Glicko-2 update
+        /// genuinely starts from the strategy's initial state, and ``previous_rating_value``
+        /// records it faithfully. This model is where the read side declines to narrate
+        /// that prior as a rating the player fell from — the same refusal
+        /// ``app.ratings.rated`` makes for rating / rank / peak / confidence. The caller
+        /// supplies the one fact the row cannot know on its own (``had_rating_before``, an
+        /// earlier change exists), because "was I rated?" is a question about the player's
+        /// history, not about this row.
+        ///
+        /// ``delta`` is COMPUTED, never stored beside its own inputs (api/CLAUDE.md): a
+        /// ``RatingChange(before=None, delta=-232.0)`` — precisely the phantom of #952 — is
+        /// not constructible.
         ///
         /// - Remark: Generated from `#/components/schemas/RatingChange`.
         internal struct RatingChange: Codable, Hashable, Sendable {
@@ -4745,18 +5414,32 @@ internal enum Components {
             internal var before: Swift.Double?
             /// - Remark: Generated from `#/components/schemas/RatingChange/after`.
             internal var after: Swift.Double
+            /// How far the rating MOVED, or ``None`` when it was established rather than
+            /// moved.
+            ///
+            /// Two distinct nulls reach a client and they mean different things: a null
+            /// *``RatingChange``* is "this match moved no rating at all" (unrated, undecided
+            /// or voided); a null ``delta`` INSIDE a present change is "this is the rating
+            /// you got, and there was nothing before it to measure from". A ``0.0`` here
+            /// would claim a rated match moved a rating by nothing.
+            ///
+            /// The arithmetic itself is ``app.domain.rating.rating_delta`` — never inlined
+            /// here — so this wire model and the match-details domain
+            /// (``app.domain.match.extras.RatingChange.delta``) cannot drift into
+            /// disagreeing about the same player's movement.
+            ///
             /// - Remark: Generated from `#/components/schemas/RatingChange/delta`.
-            internal var delta: Swift.Double
+            internal var delta: Swift.Double?
             /// Creates a new `RatingChange`.
             ///
             /// - Parameters:
             ///   - before:
             ///   - after:
-            ///   - delta:
+            ///   - delta: How far the rating MOVED, or ``None`` when it was established rather than
             internal init(
                 before: Swift.Double? = nil,
                 after: Swift.Double,
-                delta: Swift.Double
+                delta: Swift.Double? = nil
             ) {
                 self.before = before
                 self.after = after
@@ -4766,6 +5449,214 @@ internal enum Components {
                 case before
                 case after
                 case delta
+            }
+        }
+        /// How settled a player's rating is on one ladder (CONTEXT.md, "Rating
+        /// confidence").
+        ///
+        /// `interval` is the rigorous statement and belongs on the card's face;
+        /// `deviation` (Glicko-2 RD) and `volatility` (sigma) are the internals BEHIND
+        /// confidence, not names for it — the client keeps them in a drawer.
+        ///
+        /// There is deliberately NO confidence PERCENTAGE. That number does not exist:
+        /// it would be an arbitrary rescaling of RD onto a 0-100 axis, saying nothing
+        /// the level and the interval don't say better. Do not add one.
+        ///
+        /// - Remark: Generated from `#/components/schemas/RatingConfidence`.
+        internal struct RatingConfidence: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/RatingConfidence/deviation`.
+            internal var deviation: Swift.Double
+            /// - Remark: Generated from `#/components/schemas/RatingConfidence/volatility`.
+            internal var volatility: Swift.Double
+            /// - Remark: Generated from `#/components/schemas/RatingConfidence/interval`.
+            internal var interval: Components.Schemas.RatingInterval
+            /// provisional / firming_up / settled, keyed off `deviation` alone.
+            ///
+            /// Derived, never stored: a `RatingConfidence(level="settled",
+            /// deviation=350.0)` — a rating that claims to be settled while the system
+            /// has no idea where the player belongs — is not constructible. The cut
+            /// points live in one place, `app.ratings.confidence`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/RatingConfidence/level`.
+            internal enum LevelPayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case provisional = "provisional"
+                case firmingUp = "firming_up"
+                case settled = "settled"
+            }
+            /// provisional / firming_up / settled, keyed off `deviation` alone.
+            ///
+            /// Derived, never stored: a `RatingConfidence(level="settled",
+            /// deviation=350.0)` — a rating that claims to be settled while the system
+            /// has no idea where the player belongs — is not constructible. The cut
+            /// points live in one place, `app.ratings.confidence`.
+            ///
+            /// - Remark: Generated from `#/components/schemas/RatingConfidence/level`.
+            internal var level: Components.Schemas.RatingConfidence.LevelPayload
+            /// Creates a new `RatingConfidence`.
+            ///
+            /// - Parameters:
+            ///   - deviation:
+            ///   - volatility:
+            ///   - interval:
+            ///   - level: provisional / firming_up / settled, keyed off `deviation` alone.
+            internal init(
+                deviation: Swift.Double,
+                volatility: Swift.Double,
+                interval: Components.Schemas.RatingInterval,
+                level: Components.Schemas.RatingConfidence.LevelPayload
+            ) {
+                self.deviation = deviation
+                self.volatility = volatility
+                self.interval = interval
+                self.level = level
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case deviation
+                case volatility
+                case interval
+                case level
+            }
+        }
+        /// A player's rating over one CALENDAR window — the profile's rating chart
+        /// (ADR-0915).
+        ///
+        /// The chart plots rating against *calendar time*, not against the player's
+        /// match sequence, and the `rating_history` audit cannot pay for that on its own:
+        /// it holds rows only where matches completed, so the window's left edge is
+        /// almost never a match. Hence `anchor`.
+        ///
+        /// - Remark: Generated from `#/components/schemas/RatingHistoryWindow`.
+        internal struct RatingHistoryWindow: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/RatingHistoryWindow/anchor`.
+            internal struct AnchorPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/RatingHistoryWindow/anchor/value1`.
+                internal var value1: Components.Schemas.RatingPoint
+                /// Creates a new `AnchorPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                internal init(value1: Components.Schemas.RatingPoint) {
+                    self.value1 = value1
+                }
+                internal init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                internal func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/RatingHistoryWindow/anchor`.
+            internal var anchor: Components.Schemas.RatingHistoryWindow.AnchorPayload?
+            /// - Remark: Generated from `#/components/schemas/RatingHistoryWindow/points`.
+            internal var points: [Components.Schemas.RatingPoint]?
+            /// - Remark: Generated from `#/components/schemas/RatingHistoryWindow/peak`.
+            internal struct PeakPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/RatingHistoryWindow/peak/value1`.
+                internal var value1: Components.Schemas.RatingPoint
+                /// Creates a new `PeakPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                internal init(value1: Components.Schemas.RatingPoint) {
+                    self.value1 = value1
+                }
+                internal init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                internal func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/RatingHistoryWindow/peak`.
+            internal var peak: Components.Schemas.RatingHistoryWindow.PeakPayload?
+            /// - Remark: Generated from `#/components/schemas/RatingHistoryWindow/change`.
+            internal var change: Swift.Double?
+            /// Creates a new `RatingHistoryWindow`.
+            ///
+            /// - Parameters:
+            ///   - anchor:
+            ///   - points:
+            ///   - peak:
+            ///   - change:
+            internal init(
+                anchor: Components.Schemas.RatingHistoryWindow.AnchorPayload? = nil,
+                points: [Components.Schemas.RatingPoint]? = nil,
+                peak: Components.Schemas.RatingHistoryWindow.PeakPayload? = nil,
+                change: Swift.Double? = nil
+            ) {
+                self.anchor = anchor
+                self.points = points
+                self.peak = peak
+                self.change = change
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case anchor
+                case points
+                case peak
+                case change
+            }
+        }
+        /// The 95% interval around a rating — "we think this player is somewhere
+        /// between 1551 and 1823". Whole rating points, low first.
+        ///
+        /// - Remark: Generated from `#/components/schemas/RatingInterval`.
+        internal struct RatingInterval: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/RatingInterval/low`.
+            internal var low: Swift.Double
+            /// - Remark: Generated from `#/components/schemas/RatingInterval/high`.
+            internal var high: Swift.Double
+            /// Creates a new `RatingInterval`.
+            ///
+            /// - Parameters:
+            ///   - low:
+            ///   - high:
+            internal init(
+                low: Swift.Double,
+                high: Swift.Double
+            ) {
+                self.low = low
+                self.high = high
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case low
+                case high
+            }
+        }
+        /// One instant on a player's **rating timeline** (CONTEXT.md): what their
+        /// rating became, and when it became that.
+        ///
+        /// `at` is the *completion* instant of the match that moved it (ADR-0012) — not
+        /// when the audit row happened to be written, which a recompute rewrites. For a
+        /// manual / import / initial change there is no match, so `at` is the moment the
+        /// change was recorded and `match_id` is `null`.
+        ///
+        /// - Remark: Generated from `#/components/schemas/RatingPoint`.
+        internal struct RatingPoint: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/RatingPoint/at`.
+            internal var at: Foundation.Date
+            /// - Remark: Generated from `#/components/schemas/RatingPoint/rating`.
+            internal var rating: Swift.Double
+            /// - Remark: Generated from `#/components/schemas/RatingPoint/match_id`.
+            internal var matchId: Swift.String?
+            /// Creates a new `RatingPoint`.
+            ///
+            /// - Parameters:
+            ///   - at:
+            ///   - rating:
+            ///   - matchId:
+            internal init(
+                at: Foundation.Date,
+                rating: Swift.Double,
+                matchId: Swift.String? = nil
+            ) {
+                self.at = at
+                self.rating = rating
+                self.matchId = matchId
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case at
+                case rating
+                case matchId = "match_id"
             }
         }
         /// - Remark: Generated from `#/components/schemas/RbacUserCreate`.
@@ -5138,6 +6029,8 @@ internal enum Components {
         }
         /// - Remark: Generated from `#/components/schemas/SessionUser`.
         internal struct SessionUser: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/SessionUser/id`.
+            internal var id: Swift.String
             /// - Remark: Generated from `#/components/schemas/SessionUser/username`.
             internal var username: Swift.String
             /// - Remark: Generated from `#/components/schemas/SessionUser/permissions`.
@@ -5151,18 +6044,21 @@ internal enum Components {
             /// Creates a new `SessionUser`.
             ///
             /// - Parameters:
+            ///   - id:
             ///   - username:
             ///   - permissions:
             ///   - email:
             ///   - confirmedAt:
             ///   - pendingEmail:
             internal init(
+                id: Swift.String,
                 username: Swift.String,
                 permissions: [Swift.String],
                 email: Swift.String? = nil,
                 confirmedAt: Foundation.Date? = nil,
                 pendingEmail: Swift.String? = nil
             ) {
+                self.id = id
                 self.username = username
                 self.permissions = permissions
                 self.email = email
@@ -5170,6 +6066,7 @@ internal enum Components {
                 self.pendingEmail = pendingEmail
             }
             internal enum CodingKeys: String, CodingKey {
+                case id
                 case username
                 case permissions
                 case email
@@ -6343,6 +7240,63 @@ internal enum Components {
                 case _type = "type"
                 case input
                 case ctx
+            }
+        }
+        /// The CALLER's own record against the profiled player — "you are 1-4
+        /// against them", not "they are 4-1 against you".
+        ///
+        /// Present with **zero meetings** for a caller who has never played them, which
+        /// is the common case, not an error: a guest session is minted for anyone who
+        /// lands on a profile link, and a guest has played nobody (ADR-0915). The card
+        /// renders "You haven't played X yet" plus a Start-a-match CTA off exactly this
+        /// state, and needs `opponent` populated to prefill it — so the empty record is
+        /// a first-class value, and never `null` in place of one.
+        ///
+        /// - Remark: Generated from `#/components/schemas/ViewerHeadToHead`.
+        internal struct ViewerHeadToHead: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/ViewerHeadToHead/opponent`.
+            internal var opponent: Components.Schemas.HeadToHeadOpponent
+            /// - Remark: Generated from `#/components/schemas/ViewerHeadToHead/wins`.
+            internal var wins: Swift.Int?
+            /// - Remark: Generated from `#/components/schemas/ViewerHeadToHead/losses`.
+            internal var losses: Swift.Int?
+            /// - Remark: Generated from `#/components/schemas/ViewerHeadToHead/last_meeting`.
+            internal var lastMeeting: Foundation.Date?
+            /// How many times the pair have played. DERIVED, not stored: a meeting
+            /// is a *decided* match (CONTEXT.md), and a decided match is a win for one
+            /// side and a loss for the other — so `meetings` is exactly
+            /// `wins + losses`, and carrying it as its own field would let the two
+            /// drift (api/CLAUDE.md, "don't carry a field and its own derivation").
+            ///
+            /// - Remark: Generated from `#/components/schemas/ViewerHeadToHead/meetings`.
+            internal var meetings: Swift.Int
+            /// Creates a new `ViewerHeadToHead`.
+            ///
+            /// - Parameters:
+            ///   - opponent:
+            ///   - wins:
+            ///   - losses:
+            ///   - lastMeeting:
+            ///   - meetings: How many times the pair have played. DERIVED, not stored: a meeting
+            internal init(
+                opponent: Components.Schemas.HeadToHeadOpponent,
+                wins: Swift.Int? = nil,
+                losses: Swift.Int? = nil,
+                lastMeeting: Foundation.Date? = nil,
+                meetings: Swift.Int
+            ) {
+                self.opponent = opponent
+                self.wins = wins
+                self.losses = losses
+                self.lastMeeting = lastMeeting
+                self.meetings = meetings
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case opponent
+                case wins
+                case losses
+                case lastMeeting = "last_meeting"
+                case meetings
             }
         }
         /// - Remark: Generated from `#/components/schemas/app__schemas__match__MatchDetails`.
@@ -13136,8 +14090,61 @@ internal enum Operations {
     }
     /// Get Player
     ///
-    /// Authed profile bundle for `/players/$userId` — hero + first page of
-    /// matches in one response.
+    /// Authed profile bundle for `/players/$userId` — the overview in one
+    /// response: hero + the six most recent matches + the all-inclusive
+    /// `match_total` behind the "View all N matches" link. The full paginated
+    /// history is served by `/v1/players/{id}/matches`.
+    ///
+    /// `league_id` selects the ladder the RATING HALF of the page is about,
+    /// defaulting to the default league when it is omitted — and also when it names
+    /// a league that does not exist. The league is a LENS on this player, not the
+    /// resource being addressed (ADR-0915): a stale bookmark to a deleted ladder
+    /// degrades to the default one rather than 404ing a player who is perfectly
+    /// fine. `player_id` is the resource, and an unknown one is still a 404.
+    /// Everything about where this player stands follows the league: `rating` and
+    /// `rank` out of `rank_of` (so it reads "#3 of 42", never a naked "#3"), their
+    /// all-time `peak`, the `rating_delta` their most recent rated match moved, their
+    /// recent `form`, a `percentile` (only once the league is large enough for it to
+    /// mean anything), and `confidence`. An unrated player has none of them.
+    ///
+    /// `confidence` says how settled that rating is on this ladder: a `level`
+    /// (`provisional` / `firming_up` / `settled`), the 95% `interval` around the
+    /// rating ("somewhere between 1551 and 1823"), and the Glicko-2 `deviation` and
+    /// `volatility` behind them. It is `null` — the card does not render — for an
+    /// unrated player, and for one whose rating was supplied externally by a manual
+    /// strategy, which carries no deviation to be confident about.
+    ///
+    /// `leagues` lists every league this player belongs to with their rating on each
+    /// — the Leagues card, which is the page's league *switcher*. It is the same
+    /// list whichever league was asked for; the client marks the selected row (and
+    /// falls back to the one flagged `is_default` when no `league_id` was named).
+    ///
+    /// `career` is the exception: it is CROSS-LEAGUE and ignores `league_id`
+    /// entirely. Rating, rank, peak, form and percentile are facts about a *ladder*;
+    /// a player's lifetime record — decided matches, W-L, win rate, games-won share,
+    /// current and best streak — is a fact about the *person* (ADR-0915). Ask for
+    /// the same player in two different leagues and only the rating half changes.
+    /// `career.decided` counts decided matches alone, so it is smaller than
+    /// `match_total` whenever one of their matches is still in play.
+    ///
+    /// `head_to_head` is VIEWER-AWARE — the one block here that depends on who is
+    /// asking (ADR-0915), so two callers get different bytes for the same profile
+    /// and no cache in front of this endpoint may share them. `versus_viewer` is the
+    /// CALLER's own record against this player, written from the caller's side ("you
+    /// are 1-4 against them", not "they are 4-1 against you"): `null` when the caller
+    /// *is* this player, and present with zero meetings — never `null`, never an
+    /// error — when they have simply never played, which is what a brand-new guest
+    /// always sees. `frequent_opponents` is this player's most-met opponents, read
+    /// from *their* side. A meeting is a *decided* match between two named players,
+    /// rated or not, in any league: a match still in play is not a record, and a solo
+    /// "No opponent" match can never be one.
+    ///
+    /// `rating_history` is the rating chart's data for the calendar window named by
+    /// `range` (`30d` / `90d` / `1y`, defaulting to `90d`) — the same shape
+    /// `GET /v1/players/{id}/rating-history` returns, embedded so the profile paints
+    /// its chart without a second request. The client seeds that endpoint's cache from
+    /// this block and calls it only when the user changes range (ADR-0915). Note the
+    /// `anchor` inside it is a point from OUTSIDE the window, on purpose.
     ///
     /// - Remark: HTTP `GET /v1/players/{player_id}`.
     /// - Remark: Generated from `#/paths//v1/players/{player_id}/get(get_player_v1_players__player_id__get)`.
@@ -13161,12 +14168,25 @@ internal enum Operations {
             internal struct Query: Sendable, Hashable {
                 /// - Remark: Generated from `#/paths/v1/players/{player_id}/GET/query/league_id`.
                 internal var leagueId: Swift.String?
+                /// - Remark: Generated from `#/paths/v1/players/{player_id}/GET/query/range`.
+                internal enum RangePayload: String, Codable, Hashable, Sendable, CaseIterable {
+                    case _30d = "30d"
+                    case _90d = "90d"
+                    case _1y = "1y"
+                }
+                /// - Remark: Generated from `#/paths/v1/players/{player_id}/GET/query/range`.
+                internal var range: Operations.GetPlayerV1PlayersPlayerIdGet.Input.Query.RangePayload?
                 /// Creates a new `Query`.
                 ///
                 /// - Parameters:
                 ///   - leagueId:
-                internal init(leagueId: Swift.String? = nil) {
+                ///   - range:
+                internal init(
+                    leagueId: Swift.String? = nil,
+                    range: Operations.GetPlayerV1PlayersPlayerIdGet.Input.Query.RangePayload? = nil
+                ) {
                     self.leagueId = leagueId
+                    self.range = range
                 }
             }
             internal var query: Operations.GetPlayerV1PlayersPlayerIdGet.Input.Query
@@ -13332,13 +14352,259 @@ internal enum Operations {
             }
         }
     }
+    /// Get Player Rating History
+    ///
+    /// The player's rating over a CALENDAR window — the profile's rating chart
+    /// (ADR-0915). `range` is `30d`, `90d` (the default) or `1y`; `league_id` names
+    /// the ladder, defaulting to the default league, because a rating is a fact about
+    /// one ladder and never about a player "in general". As on the profile bundle it
+    /// is a lens and not the resource, so a `league_id` naming no league degrades to
+    /// the default ladder rather than 404ing; an unknown `player_id` is still a 404.
+    ///
+    /// The chart is drawn from three things:
+    ///
+    /// * `anchor` — the player's rating **as of the window start**, read from their
+    ///   last rating change *at or before* it. It is therefore A POINT FROM OUTSIDE
+    ///   THE REQUESTED WINDOW, with an `at` older than the window's left edge, and
+    ///   that is deliberate: rating history exists only where matches completed, so
+    ///   the window's left edge is almost never a match. Without it, a player whose
+    ///   first match in the window landed on day forty would be told their ninety-day
+    ///   change was only the movement since day forty. `null` when they held no rating
+    ///   at that instant — there is nothing to carry in — and the line then starts at
+    ///   the first in-window point.
+    /// * `points` — every rating change inside the window, oldest first. A **voided**
+    ///   match is absent, not zeroed: voiding deletes its rating-history rows, so it
+    ///   leaves the rating timeline entirely (CONTEXT.md, "Voided match") and the
+    ///   chart can change shape retroactively. An EMPTY list is a first-class answer,
+    ///   never an error: a rated player with nothing in the last ninety days gets
+    ///   their anchor and no points, and the chart draws a flat line at their current
+    ///   rating.
+    /// * `change` — the net movement across the window, measured from the `anchor`
+    ///   (or, with no anchor, from the first in-window point) to the latest one.
+    ///   `null`, never `+0`, for an empty window: nothing was played, so there is no
+    ///   delta to report.
+    ///
+    /// `peak` is the highest point WITHIN THE WINDOW, and is a different number from
+    /// the profile's `peak`, which is the player's all-time high on the ladder. Do not
+    /// read either for the other.
+    ///
+    /// - Remark: HTTP `GET /v1/players/{player_id}/rating-history`.
+    /// - Remark: Generated from `#/paths//v1/players/{player_id}/rating-history/get(get_player_rating_history_v1_players__player_id__rating_history_get)`.
+    internal enum GetPlayerRatingHistoryV1PlayersPlayerIdRatingHistoryGet {
+        internal static let id: Swift.String = "get_player_rating_history_v1_players__player_id__rating_history_get"
+        internal struct Input: Sendable, Hashable {
+            /// - Remark: Generated from `#/paths/v1/players/{player_id}/rating-history/GET/path`.
+            internal struct Path: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/players/{player_id}/rating-history/GET/path/player_id`.
+                internal var playerId: Swift.String
+                /// Creates a new `Path`.
+                ///
+                /// - Parameters:
+                ///   - playerId:
+                internal init(playerId: Swift.String) {
+                    self.playerId = playerId
+                }
+            }
+            internal var path: Operations.GetPlayerRatingHistoryV1PlayersPlayerIdRatingHistoryGet.Input.Path
+            /// - Remark: Generated from `#/paths/v1/players/{player_id}/rating-history/GET/query`.
+            internal struct Query: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/players/{player_id}/rating-history/GET/query/league_id`.
+                internal var leagueId: Swift.String?
+                /// - Remark: Generated from `#/paths/v1/players/{player_id}/rating-history/GET/query/range`.
+                internal enum RangePayload: String, Codable, Hashable, Sendable, CaseIterable {
+                    case _30d = "30d"
+                    case _90d = "90d"
+                    case _1y = "1y"
+                }
+                /// - Remark: Generated from `#/paths/v1/players/{player_id}/rating-history/GET/query/range`.
+                internal var range: Operations.GetPlayerRatingHistoryV1PlayersPlayerIdRatingHistoryGet.Input.Query.RangePayload?
+                /// Creates a new `Query`.
+                ///
+                /// - Parameters:
+                ///   - leagueId:
+                ///   - range:
+                internal init(
+                    leagueId: Swift.String? = nil,
+                    range: Operations.GetPlayerRatingHistoryV1PlayersPlayerIdRatingHistoryGet.Input.Query.RangePayload? = nil
+                ) {
+                    self.leagueId = leagueId
+                    self.range = range
+                }
+            }
+            internal var query: Operations.GetPlayerRatingHistoryV1PlayersPlayerIdRatingHistoryGet.Input.Query
+            /// - Remark: Generated from `#/paths/v1/players/{player_id}/rating-history/GET/header`.
+            internal struct Headers: Sendable, Hashable {
+                internal var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.GetPlayerRatingHistoryV1PlayersPlayerIdRatingHistoryGet.AcceptableContentType>]
+                /// Creates a new `Headers`.
+                ///
+                /// - Parameters:
+                ///   - accept:
+                internal init(accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.GetPlayerRatingHistoryV1PlayersPlayerIdRatingHistoryGet.AcceptableContentType>] = .defaultValues()) {
+                    self.accept = accept
+                }
+            }
+            internal var headers: Operations.GetPlayerRatingHistoryV1PlayersPlayerIdRatingHistoryGet.Input.Headers
+            /// Creates a new `Input`.
+            ///
+            /// - Parameters:
+            ///   - path:
+            ///   - query:
+            ///   - headers:
+            internal init(
+                path: Operations.GetPlayerRatingHistoryV1PlayersPlayerIdRatingHistoryGet.Input.Path,
+                query: Operations.GetPlayerRatingHistoryV1PlayersPlayerIdRatingHistoryGet.Input.Query = .init(),
+                headers: Operations.GetPlayerRatingHistoryV1PlayersPlayerIdRatingHistoryGet.Input.Headers = .init()
+            ) {
+                self.path = path
+                self.query = query
+                self.headers = headers
+            }
+        }
+        internal enum Output: Sendable, Hashable {
+            internal struct Ok: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/players/{player_id}/rating-history/GET/responses/200/content`.
+                internal enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/players/{player_id}/rating-history/GET/responses/200/content/application\/json`.
+                    case json(Components.Schemas.RatingHistoryWindow)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    internal var json: Components.Schemas.RatingHistoryWindow {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                internal var body: Operations.GetPlayerRatingHistoryV1PlayersPlayerIdRatingHistoryGet.Output.Ok.Body
+                /// Creates a new `Ok`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                internal init(body: Operations.GetPlayerRatingHistoryV1PlayersPlayerIdRatingHistoryGet.Output.Ok.Body) {
+                    self.body = body
+                }
+            }
+            /// Successful Response
+            ///
+            /// - Remark: Generated from `#/paths//v1/players/{player_id}/rating-history/get(get_player_rating_history_v1_players__player_id__rating_history_get)/responses/200`.
+            ///
+            /// HTTP response code: `200 ok`.
+            case ok(Operations.GetPlayerRatingHistoryV1PlayersPlayerIdRatingHistoryGet.Output.Ok)
+            /// The associated value of the enum case if `self` is `.ok`.
+            ///
+            /// - Throws: An error if `self` is not `.ok`.
+            /// - SeeAlso: `.ok`.
+            internal var ok: Operations.GetPlayerRatingHistoryV1PlayersPlayerIdRatingHistoryGet.Output.Ok {
+                get throws {
+                    switch self {
+                    case let .ok(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "ok",
+                            response: self
+                        )
+                    }
+                }
+            }
+            internal struct UnprocessableContent: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/players/{player_id}/rating-history/GET/responses/422/content`.
+                internal enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/players/{player_id}/rating-history/GET/responses/422/content/application\/json`.
+                    case json(Components.Schemas.HTTPValidationError)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    internal var json: Components.Schemas.HTTPValidationError {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                internal var body: Operations.GetPlayerRatingHistoryV1PlayersPlayerIdRatingHistoryGet.Output.UnprocessableContent.Body
+                /// Creates a new `UnprocessableContent`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                internal init(body: Operations.GetPlayerRatingHistoryV1PlayersPlayerIdRatingHistoryGet.Output.UnprocessableContent.Body) {
+                    self.body = body
+                }
+            }
+            /// Validation Error
+            ///
+            /// - Remark: Generated from `#/paths//v1/players/{player_id}/rating-history/get(get_player_rating_history_v1_players__player_id__rating_history_get)/responses/422`.
+            ///
+            /// HTTP response code: `422 unprocessableContent`.
+            case unprocessableContent(Operations.GetPlayerRatingHistoryV1PlayersPlayerIdRatingHistoryGet.Output.UnprocessableContent)
+            /// The associated value of the enum case if `self` is `.unprocessableContent`.
+            ///
+            /// - Throws: An error if `self` is not `.unprocessableContent`.
+            /// - SeeAlso: `.unprocessableContent`.
+            internal var unprocessableContent: Operations.GetPlayerRatingHistoryV1PlayersPlayerIdRatingHistoryGet.Output.UnprocessableContent {
+                get throws {
+                    switch self {
+                    case let .unprocessableContent(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "unprocessableContent",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Undocumented response.
+            ///
+            /// A response with a code that is not documented in the OpenAPI document.
+            case undocumented(statusCode: Swift.Int, OpenAPIRuntime.UndocumentedPayload)
+        }
+        internal enum AcceptableContentType: AcceptableProtocol {
+            case json
+            case other(Swift.String)
+            internal init?(rawValue: Swift.String) {
+                switch rawValue.lowercased() {
+                case "application/json":
+                    self = .json
+                default:
+                    self = .other(rawValue)
+                }
+            }
+            internal var rawValue: Swift.String {
+                switch self {
+                case let .other(string):
+                    return string
+                case .json:
+                    return "application/json"
+                }
+            }
+            internal static var allCases: [Self] {
+                [
+                    .json
+                ]
+            }
+        }
+    }
     /// List Player Matches
     ///
-    /// Paginated per-player match history backing page 2+ of the authed
-    /// profile page (`/players/$userId`); page 1 ships inline in the
-    /// `/v1/players/{id}` bundle. Newest-first by ``created_at``. Sets are
-    /// projected from the player's perspective so the FE renders them without
-    /// flipping sides.
+    /// Paginated per-player match history backing the full-history route
+    /// (`/players/$userId/matches`), 25 to a page. The profile overview embeds only
+    /// the six most recent inline (`GET /v1/players/{id}`) and links here for the
+    /// rest.
+    ///
+    /// The history is all-inclusive (ADR-0008): every match the player is a side
+    /// of, any status, rated or not, solo "No opponent" matches included.
+    /// Newest-first by ``created_at``. Games are projected from the player's
+    /// perspective so the FE renders them without flipping sides.
     ///
     /// - Remark: HTTP `GET /v1/players/{player_id}/matches`.
     /// - Remark: Generated from `#/paths//v1/players/{player_id}/matches/get(list_player_matches_v1_players__player_id__matches_get)`.

@@ -3204,10 +3204,11 @@ async def test_details_recent_form_includes_pre_match_rating_and_career(
     # I had 2 completed matches before this one, both wins.
     assert mine["career_matches_before"] == 2
     assert mine["career_wins_before"] == 2
-    # Rating history exists with 3 prior entries (the league-join seed plus
-    # one per rated match) and rating_before matches the most-recent entry.
+    # Rating history exists with one entry per rated match — the league-join
+    # seed is a prior, not a rating, so it is not plotted — and rating_before
+    # matches the most-recent entry.
     assert mine["rating_before"] is not None
-    assert len(mine["rating_history"]) == 3
+    assert len(mine["rating_history"]) == 2
     assert mine["rating_history"][-1] == mine["rating_before"]
     # Brand-new opponent: no rating, no career.
     fresh = forms[str(opp.id)]
@@ -3217,13 +3218,61 @@ async def test_details_recent_form_includes_pre_match_rating_and_career(
     assert fresh["career_wins_before"] == 0
 
 
+async def test_details_pre_match_rating_is_unrated_for_a_first_ever_rated_match(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """The pre-match snapshot must not present the league-join seed as a rating.
+
+    A session-minted player carries an ``initial`` 1500 ``rating_history`` row from
+    the moment they join the default league — before they have played a thing. Read
+    naively, that seed made the "going into this match" snapshot print "RATING 1500"
+    for a player with zero career matches, who reads Unrated on every other surface.
+
+    This is a POINT-IN-TIME read, so the two halves have to be right at once: the
+    newcomer, for whom this is a first-ever rated match, was Unrated *then* (null —
+    not 1500), while the player who had already finished one shows the real value
+    they earned by that instant (not null, and not the 1500 they started from).
+    """
+    me = await start_session(api_client, db_session)
+
+    # I earn a real rating first, against a third player.
+    async with opponent_session(db_session, "pre-rating-rival") as (
+        rival_client,
+        rival,
+    ):
+        await _play_match_to_completion(
+            api_client, rival_client, rival.id, best_of=3, side_1_wins=True
+        )
+
+    # The opponent is session-minted, so they DO carry the seeded 1500 row — but
+    # this match is the first rated one they've ever played.
+    async with opponent_session(db_session, "pre-rating-newcomer") as (_, newcomer):
+        current = await _create_match(api_client, newcomer.id, best_of=3)
+
+    detail = (await api_client.get(f"/v1/matches/{current['id']}")).json()
+    forms = {f["user_id"]: f for f in detail["recent_form"]}
+
+    # Never finished a rated match ⇒ Unrated going in, and nothing to plot.
+    newcomer_form = forms[str(newcomer.id)]
+    assert newcomer_form["rating_before"] is None
+    assert newcomer_form["rating_history"] == []
+
+    # I won a rated match before this one, so I go in with what it earned me —
+    # a real value, not the seed it moved away from.
+    mine = forms[str(me.id)]
+    assert mine["rating_before"] is not None
+    assert mine["rating_before"] != 1500.0
+    assert mine["rating_history"] == [mine["rating_before"]]
+
+
 async def test_details_recent_form_excludes_self_from_career_count(
     api_client: AsyncClient, db_session: AsyncSession
 ):
     """A just-completed match's own row in rating_history / its own match
-    row must not double-count itself in the BFF. The session user still shows
-    their league-join seed (recorded before the match), but none of the
-    match's own freshly-written rating rows leak into the pre-match view."""
+    row must not double-count itself in the BFF. This match is the first rated
+    one either player has finished, so going into it they were both Unrated —
+    neither the seed each carries from joining the league nor the match's own
+    freshly-written rating rows may show up in the pre-match view."""
     me = await start_session(api_client, db_session)
     async with opponent_session(db_session, "self-exclude-opp") as (opp_client, opp):
         finished = await _play_match_to_completion(
@@ -3238,19 +3287,19 @@ async def test_details_recent_form_excludes_self_from_career_count(
         assert f["career_matches_before"] == 0
         assert f["career_wins_before"] == 0
 
-    # The session user joined the league at signup, so their pre-match rating
-    # is the seeded baseline; the match's own rating rows are excluded.
+    # The session user joined the league at signup, but a join seeds a prior,
+    # not a rating: they had finished no rated match before this one, so they
+    # went into it Unrated. The match's own rating rows are excluded too.
     mine = forms[str(me.id)]
-    assert mine["rating_before"] == 1500.0
-    assert mine["rating_history"] == [1500.0]
+    assert mine["rating_before"] is None
+    assert mine["rating_history"] == []
 
-    # The opponent's session join seeded their rating too — but only the
-    # match-sourced rating row would predate the *next* match, and there
-    # isn't one — so their pre-match history for this match is just the
-    # seed (recorded before the match was created).
+    # Same for the opponent: their session join seeded a 1500 row, and this is
+    # the first rated match they've completed, so their pre-match rating is
+    # Unrated rather than that seed.
     opp_form = forms[str(opp.id)]
-    assert opp_form["rating_before"] == 1500.0
-    assert opp_form["rating_history"] == [1500.0]
+    assert opp_form["rating_before"] is None
+    assert opp_form["rating_history"] == []
 
 
 async def test_details_career_count_excludes_only_the_viewed_match(
@@ -3400,16 +3449,48 @@ async def test_pre_match_ratings_defaults_a_never_rated_player_to_null(
     api_client: AsyncClient,
     db_session: AsyncSession,
     default_league: League,
+    rating_strategies: dict[str, RatingStrategy],
 ):
     """A player with no rating history matches *no rows* in their lateral. They
     must be defaulted back in as an unrated player — a present key holding an
     empty trail (and so a ``None`` value), not a dropped key (which would silently
-    strip them from recent_form) and not a ``KeyError``."""
+    strip them from recent_form) and not a ``KeyError``.
+
+    "No rating history" means NO REAL RATING CHANGE, which is not the same as no
+    rows: ``start_session`` seeds a 1500 ``initial`` row the moment a user joins the
+    default league, so a brand-new player owns a row without ever having been rated.
+    ``is_rating_change()`` filters that seed out of the trail (#950) — it is the
+    strategy's prior, not a rating the player held — so a player whose only row is
+    the seed is Unrated here too, exactly as the pre-match snapshot renders them.
+    Trailing the seed would plot it as the sparkline's first point and let the
+    match-details chip narrate a first rated match as a fall from 1500."""
+    strategy = rating_strategies["glicko2"]
     me = await start_session(api_client, db_session)
+    seeded_only = await make_user(db_session, "rating-null-seeded")
     newcomer = await make_user(db_session, "rating-null-newcomer")
+    base = datetime(2026, 5, 1, tzinfo=UTC)
+    # The seeded-only player: a join seed and nothing else. Unrated.
+    db_session.add(
+        _match_history_row(
+            default_league,
+            seeded_only,
+            None,
+            strategy,
+            RatingHistorySource.initial,
+            1500.0,
+            base,
+        )
+    )
+    # ``me`` has been genuinely rated: a real change on top of their join seed.
+    db_session.add(
+        _match_history_row(
+            default_league, me, None, strategy, RatingHistorySource.manual, 1520.0, base
+        )
+    )
+    await db_session.commit()
 
     ratings = await MatchDetailsRepository(db_session).pre_match_ratings(
-        [me.id, newcomer.id],
+        [me.id, seeded_only.id, newcomer.id],
         default_league.id,
         datetime.now(UTC) + timedelta(days=1),
     )
@@ -3418,8 +3499,14 @@ async def test_pre_match_ratings_defaults_a_never_rated_player_to_null(
     assert newcomer.id in ratings
     assert ratings[newcomer.id] == PreMatchRating(history=[])
     assert ratings[newcomer.id].value is None
-    # And the player who *does* have history keeps their league-join seed.
-    assert ratings[me.id] == PreMatchRating(history=[1500.0])
+    # A row, but not a rating: the join seed is filtered out, so they are Unrated
+    # too — the same answer as the player who owns no rows at all.
+    assert ratings[seeded_only.id] == PreMatchRating(history=[])
+    assert ratings[seeded_only.id].value is None
+    # And the player who *has* been rated keeps their real change — and only that:
+    # the 1500 seed underneath it is not part of the trail.
+    assert ratings[me.id] == PreMatchRating(history=[1520.0])
+    assert ratings[me.id].value == 1520.0
 
 
 async def test_pre_match_ratings_caps_the_sparkline_per_user(

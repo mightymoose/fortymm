@@ -425,6 +425,7 @@ async def _build_session_response(
     return SessionResponse(
         data=SessionData(
             user=SessionUser(
+                id=user.id,
                 username=user.username,
                 permissions=permissions,
                 email=user.email,

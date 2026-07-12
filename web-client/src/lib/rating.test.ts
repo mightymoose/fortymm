@@ -1,4 +1,25 @@
-import { formatRatingDelta, formatRatingDeltaAria } from './rating'
+import { formatRating, formatRatingDelta, formatRatingDeltaAria } from './rating'
+
+describe('formatRating', () => {
+  it('rounds to whole rating points', () => {
+    expect(formatRating(1687.4)).toBe('1687')
+    expect(formatRating(1686.6)).toBe('1687')
+  })
+
+  it('prints an em dash — NEVER a 0 — for a rating that is not there', () => {
+    // Holding no rating on a ladder and being rated zero on it are different
+    // facts. A "0" would say the player is the worst on it.
+    expect(formatRating(null)).toBe('—')
+    expect(formatRating(undefined)).toBe('—')
+    expect(formatRating(null)).not.toBe('0')
+  })
+
+  it('is unsigned — a rating is not a delta', () => {
+    // `formatRatingDelta` prints "+12"; a rating is just "1687".
+    expect(formatRating(1687)).toBe('1687')
+    expect(formatRating(1687)).not.toContain('+')
+  })
+})
 
 describe('formatRatingDelta', () => {
   it('signs and rounds a gain', () => {

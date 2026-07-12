@@ -1,3 +1,4 @@
+import uuid
 from datetime import datetime
 from typing import Annotated
 
@@ -34,6 +35,12 @@ USERNAME_MAX_LENGTH = 40
 
 
 class SessionUser(BaseModel):
+    # The caller's own user id. Returned only to the holder of the session
+    # cookie, and the only place the API tells anyone who they are: without it
+    # clients have to guess at "is this me?" by comparing usernames, which a
+    # rename breaks. Never null — a guest minted by ``GET /v1/session`` is a
+    # real user row with a real id.
+    id: uuid.UUID
     username: str
     permissions: list[str]
     email: str | None = None

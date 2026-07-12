@@ -192,9 +192,19 @@ async function installApiMocks(page: Page, seed: Seed): Promise<void> {
       body: JSON.stringify(body),
     }) as const
 
+  // `id` is required on the wire (the user menu's "Your profile" link reads
+  // it) — MSW is off here, so this stub is the only thing feeding the session.
   await page.route('**/api/v1/session', (route) =>
     route.fulfill(
-      json({ data: { user: { username: SEED.meUsername, permissions: [] } } }),
+      json({
+        data: {
+          user: {
+            id: 'e0b7a1c4-3f26-4c9d-9a58-2d61b4f70c83',
+            username: SEED.meUsername,
+            permissions: [],
+          },
+        },
+      }),
     ),
   )
   await page.route(`**/api/v1/matches/${seed.id}`, (route) =>

@@ -40,6 +40,11 @@ from app.models import (
     MatchStatus,
     RatingHistory,
 )
+from app.ratings.rated import (
+    had_rating_before,
+    is_rating_change,
+    reported_rating_before,
+)
 from app.result_acceptance import side_win_counts
 
 RECENT_FORM_LIMIT = 5
@@ -76,23 +81,31 @@ class MatchDetailsRepository:
     ) -> dict[uuid.UUID, RatingChange]:
         """Returns ``user_id -> RatingChange`` for every rating row this match
         produced. Empty for matches that didn't move ratings — including, always,
-        a non-completed match, since no rating rows can exist before completion."""
+        a non-completed match, since no rating rows can exist before completion.
+
+        Each row rides with ``had_rating_before()``: whether the player already held
+        an EARNED rating when it landed. Without it, a player whose FIRST rated match
+        this is would be reported as falling from the 1500 their league-join seeded —
+        "1500 → 1268, −232" — inches from the pre-match snapshot on the same page
+        correctly calling them Unrated (#952). They were established at 1268, not
+        knocked down to it. ``reported_rating_before`` is the one reader of the raw
+        column and turns that flag into the ``before`` this match is reported with;
+        ``RatingChange.delta`` derives itself from it."""
         if status != MatchStatus.completed:
             return {}
         rows = (
-            (
-                await self._db.execute(
-                    select(RatingHistory).where(RatingHistory.match_id == match_id)
-                )
+            await self._db.execute(
+                select(
+                    RatingHistory, had_rating_before().label("had_rating_before")
+                ).where(RatingHistory.match_id == match_id)
             )
-            .scalars()
-            .all()
-        )
+        ).all()
         return {
             row.user_id: RatingChange(
-                before=row.previous_rating_value, after=row.rating_value
+                before=reported_rating_before(row, had_rating_before=was_rated),
+                after=row.rating_value,
             )
-            for row in rows
+            for row, was_rated in rows
         }
 
     async def recent_form(
@@ -176,6 +189,18 @@ class MatchDetailsRepository:
 
         Strict ``<`` on ``before`` so this match's own rating row never leaks in.
 
+        ``is_rating_change()`` — the same "who is actually rated" predicate the
+        roster, the profile hero and the leagues card read through — is applied HERE
+        AT ``before``, which is what makes this the point-in-time version of it. The
+        question the snapshot asks is not "is this player rated *now*" but "what was
+        their rating *going into this match*", and the two answers differ: a player
+        who is rated today was Unrated before their first rated match. Filtering the
+        ``initial`` seed out of a window that already ends at ``before`` answers
+        exactly that — a player with no real rating change before this match has no
+        pre-match rating (``PreMatchRating.value`` is ``None``, "Unrated") rather
+        than the 1500 prior their league-join seeded them with (#950), and the seed
+        likewise stops being plotted as the sparkline's first point.
+
         A player with no rating history in the league matches **no rows** in their
         lateral; they are defaulted back in as an unrated player, so every
         requested id is always a key of the returned dict."""
@@ -195,6 +220,7 @@ class MatchDetailsRepository:
                 RatingHistory.user_id == cited,
                 RatingHistory.league_id == league_id,
                 RatingHistory.created_at < before,
+                is_rating_change(),
             )
             .order_by(RatingHistory.created_at.desc())
             .limit(RATING_HISTORY_LIMIT)

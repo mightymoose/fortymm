@@ -1,5 +1,7 @@
 import { useState } from 'react'
 import { createFileRoute, useBlocker, useNavigate } from '@tanstack/react-router'
+import { zodValidator } from '@tanstack/zod-adapter'
+import { z } from 'zod'
 import { ArrowRight, Loader2 } from 'lucide-react'
 
 import { deriveEmailStatus, useSession } from '@/api/session'
@@ -14,6 +16,7 @@ import {
   opponentFromPlayer,
   type Opponent,
 } from '@/components/matches/match-setup/opponent'
+import { usePreselectedOpponent } from '@/components/matches/match-setup/use-preselected-opponent'
 import { useStartMatch } from '@/components/matches/match-setup/use-start-match'
 import { DiscardMatchSetupDialog } from '@/components/matches/match-setup/discard-match-setup-dialog'
 import { UserAvatar } from '@/components/ui/user-avatar'
@@ -25,10 +28,27 @@ import './new.css'
 const DEFAULT_BEST_OF = 5
 const DEFAULT_RATED = false
 
+/**
+ * `?opponent=<userId>` preseeds the opponent slot — the "Start a match" call to
+ * action on another player's profile arrives here with them already picked.
+ *
+ * Parsed at the boundary, and `.catch`-ed rather than thrown (same shape as the
+ * profile's `?page=`): a mangled value degrades to the empty picker instead of
+ * erroring the page. Deliberately *not* a uuid check — player ids are opaque to
+ * the client (the MSW/dev roster uses `pl-1`-style ids), and a well-formed id
+ * that names nobody has to degrade the same way regardless, via the 404 on the
+ * lookup. So the schema only guarantees "a non-empty string", and the lookup
+ * decides whether it's real.
+ */
+const newMatchSearchSchema = z.object({
+  opponent: z.string().trim().min(1).optional().catch(undefined),
+})
+
 export const Route = createFileRoute('/_app/matches/new')({
   head: () => ({
     meta: [{ title: pageTitle('New match') }],
   }),
+  validateSearch: zodValidator(newMatchSearchSchema),
   component: NewMatchPage,
 })
 
@@ -59,7 +79,16 @@ function MatchCard() {
   const navigate = useNavigate()
   const { data: session } = useSession()
 
-  const [opponent, setOpponent] = useState<Opponent | null>(null)
+  // An opponent named in the URL preseeds the slot; see `newMatchSearchSchema`.
+  const { opponent: preselectedId } = Route.useSearch()
+  const preselected = usePreselectedOpponent(preselectedId)
+
+  // `undefined` means the user hasn't touched the opponent slot, so whatever the
+  // URL preseeded stands. Any explicit choice — including clearing back to a
+  // solo match (`null`) — overrides it from then on.
+  const [pick, setPick] = useState<Opponent | null | undefined>(undefined)
+  const opponent = pick === undefined ? preselected.opponent : pick
+
   const [bestOf, setBestOf] =
     useState<BestOfFieldProps['bestOf']>(DEFAULT_BEST_OF)
   // Default off so submitting without picking an opponent "just works" —
@@ -69,9 +98,12 @@ function MatchCard() {
     useStartMatch()
 
   // Anything away from the form's defaults means the user has invested effort
-  // that leaving would silently destroy (#75).
+  // that leaving would silently destroy (#75). An opponent the *URL* supplied is
+  // not effort — arriving at a preseeded form and immediately backing out must
+  // not pop the discard dialog — so the opponent arm keys off `pick`, the user's
+  // own touch, rather than off the resolved `opponent`.
   const isDirty =
-    opponent !== null || bestOf !== DEFAULT_BEST_OF || rated !== DEFAULT_RATED
+    pick !== undefined || bestOf !== DEFAULT_BEST_OF || rated !== DEFAULT_RATED
 
   // Blocks in-app navigation (Cancel, back button, any other link) and
   // browser refresh/close alike while the form is dirty — the same
@@ -117,7 +149,12 @@ function MatchCard() {
           </span>
         </div>
 
-        {opponent ? (
+        {preselected.isResolving ? (
+          // Hold the slot while the URL's opponent resolves, rather than
+          // rendering the picker for a beat (which would flash the recent grid
+          // and fire its fetch) only to replace it.
+          <OpponentSkeleton />
+        ) : opponent ? (
           <SelectedOpponent
             opponent={opponent}
             // Clearing the opponent must also clear `rated` — otherwise the
@@ -127,13 +164,13 @@ function MatchCard() {
             // can't switch off, or (b) silently re-engage rating when a new
             // opponent is picked.
             onChange={() => {
-              setOpponent(null)
+              setPick(null)
               setRated(false)
             }}
           />
         ) : (
           <OpponentPicker
-            onPick={(player) => setOpponent(opponentFromPlayer(player))}
+            onPick={(player) => setPick(opponentFromPlayer(player))}
           />
         )}
       </div>
@@ -163,6 +200,24 @@ function MatchCard() {
         onLeave={() => blocker.proceed?.()}
         onStay={() => blocker.reset?.()}
       />
+    </div>
+  )
+}
+
+/* ------------------------------------------------------------------ */
+/*  Opponent placeholder                                              */
+/* ------------------------------------------------------------------ */
+
+/** Stand-in for the opponent slot while an `?opponent=` id from the URL is
+ * being resolved. Same skeleton chrome the recent-opponents grid uses. */
+function OpponentSkeleton() {
+  return (
+    <div className="nm-chip-skel" role="status" aria-label="Loading opponent">
+      <div className="av" aria-hidden="true" />
+      <div className="lines" aria-hidden="true">
+        <div className="line" />
+        <div className="line short" />
+      </div>
     </div>
   )
 }

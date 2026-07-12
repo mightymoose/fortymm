@@ -2,6 +2,7 @@ import { expect, test, type Page } from '@playwright/test'
 import { PermissionsPage } from './page-objects/rbac/permissions.page'
 import { RolesPage } from './page-objects/rbac/roles.page'
 import { UsersPage } from './page-objects/rbac/users.page'
+import { SESSION_USER_ID } from './page-objects/rbac/rbac-store'
 
 /**
  * Regression tests for a batch of admin-area bugs. Each block is written
@@ -27,12 +28,13 @@ const PERMS_SEED = {
 }
 
 test.describe('Bug #8 · Remove user must not allow self-removal', () => {
-  // RbacStore signs the session in as `rita.kovac`.
+  // RbacStore signs the session in as `rita.kovac` with id SESSION_USER_ID —
+  // the self-row must share that id, since the guard compares ids, not names.
   const SEED = {
     permissions: [],
     roles: [],
     users: [
-      { id: 'u_self', username: 'rita.kovac', role_ids: [] },
+      { id: SESSION_USER_ID, username: 'rita.kovac', role_ids: [] },
       { id: 'u_other', username: 'alex', role_ids: [] },
     ],
   }

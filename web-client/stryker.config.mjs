@@ -49,6 +49,12 @@ export default {
     "!src/vite-env.d.ts",
   ],
 
+  // The dry run executes the WHOLE suite once, uninstrumented, to record which
+  // tests cover which code. Stryker's default budget for it is 5 minutes, which
+  // the suite outgrew — a timeout here kills the job before a single mutant is
+  // tested, and reads as "mutation failed" when nothing was even mutated.
+  dryRunTimeoutMinutes: 20,
+
   // Quality bars for the score, not a build gate (break: null). Flip `break` to
   // a number once there's a stable baseline to ratchet against.
   thresholds: { high: 80, low: 60, break: null },

@@ -76,9 +76,32 @@ class DashboardRating(BaseModel):
     league_name: str
     strategy_key: str
     current: float
-    delta: float
+    # What the player's last rated match DID to them — the "+12 last match" chip.
+    #
+    # ``None`` means THERE IS NO MOVE TO REPORT, and the client must render nothing
+    # (no chip, no arrow, no tone) rather than a zero. Two ways to get there, and
+    # neither is "unknown":
+    #
+    # * their last rated match was their FIRST — it ESTABLISHED this rating instead
+    #   of moving it. They were Unrated going in, so there is no earlier number to
+    #   measure from. Reporting the 1500 their league-join seeded them with as a
+    #   ``before`` is what told a brand-new player they had just LOST 232 points of
+    #   a rating they never held (#952).
+    # * no rated match at all lies behind the current value (an admin ``manual``
+    #   override or an ``import`` moved it).
+    #
+    # Sourced from ``latest_rated_match_change`` → ``RatingChange.delta``, a computed
+    # field: the number cannot be stored next to a ``before`` that contradicts it.
+    # Do not "simplify" this back to a ``float`` with a ``0.0`` default — a zero
+    # claims a rated match moved the rating by nothing, which is a different (and
+    # false) statement.
+    delta: float | None
     peak: float
     percentile: int | None
+    # The rating changes of the last 30 days, oldest-first — and NOT the ``initial``
+    # seed row, which is the prior the league hands out on join, not a rating anyone
+    # held. So a player one rated match old has a ONE-POINT spark (their result), not
+    # a two-point line sloping out of 1500.
     spark_data: list[float]
     streak: DashboardStreak | None
     stats: list[DashboardRatingStat]

@@ -67,6 +67,9 @@ export function healthCheck(
 
 export function sessionUser(overrides: Partial<SessionUser> = {}): SessionUser {
   return {
+    // The caller's own user id — the session is the only place the API tells a
+    // client who it is (the user menu's "Your profile" link reads it).
+    id: faker.string.uuid(),
     username: faker.internet.username().toLowerCase(),
     permissions: [],
     email: null,
@@ -348,6 +351,38 @@ export function dashboardRating(
     ],
     ...overrides,
   }
+}
+
+/**
+ * The rating of a player whose **only** rated match was their first: it
+ * ESTABLISHED this rating rather than moving it.
+ *
+ * On the wire that is a `delta` of **`null`** — not a `0`, and emphatically not
+ * a signed move measured off the 1500 a league-join seeds (which is a prior, not
+ * a rating anyone held). The card must then show the number with **no chip at
+ * all**; `null >= 0` is `false` in JS, so a card that reads the delta straight
+ * paints a brand-new player's rating as a *loss* (#952).
+ *
+ * `delta` is **not overridable** — same guard as `buildEstablishedRatingChange`.
+ * A fixture that could hand an "established" rating a signed delta is a fixture
+ * that can express the phantom, and the phantom is what we are keeping off the
+ * screen. Everything else derives from `current`: one rated match means the peak
+ * *is* the current rating, and the spark is a single point (`spark_data` carries
+ * rated results only, never the seed row).
+ */
+export function establishedDashboardRating(
+  overrides: Partial<Omit<DashboardRating, 'delta'>> = {},
+): DashboardRating {
+  const current = overrides.current ?? 1268
+  return dashboardRating({
+    current,
+    peak: current,
+    spark_data: [current],
+    streak: { kind: 'L', n: 1 },
+    percentile: 22,
+    ...overrides,
+    delta: null,
+  })
 }
 
 export function dashboardAttentionItem(

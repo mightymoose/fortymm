@@ -7,11 +7,12 @@ import {
 } from "../../match-details-query";
 import { orderedSides, type MatchDetailsSide } from "../../ordered-sides";
 
-/** The numbers half of a rated row — all values pre-formatted. */
-export type RatingRowChangeView = {
-  /** Rounded pre-match rating; null when the player entered unrated (the
-   * numbers line then leads straight with the arrow into `to`). */
-  from: number | null;
+/** A player who was **already rated** and whose rating this match MOVED:
+ * `1612 → 1624`, `+12`. All values pre-formatted. */
+export type RatingRowMovedView = {
+  kind: "moved";
+  /** Rounded pre-match rating. */
+  from: number;
   /** Rounded post-match rating. */
   to: number;
   /** Signed, rounded delta, e.g. "+12" / "-8". */
@@ -26,6 +27,32 @@ export type RatingRowChangeView = {
    * Null when that leaves fewer than two points to draw a line through. */
   sparkline: number[] | null;
 };
+
+/** A player whose **first rated match** this was: they went in Unrated and came
+ * out at `to`. The row reads `Unrated → 1268`.
+ *
+ * There is deliberately **no delta and no sparkline** on this variant — not a
+ * "+0", not a fall from the 1500 their league-join seeded. Nothing moved: a
+ * rating came into existence (#952). A trend line would have to start at a point
+ * the player never held, so there is none to draw.
+ */
+export type RatingRowEstablishedView = {
+  kind: "established";
+  /** Rounded post-match rating — the rating this match *gave* them. */
+  to: number;
+  /** Accessible name for the numbers line, since the chevron is decorative and
+   * "Unrated 1268" is not a sentence. */
+  ariaLabel: string;
+};
+
+/**
+ * The numbers half of a rated row. **Two kinds, and the difference is the whole
+ * point**: a rating can be *moved* or it can be *established*, and only the
+ * first of those has a delta. Collapsing them back into one nullable shape is
+ * how a first-rated player came to be told they lost 232 points of a rating they
+ * never had (#952) — the union is here to make that unwritable.
+ */
+export type RatingRowChangeView = RatingRowMovedView | RatingRowEstablishedView;
 
 /** One side's row in the rating-change card. */
 export type RatingRowView = {
@@ -52,16 +79,30 @@ const selectChange = (
   history: number[],
 ): RatingRowChangeView | null => {
   const change = side.rating_change;
+  // Null #1: the match moved no rating at all (unrated match, undecided,
+  // voided). The row reads "Unrated player" — no numbers line, no chip.
   if (!change) return null;
+  // Null #2, and it means something else entirely: the change is PRESENT but
+  // has no delta, because there was no prior rating to measure from. This match
+  // *established* the player. `before` is null for the same reason, and testing
+  // both is not belt-and-braces — it is what narrows `before` to a number below,
+  // where `formatRatingDelta` would otherwise have been handed a `null` and
+  // `null >= 0` would have painted a bogus "up" chip (#952).
+  if (change.delta === null || change.before === null) {
+    const to = Math.round(change.after);
+    return {
+      kind: "established",
+      to,
+      ariaLabel: `Unrated before this match, now rated ${to}`,
+    };
+  }
   // history is anchored "before this match"; append the post-match value so
   // the line lands on the new rating.
-  const series = [...history];
-  if (series.length === 0 && change.before !== null) {
-    series.push(change.before);
-  }
+  const series = history.length === 0 ? [change.before] : [...history];
   series.push(change.after);
   return {
-    from: change.before === null ? null : Math.round(change.before),
+    kind: "moved",
+    from: Math.round(change.before),
     to: Math.round(change.after),
     deltaLabel: formatRatingDelta(change.delta),
     deltaAriaLabel: formatRatingDeltaAria(change.delta),

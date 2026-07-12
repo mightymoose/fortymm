@@ -17,6 +17,7 @@ import {
   dashboardRating,
   dashboardRecentResult,
   dashboardResponse,
+  establishedDashboardRating,
   sessionResponse,
 } from '@/test/factories'
 import { GUEST_PERSIST_DISMISS_KEY } from './guest-persist-banner'
@@ -270,6 +271,49 @@ describe('DashboardPage', () => {
     expect(screen.getByText(/FortyMM/i)).toBeInTheDocument()
   })
 
+  // #952, the whole-page version of the RatingCard's unit test: what a player
+  // one rated match old actually loads. The hero and the "Recent matches" Δ
+  // column read the SAME match — before this fix the Δ column said "—" (the
+  // match established the rating) while the hero, three inches above it, said
+  // the player had just lost 232 points of a 1500 they never held.
+  it('shows a just-rated player their new rating and NO "last match" chip', async () => {
+    server.use(
+      http.get('*/v1/dashboard', () =>
+        HttpResponse.json(
+          dashboardResponse({
+            // One completed rated match: enough to leave the first-match layout.
+            completed_match_count: 1,
+            attention_total_count: 1,
+            recent_results: [
+              dashboardRecentResult({
+                opponent_username: 'ada.lovelace',
+                is_win: false,
+                my_games_won: 0,
+                opponent_games_won: 3,
+                // A *present* change whose `delta` is null: the match brought the
+                // rating into existence rather than moving it.
+                my_rating_change: { before: null, after: 1268, delta: null },
+              }),
+            ],
+            rating: establishedDashboardRating({ current: 1268 }),
+          }),
+        ),
+      ),
+    )
+    renderDashboard()
+
+    // The rating the match established is on screen (more than once, in fact:
+    // the hero, and the Peak tile — a one-match player peaks *at* their current
+    // rating)…
+    expect(await screen.findAllByText('1268')).not.toHaveLength(0)
+    // …and nothing anywhere on the page claims a move: no chip, no signed
+    // figure, and no trace of the seeded prior.
+    expect(screen.queryByText(/last match/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/[+-]?\d+ last match/)).not.toBeInTheDocument()
+    expect(screen.queryByText('1500')).not.toBeInTheDocument()
+    expect(screen.queryByText(/232/)).not.toBeInTheDocument()
+  })
+
   it('hides the rating card when the user has no rated league', async () => {
     server.use(
       http.get('*/v1/dashboard', () =>
@@ -291,7 +335,7 @@ describe('DashboardPage', () => {
 })
 
 describe('DashboardPage · first-match (zero completed matches, nothing pending)', () => {
-  it('renders the hero, provisional-rating, and empty-matches cards instead of the normal layout', async () => {
+  it('renders the hero, unrated, and empty-matches cards instead of the normal layout', async () => {
     server.use(
       http.get('*/v1/dashboard', () =>
         HttpResponse.json(
@@ -310,7 +354,7 @@ describe('DashboardPage · first-match (zero completed matches, nothing pending)
     expect(
       await screen.findByRole('heading', { name: /log your first match/i }),
     ).toBeInTheDocument()
-    expect(screen.getByText('1500')).toBeInTheDocument()
+    expect(screen.getByText('Unrated')).toBeInTheDocument()
     expect(screen.getByText('No matches yet. Go play.')).toBeInTheDocument()
     expect(
       screen.queryByRole('region', { name: /needs your attention/i }),
@@ -318,6 +362,40 @@ describe('DashboardPage · first-match (zero completed matches, nothing pending)
     expect(
       screen.queryByText('Not in a rated league yet.'),
     ).not.toBeInTheDocument()
+  })
+
+  it('never puts a rating number in front of a player who has never played (#950)', async () => {
+    // The regression: this dashboard hardcoded `1500 · PROVISIONAL` while the
+    // player's own profile, the roster, their leagues card and the opponent
+    // picker all — correctly — said Unrated. Joining a league seeds
+    // `rating_value = 1500` on session-mint, before a ball is hit; that seed is
+    // the strategy's prior, not a rating anyone earned, and the API now sends
+    // `rating: null` here (CONTEXT.md § Rating).
+    //
+    // The assertion is on the *shape*, not on the literal 1500: any run of 3-4
+    // digits is rating-shaped, so re-hardcoding 1600 — or quoting a league's
+    // `initial_rating_value` back at the player — reds this too.
+    server.use(
+      http.get('*/v1/dashboard', () =>
+        HttpResponse.json(
+          dashboardResponse({
+            completed_match_count: 0,
+            rating: null,
+            recent_results: [],
+            attention: [],
+            attention_total_count: 0,
+            waiting_count: 0,
+          }),
+        ),
+      ),
+    )
+    const { container } = renderDashboard()
+
+    await screen.findByRole('heading', { name: /log your first match/i })
+    expect(container.textContent).not.toMatch(/\b\d{3,4}\b/)
+    expect(screen.queryByText(/provisional/i)).not.toBeInTheDocument()
+    // …and it does say the true thing in the number's place.
+    expect(screen.getByText('Unrated')).toBeInTheDocument()
   })
 
   it('stays on the normal dashboard when an attention item exists despite zero completed matches', async () => {

@@ -1,11 +1,12 @@
 import uuid
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from httpx import AsyncClient
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.dashboard import _league_percentile, _strategy_stats
+from app.dashboard import _strategy_stats
 from app.models import (
     League,
     LeagueMembership,
@@ -14,8 +15,10 @@ from app.models import (
     RatingHistory,
     RatingHistorySource,
     RatingStrategy,
+    User,
     UserLeagueRating,
 )
+from app.ratings.stats import league_percentile
 from tests._helpers import (
     accept_standing_result,
     make_client,
@@ -73,23 +76,14 @@ async def test_dashboard_empty_when_user_has_no_matches(
     assert body["waiting_count"] == 0
     assert body["recent_results"] == []
     assert body["completed_match_count"] == 0
-    # A fresh signup is auto-joined to the default Glicko-2 league with
-    # initial state, so the rating widget lights up immediately with peak ==
-    # current, a null streak, and a sparkline holding the lone seed point.
-    rating = body["rating"]
-    assert rating is not None
-    assert rating["league_name"] == "FortyMM"
-    assert rating["strategy_key"] == "glicko2"
-    assert rating["current"] == 1500.0
-    assert rating["delta"] == 0.0
-    assert rating["peak"] == 1500.0
-    assert rating["percentile"] is None  # alone in the league
-    assert rating["spark_data"] == [1500.0]  # the initial seed event
-    assert rating["streak"] is None
-    assert rating["stats"] == [
-        {"label": "RD", "value": "350"},
-        {"label": "Volatility", "value": "0.060"},
-    ]
+    # NO RATING CARD. A fresh signup is auto-joined to the default Glicko-2 league,
+    # which seeds them a 1500 row — but a seed is a prior, not a rating (CONTEXT.md:
+    # a player who has never finished a rated match has no rating). The card used to
+    # light up here with current 1500, peak 1500, RD 350 and a one-point sparkline:
+    # five numbers, every one of them the strategy's starting state rather than
+    # anything this player did. The widget stays hidden until the league is actually
+    # scoring you — which is what `_build_rating` always said it did.
+    assert body["rating"] is None
 
 
 async def test_dashboard_returns_score_attention_for_in_progress_match(
@@ -196,9 +190,13 @@ async def test_dashboard_returns_recent_results_for_completed_matches(
     assert result["opponent_games_won"] == 0
     change = result["my_rating_change"]
     assert change is not None
-    assert change["before"] == 1500.0
+    # This is their FIRST rated match, so it ESTABLISHED their rating rather than
+    # moving one (#952): they were Unrated going in — the 1500 the league seeded them
+    # with on signup is the Glicko-2 prior, not a rating they held — so there is no
+    # `before` to measure from and no delta. The Δ column shows the rating they got.
+    assert change["before"] is None
+    assert change["delta"] is None
     assert change["after"] > 1500.0
-    assert change["delta"] > 0
 
 
 async def test_dashboard_scoped_to_current_user(
@@ -218,11 +216,10 @@ async def test_dashboard_scoped_to_current_user(
     # Pin that completed_match_count also follows the participant filter —
     # Bob's completed match must not bleed into Alice's history total.
     assert body["completed_match_count"] == 0
-    # Alice has her own seeded league row but no completed matches of her own
-    # — the rating starts at the initial Glicko-2 values, untouched by Bob's
-    # match.
-    assert body["rating"]["current"] == 1500.0
-    assert body["rating"]["streak"] is None
+    # Alice has her own seeded league row but has never finished a rated match, so
+    # she is unrated and has no rating card — and Bob's match cannot conjure her
+    # one either.
+    assert body["rating"] is None
 
 
 async def _post_result(client: AsyncClient, match_id: str, *, best_of: int = 1) -> None:
@@ -445,12 +442,20 @@ async def test_dashboard_rating_reflects_completed_match(
         await _play_match(api_client, opp_client, opp.id, i_win=True)
 
     rating = (await api_client.get("/v1/dashboard")).json()["rating"]
-    # Glicko-2 lifts the winner above 1500 and tightens RD.
+    # One rated match and the card appears — this is what "the league is actually
+    # scoring you" looks like. Glicko-2 lifts the winner above 1500 and tightens RD.
+    assert rating is not None
     assert rating["current"] > 1500.0
-    assert rating["delta"] > 0
+    # No delta: this match ESTABLISHED the rating, it didn't move one. The old
+    # ``delta > 0`` here was the phantom in test form — it read "+24 from 1500" as a
+    # move and so could never have caught #952. Its mirror image (a first LOSS
+    # reported as ``-232 last match``) is what QA found on the hero.
+    assert rating["delta"] is None
     assert rating["peak"] == rating["current"]
-    # Seed point first, then the post-match value.
-    assert rating["spark_data"] == [1500.0, rating["current"]]
+    # ONE point: the match. The seed is not a point on this line, exactly as it is
+    # not one on the profile's chart — the two plot the same table, and a sparkline
+    # rising out of 1500 would be drawing a rating this player never held.
+    assert rating["spark_data"] == [rating["current"]]
     assert rating["streak"] == {"kind": "W", "n": 1}
     rd_stat = next(s for s in rating["stats"] if s["label"] == "RD")
     assert int(rd_stat["value"]) < 350
@@ -468,8 +473,8 @@ async def test_dashboard_streak_counts_consecutive_results(
 
     rating = (await api_client.get("/v1/dashboard")).json()["rating"]
     assert rating["streak"] == {"kind": "L", "n": 1}
-    # The seed event plus three match results.
-    assert len(rating["spark_data"]) == 4
+    # Three match results — and not a fourth point for the seed they were handed.
+    assert len(rating["spark_data"]) == 3
 
 
 async def test_dashboard_rating_peak_holds_after_loss(
@@ -489,8 +494,113 @@ async def test_dashboard_rating_peak_holds_after_loss(
     assert rating_after_loss["delta"] < 0
 
 
+async def test_dashboard_hero_first_rated_match_establishes_no_delta(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """The hero's "last match" chip on a player whose FIRST rated match is their
+    ONLY one: NO delta. Not ``-232``, and not ``0`` (#952).
+
+    This is the QA repro, exactly: a brand-new player loses their first rated match,
+    lands at 1268, and the card announced ``-232 last match`` — a fall from the 1500
+    their league-join seeded, one row below a Recent-matches Δ column that had
+    already been taught to say ``—`` for the very same match. The page contradicted
+    itself because the two fields were computed twice: the Δ column through
+    ``RatingChange``, the hero by subtracting ``previous_rating_value`` raw.
+
+    The player is SESSION-MINTED and the match runs the real propose/accept flow, so
+    the 1500 here is the genuine join seed with its ``initial`` history row — which
+    is the only reason this test has teeth. A fixture that hand-writes
+    ``previous_rating_value`` passes without the fix and proves nothing; that fiction
+    is how this bug survived four rounds.
+    """
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "rival") as (opp_client, opp):
+        await _play_match(api_client, opp_client, opp.id, i_win=False)
+
+    rating = (await api_client.get("/v1/dashboard")).json()["rating"]
+    assert rating is not None
+    # They really are below the seed — the Glicko-2 maths starts there. That is the
+    # WRITE side, and it is correct.
+    assert rating["current"] < 1500.0
+    # ...and the READ side declines to narrate it as a fall. Nothing moved: a rating
+    # came into existence.
+    assert rating["delta"] is None
+    # The other two numbers a 1500 origin would poison. ``peak`` is what they have
+    # actually held (not the seed they never did), and the sparkline is a single
+    # point — their result — rather than a line sloping down out of 1500.
+    assert rating["peak"] == rating["current"]
+    assert rating["spark_data"] == [rating["current"]]
+
+
+async def test_dashboard_hero_second_rated_match_reports_the_real_move(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """The counterweight: once a player HOLDS a rating, the hero reports the real
+    move — measured from the rating their first match established.
+
+    Suppressing every delta would satisfy the test above and be just as wrong. This
+    one reds on an "always null" fix, and it reds on a fix that keeps measuring from
+    1500 (the ``before`` here is an EARNED number, and it is not 1500).
+    """
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "rival") as (opp_client, opp):
+        await _play_match(api_client, opp_client, opp.id, i_win=False)
+        established = (await api_client.get("/v1/dashboard")).json()["rating"]
+
+        await _play_match(api_client, opp_client, opp.id, i_win=True)
+        moved = (await api_client.get("/v1/dashboard")).json()["rating"]
+
+    first_rating = established["current"]
+    assert first_rating != 1500.0
+    # A real delta, off the real first rating — not off the seed.
+    assert moved["delta"] is not None
+    assert moved["delta"] == pytest.approx(moved["current"] - first_rating)
+    assert moved["delta"] > 0
+    # Two points now, and still no seed at the origin.
+    assert moved["spark_data"] == [first_rating, moved["current"]]
+
+
+def _provenance(user: User, league: League, value: float) -> RatingHistory:
+    """The ``rating_history`` row that makes a seeded number an actual RATING.
+
+    A ``UserLeagueRating`` row on its own is what the league hands EVERY member on
+    join (1500, plus an ``initial`` event), so it makes nobody rated: the population
+    reads (``app.ratings.rated``) ask whether anything has since MOVED it. A "rated
+    peer" seeded without one of these is a ghost who pads no denominator and answers
+    no question — which is what these fixtures were, and why they could not have
+    caught the bug they were guarding."""
+    return RatingHistory(
+        league_id=league.id,
+        user_id=user.id,
+        match_id=None,
+        rating_strategy_id=league.rating_strategy_id,
+        rating_value=value,
+        rating_state={"rating": value, "rd": 200.0, "volatility": 0.06},
+        previous_rating_value=None,
+        source=RatingHistorySource.manual,
+    )
+
+
+async def _rate_member(
+    db_session: AsyncSession, user: User, league: League, value: float
+) -> None:
+    """Put a NON-MEMBER (a bare ``make_user`` row) on ``league``'s ladder at
+    ``value``: membership, rating row, and the provenance that makes it a rating."""
+    db_session.add(LeagueMembership(league_id=league.id, user_id=user.id))
+    db_session.add(
+        UserLeagueRating(
+            league_id=league.id,
+            user_id=user.id,
+            rating_strategy_id=league.rating_strategy_id,
+            rating_value=value,
+            rating_state={"rating": value, "rd": 200.0, "volatility": 0.06},
+        )
+    )
+    db_session.add(_provenance(user, league, value))
+
+
 async def _seed_rated_peers(db_session: AsyncSession) -> League:
-    """Add 4 rated members to the default league at varying ratings, none of
+    """Add 4 RATED members to the default league at varying ratings, none of
     whom have played the current user. Returns the default league."""
     default_league = (
         await db_session.execute(select(League).where(League.is_default.is_(True)))
@@ -502,32 +612,28 @@ async def _seed_rated_peers(db_session: AsyncSession) -> League:
         ("high", 1800.0),
     ]:
         peer = await make_user(db_session, name)
-        db_session.add(LeagueMembership(league_id=default_league.id, user_id=peer.id))
-        db_session.add(
-            UserLeagueRating(
-                league_id=default_league.id,
-                user_id=peer.id,
-                rating_strategy_id=default_league.rating_strategy_id,
-                rating_value=value,
-                rating_state={"rating": value, "rd": 200.0, "volatility": 0.06},
-            )
-        )
+        await _rate_member(db_session, peer, default_league, value)
     await db_session.commit()
     return default_league
 
 
-async def test_dashboard_no_percentile_for_unplayed_user_with_peers(
+async def test_dashboard_no_rating_card_for_an_unplayed_user_with_peers(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    """A never-played user sits at the seed rating (1500, RD 350) — fully
-    unrated. Even surrounded by rated peers they must not be handed a concrete
-    percentile; ranking the unrankable reads as placeholder data. (#382)"""
+    """A never-played user sits at the seed rating (1500, RD 350) — fully unrated.
+    Surrounded by rated peers, they get NO RATING CARD at all.
+
+    #382 suppressed only the *percentile* here, on the grounds that ranking the
+    unrankable reads as placeholder data. It was right, and it did not go far
+    enough: `current`, `peak`, `delta`, the RD tile and the sparkline were the same
+    placeholder — the strategy's initial state, printed as if it were this player's.
+    The percentile was just the one that said it out loud."""
     await start_session(api_client, db_session)
     await _seed_rated_peers(db_session)
 
     body = (await api_client.get("/v1/dashboard")).json()
     assert body["completed_match_count"] == 0
-    assert body["rating"]["percentile"] is None
+    assert body["rating"] is None
 
 
 async def test_dashboard_percentile_shown_once_user_has_played(
@@ -560,19 +666,57 @@ async def test_dashboard_percentile_shown_once_user_has_played(
 async def test_league_percentile_ranks_against_rated_members(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    """The "Top N%" helper itself, against peers at 1200/1400/1600/1800 plus
-    self. "Top N%" counts the share at or above the rating, so a stronger
-    rating reads a *smaller* percentage:
+    """The "Top N%" helper itself, against peers at 1200/1400/1600/1800 plus a
+    rated self at 1500. "Top N%" counts the share at or above the rating, so a
+    stronger rating reads a *smaller* percentage:
       - 1500 is 3rd of 5 (1500/1600/1800 at-or-above) → Top 60%
       - the strongest rating reads Top 20% (1 of 5), not Top 100%
-      - the weakest reads Top 100% (5 of 5)."""
+      - the weakest reads Top 100% (5 of 5).
+
+    The second half is the population, and it is the whole point: the ladder is
+    exactly the one `_load_player_ranks` ranks and `league_rated_population` counts.
+    Two members are added who must not touch a single number above —
+
+    * a GUEST who has never played: seeded 1500 by joining, which lands them in the
+      *middle* of this ladder, so counting them would corrupt the numerator and the
+      denominator at once (every percentile above would move);
+    * a TOMBSTONED ghost at 1800: a merged-away account is not a player. This helper
+      was the one read in its module with no tombstone exclusion (#944), so "Top 8%"
+      and the "#3 of 42" printed beside it were drawn from different populations.
+    """
     me = await start_session(api_client, db_session)
     default_league = await _seed_rated_peers(db_session)
+    # Self, rated. The session already seeded them a 1500 row on join; this is the
+    # provenance that turns that prior into a rating they hold, and so a rung.
+    db_session.add(_provenance(me, default_league, 1500.0))
+    await db_session.commit()
 
-    assert await _league_percentile(db_session, default_league.id, 1500.0) == 60
-    assert await _league_percentile(db_session, default_league.id, 1800.0) == 20
-    assert await _league_percentile(db_session, default_league.id, 1200.0) == 100
-    _ = me
+    assert await league_percentile(db_session, default_league.id, 1500.0) == 60
+    assert await league_percentile(db_session, default_league.id, 1800.0) == 20
+    assert await league_percentile(db_session, default_league.id, 1200.0) == 100
+
+    # Now the two who are NOT on the ladder. Nothing they do may move a number.
+    guest = await make_user(db_session, "never.played")
+    db_session.add(
+        LeagueMembership(league_id=default_league.id, user_id=guest.id)
+    )  # …joined, and so seeded:
+    db_session.add(
+        UserLeagueRating(
+            league_id=default_league.id,
+            user_id=guest.id,
+            rating_strategy_id=default_league.rating_strategy_id,
+            rating_value=1500.0,
+            rating_state={"rating": 1500.0, "rd": 350.0, "volatility": 0.06},
+        )
+    )
+    ghost = await make_user(db_session, "merged.ghost")
+    await _rate_member(db_session, ghost, default_league, 1800.0)
+    ghost.merged_into_user_id = me.id
+    await db_session.commit()
+
+    assert await league_percentile(db_session, default_league.id, 1500.0) == 60
+    assert await league_percentile(db_session, default_league.id, 1800.0) == 20
+    assert await league_percentile(db_session, default_league.id, 1200.0) == 100
 
 
 async def test_dashboard_sparkline_returns_most_recent_points(
@@ -648,3 +792,66 @@ async def test_dashboard_rating_is_null_for_manual_league(
     await start_session(api_client, db_session)
     body = (await api_client.get("/v1/dashboard")).json()
     assert body["rating"] is None
+
+
+async def test_dashboard_and_profile_agree_that_a_never_played_user_is_unrated(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """ONE definition of Unrated, across both surfaces, for the same user in the
+    same request cycle.
+
+    The dashboard used to say `1500 / peak 1500 / RD 350` about a player whose
+    profile said "Unrated" — two pages of the same app disagreeing about whether
+    someone has a rating. They cannot now: both read `app.ratings.rated`, so the
+    card is absent and every rating field on the profile is `null`.
+
+    (A weaker fix — hide the profile's rating but keep the dashboard's card —
+    passes every other test in this file. It reds here.)"""
+    await start_session(api_client, db_session)
+    await _seed_rated_peers(db_session)
+
+    body = (await api_client.get("/v1/dashboard")).json()
+    assert body["rating"] is None
+    assert body["completed_match_count"] == 0
+
+    me = (await api_client.get("/v1/session")).json()["data"]["user"]
+    profile = (await api_client.get(f"/v1/players/{me['id']}")).json()
+    assert profile["rating"] is None
+    assert profile["rank"] is None
+    assert profile["rank_of"] is None
+    assert profile["peak"] is None
+    assert profile["percentile"] is None
+    assert profile["confidence"] is None
+
+
+async def test_dashboard_peak_is_the_best_rating_earned_not_the_seed(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """A player who has ONLY EVER LOST peaks at the best rating they actually
+    earned — which is below 1500 — not at the seed the league handed them.
+
+    This is the same lie as an unrated guest's "PEAK 1500", one match later: a high
+    they are supposed to have fallen from and never reached. It is invisible to
+    `test_dashboard_rating_peak_holds_after_loss`, whose player wins first and so
+    peaks above the seed either way; only a player whose whole rated life is below
+    1500 can tell the two implementations apart.
+
+    Two losses, so the peak is a real MAXIMUM over their history (the first loss,
+    the higher of the two) rather than just "current" — an implementation that
+    dropped `max()` and returned the latest value reds too."""
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "rival") as (opp_client, opp):
+        await _play_match(api_client, opp_client, opp.id, i_win=False)
+        after_one_loss = (await api_client.get("/v1/dashboard")).json()["rating"]
+        await _play_match(api_client, opp_client, opp.id, i_win=False)
+        after_two = (await api_client.get("/v1/dashboard")).json()["rating"]
+
+    # Their whole rated life is below the seed…
+    assert after_one_loss["current"] < 1500.0
+    assert after_two["current"] < after_one_loss["current"]
+    # …so the peak is the best they ever held — the rating after the first loss —
+    # and emphatically not 1500.
+    assert after_two["peak"] == after_one_loss["current"]
+    assert after_two["peak"] < 1500.0
+    # The sparkline says the same thing: two results, no seed point rising into them.
+    assert after_two["spark_data"] == [after_one_loss["current"], after_two["current"]]

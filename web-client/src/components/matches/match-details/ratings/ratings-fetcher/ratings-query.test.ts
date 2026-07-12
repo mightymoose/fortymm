@@ -11,13 +11,18 @@ import {
   buildMatchDetailsData,
   buildScoreboard,
 } from "@/mocks/factories/matches/scoreboard.factory";
+import {
+  buildEstablishedRatingChange,
+  buildRatingChange,
+} from "@/mocks/factories/players/rating-change.factory";
 import { waitFor } from "@/test/utilities";
 
 import { ratingsQuery } from "./ratings-query";
 import { ratingsQueryPage } from "./ratings-query.page";
 
 /** A completed, rated match the viewer won 3–1: +12 for rita.kovac (with a
- * rating history), −12 for leo.mertens (no history beyond his before). */
+ * rating history), −12 for leo.mertens (no history beyond his before). Both
+ * players were **already rated** — their ratings MOVED. */
 const finalRatedMatch = (overrides: Partial<MatchDetails> = {}): MatchDetails =>
   buildMatchDetails({
     status: "completed",
@@ -26,7 +31,7 @@ const finalRatedMatch = (overrides: Partial<MatchDetails> = {}): MatchDetails =>
       buildMatchDetailsSide({
         games_won: 3,
         won: true,
-        rating_change: { before: 1612, after: 1624.4, delta: 12.4 },
+        rating_change: buildRatingChange({ before: 1612, after: 1624.4 }),
       }),
       buildMatchDetailsSide({
         side_number: 2,
@@ -40,7 +45,7 @@ const finalRatedMatch = (overrides: Partial<MatchDetails> = {}): MatchDetails =>
         games_won: 1,
         won: false,
         is_current_user_side: false,
-        rating_change: { before: 1540, after: 1527.6, delta: -12.4 },
+        rating_change: buildRatingChange({ before: 1540, after: 1527.6 }),
       }),
     ],
     recent_form: [
@@ -59,6 +64,34 @@ const finalRatedMatch = (overrides: Partial<MatchDetails> = {}): MatchDetails =>
     }),
     ...overrides,
   });
+
+/**
+ * The same match, but it is **leo.mertens's first rated match**: he went in
+ * Unrated and came out at 1268. His side carries a *present* rating change whose
+ * `delta` is null — the second of the two nulls, and the one the profile, the
+ * roster and the pre-match snapshot already refuse to narrate as a 1500 (#952).
+ *
+ * The viewer (already rated) still moves, so a single payload holds both kinds
+ * and a projection that collapsed them would be caught by either row.
+ */
+const establishedForOpponent = (): MatchDetails => {
+  const match = finalRatedMatch();
+  return {
+    ...match,
+    sides: match.sides.map((s) =>
+      s.side_number === 2
+        ? { ...s, rating_change: buildEstablishedRatingChange({ after: 1268 }) }
+        : s,
+    ),
+    // He has no rating history: a timeline is a sequence of rated matches and
+    // this is his first.
+    recent_form: match.recent_form?.map((f) =>
+      f.user_id === "u-opponent"
+        ? { ...f, rating_before: null, rating_history: [] }
+        : f,
+    ),
+  };
+};
 
 const renderRatings = async (matchId?: string) => {
   const { result } = ratingsQueryPage.render(matchId);
@@ -85,6 +118,7 @@ describe("ratingsQuery", () => {
           initials: "RK",
           won: true,
           change: {
+            kind: "moved",
             from: 1612,
             to: 1624,
             deltaLabel: "+12",
@@ -99,6 +133,7 @@ describe("ratingsQuery", () => {
           initials: "LM",
           won: false,
           change: {
+            kind: "moved",
             from: 1540,
             to: 1528,
             deltaLabel: "-12",
@@ -166,33 +201,77 @@ describe("ratingsQuery", () => {
     });
   });
 
-  it("withholds the sparkline for a first-rating player with no history", async () => {
-    // before: null and no history leaves only the post-match point — not
-    // enough to draw a line.
-    const match = finalRatedMatch();
+  it("projects a first rated match as ESTABLISHED — no delta, no trend line", async () => {
+    // The second of the two nulls: the change is PRESENT, but its `delta` is
+    // null because there was no prior rating to move from. The player was
+    // Unrated going in and came out at 1268 — they did not *lose* 232 points of
+    // the 1500 their league-join seeded (#952).
+    const match = establishedForOpponent();
+    ratingsQueryPage.mockEndpoint(() => HttpResponse.json(match));
+
+    const result = await renderRatings();
+
+    expect(result.current.data?.rows[1].change).toEqual({
+      kind: "established",
+      to: 1268,
+      ariaLabel: "Unrated before this match, now rated 1268",
+    });
+  });
+
+  it("never reports a delta, a direction or a from-number for an established rating", async () => {
+    // The projection is the last place that could resurrect the phantom, so
+    // pin its *absence*: no delta label to print, no up/down tone to pick, no
+    // 1500 to have fallen from. A `null >= 0` would have made all three.
+    ratingsQueryPage.mockEndpoint(() =>
+      HttpResponse.json(establishedForOpponent()),
+    );
+
+    const result = await renderRatings();
+
+    const change = result.current.data?.rows[1].change;
+    expect(change).not.toBeNull();
+    expect(JSON.stringify(change)).not.toContain("1500");
+    expect(change).not.toHaveProperty("deltaLabel");
+    expect(change).not.toHaveProperty("deltaAriaLabel");
+    expect(change).not.toHaveProperty("deltaUp");
+    expect(change).not.toHaveProperty("from");
+    expect(change).not.toHaveProperty("sparkline");
+  });
+
+  it("keeps the two nulls apart: no change at all is not an established rating", async () => {
+    // `rating_change: null` (this match moved no rating) and a change with a
+    // null `delta` (this match *gave* the player their rating) are different
+    // facts and must not collapse into one branch.
+    const noChange = finalRatedMatch();
     ratingsQueryPage.mockEndpoint(() =>
       HttpResponse.json({
-        ...match,
-        sides: match.sides.map((s) =>
-          s.side_number === 2
-            ? {
-                ...s,
-                rating_change: { before: null, after: 1500, delta: 0 },
-              }
-            : s,
+        ...noChange,
+        sides: noChange.sides.map((s) =>
+          s.side_number === 2 ? { ...s, rating_change: null } : s,
         ),
       }),
     );
 
     const result = await renderRatings();
 
-    expect(result.current.data?.rows[1].change).toEqual({
-      from: null,
-      to: 1500,
-      deltaLabel: "0",
-      deltaAriaLabel: "No rating change",
+    expect(result.current.data?.rows[1].change).toBeNull();
+  });
+
+  it("still moves an already-rated player, unchanged", async () => {
+    // The regression guard for the fix itself: an ordinary rated match keeps its
+    // signed delta and its trend line.
+    ratingsQueryPage.mockEndpoint(() =>
+      HttpResponse.json(establishedForOpponent()),
+    );
+
+    const result = await renderRatings();
+
+    expect(result.current.data?.rows[0].change).toMatchObject({
+      kind: "moved",
+      from: 1612,
+      to: 1624,
+      deltaLabel: "+12",
       deltaUp: true,
-      sparkline: null,
     });
   });
 
