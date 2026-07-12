@@ -3,6 +3,26 @@
  * (match-list-page, dashboard) so it sits naturally inside the AppShell. */
 
 .player-profile {
+  /* The radius/shadow scale is declared per *surface* in this codebase — the
+   * shared `.fortymm-theme` block (index.css) carries the colour ramps and
+   * `--shadow-lg`/`--shadow-glow`, but not these. `.match-details`,
+   * `.fortymm-landing`, `.simulator` and the settings page each declare the same
+   * scale over themselves; the profile is the surface that was consuming
+   * `var(--r-lg)` and `var(--shadow-sm)` without ever declaring them, so every
+   * card below computed to `radius: 0` and inherited Tailwind's much weaker
+   * `--shadow-sm` instead of the house one. (Worth hoisting all five copies into
+   * `.fortymm-theme` one day — the login and RBAC surfaces have the same latent
+   * hole — but that restyles pages this branch has no business touching.) */
+  --r-sm: 6px;
+  --r-md: 10px;
+  --r-lg: 14px;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+
+  /* The specular highlight on the hero ball — a tint above `--ball-400` that the
+   * shared ramp has no token for. Declared here so the hero's gradient and its
+   * glow spell it once (`profile-hero-display.tsx` reads it from this scope). */
+  --ball-highlight: #ffb57a;
+
   display: flex;
   flex-direction: column;
   background: var(--bg-app);
@@ -39,6 +59,7 @@
   border: 1px solid var(--border-subtle);
   border-radius: var(--r-lg);
   background: var(--bg-card);
+  box-shadow: var(--shadow-sm);
 }
 
 /* Identity on the left, standing on the right. Each half is its own
@@ -190,12 +211,12 @@
 
 .player-profile__delta--win {
   color: var(--serve-500);
-  background: var(--bg-live-soft);
+  background: color-mix(in srgb, var(--win) 14%, transparent);
 }
 
 .player-profile__delta--loss {
   color: var(--loss);
-  background: rgba(255, 77, 109, 0.14);
+  background: color-mix(in srgb, var(--loss) 14%, transparent);
 }
 
 /* Rank ("#3 of 42"), peak, percentile. Only the lines the player actually has —
@@ -273,12 +294,12 @@
 
 .player-profile__form-chip--w {
   color: var(--serve-500);
-  background: var(--bg-live-soft);
+  background: color-mix(in srgb, var(--win) 14%, transparent);
 }
 
 .player-profile__form-chip--l {
   color: var(--loss);
-  background: rgba(255, 77, 109, 0.14);
+  background: color-mix(in srgb, var(--loss) 14%, transparent);
 }
 
 /* The rating is the largest thing on the page and needs no chrome to say so.
@@ -1039,6 +1060,13 @@
   color: var(--fg-1);
 }
 
+/* It reads as a button now, so it needs a button's focus ring — as a bare text
+ * link the browser's default outline was enough. Matches `.leagues-card__row`. */
+.recent-matches__view-all:focus-visible {
+  outline: 2px solid var(--ball-500);
+  outline-offset: 2px;
+}
+
 /* ----- The table, inside a card -----
  * The cells used to carry the page gutter (up to 40px a side) because the table
  * was full-bleed. Inside a card they carry a column gutter instead, and only the
@@ -1778,7 +1806,7 @@
   display: block;
   height: 100%;
   border-radius: 999px;
-  background: rgba(0, 226, 154, 0.55);
+  background: color-mix(in srgb, var(--serve-500) 55%, transparent);
 }
 
 .head-to-head__record {

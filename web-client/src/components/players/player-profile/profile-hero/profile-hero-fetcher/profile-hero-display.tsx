@@ -12,10 +12,10 @@ import { type ProfileHeroView } from './profile-hero-query'
  */
 const BALL: CSSProperties = {
   background:
-    'radial-gradient(circle at 35% 30%, #ffb57a, #ff7a1a 55%, #b94700)',
+    'radial-gradient(circle at 35% 30%, var(--ball-highlight), var(--ball-500) 55%, var(--ball-700))',
   color: 'var(--ink-950)',
   boxShadow:
-    '0 0 0 1px rgba(255, 181, 122, 0.4), 0 0 32px rgba(255, 122, 26, 0.25)',
+    '0 0 0 1px color-mix(in srgb, var(--ball-highlight) 40%, transparent), 0 0 32px color-mix(in srgb, var(--ball-500) 25%, transparent)',
 }
 
 export interface ProfileHeroDisplayProps {
@@ -37,12 +37,10 @@ export interface ProfileHeroDisplayProps {
  */
 export const ProfileHeroDisplay = ({ hero }: ProfileHeroDisplayProps) => (
   <div className="player-profile__identity">
-    <UserAvatar
-      name={hero.username}
-      size={82}
-      className="player-profile__avatar"
-      style={BALL}
-    />
+    {/* `UserAvatar` paints its per-name hue as an *inline* background and spreads
+        the caller's `style` last, so the ball can only be handed to it this way —
+        a class would lose to the inline rule. The colours are still tokens. */}
+    <UserAvatar name={hero.username} size={82} style={BALL} />
     <div className="player-profile__name-wrap">
       <h1 className="player-profile__name">
         {hero.username}
