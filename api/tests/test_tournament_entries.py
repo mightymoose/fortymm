@@ -1441,7 +1441,7 @@ async def test_an_uncapped_event_takes_no_capacity_count(
         entrant = (
             await session.execute(select(User).where(User.id == player_id))
         ).scalar_one()
-        await enter_event(tournament_id, event_id, session, entrant)
+        await enter_event(tournament_id, event_id, None, session, entrant)
 
     assert not any(
         "count(" in statement.lower() and "tournament_entries" in statement
