@@ -1,9 +1,12 @@
+import { matchDetailRoute } from '@/api/matches'
 import {
   playerByIdQueryOptions,
   type PlayerDetail,
   type PlayerMatchRow,
   type RatingRange,
 } from '@/api/players'
+import type { MatchDetailRoute } from '@/components/matches/match-row-link/match-row-link'
+import { matchRowAriaLabel } from '@/components/matches/match-row-link/match-row-naming'
 import { formatRatingDelta, formatRatingDeltaAria } from '@/lib/rating'
 
 /** The em dash the card prints wherever a number would lie: an unfinished
@@ -70,6 +73,14 @@ export type RecentMatchRowView = {
   delta: RecentMatchDeltaView | null
   /** e.g. "Mar 14". `—` when the timestamp is unreadable. */
   when: string
+  /** The `{to,params}` target of the row's link — the match's detail page. Built
+   * here, from the typed `matchDetailRoute` factory, so the row component never
+   * hand-writes a path (the same way `MatchListRowView` carries one). */
+  detailRoute: MatchDetailRoute
+  /** The link's accessible name, e.g. "Match against ada.lovelace, Mar 14" — it
+   * names the **match**, because the anchor sits on the date cell and not around
+   * the opponent's name, which would promise a profile (#989). */
+  ariaLabel: string
 }
 
 export type RecentMatchesView = {
@@ -174,15 +185,30 @@ const selectDelta = (
   }
 }
 
-const selectRow = (row: PlayerMatchRow, timeZone?: string): RecentMatchRowView => ({
-  id: row.id,
-  opponent: row.opponent.username ?? 'No opponent',
-  isSolo: row.opponent.username === null,
-  status: selectStatus(row),
-  score: selectScore(row),
-  delta: selectDelta(row.rating_change),
-  when: selectWhen(row.created_at, timeZone),
-})
+const selectRow = (
+  row: PlayerMatchRow,
+  timeZone?: string,
+): RecentMatchRowView => {
+  const opponent = row.opponent.username ?? 'No opponent'
+  const isSolo = row.opponent.username === null
+  const when = selectWhen(row.created_at, timeZone)
+  return {
+    id: row.id,
+    opponent,
+    isSolo,
+    status: selectStatus(row),
+    score: selectScore(row),
+    delta: selectDelta(row.rating_change),
+    when,
+    // The row is a link to its match (#989). Both halves of that link are
+    // *derived data*, so they belong here rather than in the row component: the
+    // target comes off the typed route factory, and the accessible name is
+    // composed from the same two labels the row already prints — so the thing a
+    // screen reader hears can never drift from the thing on screen.
+    detailRoute: matchDetailRoute(row.id),
+    ariaLabel: matchRowAriaLabel({ opponent, isSolo, when }),
+  }
+}
 
 /**
  * `timeZone` names the zone the match days are dated in. **Omit it in production**

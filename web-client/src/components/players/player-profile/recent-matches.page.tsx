@@ -1,5 +1,6 @@
 import { ErrorBoundary } from 'react-error-boundary'
 
+import { MATCH_DETAIL_ROUTE } from '@/components/matches/match-row-link/match-row-link.page'
 import {
   mockPlayerDetailEndpoint,
   type PlayerDetailResolver,
@@ -57,7 +58,7 @@ export const recentMatchesPage = {
       >
         <RecentMatches {...props} />
       </ErrorBoundary>,
-      { linkTargets: [MATCH_HISTORY_ROUTE] },
+      { linkTargets: [MATCH_HISTORY_ROUTE, MATCH_DETAIL_ROUTE] },
     )
   },
 

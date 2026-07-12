@@ -1,6 +1,7 @@
 import { HttpResponse } from 'msw'
 import { ErrorBoundary } from 'react-error-boundary'
 
+import { MATCH_DETAIL_ROUTE } from '@/components/matches/match-row-link/match-row-link.page'
 import {
   mockPlayerDetailEndpoint,
   type PlayerDetailResolver,
@@ -201,7 +202,14 @@ export const playerProfilePage = {
       // every Leagues-card row links back to *this* profile with a different
       // league selected (the switcher, ADR-0915), and the Head-to-head card's
       // never-met CTA opens match creation with this player already picked.
-      { linkTargets: [MATCH_HISTORY_ROUTE, PROFILE_ROUTE, NEW_MATCH_ROUTE] },
+      {
+        linkTargets: [
+          MATCH_HISTORY_ROUTE,
+          MATCH_DETAIL_ROUTE,
+          PROFILE_ROUTE,
+          NEW_MATCH_ROUTE,
+        ],
+      },
     )
   },
 

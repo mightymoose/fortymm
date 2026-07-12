@@ -8,11 +8,7 @@ import {
   ChevronsRight,
 } from 'lucide-react'
 
-import {
-  usePlayerMatches,
-  type PlayerDetail,
-  type PlayerMatchRow,
-} from '@/api/players'
+import { usePlayerMatches, type PlayerDetail } from '@/api/players'
 import { Button } from '@/components/ui/button'
 import {
   Pagination,
@@ -21,7 +17,8 @@ import {
   PaginationItem,
   PaginationLink,
 } from '@/components/ui/pagination'
-import { UserAvatar } from '@/components/ui/user-avatar'
+
+import { MatchHistoryRow } from './player-match-history/match-history-row'
 
 // The table, chips and footer are styled by the profile's stylesheet, scoped
 // under the shared `.player-profile` root class this surface also wears.
@@ -214,7 +211,7 @@ function PlayerMatchesSection({
             </thead>
             <tbody>
               {rows.map((m) => (
-                <MatchRowComponent key={m.id} m={m} />
+                <MatchHistoryRow key={m.id} match={m} />
               ))}
             </tbody>
           </table>
@@ -307,148 +304,6 @@ function MatchesError({ onRetry }: { onRetry: () => void }) {
       </Button>
     </div>
   )
-}
-
-function MatchRowComponent({ m }: { m: PlayerMatchRow }) {
-  // Solo matches carry a player-less sentinel side — the row renders it as an
-  // italic "No opponent" rather than dropping the match (ADR-0008).
-  const opponentName = m.opponent.username ?? 'No opponent'
-  const isNoOpp = m.opponent.username === null
-  const won = m.result === 'W'
-  const lost = m.result === 'L'
-  return (
-    <tr>
-      <td>
-        <span className="time-cell">
-          <span className="strong">{formatDate(m.created_at)}</span>
-        </span>
-      </td>
-      <td>
-        <div className="player">
-          {isNoOpp ? (
-            <UserAvatar name={null} size={26} />
-          ) : (
-            <UserAvatar name={opponentName} size={26} />
-          )}
-          <span
-            className="player-name"
-            style={
-              isNoOpp
-                ? { color: 'var(--fg-3)', fontStyle: 'italic' }
-                : undefined
-            }
-          >
-            {opponentName}
-          </span>
-        </div>
-      </td>
-      <td>
-        {m.games.length === 0 ? (
-          <span
-            style={{ color: 'var(--fg-3)', fontFamily: 'var(--font-mono)' }}
-          >
-            —
-          </span>
-        ) : (
-          <div className="player-profile__games">
-            {m.games.map((g, i) => {
-              const gameWon = g.mine > g.theirs
-              return (
-                <div
-                  key={i}
-                  className={
-                    'player-profile__game ' +
-                    (gameWon
-                      ? 'player-profile__game--won'
-                      : 'player-profile__game--lost')
-                  }
-                >
-                  <span className="player-profile__game-mine">{g.mine}</span>
-                  <span className="player-profile__game-theirs">
-                    {g.theirs}
-                  </span>
-                </div>
-              )
-            })}
-          </div>
-        )}
-      </td>
-      <td>
-        <ResultChip
-          status={m.status}
-          awaitingAcceptance={m.awaiting_acceptance}
-          won={won}
-          lost={lost}
-        />
-      </td>
-    </tr>
-  )
-}
-
-function ResultChip({
-  status,
-  awaitingAcceptance,
-  won,
-  lost,
-}: {
-  status: PlayerMatchRow['status']
-  awaitingAcceptance: boolean
-  won: boolean
-  lost: boolean
-}) {
-  // A posted-but-unaccepted result and a genuinely-live match both sit at
-  // `in_progress`; check the awaiting flag first so the former gets its own
-  // "AWAITING" chip instead of the green "LIVE" one (#364). Mirrors the
-  // matches list's "Awaiting" bucket.
-  if (awaitingAcceptance) {
-    return (
-      <span className="player-profile__result-chip player-profile__result-chip--awaiting">
-        AWAITING
-      </span>
-    )
-  }
-  if (status === 'in_progress') {
-    return (
-      <span className="player-profile__result-chip player-profile__result-chip--live">
-        LIVE
-      </span>
-    )
-  }
-  if (status === 'pending') {
-    return (
-      <span className="player-profile__result-chip player-profile__result-chip--pending">
-        UP NEXT
-      </span>
-    )
-  }
-  if (won) {
-    return (
-      <span className="player-profile__result-chip player-profile__result-chip--win">
-        WIN
-      </span>
-    )
-  }
-  if (lost) {
-    return (
-      <span className="player-profile__result-chip player-profile__result-chip--loss">
-        LOSS
-      </span>
-    )
-  }
-  // Completed but undecided (voided/no-side-won). Neutral pill.
-  return (
-    <span className="player-profile__result-chip player-profile__result-chip--pending">
-      {status.toUpperCase()}
-    </span>
-  )
-}
-
-function formatDate(iso: string): string {
-  // The server emits ISO timestamps with TZ; rendering in local time is
-  // fine here since the column shows just month + day. (No bare YYYY-MM-DD
-  // strings — that's the pattern that bit us before.)
-  const d = new Date(iso)
-  return d.toLocaleDateString(undefined, { month: 'short', day: '2-digit' })
 }
 
 type PageToken = number | 'ellipsis'
