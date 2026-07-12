@@ -69,9 +69,17 @@ export function PlayerRouteError({ reset }: PlayerRouteErrorProps) {
         Error
       </div>
       <h1 className="md-error-state__title">Couldn’t load this player.</h1>
+      {/* Deliberately vague about the cause, because this one branch catches
+       * everything that is not a 404: a 5xx, a dropped network, a 401, a 403,
+       * and a render throw inside any profile card. Naming a cause — "reaching
+       * the server", "the network" — would be a confident lie in most of those,
+       * and "try again in a moment" promises a fix that a deterministic render
+       * crash or a real auth failure will never deliver. Say what is true of all
+       * of them (it didn't load, it may be temporary, here is the retry) and let
+       * the button do the talking. The 404 — the one status we CAN name — is not
+       * here at all any more; it has its own page. */}
       <p className="md-error-state__sub">
-        Something went wrong reaching the server — could be us, could be the
-        network. The player is probably fine; try again in a moment.
+        The profile didn’t load. It may be temporary — try again.
       </p>
       <div className="md-error-state__actions">
         <button

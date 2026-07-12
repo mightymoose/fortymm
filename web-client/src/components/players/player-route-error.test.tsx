@@ -15,7 +15,26 @@ describe('PlayerRouteError', () => {
     // not-found state's eyebrow, and putting it above a 500 would be a lie.
     expect(page.getEyebrow()).toBeInTheDocument()
     expect(page.getHeadline()).toHaveTextContent('Couldn’t load this player.')
-    expect(page.getBody(/something went wrong reaching the server/i)).toBeInTheDocument()
+    expect(page.getBody(/didn’t load/i)).toBeInTheDocument()
+  })
+
+  it('does not name a cause it cannot know', async () => {
+    // This one branch catches a 5xx, a dropped network, a 401, a 403 AND a render
+    // throw inside any profile card. Copy that blames "the server" or "the
+    // network" is a confident lie in most of those, and reassuring the user that
+    // "the player is probably fine" is not something this component is in any
+    // position to know. Say what is true of every case and let the retry button
+    // carry the rest.
+    page.render()
+
+    // `findAlert`, not `getAlert`: the router paints the boundary asynchronously,
+    // so a synchronous read here asserts against an empty DOM — and a `not.`
+    // assertion against an empty DOM passes for the wrong reason, which is the
+    // most dangerous kind of green there is.
+    const alert = await page.findAlert()
+    expect(alert).not.toHaveTextContent(/reaching the server/i)
+    expect(alert).not.toHaveTextContent(/the network/i)
+    expect(alert).not.toHaveTextContent(/probably fine/i)
   })
 
   it('paints with styling that actually applies on this route', async () => {

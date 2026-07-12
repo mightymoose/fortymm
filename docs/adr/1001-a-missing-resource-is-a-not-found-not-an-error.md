@@ -163,8 +163,19 @@ very request that fails." The premise is still true — the client *cannot* know
 before the request. The conclusion no longer follows: the request's own failure is
 where the conversion happens, so the client does not need to know in advance.
 
-**Tournaments should follow.** `/tournaments/abc` currently renders a raw Pydantic
-validator string in its error boundary (#992), and a valid-but-unknown tournament
-id gets a hand-rolled not-found — the same two bugs, one layer over. This ADR is
-the pattern to apply there; it was left out of this change only to keep the PR to
-one page.
+**Two other surfaces still carry the pattern this ADR forbids**, and one of them
+matters more than it looks:
+
+- **Match details.** `match-details-error.tsx` branches on 4xx inside its *error*
+  boundary and hand-rolls a not-found there (`{notFound ? <Link to="/matches">Back
+  to matches</Link> : <button>Try again</button>}`). This is the boundary
+  `DEFINITION_OF_COMPLETE.md` designates as **"the reference implementation"** — so
+  it is the file a developer reads before writing a new one. An ADR that forbids a
+  pattern while the repo's own exemplar still demonstrates it will lose the
+  argument by default. Fixing match details is what makes this ADR *stick*, and it
+  should be the next one converted.
+- **Tournaments.** `/tournaments/abc` renders a raw Pydantic validator string in
+  its error boundary (#992), and a valid-but-unknown tournament id gets a
+  hand-rolled not-found — the same two bugs, one layer over.
+
+Both were left out of this change only to keep the PR to one page.
