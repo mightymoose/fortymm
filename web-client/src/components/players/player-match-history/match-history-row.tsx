@@ -1,3 +1,5 @@
+import { Link } from '@tanstack/react-router'
+
 import { matchDetailRoute } from '@/api/matches'
 import type { PlayerMatchRow } from '@/api/players'
 import { MatchRowLink } from '@/components/matches/match-row-link/match-row-link'
@@ -9,14 +11,89 @@ export interface MatchHistoryRowProps {
   match: PlayerMatchRow
 }
 
+/** What the Opponent cell reads when there is nobody on the other side. */
+const NO_OPPONENT = 'No opponent'
+
+/**
+ * Who the match was against — and therefore whether the cell is a **link**.
+ *
+ * A sum type, not a nullable id: on the wire both `id` and `username` are
+ * nullable, because a **solo** match has the player-less sentinel side on the
+ * other end (ADR-0008) and there is nobody there to link to. Only the `player`
+ * variant carries an id, so `/players/null` is unbuildable rather than merely
+ * unlikely — the same shape, for the same reason, as the profile card's
+ * `RecentMatchOpponentView`.
+ */
+type OpponentView =
+  | { kind: 'player'; id: string; name: string }
+  | { kind: 'solo'; name: typeof NO_OPPONENT }
+
+const selectOpponent = (opponent: PlayerMatchRow['opponent']): OpponentView =>
+  opponent.id != null && opponent.username != null
+    ? { kind: 'player', id: opponent.id, name: opponent.username }
+    : { kind: 'solo', name: NO_OPPONENT }
+
+/**
+ * The Opponent cell: the name, as a **link to that player's profile** (#1005).
+ * The history named its opponents in plain text, and the most obvious next step
+ * from a list of people you have played was unreachable.
+ *
+ * A solo match has nobody to link to, so it stays plain text — ghost-toned and
+ * italic, to say that "No opponent" is an absence and not a person.
+ *
+ * The link wears `match-row-inline-link` because the *row* is a link too, to the
+ * match (#989), and that link's `::after` is stretched over every cell in the row
+ * — this one included. The class lifts the name above the overlay
+ * (`match-row-link.css`), so a click on the name opens the profile while a click
+ * anywhere else in the row opens the match.
+ */
+function OpponentCell({ opponent }: { opponent: OpponentView }) {
+  return (
+    <div className="player">
+      {/* `UserAvatar` already paints the sentinel placeholder for a null name,
+       * so the no-opponent case needs no branch of its own — it is the same
+       * call, with `null`. */}
+      <UserAvatar
+        name={opponent.kind === 'player' ? opponent.name : null}
+        size={26}
+      />
+      {opponent.kind === 'solo' ? (
+        <span
+          className="player-name"
+          style={{ color: 'var(--fg-3)', fontStyle: 'italic' }}
+        >
+          {opponent.name}
+        </span>
+      ) : (
+        <Link
+          to="/players/$userId"
+          params={{ userId: opponent.id }}
+          className="player-name match-history__opponent-link match-row-inline-link"
+        >
+          {opponent.name}
+        </Link>
+      )}
+    </div>
+  )
+}
+
 /**
  * One row of the **full** match history (`/players/$userId/matches`):
  * `Date | Opponent | Score | Result`.
  *
- * The row **opens its match** (#989): the date cell is a real `<a href>`
- * (`MatchRowLink`), stretched across the row, so the whole row clicks through
- * while a screen reader hears exactly one link — named for the match, not for the
- * opponent whose profile it does *not* open.
+ * The row carries **two** links, because a row is a match *and* a person:
+ *
+ * - the **row** opens its match (#989) — the date cell is a real `<a href>`
+ *   (`MatchRowLink`) whose `::after` is stretched across the row, so the whole row
+ *   clicks through, and a screen reader hears it named for the match rather than
+ *   for a person;
+ * - the **opponent's name** opens that player's profile (#1005), lifted above the
+ *   stretched overlay so it takes its own clicks. A solo match has nobody to link
+ *   to, and stays plain text.
+ *
+ * Naming is what keeps them apart: "Match against ada.lovelace, Mar 14" goes to
+ * the match, "ada.lovelace" goes to ada. Neither promises what the other delivers,
+ * which is exactly why the row's anchor is not wrapped around the name.
  *
  * Extracted from `player-match-history.tsx` so it can be tested on its own; the
  * page still owns the table, the pagination and the empty/error states.
@@ -24,8 +101,7 @@ export interface MatchHistoryRowProps {
 export function MatchHistoryRow({ match }: MatchHistoryRowProps) {
   // Solo matches carry a player-less sentinel side — the row renders it as an
   // italic "No opponent" rather than dropping the match (ADR-0008).
-  const opponent = match.opponent.username ?? 'No opponent'
-  const isSolo = match.opponent.username === null
+  const opponent = selectOpponent(match.opponent)
   const when = formatDate(match.created_at)
   const won = match.result === 'W'
   const lost = match.result === 'L'
@@ -35,26 +111,16 @@ export function MatchHistoryRow({ match }: MatchHistoryRowProps) {
       <td>
         <MatchRowLink
           route={matchDetailRoute(match.id)}
-          ariaLabel={matchRowAriaLabel({ opponent, isSolo, when })}
+          ariaLabel={matchRowAriaLabel({
+            opponent: opponent.name,
+            isSolo: opponent.kind === 'solo',
+            when,
+          })}
           when={when}
         />
       </td>
       <td>
-        <div className="player">
-          {/* `UserAvatar` already paints the sentinel placeholder for a null
-           * name, so the no-opponent case needs no branch of its own — it is
-           * the same call. (`username` is optional on the wire; `?? null`
-           * narrows it to the prop's `string | null`.) */}
-          <UserAvatar name={match.opponent.username ?? null} size={26} />
-          <span
-            className="player-name"
-            style={
-              isSolo ? { color: 'var(--fg-3)', fontStyle: 'italic' } : undefined
-            }
-          >
-            {opponent}
-          </span>
-        </div>
+        <OpponentCell opponent={opponent} />
       </td>
       <td>
         {match.games.length === 0 ? (

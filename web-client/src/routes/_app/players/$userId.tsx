@@ -8,6 +8,7 @@ import {
   RATING_RANGES,
 } from '@/api/players'
 import { SESSION_QUERY_KEY } from '@/api/session'
+import { PlayerNotFound } from '@/components/players/player-not-found'
 import { PlayerProfile } from '@/components/players/player-profile'
 import { PlayerRouteError } from '@/components/players/player-route-error'
 import { pageTitle } from '@/lib/page-title'
@@ -27,9 +28,11 @@ import { pageTitle } from '@/lib/page-title'
  * garbage `?league=` is a broken URL, not a broken app: it falls back to
  * `undefined`, which is the **default league** — the page renders, showing the
  * ladder every player is on. (A *well-formed but unknown* uuid is a different
- * animal: the API 404s it, and it flows to `errorComponent` exactly as an unknown
- * player id does. The client cannot tell valid-unknown from valid-known without
- * the very request that fails.)
+ * animal: the API 404s it, and it lands wherever an unknown *player* id lands —
+ * which, since ADR-1001, is the `notFoundComponent` below, not the error
+ * boundary. The client still cannot tell valid-unknown from valid-known without
+ * the very request that fails; the difference is that the request's own failure
+ * is now where the not-found is raised, inside the bundle's `queryFn`.)
  *
  * **`undefined` means default — the param is omitted, not spelled out.** The
  * default league is what a URL with no `?league=` means, so the default league's
@@ -100,7 +103,20 @@ export const Route = createFileRoute('/_app/players/$userId')({
     )
   },
   component: PlayerRoute,
+  // The two boundaries, and the split between them is the whole of ADR-1001.
+  // `errorComponent` keeps everything that is genuinely an error — 5xx, network,
+  // 401, 403 — and stays retryable. `notFoundComponent` owns the one status that
+  // is a designed outcome: the bundle's `queryFn` converts a 404 into a router
+  // `notFound()`, and this is the boundary that catches it.
+  //
+  // Declaring it here is NOT optional and NOT a fallback to the router's
+  // `defaultNotFoundComponent`: a route with no `notFoundComponent` of its own has
+  // no not-found boundary mounted at that match at all, so a render-thrown
+  // `notFound` would sail past every route to TanStack's generic "Something went
+  // wrong!" screen. Same for the match-history sub-route, which reads the same
+  // query.
   errorComponent: PlayerRouteError,
+  notFoundComponent: PlayerNotFound,
 })
 
 function PlayerRoute() {
@@ -108,10 +124,11 @@ function PlayerRoute() {
   const { league, range } = Route.useSearch()
 
   // No page-level fetch: every card projects off the profile bundle's single
-  // cache entry and suspends for itself. That query is `throwOnError`, so any
-  // non-2xx / network failure flows to `errorComponent` above rather than to a
-  // per-card boundary — all the cards share the one query, so a failure means
-  // none of them has anything to draw.
+  // cache entry and suspends for itself. A failure of that one query flows to a
+  // route-level boundary rather than to a per-card one — all the cards share it,
+  // so a failure means none of them has anything to draw. Which boundary depends
+  // on the status: a 404 is a `notFound()` (the query converts it) and lands in
+  // `notFoundComponent`; everything else lands in `errorComponent`.
   //
   // `league` is part of that cache key, so picking a league in the switcher
   // re-keys the bundle and the rating half of the page refetches — one request,

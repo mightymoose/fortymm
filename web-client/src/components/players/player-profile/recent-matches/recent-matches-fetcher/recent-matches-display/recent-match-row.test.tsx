@@ -1,19 +1,24 @@
 import {
   LIVE_MATCH_ID,
   RECENT_MATCH_HREF,
+  SOLO_MATCH_ID,
   buildLiveRecentMatchRowView,
   buildRecentMatchDeltaView,
   buildRecentMatchGameView,
+  buildRecentMatchOpponentView,
   buildRecentMatchRowView,
   buildRecentMatchStatusView,
+  buildSoloRecentMatchRowView,
 } from './recent-match-row.factory'
 import { recentMatchRowPage } from './recent-match-row.page'
 
 const OPPONENT = 'ada.lovelace'
+const NO_OPPONENT = 'No opponent'
 
 describe('RecentMatchRow', () => {
   it('renders a decided win as a green dot, its game chips and a signed delta', async () => {
     recentMatchRowPage.render({ row: buildRecentMatchRowView() })
+
     await recentMatchRowPage.findRow(OPPONENT)
 
     expect(recentMatchRowPage.getStatusDot(OPPONENT)).toHaveAccessibleName(
@@ -40,6 +45,7 @@ describe('RecentMatchRow', () => {
         }),
       }),
     })
+
     await recentMatchRowPage.findRow(OPPONENT)
 
     expect(recentMatchRowPage.getStatusDot(OPPONENT)).toHaveClass(
@@ -55,6 +61,7 @@ describe('RecentMatchRow', () => {
     // The result chip is gone: if the dot and the score cell don't say "Live",
     // nothing does.
     recentMatchRowPage.render({ row: buildLiveRecentMatchRowView() })
+
     await recentMatchRowPage.findRow(OPPONENT)
 
     expect(recentMatchRowPage.getStatusDot(OPPONENT)).toHaveAccessibleName(
@@ -68,6 +75,7 @@ describe('RecentMatchRow', () => {
 
   it('prints an em dash — never "+0" — when no rating moved', async () => {
     recentMatchRowPage.render({ row: buildRecentMatchRowView({ delta: null }) })
+
     await recentMatchRowPage.findRow(OPPONENT)
 
     const delta = recentMatchRowPage.getDeltaCell(OPPONENT)
@@ -90,6 +98,7 @@ describe('RecentMatchRow', () => {
         },
       }),
     })
+
     await recentMatchRowPage.findRow(OPPONENT)
 
     const chips = recentMatchRowPage
@@ -100,15 +109,74 @@ describe('RecentMatchRow', () => {
     expect(chips[1]).toHaveClass('player-profile__game--lost')
   })
 
+  it("links the opponent's name to that opponent's profile", async () => {
+    // The card named its opponents in plain text — the most obvious next step on
+    // the page, and there was nothing to click. The id was on the wire the whole
+    // time; the row now spends it.
+    recentMatchRowPage.render({
+      row: buildRecentMatchRowView({
+        opponent: buildRecentMatchOpponentView({
+          id: 'p-42',
+          name: 'grace.hopper',
+        }),
+      }),
+    })
+
+    await recentMatchRowPage.findRow('grace.hopper')
+
+    expect(recentMatchRowPage.getOpponentLink('grace.hopper')).toBeVisible()
+    expect(recentMatchRowPage.getOpponentHref('grace.hopper')).toBe(
+      '/players/p-42',
+    )
+  })
+
+  it('lifts the opponent’s name ABOVE the row link’s stretched overlay', async () => {
+    // The row's anchor paints a `::after` over every cell (`match-row-link.css`),
+    // so a control inside a row is unclickable unless it lifts itself out. The
+    // name announces, tabs and Enters correctly either way — only the *pointer*
+    // breaks — which is exactly the kind of regression a role-based query cannot
+    // see. jsdom loads no stylesheet and can measure no hit-test, so what is
+    // asserted here is the hook the stylesheet keys on; the click itself is a
+    // browser fact, pinned in `web-client/e2e/players/player-profile.spec.ts`.
+    recentMatchRowPage.render({ row: buildRecentMatchRowView() })
+
+    await recentMatchRowPage.findRow(OPPONENT)
+
+    expect(recentMatchRowPage.getOpponentLink(OPPONENT)).toHaveClass(
+      'match-row-inline-link',
+    )
+  })
+
   it('keeps a solo match in the list, as "No opponent"', async () => {
     // ADR-0008: the player-less sentinel side is rendered, not dropped.
-    recentMatchRowPage.render({
-      row: buildRecentMatchRowView({ opponent: 'No opponent', isSolo: true }),
-    })
-    await recentMatchRowPage.findRow('No opponent')
+    recentMatchRowPage.render({ row: buildSoloRecentMatchRowView() })
 
-    expect(recentMatchRowPage.getRow('No opponent')).toBeInTheDocument()
-    expect(recentMatchRowPage.getStatusDot('No opponent')).toBeInTheDocument()
+    await recentMatchRowPage.findRow(NO_OPPONENT)
+
+    expect(recentMatchRowPage.getRow(NO_OPPONENT)).toBeInTheDocument()
+    expect(recentMatchRowPage.getStatusDot(NO_OPPONENT)).toBeInTheDocument()
+  })
+
+  it('does NOT link a solo match to a PLAYER — there is nobody to link to', async () => {
+    // The null-id case, and the one a naive fix breaks: `id` is null exactly for
+    // the player-less sentinel side, so a link built from it would point at
+    // `/players/null` and land the reader on a not-found page. "No opponent" is
+    // an absence, not a player: it must be plain text.
+    //
+    // The row still links to its MATCH — a solo match is a match — so the claim is
+    // not "no anchors in the row" but "nothing in the row points at a player".
+    recentMatchRowPage.render({ row: buildSoloRecentMatchRowView() })
+
+    await recentMatchRowPage.findRow(NO_OPPONENT)
+
+    expect(recentMatchRowPage.queryOpponentLink(NO_OPPONENT)).toBeNull()
+    expect(recentMatchRowPage.getRow(NO_OPPONENT).innerHTML).not.toContain(
+      '/players/',
+    )
+    // One link, and it is the match's.
+    const links = recentMatchRowPage.getRowLinks(NO_OPPONENT)
+    expect(links).toHaveLength(1)
+    expect(links[0]).toHaveAttribute('href', `/matches/${SOLO_MATCH_ID}`)
   })
 
   it('links the row through to the match — a real href, not a role="link" row (#989)', async () => {
@@ -136,27 +204,47 @@ describe('RecentMatchRow', () => {
     )
   })
 
-  it('names the link after the MATCH — and exposes exactly one per row', async () => {
-    // The anchor is on the date cell, not the opponent's name: a link named
-    // "ada.lovelace" announces a profile and delivers a match. And it is one
-    // anchor stretched over the row, not four — a screen reader must not hear the
-    // same link once per cell.
+  it('puts the anchor on the DATE cell and names it for the MATCH', async () => {
+    // The row's anchor is on the date, not around the opponent's name: a link
+    // named "ada.lovelace" announces a profile, and this one delivers a match.
+    // The opponent's name IS a link — to the profile it promises (#1005) — which
+    // is what makes naming this one for the match the honest choice rather than
+    // the only one.
     recentMatchRowPage.render({ row: buildRecentMatchRowView() })
     await recentMatchRowPage.findRow(OPPONENT)
 
-    expect(recentMatchRowPage.getDetailLink(OPPONENT)).toHaveAccessibleName(
-      'Match against ada.lovelace, Mar 14',
-    )
-    expect(recentMatchRowPage.getRowLinks(OPPONENT)).toHaveLength(1)
+    const link = recentMatchRowPage.getDetailLink(OPPONENT)
+    expect(link).toHaveAccessibleName('Match against ada.lovelace, Mar 14')
+    expect(recentMatchRowPage.getWhenCell(OPPONENT)).toContainElement(link)
+  })
+
+  it('exposes exactly TWO links per row — the match, and the opponent', async () => {
+    // Two links a screen reader hears, and they go to two genuinely different
+    // places: the row opens the match (#989), the name opens the person (#1005).
+    // Each is named for where it actually goes. What must NOT happen is the same
+    // link heard once per cell — hence the single stretched anchor.
+    recentMatchRowPage.render({ row: buildRecentMatchRowView() })
+    await recentMatchRowPage.findRow(OPPONENT)
+
+    const links = recentMatchRowPage.getRowLinks(OPPONENT)
+    expect(links).toHaveLength(2)
+    expect(
+      links.map((link) => [
+        link.getAttribute('aria-label') ?? link.textContent,
+        link.getAttribute('href'),
+      ]),
+    ).toEqual([
+      // In DOM order: the Opponent cell comes first, the "When" cell last.
+      ['ada.lovelace', '/players/p-9'],
+      ['Match against ada.lovelace, Mar 14', RECENT_MATCH_HREF],
+    ])
   })
 
   it('names a solo match’s link "Solo match", not "Match against No opponent"', async () => {
-    recentMatchRowPage.render({
-      row: buildRecentMatchRowView({ opponent: 'No opponent', isSolo: true }),
-    })
-    await recentMatchRowPage.findRow('No opponent')
+    recentMatchRowPage.render({ row: buildSoloRecentMatchRowView() })
+    await recentMatchRowPage.findRow(NO_OPPONENT)
 
-    expect(recentMatchRowPage.getDetailLink('No opponent')).toHaveAccessibleName(
+    expect(recentMatchRowPage.getDetailLink(NO_OPPONENT)).toHaveAccessibleName(
       'Solo match, Mar 14',
     )
   })

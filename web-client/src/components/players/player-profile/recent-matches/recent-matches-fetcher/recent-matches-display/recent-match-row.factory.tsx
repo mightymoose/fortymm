@@ -1,11 +1,13 @@
 import { matchDetailRoute } from '@/api/matches'
 import { matchRowAriaLabel } from '@/components/matches/match-row-link/match-row-naming'
 
-import type {
-  RecentMatchDeltaView,
-  RecentMatchGameView,
-  RecentMatchRowView,
-  RecentMatchStatusView,
+import {
+  NO_OPPONENT,
+  type RecentMatchDeltaView,
+  type RecentMatchGameView,
+  type RecentMatchOpponentView,
+  type RecentMatchRowView,
+  type RecentMatchStatusView,
 } from '../recent-matches-query'
 import type { RecentMatchRowProps } from './recent-match-row'
 
@@ -16,6 +18,21 @@ export const RECENT_MATCH_ID = '7d1c9e52-3a64-4b18-9f0e-2c7b5a48d631'
 
 /** The href that id must produce. */
 export const RECENT_MATCH_HREF = `/matches/${RECENT_MATCH_ID}`
+
+/** A real opponent: a player with an id, so the row links to their profile. */
+export function buildRecentMatchOpponentView(
+  overrides: Partial<Extract<RecentMatchOpponentView, { kind: 'player' }>> = {},
+): RecentMatchOpponentView {
+  return { kind: 'player', id: 'p-9', name: 'ada.lovelace', ...overrides }
+}
+
+/** The **solo** opponent — the player-less sentinel side (ADR-0008). It carries
+ * no id, because there is no player behind it: the row must print "No opponent"
+ * as plain text rather than link to `/players/null`. (The *row* still links to
+ * the match — a solo match is a match.) */
+export function buildSoloOpponentView(): RecentMatchOpponentView {
+  return { kind: 'solo', name: NO_OPPONENT }
+}
 
 export function buildRecentMatchGameView(
   overrides: Partial<RecentMatchGameView> = {},
@@ -48,8 +65,7 @@ export function buildRecentMatchRowView(
 ): RecentMatchRowView {
   const row = {
     id: RECENT_MATCH_ID,
-    opponent: 'ada.lovelace',
-    isSolo: false,
+    opponent: buildRecentMatchOpponentView(),
     status: buildRecentMatchStatusView(),
     score: {
       kind: 'games',
@@ -70,7 +86,13 @@ export function buildRecentMatchRowView(
     // A factory that let the two drift could hand a test a row whose label says
     // "Mar 14" and whose href points at somebody else's match.
     detailRoute: overrides.detailRoute ?? matchDetailRoute(row.id),
-    ariaLabel: overrides.ariaLabel ?? matchRowAriaLabel(row),
+    ariaLabel:
+      overrides.ariaLabel ??
+      matchRowAriaLabel({
+        opponent: row.opponent.name,
+        isSolo: row.opponent.kind === 'solo',
+        when: row.when,
+      }),
   }
 }
 
@@ -87,6 +109,25 @@ export function buildLiveRecentMatchRowView(
     status: buildRecentMatchStatusView({ tone: 'live', label: 'Live' }),
     score: { kind: 'text', text: 'Live' },
     delta: null,
+    ...overrides,
+  })
+}
+
+/** The solo variant's own id — a different match again, and a UUID like the rest,
+ * because its row link is asserted by `href` too. */
+export const SOLO_MATCH_ID = 'c05f8d31-72ae-4b96-8d14-6f39a2e7b508'
+
+/**
+ * A **solo** match: nobody on the other side, so the opponent's name is not a link
+ * — there is nobody to link *to*. The row is kept in the list, not dropped
+ * (ADR-0008), and it still links to its match: a solo match is a match.
+ */
+export function buildSoloRecentMatchRowView(
+  overrides: Partial<RecentMatchRowView> = {},
+): RecentMatchRowView {
+  return buildRecentMatchRowView({
+    id: SOLO_MATCH_ID,
+    opponent: buildSoloOpponentView(),
     ...overrides,
   })
 }

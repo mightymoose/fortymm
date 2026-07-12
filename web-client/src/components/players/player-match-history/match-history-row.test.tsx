@@ -50,6 +50,7 @@ describe('MatchHistoryRow', () => {
     // Not on the opponent's name: a link announced as "ada.lovelace" promises a
     // profile and delivers a match. The visible text is the date the row already
     // printed, and the spoken name is built from it — so the two cannot drift.
+    // (The name IS a link — to the profile it promises. See below.)
     matchHistoryRowPage.render()
     await matchHistoryRowPage.findRow(OPPONENT)
 
@@ -59,13 +60,71 @@ describe('MatchHistoryRow', () => {
     expect(link).toHaveAccessibleName(`Match against ${OPPONENT}, ${date}`)
   })
 
-  it('exposes exactly ONE link per row', async () => {
-    // The anchor is stretched over the row with a `::after` so the row clicks
-    // through end-to-end; a screen reader must still hear one link, not four.
+  it("links the opponent's name to that opponent's profile (#1005)", async () => {
+    // The history named its opponents in plain text — the most obvious next step
+    // from a list of the people you have played, and there was nothing to click.
+    // The id was on the wire the whole time; the row now spends it.
+    matchHistoryRowPage.render({
+      match: buildPlayerMatchRow({
+        opponent: { id: 'p-42', username: 'grace.hopper' },
+      }),
+    })
+    await matchHistoryRowPage.findRow('grace.hopper')
+
+    expect(matchHistoryRowPage.getOpponentLink('grace.hopper')).toHaveAttribute(
+      'href',
+      '/players/p-42',
+    )
+  })
+
+  it('lifts the opponent’s name ABOVE the row link’s stretched overlay', async () => {
+    // The row's anchor paints a `::after` over every cell (`match-row-link.css`),
+    // so a control inside a row is unclickable unless it lifts itself out. The
+    // name announces, tabs and Enters correctly either way — only the *pointer*
+    // breaks, which is precisely what a role-based query cannot see. jsdom loads
+    // no stylesheet and can measure no hit-test, so what is pinned here is the
+    // hook the stylesheet keys on; the click itself is a browser fact, covered in
+    // `web-client/e2e/players/player-profile.spec.ts`.
     matchHistoryRowPage.render()
     await matchHistoryRowPage.findRow(OPPONENT)
 
-    expect(matchHistoryRowPage.getRowLinks(OPPONENT)).toHaveLength(1)
+    expect(matchHistoryRowPage.getOpponentLink(OPPONENT)).toHaveClass(
+      'match-row-inline-link',
+    )
+  })
+
+  it('exposes exactly TWO links per row — the match, and the opponent', async () => {
+    // The match anchor is stretched over the row with a `::after` so the row
+    // clicks through end-to-end; a screen reader must hear it ONCE, not once per
+    // cell. The opponent's name is the row's second link — a different
+    // destination (#1005), with a name of its own — not the same link twice.
+    matchHistoryRowPage.render()
+    await matchHistoryRowPage.findRow(OPPONENT)
+
+    const links = matchHistoryRowPage.getRowLinks(OPPONENT)
+    expect(links).toHaveLength(2)
+    // In DOM order: the Date cell comes first, the Opponent cell second.
+    expect(links[0]).toHaveAttribute('href', HISTORY_MATCH_HREF)
+    expect(links[0].getAttribute('aria-label')).toMatch(
+      /^Match against ada\.lovelace, /,
+    )
+    expect(links[1]).toHaveAttribute('href', '/players/p-9')
+    expect(links[1]).toHaveAccessibleName('ada.lovelace')
+  })
+
+  it('does NOT link a solo match to a PLAYER — there is nobody to link to', async () => {
+    // `id` is null exactly for the player-less sentinel side, so a link built from
+    // it would point at `/players/null` and land the reader on a not-found page.
+    // "No opponent" is an absence, not a person: plain text. The row still opens
+    // its match — that is the one link it has.
+    matchHistoryRowPage.render({ match: buildSoloMatchRow() })
+    await matchHistoryRowPage.findRow('No opponent')
+
+    expect(matchHistoryRowPage.queryOpponentLink('No opponent')).toBeNull()
+    expect(matchHistoryRowPage.getRow('No opponent').innerHTML).not.toContain(
+      '/players/',
+    )
+    expect(matchHistoryRowPage.getRowLinks('No opponent')).toHaveLength(1)
   })
 
   it('links a solo match too, named "Solo match" (ADR-0008)', async () => {

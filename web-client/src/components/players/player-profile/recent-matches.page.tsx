@@ -12,6 +12,7 @@ import { screen, type Container } from '@/test/utilities'
 import { RecentMatches, type RecentMatchesProps } from './recent-matches'
 import {
   MATCH_HISTORY_ROUTE,
+  PROFILE_ROUTE,
   recentMatchesDisplayPage,
 } from './recent-matches/recent-matches-fetcher/recent-matches-display.page'
 
@@ -58,7 +59,7 @@ export const recentMatchesPage = {
       >
         <RecentMatches {...props} />
       </ErrorBoundary>,
-      { linkTargets: [MATCH_HISTORY_ROUTE, MATCH_DETAIL_ROUTE] },
+      { linkTargets: [MATCH_HISTORY_ROUTE, PROFILE_ROUTE, MATCH_DETAIL_ROUTE] },
     )
   },
 

@@ -22,7 +22,9 @@
  * - It paints **over the row's cells**, so any interactive control put inside a row
  *   later will sit underneath it. Such a control has to lift itself out — stop the
  *   click propagating and/or take a `position` + `z-index` — the way the matches
- *   list's trailing action cell does. No row on these two surfaces has one today.
+ *   list's trailing action cell does. Both surfaces have exactly one such control
+ *   now: the opponent's name, a link to their profile (#1005), which lifts itself
+ *   with `.match-row-inline-link` below.
  * - The profile card's table overflows its column by ~17px, and that last strip is
  *   dead to hit-testing for **everything** in it, plain `<td>`s included. That is a
  *   pre-existing layout quirk of the card, not a property of this link, and it is
@@ -73,4 +75,25 @@ tr:has(.match-row-link:focus-visible) {
 
 .match-row-link:focus-visible {
   outline: none;
+}
+
+/* A control that must sit ABOVE the stretched overlay — the escape hatch the doc
+ * comment at the top of this file describes, written once rather than re-derived
+ * per surface. Today: the opponent's name, a link to their profile (#1005), on
+ * both the profile card and the full history page.
+ *
+ * The overlay is `position: absolute` with no `z-index`, so it paints in the
+ * positioned-with-`z-index: auto` layer; a control that takes `position` *and* a
+ * positive `z-index` paints in the layer above it, and therefore wins the
+ * hit-test. (The `<tr>` is `position: relative` / `z-index: auto`, which is NOT a
+ * stacking context, so the two resolve against each other directly.) That is all
+ * it takes — the anchor underneath never receives the click, so there is nothing
+ * to stop propagating.
+ *
+ * Wearing this class is the whole contract; each surface styles its own link
+ * (colour, hover, focus ring) as it sees fit. Take it off and the name still
+ * announces, tabs and Enters as a link — only the pointer breaks, silently. */
+.match-row-inline-link {
+  position: relative;
+  z-index: 1;
 }
