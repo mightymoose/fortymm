@@ -1,6 +1,10 @@
 import userEvent from '@testing-library/user-event'
 import { renderWithRoutes } from '@/test/router'
 import { render, screen, type Container } from '@/test/utilities'
+import {
+  EMPTY_STATE_LINK_TARGETS,
+  notificationsEmptyPage,
+} from './notifications-empty.page'
 import { NotificationsView, type NotificationsViewProps } from './notifications-view'
 import { buildNotificationsViewProps } from './notifications-view.factory'
 
@@ -21,23 +25,16 @@ const scoped = (container: Container) => ({
   queryEmptyState() {
     return container.queryByText('All caught up.')
   },
-  /** The empty state under a router — async, since the router resolves its
-   * initial match after first paint. See `renderEmptyInbox`. */
-  findEmptyState() {
-    return container.findByText('All caught up.')
-  },
-  queryLogMatchLink() {
-    return container.queryByRole('link', { name: 'Log a match' })
-  },
-  queryShowAll() {
-    return container.queryByRole('button', { name: 'Show all notifications' })
-  },
   queryTitle(title: string) {
     return container.queryByText(title)
   },
   rowByTitle(title: string) {
     return container.getByText(title).closest('button') as HTMLButtonElement
   },
+  /** The empty state's own surface (`findHeadline`, `queryLogMatchLink`,
+   * `queryShowAll`, …) — composed from its page object rather than re-derived,
+   * so the CTA names live in one place. */
+  ...notificationsEmptyPage.within(container),
 })
 
 export const notificationsViewPage = {
@@ -66,7 +63,7 @@ export const notificationsViewPage = {
       <NotificationsView
         {...buildNotificationsViewProps({ items: [], unreadCount: 0, ...overrides })}
       />,
-      { linkTargets: ['/matches/new', '/notifications/settings'] },
+      { linkTargets: EMPTY_STATE_LINK_TARGETS },
     )
   },
 
@@ -81,9 +78,7 @@ export const notificationsViewPage = {
     await userEvent.click(this.getMarkAllRead())
   },
   async clickShowAll() {
-    await userEvent.click(
-      screen.getByRole('button', { name: 'Show all notifications' }),
-    )
+    await userEvent.click(this.getShowAll())
   },
   async clickRow(title: string) {
     await userEvent.click(this.rowByTitle(title))

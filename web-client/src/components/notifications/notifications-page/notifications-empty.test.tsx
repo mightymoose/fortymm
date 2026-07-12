@@ -25,22 +25,19 @@ describe('NotificationsEmpty', () => {
   })
 
   describe('with a filter matching nothing', () => {
-    const filtered = { kind: 'filter-empty', filterLabel: 'Unread' } as const
+    const filterEmpty = (onShowAll = () => {}) =>
+      ({ kind: 'filter-empty', filterLabel: 'Unread', onShowAll }) as const
 
     it('names the filter rather than telling a user with notifications to go play', async () => {
-      notificationsEmptyPage.render({ state: filtered })
+      notificationsEmptyPage.render({ state: filterEmpty() })
       await notificationsEmptyPage.findHeadline()
 
-      expect(
-        notificationsEmptyPage.querySubcopy('Nothing under Unread.'),
-      ).toBeInTheDocument()
-      expect(
-        notificationsEmptyPage.querySubcopy('Nothing here. Go play.'),
-      ).not.toBeInTheDocument()
+      expect(notificationsEmptyPage.queryFilterCopy('Unread')).toBeInTheDocument()
+      expect(notificationsEmptyPage.queryGoPlayCopy()).not.toBeInTheDocument()
     })
 
     it('offers to clear the filter instead of starting a match', async () => {
-      notificationsEmptyPage.render({ state: filtered })
+      notificationsEmptyPage.render({ state: filterEmpty() })
       await notificationsEmptyPage.findHeadline()
 
       expect(notificationsEmptyPage.queryShowAll()).toBeInTheDocument()
@@ -49,7 +46,7 @@ describe('NotificationsEmpty', () => {
 
     it('clears the filter when "Show all" is clicked', async () => {
       const onShowAll = vi.fn()
-      notificationsEmptyPage.render({ state: filtered, onShowAll })
+      notificationsEmptyPage.render({ state: filterEmpty(onShowAll) })
       await notificationsEmptyPage.findHeadline()
 
       await notificationsEmptyPage.clickShowAll()

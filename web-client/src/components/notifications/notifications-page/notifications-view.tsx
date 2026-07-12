@@ -68,6 +68,7 @@ export function NotificationsView({
   // opposite next actions — see `NotificationsEmpty` (#901). A filter can only
   // come up empty while it is narrowing something, so `filter-empty` always has
   // a filter worth clearing.
+  const filterLabel = filters.find((f) => f.key === filter)?.label ?? 'this filter'
   const emptyState: NotificationsEmptyState | null =
     shown.length > 0
       ? null
@@ -75,8 +76,8 @@ export function NotificationsView({
         ? { kind: 'inbox-empty' }
         : {
             kind: 'filter-empty',
-            filterLabel:
-              filters.find((f) => f.key === filter)?.label ?? 'this filter',
+            filterLabel,
+            onShowAll: () => onFilterChange('all'),
           }
 
   return (
@@ -129,10 +130,7 @@ export function NotificationsView({
 
       <div className="overflow-hidden rounded-[14px] border border-[color:var(--border-subtle)] bg-[color:var(--bg-panel)]">
         {emptyState ? (
-          <NotificationsEmpty
-            state={emptyState}
-            onShowAll={() => onFilterChange('all')}
-          />
+          <NotificationsEmpty state={emptyState} />
         ) : (
           <ul>
             {shown.map((item, i) => (

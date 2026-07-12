@@ -75,26 +75,25 @@ describe('NotificationsView', () => {
     expect(notificationsViewPage.queryEmptyState()).toBeInTheDocument()
   })
 
-  it('offers to clear the filter — not to go play — when a filter matches nothing (#901)', async () => {
+  // What only the *view* knows is which empty it is looking at. The CTAs
+  // themselves are `NotificationsEmpty`'s contract, tested there.
+  it('reads a filter that matches nothing as filter-empty, and wires Show all (#901)', async () => {
     const onFilterChange = vi.fn()
     notificationsViewPage.render({ filter: 'match_reminder', onFilterChange })
     // These notifications exist, they just aren't in this category: the way out
     // is the filter, not a new match.
     expect(notificationsViewPage.queryShowAll()).toBeInTheDocument()
-    expect(notificationsViewPage.queryLogMatchLink()).not.toBeInTheDocument()
+    expect(notificationsViewPage.queryGoPlayCopy()).not.toBeInTheDocument()
 
     await notificationsViewPage.clickShowAll()
     expect(onFilterChange).toHaveBeenCalledWith('all')
   })
 
-  it('offers a next action when the inbox is empty (#901)', async () => {
+  it('reads a feed with no items at all as inbox-empty (#901)', async () => {
     notificationsViewPage.renderEmptyInbox()
-    await notificationsViewPage.findEmptyState()
+    await notificationsViewPage.findHeadline()
 
-    expect(notificationsViewPage.queryLogMatchLink()).toHaveAttribute(
-      'href',
-      '/matches/new',
-    )
+    expect(notificationsViewPage.queryLogMatchLink()).toBeInTheDocument()
     expect(notificationsViewPage.queryShowAll()).not.toBeInTheDocument()
   })
 

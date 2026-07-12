@@ -5,7 +5,6 @@ export function buildNotificationsEmptyProps(
 ): NotificationsEmptyProps {
   return {
     state: { kind: 'inbox-empty' },
-    onShowAll: () => {},
     ...overrides,
   }
 }

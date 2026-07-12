@@ -7,14 +7,25 @@ import {
 } from './notifications-empty'
 import { buildNotificationsEmptyProps } from './notifications-empty.factory'
 
+/** The routes the inbox-empty CTAs link to. Exported so any harness mounting
+ * this component registers the same set — a `<Link>` whose target the router
+ * doesn't know throws at render. */
+export const EMPTY_STATE_LINK_TARGETS = [
+  '/matches/new',
+  '/notifications/settings',
+]
+
 const scoped = (container: Container) => ({
   /** The headline, shared by both empty states. Async: the router resolves its
    * initial match asynchronously, so nothing is in the DOM on first paint. */
   findHeadline() {
     return container.findByText('All caught up.')
   },
-  querySubcopy(text: string | RegExp) {
-    return container.queryByText(text)
+  queryGoPlayCopy() {
+    return container.queryByText('Nothing here. Go play.')
+  },
+  queryFilterCopy(filterLabel: string) {
+    return container.queryByText(`Nothing under ${filterLabel}.`)
   },
   queryLogMatchLink() {
     return container.queryByRole('link', { name: 'Log a match' })
@@ -39,7 +50,7 @@ export const notificationsEmptyPage = {
   render(overrides: Partial<NotificationsEmptyProps> = {}) {
     return renderWithRoutes(
       <NotificationsEmpty {...buildNotificationsEmptyProps(overrides)} />,
-      { linkTargets: ['/matches/new', '/notifications/settings'] },
+      { linkTargets: EMPTY_STATE_LINK_TARGETS },
     )
   },
 
