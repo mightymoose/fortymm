@@ -19,24 +19,29 @@ import type { Opponent } from './opponent'
  */
 export type OpponentSelection =
   | { kind: 'none' }
-  | { kind: 'seeking'; query: string }
+  | { kind: 'seeking' }
   | { kind: 'picked'; opponent: Opponent }
 
 /**
  * Resolve the selection from the two things the card can observe: the opponent
- * it has committed to (picked, or preseeded from `?opponent=`), and the
- * picker's current uncommitted search text.
+ * it has committed to (picked, or preseeded from `?opponent=`), and whether the
+ * picker currently holds an uncommitted search.
  *
  * A committed opponent always wins: once you've picked someone, whatever is
  * left in the search box is irrelevant.
+ *
+ * `seeking` carries no payload on purpose. It is the *fact* of an unresolved
+ * search, not its text — and taking the boolean rather than the string is what
+ * keeps the card off the keystroke path: mirroring the query up re-rendered the
+ * whole form on every character and re-registered the `useBlocker` guard with
+ * it, to fill a field nothing ever read.
  */
 export function opponentSelection(
   opponent: Opponent | null,
-  searchQuery: string,
+  isSeeking: boolean,
 ): OpponentSelection {
   if (opponent !== null) return { kind: 'picked', opponent }
-  const query = searchQuery.trim()
-  return query.length > 0 ? { kind: 'seeking', query } : { kind: 'none' }
+  return isSeeking ? { kind: 'seeking' } : { kind: 'none' }
 }
 
 /**

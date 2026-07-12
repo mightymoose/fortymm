@@ -17,6 +17,7 @@ import {
   type Opponent,
 } from '@/components/matches/match-setup/opponent'
 import {
+  isRatable,
   opponentSelection,
   selectedOpponent,
   type OpponentSelection,
@@ -94,18 +95,21 @@ function MatchCard() {
   const [pick, setPick] = useState<Opponent | null | undefined>(undefined)
   const opponent = pick === undefined ? preselected.opponent : pick
 
-  // The picker's uncommitted search text, mirrored up here via its
-  // `onQueryChange` channel. Deliberately its own state and NOT folded into the
-  // `pick` tri-state above: `pick`'s `undefined` carries a different, load-bearing
-  // meaning ("untouched → the URL preseed stands"), and it is what the discard
-  // dialog's dirty check keys off (#75). Half-typing a name is not a touch of the
-  // opponent slot — nothing is configured yet — so it must not arm that dialog.
-  const [searchQuery, setSearchQuery] = useState('')
+  // Whether the picker currently holds an uncommitted search — the *fact*, not
+  // the text. Storing the edge rather than mirroring every keystroke keeps this
+  // card off the typing path: a per-character `setState` here re-rendered the
+  // whole form and tore down and re-registered the `useBlocker` guard with it.
+  // Deliberately its own state and NOT folded into the `pick` tri-state above:
+  // `pick`'s `undefined` carries a different, load-bearing meaning ("untouched →
+  // the URL preseed stands"), and it is what the discard dialog's dirty check
+  // keys off (#75). Half-typing a name is not a touch of the opponent slot —
+  // nothing is configured yet — so it must not arm that dialog.
+  const [isSeeking, setIsSeeking] = useState(false)
 
   // The two observations above, resolved into the one thing the rest of the card
   // reads: none | seeking | picked (#893). Everything downstream — the rated
   // field, the summary, the submit payload — is a function of this.
-  const selection = opponentSelection(opponent, searchQuery)
+  const selection = opponentSelection(opponent, isSeeking)
 
   const [bestOf, setBestOf] =
     useState<BestOfFieldProps['bestOf']>(DEFAULT_BEST_OF)
@@ -189,16 +193,20 @@ function MatchCard() {
             onChange={() => {
               setPick(null)
               setRated(false)
-              setSearchQuery('')
+              setIsSeeking(false)
             }}
           />
         ) : (
           <OpponentPicker
             onPick={(player) => {
               setPick(opponentFromPlayer(player))
-              setSearchQuery('')
+              setIsSeeking(false)
             }}
-            onQueryChange={setSearchQuery}
+            // Only the empty/non-empty edge crosses this boundary. React bails
+            // out of a `useState` set to the value it already holds, so the card
+            // re-renders when the search starts and when it ends — not once per
+            // character.
+            onQueryChange={(query) => setIsSeeking(query.trim().length > 0)}
           />
         )}
       </div>
@@ -302,8 +310,7 @@ function SubmitRow({
   onSubmit: () => void
   onCancel: () => void
 }) {
-  const opponent = selectedOpponent(selection)
-  const effectivelyRated = rated && opponent !== null
+  const effectivelyRated = rated && isRatable(selection)
   const gamesToWin = Math.ceil(bestOf / 2)
   const lengthCopy =
     bestOf === 1 ? 'Single game' : `Best of ${bestOf} · first to ${gamesToWin}`

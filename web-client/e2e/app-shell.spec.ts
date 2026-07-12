@@ -20,6 +20,7 @@
  */
 import { expect, test, type Page, type Route } from '@playwright/test'
 import type { components } from '../src/api/schema'
+import { INTERACTIVE_SELECTOR } from '../src/test/read-only'
 import {
   notificationFeed,
   notificationPreferences,
@@ -72,9 +73,16 @@ async function installMocks(page: Page) {
   })
 }
 
-/** Everything a Tab press can land on. Straight from the #887 measurement. */
-const FOCUSABLE =
-  'a[href],button:not([disabled]),input:not([disabled]),select,textarea,[tabindex]:not([tabindex="-1"])'
+/** Everything a Tab press can land on.
+ *
+ * The one selector, imported — not a copy. `read-only.ts` exists because this
+ * string forked three ways the first time it was pasted around, and a fork
+ * written here would already have been the weaker one: it would have missed
+ * `[role="switch"]` and `[role="radio"]`, so a toggle added to the sidebar
+ * tomorrow would sail straight through this #887 guard. No disabled-filtering is
+ * needed on top — the probe below asks the browser to focus each node and keeps
+ * only what it actually lands on, which discards anything unfocusable anyway. */
+const FOCUSABLE = INTERACTIVE_SELECTOR
 
 /**
  * How many of the drawer's controls the browser will *actually* focus.

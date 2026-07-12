@@ -212,6 +212,12 @@
   max-width: 100%;
 }
 
+/* The claimed-account tick. The pill's *name* is what gives way when the row is
+   tight (below); the tick must not, or it would be squashed to nothing. */
+.fmm-settings .fmm-page-header__pill > svg {
+  flex-shrink: 0;
+}
+
 .fmm-settings .fmm-page-header__pill-name {
   font-family: var(--font-mono);
   font-size: var(--text-sm);

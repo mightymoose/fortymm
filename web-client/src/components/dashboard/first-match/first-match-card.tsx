@@ -159,7 +159,11 @@ export const FirstMatchCard = () => {
           // into an unintended solo match the way /matches/new could (#893) —
           // its selection is only ever `picked` or `none`.
           onClick={() =>
-            submit({ selection: opponentSelection(opponent, ''), bestOf, rated })
+            submit({
+              selection: opponentSelection(opponent, false),
+              bestOf,
+              rated,
+            })
           }
         >
           {submitting ? 'Starting…' : 'Start scoring'}

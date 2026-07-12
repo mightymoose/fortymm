@@ -389,13 +389,7 @@ function PageHeader({
           <div className="fmm-page-header__pill-name" title={display}>
             {display}
           </div>
-          {claimed && (
-            <Check
-              size={14}
-              color="var(--serve-500)"
-              style={{ flexShrink: 0 }}
-            />
-          )}
+          {claimed && <Check size={14} color="var(--serve-500)" />}
         </div>
       </div>
       <p className="fmm-page-header__lede">

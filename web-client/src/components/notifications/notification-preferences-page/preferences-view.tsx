@@ -47,7 +47,18 @@ function isAwaitingSetup(channel: ChannelState) {
  * permission gate, it's a prerequisite the user can clear themselves, and the
  * nudge supplies the "why" a bare disabled control would withhold. */
 function isDeliverable(channel: ChannelState) {
-  return channel.available && !isAwaitingSetup(channel)
+  return channel.available && !channel.setup_required
+}
+
+/** Is this channel *effectively* on — the user wants it **and** we can deliver?
+ *
+ * The one place that question is answered. It used to be spelled three ways (the
+ * card, the matrix header, the matrix cell), and the spellings had already
+ * drifted: the card asked only whether setup was pending, so a channel the server
+ * marked unavailable-but-enabled would have lit its switch on — #892 again, in
+ * the half of the component #892 didn't touch. A rule written once cannot drift. */
+function isOn(channel: ChannelState) {
+  return channel.enabled && isDeliverable(channel)
 }
 
 /** The notifications settings page: channel "sign-up" cards plus the
@@ -63,9 +74,6 @@ export function PreferencesView({
   const channelByKey = new Map(channels.map((c) => [c.channel, c]))
   const channelLabel = new Map(taxonomy.channels.map((c) => [c.key, c.label]))
   const categoryLabel = new Map(taxonomy.types.map((t) => [t.key, t.label]))
-  const deliverable = new Map(
-    channels.map((c) => [c.channel, isDeliverable(c)] as const),
-  )
 
   return (
     <div className="mx-auto max-w-[840px] px-6 pt-9 pb-20">
@@ -90,7 +98,7 @@ export function PreferencesView({
           const awaitingSetup = isAwaitingSetup(channel)
           // A channel with nowhere to deliver reads as off, whatever the stored
           // master says — and can't be switched on until setup is done.
-          const on = channel.enabled && !awaitingSetup
+          const on = isOn(channel)
           const interactive = !channel.locked && isDeliverable(channel)
           const nudge = awaitingSetup
             ? channelSetupNudge(channel.channel, pendingEmail)
@@ -162,7 +170,7 @@ export function PreferencesView({
           {channels.map((channel) => {
             const { Icon } = CHANNEL_VISUAL[channel.channel]
             const label = channelLabel.get(channel.channel) ?? channel.channel
-            const on = channel.enabled && isDeliverable(channel)
+            const on = isOn(channel)
             return (
               <div
                 key={channel.channel}
@@ -207,13 +215,13 @@ export function PreferencesView({
                 const master = channelByKey.get(cell.channel)
                 // Same rule as the master switch above, one level down: a cell
                 // can only claim delivery its channel can actually make. With
-                // the channel awaiting setup, `canDeliver` is false, so the
-                // cell reads off and can't be flipped — including the cells
-                // locked on (match reminders), which is exactly the promise the
-                // channel can't keep yet.
-                const canDeliver = deliverable.get(cell.channel) ?? false
-                const masterOn = (master?.enabled ?? false) && canDeliver
-                const disabled = cell.locked || !canDeliver || !masterOn
+                // the channel awaiting setup its master is off, so the cell
+                // reads off and can't be flipped — including the cells locked
+                // on (match reminders), which is exactly the promise the channel
+                // can't keep yet.
+                const canDeliver = master ? isDeliverable(master) : false
+                const masterOn = master ? isOn(master) : false
+                const disabled = cell.locked || !masterOn
                 return (
                   <div
                     key={cell.channel}

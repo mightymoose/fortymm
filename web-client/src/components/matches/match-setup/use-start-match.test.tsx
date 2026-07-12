@@ -282,7 +282,7 @@ describe('useStartMatch', () => {
 
     await act(() =>
       submit({
-        selection: { kind: 'seeking', query: 'zzzzzz' },
+        selection: { kind: 'seeking' },
         bestOf: 5,
         rated: false,
       }),
@@ -312,7 +312,7 @@ describe('useStartMatch', () => {
 
     await act(() =>
       submit({
-        selection: { kind: 'seeking', query: 'zzzzzz' },
+        selection: { kind: 'seeking' },
         bestOf: 5,
         rated: true,
       }),
