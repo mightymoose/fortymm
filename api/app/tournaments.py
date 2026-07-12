@@ -2,7 +2,7 @@ import uuid
 from typing import Any, Literal, assert_never
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
-from sqlalchemy import select
+from sqlalchemy import ColumnElement, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -273,6 +273,52 @@ def _require_owner(t: Tournament, current_user: User) -> None:
         )
 
 
+# The statuses in which a tournament has been ANNOUNCED to the world. Publishing
+# is the act that makes a tournament public (ADR-0017), and nothing walks
+# backwards out of it, so everything from ``published`` onward is announced and
+# ``draft`` is not.
+#
+# An allow-list, deliberately, rather than "anything but draft": a status added
+# to the enum tomorrow is invisible to non-owners until somebody puts it in this
+# set on purpose. The inverse spelling would silently publish a future
+# pre-publish status (a ``pending_review``, a ``scheduled``) the moment it was
+# added, which is exactly the leak this predicate exists to close.
+ANNOUNCED_STATUSES: frozenset[TournamentStatus] = frozenset(
+    {
+        TournamentStatus.published,
+        TournamentStatus.live,
+        TournamentStatus.archived,
+    }
+)
+
+
+def _visible_to(user_id: uuid.UUID) -> ColumnElement[bool]:
+    """Which tournaments ``user_id`` may see at all: the announced ones, plus
+    their own — whatever status their own is in.
+
+    A draft is not announced, so it is owner-only. The read routes push this into
+    the WHERE clause rather than filtering after the fact, so a hidden draft is
+    *not selected* and the detail route's existing "Tournament not found." 404
+    answers for it. 404 and not 403: a 403 would confirm that a tournament with
+    that id exists, which is precisely what an unannounced tournament must not
+    admit. A draft the caller cannot see is indistinguishable from one that was
+    never created.
+
+    ``tournament.view`` is a separate question, and it is asked first — it is a
+    route dependency, so a caller without the permission is refused (403) before
+    this predicate is ever built. Permission says "may you read tournaments at
+    all"; this says "which ones are there for you to read".
+
+    One predicate, used by both the list and the detail route, because two copies
+    of this rule would eventually disagree — and the way they disagree is that the
+    list hides a draft the detail route still serves.
+    """
+    return or_(
+        Tournament.status.in_(ANNOUNCED_STATUSES),
+        Tournament.created_by_user_id == user_id,
+    )
+
+
 # ----- tournament routes ---------------------------------------------------
 
 
@@ -293,10 +339,17 @@ async def list_tournaments(
     # batch. A per-event entry count would be the N+1 this shape exists to avoid,
     # and a statement-count tripwire in tests/test_tournaments.py fails if one
     # comes back.
+    #
+    # Scoped by ``_visible_to``: somebody else's draft is not the caller's to see,
+    # so it never enters the result set — and, because the filter is a WHERE clause
+    # on the first of the three queries, the events and entrants queries are keyed
+    # off the surviving ids and cannot leak a hidden tournament's contents either.
+    # A predicate costs no extra statement, so the tripwire above still reads 3.
     rows = (
         await db.execute(
             select(Tournament, User.username)
             .join(User, User.id == Tournament.created_by_user_id)
+            .where(_visible_to(current_user.id))
             .order_by(Tournament.created_at.desc())
         )
     ).all()
@@ -382,11 +435,18 @@ async def get_tournament(
     # Fetch the row and creator username in one joined query. The inner join
     # can't drop the row (RESTRICT FK guarantees the creator exists), so a
     # missing row means the tournament itself is absent.
+    #
+    # The SAME visibility predicate the list uses, and it is applied HERE, in the
+    # WHERE clause, rather than as a check on the loaded row: a tournament the
+    # caller cannot see is simply not selected, so it falls into the 404 below by
+    # the one path a nonexistent id already takes. There is deliberately no second
+    # error branch to write — "hidden" and "not there" must be the same answer, and
+    # the surest way to keep them the same is to leave only one place that answers.
     row = (
         await db.execute(
             select(Tournament, User.username)
             .join(User, User.id == Tournament.created_by_user_id)
-            .where(Tournament.id == tournament_id)
+            .where(Tournament.id == tournament_id, _visible_to(current_user.id))
         )
     ).one_or_none()
     if row is None:

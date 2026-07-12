@@ -32,7 +32,12 @@
 import { expect, test } from '@playwright/test'
 
 import { TournamentDetailPage } from '../page-objects/tournaments/tournament-detail.page'
-import { EVENT, ME, STATUSES } from '../page-objects/tournaments/tournaments-store'
+import {
+  ANNOUNCED_STATUSES,
+  EVENT,
+  ME,
+  STATUSES,
+} from '../page-objects/tournaments/tournaments-store'
 import { expectAxeClean } from '../support/axe'
 
 /** The registration window's copy, hard-coded test-side (as the roster copy in
@@ -363,10 +368,19 @@ test.describe('Tournaments · the registration window', () => {
 })
 
 test.describe('Tournaments · a viewer who does not own the tournament', () => {
-  // Every status, because a header that leaked a button in exactly one of them
-  // would be a viewer clicking Publish on somebody else's tournament — a 403 they
-  // were invited to earn. (Hiding it is UX; the API 403s independently.)
-  for (const status of STATUSES) {
+  // Every status a viewer can actually SEE, because a header that leaked a button
+  // in exactly one of them would be a viewer clicking a transition on somebody
+  // else's tournament — a 403 they were invited to earn. (Hiding it is UX; the API
+  // 403s independently.)
+  //
+  // Announced-only, not all four (#967): somebody else's DRAFT is not a page a
+  // viewer can be on. The API hides an unannounced tournament from everyone but its
+  // creator — its detail GET is a 404, deliberately, so a hidden draft is
+  // indistinguishable from one that never existed — so a viewer-on-a-draft spec
+  // would stub a response the server will not send and assert the UI behaves in a
+  // state it cannot reach. The 404 is the real behaviour there, and it belongs to
+  // the not-found screen, not to this sweep.
+  for (const status of ANNOUNCED_STATUSES) {
     test(`sees the ${status} badge and NO lifecycle button`, async ({ page }) => {
       const { pom, store } = await TournamentDetailPage.navigateTo(page, {
         status,

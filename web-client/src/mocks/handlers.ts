@@ -1535,6 +1535,11 @@ export const handlers = [
   // mirroring the real API. The list and detail GET both return
   // `TournamentDetailRead` (events included). Event sub-routes are registered
   // before the bare `:tournamentId` so MSW matches them first.
+  //
+  // Both GETs are also VISIBILITY-scoped (#967): the store serves only the
+  // announced tournaments plus the dev user's own, so the seeded foreign draft is
+  // missing from the list and 404s (not 403s) on detail — no branch here, because
+  // `findTournament` simply does not find it.
   http.get('*/v1/tournaments', async () => {
     await delay(250)
     return HttpResponse.json(listTournaments())

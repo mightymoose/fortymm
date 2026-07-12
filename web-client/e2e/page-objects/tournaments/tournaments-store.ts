@@ -18,9 +18,29 @@ export type TournamentStatus = TournamentDetailRead['status']
 type UnreadCountResponse = components['schemas']['UnreadCountResponse']
 
 /** Every status a tournament can be in, in lifecycle order — so a spec that
- * sweeps "each of the four" cannot quietly sweep three. */
+ * sweeps "each of the four" cannot quietly sweep three. This is the sweep for an
+ * OWNER, who can reach all four of their own. */
 export const STATUSES: readonly TournamentStatus[] = [
   'draft',
+  'published',
+  'live',
+  'archived',
+]
+
+/** The statuses in which a tournament has been ANNOUNCED — the API's
+ * `ANNOUNCED_STATUSES` (#967), and the only statuses a NON-OWNER can ever have on
+ * screen: a draft is owner-only to read, so a stranger's GET of one is a 404 and
+ * the detail page never renders at all.
+ *
+ * The viewer sweeps run over this list rather than over `STATUSES`, because a
+ * viewer + `draft` fixture would be a world the server cannot produce — the spec
+ * would be stubbing a response the API refuses to give, and asserting the UI is
+ * well-behaved in a state it can never be in.
+ *
+ * An allow-list, matching the server's spelling rather than `!== 'draft'`: a
+ * pre-publish status added tomorrow stays invisible to non-owners until it is put
+ * here on purpose. */
+export const ANNOUNCED_STATUSES: readonly TournamentStatus[] = [
   'published',
   'live',
   'archived',

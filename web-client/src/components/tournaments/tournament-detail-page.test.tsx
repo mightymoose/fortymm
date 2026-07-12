@@ -90,12 +90,23 @@ describe('TournamentDetailPage', () => {
     expect(onCreateEvent).toHaveBeenCalledTimes(1)
   })
 
+  // `published`, not `draft`: a non-creator can no longer be looking at a draft at
+  // all — the API hides an unannounced tournament from everyone but its creator, so
+  // it answers a stranger's GET with a 404 (#967) and this page never renders. A
+  // non-owner + `draft` fixture would be a state the server cannot produce, and the
+  // test would prove nothing about the world. `published` is the reachable case: I
+  // can see other people's announced tournaments, and I still get no button.
+  //
+  // The button asserted absent is the one the OWNER of a `published` tournament is
+  // offered ("Start tournament"). Asserting `/Publish/` here would pass on a
+  // published tournament even if the gate were removed entirely — nobody, owner or
+  // not, is offered Publish from `published`.
   it('hides the lifecycle action for a non-creator', () => {
     tournamentDetailPagePage.render({
-      tournament: buildTournament({ status: 'draft', canEdit: false }),
+      tournament: buildTournament({ status: 'published', canEdit: false }),
     })
     expect(
-      tournamentDetailPagePage.queryLifecycleButton(/Publish/),
+      tournamentDetailPagePage.queryLifecycleButton(/Start tournament/),
     ).toBeNull()
   })
 
