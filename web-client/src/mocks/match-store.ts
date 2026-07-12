@@ -1,5 +1,6 @@
 import type { components } from '@/api/schema'
 import { compactGames, isDecidedMatch } from '@/lib/scoring'
+import { mockUuid } from '@/mocks/mock-uuid'
 
 type MatchStatus = components['schemas']['MatchStatus']
 type MatchDetails = components['schemas']['app__schemas__match__MatchDetails']
@@ -989,12 +990,24 @@ export function statusCountsOf(seeds: SeedMatch[]): Record<string, number> {
   return counts
 }
 
-/** Seed snapshot used at module load. `m-2207` is the deterministic
- * in-progress match the score-entry e2e hard-codes into its URL. */
+/** Ids of the seeded matches. UUIDs, because that's what the API mints and
+ * what the `$matchId` routes will accept — a friendlier `m-2207` 404s before
+ * the page ever fetches (#958). Exported so anything that deep-links a seeded
+ * match (the notification feed) points at one that exists. */
+export const SEED_MATCH_IDS = {
+  pending: mockUuid('match:pending-1'),
+  inProgress: mockUuid('match:in-progress-2207'),
+  completedWin: mockUuid('match:completed-win-1'),
+  completedLoss: mockUuid('match:completed-loss-1'),
+  completedWin2: mockUuid('match:completed-win-2'),
+} as const
+
+/** Seed snapshot used at module load. `inProgress` is the deterministic
+ * in-progress match — the one to open when you want a half-scored board. */
 export function buildInitialSeeds(): SeedMatch[] {
   return [
     {
-      id: 'm-pending-1',
+      id: SEED_MATCH_IDS.pending,
       status: 'pending',
       best_of: 5,
       affects_rating: true,
@@ -1005,7 +1018,7 @@ export function buildInitialSeeds(): SeedMatch[] {
       results: [],
     },
     {
-      id: 'm-2207',
+      id: SEED_MATCH_IDS.inProgress,
       status: 'in_progress',
       best_of: 5,
       affects_rating: true,
@@ -1027,7 +1040,7 @@ export function buildInitialSeeds(): SeedMatch[] {
       results: [],
     },
     {
-      id: 'm-completed-win-1',
+      id: SEED_MATCH_IDS.completedWin,
       status: 'completed',
       best_of: 5,
       affects_rating: true,
@@ -1072,7 +1085,7 @@ export function buildInitialSeeds(): SeedMatch[] {
       ],
     },
     {
-      id: 'm-completed-loss-1',
+      id: SEED_MATCH_IDS.completedLoss,
       status: 'completed',
       best_of: 3,
       affects_rating: true,
@@ -1104,7 +1117,7 @@ export function buildInitialSeeds(): SeedMatch[] {
       ],
     },
     {
-      id: 'm-completed-win-2',
+      id: SEED_MATCH_IDS.completedWin2,
       status: 'completed',
       best_of: 3,
       affects_rating: true,
@@ -1193,6 +1206,10 @@ export function validateScore(side1: number, side2: number): string | null {
   return null
 }
 
+/** Distinguishes the matches one dev session creates, so two started in the
+ * same tick can't land on the same id. */
+let matchSeq = 0
+
 /** Hardcoded current-user id used by `POST /v1/matches` to populate side 1.
  * Games aren't pre-created — POST .../scores/new inserts them lazily. */
 export function newMatchSeed(input: {
@@ -1200,7 +1217,10 @@ export function newMatchSeed(input: {
   rated: boolean
   opponent: { id: string; username: string } | null
 }): SeedMatch {
-  const id = `m-${Date.now().toString(36)}`
+  // A UUID, like the API mints — anything else and the scoring routes this
+  // redirects into would reject the id before fetching (#958).
+  matchSeq += 1
+  const id = mockUuid(`match:new:${matchSeq}`)
   const seed: SeedMatch = {
     id,
     status: 'in_progress',

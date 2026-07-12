@@ -1,4 +1,6 @@
+import { isMatchId } from '@/lib/match-id'
 import {
+  buildInitialSeeds,
   mockMatches,
   newMatchSeed,
   projectMatchDetails,
@@ -105,5 +107,37 @@ describe('projectRating (the dashboard rating card the mock feeds)', () => {
 
     expect(typeof rating?.delta).toBe('number')
     expect(rating?.delta).not.toBe(0)
+  })
+})
+
+describe('match ids the router can actually address (#958)', () => {
+  // The `$matchId` routes reject a non-UUID id before they fetch, so an id the
+  // mock world invents is only usable if it is shaped like one the API mints.
+  // Every seeded match used to be `m-…`, which meant every match-detail page
+  // 404'd under `npm run dev` and the surface was unreachable in the mocks.
+  it('gives every seeded match an id the $matchId routes accept', () => {
+    const ids = buildInitialSeeds().map((seed) => seed.id)
+
+    expect(ids.length).toBeGreaterThan(0)
+    expect(ids.filter((id) => !isMatchId(id))).toEqual([])
+  })
+
+  it('gives a match created in the mock world one too, so the scoring screen it redirects into can load it', () => {
+    const seed = newMatchSeed({
+      bestOf: 3,
+      rated: true,
+      opponent: { id: 'pl-nguyen', username: 'nguyen.t' },
+    })
+
+    expect(isMatchId(seed.id)).toBe(true)
+  })
+
+  it('mints a distinct id per created match', () => {
+    const input = { bestOf: 3, rated: false, opponent: null }
+
+    const first = newMatchSeed(input)
+    const second = newMatchSeed(input)
+
+    expect(first.id).not.toBe(second.id)
   })
 })

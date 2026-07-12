@@ -124,7 +124,7 @@ describe('MatchesPage', () => {
 
   it('paints the winning side green on a completed row', async () => {
     renderMatchesPage()
-    // Seed match m-completed-win-1 has side-1 (rita.kovac) winning vs silva.r.
+    // The completed-win seed has side-1 (rita.kovac) winning vs silva.r.
     const winner = await screen.findByText('silva.r')
     // The losing side's name is rendered without is-winner; the winning side
     // (the seed user) on that row carries it.

@@ -12,9 +12,10 @@ type Seed = {
   games: Game[]
 }
 
-// The seed shape exercised by the score-entry e2e. Mirrors `m-2207` from
-// `src/mocks/match-store.ts` (1-1 mid-match), but under a UUID-shaped id (see
-// SEED.matchId) so it survives the scoring routes' param-shape guard (#385).
+// The seed shape exercised by the score-entry e2e. Mirrors the in-progress seed
+// in `src/mocks/match-store.ts` (`SEED_MATCH_IDS.inProgress`, 1-1 mid-match),
+// under a UUID-shaped id of its own (see SEED.matchId) so it survives the
+// scoring routes' param-shape guard (#385).
 // Per the decouple-scoring refactor, only scored games have rows — the next
 // un-scored slot is exposed via current_game.game_number.
 function buildSeed(): Seed {
