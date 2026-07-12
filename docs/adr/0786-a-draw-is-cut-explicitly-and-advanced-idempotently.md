@@ -125,6 +125,33 @@ field of work — thus means *the first second of `live`*, and never earlier:
 players must not receive playable matches while registration is still open.
 The scheduler plans on **fixtures**, which exist pre-live.
 
+### An account merge that double-counted a human invalidates the draw
+
+A guest and the claimed account they merge into may *both* be actively entered
+in the same event. `merge_user` already resolves that collision by hard-deleting
+the guest's duplicate entry — which, with the fixtures table's `ON DELETE
+CASCADE`, would silently punch holes in a cut draw.
+
+The tempting repair — **re-point the guest's fixtures onto the surviving
+entry** — is wrong, and dangerously so. It seats one human in two slots of the
+same pool (everyone else plays them twice; drawn against themselves, the fixture
+is self-play), and because the go-live currency check compares entrant *sets*,
+the corrupted draw would **satisfy the check and go live**. The cascade's holes
+are the safer failure: they make the sets differ, and go-live refuses.
+
+So a merge collision **un-cuts the event's draw** (deletes its fixtures) and the
+director re-cuts. A draw cut from a field that double-counted a human is wrong
+throughout — its pool sizes and snake seeding were computed against N+1
+entrants — so it is regenerated, never patched. The merge itself is never
+refused (consistent with the self-play collision doctrine). The surviving entry
+inherits the **earlier** `created_at` and any seed, because registration order
+is the draw's ordering tie-break and must not shift silently.
+
+A merge collision on an event whose play has already begun cannot be resolved
+this way (the play guard forbids un-cutting) and is left for #788, where matches
+exist and the self-play-collision machinery — transfer then void — applies.
+Until then it is unreachable: no tournament match exists to have been played.
+
 ### Entrants are ordered by seed, then registration order
 
 `plan_initial` receives an already-ordered list: `seed` ascending where set,
