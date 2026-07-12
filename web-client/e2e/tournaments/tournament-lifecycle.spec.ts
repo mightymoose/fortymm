@@ -205,6 +205,55 @@ test.describe('Tournaments · the lifecycle', () => {
 })
 
 test.describe('Tournaments · the registration window', () => {
+  test('a stale ENTER is told the window SHUT — not that they already entered', async ({
+    page,
+  }) => {
+    // The player's half of the two-tab race. They have this published tournament
+    // open and are looking at an **Enter** button; the director starts the
+    // tournament from their own tab. The button on this page now names a request
+    // the server refuses — with a 409, the SAME status code a duplicate entry
+    // earns, which is why the client used to read this as "you already entered"
+    // and tell the player something that is simply false: they are not entered,
+    // and from here they cannot be.
+    const { pom, store } = await TournamentDetailPage.navigateTo(page, {
+      status: 'published',
+    })
+    await expect(pom.enterButton(EVENT.EMPTY)).toBeVisible()
+
+    store.transitionElsewhere('live')
+
+    // Still stale — the page has not refetched behind our backs, so the click
+    // below really is the stale one.
+    await expect(pom.enterButton(EVENT.EMPTY)).toBeVisible()
+
+    await pom.enterButton(EVENT.EMPTY).click()
+
+    // THE assertion, half one: the truth, in the tense the tournament is actually
+    // in. Not "You were already entered in this event".
+    await expect(pom.toasts).toHaveCount(1)
+    await expect(pom.toasts).toContainText('Entries are closed for this event')
+    // The REASON is the server's sentence (`_registration_closed_detail`), not the
+    // card's — it is the only side that knows *which* closed status this is, and
+    // "already under way" is different news from "has ended".
+    await expect(pom.toasts).toContainText('already under way')
+    await expect(pom.toasts).not.toContainText('already entered')
+
+    // …and it was a 409 from the entries route, not an accident of an unmocked
+    // call falling through to a 404.
+    expect(store.unhandled).toEqual([])
+
+    // THE assertion, half two: the view reconciles, so the refusal and the screen
+    // agree — the button that was just refused is gone, replaced by the lock, and
+    // the player is genuinely NOT on the roster.
+    await expect(pom.enterButton(EVENT.EMPTY)).toHaveCount(0)
+    await expect(pom.registrationNotice(EVENT.EMPTY)).toContainText(
+      NOTICE.live.lead,
+    )
+    await expect(pom.withdrawButton(EVENT.EMPTY)).toHaveCount(0)
+    expect(store.entrantsOf(EVENT.EMPTY)).toEqual([])
+    await pom.expectEntryCount(EVENT.EMPTY, 0, 48)
+  })
+
   test('a DRAFT tournament says entry is not open yet, and offers no Enter', async ({
     page,
   }) => {

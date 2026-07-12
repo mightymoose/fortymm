@@ -7,6 +7,7 @@ import { PERM } from '@/lib/permissions'
 import { useEnterEvent, useWithdrawEntry } from '../../data/api'
 import { entryControlState } from '../../data/lifecycle'
 import type { Tournament, TournamentEvent } from '../../data/types'
+import { LeadReason } from './lead-reason'
 
 export interface EnterEventControlProps {
   /** The whole tournament, not just its id: the control needs its **status** to
@@ -67,13 +68,22 @@ export const EnterEventControl = ({
   const isPending = enter.isPending || withdraw.isPending
 
   switch (state.kind) {
-    case 'unpermitted':
-    case 'not-singles':
+    case 'hidden':
       return null
 
-    case 'not-open-yet':
-    case 'locked':
-      return <RegistrationNotice lead={state.lead} reason={state.reason} />
+    case 'closed':
+      // Inert text where the button was — never a `disabled` button, which would
+      // be an unexplained dead end (ADR 0015, "hide mutating affordances"). The
+      // same lead-plus-reason voice the roster's own empty states use.
+      return (
+        <LeadReason
+          testId="registration-notice"
+          layout="stacked"
+          lead={state.lead}
+          reason={state.reason}
+          className="max-w-[190px] text-right"
+        />
+      )
 
     case 'withdraw':
       return (
@@ -105,7 +115,7 @@ export const EnterEventControl = ({
       )
 
     default: {
-      // A seventh state without a branch is a TYPE error here, not a card that
+      // A fifth state without a branch is a TYPE error here, not a card that
       // silently renders nothing — the failure mode this whole component exists
       // to avoid.
       const exhaustive: never = state
@@ -113,22 +123,3 @@ export const EnterEventControl = ({
     }
   }
 }
-
-/** The closed window, in the muted lead-plus-reason voice the roster's own empty
- * states use — deliberately inert text, never a `disabled` button, which would be
- * an unexplained dead end (ADR 0015, rule "hide mutating affordances"). */
-const RegistrationNotice = ({
-  lead,
-  reason,
-}: {
-  lead: string
-  reason: string
-}) => (
-  <p
-    data-testid="registration-notice"
-    className="max-w-[190px] text-right text-[12px] leading-snug text-[color:var(--fg-3)]"
-  >
-    <span className="block font-medium text-[color:var(--fg-2)]">{lead}</span>
-    {reason}
-  </p>
-)

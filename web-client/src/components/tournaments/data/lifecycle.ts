@@ -10,14 +10,30 @@ import { Radio, Rocket, Square, type LucideIcon } from 'lucide-react'
 import { myEntrant } from './helpers'
 import type { Tournament, TournamentEvent, TournamentStatus } from './types'
 
+/**
+ * What an edge MEANS, visually — not how it looks. Going live is the one edge
+ * that changes the state of the world for everyone watching (the field is fixed,
+ * the draw is cut from it), and it is toned to say so; ending is a quiet,
+ * receding act. The class strings that cash these out live with the component
+ * that renders them (`LifecycleActions`), so this table stays a table of
+ * lifecycle facts rather than a place style leaks into the data layer.
+ */
+export type LifecycleTone = 'default' | 'go-live' | 'ghost'
+
 /** The button that stands for one edge of the lifecycle. */
 export interface LifecycleEdge {
   /** The status this edge moves *to* — the body of the transition request. */
   to: TournamentStatus
+  /** What the button says. */
   label: string
+  /** How the edge is *named* to the person who asked for it, so a failure reads
+   * as the thing they clicked ("Couldn't publish the tournament") rather than as
+   * the wire ("Couldn't POST a transition"). It sits on the edge, next to the
+   * label, because it is the same fact in another voice: a second table keyed by
+   * the target status could disagree with this one about what an edge is. */
+  verb: string
   icon: LucideIcon
-  variant?: 'ghost'
-  className?: string
+  tone: LifecycleTone
 }
 
 /**
@@ -30,31 +46,49 @@ export interface LifecycleEdge {
  * (`LEGAL_TRANSITIONS` in `api/app/tournaments.py`) and is the authority; this one
  * exists so the UI never *offers* an edge the server would refuse. A status picker
  * would offer all four — i.e. mostly illegal jumps — which is why there isn't one.
+ *
+ * Everything the UI knows about an edge is on the edge: where it goes, what the
+ * button says, what the *failure* says, and what it means. `draft` appears here as
+ * a source, never as a target — nothing un-publishes (ADR-0017) — which is why the
+ * mutation takes the edge itself rather than a bare target status: a lookup keyed
+ * by "where it lands" would need an unreachable `draft` row to stay total.
  */
 export const LIFECYCLE_EDGE: Record<TournamentStatus, LifecycleEdge | null> = {
-  draft: { to: 'published', label: 'Publish', icon: Rocket },
+  draft: {
+    to: 'published',
+    label: 'Publish',
+    verb: 'publish the tournament',
+    icon: Rocket,
+    tone: 'default',
+  },
   published: {
     to: 'live',
     label: 'Start tournament',
+    verb: 'start the tournament',
     icon: Radio,
-    className:
-      'border border-[color:rgba(0,226,154,0.35)] bg-[color:rgba(0,226,154,0.1)] text-[color:var(--serve-500)] hover:bg-[color:rgba(0,226,154,0.18)]',
+    tone: 'go-live',
   },
   live: {
     to: 'archived',
     label: 'End tournament',
+    verb: 'end the tournament',
     icon: Square,
-    variant: 'ghost',
+    tone: 'ghost',
   },
   archived: null,
 }
 
-/** Whether this tournament offers a lifecycle action at all: an owner, standing
- * on a status that has an edge out of it. The detail header asks *before* it
- * renders its action slot, so a viewer — and an archived tournament — leaves that
- * slot genuinely empty instead of filling it with a wrapper around nothing. */
-export function hasLifecycleAction(tournament: Tournament): boolean {
-  return tournament.canEdit && LIFECYCLE_EDGE[tournament.status] !== null
+/** The lifecycle action this tournament offers — the one edge legal from where it
+ * stands — or `null` when it offers none: a viewer (transitions are owner-only,
+ * 403 server-side), or the terminal `archived`.
+ *
+ * One accessor, asked by both the detail header (which needs to know whether to
+ * give the action slot to anything at all, since `PageHeading` wraps a truthy
+ * action in a spacing div) and by `LifecycleActions` (which needs the edge to
+ * render and to post). A predicate would answer the first question but leave the
+ * second to a second lookup — two reads of one table, which can disagree. */
+export function lifecycleEdgeFor(tournament: Tournament): LifecycleEdge | null {
+  return tournament.canEdit ? LIFECYCLE_EDGE[tournament.status] : null
 }
 
 /**
@@ -76,9 +110,10 @@ export type RegistrationWindow =
 /**
  * The window each status opens, one entry per status — the client's reading of
  * the table in ADR-0017 ("Entering and withdrawing require `published`"), which
- * the server enforces (`_require_open_for_entry` in `api/app/tournaments.py`,
- * 409). This table exists so the card never *offers* an Enter the server would
- * refuse: every non-`published` status is a designed state here, never a button.
+ * the server owns (`_registration_open` decides; `_enforce_registration_open`
+ * turns a refusal into the 409 and its words — `api/app/tournaments.py`). This
+ * table exists so the card never *offers* an Enter the server would refuse: every
+ * non-`published` status is a designed state here, never a button.
  *
  * It sits beside `LIFECYCLE_EDGE` on purpose. Publishing is what opens
  * registration and going live is what locks it, so the edges and the window are
@@ -106,33 +141,36 @@ export const REGISTRATION_WINDOW: Record<TournamentStatus, RegistrationWindow> =
   }
 
 /**
- * Everything the event card's entry control can be, as one discriminated union
- * — the six cases are mutually exclusive, and the ORDER they are decided in is
- * the whole rule:
+ * Everything the event card's entry control can be, as one discriminated union —
+ * four cases, one per thing the card can *render*, and the ORDER they are decided
+ * in is the whole rule:
  *
- * 1. `unpermitted` / `not-singles` — the request could only ever fail *for this
- *    caller* (403 / 400), and no act of the director's will change that on this
- *    page. Both render **nothing**: a fact about you is not a state of the
- *    tournament, and there is nothing to report.
- * 2. `not-open-yet` / `locked` — the registration *window* is shut. That is a
- *    fact about the **tournament**, and it changes: it opens when the director
- *    publishes and shuts again when they start play. So it renders as a state,
- *    not as silence and not as a bare disabled button ("empty is a designed data
- *    state, never a thrown one").
+ * 1. `hidden` — the request could only ever fail *for this caller*: they lack
+ *    `tournament.enter` (403), or the event is doubles/teams (400). No act of the
+ *    director's will change that on this page, so there is **nothing to report**:
+ *    a fact about you is not a state of the tournament. The two reasons are not
+ *    two cases, because nothing downstream can tell them apart — both render
+ *    silence, and neither carries anything to render.
+ * 2. `closed` — the registration *window* is shut. That is a fact about the
+ *    **tournament**, and it changes: it opens when the director publishes and
+ *    shuts again when they start play. So it renders as a state — not as silence,
+ *    and not as a bare disabled button ("empty is a designed data state, never a
+ *    thrown one"). "Not open yet" and "entries locked" are likewise not two cases
+ *    but one: the difference between a door not yet unlocked and a door shut again
+ *    is carried by the `lead` + `reason` copy (`REGISTRATION_WINDOW` above), which
+ *    is the only thing that differed about them.
  * 3. `enter` / `withdraw` — the window is open and the only question left is
  *    whether the player is already in.
  *
  * The window is judged BEFORE membership, which is what makes the entered player
- * on a `live` tournament come out `locked` rather than `withdraw`: they are still
+ * on a `live` tournament come out `closed` rather than `withdraw`: they are still
  * an entrant (their chip is still on the roster — the field is fixed, that is what
  * going live *means*), they simply cannot take themselves out of it. A Withdraw
  * button there would be a 409 with a nice icon.
  */
 export type EntryControlState =
-  | { kind: 'unpermitted' }
-  | { kind: 'not-singles' }
-  | { kind: 'not-open-yet'; lead: string; reason: string }
-  | { kind: 'locked'; lead: string; reason: string }
+  | { kind: 'hidden' }
+  | { kind: 'closed'; lead: string; reason: string }
   | { kind: 'enter' }
   /** The player's OWN entry id — an entry is withdrawn by its id, and this is the
    * only place that join (on username, via `myEntrant`) is made. */
@@ -152,15 +190,20 @@ export function entryControlState({
   canEnter: boolean
   username: string | null | undefined
 }): EntryControlState {
-  if (!canEnter) return { kind: 'unpermitted' }
-  if (event.format !== 'singles') return { kind: 'not-singles' }
+  // 1. Facts about the CALLER — nothing to report, in any status.
+  if (!canEnter) return { kind: 'hidden' }
+  if (event.format !== 'singles') return { kind: 'hidden' }
 
+  // 2. The window, BEFORE membership — this is the ordering the whole type exists
+  //    to enforce: an entered player on a `live` tournament is `closed`, not
+  //    `withdraw`.
   const registration = REGISTRATION_WINDOW[status]
   if (registration.state !== 'open') {
-    const { state, lead, reason } = registration
-    return { kind: state, lead, reason }
+    const { lead, reason } = registration
+    return { kind: 'closed', lead, reason }
   }
 
+  // 3. Open: the only question left is whether they are already in.
   const entry = myEntrant(event, username)
   return entry ? { kind: 'withdraw', entryId: entry.id } : { kind: 'enter' }
 }

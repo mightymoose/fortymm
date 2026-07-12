@@ -37,8 +37,20 @@ import {
   useUpdateTournament,
   useWithdrawEntry,
 } from './api'
+import { LIFECYCLE_EDGE, type LifecycleEdge } from './lifecycle'
 
 type TournamentUpdate = components['schemas']['TournamentUpdate']
+
+/** The edge OUT of `from` — which is what the transition mutation takes: an edge,
+ * not a bare target status. It carries both the `to` for the body and the verb the
+ * failure toast names the click with, and those are two facts about one edge (there
+ * is exactly one lifecycle table). This is also how a real caller gets one: the
+ * header renders the edge its tournament's status offers. */
+function edgeFrom(from: 'draft' | 'published' | 'live'): LifecycleEdge {
+  const edge = LIFECYCLE_EDGE[from]
+  if (!edge) throw new Error(`no edge out of ${from}`)
+  return edge
+}
 
 vi.mock('sonner', async () => {
   const actual = await vi.importActual<typeof import('sonner')>('sonner')
@@ -237,11 +249,13 @@ describe('useTransitionTournament', () => {
     })
 
     const { result } = renderHook(() => useTransitionTournament('t-1'))
-    const moved = await result.current.mutateAsync('published')
+    const moved = await result.current.mutateAsync(edgeFrom('draft'))
 
     expect(seen!.url).toContain('/v1/tournaments/t-1/transitions')
-    // `to` alone: the tournament already knows where it *is*, and a stale client
-    // that also sent `from` would only be reporting what it believed (ADR-0017).
+    // `to` alone on the WIRE — the mutation takes the whole edge, but only its
+    // target is sent: the tournament already knows where it *is*, and a stale
+    // client that also sent `from` would only be reporting what it believed
+    // (ADR-0017).
     expect(seen!.body).toEqual({ to: 'published' })
     expect(moved.status).toBe('published')
   })
@@ -255,7 +269,7 @@ describe('useTransitionTournament', () => {
     const { result } = renderHookRaw(() => useTransitionTournament('t-1'), {
       wrapper,
     })
-    result.current.mutate('live')
+    result.current.mutate(edgeFrom('published'))
 
     await waitForRaw(() => expect(result.current.isSuccess).toBe(true))
 
@@ -284,7 +298,9 @@ describe('useTransitionTournament', () => {
     const { result } = renderHookRaw(() => useTransitionTournament('t-1'), {
       wrapper,
     })
-    result.current.mutate('published')
+    // The edge this stale tab is still offering: it reads `draft`, so it offers
+    // Publish — which the server has already been published out from under.
+    result.current.mutate(edgeFrom('draft'))
 
     await waitForRaw(() => expect(result.current.isError).toBe(true))
 
@@ -315,7 +331,7 @@ describe('useTransitionTournament', () => {
     const { result } = renderHookRaw(() => useTransitionTournament('t-1'), {
       wrapper,
     })
-    result.current.mutate('published')
+    result.current.mutate(edgeFrom('draft'))
 
     await waitForRaw(() => expect(result.current.isError).toBe(true))
 
@@ -336,7 +352,8 @@ describe('useTransitionTournament', () => {
     const { result } = renderHookRaw(() => useTransitionTournament('t-1'), {
       wrapper,
     })
-    result.current.mutate('archived')
+    // The edge out of `live` — "End tournament". Its verb is what the toast says.
+    result.current.mutate(edgeFrom('live'))
 
     await waitForRaw(() => expect(result.current.isError).toBe(true))
 
@@ -368,15 +385,17 @@ describe('the lifecycle, against the stateful mock store', () => {
     await waitForRaw(() => expect(result.current.detail.data).toBeTruthy())
     expect(result.current.detail.data!.status).toBe('draft')
 
-    await act(() => result.current.move.mutateAsync('published'))
+    // Each step takes the edge the status it is standing on offers — which is
+    // exactly what the header hands the mutation.
+    await act(() => result.current.move.mutateAsync(edgeFrom('draft')))
     await waitForRaw(() =>
       expect(result.current.detail.data!.status).toBe('published'),
     )
 
-    await act(() => result.current.move.mutateAsync('live'))
+    await act(() => result.current.move.mutateAsync(edgeFrom('published')))
     await waitForRaw(() => expect(result.current.detail.data!.status).toBe('live'))
 
-    await act(() => result.current.move.mutateAsync('archived'))
+    await act(() => result.current.move.mutateAsync(edgeFrom('live')))
     await waitForRaw(() =>
       expect(result.current.detail.data!.status).toBe('archived'),
     )
@@ -394,7 +413,10 @@ describe('the lifecycle, against the stateful mock store', () => {
 
     await waitForRaw(() => expect(result.current.detail.data).toBeTruthy())
 
-    result.current.move.mutate('live')
+    // The published→live edge, posted at a tournament that is still a DRAFT: a
+    // stale tab holding the edge it last saw. `to: 'live'` from `draft` skips a
+    // stage, and the server refuses it.
+    result.current.move.mutate(edgeFrom('published'))
     await waitForRaw(() => expect(result.current.move.isError).toBe(true))
 
     expect((result.current.move.error as ApiError).status).toBe(409)
@@ -493,6 +515,57 @@ describe('useEnterEvent', () => {
     )
     expect(toast.error).not.toHaveBeenCalled()
   })
+
+  // The OTHER 409 (ADR-0017), and the reason a bare `status === 409` check is not
+  // enough any more: `POST …/entries` refuses a CLOSED REGISTRATION WINDOW with a
+  // 409 too. The stale tab is the director's fault, not the player's — they had
+  // the page open, the director started the tournament from another tab, and the
+  // Enter button they are looking at is now a button the server refuses.
+  //
+  // Telling them "You were already entered in this event" there is FALSE: they are
+  // not entered, they cannot enter, and the card is about to say so. That is the
+  // bug these three rows pin — they all took the benign path before.
+  it.each([
+    {
+      status: 'live',
+      detail: 'This tournament is already under way, so its entries are locked.',
+    },
+    {
+      status: 'archived',
+      detail: 'This tournament has ended, so its events can no longer be entered.',
+    },
+    {
+      status: 'draft',
+      detail:
+        'This tournament has not been published yet, so its events are not open for entry.',
+    },
+  ])(
+    'reports a closed-window 409 ($status) as the refusal it is — never as "already entered"',
+    async ({ detail }) => {
+      // The server's own words (`_registration_closed_detail`, `api/app/tournaments.py`).
+      mockEventEnterEndpoint(server, () =>
+        HttpResponse.json({ detail }, { status: 409 }),
+      )
+      const { wrapper } = setupClient()
+
+      const { result } = renderHookRaw(() => useEnterEvent('t-1'), { wrapper })
+      result.current.mutate('ev-1')
+
+      await waitForRaw(() => expect(result.current.isError).toBe(true))
+
+      // Our title (entries are closed — the fact), the server's sentence for the
+      // reason: it is the only side that knows WHICH closed status this is, and
+      // "not yet" and "too late" are different things to be told.
+      expect(toast.error).toHaveBeenCalledWith(
+        'Entries are closed for this event',
+        expect.objectContaining({ description: detail }),
+      )
+      // THE assertion. The benign note is for the duplicate-entry 409 alone; firing
+      // it here would tell a player who is NOT entered that they are — over a card
+      // that (once the settle-reconcile lands) shows the lock.
+      expect(toast.info).not.toHaveBeenCalled()
+    },
+  )
 
   it('still surfaces a GENUINE failure (a 400, a 5xx) as an error toast', async () => {
     // The benign-409 carve-out must not become a swallow-everything: a doubles

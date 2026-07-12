@@ -20,7 +20,7 @@ import {
   fmtDateRange,
   genId,
 } from './data/helpers'
-import { hasLifecycleAction } from './data/lifecycle'
+import { lifecycleEdgeFor } from './data/lifecycle'
 import type {
   Tournament,
   TournamentEvent,
@@ -118,12 +118,13 @@ export const TournamentDetailPage = ({
           // The lifecycle affordance owns its own writes: it posts the edge to
           // `…/transitions` rather than routing a status through `onUpdate`, which
           // patches the tournament's *fields* and carries no status at all
-          // (ADR-0017). `hasLifecycleAction` asks the same table the component
+          // (ADR-0017). `lifecycleEdgeFor` is the same accessor the component
           // renders from, so a viewer — and an archived tournament, which has no
-          // edge out of it — leaves the action slot genuinely empty rather than
-          // filling it with a wrapper around nothing.
+          // edge out of it — leaves the action slot genuinely empty (a falsy
+          // action: `PageHeading` wraps a truthy one in a spacing div) rather than
+          // filling it with a wrapper around a component that renders nothing.
           action={
-            hasLifecycleAction(tournament) && (
+            lifecycleEdgeFor(tournament) && (
               <LifecycleActions tournament={tournament} />
             )
           }

@@ -13,6 +13,8 @@ import {
   updateEvent,
   updateTournament,
   withdrawEntry,
+  type EnterResult,
+  type WithdrawResult,
 } from './tournaments-store'
 import type { components } from '@/api/schema'
 
@@ -24,19 +26,35 @@ const EMPTY_SINGLES = 'ev-u1500' // seeded with no entrants
 const FULLISH_SINGLES = 'ev-open-singles' // seeded with 52 other players
 const DOUBLES = 'ev-mixed-doubles'
 
-/** The registration-window copy, from `_registration_closed_detail` in
- * `api/app/tournaments.py` — byte for byte. The player reads these, so they are
- * part of the contract the mock stands in for. */
-const CLOSED_DETAIL: Record<Exclude<TournamentStatus, 'published'>, string> = {
-  draft:
-    'This tournament has not been published yet, so its events are not open for entry.',
-  live: 'This tournament is already under way, so its entries are locked.',
-  archived:
-    'This tournament has ended, so its events can no longer be entered.',
+/** What each closed status must SAY — the distinctive phrase of the server's
+ * sentence for it (`_registration_closed_detail`, `api/app/tournaments.py`), the
+ * way the API's own tests assert it ("already under way").
+ *
+ * A fragment, not the sentence: re-typing all three in full here would only prove
+ * this file equals itself — the store's copy and the test's copy would be two
+ * hand-written copies of the server's, and a drift in either could be "fixed" by
+ * editing the other. What is worth pinning is that live/draft/archived are three
+ * DIFFERENT pieces of news and that the store gives each one its own. */
+const CLOSED_PHRASE: Record<Exclude<TournamentStatus, 'published'>, string> = {
+  draft: 'has not been published yet',
+  live: 'already under way',
+  archived: 'has ended',
 }
 
 const STATUSES: TournamentStatus[] = ['draft', 'published', 'live', 'archived']
 const CLOSED_STATUSES = ['draft', 'live', 'archived'] as const
+
+/** Assert a refusal is the registration-window 409, and that it says WHY in the
+ * words the server uses for that status. */
+function expectRegistrationClosed(
+  result: EnterResult | WithdrawResult,
+  status: Exclude<TournamentStatus, 'published'>,
+) {
+  if (result.ok || result.status !== 409) {
+    throw new Error(`expected a 409, got ${JSON.stringify(result)}`)
+  }
+  expect(result.detail).toContain(CLOSED_PHRASE[status])
+}
 
 function event(eventId: string) {
   const found = findTournament(TOURNAMENT)!.events.find((e) => e.id === eventId)
@@ -183,11 +201,7 @@ describe('enterEvent, against the registration window', () => {
     (status) => {
       const { tournamentId, singlesId } = tournamentIn(status)
 
-      expect(enterEvent(tournamentId, singlesId)).toEqual({
-        ok: false,
-        status: 409,
-        detail: CLOSED_DETAIL[status],
-      })
+      expectRegistrationClosed(enterEvent(tournamentId, singlesId), status)
       const after = eventIn(tournamentId, singlesId)
       expect(after.entrants).toEqual([])
       expect(after.entered).toBe(0)
@@ -313,11 +327,10 @@ describe('withdrawEntry, against the registration window', () => {
     (status) => {
       const entryId = activeEntryIn(status)
 
-      expect(withdrawEntry(TOURNAMENT, EMPTY_SINGLES, entryId)).toEqual({
-        ok: false,
-        status: 409,
-        detail: CLOSED_DETAIL[status],
-      })
+      expectRegistrationClosed(
+        withdrawEntry(TOURNAMENT, EMPTY_SINGLES, entryId),
+        status,
+      )
       // Still on the roster: the refusal did not half-apply.
       expect(event(EMPTY_SINGLES).entered).toBe(1)
     },

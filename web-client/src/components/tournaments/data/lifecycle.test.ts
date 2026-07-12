@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   entryControlState,
-  hasLifecycleAction,
+  lifecycleEdgeFor,
   LIFECYCLE_EDGE,
   REGISTRATION_WINDOW,
 } from './lifecycle'
@@ -23,12 +23,22 @@ describe('LIFECYCLE_EDGE', () => {
   it('offers no edge out of the terminal archived status', () => {
     expect(LIFECYCLE_EDGE.archived).toBeNull()
   })
+
+  // The verb rides on the EDGE, so the failure toast names the thing the user
+  // clicked ("Couldn't publish the tournament"). It used to live in a second table
+  // in `data/api.ts`, keyed by target status — two tables of one lifecycle, which
+  // could disagree about what an edge is.
+  it('names each edge in the voice of the person who clicked it', () => {
+    expect(LIFECYCLE_EDGE.draft?.verb).toBe('publish the tournament')
+    expect(LIFECYCLE_EDGE.published?.verb).toBe('start the tournament')
+    expect(LIFECYCLE_EDGE.live?.verb).toBe('end the tournament')
+  })
 })
 
 describe('REGISTRATION_WINDOW', () => {
-  // ADR-0017's table, and the server's `_require_open_for_entry` guard: exactly
-  // ONE status opens the window. A second open status here would be an Enter
-  // button the API answers with a 409.
+  // ADR-0017's table, and the server's `_registration_open` /
+  // `_enforce_registration_open` guard: exactly ONE status opens the window. A
+  // second open status here would be an Enter button the API answers with a 409.
   it('is open on published, and on published only', () => {
     expect(REGISTRATION_WINDOW.published.state).toBe('open')
     expect(REGISTRATION_WINDOW.draft.state).toBe('not-open-yet')
@@ -82,39 +92,48 @@ describe('entryControlState', () => {
 
   // Facts about the CALLER, decided before the window: they render nothing, and
   // they do so in every status — an unpermitted viewer of a draft is told nothing
-  // about a registration window they could never have used.
+  // about a registration window they could never have used. The missing permission
+  // and the un-enterable format are ONE case (`hidden`), because nothing
+  // downstream can tell them apart: both are silence.
   it.each(['draft', 'published', 'live', 'archived'] as const)(
-    'is unpermitted on a %s tournament for a player without tournament.enter',
+    'is hidden on a %s tournament for a player without tournament.enter',
     (status) => {
-      expect(state({ status, canEnter: false })).toEqual({
-        kind: 'unpermitted',
-      })
+      expect(state({ status, canEnter: false })).toEqual({ kind: 'hidden' })
     },
   )
 
   it.each(['doubles', 'teams'] as const)(
-    'is not-singles for a %s event, whatever the status',
+    'is hidden for a %s event, whatever the status',
     (format) => {
       expect(state({ event: buildEvent({ format }), status: 'draft' })).toEqual({
-        kind: 'not-singles',
+        kind: 'hidden',
       })
     },
   )
 
-  // The window, decided before membership — the crux of this slice.
+  // The window, decided before membership — the crux of this slice. `closed` is one
+  // case; the difference between a door not yet unlocked and a door shut again is
+  // carried by the copy, which is the only place it was ever carried.
   it('reports the shut window on a draft tournament instead of offering enter', () => {
-    expect(state({ status: 'draft', event: emptyEvent })).toMatchObject({
-      kind: 'not-open-yet',
+    expect(state({ status: 'draft', event: emptyEvent })).toEqual({
+      kind: 'closed',
       lead: 'Not open yet',
+      reason: 'Entry opens when this tournament is published.',
     })
   })
 
-  it.each(['live', 'archived'] as const)(
-    'reports entries locked on a %s tournament instead of offering enter',
-    (status) => {
-      expect(state({ status, event: emptyEvent })).toMatchObject({
-        kind: 'locked',
+  it.each([
+    { status: 'live', reason: 'The tournament is under way.' },
+    { status: 'archived', reason: 'The tournament has ended.' },
+  ] as const)(
+    'reports entries locked on a $status tournament instead of offering enter',
+    ({ status, reason }) => {
+      expect(state({ status, event: emptyEvent })).toEqual({
+        kind: 'closed',
         lead: 'Entries locked',
+        // …and says WHICH lock it is: "under way" and "has ended" are not the same
+        // news to a player who has just arrived.
+        reason,
       })
     },
   )
@@ -127,37 +146,55 @@ describe('entryControlState', () => {
     'locks an ENTERED player out of withdrawing on a %s tournament',
     (status) => {
       expect(state({ status, event: enteredEvent })).toMatchObject({
-        kind: 'locked',
+        kind: 'closed',
+        lead: 'Entries locked',
       })
     },
   )
 
   it('does not offer withdraw to an entered player before publication either', () => {
     expect(state({ status: 'draft', event: enteredEvent })).toMatchObject({
-      kind: 'not-open-yet',
+      kind: 'closed',
+      lead: 'Not open yet',
     })
   })
 })
 
-describe('hasLifecycleAction', () => {
-  // What the header asks BEFORE it renders its action slot, so a viewer (and an
-  // archived tournament) leaves that slot genuinely empty rather than filling it
-  // with a wrapper around a component that renders nothing.
+describe('lifecycleEdgeFor', () => {
+  // The ONE accessor: what the header asks before it renders its action slot (so a
+  // viewer — and an archived tournament — leaves that slot genuinely empty rather
+  // than filling it with a wrapper around a component that renders nothing), AND
+  // what `LifecycleActions` renders and posts. One read of the table, not two.
   it.each([
-    { status: 'draft', canEdit: true, expected: true },
-    { status: 'published', canEdit: true, expected: true },
-    { status: 'live', canEdit: true, expected: true },
-    { status: 'archived', canEdit: true, expected: false },
-    { status: 'draft', canEdit: false, expected: false },
-    { status: 'published', canEdit: false, expected: false },
-    { status: 'live', canEdit: false, expected: false },
-    { status: 'archived', canEdit: false, expected: false },
+    { status: 'draft', canEdit: true, expected: 'published' },
+    { status: 'published', canEdit: true, expected: 'live' },
+    { status: 'live', canEdit: true, expected: 'archived' },
+    // Terminal: an owner standing on `archived` has nowhere to go.
+    { status: 'archived', canEdit: true, expected: null },
+    // A viewer is offered nothing, in any status — transitions are owner-only
+    // (403) server-side, so a button here would be one the API refuses.
+    { status: 'draft', canEdit: false, expected: null },
+    { status: 'published', canEdit: false, expected: null },
+    { status: 'live', canEdit: false, expected: null },
+    { status: 'archived', canEdit: false, expected: null },
   ] as const)(
-    'is $expected for a $status tournament with canEdit=$canEdit',
+    'offers $expected for a $status tournament with canEdit=$canEdit',
     ({ status, canEdit, expected }) => {
-      expect(hasLifecycleAction(buildTournament({ status, canEdit }))).toBe(
-        expected,
-      )
+      const edge = lifecycleEdgeFor(buildTournament({ status, canEdit }))
+
+      expect(edge?.to ?? null).toBe(expected)
     },
   )
+
+  // It returns the EDGE, not a boolean — which is what lets the component render
+  // and post from one lookup instead of re-reading the table behind the predicate.
+  it('hands back the whole edge — label, verb and target together', () => {
+    expect(
+      lifecycleEdgeFor(buildTournament({ status: 'published', canEdit: true })),
+    ).toMatchObject({
+      to: 'live',
+      label: 'Start tournament',
+      verb: 'start the tournament',
+    })
+  })
 })

@@ -378,6 +378,30 @@ function replace(next: StoredTournament) {
   tournaments = tournaments.map((t) => (t.id === next.id ? next : t))
 }
 
+/** A tournament the caller is allowed to modify — or the refusal that stopped
+ * them. `ok: false` is shaped so every owner-only mutation below can simply
+ * `return owned` on the failure path. */
+type OwnedResult =
+  | { ok: true; tournament: StoredTournament }
+  | { ok: false; status: 403 | 404 }
+
+/** Load a tournament and check it is the caller's: the mock's
+ * `_get_tournament_or_404` + `_require_owner` (`api/app/tournaments.py`), in one
+ * step, because every owner-only mutation asks the same two questions in the same
+ * order — does it exist (**404**), and is it mine (**403**)?
+ *
+ * The order is load-bearing and is the server's: a stranger must not be able to
+ * tell a tournament they cannot touch from one that does not exist at all. Written
+ * out six times, one of the six could drift; written once, none can. (Entering and
+ * withdrawing do NOT come through here — they are the two mutations a player makes
+ * against a tournament they do *not* own, so they check existence only.) */
+function requireOwned(id: string): OwnedResult {
+  const existing = tournaments.find((t) => t.id === id)
+  if (!existing) return { ok: false, status: 404 }
+  if (!existing.can_edit) return { ok: false, status: 403 }
+  return { ok: true, tournament: existing }
+}
+
 /** Patch a tournament's top-level fields. Non-owned rows (`can_edit: false`)
  * return 403; a missing id returns 404 — mirroring the real API's gating.
  *
@@ -387,9 +411,9 @@ export function updateTournament(
   id: string,
   patch: TournamentUpdate,
 ): StoreResult {
-  const existing = tournaments.find((t) => t.id === id)
-  if (!existing) return { ok: false, status: 404 }
-  if (!existing.can_edit) return { ok: false, status: 403 }
+  const owned = requireOwned(id)
+  if (!owned.ok) return owned
+  const existing = owned.tournament
   const next: StoredTournament = {
     ...existing,
     name: patch.name ?? existing.name,
@@ -441,12 +465,12 @@ export function transitionTournament(
   id: string,
   to: TournamentStatus,
 ): TransitionResult {
-  const existing = tournaments.find((t) => t.id === id)
-  // Load (404), then ownership (403), and only then judge the edge (409) — the
-  // API's ordering, so a stranger never learns what status a tournament they
-  // cannot touch is in.
-  if (!existing) return { ok: false, status: 404 }
-  if (!existing.can_edit) return { ok: false, status: 403 }
+  // Load (404), then ownership (403) — `requireOwned` — and only then judge the
+  // edge (409). The API's ordering, so a stranger never learns what status a
+  // tournament they cannot touch is in.
+  const owned = requireOwned(id)
+  if (!owned.ok) return owned
+  const existing = owned.tournament
   if (!LEGAL_TRANSITIONS.has(`${existing.status}>${to}`)) {
     return {
       ok: false,
@@ -466,9 +490,8 @@ export function transitionTournament(
 
 /** Delete a tournament. Same gating as update. */
 export function deleteTournament(id: string): DeleteResult {
-  const existing = tournaments.find((t) => t.id === id)
-  if (!existing) return { ok: false, status: 404 }
-  if (!existing.can_edit) return { ok: false, status: 403 }
+  const owned = requireOwned(id)
+  if (!owned.ok) return owned
   tournaments = tournaments.filter((t) => t.id !== id)
   return { ok: true }
 }
@@ -480,9 +503,9 @@ export function createEvent(
   tournamentId: string,
   body: TournamentEventCreate,
 ): EventResult {
-  const existing = tournaments.find((t) => t.id === tournamentId)
-  if (!existing) return { ok: false, status: 404 }
-  if (!existing.can_edit) return { ok: false, status: 403 }
+  const owned = requireOwned(tournamentId)
+  if (!owned.ok) return owned
+  const existing = owned.tournament
   eventCounter += 1
   const now = new Date().toISOString()
   const event: StoredEvent = {
@@ -513,9 +536,9 @@ export function updateEvent(
   eventId: string,
   patch: TournamentEventUpdate,
 ): EventResult {
-  const existing = tournaments.find((t) => t.id === tournamentId)
-  if (!existing) return { ok: false, status: 404 }
-  if (!existing.can_edit) return { ok: false, status: 403 }
+  const owned = requireOwned(tournamentId)
+  if (!owned.ok) return owned
+  const existing = owned.tournament
   const event = existing.events.find((e) => e.id === eventId)
   if (!event) return { ok: false, status: 404 }
   const next: StoredEvent = {
@@ -546,9 +569,9 @@ export function deleteEvent(
   tournamentId: string,
   eventId: string,
 ): DeleteResult {
-  const existing = tournaments.find((t) => t.id === tournamentId)
-  if (!existing) return { ok: false, status: 404 }
-  if (!existing.can_edit) return { ok: false, status: 403 }
+  const owned = requireOwned(tournamentId)
+  if (!owned.ok) return owned
+  const existing = owned.tournament
   const event = existing.events.find((e) => e.id === eventId)
   if (!event) return { ok: false, status: 404 }
   replace({

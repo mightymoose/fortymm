@@ -612,6 +612,50 @@ def _registration_closed_detail(status: ClosedRegistrationStatus) -> str:
             assert_never(status)
 
 
+def _registration_open(t: Tournament) -> bool:
+    """Whether a tournament's registration window is open right now (ignoring who
+    is asking, and what they want to do with it).
+
+    This is the whole rule, and it is one line: a tournament's status IS its
+    registration window (ADR-0017), so the window is open in ``published`` and shut
+    in the other three.
+
+    Single source of truth shared by every guard that has to know — entering,
+    withdrawing an active entry, and whatever comes next (a director entering a
+    player for someone else, #784; a ``can_enter`` flag on the BFF read) — so a
+    third caller cannot quietly grow a fourth opinion about when registration is
+    open. The routes ask ``_enforce_registration_open``; the *decision* lives here,
+    exactly once.
+    """
+    return t.status is TournamentStatus.published
+
+
+def _enforce_registration_open(t: Tournament) -> None:
+    """Raise the 409 when the registration window is shut.
+
+    ``_registration_open`` owns the *decision*; this only turns a refusal into a
+    status code and words (``_registration_closed_detail``), so no caller of this
+    can disagree with a caller of the predicate about whether entry is open.
+
+    409, not 403 (ADR-0017): the caller is permitted and the entry is their own — it
+    is the tournament that is in the wrong state. "Not you" would be a lie; the truth
+    is "not now".
+
+    The status is re-tested below rather than taken on trust from the predicate,
+    because a ``bool`` cannot narrow ``t.status`` for the type checker — and that
+    narrowing is load-bearing: it is what keeps ``_registration_closed_detail``'s
+    ``Literal`` exhaustive, so a fourth closed status added to the enum is a type
+    error right here until somebody writes the sentence a player should read.
+    """
+    if _registration_open(t):
+        return
+    if t.status is not TournamentStatus.published:
+        raise HTTPException(
+            status_code=409,
+            detail=_registration_closed_detail(t.status),
+        )
+
+
 @router.post(
     "/tournaments/{tournament_id}/events/{event_id}/entries",
     response_model=TournamentEntrantRead,
@@ -671,16 +715,11 @@ async def enter_event(
     # change. It also keeps one clean rule for the whole handler: every "this
     # request cannot work" check precedes every "the state conflicts" check, so
     # both 409s (this one, and the already-entered one at commit) sit last.
-    if tournament.status is not TournamentStatus.published:
-        # 409, not 403 (ADR-0017). The caller holds ``tournament.enter`` and the
-        # entry would be their own, so they ARE permitted: 403 would say "not
-        # you", when the truth is "not now". Refusing before the INSERT (rather
-        # than inserting and rolling back) is what makes "no row is written" a
-        # property of the code and not of a transaction that happened to abort.
-        raise HTTPException(
-            status_code=409,
-            detail=_registration_closed_detail(tournament.status),
-        )
+    #
+    # Refusing HERE, before the INSERT (rather than inserting and rolling back), is
+    # what makes "no row is written" a property of the code and not of a transaction
+    # that happened to abort.
+    _enforce_registration_open(tournament)
 
     entry = TournamentEntry(event_id=event.id, user_id=current_user.id)
     db.add(entry)
@@ -768,21 +807,17 @@ async def withdraw_from_event(
 
     # The gate is on the state CHANGE, not on the call (ADR-0017). Going live locks
     # the field the draw is cut from, so flipping an ``entered`` entry to
-    # ``withdrawn`` outside ``published`` is refused — a 409, like the enter route's,
-    # because the caller is permitted and it is the tournament that is in the wrong
-    # state. But an entry that is *already* withdrawn has nothing left to lock, so it
-    # is deliberately not gated: the ``entered`` conjunct is what preserves the
-    # idempotent 204 that ADR-0016 designed, in ``live`` and ``archived`` too. Drop
-    # it and this route starts answering 409 to a request that would change nothing —
-    # a conflict with no conflict in it.
-    if (
-        entry.status is TournamentEntryStatus.entered
-        and tournament.status is not TournamentStatus.published
-    ):
-        raise HTTPException(
-            status_code=409,
-            detail=_registration_closed_detail(tournament.status),
-        )
+    # ``withdrawn`` outside the registration window is refused — the same window, and
+    # the same 409, the enter route asks about, which is why both ask the one
+    # enforcer rather than each restating what "open" means.
+    #
+    # But an entry that is *already* withdrawn has nothing left to lock, so it is
+    # deliberately not gated: this ``entered`` guard is what preserves the idempotent
+    # 204 that ADR-0016 designed, in ``live`` and ``archived`` too. Drop it and this
+    # route starts answering 409 to a request that would change nothing — a conflict
+    # with no conflict in it.
+    if entry.status is TournamentEntryStatus.entered:
+        _enforce_registration_open(tournament)
 
     # Idempotent by construction: withdrawing is an assignment, not a decrement,
     # so applying it to an already-withdrawn entry writes the value it already

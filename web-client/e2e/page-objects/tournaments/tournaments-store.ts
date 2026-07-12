@@ -421,7 +421,12 @@ export class TournamentsStore {
     }
 
     this.detail = { ...this.detail, status: to }
-    return json(route, 200, this.readDetail())
+    // **201**, as the route is declared (`status_code=status.HTTP_201_CREATED` —
+    // a transition CREATES a move, it does not update a field), and as the MSW
+    // mock answers. A stub that answered 200 would be the one thing this table of
+    // hand-written responses exists to prevent: a client agreeing with a server
+    // that is not the one it will meet.
+    return json(route, 201, this.readDetail())
   }
 
   /** `POST …/entries` — self-registration. No request body: the caller is always

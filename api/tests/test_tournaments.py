@@ -905,11 +905,14 @@ async def test_non_creator_with_permission_can_read_but_not_modify(
 # ``app.tournaments.LEGAL_TRANSITIONS``: a test that reads its expectations out of
 # the table under test would agree with that table however wrong it got. These are
 # the edges ADR-0017 decided on, stated independently.
-_LEGAL_EDGES = {
+# A list, in lifecycle order, so it can be parametrized over directly: a set would
+# hand pytest its three cases in whatever order the enum members happened to hash in
+# that process.
+_LEGAL_EDGES = [
     (TournamentStatus.draft, TournamentStatus.published),
     (TournamentStatus.published, TournamentStatus.live),
     (TournamentStatus.live, TournamentStatus.archived),
-}
+]
 # Every ordered pair of the four statuses is either legal or a conflict, so the
 # two lists below are built as a partition of all 4x4 = 16 — including the four
 # self-transitions, which ADR-0017 makes conflicts rather than idempotent no-ops.
@@ -965,10 +968,7 @@ async def _status_of(client: AsyncClient, tournament_id: str) -> str:
     return status_value
 
 
-@pytest.mark.parametrize(
-    ("start", "target"),
-    _edge_params([edge for edge in _ALL_EDGES if edge in _LEGAL_EDGES]),
-)
+@pytest.mark.parametrize(("start", "target"), _edge_params(_LEGAL_EDGES))
 async def test_transition_legal_edge_moves_the_tournament_and_persists(
     authed_client: tuple[AsyncClient, User],
     db_session: AsyncSession,
