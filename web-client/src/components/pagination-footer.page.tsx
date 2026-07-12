@@ -34,6 +34,17 @@ const scoped = (container: Container) => ({
   queryPageLink(n: number) {
     return container.queryByRole('link', { name: String(n) })
   },
+  /**
+   * Every clickable page token, whatever its number. Use this to assert the
+   * *absence* of a pager: an empty list must offer no page to click (#889).
+   */
+  queryPageLinks() {
+    return container.queryAllByRole('link')
+  },
+  /** The pager itself — `Pagination` renders `<nav aria-label="pagination">`. */
+  queryPager() {
+    return container.queryByRole('navigation', { name: /pagination/i })
+  },
 })
 
 /**
