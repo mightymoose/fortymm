@@ -1,3 +1,4 @@
+import { MATCH_DETAIL_ROUTE } from '@/components/matches/match-row-link/match-row-link.page'
 import { renderWithRoutes } from '@/test/router'
 import { screen, type Container } from '@/test/utilities'
 
@@ -78,15 +79,16 @@ const scoped = (container: Container) => ({
 /**
  * Test page-object for `RecentMatchesDisplay` — the pure view-in, DOM-out card.
  *
- * The footer renders a typed `<Link>`, so `render` mounts the card under a
- * memory router registering the match-history route. The router resolves
+ * The footer renders a typed `<Link>` — and so does every row, which links
+ * through to its match (#989) — so `render` mounts the card under a memory router
+ * registering both the history and the match-detail routes. The router resolves
  * asynchronously: start tests with `await recentMatchesDisplayPage.findCard()`.
  */
 export const recentMatchesDisplayPage = {
   render(overrides: Partial<RecentMatchesDisplayProps> = {}) {
     const props = buildRecentMatchesDisplayProps(overrides)
     renderWithRoutes(<RecentMatchesDisplay {...props} />, {
-      linkTargets: [MATCH_HISTORY_ROUTE],
+      linkTargets: [MATCH_HISTORY_ROUTE, MATCH_DETAIL_ROUTE],
     })
   },
 

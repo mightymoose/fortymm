@@ -1,3 +1,4 @@
+import { MatchRowLink } from '@/components/matches/match-row-link/match-row-link'
 import { UserAvatar } from '@/components/ui/user-avatar'
 import { cn } from '@/lib/utils'
 
@@ -21,7 +22,12 @@ export interface RecentMatchRowProps {
  * The Δ cell prints an em dash for any row that moved no rating — undecided *or*
  * unrated. Never "+0".
  *
- * Pure view-in, DOM-out: every label was derived in `selectRecentMatches`.
+ * The row **opens its match**: the "When" cell is a real `<a href>`
+ * (`MatchRowLink`) stretched across the whole row, so the row clicks through
+ * end-to-end while a screen reader hears one link, named for the match (#989).
+ *
+ * Pure view-in, DOM-out: every label — including the link's target and its
+ * accessible name — was derived in `selectRecentMatches`.
  */
 export const RecentMatchRow = ({ row }: RecentMatchRowProps) => (
   <tr className="recent-matches__row">
@@ -99,9 +105,11 @@ export const RecentMatchRow = ({ row }: RecentMatchRowProps) => (
       )}
     </td>
     <td>
-      <span className="time-cell">
-        <span className="strong">{row.when}</span>
-      </span>
+      <MatchRowLink
+        route={row.detailRoute}
+        ariaLabel={row.ariaLabel}
+        when={row.when}
+      />
     </td>
   </tr>
 )
