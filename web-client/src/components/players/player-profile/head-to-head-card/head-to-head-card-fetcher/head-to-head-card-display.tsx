@@ -137,44 +137,62 @@ const FrequentOpponents = ({
   opponents: FrequentOpponentView[]
   playerName: string
   isOwnProfile: boolean
-}) => {
-  if (opponents.length === 0) {
-    return (
+}) => (
+  // The empty case is the *same block* as the populated one, deliberately: it
+  // used to early-return a bare <p>, which on somebody else's profile left the
+  // line "X hasn't played anyone yet." floating unlabelled under HEAD-TO-HEAD —
+  // directly beneath "You haven't played X yet.", where it read as a
+  // contradiction of it rather than as a second, quieter section. Empty is a
+  // designed data state, so it keeps its heading and only loses its rows.
+  <div className="head-to-head__frequent">
+    {/* On your own profile the card's *heading* already says "Frequent
+     * opponents", so a sub-heading repeating it would be noise — full or empty.
+     * On somebody else's, the list needs saying whose it is — these are *their*
+     * rivalries, not yours, and the block above is the one that is yours. */}
+    {!isOwnProfile && (
+      <p className="head-to-head__frequent-title">
+        {playerName}’s frequent opponents
+      </p>
+    )}
+    {opponents.length === 0 ? (
       <p className="head-to-head__empty">
         {isOwnProfile
           ? 'You haven’t played anyone yet.'
           : `${playerName} hasn’t played anyone yet.`}
       </p>
-    )
-  }
-
-  return (
-    <div className="head-to-head__frequent">
-      {/* On your own profile the card's *heading* already says "Frequent
-       * opponents", so a sub-heading repeating it would be noise. On somebody
-       * else's, the list needs saying whose it is — these are *their* rivalries,
-       * not yours, and the block above is the one that is yours. */}
-      {!isOwnProfile && (
-        <p className="head-to-head__frequent-title">
-          {playerName}’s frequent opponents
-        </p>
-      )}
+    ) : (
       <ul className="head-to-head__rows">
         {opponents.map((opponent) => (
           <FrequentOpponentRow key={opponent.id} opponent={opponent} />
         ))}
       </ul>
-    </div>
-  )
-}
+    )}
+  </div>
+)
 
+/**
+ * One rivalry: their name, the player's record against them, and the win-share
+ * bar that says the record again geometrically.
+ *
+ * The name is a **link to that opponent's profile**. It used to be a bare
+ * `<span>`: the card would tell you the player was 1–1 against somebody and then
+ * give you no way to go and look at them — a dead end on the page whose whole job
+ * is to be a hub. The id it needs was already in the view (it is this row's React
+ * `key`), so this costs the query nothing.
+ */
 const FrequentOpponentRow = ({
   opponent,
 }: {
   opponent: FrequentOpponentView
 }) => (
   <li className="head-to-head__row">
-    <span className="head-to-head__opponent">{opponent.username}</span>
+    <Link
+      to="/players/$userId"
+      params={{ userId: opponent.id }}
+      className="head-to-head__opponent"
+    >
+      {opponent.username}
+    </Link>
     {/* The bar is the record said again, geometrically — so it is decorative, and
      * the record beside it is what a screen reader reads. */}
     <span className="head-to-head__bar" aria-hidden="true">

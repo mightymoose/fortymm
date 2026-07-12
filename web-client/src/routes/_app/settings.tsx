@@ -369,82 +369,30 @@ function PageHeader({
   username: string
   claimed: boolean
 }) {
+  // Styles live in settings.css (`.fmm-page-header*`), not inline: this row has
+  // to respond to the viewport (see the comment there) and an inline `style`
+  // object cannot carry a media query (#890).
+  const display = username || '…'
   return (
-    <header style={{ marginBottom: 28 }}>
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 12,
-          marginBottom: 14,
-          fontSize: 'var(--text-xs)',
-          color: 'var(--fg-muted)',
-          letterSpacing: '0.14em',
-          textTransform: 'uppercase',
-          fontWeight: 600,
-        }}
-      >
+    <header className="fmm-page-header">
+      <div className="fmm-page-header__crumbs">
         <span className="ball-dot" style={{ width: 7, height: 7 }} />
         Workspace
-        <span style={{ color: 'var(--ink-600)' }}>/</span>
-        <span style={{ color: 'var(--fg-2)' }}>Settings</span>
+        <span className="fmm-page-header__crumbs-sep">/</span>
+        <span className="fmm-page-header__crumbs-current">Settings</span>
       </div>
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'flex-end',
-          gap: 16,
-          justifyContent: 'space-between',
-        }}
-      >
-        <h1
-          style={{
-            fontFamily: 'var(--font-display)',
-            fontSize: 64,
-            letterSpacing: '0.02em',
-            textTransform: 'uppercase',
-            color: 'var(--fg-1)',
-            margin: 0,
-            lineHeight: 1,
-          }}
-        >
-          Settings
-        </h1>
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 10,
-            padding: '6px 12px 6px 6px',
-            background: 'var(--bg-card)',
-            border: '1px solid var(--border-subtle)',
-            borderRadius: 'var(--r-pill)',
-            flexShrink: 0,
-          }}
-        >
-          <UserAvatar name={username || '…'} size={26} dim={!claimed} />
-          <div
-            style={{
-              fontFamily: 'var(--font-mono)',
-              fontSize: 'var(--text-sm)',
-              color: 'var(--fg-2)',
-              letterSpacing: '0.02em',
-            }}
-          >
-            {username || '…'}
+      <div className="fmm-page-header__row">
+        <h1 className="fmm-page-header__title">Settings</h1>
+        <div className="fmm-page-header__pill" data-testid="settings-user-pill">
+          <UserAvatar name={display} size={26} dim={!claimed} />
+          {/* `title` so a truncated long username is still readable on hover. */}
+          <div className="fmm-page-header__pill-name" title={display}>
+            {display}
           </div>
           {claimed && <Check size={14} color="var(--serve-500)" />}
         </div>
       </div>
-      <p
-        style={{
-          marginTop: 14,
-          marginBottom: 0,
-          color: 'var(--fg-3)',
-          fontSize: 'var(--text-base)',
-          maxWidth: 560,
-        }}
-      >
+      <p className="fmm-page-header__lede">
         Save each section on its own — we don't bundle changes you didn't ask for.
       </p>
     </header>

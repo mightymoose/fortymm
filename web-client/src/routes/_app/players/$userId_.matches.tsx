@@ -6,6 +6,7 @@ import { z } from 'zod'
 import { playerByIdQueryOptions, usePlayerById } from '@/api/players'
 import { SESSION_QUERY_KEY, useSession } from '@/api/session'
 import { PlayerMatchHistory } from '@/components/players/player-match-history'
+import { PlayerNotFound } from '@/components/players/player-not-found'
 import { PlayerRouteError } from '@/components/players/player-route-error'
 import { pageTitle } from '@/lib/page-title'
 
@@ -33,6 +34,13 @@ export const Route = createFileRoute('/_app/players/$userId_/matches')({
   },
   component: PlayerMatchHistoryRoute,
   errorComponent: PlayerRouteError,
+  // This route reads the SAME profile bundle as `/players/$userId`, so it 404s the
+  // same way and needs its own not-found boundary (ADR-1001). It does not inherit
+  // the profile route's — this is a sibling, not a child — and it cannot fall back
+  // to the router's `defaultNotFoundComponent`, which never sees a render-thrown
+  // `notFound`. Without this line, an unknown player id here renders TanStack's
+  // generic "Something went wrong!" screen.
+  notFoundComponent: PlayerNotFound,
 })
 
 function PlayerMatchHistoryRoute() {
@@ -44,8 +52,9 @@ function PlayerMatchHistoryRoute() {
   // The heading needs the player's identity; the profile bundle is the natural
   // source and is usually a cache hit when the user arrived from the profile.
   // Gate on the session so a first-visit direct-load doesn't race the session
-  // cookie. The query is `throwOnError`, so any non-2xx flows to
-  // `errorComponent` above; the matches list keeps its own inline retry.
+  // cookie. The query is `throwOnError`, so a failure flows to a route boundary
+  // above — a 404 to `notFoundComponent`, anything else to `errorComponent`; the
+  // matches list keeps its own inline retry.
   const session = useSession()
   const { data: player, isPending } = usePlayerById(userId, {
     enabled: session.isSuccess,

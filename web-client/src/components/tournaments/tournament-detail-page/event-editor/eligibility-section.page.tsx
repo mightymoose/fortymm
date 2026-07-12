@@ -1,11 +1,12 @@
 import { interactiveControlsIn, interactiveElementsIn } from '@/test/read-only'
 import { render, screen, type Container } from '@/test/utilities'
 
+import type { Predicate } from '../../data/types'
 import {
-  EligibilitySection,
-  type EligibilitySectionProps,
-} from './eligibility-section'
-import { buildEligibilitySectionProps } from './eligibility-section.factory'
+  buildEligibilitySectionProps,
+  type EligibilityHarnessInputs,
+} from './eligibility-section.factory'
+import { EligibilityHarness } from './eligibility-section.harness'
 import { predicateRowPage } from './eligibility-section/predicate-row.page'
 
 const scoped = (container: Container) => ({
@@ -23,6 +24,16 @@ const scoped = (container: Container) => ({
   },
   queryRows() {
     return container.queryAllByTestId('predicate-row')
+  },
+  /** Every Remove-rule button, in render order — to remove a specific row. */
+  getRemoveRuleButtons() {
+    return container.queryAllByRole('button', { name: 'Remove rule' })
+  },
+  /** The live `predicates` array in form state (via the probe), so a test can
+   * assert that an add / edit / remove flowed through `useFieldArray`. */
+  getPredicates(): Predicate[] {
+    const el = container.queryByTestId('predicates-probe')
+    return el ? (JSON.parse(el.textContent || '[]') as Predicate[]) : []
   },
   /** The Field / Operator / Value column headers — form furniture that means
    * nothing without the controls beneath it. */
@@ -47,8 +58,8 @@ const scoped = (container: Container) => ({
 
 /** Test page-object for `EligibilitySection`. */
 export const eligibilitySectionPage = {
-  render(overrides: Partial<EligibilitySectionProps> = {}) {
-    render(<EligibilitySection {...buildEligibilitySectionProps(overrides)} />)
+  render(overrides: Partial<EligibilityHarnessInputs> = {}) {
+    render(<EligibilityHarness {...buildEligibilitySectionProps(overrides)} />)
   },
 
   within(container: Container = screen) {

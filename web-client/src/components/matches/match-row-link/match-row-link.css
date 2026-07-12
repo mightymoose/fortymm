@@ -1,0 +1,99 @@
+/* The stretched match-row link (#989).
+ *
+ * A match-history row must open its match — through a REAL anchor, so cmd-click,
+ * middle-click and "open in new tab" work and the router preloads on intent. (The
+ * `<tr role="link">` + `onClick` idiom the matches list still uses can do none of
+ * that, and needs a manual `router.preloadRoute` to make up for it; #953 replaces
+ * it there. Do not copy it here.)
+ *
+ * Exactly ONE anchor per row, and it sits on the **date** cell: an anchor wrapped
+ * around the opponent's name announces as "go to Alice's profile", which is not
+ * where it goes. Its accessible name names the match instead ("Match against
+ * Alice, Mar 14" / "Solo match, Mar 14").
+ *
+ * The whole row still clicks, because the anchor's `::after` is stretched over it —
+ * one link a screen reader hears once, a hit area the size of the row. (Measured in
+ * a real Chrome: the anchor answers a hit-test at 5%, 20%, 40%, 60%, 80% and 95%
+ * across a row, and a click in the middle of the *score* cell — nowhere near the
+ * date text — navigates to that row's match.)
+ *
+ * Two things to know about the overlay:
+ *
+ * - It paints **over the row's cells**, so any interactive control put inside a row
+ *   later will sit underneath it. Such a control has to lift itself out — stop the
+ *   click propagating and/or take a `position` + `z-index` — the way the matches
+ *   list's trailing action cell does. Both surfaces have exactly one such control
+ *   now: the opponent's name, a link to their profile (#1005), which lifts itself
+ *   with `.match-row-inline-link` below.
+ * - The profile card's table overflows its column by ~17px, and that last strip is
+ *   dead to hit-testing for **everything** in it, plain `<td>`s included. That is a
+ *   pre-existing layout quirk of the card, not a property of this link, and it is
+ *   out of scope here.
+ */
+.match-row-link {
+  /* NOT `position: relative` — that would make the anchor itself the ::after's
+   * containing block and shrink the hit area back down to the date cell. The row
+   * is the containing block (below). */
+  display: inline-block;
+  /* The date's own look, unchanged from the plain `.time-cell .strong` span this
+   * anchor replaced on both surfaces: mono, 12px, one step brighter than the
+   * cell around it. Undecorated — the row's hover/focus cues carry the
+   * affordance, a blue underline in the middle of a table does not. */
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--fg-2);
+  text-decoration: none;
+}
+
+.match-row-link::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+}
+
+/* The row is the positioned ancestor the stretched ::after resolves against — and
+ * it is a click target now, so the cursor says so.
+ *
+ * No hover rule here, on purpose: both surfaces already light their rows on hover
+ * with this very token (`.recent-matches__row:hover` and
+ * `.player-profile table.matches tbody tr:hover`, in `player-profile.css`). Those
+ * were row-tracking cues; now that the whole row opens the match they are honest
+ * affordances, and a second identical `--bg-hover` declaration here would only be
+ * one more thing to keep in step. */
+tr:has(.match-row-link) {
+  position: relative;
+  cursor: pointer;
+}
+
+/* The focus ring belongs on the ROW, not on the date cell — the anchor's hit area
+ * *is* the row, so that is what a keyboard user must see highlighted. Cribbed from
+ * `.is-clickable:focus-visible` on the matches list. */
+tr:has(.match-row-link:focus-visible) {
+  outline: 2px solid var(--ball-500);
+  outline-offset: -2px;
+}
+
+.match-row-link:focus-visible {
+  outline: none;
+}
+
+/* A control that must sit ABOVE the stretched overlay — the escape hatch the doc
+ * comment at the top of this file describes, written once rather than re-derived
+ * per surface. Today: the opponent's name, a link to their profile (#1005), on
+ * both the profile card and the full history page.
+ *
+ * The overlay is `position: absolute` with no `z-index`, so it paints in the
+ * positioned-with-`z-index: auto` layer; a control that takes `position` *and* a
+ * positive `z-index` paints in the layer above it, and therefore wins the
+ * hit-test. (The `<tr>` is `position: relative` / `z-index: auto`, which is NOT a
+ * stacking context, so the two resolve against each other directly.) That is all
+ * it takes — the anchor underneath never receives the click, so there is nothing
+ * to stop propagating.
+ *
+ * Wearing this class is the whole contract; each surface styles its own link
+ * (colour, hover, focus ring) as it sees fit. Take it off and the name still
+ * announces, tabs and Enters as a link — only the pointer breaks, silently. */
+.match-row-inline-link {
+  position: relative;
+  z-index: 1;
+}

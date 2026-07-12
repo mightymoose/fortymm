@@ -6,6 +6,7 @@ import {
   createRouter,
 } from '@tanstack/react-router'
 import { http, HttpResponse } from 'msw'
+import userEvent from '@testing-library/user-event'
 
 import { mockSession } from '@/mocks/handlers'
 import { server } from '@/mocks/server'
@@ -45,8 +46,23 @@ const scoped = (container: Container) => {
     Array.from(sidebar().querySelectorAll<HTMLAnchorElement>(selector)).map(
       labelOf,
     )
+  const alphaTrigger = (): HTMLElement =>
+    container.getByRole('button', { name: 'About the alpha release' })
 
   return {
+    /** The `<aside>` itself — the drawer on mobile, the sidebar on desktop. */
+    getSidebar() {
+      return sidebar()
+    },
+    /**
+     * The topbar hamburger. Its `aria-controls` must resolve to the sidebar's
+     * `id`; whether the *closed* drawer is actually out of the tab order is a
+     * question about layout, so it's pinned in `e2e/app-shell.spec.ts` — jsdom
+     * cannot see the CSS that hides it.
+     */
+    getMenuButton() {
+      return container.getByRole('button', { name: 'Open navigation' })
+    },
     /**
      * Any nav link in the sidebar by its label — top-level ("Matches") or
      * sub-nav ("Preferences"); the labels are unique across both levels.
@@ -85,6 +101,69 @@ const scoped = (container: Container) => {
     getActiveSubNavLabels() {
       return labels('.app-shell__sub-nav-link.is-active')
     },
+    /**
+     * Labels of every sidebar link — both levels — announced to assistive tech
+     * as the current page. This is the *semantic* layer, not the visual one, and
+     * the two deliberately disagree: on `/notifications/settings` the parent is
+     * lit but says nothing, so this returns `['Preferences']` while
+     * `getParentActiveNavLabels()` returns `['Notifications']`. ARIA has exactly
+     * one current page, so this list should never hold more than one label
+     * (#930).
+     */
+    getCurrentPageNavLabels() {
+      return labels('a[aria-current="page"]')
+    },
+    /** Every value of `aria-current` in the sidebar — `aria-current="true"` on a
+     * section ancestor would be just as wrong as a second `"page"`, and only a
+     * value-blind sweep can see it. */
+    getAriaCurrentValues() {
+      return Array.from(
+        sidebar().querySelectorAll<HTMLAnchorElement>('a[aria-current]'),
+      ).map((el) => `${labelOf(el)}=${el.getAttribute('aria-current')}`)
+    },
+
+    // --- The alpha notice (topbar) ---------------------------------------
+    //
+    // Radix portals the popover's content to `document.body`, *outside* the
+    // shell's tree, so the notice accessors read from `screen` rather than
+    // from `container`. Only the trigger — a real topbar child — is scoped.
+
+    /** The topbar "Alpha" badge that opens the notice. */
+    getAlphaTrigger() {
+      return alphaTrigger()
+    },
+    /** Click the badge and wait for the notice. Radix renders popover content
+     * with `role="dialog"` (it is not modal — Escape and an outside click both
+     * dismiss it — but the role is a dialog all the same). */
+    async openAlphaNotice() {
+      await userEvent.click(alphaTrigger())
+      return await screen.findByRole('dialog')
+    },
+    /** The open notice, or `null` once it is dismissed. */
+    queryAlphaNotice() {
+      return screen.queryByRole('dialog')
+    },
+    /**
+     * The notice's close control, addressed by its accessible name — the whole
+     * point of #891 is that a control exists *and* announces itself. Throws
+     * when there is none, which is exactly what the pre-fix shell did.
+     */
+    getAlphaCloseButton() {
+      return within(screen.getByRole('dialog')).getByRole('button', {
+        name: 'Close alpha notice',
+      })
+    },
+    /**
+     * Every button inside the open notice. Before #891 this was **empty** — the
+     * panel covered most of a 375px viewport with nothing to press. Asserting
+     * the list (not just "a close button exists") also catches a second, unnamed
+     * dismiss affordance sneaking in.
+     */
+    getAlphaNoticeButtonNames() {
+      return within(screen.getByRole('dialog'))
+        .queryAllByRole('button')
+        .map((el) => el.getAttribute('aria-label') ?? labelOf(el))
+    },
   }
 }
 
@@ -95,13 +174,17 @@ const scoped = (container: Container) => {
  * router and the session query both resolve asynchronously, so tests start with
  * `await appShellPage.findNavLink(...)`.
  *
- * Active state is asserted through the BEM classes, not `aria-current`: a
- * TanStack `<Link>` stamps `aria-current="page"` (plus `data-status="active"`)
- * on *every* link whose `to` is a prefix of the location — its default
- * `activeOptions.exact` is `false` — so the parent items and the Inbox child
- * all carry it regardless of what the shell decides. The `is-active` /
- * `is-parent-active` classes are the shell's own contract (they drive the CSS
- * and the e2e locators), so they're what these accessors read.
+ * The shell has **two** notions of "current", and they are read separately:
+ *
+ * - **Visual** — the `is-active` / `is-parent-active` BEM classes the shell
+ *   computes itself (`getActiveNavLabels`, `getParentActiveNavLabels`,
+ *   `getActiveSubNavLabels`). A section parent is lit across its whole subtree.
+ * - **Semantic** — `aria-current="page"` (`getCurrentPageNavLabels`,
+ *   `getAriaCurrentValues`). Only the leaf; a parent announces nothing.
+ *
+ * They must be asserted together. The classes drive the CSS and no CSS reads
+ * `aria-current`, so a change that quietly dimmed the parent would still satisfy
+ * an `aria-current`-only test, and vice versa (#930).
  */
 export const appShellPage = {
   render(pathname: string, overrides: Partial<AppShellProps> = {}) {

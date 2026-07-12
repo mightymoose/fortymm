@@ -52,6 +52,7 @@ import {
 } from './queries'
 import { Avatar, EmptyState, Field, Stat } from './primitives'
 import { colorFor, fmtDate, fmtDateRel, groupPermissions } from './helpers'
+import { applyServerFieldError, notifyError } from '@/lib/notify-error'
 
 // The default role is held by every user on the platform, so the API refuses to
 // delete it (that would cascade the grant away from everyone) or rename it (the
@@ -401,12 +402,19 @@ function RoleDetail({
               variant="outline"
               size="sm"
               onClick={async () => {
-                const dup = await createRole.mutateAsync({
-                  name: `${role.name} (copy)`,
-                  description: role.description,
-                  template_id: role.id,
-                })
-                onSelect(dup.id)
+                // useCreateRole no longer carries a global onError toast (the
+                // New-role form owns its errors inline), so this non-form caller
+                // surfaces its own failure.
+                try {
+                  const dup = await createRole.mutateAsync({
+                    name: `${role.name} (copy)`,
+                    description: role.description,
+                    template_id: role.id,
+                  })
+                  onSelect(dup.id)
+                } catch (err) {
+                  notifyError('create the role')(err)
+                }
               }}
             >
               <Copy size={14} /> Duplicate
@@ -847,6 +855,25 @@ function RoleMembers({
   )
 }
 
+// Mirrors the server's column constraints so an over-long name gets an inline
+// message client-side instead of a bare 4xx. A *duplicate* name is not refined
+// away here on purpose: the server owns uniqueness (and races), so a clash comes
+// back as a 409 the form surfaces inline — see `handleSubmit` below (issue #937).
+const roleCreateSchema = z.object({
+  name: z
+    .string()
+    .trim()
+    .min(1, { message: 'Name is required.' })
+    .max(255, { message: 'Name must be 255 characters or fewer.' }),
+  description: z
+    .string()
+    .trim()
+    .max(1024, { message: 'Description must be 1024 characters or fewer.' })
+    .optional(),
+})
+
+type RoleCreateValues = z.infer<typeof roleCreateSchema>
+
 function NewRoleModal({
   existing,
   onClose,
@@ -854,29 +881,30 @@ function NewRoleModal({
 }: {
   existing: Role[]
   onClose: () => void
-  onCreate: (input: { name: string; description: string; templateId?: string }) => void
+  onCreate: (input: { name: string; description: string; templateId?: string }) => Promise<void>
 }) {
-  const [name, setName] = useState('')
-  const [description, setDescription] = useState('')
   const [templateId, setTemplateId] = useState('')
-  const [submitAttempted, setSubmitAttempted] = useState(false)
-  const trimmed = name.trim()
-  const taken = existing.some((r) => r.name.toLowerCase() === trimmed.toLowerCase())
-  // Surface a missing name only after a submit attempt — an empty submit must
-  // never be a silent no-op.
-  const nameError = !trimmed
-    ? submitAttempted
-      ? 'Name is required.'
-      : null
-    : taken
-      ? 'A role with this name already exists.'
-      : null
+  const form = useForm<RoleCreateValues>({
+    resolver: zodResolver(roleCreateSchema),
+    defaultValues: { name: '', description: '' },
+    mode: 'onChange',
+  })
 
-  function handleCreate() {
-    setSubmitAttempted(true)
-    if (!trimmed || taken) return
-    onCreate({ name: trimmed, description: description.trim(), templateId: templateId || undefined })
-  }
+  // Mirrors EditRoleModal: await the mutation, and surface a server 409/422 as
+  // an inline error on the name field. The dialog closes only on success (the
+  // parent's onCreate unmounts it), so a rejected request keeps it open with
+  // the reason shown instead of vanishing silently (#614/#937).
+  const handleSubmit = form.handleSubmit(async (values) => {
+    try {
+      await onCreate({
+        name: values.name,
+        description: values.description ?? '',
+        templateId: templateId || undefined,
+      })
+    } catch (err) {
+      applyServerFieldError(form, 'name', err, 'create the role', 'Server rejected this name.')
+    }
+  })
 
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
@@ -887,35 +915,64 @@ function NewRoleModal({
             Name the role and optionally copy permissions from an existing one.
           </DialogDescription>
         </DialogHeader>
-        <div style={{ display: 'grid', gap: 16 }}>
-          <Field label="Name" hint={nameError} hintTone={nameError ? 'loss' : 'neutral'}>
-            <Input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Volunteer scorer" />
-          </Field>
-          <Field label="Description" hint="Optional. Helps the next admin understand what this role does.">
-            <Textarea
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              placeholder="What can people with this role do?"
-              style={{ minHeight: 70 }}
-            />
-          </Field>
-          <Field label="Copy permissions from" hint="Optional. Lets you start from an existing role.">
-            <select value={templateId} onChange={(e) => setTemplateId(e.target.value)} style={nativeSelectStyle}>
-              <option value="">Blank — no permissions</option>
-              {existing.map((r) => (
-                <option key={r.id} value={r.id}>
-                  {r.name} ({r.permission_ids.length} perms)
-                </option>
-              ))}
-            </select>
-          </Field>
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose}>Cancel</Button>
-          <Button onClick={handleCreate}>
-            <Check size={14} /> Create role
-          </Button>
-        </DialogFooter>
+        <Form {...form}>
+          <form onSubmit={handleSubmit} noValidate>
+            <div style={{ display: 'grid', gap: 16 }}>
+              <FormField
+                control={form.control}
+                name="name"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Name</FormLabel>
+                    <FormControl>
+                      <Input autoFocus maxLength={255} placeholder="e.g. Volunteer scorer" {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name="description"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Description</FormLabel>
+                    <FormControl>
+                      <Textarea
+                        placeholder="What can people with this role do?"
+                        style={{ minHeight: 70 }}
+                        {...field}
+                        value={field.value ?? ''}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      Optional. Helps the next admin understand what this role does.
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <Field label="Copy permissions from" hint="Optional. Lets you start from an existing role.">
+                <select value={templateId} onChange={(e) => setTemplateId(e.target.value)} style={nativeSelectStyle}>
+                  <option value="">Blank — no permissions</option>
+                  {existing.map((r) => (
+                    <option key={r.id} value={r.id}>
+                      {r.name} ({r.permission_ids.length} perms)
+                    </option>
+                  ))}
+                </select>
+              </Field>
+            </div>
+            <DialogFooter style={{ marginTop: 16 }}>
+              <Button type="button" variant="outline" onClick={onClose}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={form.formState.isSubmitting}>
+                <Check size={14} /> Create role
+              </Button>
+            </DialogFooter>
+          </form>
+        </Form>
       </DialogContent>
     </Dialog>
   )

@@ -1,13 +1,5 @@
 import { useState } from 'react'
-import {
-  Calendar,
-  Hash,
-  Layers,
-  MapPin,
-  Table2,
-  Trophy,
-  Users,
-} from 'lucide-react'
+import { Calendar, Layers, MapPin, Table2, Trophy, Users } from 'lucide-react'
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 
@@ -18,6 +10,7 @@ import {
   EM_DASH,
   emptyEvent,
   fmtDateRange,
+  fmtVenueLine,
   genId,
 } from './data/helpers'
 import { lifecycleEdgeFor } from './data/lifecycle'
@@ -43,25 +36,31 @@ export interface TournamentDetailPageProps {
   onUpdate: (tournament: Tournament) => void
   /** Persist an edited table catalogue (add/remove from the Tables tab). */
   onChangeCatalogue: (catalogue: TournamentTable[]) => void
-  /** Persist a new event. **May be async, and its rejection is load-bearing**: it
-   * travels back to the `EventEditor`, which stays open over it — so a refused
-   * create is reported instead of quietly binning everything the organizer typed. */
-  onCreateEvent: (event: TournamentEvent) => void | Promise<void>
+  /** Persist a new event. **The returned promise is load-bearing**: the `EventEditor`
+   * awaits it, closes itself only when it RESOLVES, and stays open over a rejection —
+   * so a refused create is reported instead of quietly binning everything the
+   * organizer typed (#933, #934). */
+  onCreateEvent: (event: TournamentEvent) => Promise<void>
   /** Persist an edited event — same contract as `onCreateEvent`. */
-  onUpdateEvent: (event: TournamentEvent) => void | Promise<void>
+  onUpdateEvent: (event: TournamentEvent) => Promise<void>
   onDeleteEvent: (eventId: string) => void
   onBack: () => void
 }
 
 function MetaItem({
   icon,
+  testId,
   children,
 }: {
   icon: React.ReactNode
+  testId?: string
   children: React.ReactNode
 }) {
   return (
-    <span className="inline-flex min-w-0 items-center gap-2 text-[14px] text-[color:var(--fg-2)]">
+    <span
+      data-testid={testId}
+      className="inline-flex min-w-0 items-center gap-2 text-[14px] text-[color:var(--fg-2)]"
+    >
       <span className="text-[color:var(--fg-3)]">{icon}</span>
       {children}
     </span>
@@ -95,6 +94,10 @@ export const TournamentDetailPage = ({
   const days = daysBetween(range.start, range.end)
   const entries = tournament.events.reduce((s, e) => s + (e.entered || 0), 0)
   const pools = tournament.events.reduce((s, e) => s + e.pools.length, 0)
+  // Empty when venue, city, and region are all blank — and then the meta item
+  // is not rendered at all, pin included. Punctuation with nothing to punctuate
+  // ("· ,") is a rendering bug, not a placeholder (#994).
+  const venue = fmtVenueLine(tournament.address)
 
   const openEvent = (ev: TournamentEvent) => {
     setEditorEvent(ev)
@@ -104,19 +107,18 @@ export const TournamentDetailPage = ({
     setEditorEvent(emptyEvent(tournament))
     setEditorOpen(true)
   }
-  /** Persist the editor's draft, and close the editor **only if that worked**.
+  /** Persist the editor's draft — and **do not close anything here**.
    *
-   * The `await` and the missing `catch` are both deliberate. The write is awaited so
-   * that `setEditorOpen(false)` is reached on the success path alone; the rejection
-   * is deliberately NOT caught here, because the `EventEditor` is what catches it —
-   * it owns the sheet that must stay open, and the draft that must survive. Firing
-   * the mutation and closing regardless (what this did) is how a 422 became an event
-   * that was never created, reported nowhere. */
-  const saveEvent = async (ev: TournamentEvent) => {
-    if (ev.id.startsWith('new')) await onCreateEvent({ ...ev, id: genId('ev') })
-    else await onUpdateEvent(ev)
-    setEditorOpen(false)
-  }
+   * The promise is returned rather than swallowed, and the rejection is deliberately
+   * NOT caught: the `EventEditor` awaits this, closes itself on the success path
+   * alone, and catches the refusal — because it owns the sheet that must stay open
+   * and the work that must survive. Firing the mutation and closing regardless (what
+   * this used to do) is how a 422 became an event that was never created, reported
+   * nowhere (#933, #934). */
+  const saveEvent = (ev: TournamentEvent) =>
+    ev.id.startsWith('new')
+      ? onCreateEvent({ ...ev, id: genId('ev') })
+      : onUpdateEvent(ev)
 
   return (
     <div>
@@ -155,20 +157,11 @@ export const TournamentDetailPage = ({
               </span>
             )}
           </MetaItem>
-          <MetaItem icon={<MapPin size={14} />}>
-            <span className="text-[color:var(--fg-1)]">
-              {tournament.address.venue}
-            </span>
-            <span className="mx-1.5 text-[color:var(--fg-3)]">·</span>
-            <span>
-              {tournament.address.city}, {tournament.address.region}
-            </span>
-          </MetaItem>
-          <MetaItem icon={<Hash size={14} />}>
-            <span className="font-mono text-[12px] text-[color:var(--fg-3)]">
-              {tournament.id}
-            </span>
-          </MetaItem>
+          {venue && (
+            <MetaItem icon={<MapPin size={14} />} testId="tournament-venue-line">
+              <span className="truncate text-[color:var(--fg-1)]">{venue}</span>
+            </MetaItem>
+          )}
         </div>
 
         <div className="grid grid-cols-5 gap-3">

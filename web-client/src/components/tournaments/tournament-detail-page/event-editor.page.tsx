@@ -60,6 +60,15 @@ const scoped = (container: Container) => ({
   getSaveButton() {
     return container.getByRole('button', { name: /Create event|Save changes/ })
   },
+  getEntryFeeInput() {
+    return container.getByLabelText(/Entry fee/)
+  },
+  /** An inline validation/server error rendered below a Basics field — the same
+   * node `queryFieldError` returns, taking a `RegExp` for the cases that only want
+   * to pin a phrase. */
+  queryError(message: string | RegExp) {
+    return container.queryByText(message)
+  },
   /** The save/create action — absent for a non-creator (`canEdit: false`),
    * who gets a read-only view. */
   querySaveButton() {

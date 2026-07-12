@@ -228,6 +228,49 @@ test.describe('Match Details', () => {
         });
     });
 
+    // #888: the page rendered its own `<main className="md-page">` inside the
+    // app shell's `<main className="app-shell__content">`, so a screen reader's
+    // landmark list held two "main" regions, one nested in the other. The issue
+    // was filed as a mobile bug; it was not — the wrapper was unconditional, and
+    // the page reproduced it identically at 1280x800. Both viewports are pinned
+    // below so a re-introduced responsive wrapper can't sneak it back in on one
+    // of them. (The shared axe helper deliberately drops the `best-practice`
+    // tag, which is where `landmark-one-main` lives — hence this targeted
+    // assertion rather than a broader scan.)
+    test.describe('landmarks', () => {
+        const VIEWPORTS = [
+            { name: 'desktop', size: { width: 1280, height: 800 } },
+            { name: 'mobile', size: { width: 375, height: 667 } },
+        ] as const;
+
+        for (const { name, size } of VIEWPORTS) {
+            test.describe(name, () => {
+                test.use({ viewport: size });
+
+                test(`exposes exactly one main landmark at ${name} (${size.width}x${size.height})`, async ({
+                    page,
+                }) => {
+                    await matchDetailsPage.mock(decidedMatch(COMPLETED_WIN_ID));
+                    await matchDetailsPage.goTo(COMPLETED_WIN_ID);
+
+                    // Guard: the match content is on screen, so the counts below
+                    // are of the finished page and not of an empty shell.
+                    await expect(
+                        page.getByRole('region', {
+                            name: 'rita.kovac defeated silva.r by 3 games to 1',
+                        }),
+                    ).toBeVisible();
+
+                    // What assistive tech actually enumerates: main landmarks,
+                    // whether claimed by the <main> tag or by role="main".
+                    await expect(page.getByRole('main')).toHaveCount(1);
+                    // And that one is not wrapping another.
+                    await expect(page.locator('main main')).toHaveCount(0);
+                });
+            });
+        }
+    });
+
     // #952: the card told a player "Unrated" in one panel and "1500 → 1268
     // (−232)" in another, inches apart. A first rated match does not *lose* you
     // 232 points — it *establishes* you at 1268. Proven here, in a real browser,

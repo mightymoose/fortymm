@@ -1,5 +1,6 @@
 import { http, HttpResponse } from 'msw'
 import type { components } from '@/api/schema'
+import { SEED_MATCH_IDS } from '@/mocks/match-store'
 import {
   notificationPreferences,
   notificationTaxonomy,
@@ -20,7 +21,9 @@ let feed: NotificationItem[] = [
     category: 'result_confirm',
     title: 'Accept your score',
     body: 'def. Patel, M. — you logged 3–1. Tap to accept.',
-    link: '/matches/m-1',
+    // A match that actually exists in the store, addressed the way the router
+    // expects. `/matches/m-1` pointed at nothing and 404'd on both counts (#958).
+    link: `/matches/${SEED_MATCH_IDS.inProgress}`,
     action_label: 'Review',
     delta: null,
     read_at: null,

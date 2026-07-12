@@ -10,6 +10,7 @@ import {
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { describe, expect, it } from 'vitest'
 import { NotFoundPage } from './not-found-page'
+import { notFoundContentPage } from './not-found-content.page'
 
 function renderAt(path: string) {
   const queryClient = new QueryClient({
@@ -47,6 +48,17 @@ describe('NotFoundPage', () => {
     expect(
       screen.getByRole('link', { name: /back to dashboard/i }),
     ).toHaveAttribute('href', '/dashboard')
+  })
+
+  it('renders exactly one <main> landmark — it owns the only app shell', async () => {
+    renderAt('/this-page-does-not-exist')
+    await screen.findByRole('heading', { name: /page not\s*found/i })
+
+    // The regression this guards: `NotFoundPage` supplies the `AppShell`, and
+    // `NotFoundContent` supplies none — so nothing here nests two shells. A
+    // route already under the `_app` layout must render `NotFoundContent`, not
+    // this component, or the page grows a second <main>.
+    expect(notFoundContentPage.getMainLandmarks()).toHaveLength(1)
   })
 
   it('recovers to the dashboard when the action is clicked', async () => {

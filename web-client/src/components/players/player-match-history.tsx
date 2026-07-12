@@ -1,27 +1,12 @@
 import { useEffect } from 'react'
 import { Link } from '@tanstack/react-router'
-import {
-  ArrowLeft,
-  ChevronLeft,
-  ChevronRight,
-  ChevronsLeft,
-  ChevronsRight,
-} from 'lucide-react'
+import { ArrowLeft } from 'lucide-react'
 
-import {
-  usePlayerMatches,
-  type PlayerDetail,
-  type PlayerMatchRow,
-} from '@/api/players'
+import { usePlayerMatches, type PlayerDetail } from '@/api/players'
+import { PaginationFooter } from '@/components/pagination-footer'
 import { Button } from '@/components/ui/button'
-import {
-  Pagination,
-  PaginationContent,
-  PaginationEllipsis,
-  PaginationItem,
-  PaginationLink,
-} from '@/components/ui/pagination'
-import { UserAvatar } from '@/components/ui/user-avatar'
+
+import { MatchHistoryRow } from './player-match-history/match-history-row'
 
 // The table, chips and footer are styled by the profile's stylesheet, scoped
 // under the shared `.player-profile` root class this surface also wears.
@@ -184,9 +169,12 @@ function PlayerMatchesSection({
 
   return (
     <section className="player-profile__section">
+      {/* No count chip beside the title: the footer's "Showing 1–2 of 2
+       * matches" readout is the page's single count (#1006). Two of them meant
+       * the same number twice, and neither sibling list (the players list, the
+       * matches list) carries one. */}
       <div className="player-profile__section-header">
         <span className="player-profile__section-title">Matches</span>
-        {data && <span className="player-profile__section-count">{total}</span>}
       </div>
       <div className="player-profile__table-wrap">
         {isError ? (
@@ -214,18 +202,32 @@ function PlayerMatchesSection({
             </thead>
             <tbody>
               {rows.map((m) => (
-                <MatchRowComponent key={m.id} m={m} />
+                <MatchHistoryRow key={m.id} match={m} />
               ))}
             </tbody>
           </table>
         )}
       </div>
-      {total > PAGE_SIZE && (
+      {/* Shown at every *non-zero* row count. This used to be gated on
+       * `total > PAGE_SIZE` — a history of a page or less rendered no count and
+       * no pager at all, so a two-match history was a bare table with nothing
+       * under it (#1006). That guard is gone for good: the footer self-clamps
+       * (`safePage`, `first = total === 0 ? 0 : …`) and disables its own buttons
+       * at a single page, so a short history needs no guard from us.
+       *
+       * `total > 0` is a different claim, not that guard coming back. At zero,
+       * `MatchesEmpty` above already says "No matches yet"; a footer reading
+       * "Showing 0–0 of 0 matches" over four dead buttons would only restate it
+       * and offer a pager with nothing to page. An empty history is a designed
+       * data state — the empty state is the whole of it. */}
+      {total > 0 && (
         <PaginationFooter
           page={page}
           setPage={onPageChange}
           total={total}
           pageSize={PAGE_SIZE}
+          totalPages={totalPages}
+          noun="matches"
         />
       )}
     </section>
@@ -309,264 +311,3 @@ function MatchesError({ onRetry }: { onRetry: () => void }) {
   )
 }
 
-function MatchRowComponent({ m }: { m: PlayerMatchRow }) {
-  // Solo matches carry a player-less sentinel side — the row renders it as an
-  // italic "No opponent" rather than dropping the match (ADR-0008).
-  const opponentName = m.opponent.username ?? 'No opponent'
-  const isNoOpp = m.opponent.username === null
-  const won = m.result === 'W'
-  const lost = m.result === 'L'
-  return (
-    <tr>
-      <td>
-        <span className="time-cell">
-          <span className="strong">{formatDate(m.created_at)}</span>
-        </span>
-      </td>
-      <td>
-        <div className="player">
-          {isNoOpp ? (
-            <UserAvatar name={null} size={26} />
-          ) : (
-            <UserAvatar name={opponentName} size={26} />
-          )}
-          <span
-            className="player-name"
-            style={
-              isNoOpp
-                ? { color: 'var(--fg-3)', fontStyle: 'italic' }
-                : undefined
-            }
-          >
-            {opponentName}
-          </span>
-        </div>
-      </td>
-      <td>
-        {m.games.length === 0 ? (
-          <span
-            style={{ color: 'var(--fg-3)', fontFamily: 'var(--font-mono)' }}
-          >
-            —
-          </span>
-        ) : (
-          <div className="player-profile__games">
-            {m.games.map((g, i) => {
-              const gameWon = g.mine > g.theirs
-              return (
-                <div
-                  key={i}
-                  className={
-                    'player-profile__game ' +
-                    (gameWon
-                      ? 'player-profile__game--won'
-                      : 'player-profile__game--lost')
-                  }
-                >
-                  <span className="player-profile__game-mine">{g.mine}</span>
-                  <span className="player-profile__game-theirs">
-                    {g.theirs}
-                  </span>
-                </div>
-              )
-            })}
-          </div>
-        )}
-      </td>
-      <td>
-        <ResultChip
-          status={m.status}
-          awaitingAcceptance={m.awaiting_acceptance}
-          won={won}
-          lost={lost}
-        />
-      </td>
-    </tr>
-  )
-}
-
-function ResultChip({
-  status,
-  awaitingAcceptance,
-  won,
-  lost,
-}: {
-  status: PlayerMatchRow['status']
-  awaitingAcceptance: boolean
-  won: boolean
-  lost: boolean
-}) {
-  // A posted-but-unaccepted result and a genuinely-live match both sit at
-  // `in_progress`; check the awaiting flag first so the former gets its own
-  // "AWAITING" chip instead of the green "LIVE" one (#364). Mirrors the
-  // matches list's "Awaiting" bucket.
-  if (awaitingAcceptance) {
-    return (
-      <span className="player-profile__result-chip player-profile__result-chip--awaiting">
-        AWAITING
-      </span>
-    )
-  }
-  if (status === 'in_progress') {
-    return (
-      <span className="player-profile__result-chip player-profile__result-chip--live">
-        LIVE
-      </span>
-    )
-  }
-  if (status === 'pending') {
-    return (
-      <span className="player-profile__result-chip player-profile__result-chip--pending">
-        UP NEXT
-      </span>
-    )
-  }
-  if (won) {
-    return (
-      <span className="player-profile__result-chip player-profile__result-chip--win">
-        WIN
-      </span>
-    )
-  }
-  if (lost) {
-    return (
-      <span className="player-profile__result-chip player-profile__result-chip--loss">
-        LOSS
-      </span>
-    )
-  }
-  // Completed but undecided (voided/no-side-won). Neutral pill.
-  return (
-    <span className="player-profile__result-chip player-profile__result-chip--pending">
-      {status.toUpperCase()}
-    </span>
-  )
-}
-
-function formatDate(iso: string): string {
-  // The server emits ISO timestamps with TZ; rendering in local time is
-  // fine here since the column shows just month + day. (No bare YYYY-MM-DD
-  // strings — that's the pattern that bit us before.)
-  const d = new Date(iso)
-  return d.toLocaleDateString(undefined, { month: 'short', day: '2-digit' })
-}
-
-type PageToken = number | 'ellipsis'
-
-function paginationRange(current: number, total: number): PageToken[] {
-  const delta = 1
-  const range: PageToken[] = []
-  const left = Math.max(2, current - delta)
-  const right = Math.min(total - 1, current + delta)
-  range.push(1)
-  if (left > 2) range.push('ellipsis')
-  for (let i = left; i <= right; i++) range.push(i)
-  if (right < total - 1) range.push('ellipsis')
-  if (total > 1) range.push(total)
-  return range
-}
-
-function PaginationFooter({
-  page,
-  setPage,
-  total,
-  pageSize,
-}: {
-  page: number
-  setPage: (n: number) => void
-  total: number
-  pageSize: number
-}) {
-  const totalPages = Math.max(1, Math.ceil(total / pageSize))
-  // Clamp a stale/out-of-range `page` to a valid one so the range math can
-  // never render start > end — e.g. the frame before the parent's redirect
-  // effect snaps a deep-linked `?page=999` back to the last page (#637). The
-  // footer is self-protecting regardless of what the caller passes.
-  const safePage = Math.min(Math.max(1, page), totalPages)
-  const first = total === 0 ? 0 : (safePage - 1) * pageSize + 1
-  const last = Math.min(total, safePage * pageSize)
-  const tokens = paginationRange(safePage, totalPages)
-  const atFirst = safePage <= 1
-  const atLast = safePage >= totalPages
-
-  return (
-    <div className="footer">
-      <div className="footer-info">
-        Showing{' '}
-        <span className="mono">
-          {first}–{last}
-        </span>{' '}
-        of <span className="mono">{total}</span> matches
-      </div>
-      <div className="footer-spacer" />
-      <Pagination className="mx-0 w-auto justify-end">
-        <PaginationContent>
-          <PaginationItem>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              disabled={atFirst}
-              onClick={() => setPage(1)}
-              aria-label="First page"
-            >
-              <ChevronsLeft size={14} strokeWidth={2.4} />
-            </Button>
-          </PaginationItem>
-          <PaginationItem>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              disabled={atFirst}
-              onClick={() => setPage(safePage - 1)}
-              aria-label="Previous page"
-            >
-              <ChevronLeft size={14} strokeWidth={2.4} />
-            </Button>
-          </PaginationItem>
-          {tokens.map((t, i) =>
-            t === 'ellipsis' ? (
-              <PaginationItem key={i}>
-                <PaginationEllipsis />
-              </PaginationItem>
-            ) : (
-              <PaginationItem key={i}>
-                <PaginationLink
-                  href="#"
-                  isActive={t === safePage}
-                  onClick={(e) => {
-                    e.preventDefault()
-                    setPage(t)
-                  }}
-                >
-                  {t}
-                </PaginationLink>
-              </PaginationItem>
-            ),
-          )}
-          <PaginationItem>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              disabled={atLast}
-              onClick={() => setPage(safePage + 1)}
-              aria-label="Next page"
-            >
-              <ChevronRight size={14} strokeWidth={2.4} />
-            </Button>
-          </PaginationItem>
-          <PaginationItem>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              disabled={atLast}
-              onClick={() => setPage(totalPages)}
-              aria-label="Last page"
-            >
-              <ChevronsRight size={14} strokeWidth={2.4} />
-            </Button>
-          </PaginationItem>
-        </PaginationContent>
-      </Pagination>
-    </div>
-  )
-}

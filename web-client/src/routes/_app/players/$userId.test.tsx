@@ -34,6 +34,7 @@ import {
   buildRatingPoint,
   daysAgo,
 } from '@/mocks/factories/players/rating-history.factory'
+import { playerNotFoundPage } from '@/components/players/player-not-found.page'
 import { ratingChartDisplayPage } from '@/components/players/player-profile/rating-chart/rating-chart-fetcher/rating-chart-display.page'
 import { ratingPanelDisplayPage } from '@/components/players/player-profile/rating-panel/rating-panel-fetcher/rating-panel-display.page'
 import { server } from '@/mocks/server'
@@ -42,6 +43,13 @@ import { Route } from './$userId'
 
 const ProfileRoute = Route.options.component!
 const ProfileError = Route.options.errorComponent!
+/** The route's OWN not-found boundary (ADR-1001). Read off the shipped route
+ * rather than passed in by the harness: a route that forgets to declare one has
+ * no not-found boundary at its match at all, so the `notFound()` the profile
+ * bundle throws would escape to TanStack's generic "Something went wrong!"
+ * screen. This is `undefined` if the route drops it — and the tests below then
+ * render exactly that generic screen and go red. */
+const ProfileNotFound = Route.options.notFoundComponent
 
 /** The route's shipped loader and its deps, typed loosely enough to hang off a
  * bare root route in this harness. They are the real functions — nothing here
@@ -144,9 +152,36 @@ function mockProfileFailure(status = 500) {
 }
 
 /**
+ * A QueryClient that **retries** — the only kind that can prove a query doesn't.
+ *
+ * In a browser, React Query's own default is `retry: 3` with backoff, and the
+ * app's `QueryClient` (`main.tsx`) overrides nothing, so that default is the
+ * ambient policy every query inherits unless it opts out. **Under vitest it is
+ * not**: query-core's `environmentManager` reports this environment as a server
+ * (`retry ?? (isServer ? 0 : 3)`), so an *unset* `retry` silently means "don't
+ * retry" here — measured, not assumed. A test that left `retry` unset on the
+ * client would therefore pass whether or not the bundle opted out, which is a
+ * test that proves nothing.
+ *
+ * So the ambient policy is spelled out explicitly (`retry: 3`, and a 1ms delay so
+ * the test doesn't sit through the real backoff). The query's own `retry: false`
+ * has to beat it. Delete that line from `playerByIdQueryOptions` and this client
+ * retries the 404 three times over — which is exactly the user-visible defect:
+ * seconds of skeleton before being told the player doesn't exist.
+ */
+function retryingQueryClient() {
+  return new QueryClient({
+    defaultOptions: {
+      queries: { staleTime: 30_000, refetchOnWindowFocus: false, retry: 3, retryDelay: 1 },
+    },
+  })
+}
+
+/**
  * @param existing a QueryClient from an earlier render, to carry its cache across
  *   an unmount — which is how a real user's second visit to a profile works, and
- *   the only way to catch a card that seeds itself from a *stale* bundle.
+ *   the only way to catch a card that seeds itself from a *stale* bundle. Also
+ *   how a test opts out of the fast `retry: false` default above.
  */
 function renderProfile(initialEntry = '/players/p-1', existing?: QueryClient) {
   const queryClient =
@@ -169,6 +204,10 @@ function renderProfile(initialEntry = '/players/p-1', existing?: QueryClient) {
     path: '/players/$userId',
     component: ProfileRoute,
     errorComponent: ProfileError,
+    // The SHIPPED not-found boundary, not one this harness invents. Drop the line
+    // from the route and this is `undefined` — which is precisely the failure
+    // mode ADR-1001 warns about, and the 404 tests below reproduce it.
+    notFoundComponent: ProfileNotFound,
     validateSearch: Route.options.validateSearch,
     // The REAL loader and its deps. Wiring them is the only way to catch the bug
     // they exist for: a loader that prefetched the league-less, default-range
@@ -190,8 +229,29 @@ function renderProfile(initialEntry = '/players/p-1', existing?: QueryClient) {
     path: '/players/$userId/matches',
     component: () => <div>match history</div>,
   })
+  // The not-found state's one recovery action is a typed <Link to="/players">, so
+  // the players list has to exist in the tree for it to resolve — and to be
+  // followable, which is what makes "it is not a dead end" a real claim.
+  const playersListRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/players',
+    component: () => <div>players list</div>,
+  })
+  // …and every row of that card is itself a typed <Link> to its match (#989).
+  // (The opponent's name inside the row is a <Link to="/players/$userId"> too,
+  // #1005 — it resolves against `profileRoute` above, the page's own route.)
+  const matchDetail = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/matches/$matchId',
+    component: () => <div>match detail</div>,
+  })
   const router = createRouter({
-    routeTree: rootRoute.addChildren([profileRoute, historyRoute]),
+    routeTree: rootRoute.addChildren([
+      playersListRoute,
+      profileRoute,
+      historyRoute,
+      matchDetail,
+    ]),
     history: createMemoryHistory({ initialEntries: [initialEntry] }),
     context: { queryClient },
   })
@@ -321,6 +381,184 @@ describe('player profile route', () => {
 
     await waitFor(() => expect(screen.getByRole('alert')).toBeInTheDocument())
   })
+})
+
+/**
+ * The error taxonomy (ADR-1001). A missing player and a broken server are two
+ * different things and land in two different boundaries, and the whole risk of
+ * that change is that the *second* one quietly stops working — a 5xx that says
+ * "Player not found." with no way to retry is a worse bug than the one being
+ * fixed. So each of the two states is asserted positively **and** against the
+ * other.
+ */
+describe('player profile — a missing player is a not-found, not an error', () => {
+  /** The profile bundle 404s: a well-formed id that names nobody. */
+  function mockMissingPlayer(onRequest?: () => void) {
+    server.use(
+      http.get('*/v1/session', () => HttpResponse.json(sessionResponse())),
+      http.get('*/v1/players/:playerId', () => {
+        onRequest?.()
+        return HttpResponse.json({ detail: 'Player not found.' }, { status: 404 })
+      }),
+    )
+  }
+
+  const notFoundPage = playerNotFoundPage.within(screen)
+
+  it('renders the designed not-found page — not the error boundary', async () => {
+    mockMissingPlayer()
+
+    renderProfile('/players/00000000-0000-0000-0000-000000000000')
+
+    // The designed state, with the copy that names what was missing…
+    expect(await notFoundPage.findHeadline()).toHaveTextContent(
+      'Player not found.',
+    )
+    expect(notFoundPage.getBody(/no player with that id/i)).toBeInTheDocument()
+    // …and NOT the error boundary (which no longer has a 404 branch at all)…
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(
+      screen.queryByText(/couldn’t load this player/i),
+    ).not.toBeInTheDocument()
+    // …and NOT TanStack's generic screen, which is what a route that forgot its
+    // own `notFoundComponent` would render (the `defaultNotFoundComponent` never
+    // sees a render-thrown `notFound`).
+    expect(screen.queryByText(/something went wrong!/i)).not.toBeInTheDocument()
+    // …and no half-painted profile behind it.
+    expect(
+      screen.queryByRole('heading', { level: 1, name: /rita/i }),
+    ).not.toBeInTheDocument()
+  })
+
+  it('is not a dead end — the one action lands on the players list', async () => {
+    // The whole of #1001: the old 4xx branch rendered no action at all, so
+    // enumerating the links in `main` returned `[]` and the only escape was the
+    // browser's back button. Assert the link is *followable*, not merely present.
+    const user = userEvent.setup()
+    mockMissingPlayer()
+
+    const { router } = renderProfile('/players/nobody')
+    await notFoundPage.findHeadline()
+
+    const actions = notFoundPage.getActions()
+    expect(actions).toHaveLength(1)
+    expect(actions[0]).toHaveAccessibleName('Back to players')
+
+    await user.click(actions[0])
+
+    expect(await screen.findByText('players list')).toBeInTheDocument()
+    expect(router.state.location.pathname).toBe('/players')
+  })
+
+  it('surfaces the missing player at ONCE — a 404 is never retried', async () => {
+    // A 404 will fail identically every time, so retrying it only buys the user a
+    // few seconds of skeleton before being told the player doesn't exist. The
+    // bundle's `retry: false` is what declines the ambient retry policy — in a
+    // browser, React Query's own default of THREE with backoff, which the app's
+    // QueryClient does not override — so this runs on a client that ACTUALLY
+    // RETRIES (see `retryingQueryClient`; the file's other client, and vitest's
+    // environment, would not).
+    //
+    // Take `retry: false` off `playerByIdQueryOptions` and this goes red on the
+    // count: the missing player is fetched four times before the not-found page
+    // is allowed to paint.
+    let requests = 0
+    mockMissingPlayer(() => {
+      requests += 1
+    })
+
+    renderProfile('/players/nobody', retryingQueryClient())
+
+    expect(await notFoundPage.findHeadline()).toHaveTextContent(
+      'Player not found.',
+    )
+    expect(requests).toBe(1)
+  })
+
+  it('still sends a 5xx to the error boundary — with a Try again that works', async () => {
+    // The regression this change most endangers. A server error is NOT a missing
+    // player: the player may well exist, the request simply failed, and the user
+    // must be able to try it again. If this ever renders "Player not found.", or
+    // renders it without a working retry, the taxonomy has been mis-split.
+    const user = userEvent.setup()
+    let attempts = 0
+    server.use(
+      http.get('*/v1/session', () => HttpResponse.json(sessionResponse())),
+      http.get('*/v1/players/:playerId', () => {
+        attempts += 1
+        // Fail once, then recover — so "Try again" has something to succeed at.
+        if (attempts === 1) return new HttpResponse(null, { status: 500 })
+        return HttpResponse.json(buildPlayerDetail({ username: 'rita.kovac' }))
+      }),
+    )
+
+    renderProfile()
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('Couldn’t load this player.')
+    // Emphatically not the not-found page…
+    expect(
+      screen.queryByRole('heading', { level: 1, name: 'Player not found.' }),
+    ).not.toBeInTheDocument()
+    expect(screen.queryByText(/no player with that id/i)).not.toBeInTheDocument()
+
+    // …and the retry is real: it refetches and the profile paints.
+    await user.click(screen.getByRole('button', { name: 'Try again' }))
+
+    expect(
+      await screen.findByRole('heading', { level: 1, name: 'rita.kovac' }),
+    ).toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(attempts).toBeGreaterThan(1)
+  })
+
+  it.each([401, 403])(
+    'keeps a bare %i retryable — an error, never “Player not found.”',
+    async (status) => {
+      // The other two statuses that are still 4xx and still land in the error
+      // boundary. Since ADR-1001 that boundary has exactly ONE branch, so their
+      // correctness holds *by construction* — and nothing would catch a future
+      // change that reintroduced branching and stranded a 401 in the actionless
+      // dead end #1001 filed. So pin them: both must render the error state,
+      // both must offer a working Try again, and neither may be told the player
+      // doesn't exist.
+      //
+      // A **bare** 401 on purpose (an empty body, no structured `session_ended` /
+      // `session_merged` code): a session-ended 401 never reaches a boundary at
+      // all — the API client's global handler intercepts it and redirects to
+      // `/login`. This is the ordinary auth failure that a retry can clear.
+      const user = userEvent.setup()
+      let attempts = 0
+      server.use(
+        http.get('*/v1/session', () => HttpResponse.json(sessionResponse())),
+        http.get('*/v1/players/:playerId', () => {
+          attempts += 1
+          // Fail once, then recover — so "Try again" has something to succeed at.
+          if (attempts === 1) return new HttpResponse(null, { status })
+          return HttpResponse.json(buildPlayerDetail({ username: 'rita.kovac' }))
+        }),
+      )
+
+      renderProfile()
+
+      const alert = await screen.findByRole('alert')
+      expect(alert).toHaveTextContent('Couldn’t load this player.')
+      // Not the not-found state, in either of its two tells.
+      expect(screen.queryByText(/player not found/i)).not.toBeInTheDocument()
+      expect(
+        screen.queryByText(/no player with that id/i),
+      ).not.toBeInTheDocument()
+
+      // …and it is not a dead end: the one action retries, and the retry works.
+      await user.click(screen.getByRole('button', { name: 'Try again' }))
+
+      expect(
+        await screen.findByRole('heading', { level: 1, name: 'rita.kovac' }),
+      ).toBeInTheDocument()
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+      expect(attempts).toBeGreaterThan(1)
+    },
+  )
 })
 
 /**

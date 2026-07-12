@@ -1,6 +1,7 @@
 import { Suspense } from 'react'
 import { ErrorBoundary } from 'react-error-boundary'
 
+import { MATCH_DETAIL_ROUTE } from '@/components/matches/match-row-link/match-row-link.page'
 import {
   mockPlayerDetailEndpoint,
   type PlayerDetailResolver,
@@ -15,6 +16,7 @@ import {
 } from './recent-matches-fetcher'
 import {
   MATCH_HISTORY_ROUTE,
+  PROFILE_ROUTE,
   recentMatchesDisplayPage,
 } from './recent-matches-fetcher/recent-matches-display.page'
 
@@ -76,7 +78,7 @@ export const recentMatchesFetcherPage = {
           <RecentMatchesFetcher {...props} />
         </Suspense>
       </ErrorBoundary>,
-      { linkTargets: [MATCH_HISTORY_ROUTE] },
+      { linkTargets: [MATCH_HISTORY_ROUTE, PROFILE_ROUTE, MATCH_DETAIL_ROUTE] },
     )
   },
 

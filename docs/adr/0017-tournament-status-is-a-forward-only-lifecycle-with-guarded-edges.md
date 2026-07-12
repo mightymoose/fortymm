@@ -145,16 +145,20 @@ clients: `web-client/src/api/schema.d.ts` and `ios/Fortymm/Generated/Types.swift
 both lose the field from the create/update bodies, and any caller still sending it
 now gets a `422` rather than being quietly obeyed.
 
-Two related holes are **left open on purpose**, because they are not this slice:
+Two related holes were **left open on purpose**, because they were not this slice:
 
 - **Editing is not locked when a tournament goes live.** `PATCH /tournaments/{id}`
   and the event CRUD routes still work in every status. Locking entries but not the
   events those entries are against is admittedly half a lock; closing it is a
   follow-up, not a smuggled-in scope increase.
-- **Drafts are visible to everyone with `tournament.view`.** A tournament nobody
-  has published still appears in the list for any signed-in user, which sits oddly
-  beside "publishing is what announces it". That is a visibility bug with its own
-  ticket, and fixing it here would have hidden a real change inside a lifecycle PR.
+- ~~**Drafts are visible to everyone with `tournament.view`.**~~ **Closed by #967.**
+  A draft is now visible only to the user who created it: the two read routes share
+  a `_visible_to(user_id)` predicate admitting the *announced* statuses
+  (`published`, `live`, `archived` — an allow-list, so a future pre-publish status
+  cannot silently leak) plus your own, whatever status yours is in. Someone else's
+  draft is absent from the list and answers **404** on the detail route — a hidden
+  draft is deliberately indistinguishable from a nonexistent one, rather than a
+  `403` that would confirm it exists.
 
 Slice B (#785, #786) gets what it needs: a `live` tournament whose field of
 entrants cannot change under it, reached through a single dispatch point where the

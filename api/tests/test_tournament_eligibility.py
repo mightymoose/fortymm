@@ -26,6 +26,7 @@ from app.tournament_eligibility import (
     Unconstrained,
     describe_rule,
     evaluate_rating_eligibility,
+    event_is_full,
     rating_rule,
 )
 
@@ -270,3 +271,65 @@ def test_the_refusal_message_carries_the_rating_and_the_rule() -> None:
         "Your rating on this tournament's ladder is 1650, "
         "and this event is for players rated under 1500."
     )
+
+
+# ----- capacity: a cap, or no cap at all (ADR-0935) --------------------------
+#
+# ``max_players`` is nullable and NULL means *uncapped* — not a cap of zero, and not a
+# missing number to be defaulted. ``event_is_full`` is the single place that reads the
+# sentinel (the entry guard and the detail read both ask it, so they cannot disagree),
+# and these are the rows that pin what it answers. The uncapped ones are cheap to write
+# and were expensive to omit: before them, ``entered >= max_players`` against a NULL cap
+# was a ``TypeError`` on the entry route, and the "defensive" repair of it
+# (``max_players or 0``) is worse — it reads every uncapped event as permanently full,
+# so the event that admits everybody is the one nobody can enter.
+
+
+@pytest.mark.parametrize("entered", [0, 1, 63, 64, 65, 10_000])
+def test_an_uncapped_event_is_never_full(entered: int) -> None:
+    """No cap, no limit: whatever the field has grown to, the event still admits.
+
+    Parametrized past every number a cap might plausibly have been — including the 64
+    the fixtures use and a field far larger than any real event — because the failure
+    this guards against is not "wrong at one value", it is "full at *all* of them".
+    """
+    assert event_is_full(entered=entered, max_players=None) is False
+
+
+@pytest.mark.parametrize(
+    ("entered", "expected"),
+    [
+        (0, False),
+        (63, False),
+        # AT the cap: the event is full — the 64th entrant took the last slot, and the
+        # 65th is refused. ``>`` instead of ``>=`` here would silently sell one seat
+        # too many at every event on the platform.
+        (64, True),
+        # PAST the cap: an event whose ``max_players`` was lowered under a field that
+        # had already filled past it IS full. ``==`` would sail straight by and keep
+        # admitting players — a capacity check must never fail in the permissive
+        # direction.
+        (65, True),
+    ],
+)
+def test_a_capped_event_fills_at_its_cap_and_stays_full(
+    entered: int, expected: bool
+) -> None:
+    """The capped behaviour is unchanged by the nullable column: the boundary is still
+    ``>=``, at exactly ``max_players``. Nullability must not have loosened it — a
+    ``None`` check bolted on in front of a comparison is the easy way to move the
+    boundary by one and never notice."""
+    assert event_is_full(entered=entered, max_players=64) is expected
+
+
+def test_a_cap_of_one_is_a_cap_and_not_a_missing_one() -> None:
+    """The smallest legal cap still behaves like a cap.
+
+    ``1`` is the value most at risk from a falsy-check repair of the sentinel: write the
+    uncapped branch as ``if not max_players`` and ``0`` *and* ``None`` collapse together
+    — but write the capped one as ``if max_players`` and a cap of 1 keeps working while
+    the sentinel silently does not. This row is here so that the only reading of
+    "uncapped" that passes is the one that tests ``is None``.
+    """
+    assert event_is_full(entered=0, max_players=1) is False
+    assert event_is_full(entered=1, max_players=1) is True

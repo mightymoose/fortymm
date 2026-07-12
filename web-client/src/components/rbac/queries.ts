@@ -95,6 +95,11 @@ export function useDeletePermission() {
   })
 }
 
+// The New-role form awaits this via mutateAsync so it can surface a 409/422
+// inline on the name field (issue #937) — so, per web-client/CLAUDE.md, no
+// global onError toast is attached here (it would double-report the form's own
+// inline error). Non-form callers (e.g. the "Duplicate" button) own their
+// errors at the call site — wrap with notifyError there.
 export function useCreateRole() {
   const qc = useQueryClient()
   return useMutation({
@@ -105,7 +110,6 @@ export function useCreateRole() {
       permission_ids?: string[]
     }) => unwrap('create role', await api.POST('/v1/roles', { body: input })),
     onSuccess: () => qc.invalidateQueries({ queryKey: ROLES_KEY }),
-    onError: notifyError('create the role'),
   })
 }
 

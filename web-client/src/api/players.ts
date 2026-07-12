@@ -1,6 +1,7 @@
 import { keepPreviousData, queryOptions, useQuery } from '@tanstack/react-query'
+import { notFound } from '@tanstack/react-router'
 
-import { api, unwrap } from './client'
+import { ApiError, api, unwrap } from './client'
 import type { components, operations } from './schema'
 
 export type PlayerSummary = components['schemas']['PlayerSummary']
@@ -208,6 +209,32 @@ export function usePlayerList(
  * another window's caption with no request left to correct it. Seeding from the
  * fetch cannot go wrong that way — the worst it can do is *not* seed, and an
  * unseeded chart simply fetches its own window (one narrow request, right data).
+ *
+ * **A 404 is converted to a router `notFound()` right here, in the `queryFn`**
+ * ([ADR-1001](../../../docs/adr/1001-a-missing-resource-is-a-not-found-not-an-error.md)):
+ * a missing player is a *designed state*, not an error, so it must reach the
+ * route's `notFoundComponent` and never its `errorComponent`. The conversion has
+ * to happen at the fetch — the client cannot tell a valid-unknown id from a
+ * valid-known one without the very request that fails, and by the time an
+ * `ApiError` is in flight the only boundary left is the error one.
+ *
+ * Two obligations come with it, and they are not optional:
+ *
+ * - **Every route that reads this query needs its own `notFoundComponent`.** A
+ *   route without one has no not-found boundary *at that match at all* (the
+ *   router's `defaultNotFoundComponent` does not catch a render-thrown
+ *   `notFound`), so the throw escapes to TanStack's generic "Something went
+ *   wrong!" screen. Today that is `/players/$userId` and `/players/$userId/matches`.
+ *   A consumer that must *not* surface the notFound (`usePreselectedOpponent`,
+ *   which degrades an unknown `?opponent=` to the empty picker) keeps its
+ *   `throwOnError: false` — that is what stops it throwing at all.
+ * - **It must not retry.** `retry: false` below is load-bearing, not decoration:
+ *   the app's `QueryClient` sets no `retry`, so React Query's default of **3**
+ *   would apply, and a missing player would be re-fetched three times with
+ *   backoff before the `notFound()` ever surfaced — seconds of skeleton to be
+ *   told the player does not exist. A 404 will fail identically every time. (A
+ *   5xx does *not* need retrying here either: it goes to `PlayerRouteError`,
+ *   which offers a real "Try again" the user drives.)
  */
 export function playerByIdQueryOptions(
   playerId: string,
@@ -217,15 +244,25 @@ export function playerByIdQueryOptions(
   return queryOptions({
     queryKey: playerQueryKey(playerId, leagueId),
     queryFn: async ({ client }): Promise<PlayerDetail> => {
-      const player: PlayerDetail = unwrap(
-        'load player',
-        await api.GET('/v1/players/{player_id}', {
-          params: {
-            path: { player_id: playerId },
-            query: { league_id: leagueId, range },
-          },
-        }),
-      )
+      let player: PlayerDetail
+      try {
+        player = unwrap(
+          'load player',
+          await api.GET('/v1/players/{player_id}', {
+            params: {
+              path: { player_id: playerId },
+              query: { league_id: leagueId, range },
+            },
+          }),
+        )
+      } catch (error) {
+        // The one status that is not an error. Note `notFound()` returns a plain
+        // object (`{ isNotFound: true }`) rather than an `Error` — anything that
+        // can catch it must tolerate a non-Error throw (`PlayerRouteError`'s
+        // `instanceof ApiError` narrowing does).
+        if (error instanceof ApiError && error.status === 404) throw notFound()
+        throw error
+      }
       // Hand the embedded window to the chart's own cache, under the key for the
       // range THIS request named. `client` is the client the query is running on,
       // so this is correct under the app's singleton and under a test's throwaway
@@ -236,11 +273,21 @@ export function playerByIdQueryOptions(
       )
       return player
     },
+    // Load-bearing — see the note above. A 404 must surface at once.
     retry: false,
     throwOnError: true,
   })
 }
 
+/**
+ * The profile bundle as a plain (non-suspending) query — the match-history
+ * sub-route reads it for the player's name in the heading.
+ *
+ * It inherits the 404 → `notFound()` conversion, so **every route that mounts
+ * this hook must declare a `notFoundComponent`** (ADR-1001). Callers that want an
+ * unknown id to degrade quietly instead must pass `throwOnError: false`, which is
+ * what `usePreselectedOpponent` does.
+ */
 export function usePlayerById(
   playerId: string,
   options: { enabled?: boolean; leagueId?: string; range?: RatingRange } = {},

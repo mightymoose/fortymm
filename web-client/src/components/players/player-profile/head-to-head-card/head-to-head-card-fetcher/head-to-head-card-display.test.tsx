@@ -1,3 +1,5 @@
+import { within } from '@/test/utilities'
+
 import { headToHeadCardDisplayPage } from './head-to-head-card-display.page'
 import {
   buildFrequentOpponentView,
@@ -172,6 +174,94 @@ describe('HeadToHeadCardDisplay', () => {
     })
   })
 
+  describe('the frequent-opponent names are links to those players', () => {
+    it('sends each name to THAT opponent’s profile, not to the profiled player’s', async () => {
+      // The card would tell you the player was 1–1 against sable.rook and then
+      // give you nowhere to click — a dead end on the page whose job is to be a
+      // hub. The id was in the view all along (it is the row's React `key`).
+      //
+      // Asserted per row, on the href, because the two bugs a bare "there is a
+      // link" check waves through are exactly the plausible ones: every row
+      // linking to the *profiled* player (p-1, the id sitting right there in
+      // `versusViewer`), or every row linking to the first opponent.
+      headToHeadCardDisplayPage.render({
+        headToHead: buildHeadToHeadView({
+          playerName: 'perky-ringtail',
+          versusViewer: buildViewerRecordView({
+            opponent: { id: 'p-1', username: 'perky-ringtail' },
+          }),
+        }),
+      })
+
+      await headToHeadCardDisplayPage.findHeadToHeadCard()
+
+      expect(
+        headToHeadCardDisplayPage.getFrequentOpponentHref('nia.brandt'),
+      ).toBe('/players/p-21')
+      expect(
+        headToHeadCardDisplayPage.getFrequentOpponentHref('omar.faye'),
+      ).toBe('/players/p-22')
+      expect(
+        headToHeadCardDisplayPage.getFrequentOpponentHref('sable.rook'),
+      ).toBe('/players/p-23')
+      // Row order, and one link per row — no row left as plain text, and none of
+      // them pointing at the player whose profile this is.
+      expect(headToHeadCardDisplayPage.getFrequentOpponentHrefs()).toEqual([
+        '/players/p-21',
+        '/players/p-22',
+        '/players/p-23',
+      ])
+    })
+
+    it('links them on your own profile too — your rivals are just as reachable', async () => {
+      headToHeadCardDisplayPage.render({
+        headToHead: buildOwnProfileHeadToHeadView({
+          frequentOpponents: [
+            buildFrequentOpponentView({ id: 'p-77', username: 'nia.brandt' }),
+          ],
+        }),
+      })
+
+      await headToHeadCardDisplayPage.findHeadToHeadCard()
+
+      expect(
+        headToHeadCardDisplayPage.getFrequentOpponentHref('nia.brandt'),
+      ).toBe('/players/p-77')
+    })
+
+    it('keeps the row’s record, meetings and decorative bar exactly as they were', async () => {
+      // Only the NAME became a link. The bar stays aria-hidden (it says the
+      // record a second time, geometrically), so the row must still expose
+      // exactly one link — a bar or a record turned linky would be a regression
+      // that "the name is a link" alone would not notice.
+      headToHeadCardDisplayPage.render({
+        headToHead: buildHeadToHeadView({
+          frequentOpponents: [
+            buildFrequentOpponentView({
+              id: 'p-21',
+              username: 'nia.brandt',
+              record: '6–2',
+              meetings: '8 meetings',
+              winShare: 0.75,
+            }),
+          ],
+        }),
+      })
+
+      await headToHeadCardDisplayPage.findHeadToHeadCard()
+
+      const [row] = headToHeadCardDisplayPage.getFrequentRows()
+      expect(within(row).getAllByRole('link')).toHaveLength(1)
+      expect(headToHeadCardDisplayPage.getFrequentRecord('nia.brandt')).toBe(
+        '6–2',
+      )
+      expect(row).toHaveTextContent('8 meetings')
+      expect(headToHeadCardDisplayPage.getFrequentBarWidth('nia.brandt')).toBe(
+        '75%',
+      )
+    })
+  })
+
   describe('the win-share bars', () => {
     it('draws each bar at the share of meetings the player WON', async () => {
       headToHeadCardDisplayPage.render({
@@ -220,6 +310,84 @@ describe('HeadToHeadCardDisplay', () => {
 
       expect(headToHeadCardDisplayPage.queryFrequentEmpty()).toHaveTextContent(
         'perky-ringtail hasn’t played anyone yet.',
+      )
+    })
+
+    it('keeps the "X’s frequent opponents" sub-heading over somebody else’s empty list', async () => {
+      // The empty line is a *section that happens to be empty*, not a stray
+      // sentence. Without its sub-heading it lands directly under the card's
+      // HEAD-TO-HEAD heading — and, in the never-met state, directly under "You
+      // haven't played X yet.", where "X hasn't played anyone yet." reads as a
+      // contradiction of the line above rather than as a second, quieter section
+      // about them.
+      headToHeadCardDisplayPage.render({
+        headToHead: buildHeadToHeadView({
+          playerName: 'perky-ringtail',
+          frequentOpponents: [],
+        }),
+      })
+
+      await headToHeadCardDisplayPage.findHeadToHeadCard()
+
+      expect(headToHeadCardDisplayPage.queryFrequentTitle()).toHaveTextContent(
+        'perky-ringtail’s frequent opponents',
+      )
+      // …and the empty line sits INSIDE that labelled block, rather than beside
+      // it — which is the shape the early-return used to produce.
+      expect(headToHeadCardDisplayPage.queryFrequentBlock()).toContainElement(
+        headToHeadCardDisplayPage.queryFrequentEmpty() as HTMLElement,
+      )
+    })
+
+    it('still gives your OWN empty list no sub-heading — the card’s heading already says it', async () => {
+      // The other half of the pair above, and the reason this is not simply
+      // "always render the sub-heading": on your own profile the card's <h2>
+      // already reads "Frequent opponents", so a sub-heading would only repeat
+      // it. Empty changes nothing about that.
+      headToHeadCardDisplayPage.render({
+        headToHead: buildOwnProfileHeadToHeadView({ frequentOpponents: [] }),
+      })
+
+      await headToHeadCardDisplayPage.findHeadToHeadCard()
+
+      expect(headToHeadCardDisplayPage.getHeadToHeadTitle()).toBe(
+        'Frequent opponents',
+      )
+      expect(headToHeadCardDisplayPage.queryFrequentTitle()).toBeNull()
+      expect(
+        headToHeadCardDisplayPage.getHeadToHeadCard(),
+      ).not.toHaveTextContent(/’s frequent opponents/i)
+    })
+
+    it('labels the empty section even in the never-met dead end, below the Start-a-match CTA', async () => {
+      // The demo case, and the one that produced the bug report: a player nobody
+      // has played, viewed by somebody who has not played them either — which is
+      // every guest arriving on a shared link. Both empty states are on screen at
+      // once, and each must be legible as its own thing.
+      headToHeadCardDisplayPage.render({
+        headToHead: buildHeadToHeadView({
+          playerName: 'perky-ringtail',
+          versusViewer: buildNeverMetRecordView({
+            opponent: { id: 'p-1', username: 'perky-ringtail' },
+          }),
+          frequentOpponents: [],
+        }),
+      })
+
+      await headToHeadCardDisplayPage.findHeadToHeadCard()
+
+      expect(headToHeadCardDisplayPage.queryInvite()).toHaveTextContent(
+        'You haven’t played perky-ringtail yet.',
+      )
+      expect(headToHeadCardDisplayPage.queryStartMatchLink()).toBeInTheDocument()
+      expect(headToHeadCardDisplayPage.queryFrequentTitle()).toHaveTextContent(
+        'perky-ringtail’s frequent opponents',
+      )
+      expect(headToHeadCardDisplayPage.queryFrequentEmpty()).toHaveTextContent(
+        'perky-ringtail hasn’t played anyone yet.',
+      )
+      expect(headToHeadCardDisplayPage.queryFrequentBlock()).toContainElement(
+        headToHeadCardDisplayPage.queryFrequentEmpty() as HTMLElement,
       )
     })
   })

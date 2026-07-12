@@ -1,15 +1,22 @@
+import { matchDetailRoute } from '@/api/matches'
 import {
   playerByIdQueryOptions,
   type PlayerDetail,
   type PlayerMatchRow,
   type RatingRange,
 } from '@/api/players'
+import type { MatchDetailRoute } from '@/components/matches/match-row-link/match-row-link'
+import { matchRowAriaLabel } from '@/components/matches/match-row-link/match-row-naming'
 import { formatRatingDelta, formatRatingDeltaAria } from '@/lib/rating'
 
 /** The em dash the card prints wherever a number would lie: an unfinished
  * match has no score, and an undecided *or* unrated one has no rating change.
  * Never a "+0" (ADR-0915). */
 export const NO_VALUE = '—'
+
+/** What the Opponent cell reads for a solo match — one with nobody on the other
+ * side (ADR-0008). It is a name for an absence, not a player. */
+export const NO_OPPONENT = 'No opponent'
 
 /**
  * What the row's status dot says. With the result chip gone, this dot — and the
@@ -58,18 +65,56 @@ export type RecentMatchDeltaView = {
   tone: 'win' | 'loss'
 }
 
+/**
+ * Who the match was against — and, therefore, whether the cell is a **link**.
+ *
+ * A sum type, not a nullable id beside an `isSolo` flag: on the wire
+ * (`PlayerMatchOpponent`) both `id` and `username` are nullable, because a
+ * **solo** match has the player-less sentinel side on the other end (ADR-0008)
+ * and there is nobody there to link to. A nullable id would let a row render
+ * `/players/null`; here the id exists only on the variant that has a player, so
+ * the link is unbuildable in the case that has none. (The client-side twin of
+ * "no tri-state booleans".)
+ */
+export type RecentMatchOpponentView =
+  | { kind: 'player'; id: string; name: string }
+  | { kind: 'solo'; name: typeof NO_OPPONENT }
+
+/**
+ * One row of the card — and it carries **two** destinations, on purpose.
+ *
+ * A row is a match *and* a person, and the reader can want either. So the row
+ * exposes both, each named for where it actually goes:
+ *
+ * - the **row** (its stretched anchor, on the date cell) opens the **match** —
+ *   `detailRoute` + `ariaLabel`, "Match against ada.lovelace, Mar 14" (#989);
+ * - the **opponent's name** opens that **player's profile** — `opponent`, when it
+ *   is a `player` (#1005).
+ *
+ * That is two links a screen reader hears per row, not one heard twice: they are
+ * different destinations, and each is named for its own. The name is *not* folded
+ * into the row link precisely because "ada.lovelace", announced as a link, would
+ * promise a profile and deliver a match.
+ */
 export type RecentMatchRowView = {
   id: string
-  /** The opponent's username — or "No opponent" for a solo match, which stays
-   * in the history rather than being dropped. */
-  opponent: string
-  isSolo: boolean
+  /** The opponent, and whether there is one: a `player` is linked to their
+   * profile, a solo match reads "No opponent" as plain text. */
+  opponent: RecentMatchOpponentView
   status: RecentMatchStatusView
   score: RecentMatchScoreView
   /** `null` when no rating moved: the display prints `—`, never "+0". */
   delta: RecentMatchDeltaView | null
   /** e.g. "Mar 14". `—` when the timestamp is unreadable. */
   when: string
+  /** The `{to,params}` target of the row's link — the match's detail page. Built
+   * here, from the typed `matchDetailRoute` factory, so the row component never
+   * hand-writes a path (the same way `MatchListRowView` carries one). */
+  detailRoute: MatchDetailRoute
+  /** The **row** link's accessible name, e.g. "Match against ada.lovelace,
+   * Mar 14". It names the match, because that is where the row goes; the
+   * opponent's own name is a separate link, to their profile. */
+  ariaLabel: string
 }
 
 export type RecentMatchesView = {
@@ -174,15 +219,54 @@ const selectDelta = (
   }
 }
 
-const selectRow = (row: PlayerMatchRow, timeZone?: string): RecentMatchRowView => ({
-  id: row.id,
-  opponent: row.opponent.username ?? 'No opponent',
-  isSolo: row.opponent.username === null,
-  status: selectStatus(row),
-  score: selectScore(row),
-  delta: selectDelta(row.rating_change),
-  when: selectWhen(row.created_at, timeZone),
-})
+/**
+ * The opponent cell, and with it the row's *second* navigation.
+ *
+ * The id is **already on the wire** — the card simply dropped it, which is what
+ * made every opponent's name a dead end. Projecting it is the whole fix; the
+ * only subtlety is the case where there is no id to project.
+ *
+ * Both halves or nothing. A `player` is built only when the id *and* the username
+ * are there, so the id the row links to cannot be `null`/`undefined` — the type
+ * makes `/players/null` unbuildable rather than merely unlikely. The API nulls the
+ * two together (`PlayerMatchOpponent`: "``id`` and ``username`` are both ``None``
+ * for the player-less sentinel side"), so in practice this is exactly the solo
+ * match; and a payload that somehow named an opponent without identifying them
+ * degrades to the unlinkable cell rather than to a broken link.
+ */
+const selectOpponent = (
+  opponent: PlayerMatchRow['opponent'],
+): RecentMatchOpponentView =>
+  opponent.id != null && opponent.username != null
+    ? { kind: 'player', id: opponent.id, name: opponent.username }
+    : { kind: 'solo', name: NO_OPPONENT }
+
+const selectRow = (
+  row: PlayerMatchRow,
+  timeZone?: string,
+): RecentMatchRowView => {
+  const opponent = selectOpponent(row.opponent)
+  const when = selectWhen(row.created_at, timeZone)
+  return {
+    id: row.id,
+    opponent,
+    status: selectStatus(row),
+    score: selectScore(row),
+    delta: selectDelta(row.rating_change),
+    when,
+    // The row is a link to its match (#989). Both halves of that link are
+    // *derived data*, so they belong here rather than in the row component: the
+    // target comes off the typed route factory, and the accessible name is
+    // composed from the same two labels the row already prints — so the thing a
+    // screen reader hears can never drift from the thing on screen.
+    detailRoute: matchDetailRoute(row.id),
+    ariaLabel: matchRowAriaLabel({
+      opponent: opponent.name,
+      isSolo: opponent.kind === 'solo',
+      when,
+    }),
+  }
+}
 
 /**
  * `timeZone` names the zone the match days are dated in. **Omit it in production**
@@ -201,7 +285,9 @@ export const selectRecentMatches = (
     // and every state in them belongs on the card.
     rows: player.matches.items.map((row) => selectRow(row, timeZone)),
     total,
-    viewAllLabel: `View all ${total} ${total === 1 ? 'match' : 'matches'}`,
+    // "View all 1 match" reads wrong — "all" presupposes more than one — so the
+    // lone-match case drops both the count and the "all".
+    viewAllLabel: total === 1 ? 'View match' : `View all ${total} matches`,
   }
 }
 

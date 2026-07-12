@@ -28,6 +28,12 @@ const scoped = (container: Container) => ({
   queryLifecycleButton(name: RegExp) {
     return container.queryByRole('button', { name })
   },
+  /** The header's venue meta item (pin icon + address). The whole item — icon
+   * included — is absent when venue, city, and region are all blank, so this is
+   * a `query`: its absence is the assertion (#994). */
+  queryVenueLine() {
+    return container.queryByTestId('tournament-venue-line')
+  },
   ...eventsTabPage.within(container),
 })
 
@@ -40,11 +46,17 @@ export const tournamentDetailPagePage = {
   getEditorSaveButton() {
     return screen.getByRole('button', { name: /Create event|Save changes/ })
   },
-  /** The editor's name field. A NEW event starts blank (`emptyEvent`), and a blank
-   * name is now refused in the form — so a page-level test that wants to reach the
-   * *server* has to fill this in first, exactly as an organizer does. */
+  /** The editor's name field (the sheet portals to the body). A NEW event starts
+   * blank (`emptyEvent`), and a blank name is refused in the form — so a page-level
+   * test that wants to reach the *server* has to fill this in first, exactly as an
+   * organizer does. */
   getEditorNameInput() {
     return screen.getByLabelText(/Event name/)
+  },
+  /** The editor's player-limit field. Blanking it is how a page-level test authors
+   * an **uncapped** event (ADR-0935) — the save then carries `maxPlayers: null`. */
+  getEditorPlayerLimitInput() {
+    return screen.getByLabelText(/Player limit/)
   },
   /** The event editor sheet — present exactly while it is open. A refused save
    * must leave it here, holding the organizer's work. */

@@ -231,7 +231,7 @@ def _compare(op: RatingComparisonOp, rating: float, value: int) -> bool:
 # ----- capacity --------------------------------------------------------------
 
 
-def event_is_full(*, entered: int, max_players: int) -> bool:
+def event_is_full(*, entered: int, max_players: int | None) -> bool:
     """Whether an event has no room left — the *other* half of "may I enter?", and the
     only one that is not about the player at all.
 
@@ -240,10 +240,20 @@ def event_is_full(*, entered: int, max_players: int) -> bool:
     explains why the Enter control is missing must never disagree about what "full"
     means — the same reason the rating decision is a single function (ADR-0783).
 
-    ``>=``, not ``==``: an event whose ``max_players`` was lowered under a field that
-    has already filled past it IS full. ``==`` would sail straight past it and keep
-    admitting players, and a capacity check must never fail in the permissive
-    direction.
+    **AN UNCAPPED EVENT IS NEVER FULL (ADR-0935).** ``max_players`` is nullable and
+    ``None`` is the "no cap" sentinel — not a cap of zero, and not a missing number to
+    be defaulted. So the ``None`` check is first, before ``entered`` is looked at, and
+    the answer is always ``False``: there is no limit for a count to reach, so no field
+    is large enough to close the event. Reading ``None`` as "full" would be the worst
+    available failure — the uncapped event, the one that admits everybody, would be the
+    one nobody could enter — and reading it as ``0`` (via a ``max_players or 0``) is the
+    same bug spelled arithmetically. Total over the sentinel here, once, so that no
+    caller has to defend against it and no caller can get it wrong.
+
+    ``>=``, not ``==``, when there IS a cap: an event whose ``max_players`` was lowered
+    under a field that has already filled past it IS full. ``==`` would sail straight
+    past it and keep admitting players, and a capacity check must never fail in the
+    permissive direction.
 
     ``entered`` is a count of **active** entries (ADR-0016) — withdrawn entries are
     not entrants and their slots are genuinely free. Where that count comes from is
@@ -252,6 +262,8 @@ def event_is_full(*, entered: int, max_players: int) -> bool:
     read path takes the length of the entrants list it has already loaded (which is
     the same number, and costs no second query).
     """
+    if max_players is None:
+        return False
     return entered >= max_players
 
 

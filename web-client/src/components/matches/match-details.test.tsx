@@ -151,6 +151,33 @@ describe("MatchDetails — scoreboard seam", () => {
   });
 });
 
+describe("MatchDetails — landmarks", () => {
+  it("contributes no main landmark of its own — the app shell owns the page's only one (#888)", async () => {
+    // The page used to wrap itself in `<main className="md-page">`, which the
+    // app shell then rendered *inside* its own `<main className="app-shell__
+    // content">`: two main landmarks on every match-detail page, at every
+    // viewport. This suite renders the page without the shell, so the count of
+    // mains it contributes is exactly zero; the one-main-per-page count is
+    // pinned in a real browser (with the shell around it, at both mobile and
+    // desktop) by e2e/matches/match-details.spec.ts.
+    matchDetailsPage.mockMatch("m-1", decidedMatch());
+
+    const { container } = matchDetailsPage.render("m-1");
+
+    // Guard: the page has actually rendered, so the absences below aren't
+    // vacuous.
+    await waitFor(() => matchDetailsPage.scoreboard.getRegion());
+
+    expect(container.querySelectorAll("main")).toHaveLength(0);
+    // Belt and braces — the landmark can also be claimed by an explicit role.
+    expect(container.querySelectorAll('[role="main"]')).toHaveLength(0);
+
+    // The layout survives the tag swap: it hangs off the classes, which stay
+    // on the wrapper that replaced the <main>.
+    expect(container.querySelector("div.md-page.md-page--y")).toBeInTheDocument();
+  });
+});
+
 describe("MatchDetails — page wiring", () => {
   it("renders the hero scoreline from the participant sides counts", async () => {
     const match = matchDetails({

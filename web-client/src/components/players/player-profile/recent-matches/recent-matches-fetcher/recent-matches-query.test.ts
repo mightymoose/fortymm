@@ -1,5 +1,6 @@
 import { HttpResponse } from 'msw'
 
+import { matchDetailRoute } from '@/api/matches'
 import { playerByIdQueryOptions, type PlayerMatchRow } from '@/api/players'
 import { buildPlayerDetail } from '@/mocks/factories/players/player-detail.factory'
 import {
@@ -78,10 +79,10 @@ describe('recentMatchesQuery', () => {
     expect(view.viewAllLabel).toBe('View all 50 matches')
   })
 
-  it('says "match", singular, when there is only one', async () => {
+  it('drops the count and "all" for a lone match — "View all 1 match" reads wrong', async () => {
     const view = await selectFrom({ match_total: 1 })
 
-    expect(view.viewAllLabel).toBe('View all 1 match')
+    expect(view.viewAllLabel).toBe('View match')
   })
 
   it('carries the player id the history link needs', async () => {
@@ -199,11 +200,51 @@ describe('recentMatchesQuery', () => {
     expect(row.delta).toBeNull()
   })
 
+  it('carries the opponent’s id, so the row can link to their profile', async () => {
+    // The id was on the wire all along — the projection dropped it, and that is
+    // the whole reason every opponent's name on this card was a dead end.
+    const row = await selectRow(
+      buildPlayerMatchRow({
+        opponent: { id: 'p-42', username: 'grace.hopper' },
+      }),
+    )
+
+    expect(row.opponent).toEqual({
+      kind: 'player',
+      id: 'p-42',
+      name: 'grace.hopper',
+    })
+  })
+
   it('renders the solo sentinel as "No opponent" rather than dropping the match', async () => {
     const row = await selectRow(buildSoloMatchRow())
 
-    expect(row.opponent).toBe('No opponent')
-    expect(row.isSolo).toBe(true)
+    expect(row.opponent).toEqual({ kind: 'solo', name: 'No opponent' })
+  })
+
+  it('gives the solo sentinel NO id — there is nobody to link to', async () => {
+    // The null-id case, stated as a type-level fact rather than a rendering one:
+    // `id` exists only on the `player` variant, so nothing downstream can build
+    // `/players/null` out of a solo row — the link is unbuildable, not merely
+    // unbuilt. (The wire nulls `id` and `username` together for the player-less
+    // sentinel side of a solo match, ADR-0008.)
+    const row = await selectRow(buildSoloMatchRow())
+
+    expect(row.opponent.kind).toBe('solo')
+    expect(row.opponent).not.toHaveProperty('id')
+  })
+
+  it('will not link an opponent the payload named but did not identify', async () => {
+    // `PlayerMatchOpponent` nulls its two fields independently on the wire, so a
+    // username without an id is *typable* even though the API never sends it. It
+    // is the one shape that could still produce `/players/undefined`, so the
+    // projection demands BOTH halves before it calls someone a linkable player:
+    // drop the id check and this row would carry `id: undefined` into a <Link>.
+    const row = await selectRow(
+      buildPlayerMatchRow({ opponent: { id: null, username: 'ada.lovelace' } }),
+    )
+
+    expect(row.opponent.kind).toBe('solo')
   })
 
   it('is empty, and offers nothing to view, for a player with no matches', async () => {
@@ -265,5 +306,51 @@ describe('recentMatchesQuery', () => {
     expect(recentMatchesQuery('p-1').queryKey).toEqual(
       playerByIdQueryOptions('p-1').queryKey,
     )
+  })
+
+  it('points each row at ITS match, through the typed route factory (#989)', async () => {
+    // The row is a link now, and the target is derived data — so it is derived
+    // here, from `matchDetailRoute`, rather than hand-written as a path in the
+    // row component. A real match id: the `$matchId` route guard
+    // (`src/lib/match-id.ts`) only accepts a UUID.
+    const id = '5b1d3f7a-2c94-4e08-8a6d-19f4b7c02e35'
+    const row = await selectRow(buildPlayerMatchRow({ id }))
+
+    expect(row.detailRoute).toEqual(matchDetailRoute(id))
+    expect(row.detailRoute).toEqual({
+      to: '/matches/$matchId',
+      params: { matchId: id },
+    })
+  })
+
+  it('names the link after the MATCH — the opponent and the day it was played', async () => {
+    // The anchor sits on the date cell, not on the opponent's name: a link
+    // announced as "ada.lovelace" promises a profile and delivers a match. So the
+    // label says what actually opens.
+    const row = await selectRow(buildPlayerMatchRow())
+
+    expect(row.ariaLabel).toBe('Match against ada.lovelace, Mar 14')
+  })
+
+  it('names a solo match’s link "Solo match" — nobody is "against" the sentinel side', async () => {
+    const row = await selectRow(buildSoloMatchRow())
+
+    expect(row.ariaLabel).toBe('Solo match, Mar 14')
+    expect(row.ariaLabel).not.toContain('No opponent')
+  })
+
+  it('keeps the link’s spoken date and the printed one the same', async () => {
+    // Both come off the one `when` the row already carries, so a match dated in
+    // the reader's zone cannot be announced in another. (The Chicago/Tokyo pair
+    // above pins the zone itself; this pins that the label follows it.)
+    const bundle = buildPlayerDetail({
+      matches: buildPlayerMatchList([
+        buildPlayerMatchRow({ created_at: '2026-07-12T00:15:00Z' }),
+      ]),
+    })
+
+    const chicago = selectRecentMatches(bundle, 'America/Chicago').rows[0]
+    expect(chicago.when).toBe('Jul 11')
+    expect(chicago.ariaLabel).toContain('Jul 11')
   })
 })

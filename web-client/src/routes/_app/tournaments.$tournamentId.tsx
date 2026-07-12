@@ -80,7 +80,7 @@ function TournamentDetailRoute() {
       // `mutateAsync`, not `mutate`: the event editor AWAITS these, closes only
       // when they resolve, and renders the failure inline when they don't (the
       // `NewTournamentModal` contract — a modal that closes over a rejected write
-      // has silently thrown the user's work away, #614).
+      // has silently thrown the user's work away: #614, #933, #934).
       onCreateEvent={async (ev) => {
         await createEvent.mutateAsync(eventToCreateBody(ev))
       }}

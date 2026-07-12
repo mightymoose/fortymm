@@ -7,10 +7,59 @@ import { buildTournamentDetailRead } from '@/mocks/factories/tournaments/tournam
 import { server } from '@/mocks/server'
 import { waitFor } from '@/test/utilities'
 
-import { buildEvent, buildTournament } from './data/seed.factory'
+import { buildAddress, buildEvent, buildTournament } from './data/seed.factory'
 import { tournamentDetailPagePage } from './tournament-detail-page.page'
 
 describe('TournamentDetailPage', () => {
+  // Same doctrine as the card's: the separators are joins between the address
+  // parts that are present, so a partial address strands no punctuation and an
+  // empty one renders no meta item at all (#994, #972).
+  describe('the header venue line', () => {
+    it('joins the address parts that are present', () => {
+      tournamentDetailPagePage.render({ tournament: buildTournament() })
+
+      expect(tournamentDetailPagePage.queryVenueLine()).toHaveTextContent(
+        'Berkeley TT Club · Berkeley, CA',
+      )
+    })
+
+    it('drops the comma the missing region would have hung off', () => {
+      tournamentDetailPagePage.render({
+        tournament: buildTournament({ address: buildAddress({ region: '' }) }),
+      })
+
+      const line = tournamentDetailPagePage.queryVenueLine()
+      expect(line).toHaveTextContent('Berkeley TT Club · Berkeley')
+      expect(line?.textContent).not.toContain(',')
+    })
+
+    it('renders no venue meta item — pin included — when there is no address', () => {
+      tournamentDetailPagePage.render({
+        tournament: buildTournament({
+          address: buildAddress({ venue: '', city: '', region: '' }),
+        }),
+      })
+
+      // Absent, not blank: the item carries the pin and the punctuation, so a
+      // rendered-but-empty one would still read as the bug's bare "· ,". (The
+      // interpunct legitimately appears elsewhere on the page — the event card's
+      // own meta — so this asserts the item, not the character.)
+      expect(tournamentDetailPagePage.queryVenueLine()).toBeNull()
+    })
+  })
+
+  // A database identifier is not user-facing copy: the header used to print the
+  // tournament's raw UUID in a `#` chip (#972). It is gone, not relabelled.
+  it('never shows the tournament\'s raw id', () => {
+    tournamentDetailPagePage.render({
+      tournament: buildTournament({ id: '8330f9f7-c64c-4f9d-910d-56b77bde88cb' }),
+    })
+
+    expect(document.body).not.toHaveTextContent(
+      '8330f9f7-c64c-4f9d-910d-56b77bde88cb',
+    )
+  })
+
   // The stat strip prints its own unit, so it owns the plural. Both sides are
   // asserted: a fix that simply hardcoded "day" would read "2 day" for a
   // weekend tournament, which is the same bug wearing the other shoe.
@@ -80,7 +129,7 @@ describe('TournamentDetailPage', () => {
   })
 
   it('opens the event editor and creates a new event', async () => {
-    const onCreateEvent = vi.fn()
+    const onCreateEvent = vi.fn().mockResolvedValue(undefined)
     tournamentDetailPagePage.render({
       tournament: buildTournament({ events: [] }),
       onCreateEvent,
@@ -94,8 +143,48 @@ describe('TournamentDetailPage', () => {
       'Twilight Singles',
     )
     await userEvent.click(tournamentDetailPagePage.getEditorSaveButton())
-    expect(onCreateEvent).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(onCreateEvent).toHaveBeenCalledTimes(1))
+    expect(onCreateEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'Twilight Singles' }),
+    )
     // A successful create closes the editor — and it is the ONLY thing that does.
+    await waitFor(() => expect(tournamentDetailPagePage.queryEditor()).toBeNull())
+  })
+
+  /**
+   * **The uncapped event, end to end** — the path neither branch of this merge had.
+   *
+   * `emptyEvent` seeds a cap of 32, so the organizer of an unlimited event has to
+   * *clear* the box; the old editor read `Number('')` as `0` and sent an event of zero
+   * players, which the server refused (`gt=0`) with a 422 the sheet swallowed. So the
+   * two halves of the assertion are the two halves of the bug: `null` goes on the wire
+   * (not `0`, not `NaN`), and the create is accepted rather than refused.
+   *
+   * `toHaveBeenCalledWith(objectContaining({maxPlayers: null}))` is the load-bearing
+   * line: `expect.objectContaining({maxPlayers: 0})` would also pass a test that merely
+   * checked "the create fired".
+   */
+  it('creates an event with NO player cap when the limit is left blank (ADR-0935)', async () => {
+    const onCreateEvent = vi.fn().mockResolvedValue(undefined)
+    tournamentDetailPagePage.render({
+      tournament: buildTournament({ events: [] }),
+      onCreateEvent,
+    })
+
+    await userEvent.click(tournamentDetailPagePage.getNewEventButton())
+    await userEvent.type(
+      tournamentDetailPagePage.getEditorNameInput(),
+      'Club Night',
+    )
+    await userEvent.clear(tournamentDetailPagePage.getEditorPlayerLimitInput())
+    await userEvent.click(tournamentDetailPagePage.getEditorSaveButton())
+
+    await waitFor(() => expect(onCreateEvent).toHaveBeenCalledTimes(1))
+    expect(onCreateEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'Club Night', maxPlayers: null }),
+    )
+    // Not a refusal: no banner, and the sheet closed because the save went through.
+    expect(tournamentDetailPagePage.queryEditorFailure()).toBeNull()
     await waitFor(() => expect(tournamentDetailPagePage.queryEditor()).toBeNull())
   })
 
@@ -159,12 +248,23 @@ describe('TournamentDetailPage', () => {
     expect(tournamentDetailPagePage.queryEditor()).toBeInTheDocument()
   })
 
+  // `published`, not `draft`: a non-creator can no longer be looking at a draft at
+  // all — the API hides an unannounced tournament from everyone but its creator, so
+  // it answers a stranger's GET with a 404 (#967) and this page never renders. A
+  // non-owner + `draft` fixture would be a state the server cannot produce, and the
+  // test would prove nothing about the world. `published` is the reachable case: I
+  // can see other people's announced tournaments, and I still get no button.
+  //
+  // The button asserted absent is the one the OWNER of a `published` tournament is
+  // offered ("Start tournament"). Asserting `/Publish/` here would pass on a
+  // published tournament even if the gate were removed entirely — nobody, owner or
+  // not, is offered Publish from `published`.
   it('hides the lifecycle action for a non-creator', () => {
     tournamentDetailPagePage.render({
-      tournament: buildTournament({ status: 'draft', canEdit: false }),
+      tournament: buildTournament({ status: 'published', canEdit: false }),
     })
     expect(
-      tournamentDetailPagePage.queryLifecycleButton(/Publish/),
+      tournamentDetailPagePage.queryLifecycleButton(/Start tournament/),
     ).toBeNull()
   })
 

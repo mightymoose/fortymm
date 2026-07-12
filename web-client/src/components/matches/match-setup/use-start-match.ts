@@ -5,11 +5,19 @@ import { z } from 'zod'
 import { ApiError } from '@/api/client'
 import { nextScoringDestination, useCreateMatch } from '@/api/matches'
 
-import type { Opponent } from './opponent'
+import {
+  isRatable,
+  selectedOpponent,
+  type OpponentSelection,
+} from './opponent-selection'
 
 // Rated matches need an opponent; the API enforces this independently. The
 // client toggle is disabled when no opponent is picked, so this only fires
 // in a near-impossible race — keep the refinement for defense in depth.
+//
+// `hasOpponent` comes from `isRatable(selection)`, so a `seeking` selection (a
+// typed-but-uncommitted search, #893) is treated exactly like `none`: not an
+// opponent, therefore not rateable.
 const matchFormSchema = z
   .object({
     hasOpponent: z.boolean(),
@@ -23,7 +31,13 @@ const matchFormSchema = z
   })
 
 export interface StartMatchInput {
-  opponent: Opponent | null
+  /**
+   * The full selection, not a bare `Opponent | null` — the send-time coercion
+   * below is one of the places that has to agree on "no opponent ⇒ solo and
+   * unrated", and taking the sum type is what stops it disagreeing with the UI
+   * about what a `seeking` selection means (#893).
+   */
+  selection: OpponentSelection
   bestOf: number
   rated: boolean
 }
@@ -86,10 +100,13 @@ export function useStartMatch(): UseStartMatchResult {
     }
   }, [])
 
-  async function submit({ opponent, bestOf, rated }: StartMatchInput) {
+  async function submit({ selection, bestOf, rated }: StartMatchInput) {
     setSubmitted(true)
+    // One reading of the selection, shared by the refinement and the payload —
+    // `seeking` collapses to "no opponent" here, and only here.
+    const opponent = selectedOpponent(selection)
     const validation = matchFormSchema.safeParse({
-      hasOpponent: opponent !== null,
+      hasOpponent: isRatable(selection),
       rated,
       bestOf,
     })
@@ -110,7 +127,7 @@ export function useStartMatch(): UseStartMatchResult {
       const created = await createMatch.mutateAsync({
         opponent_user_id: opponent?.id ?? null,
         best_of: bestOf,
-        rated: opponent !== null && rated,
+        rated: isRatable(selection) && rated,
       })
       // Latch the #81 duplicate-create guard BEFORE the mount gate so
       // `hasSucceeded()` and the "this form is spent" contract are unchanged

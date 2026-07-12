@@ -1461,6 +1461,11 @@ export interface components {
          *
          *     Transient: a withdrawal frees a slot (ADR-0016), which is why the entry route
          *     refuses it with a 409 rather than a 403.
+         *
+         *     An **uncapped** event (``max_players`` is ``null``, ADR-0935) is never in this
+         *     state, however many players enter it: there is no limit for the field to reach.
+         *     ``event_is_full`` is the single place that says so, and both this read and the
+         *     entry route's 409 ask it.
          */
         EventEntryFull: {
             /**
@@ -3127,6 +3132,12 @@ export interface components {
          *     ``EventMaxPlayers`` and ``EventEntryFee``, shared verbatim with
          *     ``TournamentEventUpdate`` — so a value that would overflow ``Integer`` or
          *     ``Numeric(8, 2)`` is a 422 here and never reaches the driver as a 500.
+         *
+         *     ``max_players`` is **optional**: omit it (or send ``null``) for an event with no
+         *     entrant cap (ADR-0935). Absent and null mean the same thing here — uncapped —
+         *     because there is nothing else an absent cap could mean on a create. The bound and
+         *     the nullability are orthogonal and both hold: a cap that is *present* is a whole
+         *     number from 1 to ``MAX_EVENT_PLAYERS``.
          */
         TournamentEventCreate: {
             /** Name */
@@ -3134,7 +3145,7 @@ export interface components {
             format: components["schemas"]["EventFormat"];
             draw_type: components["schemas"]["DrawType"];
             /** Max Players */
-            max_players: number;
+            max_players?: number | null;
             /** Entry Fee */
             entry_fee: number;
             slot: components["schemas"]["Slot"];
@@ -3161,7 +3172,7 @@ export interface components {
             format: components["schemas"]["EventFormat"];
             draw_type: components["schemas"]["DrawType"];
             /** Max Players */
-            max_players: number;
+            max_players: number | null;
             /** Entry Fee */
             entry_fee: number;
             slot: components["schemas"]["Slot"];
@@ -3197,18 +3208,24 @@ export interface components {
         /**
          * TournamentEventUpdate
          * @description Partial update for an event. Absent fields are unchanged. Every column
-         *     these fields back — ``name``/``format``/``draw_type``/``max_players``/
+         *     these fields back except ``max_players`` — ``name``/``format``/``draw_type``/
          *     ``entry_fee``/``slot``/``match_settings``/``predicates``/``pools`` — is NOT
-         *     NULL, so an explicit ``null`` on any of them is rejected (422);
+         *     NULL, so an explicit ``null`` on any of *those* is rejected (422).
          *     ``predicates``/``pools`` replace wholesale when present. ``entered`` is not
          *     updatable — it is derived from the event's active entries, not stored — so
          *     sending it is a 422 via ``extra="forbid"``.
          *
-         *     ``max_players`` and ``entry_fee`` carry the **same** bounds create does — the
-         *     ``EventMaxPlayers``/``EventEntryFee`` aliases, not a second copy of the numbers.
-         *     A patch that could smuggle in a value create refuses would defeat create's
-         *     boundary entirely: the event would simply be born small and then edited into the
-         *     500.
+         *     ``max_players`` is the one nullable column here, so it is the one field where
+         *     ``null`` and *absent* differ: an explicit ``null`` **clears the cap**, making the
+         *     event uncapped (ADR-0935), while omitting the key leaves the cap alone. That is
+         *     why it is not in the ``_reject_explicit_null`` list below.
+         *
+         *     ``max_players`` and ``entry_fee`` otherwise carry the **same** bounds create does —
+         *     the ``EventMaxPlayers``/``EventEntryFee`` aliases, not a second copy of the numbers,
+         *     so a cap the client clears to ``null`` and a cap it sets to ``9999999999`` are
+         *     answered by the same rules on both verbs. A patch that could smuggle in a value
+         *     create refuses would defeat create's boundary entirely: the event would simply be
+         *     born small and then edited into the 500.
          */
         TournamentEventUpdate: {
             /** Name */

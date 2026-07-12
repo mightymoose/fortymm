@@ -1,3 +1,4 @@
+import { MATCH_DETAIL_ROUTE } from '@/components/matches/match-row-link/match-row-link.page'
 import { renderWithRoutes } from '@/test/router'
 import { screen, type Container } from '@/test/utilities'
 
@@ -11,6 +12,14 @@ import { recentMatchRowPage } from './recent-matches-display/recent-match-row.pa
 /** The route the "View all N matches" footer link opens. Registered as a stub in
  * the harness so the typed `<Link>` resolves. */
 export const MATCH_HISTORY_ROUTE = '/players/$userId/matches'
+
+/** The route every row's opponent name opens — that player's profile. Any
+ * harness mounting this card has to register it too, or the row's `<Link>`
+ * throws. (Declared here rather than re-exported from the row's page object:
+ * `react-refresh/only-export-components` cannot tell a re-exported binding from
+ * a component, and each page object in this tree names its own targets — see
+ * `leagues-card-display.page.tsx`.) */
+export const PROFILE_ROUTE = '/players/$userId'
 
 const scoped = (container: Container) => ({
   /** The card itself, named by its "Recent matches" heading. */
@@ -78,15 +87,20 @@ const scoped = (container: Container) => ({
 /**
  * Test page-object for `RecentMatchesDisplay` — the pure view-in, DOM-out card.
  *
- * The footer renders a typed `<Link>`, so `render` mounts the card under a
- * memory router registering the match-history route. The router resolves
- * asynchronously: start tests with `await recentMatchesDisplayPage.findCard()`.
+ * The footer renders a typed `<Link>`, and so does every row — twice over: the row
+ * itself links through to its match (#989) and the opponent's name to their
+ * profile (#1005). So `render` mounts the card under a memory router registering
+ * all three routes. The router resolves asynchronously: start tests with
+ * `await recentMatchesDisplayPage.findCard()`.
  */
 export const recentMatchesDisplayPage = {
   render(overrides: Partial<RecentMatchesDisplayProps> = {}) {
     const props = buildRecentMatchesDisplayProps(overrides)
     renderWithRoutes(<RecentMatchesDisplay {...props} />, {
-      linkTargets: [MATCH_HISTORY_ROUTE],
+      // Three targets: the footer opens the full history, every row opens its
+      // match (#989), and every row's opponent name opens that opponent's
+      // profile (#1005).
+      linkTargets: [MATCH_HISTORY_ROUTE, PROFILE_ROUTE, MATCH_DETAIL_ROUTE],
     })
   },
 

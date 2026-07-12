@@ -1,5 +1,6 @@
 import type { NotificationChannel } from '@/api/notifications'
 import { notificationPreferences } from '@/test/factories'
+import { preferencesAwaitingSetup } from './preferences-view.factory'
 import { preferencesViewPage } from './preferences-view.page'
 
 /** Flip one channel's `setup_required` to surface (or clear) its nudge. */
@@ -130,6 +131,77 @@ describe('PreferencesView', () => {
     expect(
       preferencesViewPage.queryNudgeCta('Set up push'),
     ).not.toBeInTheDocument()
+  })
+
+  // #892: a switch sitting "on" beside "No devices yet" claims a delivery path
+  // that doesn't exist. A channel awaiting setup reads off and can't be flipped
+  // until the nudge beside it has been followed.
+  describe('a channel awaiting setup', () => {
+    it('renders the email and push switches off and not switchable', async () => {
+      preferencesViewPage.render({ preferences: preferencesAwaitingSetup() })
+      await preferencesViewPage.findHeading()
+
+      for (const label of ['Email', 'Push']) {
+        const master = preferencesViewPage.channelSwitch(label)
+        expect(master).not.toBeChecked()
+        expect(master).toBeDisabled()
+      }
+    })
+
+    it('keeps the setup nudge visible as the way out', async () => {
+      preferencesViewPage.render({ preferences: preferencesAwaitingSetup() })
+      await preferencesViewPage.findHeading()
+
+      expect(preferencesViewPage.nudgeCta('Add email')).toHaveAttribute(
+        'href',
+        '/settings#sec-email',
+      )
+      expect(preferencesViewPage.nudgeCta('Set up push')).toHaveAttribute(
+        'href',
+        '/settings#sec-notifications',
+      )
+    })
+
+    it('renders its matrix cells off and not switchable', async () => {
+      preferencesViewPage.render({ preferences: preferencesAwaitingSetup() })
+      await preferencesViewPage.findHeading()
+
+      for (const channel of ['Email', 'Push']) {
+        const cell = preferencesViewPage.cell('Rating changes', channel)
+        expect(cell).not.toBeChecked()
+        expect(cell).toBeDisabled()
+      }
+    })
+
+    it('renders even a locked-on matrix cell off, since it cannot deliver', async () => {
+      preferencesViewPage.render({ preferences: preferencesAwaitingSetup() })
+      await preferencesViewPage.findHeading()
+
+      // Match reminders are locked on for push — but there is no device to push
+      // to, so the cell must not claim otherwise.
+      const cell = preferencesViewPage.cell('Match reminders', 'Push')
+      expect(cell).not.toBeChecked()
+      expect(cell).toBeDisabled()
+    })
+
+    it('leaves a channel that is set up fully switchable', async () => {
+      const onToggleChannel = vi.fn()
+      preferencesViewPage.render({
+        preferences: withSetupRequired('email', true),
+        onToggleChannel,
+      })
+      await preferencesViewPage.findHeading()
+
+      // Push has a registered device: it stays on, enabled, and toggleable, and
+      // its matrix cells stay live.
+      const push = preferencesViewPage.channelSwitch('Push')
+      expect(push).toBeChecked()
+      expect(push).toBeEnabled()
+      expect(preferencesViewPage.cell('Rating changes', 'Push')).toBeEnabled()
+
+      await preferencesViewPage.toggleChannel('Push')
+      expect(onToggleChannel).toHaveBeenCalledWith('push', false)
+    })
   })
 
   it('shows no setup nudge for a fully configured account', async () => {

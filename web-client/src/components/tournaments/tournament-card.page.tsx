@@ -17,6 +17,12 @@ const scoped = (container: Container) => ({
   queryDeleteButton(name: string) {
     return container.queryByRole('button', { name: `Delete ${name}` })
   },
+  /** The venue line (pin icon + address). The whole row — icon included — is
+   * absent when the tournament has no venue, city, or region, so this is a
+   * `query`: its absence is the assertion (#994). */
+  queryVenueLine() {
+    return container.queryByTestId('tournament-venue-line')
+  },
   /** The card's status pill, reusing the badge's own query. */
   ...statusBadgePage.within(container),
 })

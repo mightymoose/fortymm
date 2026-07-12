@@ -4,6 +4,12 @@
 // event) enforce the same creator-only rule the real API does — a
 // `can_edit: false` row (created by someone else) returns 403.
 //
+// The READS are gated too (#967): a draft is owner-only, so `listTournaments` and
+// `findTournament` below apply the server's visibility predicate and another
+// organiser's draft is neither listed nor readable (a 404, never a 403). The store
+// holds such a row on purpose — see the seed — because a mock that simply omitted
+// it would leave the rule it is meant to mirror standing on nothing.
+//
 // Entries (ADR-0016) are modelled the way the server models them: an event
 // stores its *active entrants* and NOTHING ELSE — the `entered` count is derived
 // (`entrants.length`) at read time by `readEvent` below, so the count and the
@@ -339,6 +345,43 @@ function seed(): StoredTournament[] {
         },
       ],
     },
+    {
+      // Somebody else's DRAFT — the one row in the seed that is never served.
+      //
+      // The store is the database, not the route: the API's table really does hold
+      // other organisers' unpublished drafts, and what keeps them off the dev user's
+      // wire is the visibility predicate in `listTournaments` / `findTournament`
+      // below (#967), not their absence from the table. So the row is seeded
+      // precisely so that the predicate has something to hide: without it, the
+      // predicate would be unexercised in `npm run dev` and unreachable from the
+      // store's own tests, which is how a filter quietly rots into a no-op.
+      //
+      // Its observable behaviour is the API's: absent from the list, and a 404 —
+      // not a 403 — from the detail route, because a draft you cannot see must be
+      // indistinguishable from one that does not exist.
+      id: 'league-office-draft-2027',
+      league_id: DEFAULT_LEAGUE_ID,
+      name: 'League Office Draft 2027',
+      description: 'Not announced yet — and not the dev user’s to see.',
+      status: 'draft',
+      start_date: '2027-01-16',
+      end_date: '2027-01-17',
+      address: {
+        venue: 'San Jose Sports Hall',
+        street: '1500 Senter Rd',
+        city: 'San Jose',
+        region: 'CA',
+        postal: '95112',
+        country: 'USA',
+      },
+      table_catalogue: tables(6),
+      created_by_user_id: 'u-office',
+      created_by_username: 'league.office',
+      can_edit: false,
+      created_at: '2026-06-14T11:00:00Z',
+      updated_at: '2026-06-14T11:00:00Z',
+      events: [],
+    },
   ]
 }
 
@@ -383,18 +426,74 @@ export function resetTournamentsStore() {
   tournaments = seed()
 }
 
-/** The list, newest-created first (mirrors the API's ordering). */
+// The statuses in which a tournament has been ANNOUNCED to the world — the mock's
+// copy of the server's `ANNOUNCED_STATUSES` (`api/app/tournaments.py`, #967).
+// Publishing is the act that makes a tournament public (ADR-0017) and nothing walks
+// backwards out of it, so everything from `published` onward is announced and
+// `draft` is not.
+//
+// An allow-list, deliberately — NOT `status !== 'draft'`. A status added to
+// `TournamentStatus` tomorrow is invisible to non-owners until somebody puts it in
+// this set on purpose; the inverse spelling would silently publish a future
+// pre-publish status (a `pending_review`, a `scheduled`) the moment it was added,
+// which is the very leak the predicate exists to close. Spelled as a `Record` over
+// the enum rather than a bare `Set<string>`, so that new status is a *type error*
+// here — an unlisted key cannot simply be forgotten.
+const ANNOUNCED: Record<TournamentStatus, boolean> = {
+  draft: false,
+  published: true,
+  live: true,
+  archived: true,
+}
+
+/** The same allow-list as a list, for the callers that need to *iterate* the
+ * announced statuses rather than ask about one — today the web-client e2e suite,
+ * whose viewer sweeps must run over exactly the statuses a non-owner can ever have
+ * on screen.
+ *
+ * DERIVED, never re-typed. A hand-written second copy of these three strings is
+ * unchecked by the type system and rots silently: the day a status is added,
+ * `ANNOUNCED` above is a compile error (good) while a literal `['published',
+ * 'live', 'archived']` elsewhere just keeps passing, and the sweep that thought it
+ * covered every announced status quietly covers all but the new one. */
+export const ANNOUNCED_STATUSES: readonly TournamentStatus[] = (
+  Object.keys(ANNOUNCED) as TournamentStatus[]
+).filter((s) => ANNOUNCED[s])
+
+/** Which tournaments the dev user may see AT ALL: the announced ones, plus their
+ * own — whatever status their own is in (`_visible_to`, `api/app/tournaments.py`).
+ *
+ * Ownership is matched on `created_by_user_id`, the server's spelling, rather than
+ * on the derived `can_edit` flag that happens to agree with it: the id is the fact,
+ * `can_edit` is a projection of it.
+ *
+ * One predicate for both reads below, for the server's reason: two copies of this
+ * rule would eventually disagree, and the way they disagree is that the list hides
+ * a draft the detail route still serves. */
+function isVisible(t: StoredTournament): boolean {
+  return ANNOUNCED[t.status] || t.created_by_user_id === DEV_USER_ID
+}
+
+/** The list, newest-created first (mirrors the API's ordering) — and scoped to what
+ * the dev user may see: another organiser's draft never appears. */
 export function listTournaments(): TournamentDetailRead[] {
   return tournaments
-    .slice()
+    .filter(isVisible)
     .sort((a, b) => b.created_at.localeCompare(a.created_at))
     .map(readDetail)
 }
 
-/** A single tournament's detail, or `undefined` if missing. */
+/** A single tournament's detail, or `undefined` if it is missing **or hidden**.
+ *
+ * The two answers are deliberately the same one, as on the server: a tournament the
+ * caller cannot see is simply not found, so it leaves through the handler's existing
+ * 404 by the one path a nonexistent id already takes. A 403 would confirm that a
+ * tournament with that id exists — precisely what an unannounced draft must not
+ * admit — so there is no second branch here to get wrong. (The owner-only *writes*
+ * still 403 via `requireOwned`: those are all on rows the caller can see.) */
 export function findTournament(id: string): TournamentDetailRead | undefined {
   const found = tournaments.find((t) => t.id === id)
-  return found === undefined ? undefined : readDetail(found)
+  return found === undefined || !isVisible(found) ? undefined : readDetail(found)
 }
 
 let createCounter = 0
@@ -518,9 +617,9 @@ type OwnedResult =
   | { ok: false; status: 403 | 404 }
 
 /** Load a tournament and check it is the caller's: the mock's
- * `_get_tournament_or_404` + `_require_owner` (`api/app/tournaments.py`), in one
- * step, because every owner-only mutation asks the same two questions in the same
- * order — does it exist (**404**), and is it mine (**403**)?
+ * `_get_owned_tournament_or_404` (`api/app/tournaments.py`), which welds the same
+ * two questions together for the same reason — every owner-only mutation asks them
+ * in the same order: does it exist (**404**), and is it mine (**403**)?
  *
  * The order is load-bearing and is the server's: a stranger must not be able to
  * tell a tournament they cannot touch from one that does not exist at all. Written
@@ -656,7 +755,8 @@ export function createEvent(
     name: body.name,
     format: body.format,
     draw_type: body.draw_type,
-    max_players: body.max_players,
+    // A missing cap is "no cap" (ADR-0935), stored as null — never undefined.
+    max_players: body.max_players ?? null,
     entry_fee: body.entry_fee,
     // A brand-new event has no entrants, so its derived count is 0. There is no
     // `entered` to set — that's the point.
@@ -688,7 +788,11 @@ export function updateEvent(
     name: patch.name ?? event.name,
     format: patch.format ?? event.format,
     draw_type: patch.draw_type ?? event.draw_type,
-    max_players: patch.max_players ?? event.max_players,
+    // An explicit `null` clears the cap (ADR-0935); only an *absent* key leaves
+    // the stored cap untouched. `??` would conflate the two, silently keeping a
+    // cap the editor meant to remove.
+    max_players:
+      'max_players' in patch ? (patch.max_players ?? null) : event.max_players,
     entry_fee: patch.entry_fee ?? event.entry_fee,
     // Entrants are not in the PATCH body — an editor edit never touches the
     // registrations, so the derived count survives the edit untouched.
