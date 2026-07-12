@@ -39,11 +39,35 @@ const conflictingPools = () => [
 ]
 
 describe('PoolsSection', () => {
-  it('appends a pool when Add pool is clicked', async () => {
-    const onChange = vi.fn()
-    poolsSectionPage.render({ event: buildEvent({ pools: [buildPool()] }), onChange })
-    await userEvent.click(poolsSectionPage.getAddPoolButton())
-    expect(onChange.mock.calls.at(-1)?.[0].pools).toHaveLength(2)
+  // The three mutations, each asserted against the live form state the section
+  // now drives via `useFieldArray` (chore 1e) — not a bridged `onChange` spy.
+  describe('the pool list drives the form', () => {
+    it('appends a pool to the form when Add pool is clicked', async () => {
+      poolsSectionPage.render({ event: buildEvent({ pools: [buildPool()] }) })
+      await userEvent.click(poolsSectionPage.getAddPoolButton())
+      expect(poolsSectionPage.getPools()).toHaveLength(2)
+    })
+
+    it('writes an edited table selection into the form', async () => {
+      // The seeded pool reserves t1–t4; toggling T5 must land in form state.
+      poolsSectionPage.render({
+        event: buildEvent({ pools: [buildPool({ tableIds: ['t1'] })] }),
+      })
+
+      await userEvent.click(poolsSectionPage.getTableToggle('T5'))
+      expect(poolsSectionPage.getPools()[0].tableIds).toEqual(['t1', 't5'])
+    })
+
+    it('removes a pool from the form', async () => {
+      poolsSectionPage.render({ event: buildEvent({ pools: twoPools() }) })
+      expect(poolsSectionPage.getPools()).toHaveLength(2)
+
+      // Remove the first pool; the second must be what survives.
+      await userEvent.click(poolsSectionPage.getRemovePoolButtons()[0])
+      const remaining = poolsSectionPage.getPools()
+      expect(remaining).toHaveLength(1)
+      expect(remaining[0].id).toBe('p-2')
+    })
   })
 
   it('counts distinct double-booked tables, not conflict pairs', () => {

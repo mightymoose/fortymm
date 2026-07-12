@@ -7,20 +7,35 @@ import { Field } from '../../field'
 import { SectionHeader } from '../section-header'
 import { OptionSelect } from './option-select'
 
+/** Inline validation messages for the scalar fields this section owns, mapped
+ * from the editor's React-Hook-Form state. Present only for a field the resolver
+ * (or the server) rejected; absent otherwise. Never shown to a viewer — `Field`
+ * drops the hint slot in its read-only branch (ADR 0015). */
+export interface BasicsFieldErrors {
+  name?: string
+  maxPlayers?: string
+  entryFee?: string
+}
+
 export interface BasicsSectionProps {
   event: TournamentEvent
   /** When false (a non-creator), the section renders values instead of
    * controls — a viewer gets a rendering of the data, never a disabled form
    * (ADR 0015). */
   canEdit: boolean
+  /** Inline errors for the name / player-limit / entry-fee fields, surfaced
+   * below the control in red. The editor owns the form and passes these down. */
+  errors?: BasicsFieldErrors
   onChange: (next: TournamentEvent) => void
 }
 
-/** The numeric fields are edited through `Number(e.target.value)`, so clearing
- * one leaves `NaN` on the draft. To a reader that is an *unset* field — an
- * em-dash — not the literal string "NaN" (what `ReadOnlyValue` would print) and
- * not `0` (a real, different answer: free to enter). */
-const numericValue = (n: number): number | null => (Number.isNaN(n) ? null : n)
+/** A cleared numeric field is *unset* to a reader — an em-dash, not the literal
+ * string "NaN" (what `ReadOnlyValue` would print) and not `0` (a real, different
+ * answer: free to enter). The player limit reaches a reader as `null` when
+ * uncapped (ADR-0935); the entry fee, still edited through `Number('')`, reaches
+ * it as `NaN`. Both mean "unset". */
+const numericValue = (n: number | null): number | null =>
+  n === null || Number.isNaN(n) ? null : n
 
 /** The event editor's "Basics" tab: name, format, draw type, caps, and the
  * time-slot window. Each row declares its control *and* the value it holds;
@@ -37,6 +52,7 @@ const numericValue = (n: number): number | null => (Number.isNaN(n) ? null : n)
 export const BasicsSection = ({
   event,
   canEdit,
+  errors = {},
   onChange,
 }: BasicsSectionProps) => {
   const set = (patch: Partial<TournamentEvent>) => onChange({ ...event, ...patch })
@@ -55,12 +71,20 @@ export const BasicsSection = ({
         }
       />
 
-      <Field label="Event name" required readOnly={readOnly} value={event.name}>
+      <Field
+        label="Event name"
+        required
+        readOnly={readOnly}
+        value={event.name}
+        error={!!errors.name}
+        hint={errors.name}
+      >
         {(id) => (
           <Input
             id={id}
             autoFocus
             value={event.name}
+            aria-invalid={!!errors.name}
             placeholder="Open Singles"
             onChange={(e) => set({ name: e.target.value })}
           />
@@ -102,7 +126,11 @@ export const BasicsSection = ({
       <div className="grid grid-cols-2 gap-4">
         <Field
           label="Player limit"
-          hint="Hard cap. Waitlist opens past this."
+          // A blank field is a real, valid state — an uncapped event — so it
+          // carries no required asterisk. The error, when present, replaces the
+          // helper text.
+          error={!!errors.maxPlayers}
+          hint={errors.maxPlayers ?? 'Blank = no cap. Waitlist opens past this.'}
           readOnly={readOnly}
           value={numericValue(event.maxPlayers)}
         >
@@ -110,15 +138,27 @@ export const BasicsSection = ({
             <Input
               id={id}
               type="number"
-              min={2}
+              min={1}
               max={512}
-              value={event.maxPlayers}
-              onChange={(e) => set({ maxPlayers: Number(e.target.value) })}
+              aria-invalid={!!errors.maxPlayers}
+              // Hold empty as empty and submit `null` — never `Number('')`, which
+              // would coerce a blank cap to `0`/`NaN` (ADR-0935). `0` typed is a
+              // real, invalid cap the resolver rejects.
+              value={event.maxPlayers ?? ''}
+              onChange={(e) =>
+                set({
+                  maxPlayers:
+                    e.target.value === '' ? null : Number(e.target.value),
+                })
+              }
             />
           )}
         </Field>
         <Field
           label="Entry fee"
+          required
+          error={!!errors.entryFee}
+          hint={errors.entryFee}
           readOnly={readOnly}
           value={numericValue(event.entryFee)}
         >
@@ -127,8 +167,17 @@ export const BasicsSection = ({
               id={id}
               type="number"
               min={0}
-              value={event.entryFee}
-              onChange={(e) => set({ entryFee: Number(e.target.value) })}
+              aria-invalid={!!errors.entryFee}
+              // A blank fee is *missing*, not `0`: `NaN` marks it unset (a
+              // required error), while a typed `0` is a legitimate free event
+              // (ADR-0935).
+              value={Number.isNaN(event.entryFee) ? '' : event.entryFee}
+              onChange={(e) =>
+                set({
+                  entryFee:
+                    e.target.value === '' ? NaN : Number(e.target.value),
+                })
+              }
             />
           )}
         </Field>

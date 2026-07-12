@@ -77,10 +77,15 @@ function TournamentDetailRoute() {
           patch: tournamentToUpdateBody(tournament, catalogue),
         })
       }
-      onCreateEvent={(ev) => createEvent.mutate(eventToCreateBody(ev))}
-      onUpdateEvent={(ev) =>
-        updateEvent.mutate({ eventId: ev.id, body: eventToUpdateBody(ev) })
-      }
+      onCreateEvent={async (ev) => {
+        await createEvent.mutateAsync(eventToCreateBody(ev))
+      }}
+      onUpdateEvent={async (ev) => {
+        await updateEvent.mutateAsync({
+          eventId: ev.id,
+          body: eventToUpdateBody(ev),
+        })
+      }}
       onDeleteEvent={(id) => deleteEvent.mutate(id)}
       onBack={back}
     />

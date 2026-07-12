@@ -124,8 +124,18 @@ def upgrade() -> None:
         sa.Column("name", sa.String(length=255), nullable=False),
         sa.Column("format", event_format_enum, nullable=False),
         sa.Column("draw_type", draw_type_enum, nullable=False),
-        sa.Column("max_players", sa.Integer(), nullable=False),
+        # ``max_players`` is nullable: NULL is the "no cap" sentinel (ADR-0935).
+        # The CHECK guarantees a *present* cap is positive — a SQL CHECK passes on
+        # NULL, so "no cap" and "a positive cap" are the only representable states,
+        # never zero or negative.
+        sa.Column("max_players", sa.Integer(), nullable=True),
         sa.Column("entry_fee", sa.Numeric(precision=8, scale=2), nullable=False),
+        sa.CheckConstraint(
+            "max_players > 0", name="ck_tournament_events_max_players_positive"
+        ),
+        sa.CheckConstraint(
+            "entry_fee >= 0", name="ck_tournament_events_entry_fee_non_negative"
+        ),
         # No ``entered`` column: an event's entry count is DERIVED from a live
         # count of its active ``tournament_entries`` rows (ADR-0016). A stored
         # counter is a second copy of the truth that can drift from the rows it

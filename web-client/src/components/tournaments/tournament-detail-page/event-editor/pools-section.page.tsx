@@ -1,8 +1,12 @@
 import { interactiveControlsIn, interactiveElementsIn } from '@/test/read-only'
 import { render, screen, type Container } from '@/test/utilities'
 
-import { PoolsSection, type PoolsSectionProps } from './pools-section'
-import { buildPoolsSectionProps } from './pools-section.factory'
+import type { Pool } from '../../data/types'
+import {
+  buildPoolsSectionProps,
+  type PoolsHarnessInputs,
+} from './pools-section.factory'
+import { PoolsHarness } from './pools-section.harness'
 import { poolCardPage } from './pools-section/pool-card.page'
 
 const scoped = (container: Container) => ({
@@ -22,6 +26,16 @@ const scoped = (container: Container) => ({
   queryPoolCards() {
     return container.queryAllByTestId('pool-card')
   },
+  /** Every Remove-pool button, in render order — to remove a specific card. */
+  getRemovePoolButtons() {
+    return container.queryAllByRole('button', { name: 'Remove pool' })
+  },
+  /** The live `pools` array in form state (via the probe), so a test can assert
+   * that an add / edit / remove flowed through `useFieldArray`. */
+  getPools(): Pool[] {
+    const el = container.queryByTestId('pools-probe')
+    return el ? (JSON.parse(el.textContent || '[]') as Pool[]) : []
+  },
   queryConflictAlert() {
     return container.queryByRole('alert')
   },
@@ -39,8 +53,8 @@ const scoped = (container: Container) => ({
 
 /** Test page-object for `PoolsSection`. */
 export const poolsSectionPage = {
-  render(overrides: Partial<PoolsSectionProps> = {}) {
-    render(<PoolsSection {...buildPoolsSectionProps(overrides)} />)
+  render(overrides: Partial<PoolsHarnessInputs> = {}) {
+    render(<PoolsHarness {...buildPoolsSectionProps(overrides)} />)
   },
 
   within(container: Container = screen) {

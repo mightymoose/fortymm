@@ -46,6 +46,10 @@ export const tournamentDetailPagePage = {
   getEditorSaveButton() {
     return screen.getByRole('button', { name: /Create event|Save changes/ })
   },
+  /** The event editor's name field (portalled to the body). */
+  getEditorNameInput() {
+    return screen.getByLabelText(/Event name/)
+  },
 
   within(container: Container = screen) {
     return scoped(container)
