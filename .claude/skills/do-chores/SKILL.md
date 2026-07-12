@@ -22,6 +22,18 @@ missing, stop and tell the user to run `/to-chores` first. Treat the file as the
 source of truth: **ticked box = done**, `⚠ BLOCKED` = needs attention, unticked =
 pending.
 
+**Move the tickets to In Progress.** Read the `Tickets:` header line. For each issue
+number listed (skip if it's `—`), move its card on the FortyMM project board:
+
+```bash
+scripts/project-status.sh "In Progress" <issue-number> [<issue-number> ...]
+```
+
+The board is a convenience, not a gate — if the script warns that an issue isn't on
+the board, or `gh` lacks the `project` scope, **note it and keep driving**; never let
+a board hiccup stop the work. Do this once at the start of a run (it's idempotent, so
+a resume re-running it is harmless).
+
 ## Drive loop
 
 Repeat until every chore is ticked or every remaining chore is blocked:

@@ -1,6 +1,6 @@
 ---
 name: epic
-description: Drive a change end-to-end through the fortymm arc — /grill-with-docs → /to-chores → /do-chores → /land-the-plane — as a GATED conductor. It sequences the four phases and carries the plan→work-order→PR artifact chain, but stops for your decision at every phase boundary and never merges. Use to run a whole feature/bugfix through the arc from one entry point; use the individual skills when you only want one phase.
+description: Drive a change end-to-end through the fortymm arc — /grill-with-docs → /to-chores → /do-chores → /land-the-plane — as a GATED conductor. It sequences the four phases and carries the plan→work-order→PR artifact chain, stopping for your decision at every phase boundary; the merge itself is /land-the-plane's own gated step, and once it lands the arc moves the work order's tickets to Done. Use to run a whole feature/bugfix through the arc from one entry point; use the individual skills when you only want one phase.
 disable-model-invocation: true
 argument-hint: "[the goal to drive — an issue ref, a plan/PRD path, or a one-line description]"
 ---
@@ -21,8 +21,8 @@ false premise, right-sizes the decomposition, and decides what ships. This skill
 **never runs a phase's decision on the user's behalf**. At each boundary it
 summarises what the phase produced, states the decision that's now the user's,
 and **waits for an explicit go-ahead** before starting the next phase. It never
-merges (that stays with the user), never skips a gate, and never retries a
-blocked phase in a loop.
+skips a gate and never retries a blocked phase in a loop; the one merge in the
+arc is `/land-the-plane`'s own gated Step 8, not a decision `/epic` makes itself.
 
 If you find yourself wanting to "just push through" a gate to save a round-trip:
 don't. The one time the gate cost a round-trip this arc was designed for, it
@@ -102,10 +102,15 @@ adversarial edge-case exploration, never instead of it. When the notes say the
 change is *not observable in the UI*, skip the browser pass rather than run a
 hollow one, and say so.
 
-**Gate:** it stops at any surfaced code-review issue, security finding, or QA bug
-— raise them to the user, don't auto-fix. And it stops **before merge**: this is
-an agent-authored branch, self-merge is blocked (two-party review), so the merge
-is always the user's.
+**Gate:** it stops at any surfaced code-review issue, security finding, or QA bug —
+raise them to the user, don't auto-fix; resolving one may take a separate
+conversation, at which point `/epic` picks back up from its resumability rules
+below. If every step lands clean, `/land-the-plane`'s own Step 8 **merges the PR
+itself** — there is no separate confirmation pause once the gates are clear.
+Because the Skill tool runs a sub-skill's steps inline, control returns to this
+arc automatically the moment `/land-the-plane` finishes (merged, or stopped at a
+gate) — continue straight into Step 5 rather than treating the hand-off as
+something you need to re-trigger.
 
 ### 5. Check the testing notes — the arc's acceptance gate
 
@@ -116,11 +121,36 @@ is an unmet acceptance criterion — surface it, don't quietly drop it. "The sui
 green" does not discharge a testing note; the notes exist precisely because a green
 suite and a working product are different claims.
 
-`/epic` ends here — report the PR, the testing-notes ledger, and hand off.
+### 6. Move the tickets to Done
+
+Move the work order's tickets to **Done** only once the PR is **actually merged**,
+not merely green. Confirm the merge independently — don't trust a step summary —
+with `gh pr view <number> --json state,mergedAt`. If `/land-the-plane` stopped at a
+gate instead of reaching Step 8 (a surfaced issue awaiting the user, or the user
+chose not to merge yet), the arc isn't done: leave the tickets **In Progress**,
+report the open gate, and stop — resume this step next time `/epic` is re-entered
+and the PR has since merged.
+
+Once the merge is confirmed **and** every testing note is confirmed (no unmet
+acceptance criterion, no `⚠ BLOCKED` chore), read the work order's `Tickets:`
+header and, for each issue number (skip `—`):
+
+```bash
+scripts/project-status.sh "Done" <issue-number> [<issue-number> ...]
+```
+
+A board hiccup (issue not on the board, missing `project` scope) is a note, never a
+blocker — as in `/do-chores`.
+
+`/epic` ends here — report the merged PR, the testing-notes ledger, the tickets
+moved to Done, and hand off.
 
 ## Invariants (hold these across every phase)
 
-- **Never merge.** The arc ends at a ready, green PR; the user merges.
+- **Don't merge directly.** `/epic` never runs `gh pr merge` itself — merging is
+  `/land-the-plane`'s own Step 8, reached only once every one of its gates
+  (tests, code review, security review, QA) is clean. If a gate finds something,
+  the merge waits for the user's decision, same as any other phase gate.
 - **Never skip a gate**, even for a "small" change — right-size the *work*, not the
   checkpoints.
 - **Carry the artifact chain**: the agreed plan (+ ADRs) → `.claude/work-order.md`
