@@ -6,6 +6,7 @@ import {
   createRouter,
 } from '@tanstack/react-router'
 import { http, HttpResponse } from 'msw'
+import userEvent from '@testing-library/user-event'
 
 import { mockSession } from '@/mocks/handlers'
 import { server } from '@/mocks/server'
@@ -45,6 +46,8 @@ const scoped = (container: Container) => {
     Array.from(sidebar().querySelectorAll<HTMLAnchorElement>(selector)).map(
       labelOf,
     )
+  const alphaTrigger = (): HTMLElement =>
+    container.getByRole('button', { name: 'About the alpha release' })
 
   return {
     /** The `<aside>` itself — the drawer on mobile, the sidebar on desktop. */
@@ -117,6 +120,49 @@ const scoped = (container: Container) => {
       return Array.from(
         sidebar().querySelectorAll<HTMLAnchorElement>('a[aria-current]'),
       ).map((el) => `${labelOf(el)}=${el.getAttribute('aria-current')}`)
+    },
+
+    // --- The alpha notice (topbar) ---------------------------------------
+    //
+    // Radix portals the popover's content to `document.body`, *outside* the
+    // shell's tree, so the notice accessors read from `screen` rather than
+    // from `container`. Only the trigger — a real topbar child — is scoped.
+
+    /** The topbar "Alpha" badge that opens the notice. */
+    getAlphaTrigger() {
+      return alphaTrigger()
+    },
+    /** Click the badge and wait for the notice. Radix renders popover content
+     * with `role="dialog"` (it is not modal — Escape and an outside click both
+     * dismiss it — but the role is a dialog all the same). */
+    async openAlphaNotice() {
+      await userEvent.click(alphaTrigger())
+      return await screen.findByRole('dialog')
+    },
+    /** The open notice, or `null` once it is dismissed. */
+    queryAlphaNotice() {
+      return screen.queryByRole('dialog')
+    },
+    /**
+     * The notice's close control, addressed by its accessible name — the whole
+     * point of #891 is that a control exists *and* announces itself. Throws
+     * when there is none, which is exactly what the pre-fix shell did.
+     */
+    getAlphaCloseButton() {
+      return within(screen.getByRole('dialog')).getByRole('button', {
+        name: 'Close alpha notice',
+      })
+    },
+    /**
+     * Every button inside the open notice. Before #891 this was **empty** — the
+     * panel covered most of a 375px viewport with nothing to press. Asserting
+     * the list (not just "a close button exists") also catches a second, unnamed
+     * dismiss affordance sneaking in.
+     */
+    getAlphaNoticeButtonNames() {
+      return within(screen.getByRole('dialog'))
+        .queryAllByRole('button')
+        .map((el) => el.getAttribute('aria-label') ?? labelOf(el))
     },
   }
 }

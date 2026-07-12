@@ -1,3 +1,6 @@
+import userEvent from '@testing-library/user-event'
+import { waitFor } from '@/test/utilities'
+
 import { appShellPage } from './app-shell.page'
 
 /**
@@ -230,5 +233,70 @@ describe('AppShell sidebar', () => {
     expect(appShellPage.getParentActiveNavLabels()).toEqual(['Administration'])
     // Deeper than "Users", so no child claims the strict-equality highlight.
     expect(appShellPage.getActiveSubNavLabels()).toEqual([])
+  })
+})
+
+/**
+ * The topbar's "Alpha" notice — a **non-modal** Radix popover (the shared
+ * `ui/popover.tsx` passes no `modal` prop, so Radix defaults to
+ * `modal={false}`).
+ *
+ * Two different bugs meet here, and only one of them was real:
+ *
+ * - **#891 — no visible close control.** Measured in a browser: the open panel
+ *   contained **zero** buttons. On a 375px viewport it is a 320×272 slab over
+ *   most of the page, dismissable only by an outside click or a key a touch user
+ *   does not have. The close-control test below is the *discriminating* one — it
+ *   fails against the pre-fix shell.
+ * - **#885 — "does not close on Escape".** It does. Escape was verified working
+ *   in a browser on desktop and mobile before any change was made, and it passes
+ *   here both before and after the #891 fix: Radix's `DismissableLayer` handles
+ *   it and nothing in the shell intercepts `onEscapeKeyDown`. The Escape test is
+ *   therefore a **regression guard**, not a fix — its job is to fail if someone
+ *   later adds an `onEscapeKeyDown` preventDefault or a global key handler that
+ *   swallows it. It is deliberately non-discriminating today.
+ */
+describe('AppShell alpha notice', () => {
+  it('offers a labelled close control that dismisses it (#891)', async () => {
+    appShellPage.render('/dashboard')
+    await appShellPage.findNavLink('Dashboard')
+    await appShellPage.openAlphaNotice()
+
+    // Before the fix this list was `[]` — the panel had no button at all.
+    expect(appShellPage.getAlphaNoticeButtonNames()).toEqual([
+      'Close alpha notice',
+    ])
+    const close = appShellPage.getAlphaCloseButton()
+    // Named *and* actually on screen: an sr-only-only affordance would leave a
+    // sighted touch user exactly where #891 found them.
+    expect(close).toBeVisible()
+
+    await userEvent.click(close)
+
+    await waitFor(() => expect(appShellPage.queryAlphaNotice()).toBeNull())
+  })
+
+  it('hands focus back to the Alpha badge once the notice is closed (#891)', async () => {
+    appShellPage.render('/dashboard')
+    await appShellPage.findNavLink('Dashboard')
+    await appShellPage.openAlphaNotice()
+
+    await userEvent.click(appShellPage.getAlphaCloseButton())
+
+    // Dismissing must not strand focus on a detached node — the keyboard user
+    // lands back on the control they opened it from.
+    await waitFor(() =>
+      expect(appShellPage.getAlphaTrigger()).toHaveFocus(),
+    )
+  })
+
+  it('still dismisses on Escape — regression guard, not a fix (#885)', async () => {
+    appShellPage.render('/dashboard')
+    await appShellPage.findNavLink('Dashboard')
+    await appShellPage.openAlphaNotice()
+
+    await userEvent.keyboard('{Escape}')
+
+    await waitFor(() => expect(appShellPage.queryAlphaNotice()).toBeNull())
   })
 })

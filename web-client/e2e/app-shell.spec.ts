@@ -394,3 +394,84 @@ test.describe('Desktop sidebar (#887 must not over-reach)', () => {
     expect(await offscreenTabbableCount(page)).toBe(0)
   })
 })
+
+/**
+ * The topbar "Alpha" notice — a non-modal Radix popover.
+ *
+ * **#891 (the real bug)**: the open panel contained **zero** buttons. On a 375px
+ * viewport it renders as a ~320×272 slab over most of the page, and its only
+ * exits were an outside click and Escape — neither of which is something you can
+ * see, and one of which a touch user does not have. The button-count assertion
+ * below is the measurement from the issue, and it is the discriminating test:
+ * it fails against the pre-fix shell.
+ *
+ * **#885 (not reproducible)**: "the alpha dialog does not close on Escape". It
+ * does — verified in a browser on `main`, at both viewports, before anything was
+ * changed. The Escape tests here are a **regression guard** for behaviour Radix's
+ * `DismissableLayer` already gives us; they passed before this change too. They
+ * exist so that a future `onEscapeKeyDown` preventDefault or a global key handler
+ * that swallows Escape turns the suite red.
+ *
+ * Both viewports are exercised because the panel's harm (#891) is a mobile-layout
+ * harm, while the a11y contract must hold everywhere.
+ */
+test.describe('Alpha notice (#891 close control, #885 Escape guard)', () => {
+  const ALPHA_TRIGGER = 'About the alpha release'
+
+  /** The popover's content: Radix gives it `role="dialog"`. */
+  const notice = (page: Page) => page.getByRole('dialog')
+
+  async function openAlphaNotice(page: Page) {
+    await page.getByRole('button', { name: ALPHA_TRIGGER }).click()
+    await expect(notice(page)).toBeVisible()
+  }
+
+  for (const [device, viewport] of [
+    ['mobile', { width: 375, height: 667 }],
+    ['desktop', { width: 1280, height: 800 }],
+  ] as const) {
+    test.describe(device, () => {
+      test.use({ viewport })
+
+      test('closes on a click of its visible, labelled close control (#891)', async ({
+        page,
+      }) => {
+        await gotoDashboard(page)
+        await openAlphaNotice(page)
+
+        // The #891 measurement: this list was empty. Reading the *names* rather
+        // than the count also pins that the control announces itself — an
+        // unlabelled icon button would be no use to a screen-reader user.
+        const buttons = notice(page).getByRole('button')
+        expect(
+          await buttons.evaluateAll((els) =>
+            els.map((el) => el.getAttribute('aria-label') ?? el.textContent?.trim()),
+          ),
+          'buttons inside the open alpha notice',
+        ).toEqual(['Close alpha notice'])
+
+        const close = notice(page).getByRole('button', { name: 'Close alpha notice' })
+        // `.click()` is itself the proof a real user could reach it: Playwright
+        // refuses to click an element that is hidden, zero-sized, or covered.
+        await expect(close).toBeVisible()
+        await close.click()
+
+        await expect(notice(page)).toHaveCount(0)
+        // Focus comes back to the badge rather than being stranded on a removed
+        // node — a keyboard user can carry on tabbing from where they were.
+        await expect(page.getByRole('button', { name: ALPHA_TRIGGER })).toBeFocused()
+      })
+
+      test('still closes on Escape — regression guard, not a fix (#885)', async ({
+        page,
+      }) => {
+        await gotoDashboard(page)
+        await openAlphaNotice(page)
+
+        await page.keyboard.press('Escape')
+
+        await expect(notice(page)).toHaveCount(0)
+      })
+    })
+  }
+})

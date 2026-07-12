@@ -12,6 +12,7 @@ import {
   TriangleAlert,
   Trophy,
   Users,
+  X,
 } from 'lucide-react'
 import { useSession } from '@/api/session'
 import { Wordmark } from '@/components/wordmark'
@@ -20,8 +21,10 @@ import { PERM } from '@/lib/permissions'
 import { NotificationBell } from './notifications/notification-bell'
 import { UserMenu } from './user-menu'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import {
   Popover,
+  PopoverClose,
   PopoverContent,
   PopoverDescription,
   PopoverHeader,
@@ -465,6 +468,24 @@ export function AppShell({ children }: AppShellProps) {
                       FortyMM is under active development — expect rough edges.
                     </PopoverDescription>
                   </span>
+                  {/*
+                    #891: the notice had no visible way out. It is a non-modal
+                    popover, so Escape and an outside click already dismissed it
+                    — but neither is an affordance you can *see*, and on a 375px
+                    viewport this panel covers most of the page. Same shape as
+                    the dialog's close (ghost icon button, X), named the way the
+                    sidebar's is ("Close navigation").
+                  */}
+                  <PopoverClose asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      className="-mt-1 -mr-1 ml-auto shrink-0 text-muted-foreground hover:text-foreground"
+                      aria-label="Close alpha notice"
+                    >
+                      <X />
+                    </Button>
+                  </PopoverClose>
                 </PopoverHeader>
                 <ul className="list-disc space-y-1.5 py-3.5 pr-3.5 pl-8 text-xs leading-relaxed text-muted-foreground">
                   <li>Features may change or break without warning.</li>

@@ -137,6 +137,100 @@
   }
 }
 
+/* ---------- Page header ----------
+   These styles used to live inline on the JSX (`style={{ ... }}`), which made
+   them un-media-queryable — and the header was the one thing on this page that
+   needed a mobile rule. It is a row of two items that cannot give way on their
+   own: the display <h1> is a single unbreakable word (so its min-content floor
+   is its full rendered width) and the username pill was pinned at
+   `flex-shrink: 0`. At 360px their sum overflowed the ~328px content box and
+   the whole document scrolled sideways — by more the longer the username, which
+   is why a short-name check sails past it (#890).
+
+   The fix is two-part, and both parts are load-bearing:
+     1. the row WRAPS, so the pill drops below the heading when they can't share
+        a line, and
+     2. the pill may SHRINK and its name TRUNCATES, so even a 40-character
+        username (the server's max) can't push past the viewport on its own line.
+   The heading also scales down with the viewport via clamp(), but only below
+   ~533px — desktop keeps the full 64px display size. */
+.fmm-settings .fmm-page-header {
+  margin-bottom: 28px;
+}
+
+.fmm-settings .fmm-page-header__crumbs {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+  font-size: var(--text-xs);
+  color: var(--fg-muted);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+.fmm-settings .fmm-page-header__crumbs-sep {
+  color: var(--ink-600);
+}
+.fmm-settings .fmm-page-header__crumbs-current {
+  color: var(--fg-2);
+}
+
+.fmm-settings .fmm-page-header__row {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  /* Wrap, or the two unshrinkable-by-default items force a horizontal scroll. */
+  flex-wrap: wrap;
+}
+
+.fmm-settings .fmm-page-header__title {
+  font-family: var(--font-display);
+  /* 64px on desktop; scales down only once the viewport is narrower than
+     ~533px, with a 44px floor so it still reads as the page's hero. */
+  font-size: clamp(2.75rem, 12vw, 4rem);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--fg-1);
+  margin: 0;
+  line-height: 1;
+  min-width: 0;
+}
+
+.fmm-settings .fmm-page-header__pill {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px 6px 6px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-pill);
+  /* Shrinkable and never wider than its line: a long username truncates
+     rather than widening the document. */
+  min-width: 0;
+  max-width: 100%;
+}
+
+.fmm-settings .fmm-page-header__pill-name {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--fg-2);
+  letter-spacing: 0.02em;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fmm-settings .fmm-page-header__lede {
+  margin-top: 14px;
+  margin-bottom: 0;
+  color: var(--fg-3);
+  font-size: var(--text-base);
+  max-width: 560px;
+}
+
 /* ---------- Inputs ---------- */
 .fmm-settings .fmm-input {
   width: 100%;
