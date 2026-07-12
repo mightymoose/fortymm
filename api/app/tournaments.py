@@ -1,5 +1,5 @@
 import uuid
-from typing import Any
+from typing import Any, Literal, assert_never
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import select
@@ -565,6 +565,53 @@ async def delete_event(
 # ----- entry routes --------------------------------------------------------
 
 
+# A tournament's status IS its registration window (ADR-0017): ``published`` is
+# open, and the other three are shut for three different reasons — a draft is not
+# announced yet, a live tournament's field is fixed (the draw is cut from it), and
+# an archived one is over.
+#
+# The closed statuses are named as a Literal rather than the whole enum so the set
+# stays exhaustive under change: mypy narrows ``tournament.status`` past the
+# ``is not published`` guard, so a fourth closed status added to the enum tomorrow
+# is a type error at the call site until it is handled — and ``assert_never`` makes
+# a missing branch in here one too. That is the "if you must map an enum, do it in
+# one place with an exhaustive match" rule; a dict keyed by status would answer a
+# new member with a KeyError at runtime instead.
+ClosedRegistrationStatus = Literal[
+    TournamentStatus.draft,
+    TournamentStatus.live,
+    TournamentStatus.archived,
+]
+
+
+def _registration_closed_detail(status: ClosedRegistrationStatus) -> str:
+    """Why registration is refused, in words a player can read.
+
+    The status is not merely echoed back: "not yet" and "too late" are different
+    things to be told, and a client that only knew "you cannot enter" could not
+    say which.
+
+    Both entering and withdrawing an active entry are refused for the *same*
+    reason — the registration window is shut — so both say it with this one
+    function rather than drifting into two half-maintained copies of the same
+    three sentences. Each sentence leads with the fact about the *tournament*
+    ("has not been published yet", "is already under way", "has ended"), which is
+    what a player on either side of the window needs to be told.
+    """
+    match status:
+        case TournamentStatus.draft:
+            return (
+                "This tournament has not been published yet, "
+                "so its events are not open for entry."
+            )
+        case TournamentStatus.live:
+            return "This tournament is already under way, so its entries are locked."
+        case TournamentStatus.archived:
+            return "This tournament has ended, so its events can no longer be entered."
+        case _:
+            assert_never(status)
+
+
 @router.post(
     "/tournaments/{tournament_id}/events/{event_id}/entries",
     response_model=TournamentEntrantRead,
@@ -583,6 +630,12 @@ async def enter_event(
     someone else. Entering a player who is not you is a director's job, and a
     different endpoint.
 
+    Registration is open only while the tournament is **`published`** — its status
+    *is* its registration window (ADR-0017). Entering an event of a `draft`
+    tournament (not announced yet), a `live` one (the field is fixed; the draw is
+    cut from it), or an `archived` one (it is over) is a `409` — not a `403`: you
+    are permitted, the tournament is simply in the wrong state.
+
     Entering an event you are already in is a `409`; withdrawing first frees you
     to enter it again. Doubles and teams events are a `400`: an entry is one row
     per player, with nowhere to record a partner or a team.
@@ -592,7 +645,7 @@ async def enter_event(
     # a player entering themselves is by definition not the tournament's owner,
     # so the authorization is the ``tournament.enter`` gate above plus the fact
     # that ``current_user`` is the only user this handler can enter.
-    await _get_tournament_or_404(db, tournament_id)
+    tournament = await _get_tournament_or_404(db, tournament_id)
     event = await _get_event_or_404(db, tournament_id, event_id)
     if event.format is not EventFormat.singles:
         # Not a policy — a modelling limit (ADR-0016). One row per user cannot
@@ -605,6 +658,28 @@ async def enter_event(
                 "Only singles events can be entered directly, "
                 f"not {event.format.value}."
             ),
+        )
+
+    # Ordering: the format 400 first, then the status 409 — the permanent refusal
+    # before the transient one. It is a judgment call, not a forced move (asking
+    # "is registration open at all?" before "is this event's shape enterable?" is
+    # defensible too), so here is the reason. A 409 means "not now", and invites
+    # the caller back once the tournament is published — but a doubles event will
+    # never be enterable through this route, in any status, so a caller sent away
+    # to retry would only be refused again, this time with the 400 they should
+    # have been given in the first place. Answer with the fact that will not
+    # change. It also keeps one clean rule for the whole handler: every "this
+    # request cannot work" check precedes every "the state conflicts" check, so
+    # both 409s (this one, and the already-entered one at commit) sit last.
+    if tournament.status is not TournamentStatus.published:
+        # 409, not 403 (ADR-0017). The caller holds ``tournament.enter`` and the
+        # entry would be their own, so they ARE permitted: 403 would say "not
+        # you", when the truth is "not now". Refusing before the INSERT (rather
+        # than inserting and rolling back) is what makes "no row is written" a
+        # property of the code and not of a transaction that happened to abort.
+        raise HTTPException(
+            status_code=409,
+            detail=_registration_closed_detail(tournament.status),
         )
 
     entry = TournamentEntry(event_id=event.id, user_id=current_user.id)
@@ -650,24 +725,63 @@ async def withdraw_from_event(
     uniqueness guard is a *partial* index over active entries only, the player is
     free to enter the same event again afterwards.
 
-    You may only withdraw your own entry; someone else's is a `403`. Withdrawing
-    an entry that is already withdrawn is a no-op, not an error: this is `DELETE`,
-    and asking for a state the resource is already in is a success.
+    You may only withdraw your own entry; someone else's is a `403`.
+
+    Withdrawal, like entry, is open only while the tournament is **`published`** —
+    its status *is* its registration window (ADR-0017). Withdrawing an *active*
+    entry from a `live` tournament would pull a player out from under a draw cut
+    from the field they were part of, so it is a `409`, as it is for a `draft`
+    tournament (registration has not opened) and an `archived` one (it is over).
+    A `409`, not a `403`: you are permitted, the tournament is simply in the wrong
+    state.
+
+    **Withdrawing an entry that is already withdrawn is a `204` in every status**,
+    `live` and `archived` included — a no-op, not an error: this is `DELETE`, and
+    asking for a state the resource is already in is a success. The status gate is
+    on the state *change*, not on the call; an entry that is already withdrawn has
+    nothing left to lock.
     """
     # Load-then-authorize, as everywhere else here: the tournament, the event
     # under it, and the entry under that event must all exist before ownership is
     # considered — so a wrong (tournament, event, entry) triple is a 404, and 403
     # means "this entry is real, but it isn't yours".
-    await _get_tournament_or_404(db, tournament_id)
+    tournament = await _get_tournament_or_404(db, tournament_id)
     event = await _get_event_or_404(db, tournament_id, event_id)
     entry = await _get_entry_or_404(db, event.id, entry_id)
     if entry.user_id != current_user.id:
         # The ``tournament.enter`` gate says "may self-register at all"; it cannot
         # say *whose* entry this is. Withdrawing another player from an event is a
         # director's job (#784), on a different endpoint with its own permission.
+        #
+        # Ordering: this 403 precedes the status 409 below, so withdrawing someone
+        # else's entry from a *live* tournament is "not yours", not "not now".
+        # "Not yours" is the fact that will not change: come back when the
+        # tournament is published and the entry is still not theirs to withdraw,
+        # whereas a 409 would invite exactly that pointless retry. Same rule the
+        # 404s above follow, and the same rule the enter route follows with its
+        # doubles 400 — every permanent refusal is answered before any transient
+        # one.
         raise HTTPException(
             status_code=403,
             detail="You can only withdraw your own entry.",
+        )
+
+    # The gate is on the state CHANGE, not on the call (ADR-0017). Going live locks
+    # the field the draw is cut from, so flipping an ``entered`` entry to
+    # ``withdrawn`` outside ``published`` is refused — a 409, like the enter route's,
+    # because the caller is permitted and it is the tournament that is in the wrong
+    # state. But an entry that is *already* withdrawn has nothing left to lock, so it
+    # is deliberately not gated: the ``entered`` conjunct is what preserves the
+    # idempotent 204 that ADR-0016 designed, in ``live`` and ``archived`` too. Drop
+    # it and this route starts answering 409 to a request that would change nothing —
+    # a conflict with no conflict in it.
+    if (
+        entry.status is TournamentEntryStatus.entered
+        and tournament.status is not TournamentStatus.published
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail=_registration_closed_detail(tournament.status),
         )
 
     # Idempotent by construction: withdrawing is an assignment, not a decrement,

@@ -29,6 +29,16 @@ const scoped = (container: Container) => ({
   findWithdrawButton(eventName: string) {
     return container.findByRole('button', { name: `Withdraw from ${eventName}` })
   },
+  /** The closed-registration copy — what a `draft`, `live` or `archived`
+   * tournament shows *instead* of a control (ADR-0017). Inert text, so it is
+   * addressed by test id rather than by role: there is deliberately no button
+   * here to find. */
+  queryRegistrationNotice() {
+    return container.queryByTestId('registration-notice')
+  },
+  findRegistrationNotice() {
+    return container.findByTestId('registration-notice')
+  },
   /** Resolves once the session has landed (`SessionProbe`) — gate absence
    * assertions on this, or they pass vacuously while it is still in flight. */
   findSessionReady() {

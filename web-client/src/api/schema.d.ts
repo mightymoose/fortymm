@@ -976,6 +976,12 @@ export interface paths {
          *     someone else. Entering a player who is not you is a director's job, and a
          *     different endpoint.
          *
+         *     Registration is open only while the tournament is **`published`** — its status
+         *     *is* its registration window (ADR-0017). Entering an event of a `draft`
+         *     tournament (not announced yet), a `live` one (the field is fixed; the draw is
+         *     cut from it), or an `archived` one (it is over) is a `409` — not a `403`: you
+         *     are permitted, the tournament is simply in the wrong state.
+         *
          *     Entering an event you are already in is a `409`; withdrawing first frees you
          *     to enter it again. Doubles and teams events are a `400`: an entry is one row
          *     per player, with nowhere to record a partner or a team.
@@ -1006,9 +1012,21 @@ export interface paths {
          *     uniqueness guard is a *partial* index over active entries only, the player is
          *     free to enter the same event again afterwards.
          *
-         *     You may only withdraw your own entry; someone else's is a `403`. Withdrawing
-         *     an entry that is already withdrawn is a no-op, not an error: this is `DELETE`,
-         *     and asking for a state the resource is already in is a success.
+         *     You may only withdraw your own entry; someone else's is a `403`.
+         *
+         *     Withdrawal, like entry, is open only while the tournament is **`published`** —
+         *     its status *is* its registration window (ADR-0017). Withdrawing an *active*
+         *     entry from a `live` tournament would pull a player out from under a draw cut
+         *     from the field they were part of, so it is a `409`, as it is for a `draft`
+         *     tournament (registration has not opened) and an `archived` one (it is over).
+         *     A `409`, not a `403`: you are permitted, the tournament is simply in the wrong
+         *     state.
+         *
+         *     **Withdrawing an entry that is already withdrawn is a `204` in every status**,
+         *     `live` and `archived` included — a no-op, not an error: this is `DELETE`, and
+         *     asking for a state the resource is already in is a success. The status gate is
+         *     on the state *change*, not on the call; an entry that is already withdrawn has
+         *     nothing left to lock.
          */
         delete: operations["withdraw_from_event_v1_tournaments__tournament_id__events__event_id__entries__entry_id__delete"];
         options?: never;

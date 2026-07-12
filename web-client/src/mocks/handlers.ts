@@ -1020,9 +1020,10 @@ export const handlers = [
         if (result.status === 400) {
           return detail('Only singles events can be entered.', 400)
         }
-        if (result.status === 409) {
-          return detail('You have already entered this event.', 409)
-        }
+        // Both 409s — registration closed (ADR-0017) and already entered — carry
+        // the store's copy, which is the server's copy. The handler no longer
+        // knows which conflict it is; the store already said.
+        if (result.status === 409) return detail(result.detail, 409)
         return detail('Event not found.', 404)
       }
       return HttpResponse.json(result.entrant, { status: 201 })
@@ -1038,6 +1039,9 @@ export const handlers = [
         String(params.entryId),
       )
       if (!result.ok) {
+        // The registration window is shut and this entry is still active
+        // (ADR-0017) — the store's detail says which of draft/live/archived.
+        if (result.status === 409) return detail(result.detail, 409)
         return detail(
           result.status === 403
             ? 'You can only withdraw your own entry.'

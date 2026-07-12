@@ -40,6 +40,7 @@ from app.models import (
     TournamentEntry,
     TournamentEntryStatus,
     TournamentEvent,
+    TournamentStatus,
     User,
 )
 from app.tournaments import TOURNAMENT_ENTER, TOURNAMENT_VIEW
@@ -49,12 +50,23 @@ ACTIVE_ENTRY_INDEX = "uq_tournament_entries_event_id_user_id_active"
 
 
 async def _make_event(
-    db_session: AsyncSession, format: EventFormat = EventFormat.singles
+    db_session: AsyncSession,
+    format: EventFormat = EventFormat.singles,
+    status: TournamentStatus = TournamentStatus.published,
 ) -> TournamentEvent:
-    """An event of ``format`` under a tournament owned by its own throwaway
-    director. Written straight to the database rather than through the create
-    routes: those are owner-only and permission-gated, and dragging that setup in
-    would blur which grant the entry route is actually being tested against.
+    """An event of ``format`` under a tournament in ``status``, owned by its own
+    throwaway director. Written straight to the database rather than through the
+    create routes: those are owner-only and permission-gated, and dragging that
+    setup in would blur which grant the entry route is actually being tested
+    against.
+
+    ``status`` defaults to ``published`` because that is the one status in which
+    registration is open (ADR-0017): every test here that enters or withdraws needs
+    an open window, and a tournament that could not be entered would say nothing
+    about the entry rules. The column is **written directly** — the starting status
+    is never reached by walking ``POST /transitions``, because a bug in the
+    transitions guard must not be able to build this file's preconditions and so
+    hide itself.
 
     The JSONB value-objects carry *valid* payloads rather than partial dicts — the
     read path validates them into ``Address``/``Slot``/``MatchSettings`` on the way
@@ -64,6 +76,7 @@ async def _make_event(
     director = await make_user(db_session, f"director-{uuid.uuid4().hex[:8]}")
     tournament = Tournament(
         name="Spring Open",
+        status=status,
         address={
             "venue": "Berkeley TT Club",
             "street": "1 Shattuck Ave",
@@ -117,6 +130,22 @@ async def _active_entries(
             TournamentEntry.event_id == event_id,
             TournamentEntry.status == TournamentEntryStatus.entered,
         )
+    )
+    return list(rows.scalars())
+
+
+async def _all_entries(
+    db_session: AsyncSession, event_id: uuid.UUID
+) -> list[TournamentEntry]:
+    """Every entry row for an event, whatever its status.
+
+    The "and nothing was written" assertions must use *this*, not
+    ``_active_entries``: a handler that inserted the row and then refused could
+    leave behind a row that ``_active_entries``' ``status = 'entered'`` filter
+    happens to hide, and the test would pass against the bug it exists to catch.
+    """
+    rows = await db_session.execute(
+        select(TournamentEntry).where(TournamentEntry.event_id == event_id)
     )
     return list(rows.scalars())
 
@@ -448,6 +477,107 @@ async def test_entering_an_unknown_event_is_a_404(
     ).status_code == 404
 
 
+async def test_entering_succeeds_while_the_tournament_status_is_published(
+    entrant_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """The open half of the registration window (ADR-0017): ``published`` is the
+    one status in which entering works, and it is stated here explicitly rather
+    than left implicit in the fixture's default."""
+    client, user = entrant_client
+    event = await _make_event(db_session, status=TournamentStatus.published)
+
+    response = await client.post(_entries_url(event))
+
+    assert response.status_code == 201, response.text
+    (row,) = await _active_entries(db_session, event.id)
+    assert row.user_id == user.id
+
+
+@pytest.mark.parametrize(
+    "tournament_status",
+    [TournamentStatus.draft, TournamentStatus.live, TournamentStatus.archived],
+)
+async def test_entering_is_a_409_when_the_tournament_status_is_not_published(
+    entrant_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    tournament_status: TournamentStatus,
+) -> None:
+    """The closed half of the window, in all three of its shapes: a ``draft``
+    nobody has announced, a ``live`` tournament whose field is fixed, and an
+    ``archived`` one that is over. The tournament's status *is* the registration
+    window (ADR-0017), so entering outside ``published`` is refused.
+
+    **409, not 403**, and the distinction is the point: the caller holds
+    ``tournament.enter`` and the entry would be their own, so they are permitted —
+    it is the tournament that is in the wrong state. 403 would say "not you"; the
+    truth is "not now".
+
+    And the row: asserting only the status code would pass against a handler that
+    inserted the entry and *then* refused, leaving a phantom entrant behind on a
+    request that was answered as a failure. ``_all_entries`` is unfiltered, so a
+    row written in any status fails this.
+    """
+    client, _ = entrant_client
+    event = await _make_event(db_session, status=tournament_status)
+    event_id = event.id
+
+    response = await client.post(_entries_url(event))
+
+    assert response.status_code == 409, response.text
+    assert await _all_entries(db_session, event_id) == []
+
+
+@pytest.mark.parametrize(
+    ("tournament_status", "phrase"),
+    [
+        (TournamentStatus.draft, "not been published yet"),
+        (TournamentStatus.live, "already under way"),
+        (TournamentStatus.archived, "has ended"),
+    ],
+)
+async def test_the_status_refusal_says_which_wrong_state_it_refused(
+    entrant_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    tournament_status: TournamentStatus,
+    phrase: str,
+) -> None:
+    """The detail is prose a player could be shown, and each closed status gets its
+    own: "not yet" and "too late" are different things to be told, and a single
+    "you cannot enter this" would leave a client unable to say which."""
+    client, _ = entrant_client
+    event = await _make_event(db_session, status=tournament_status)
+
+    response = await client.post(_entries_url(event))
+
+    assert response.status_code == 409, response.text
+    assert phrase in response.json()["detail"]
+
+
+async def test_the_doubles_400_outranks_the_status_409(
+    entrant_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """A doubles event of a draft tournament is a **400**, not a 409.
+
+    The two refusals are not the same kind of thing. "Not now" invites a retry once
+    the tournament is published — but this route will never accept a doubles entry,
+    in any status, so answering 409 would send the caller away to come back and be
+    refused again. The permanent refusal wins over the transient one.
+    """
+    client, _ = entrant_client
+    event = await _make_event(
+        db_session, format=EventFormat.doubles, status=TournamentStatus.draft
+    )
+    event_id = event.id
+
+    response = await client.post(_entries_url(event))
+
+    assert response.status_code == 400, response.text
+    assert "singles" in response.json()["detail"]
+    assert await _all_entries(db_session, event_id) == []
+
+
 # ----- the withdrawal route --------------------------------------------------
 
 
@@ -624,6 +754,159 @@ async def test_withdrawing_an_already_withdrawn_entry_is_idempotent(
     assert [(r.id, r.status) for r in rows] == [
         (entry_id, TournamentEntryStatus.withdrawn)
     ]
+
+
+async def _seed_entry(
+    db_session: AsyncSession,
+    event: TournamentEvent,
+    user: User,
+    status: TournamentEntryStatus = TournamentEntryStatus.entered,
+) -> uuid.UUID:
+    """An entry for ``user`` in ``event``, in ``status``, written straight to the
+    database — the withdrawal-gate tests' precondition.
+
+    It cannot be built through the routes any more, which is the whole reason this
+    exists: entering is *itself* gated on ``published`` (2a), so a fixture that
+    walked ``POST`` → optional ``DELETE`` could only ever leave an entry under a
+    published tournament — precisely the one status the tests below are not about.
+    Writing the row directly is also what keeps them honest: the same rule
+    ``_make_event`` follows for the tournament's status column, for the same reason
+    — a bug in one gate must not be able to build the other gate's preconditions and
+    so hide itself.
+    """
+    entry = TournamentEntry(event_id=event.id, user_id=user.id, status=status)
+    db_session.add(entry)
+    await db_session.commit()
+    await db_session.refresh(entry)
+    return entry.id
+
+
+async def _reread(db_session: AsyncSession, entry_id: uuid.UUID) -> TournamentEntry:
+    """The entry as the *database* now holds it, not as this session remembers it.
+
+    ``populate_existing`` is load-bearing here, not decoration. ``_seed_entry`` put
+    the row in this session's identity map, and the routes commit through a
+    *different* session — so a plain read would answer ``entered`` from cache even
+    after a buggy handler had flipped the row and committed. Every "and it is still
+    ``entered``" assertion below would then pass against the exact handler it exists
+    to catch: the one that writes the withdrawal and only *then* refuses.
+    """
+    row = await db_session.get(TournamentEntry, entry_id, populate_existing=True)
+    assert row is not None, "the entry row vanished — withdrawal must soft-delete"
+    return row
+
+
+async def test_withdrawing_succeeds_while_the_tournament_status_is_published(
+    entrant_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """The open half of the window, from the withdrawal side: while a tournament is
+    ``published`` its entries are still fluid, so a player may take theirs back."""
+    client, user = entrant_client
+    event = await _make_event(db_session, status=TournamentStatus.published)
+    entry_id = await _seed_entry(db_session, event, user)
+
+    response = await client.delete(_entry_url(event, entry_id))
+
+    assert response.status_code == 204, response.text
+    assert (
+        await _reread(db_session, entry_id)
+    ).status is TournamentEntryStatus.withdrawn
+
+
+@pytest.mark.parametrize(
+    "tournament_status",
+    [TournamentStatus.draft, TournamentStatus.live, TournamentStatus.archived],
+)
+async def test_withdrawing_an_active_entry_is_a_409_outside_published(
+    entrant_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    tournament_status: TournamentStatus,
+) -> None:
+    """Going live *locks the entries* (ADR-0017), and this is what that means: an
+    active entry cannot be withdrawn once the tournament has left ``published``.
+    Withdrawing from a ``live`` tournament would pull a player out from under a draw
+    generated from the field they were part of. ``draft`` and ``archived`` are shut
+    for their own reasons — registration has not opened; it is over.
+
+    **409, not 403**: the caller holds ``tournament.enter`` and it is their own
+    entry, so they are permitted. It is the tournament that is in the wrong state.
+
+    And the row is re-read: a status-code-only assertion would pass against a
+    handler that flipped the entry to ``withdrawn`` and *then* refused — answering
+    409 while having already done the very thing it refused.
+    """
+    client, user = entrant_client
+    event = await _make_event(db_session, status=tournament_status)
+    entry_id = await _seed_entry(db_session, event, user)
+
+    response = await client.delete(_entry_url(event, entry_id))
+
+    assert response.status_code == 409, response.text
+    assert (await _reread(db_session, entry_id)).status is TournamentEntryStatus.entered
+
+
+@pytest.mark.parametrize("tournament_status", list(TournamentStatus))
+async def test_withdrawing_an_already_withdrawn_entry_is_204_in_every_status(
+    entrant_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    tournament_status: TournamentStatus,
+) -> None:
+    """The idempotency exception, and the test a *blunt* status gate fails.
+
+    ADR-0016 made "withdrawing an already-withdrawn entry is a 204" a designed
+    invariant — this is ``DELETE``, and asking for a state the resource is already
+    in is a success. ADR-0017's lock must not quietly repeal it. So the gate is on
+    the state **change**, not on the call: an entry that is already ``withdrawn``
+    has nothing left to lock, and a request that would change *nothing* has no
+    conflict in it to answer 409 with.
+
+    Hence all four statuses, ``live`` and ``archived`` emphatically included — those
+    are the two a gate written as "refuse unless published" would break, turning a
+    no-op into a conflict. The parametrization is over the whole enum on purpose: a
+    fifth status added tomorrow inherits this test rather than escaping it.
+    """
+    client, user = entrant_client
+    event = await _make_event(db_session, status=tournament_status)
+    entry_id = await _seed_entry(
+        db_session, event, user, status=TournamentEntryStatus.withdrawn
+    )
+
+    response = await client.delete(_entry_url(event, entry_id))
+
+    assert response.status_code == 204, response.text
+    assert response.content == b""
+    assert (
+        await _reread(db_session, entry_id)
+    ).status is TournamentEntryStatus.withdrawn
+
+
+async def test_the_ownership_403_outranks_the_status_409_on_a_live_tournament(
+    entrant_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """Someone else's active entry in a **live** tournament is a 403, not a 409 —
+    the one case where both refusals are plausible, and so the only one that
+    actually pins the order.
+
+    "Not yours" outranks "not now" because it is the fact that will not change: a
+    409 invites the caller back once the tournament is published, where the entry
+    will still not be theirs to withdraw. Same shape as the enter route's doubles
+    400 beating its status 409 — every permanent refusal is answered before any
+    transient one. The rival's entry is untouched, so the 403 is not a partial write.
+    """
+    client, _ = entrant_client
+    event = await _make_event(db_session, status=TournamentStatus.live)
+    rival = await make_user(db_session, f"rival-{uuid.uuid4().hex[:8]}")
+    rival_entry = await _seed_entry(db_session, event, rival)
+
+    response = await client.delete(_entry_url(event, rival_entry))
+
+    assert response.status_code == 403, response.text
+    assert response.json()["detail"] == "You can only withdraw your own entry."
+    assert (
+        await _reread(db_session, rival_entry)
+    ).status is TournamentEntryStatus.entered
 
 
 async def test_withdrawing_an_entry_that_isnt_addressable_here_is_a_404(

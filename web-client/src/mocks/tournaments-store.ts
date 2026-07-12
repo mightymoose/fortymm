@@ -180,7 +180,13 @@ function seed(): StoredTournament[] {
       id: 'club-champs-2026',
       name: 'Club Championship',
       description: 'Run by the league office — view only.',
-      status: 'live',
+      // `published`, not `live`: registration is open only while a tournament is
+      // published (ADR-0017), and this is the seed's ONLY row the dev user does
+      // not own — so it is the only place `npm run dev` can show that entering is
+      // gated on the `tournament.enter` permission and NOT on ownership. Seeding
+      // it `live` would lock its entries and hide that. The closed-window states
+      // are still one click away: start (then end) the owned Bay Area Open.
+      status: 'published',
       start_date: '2026-07-01',
       end_date: '2026-07-01',
       address: {
@@ -199,8 +205,9 @@ function seed(): StoredTournament[] {
       updated_at: '2026-06-12T08:00:00Z',
       events: [
         {
-          // On a tournament the dev user does NOT own: entering is gated on the
-          // `tournament.enter` permission, not on ownership, so Enter still shows.
+          // On a tournament the dev user does NOT own (but which IS published):
+          // entering is gated on the `tournament.enter` permission, not on
+          // ownership, so Enter still shows.
           id: 'ev-cc-open',
           tournament_id: 'club-champs-2026',
           name: "Women's Championship Singles",
@@ -340,16 +347,24 @@ export type EventResult =
 export type DeleteResult = { ok: true } | { ok: false; status: 403 | 404 }
 
 /** Entering can fail four ways, mirroring the API: 404 (no such tournament or
- * event), 400 (not a singles event), 409 (already actively entered). A 403 for a
- * missing `tournament.enter` permission is the session's business, not the
- * store's — the dev session always holds it. */
+ * event), 400 (not a singles event), 409 (registration is closed, or already
+ * actively entered). Both 409s carry the server's `detail` verbatim, because the
+ * copy is what the player is shown. A 403 for a missing `tournament.enter`
+ * permission is the session's business, not the store's — the dev session always
+ * holds it. */
 export type EnterResult =
   | { ok: true; entrant: TournamentEntrantRead }
-  | { ok: false; status: 400 | 404 | 409 }
+  | { ok: false; status: 400 | 404 }
+  | { ok: false; status: 409; detail: string }
 
-/** Withdrawing fails with a 403 when the entry is someone else's; withdrawing an
- * entry that is already gone is idempotent (`ok`), as on the server. */
-export type WithdrawResult = { ok: true } | { ok: false; status: 403 | 404 }
+/** Withdrawing fails with a 403 when the entry is someone else's, and a 409 when
+ * the tournament's registration window is shut and the entry is still active.
+ * Withdrawing an entry that is already gone is idempotent (`ok`) — in *every*
+ * status — as on the server. */
+export type WithdrawResult =
+  | { ok: true }
+  | { ok: false; status: 403 | 404 }
+  | { ok: false; status: 409; detail: string }
 
 /** Strip the embedded `events` so the create/update handlers return the bare
  * `TournamentRead` the real API does. */
@@ -545,6 +560,40 @@ export function deleteEvent(
 
 let entryCounter = 0
 
+// A tournament's status IS its registration window (ADR-0017): `published` is
+// open, and the other three are shut for three different reasons — a draft is not
+// announced yet, a live tournament's field is fixed (the draw is cut from it), and
+// an archived one is over. The server refuses entry and active-entry withdrawal
+// outside `published` with a 409, so the mock must too: a mock that is MORE
+// permissive than the server it stands in for is a trap, and a regression that
+// offered Enter on a `live` tournament would 201 here, pass every vitest test, and
+// look fine in `npm run dev`.
+//
+// A `Record` keyed by the closed statuses (not by the whole enum) is the exhaustive
+// match the server's `_registration_closed_detail` makes with `assert_never`: a
+// fourth closed status added to `TournamentStatus` tomorrow is a type error at this
+// literal until it is given words, and no key can be missing at runtime.
+const REGISTRATION_CLOSED_DETAIL: Record<
+  Exclude<TournamentStatus, 'published'>,
+  string
+> = {
+  // The server's wording, verbatim (`_registration_closed_detail`,
+  // `api/app/tournaments.py`) — "not yet" and "too late" are different things to
+  // be told, and this copy is what the player reads.
+  draft:
+    'This tournament has not been published yet, so its events are not open for entry.',
+  live: 'This tournament is already under way, so its entries are locked.',
+  archived:
+    'This tournament has ended, so its events can no longer be entered.',
+}
+
+/** Why registration is refused, or `null` while the window is open. One function,
+ * because entering and withdrawing an active entry are refused for the *same*
+ * reason — exactly as on the server. */
+function registrationClosedDetail(t: StoredTournament): string | null {
+  return t.status === 'published' ? null : REGISTRATION_CLOSED_DETAIL[t.status]
+}
+
 /** Enter the dev user into an event — the caller is always the entrant (there is
  * no request body; self-registration only). Not creator-gated: the whole point
  * is that a player writes to a tournament they don't own. */
@@ -558,10 +607,23 @@ export function enterEvent(
   if (!event) return { ok: false, status: 404 }
   // One row per user can't express a doubles pairing or a team (ADR-0016).
   if (event.format !== 'singles') return { ok: false, status: 400 }
+  // Ordering, mirrored from the server: the format 400 first, then the status 409
+  // — the permanent refusal before the transient one. A 409 says "not now" and
+  // invites the caller back once the tournament is published; a doubles event will
+  // never be enterable through this route in ANY status, so it must be answered
+  // with the fact that will not change.
+  const closed = registrationClosedDetail(existing)
+  // 409, not 403 (ADR-0017): the caller is permitted and the entry would be their
+  // own — the *tournament* is in the wrong state. "Not now", never "not you".
+  if (closed !== null) return { ok: false, status: 409, detail: closed }
   // The server's partial unique index, in miniature: at most one *active* entry
   // per player per event. A second one is a 409, never a second row.
   if (event.entrants.some((e) => e.user_id === DEV_USER_ID)) {
-    return { ok: false, status: 409 }
+    return {
+      ok: false,
+      status: 409,
+      detail: 'You have already entered this event.',
+    }
   }
   entryCounter += 1
   const entrant: TournamentEntrantRead = {
@@ -583,7 +645,11 @@ export function enterEvent(
  * server soft-deletes, so a repeat DELETE is still a 204; here the row is simply
  * already gone. Dropping it (rather than tombstoning) is faithful on the wire:
  * a withdrawn entry appears in neither the list nor the count, and the player can
- * enter again straight away. */
+ * enter again straight away.
+ *
+ * Withdrawal is gated on the registration window too (ADR-0017) — pulling a player
+ * out of a `live` tournament would empty a slot the draw was cut from — but the
+ * gate is on the state CHANGE, not on the call: see the ordering below. */
 export function withdrawEntry(
   tournamentId: string,
   eventId: string,
@@ -594,9 +660,21 @@ export function withdrawEntry(
   const event = existing.events.find((e) => e.id === eventId)
   if (!event) return { ok: false, status: 404 }
   const entrant = event.entrants.find((e) => e.id === entryId)
-  // Already withdrawn (or never existed): idempotent, exactly as on the server.
+  // Already withdrawn (or never existed): idempotent, exactly as on the server —
+  // and deliberately BEFORE the status gate below, so it stays a 204 in `live` and
+  // `archived` too. This is DELETE: asking for a state the resource is already in
+  // is a success (ADR-0016), and an entry that is already withdrawn has nothing
+  // left to lock. A gate applied bluntly would quietly turn it into a 409 for a
+  // request that changes nothing — a conflict with no conflict in it.
   if (!entrant) return { ok: true }
+  // The 403 precedes the status 409, as on the server: withdrawing someone else's
+  // entry from a live tournament is "not yours" (which will never change), not
+  // "not now" (which invites a pointless retry).
   if (entrant.user_id !== DEV_USER_ID) return { ok: false, status: 403 }
+  // The entry is active and it is the caller's, so this call really would change
+  // state — and outside `published` the field is not the caller's to change.
+  const closed = registrationClosedDetail(existing)
+  if (closed !== null) return { ok: false, status: 409, detail: closed }
   const next: StoredEvent = {
     ...event,
     entrants: event.entrants.filter((e) => e.id !== entryId),

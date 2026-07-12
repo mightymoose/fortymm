@@ -18,14 +18,91 @@ import type { components } from '@/api/schema'
 
 type TournamentStatus = components['schemas']['TournamentStatus']
 
-const TOURNAMENT = 'bay-area-open-2026'
+const TOURNAMENT = 'bay-area-open-2026' // seeded `published`, owned
+const DRAFT_TOURNAMENT = 'summer-slam-2026' // seeded `draft`, owned, no events
 const EMPTY_SINGLES = 'ev-u1500' // seeded with no entrants
 const FULLISH_SINGLES = 'ev-open-singles' // seeded with 52 other players
 const DOUBLES = 'ev-mixed-doubles'
 
+/** The registration-window copy, from `_registration_closed_detail` in
+ * `api/app/tournaments.py` — byte for byte. The player reads these, so they are
+ * part of the contract the mock stands in for. */
+const CLOSED_DETAIL: Record<Exclude<TournamentStatus, 'published'>, string> = {
+  draft:
+    'This tournament has not been published yet, so its events are not open for entry.',
+  live: 'This tournament is already under way, so its entries are locked.',
+  archived:
+    'This tournament has ended, so its events can no longer be entered.',
+}
+
+const STATUSES: TournamentStatus[] = ['draft', 'published', 'live', 'archived']
+const CLOSED_STATUSES = ['draft', 'live', 'archived'] as const
+
 function event(eventId: string) {
   const found = findTournament(TOURNAMENT)!.events.find((e) => e.id === eventId)
   if (!found) throw new Error(`no seeded event ${eventId}`)
+  return found
+}
+
+/** A tournament genuinely IN `status`, holding an empty singles event and a
+ * doubles event.
+ *
+ * The lifecycle is forward-only, so there is no walking a tournament *back* to
+ * `draft`: the draft case is the seeded draft (which has no events of its own)
+ * with the two events added to it, and the rest are the seeded `published`
+ * tournament moved along legal edges only. */
+function tournamentIn(status: TournamentStatus): {
+  tournamentId: string
+  singlesId: string
+  doublesId: string
+} {
+  if (status === 'draft') {
+    const singles = createEvent(DRAFT_TOURNAMENT, {
+      name: 'Novice Singles',
+      format: 'singles',
+      draw_type: 'single-elim',
+      max_players: 16,
+      entry_fee: 10,
+      slot: { date: '2026-08-22', start: '09:00', end: '12:00' },
+      match_settings: { rated: false, length_games: 3 },
+    })
+    const doubles = createEvent(DRAFT_TOURNAMENT, {
+      name: 'Novice Doubles',
+      format: 'doubles',
+      draw_type: 'single-elim',
+      max_players: 16,
+      entry_fee: 10,
+      slot: { date: '2026-08-23', start: '09:00', end: '12:00' },
+      match_settings: { rated: false, length_games: 3 },
+    })
+    if (!singles.ok || !doubles.ok) throw new Error('setup failed: no events')
+    return {
+      tournamentId: DRAFT_TOURNAMENT,
+      singlesId: singles.event.id,
+      doublesId: doubles.event.id,
+    }
+  }
+  // `published` is where the seed already is (so: no steps); `live` and
+  // `archived` are one and two legal edges further on.
+  const forward: TournamentStatus[] = ['live', 'archived']
+  for (const step of forward.slice(0, forward.indexOf(status) + 1)) {
+    const moved = transitionTournament(TOURNAMENT, step)
+    if (!moved.ok) throw new Error(`setup failed: could not reach ${status}`)
+  }
+  return {
+    tournamentId: TOURNAMENT,
+    singlesId: EMPTY_SINGLES,
+    doublesId: DOUBLES,
+  }
+}
+
+/** The event as the store now reads it back — the count included, so a refusal
+ * can be shown to have left the roster alone. */
+function eventIn(tournamentId: string, eventId: string) {
+  const found = findTournament(tournamentId)!.events.find(
+    (e) => e.id === eventId,
+  )
+  if (!found) throw new Error(`no event ${eventId}`)
   return found
 }
 
@@ -64,6 +141,7 @@ describe('enterEvent', () => {
     expect(enterEvent(TOURNAMENT, EMPTY_SINGLES)).toEqual({
       ok: false,
       status: 409,
+      detail: 'You have already entered this event.',
     })
     expect(event(EMPTY_SINGLES).entered).toBe(1)
   })
@@ -79,8 +157,11 @@ describe('enterEvent', () => {
   })
 
   it('is allowed on a tournament the entrant does not own — entry is not creator-gated', () => {
+    // Published (so the window is open) but owned by the league office: what is
+    // being proved here is that ownership has nothing to do with entering.
     const notMine = findTournament('club-champs-2026')!
     expect(notMine.can_edit).toBe(false)
+    expect(notMine.status).toBe('published')
 
     const result = enterEvent('club-champs-2026', 'ev-cc-open')
 
@@ -90,6 +171,51 @@ describe('enterEvent', () => {
     )!
     expect(found.entered).toBe(29)
   })
+})
+
+// The registration window (ADR-0017): a tournament's status IS the state of its
+// registration, and only `published` is open. The mock must be no more permissive
+// than the server here — if it 201'd on a `live` tournament, a regression that
+// offered Enter there would pass every vitest test and look fine in `npm run dev`.
+describe('enterEvent, against the registration window', () => {
+  it.each(CLOSED_STATUSES)(
+    "409s an entry on a %s tournament, in the server's words, and adds no entrant",
+    (status) => {
+      const { tournamentId, singlesId } = tournamentIn(status)
+
+      expect(enterEvent(tournamentId, singlesId)).toEqual({
+        ok: false,
+        status: 409,
+        detail: CLOSED_DETAIL[status],
+      })
+      const after = eventIn(tournamentId, singlesId)
+      expect(after.entrants).toEqual([])
+      expect(after.entered).toBe(0)
+    },
+  )
+
+  it('still enters on a published tournament — the window is open, not welded shut', () => {
+    const { tournamentId, singlesId } = tournamentIn('published')
+
+    expect(enterEvent(tournamentId, singlesId).ok).toBe(true)
+    expect(eventIn(tournamentId, singlesId).entered).toBe(1)
+  })
+
+  // Ordering, mirrored from the server: the permanent refusal outranks the
+  // transient one. A 409 invites the caller back once the tournament is
+  // published — but a doubles event will never be enterable in ANY status, so it
+  // must be answered with the fact that will not change.
+  it.each(CLOSED_STATUSES)(
+    'answers a doubles event on a %s tournament with the 400, not the status 409',
+    (status) => {
+      const { tournamentId, doublesId } = tournamentIn(status)
+
+      expect(enterEvent(tournamentId, doublesId)).toEqual({
+        ok: false,
+        status: 400,
+      })
+    },
+  )
 })
 
 describe('withdrawEntry', () => {
@@ -136,6 +262,106 @@ describe('withdrawEntry', () => {
   })
 })
 
+// Withdrawal is gated on the same registration window as entry (ADR-0017) —
+// pulling a player out of a `live` tournament would empty a slot the draw was cut
+// from — but the gate is on the state CHANGE, not on the call.
+describe('withdrawEntry, against the registration window', () => {
+  /** Enter the dev user while the window is open, then move the tournament to
+   * `status`: an ACTIVE entry sitting in a tournament whose window has shut.
+   * (Only `live` and `archived` are reachable — a published tournament cannot go
+   * back to `draft`, so an active entry against a draft cannot exist at all.) */
+  function activeEntryIn(status: 'live' | 'archived'): string {
+    const entered = enterEvent(TOURNAMENT, EMPTY_SINGLES)
+    if (!entered.ok) throw new Error('setup failed: could not enter')
+    tournamentIn(status)
+    return entered.entrant.id
+  }
+
+  /** An entry that is ALREADY withdrawn, on a tournament in `status`. A withdrawn
+   * entry is one the event no longer carries (this store drops the row; the server
+   * tombstones it — the same fact on the wire).
+   *
+   * For the three statuses a published tournament can reach, the entry is genuinely
+   * entered-and-then-withdrawn while the window was open, and the tournament is
+   * only then moved on. `draft` is different by construction: entering a draft is
+   * refused and there is no edge back to it, so a draft tournament can never HOLD
+   * an entry — an entry id against its event is necessarily one the event does not
+   * carry, which is exactly what "already withdrawn" is here. */
+  function withdrawnEntryIn(status: TournamentStatus): {
+    tournamentId: string
+    singlesId: string
+    entryId: string
+  } {
+    if (status === 'draft') {
+      const { tournamentId, singlesId } = tournamentIn('draft')
+      return { tournamentId, singlesId, entryId: 'entry-me-1' }
+    }
+    const entered = enterEvent(TOURNAMENT, EMPTY_SINGLES)
+    if (!entered.ok) throw new Error('setup failed: could not enter')
+    const gone = withdrawEntry(TOURNAMENT, EMPTY_SINGLES, entered.entrant.id)
+    if (!gone.ok) throw new Error('setup failed: could not withdraw')
+    tournamentIn(status) // published: already there; live/archived: forward
+    return {
+      tournamentId: TOURNAMENT,
+      singlesId: EMPTY_SINGLES,
+      entryId: entered.entrant.id,
+    }
+  }
+
+  it.each(['live', 'archived'] as const)(
+    "409s the withdrawal of an ACTIVE entry once the tournament is %s, in the server's words",
+    (status) => {
+      const entryId = activeEntryIn(status)
+
+      expect(withdrawEntry(TOURNAMENT, EMPTY_SINGLES, entryId)).toEqual({
+        ok: false,
+        status: 409,
+        detail: CLOSED_DETAIL[status],
+      })
+      // Still on the roster: the refusal did not half-apply.
+      expect(event(EMPTY_SINGLES).entered).toBe(1)
+    },
+  )
+
+  it('still withdraws on a published tournament — the window is open both ways', () => {
+    const entered = enterEvent(TOURNAMENT, EMPTY_SINGLES)
+    if (!entered.ok) throw new Error('setup failed')
+
+    expect(
+      withdrawEntry(TOURNAMENT, EMPTY_SINGLES, entered.entrant.id),
+    ).toEqual({ ok: true })
+    expect(event(EMPTY_SINGLES).entered).toBe(0)
+  })
+
+  // The invariant a blunt gate breaks. ADR-0016 designed the idempotent 204; a
+  // status check placed before the "is this entry still active?" question would
+  // quietly convert it into a 409 for a request that changes nothing — a conflict
+  // with no conflict in it. An entry that is already withdrawn has nothing left to
+  // lock, in ANY status.
+  it.each(STATUSES)(
+    '204s an already-withdrawn entry on a %s tournament — the gate is on the state change, not the call',
+    (status) => {
+      const { tournamentId, singlesId, entryId } = withdrawnEntryIn(status)
+
+      expect(withdrawEntry(tournamentId, singlesId, entryId)).toEqual({
+        ok: true,
+      })
+      expect(eventIn(tournamentId, singlesId).entered).toBe(0)
+    },
+  )
+
+  it('403s someone else’s entry BEFORE the status 409 — "not yours" is the fact that will not change', () => {
+    const theirs = event(FULLISH_SINGLES).entrants[0]
+    tournamentIn('live')
+
+    expect(withdrawEntry(TOURNAMENT, FULLISH_SINGLES, theirs.id)).toEqual({
+      ok: false,
+      status: 403,
+    })
+    expect(event(FULLISH_SINGLES).entered).toBe(52)
+  })
+})
+
 describe('the rest of the event surface still holds', () => {
   it('creates an event with no entrants and a zero count', () => {
     const result = createEvent(TOURNAMENT, {
@@ -171,9 +397,8 @@ describe('the rest of the event surface still holds', () => {
 describe('transitionTournament', () => {
   const DRAFT = 'summer-slam-2026' // seeded `draft`, owned
   const PUBLISHED = 'bay-area-open-2026' // seeded `published`, owned
-  const NOT_MINE = 'club-champs-2026' // seeded `live`, can_edit: false
+  const NOT_MINE = 'club-champs-2026' // seeded `published`, can_edit: false
 
-  const STATUSES: TournamentStatus[] = ['draft', 'published', 'live', 'archived']
   const LEGAL: [TournamentStatus, TournamentStatus][] = [
     ['draft', 'published'],
     ['published', 'live'],
@@ -224,12 +449,14 @@ describe('transitionTournament', () => {
     expect(findTournament(id)!.status).toBe(from)
   })
 
+  // `published → archived` is an illegal edge too, so this also pins the ordering:
+  // not-yours is answered before the edge is judged.
   it('403s a tournament the caller does not own, whatever the edge', () => {
     expect(transitionTournament(NOT_MINE, 'archived')).toEqual({
       ok: false,
       status: 403,
     })
-    expect(findTournament(NOT_MINE)!.status).toBe('live')
+    expect(findTournament(NOT_MINE)!.status).toBe('published')
   })
 
   it('404s an unknown tournament — missing beats not-yours beats illegal', () => {
