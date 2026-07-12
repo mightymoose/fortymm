@@ -75,6 +75,29 @@ describe('NotificationsView', () => {
     expect(notificationsViewPage.queryEmptyState()).toBeInTheDocument()
   })
 
+  it('offers to clear the filter — not to go play — when a filter matches nothing (#901)', async () => {
+    const onFilterChange = vi.fn()
+    notificationsViewPage.render({ filter: 'match_reminder', onFilterChange })
+    // These notifications exist, they just aren't in this category: the way out
+    // is the filter, not a new match.
+    expect(notificationsViewPage.queryShowAll()).toBeInTheDocument()
+    expect(notificationsViewPage.queryLogMatchLink()).not.toBeInTheDocument()
+
+    await notificationsViewPage.clickShowAll()
+    expect(onFilterChange).toHaveBeenCalledWith('all')
+  })
+
+  it('offers a next action when the inbox is empty (#901)', async () => {
+    notificationsViewPage.renderEmptyInbox()
+    await notificationsViewPage.findEmptyState()
+
+    expect(notificationsViewPage.queryLogMatchLink()).toHaveAttribute(
+      'href',
+      '/matches/new',
+    )
+    expect(notificationsViewPage.queryShowAll()).not.toBeInTheDocument()
+  })
+
   it('reports the unread count', () => {
     notificationsViewPage.render({ unreadCount: 4 })
     expect(notificationsViewPage.queryUnreadBadge()).toHaveTextContent('4 unread')

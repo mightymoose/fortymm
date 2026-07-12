@@ -1,4 +1,5 @@
 import userEvent from '@testing-library/user-event'
+import { renderWithRoutes } from '@/test/router'
 import { render, screen, type Container } from '@/test/utilities'
 import { NotificationsView, type NotificationsViewProps } from './notifications-view'
 import { buildNotificationsViewProps } from './notifications-view.factory'
@@ -20,6 +21,17 @@ const scoped = (container: Container) => ({
   queryEmptyState() {
     return container.queryByText('All caught up.')
   },
+  /** The empty state under a router — async, since the router resolves its
+   * initial match after first paint. See `renderEmptyInbox`. */
+  findEmptyState() {
+    return container.findByText('All caught up.')
+  },
+  queryLogMatchLink() {
+    return container.queryByRole('link', { name: 'Log a match' })
+  },
+  queryShowAll() {
+    return container.queryByRole('button', { name: 'Show all notifications' })
+  },
   queryTitle(title: string) {
     return container.queryByText(title)
   },
@@ -40,6 +52,24 @@ export const notificationsViewPage = {
     }
   },
 
+  /**
+   * `render`, but mounted under a memory router.
+   *
+   * Only the *inbox-empty* state (no notifications at all) renders typed
+   * `<Link>`s, and a `<Link>` needs a router registering its target — so this is
+   * the harness for a feed with no items. Every other state, the filter-empty
+   * one included, is link-free and uses the plain `render` above. The router
+   * resolves asynchronously: start with `await findEmptyState()`.
+   */
+  renderEmptyInbox(overrides: Partial<NotificationsViewProps> = {}) {
+    return renderWithRoutes(
+      <NotificationsView
+        {...buildNotificationsViewProps({ items: [], unreadCount: 0, ...overrides })}
+      />,
+      { linkTargets: ['/matches/new', '/notifications/settings'] },
+    )
+  },
+
   within(container: Container = screen) {
     return scoped(container)
   },
@@ -49,6 +79,11 @@ export const notificationsViewPage = {
   },
   async clickMarkAllRead() {
     await userEvent.click(this.getMarkAllRead())
+  },
+  async clickShowAll() {
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Show all notifications' }),
+    )
   },
   async clickRow(title: string) {
     await userEvent.click(this.rowByTitle(title))
