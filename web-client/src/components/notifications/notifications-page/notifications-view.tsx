@@ -1,4 +1,3 @@
-import { Inbox } from 'lucide-react'
 import type {
   NotificationItem,
   NotificationTaxonomy,
@@ -6,6 +5,10 @@ import type {
 import { cn } from '@/lib/utils'
 import type { NotificationCategory } from '../notification-meta'
 import { NotificationRow } from '../notification-row'
+import {
+  NotificationsEmpty,
+  type NotificationsEmptyState,
+} from './notifications-empty'
 
 export type NotificationFilter = 'all' | 'unread' | NotificationCategory
 
@@ -61,6 +64,21 @@ export function NotificationsView({
     { key: 'unread', label: 'Unread' },
     ...categoryTypes.map((type) => ({ key: type.key, label: type.short })),
   ]
+  // An empty *list* is two different situations wearing one face, and they want
+  // opposite next actions — see `NotificationsEmpty` (#901). A filter can only
+  // come up empty while it is narrowing something, so `filter-empty` always has
+  // a filter worth clearing.
+  const filterLabel = filters.find((f) => f.key === filter)?.label ?? 'this filter'
+  const emptyState: NotificationsEmptyState | null =
+    shown.length > 0
+      ? null
+      : items.length === 0
+        ? { kind: 'inbox-empty' }
+        : {
+            kind: 'filter-empty',
+            filterLabel,
+            onShowAll: () => onFilterChange('all'),
+          }
 
   return (
     <div className="mx-auto max-w-[760px] px-6 pt-9 pb-20">
@@ -111,18 +129,8 @@ export function NotificationsView({
       </div>
 
       <div className="overflow-hidden rounded-[14px] border border-[color:var(--border-subtle)] bg-[color:var(--bg-panel)]">
-        {shown.length === 0 ? (
-          <div className="px-5 py-14 text-center">
-            <span className="mb-3.5 inline-flex size-14 items-center justify-center rounded-full bg-[color:var(--bg-card)] text-[color:var(--fg-muted)]">
-              <Inbox size={26} />
-            </span>
-            <p className="text-base font-semibold text-[color:var(--fg-2)]">
-              All caught up.
-            </p>
-            <p className="mt-1 text-[13px] text-[color:var(--fg-3)]">
-              Nothing here. Go play.
-            </p>
-          </div>
+        {emptyState ? (
+          <NotificationsEmpty state={emptyState} />
         ) : (
           <ul>
             {shown.map((item, i) => (
