@@ -4,6 +4,7 @@
 // that callers tweak via overrides.
 
 import type {
+  Address,
   Entrant,
   Pool,
   Predicate,
@@ -11,6 +12,22 @@ import type {
   TournamentEvent,
   TournamentTable,
 } from './types'
+
+/** The seeded venue address. Every part is optional in the domain (blank =
+ * `''`), so the partial and wholly-blank cases are expressed by overriding
+ * parts to `''` — `buildAddress({ venue: '', city: '', region: '' })` — rather
+ * than by hand-rolling a second literal at each call site. */
+export function buildAddress(overrides: Partial<Address> = {}): Address {
+  return {
+    venue: 'Berkeley TT Club',
+    street: '2727 Milvia St',
+    city: 'Berkeley',
+    region: 'CA',
+    postal: '94703',
+    country: 'USA',
+    ...overrides,
+  }
+}
 
 /** A single physical table, `T1` on court 1. */
 export function buildTable(
@@ -104,14 +121,7 @@ export function buildTournament(
     startDate: '2026-06-13',
     endDate: '2026-06-14',
     description: 'Two-day open. USATT-sanctioned, ratings-eligible.',
-    address: {
-      venue: 'Berkeley TT Club',
-      street: '2727 Milvia St',
-      city: 'Berkeley',
-      region: 'CA',
-      postal: '94703',
-      country: 'USA',
-    },
+    address: buildAddress(),
     tableIds: ['t1', 't2', 't3', 't4', 't5', 't6', 't7', 't8'],
     events: [buildEvent()],
     ...overrides,

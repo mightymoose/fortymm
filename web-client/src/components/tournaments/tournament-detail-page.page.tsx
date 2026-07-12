@@ -28,6 +28,12 @@ const scoped = (container: Container) => ({
   queryLifecycleButton(name: RegExp) {
     return container.queryByRole('button', { name })
   },
+  /** The header's venue meta item (pin icon + address). The whole item — icon
+   * included — is absent when venue, city, and region are all blank, so this is
+   * a `query`: its absence is the assertion (#994). */
+  queryVenueLine() {
+    return container.queryByTestId('tournament-venue-line')
+  },
   ...eventsTabPage.within(container),
 })
 

@@ -1,13 +1,5 @@
 import { useState } from 'react'
-import {
-  Calendar,
-  Hash,
-  Layers,
-  MapPin,
-  Table2,
-  Trophy,
-  Users,
-} from 'lucide-react'
+import { Calendar, Layers, MapPin, Table2, Trophy, Users } from 'lucide-react'
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 
@@ -18,6 +10,7 @@ import {
   EM_DASH,
   emptyEvent,
   fmtDateRange,
+  fmtVenueLine,
   genId,
 } from './data/helpers'
 import { lifecycleEdgeFor } from './data/lifecycle'
@@ -51,13 +44,18 @@ export interface TournamentDetailPageProps {
 
 function MetaItem({
   icon,
+  testId,
   children,
 }: {
   icon: React.ReactNode
+  testId?: string
   children: React.ReactNode
 }) {
   return (
-    <span className="inline-flex min-w-0 items-center gap-2 text-[14px] text-[color:var(--fg-2)]">
+    <span
+      data-testid={testId}
+      className="inline-flex min-w-0 items-center gap-2 text-[14px] text-[color:var(--fg-2)]"
+    >
       <span className="text-[color:var(--fg-3)]">{icon}</span>
       {children}
     </span>
@@ -91,6 +89,10 @@ export const TournamentDetailPage = ({
   const days = daysBetween(range.start, range.end)
   const entries = tournament.events.reduce((s, e) => s + (e.entered || 0), 0)
   const pools = tournament.events.reduce((s, e) => s + e.pools.length, 0)
+  // Empty when venue, city, and region are all blank — and then the meta item
+  // is not rendered at all, pin included. Punctuation with nothing to punctuate
+  // ("· ,") is a rendering bug, not a placeholder (#994).
+  const venue = fmtVenueLine(tournament.address)
 
   const openEvent = (ev: TournamentEvent) => {
     setEditorEvent(ev)
@@ -143,20 +145,11 @@ export const TournamentDetailPage = ({
               </span>
             )}
           </MetaItem>
-          <MetaItem icon={<MapPin size={14} />}>
-            <span className="text-[color:var(--fg-1)]">
-              {tournament.address.venue}
-            </span>
-            <span className="mx-1.5 text-[color:var(--fg-3)]">·</span>
-            <span>
-              {tournament.address.city}, {tournament.address.region}
-            </span>
-          </MetaItem>
-          <MetaItem icon={<Hash size={14} />}>
-            <span className="font-mono text-[12px] text-[color:var(--fg-3)]">
-              {tournament.id}
-            </span>
-          </MetaItem>
+          {venue && (
+            <MetaItem icon={<MapPin size={14} />} testId="tournament-venue-line">
+              <span className="truncate text-[color:var(--fg-1)]">{venue}</span>
+            </MetaItem>
+          )}
         </div>
 
         <div className="grid grid-cols-5 gap-3">
