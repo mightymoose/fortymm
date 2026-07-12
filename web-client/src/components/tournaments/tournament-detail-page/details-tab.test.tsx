@@ -37,6 +37,24 @@ describe('DetailsTab', () => {
     expect(detailsTabPage.querySaveButton()).toBeNull()
   })
 
+  // Status is not an editable field (ADR-0017): it moves only across a guarded
+  // edge, so this tab offers no way to set one. The four-way toggle that used to
+  // live here could ask for `draft → archived`, an edge the server does not have
+  // — and once `status` left `TournamentUpdate`, it could not even ask for a
+  // legal one: it was a control that did nothing.
+  it('offers the OWNER no way to set a status directly', () => {
+    detailsTabPage.render({
+      tournament: buildTournament({ status: 'draft' }),
+      canEdit: true,
+    })
+
+    expect(detailsTabPage.queryStatusField()).toBeNull()
+    // `ToggleGroupItem` renders `role="radio"`, not `button` — sweep for what the
+    // control actually was, or its removal would go unproven.
+    expect(detailsTabPage.queryAllRadios()).toHaveLength(0)
+    expect(screen.queryByText('Published')).toBeNull()
+  })
+
   // The form's furniture, which only the organizer gets. Paired with the
   // read-only case below so neither can be satisfied by deleting the feature: an
   // assertion that a viewer sees no hint would also pass if the hint were ripped
@@ -61,10 +79,11 @@ describe('DetailsTab', () => {
   // control, so this fails against a `disabled={!canEdit}` editor — which is
   // exactly the drift it exists to catch.
   //
-  // The sweep is over the DOM, not over ARIA roles: the tab's status control is
-  // a `ToggleGroup`, whose items are `radio`s rather than `button`s, so a
-  // role-only sweep of textbox/combobox/switch/button would go green with the
-  // whole toggle group still live. Assert on the elements themselves.
+  // The sweep is over the DOM (`interactiveElementsIn`), not over ARIA roles,
+  // because a role sweep under-proves: an `<input type="date">` has no role at
+  // all, and a `ToggleGroupItem` renders `role="radio"`, not `button`. This tab's
+  // controls are all inputs and a textarea today — the DOM sweep is what keeps
+  // that true for the next control someone adds to it.
   it('renders no interactive controls for a non-creator', () => {
     detailsTabPage.render({
       tournament: buildTournament(),
@@ -97,10 +116,12 @@ describe('DetailsTab', () => {
       screen.queryByText(/Optional. Shown on the public registration page/),
     ).toBeNull()
 
+    // No status row, for a reader or an editor: status is not a field of this
+    // form (ADR-0017) — it is the hero's badge, and it moves only through the
+    // header's lifecycle button.
     expect(detailsTabPage.getReadOnlyValues()).toEqual([
       'Bay Area Open 2026',
       'Two-day open.',
-      'Published',
       'Berkeley TT Club',
       '2727 Milvia St',
       'Berkeley',

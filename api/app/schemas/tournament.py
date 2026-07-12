@@ -155,11 +155,16 @@ class TournamentDetailRead(TournamentRead):
 
 
 class TournamentCreate(BaseModel):
+    """A new tournament. It carries **no** ``status``: a tournament is born
+    ``draft`` (the column's default) and moves only across a guarded lifecycle
+    edge, via ``POST /v1/tournaments/{id}/transitions`` (ADR-0017). Sending a
+    ``status`` here is a 422 — ``extra="forbid"`` — rather than a tournament that
+    is born ``live``."""
+
     model_config = ConfigDict(extra="forbid")
 
     name: str = Field(min_length=1, max_length=255)
     description: str | None = Field(default=None, max_length=1024)
-    status: TournamentStatus = TournamentStatus.draft
     start_date: date | None = None
     end_date: date | None = None
     address: Address
@@ -168,24 +173,29 @@ class TournamentCreate(BaseModel):
 
 class TournamentUpdate(BaseModel):
     """Partial update. A field that is *absent* is left unchanged; an explicit
-    value replaces the current one. The columns backing ``name``, ``status``,
-    ``address``, and ``table_catalogue`` are NOT NULL, so for those an explicit
-    ``null`` is rejected (422) rather than allowed to reach the DB — "omitted"
-    and "cleared" are different. ``description``/``start_date``/``end_date`` are
-    nullable columns and may be cleared. ``table_catalogue`` replaces wholesale
-    when present."""
+    value replaces the current one. The columns backing ``name``, ``address``,
+    and ``table_catalogue`` are NOT NULL, so for those an explicit ``null`` is
+    rejected (422) rather than allowed to reach the DB — "omitted" and "cleared"
+    are different. ``description``/``start_date``/``end_date`` are nullable
+    columns and may be cleared. ``table_catalogue`` replaces wholesale when
+    present.
+
+    ``status`` is **not** updatable and is absent here on purpose: the lifecycle
+    runs forward only across guarded edges, so the one way it moves is
+    ``POST /v1/tournaments/{id}/transitions`` (ADR-0017). A guard on that route
+    that left a ``status`` field on this one would have guarded nothing, so
+    sending ``status`` here is a 422 via ``extra="forbid"``."""
 
     model_config = ConfigDict(extra="forbid")
 
     name: str | None = Field(default=None, min_length=1, max_length=255)
     description: str | None = Field(default=None, max_length=1024)
-    status: TournamentStatus | None = None
     start_date: date | None = None
     end_date: date | None = None
     address: Address | None = None
     table_catalogue: list[TournamentTable] | None = None
 
-    @field_validator("name", "status", "address", "table_catalogue", mode="before")
+    @field_validator("name", "address", "table_catalogue", mode="before")
     @classmethod
     def _reject_explicit_null(cls, value: Any) -> Any:
         # These map to NOT NULL columns. ``mode="before"`` runs even when the
@@ -194,6 +204,20 @@ class TournamentUpdate(BaseModel):
         if value is None:
             raise ValueError("must not be null")
         return value
+
+
+class TournamentTransitionCreate(BaseModel):
+    """The edge a caller wants the tournament to travel: the status to move *to*.
+
+    ``to`` alone, with no ``from``: the tournament already knows where it is, and
+    a client that told us would only be telling us what it *believed* — a stale
+    tab's belief at that. The current status is read from the row, and whether the
+    (current, ``to``) pair is an edge at all is the server's judgement (ADR-0017).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    to: TournamentStatus
 
 
 class TournamentEventCreate(BaseModel):

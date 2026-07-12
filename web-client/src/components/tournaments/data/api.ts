@@ -24,6 +24,7 @@ import type {
   PredicateValue,
   Tournament,
   TournamentEvent,
+  TournamentStatus,
   TournamentTable,
 } from './types'
 
@@ -103,14 +104,19 @@ export function apiToTournament(t: TournamentDetailRead): Tournament {
 
 /** Build the `TournamentCreate` body from a prototype draft (the "New
  * tournament" modal). The modal collects no tables, so `table_catalogue` is the
- * empty array the bare-create endpoint expects. */
+ * empty array the bare-create endpoint expects.
+ *
+ * **No `status`.** A tournament is born `draft` — the server's column default
+ * decides, the client does not ask (ADR-0017: status left the write schemas, so
+ * the lifecycle only ever moves across a guarded edge). The draft the modal
+ * hands us still carries a `status` because `Tournament` is the *read* model;
+ * this builder simply does not propagate it. */
 export function draftToCreateBody(
   draft: Omit<Tournament, 'id'>,
 ): TournamentCreate {
   return {
     name: draft.name,
     description: draft.description,
-    status: draft.status,
     start_date: draft.startDate,
     end_date: draft.endDate,
     address: draft.address,
@@ -122,7 +128,11 @@ export function draftToCreateBody(
  * `Tournament` and the full table catalogue. Events are NOT included — they
  * have their own endpoints. The catalogue is sent as-is (the Tables tab edits
  * it directly: assign IS catalogue here, since the API has no separate global
- * table list), so a Tables-tab edit round-trips the label/court, not just ids. */
+ * table list), so a Tables-tab edit round-trips the label/court, not just ids.
+ *
+ * **No `status`.** An edit carries no status, so editing a tournament's name or
+ * dates can never move its lifecycle (ADR-0017). Moving it is
+ * `POST /v1/tournaments/{id}/transitions`, which is a mutation of its own. */
 export function tournamentToUpdateBody(
   t: Tournament,
   catalogue: TournamentTable[],
@@ -130,7 +140,6 @@ export function tournamentToUpdateBody(
   return {
     name: t.name,
     description: t.description,
-    status: t.status,
     start_date: t.startDate,
     end_date: t.endDate,
     address: t.address,
@@ -259,6 +268,27 @@ export function useTables(id: string): TournamentTable[] {
 }
 
 // ----- mutations -----------------------------------------------------------
+//
+// INVALIDATION MAP — every mutation in this module invalidates exactly this set:
+//
+// | mutation                | invalidates                              | when      |
+// | ----------------------- | ---------------------------------------- | --------- |
+// | useCreateTournament     | ['tournaments']                          | onSuccess |
+// | useUpdateTournament     | ['tournaments'], ['tournaments', id]     | onSuccess |
+// | useTransitionTournament | ['tournaments'], ['tournaments', id]     | onSettled |
+// | useDeleteTournament     | ['tournaments'], ['tournaments', id]     | onSuccess |
+// | useCreateEvent          | ['tournaments'], ['tournaments', id]     | onSuccess |
+// | useUpdateEvent          | ['tournaments'], ['tournaments', id]     | onSuccess |
+// | useDeleteEvent          | ['tournaments'], ['tournaments', id]     | onSuccess |
+// | useEnterEvent           | ['tournaments'], ['tournaments', id]     | onSettled |
+// | useWithdrawEntry        | ['tournaments'], ['tournaments', id]     | onSettled |
+//
+// There are only two keys, because there are only two queries: the list and one
+// tournament's detail (events, entrants and the table catalogue all arrive nested
+// in the detail — see the queries above). Create is the one mutation that touches
+// only the list: it has no detail entry to stale yet. The three `onSettled` rows
+// reconcile on FAILURE as well as success, which is deliberate — see the notes on
+// each.
 
 /** Create a bare tournament. Returns the created id for navigation.
  *
@@ -275,8 +305,9 @@ export function useCreateTournament() {
   })
 }
 
-/** Patch tournament-level fields (name/status/dates/description/address/
- * table_catalogue) — never events. */
+/** Patch tournament-level fields (name/dates/description/address/
+ * table_catalogue) — never events, and never `status` (ADR-0017: the lifecycle
+ * moves only through `POST /v1/tournaments/{id}/transitions`). */
 export function useUpdateTournament() {
   const qc = useQueryClient()
   return useMutation({
@@ -293,6 +324,57 @@ export function useUpdateTournament() {
       ),
     onSuccess: (_data, input) => invalidateTournament(qc, input.id),
     onError: notifyError('update the tournament'),
+  })
+}
+
+// ----- the lifecycle (ADR-0017) --------------------------------------------
+
+/** How each edge is *named* to the person who asked for it, so a failure reads
+ * as the thing they clicked ("Couldn't publish the tournament") rather than as
+ * the wire ("Couldn't POST a transition"). Keyed by the target status, and total
+ * over `TournamentStatus` — `draft` has no inbound edge (nothing un-publishes:
+ * ADR-0017), and the UI never offers one, but a `Record` keeps the lookup a
+ * total function instead of a `possibly undefined`. */
+const TRANSITION_VERB: Record<TournamentStatus, string> = {
+  published: 'publish the tournament',
+  live: 'start the tournament',
+  archived: 'end the tournament',
+  draft: 'move the tournament',
+}
+
+/** Move a tournament along its lifecycle: `POST /v1/tournaments/{id}/transitions`
+ * with the status to move **to**. This is the *only* way a status changes —
+ * `TournamentUpdate` has no `status` field (ADR-0017), so the header's Publish /
+ * Start / End buttons come here and nowhere else.
+ *
+ * The caller sends only `to`: the tournament already knows where it is, and a
+ * client that also sent `from` would only be reporting what it *believed* — a
+ * stale tab's belief at that. Whether (current, `to`) is an edge at all is the
+ * server's judgement, and an illegal one is a **409**.
+ *
+ * That 409 is a *genuine* failure — nothing moved — so it toasts, unlike the
+ * entry 409 below (which means "you are already in", and is benign). But like the
+ * entry mutations it reconciles **`onSettled`, not `onSuccess`**: since the UI
+ * only ever offers the edge that is legal from the status it last read, a 409 can
+ * only mean this view is stale (the classic case: publish in tab A, then click
+ * Publish in tab B). Re-reading the tournament is what corrects the badge and
+ * swaps the button for the one that *is* legal now — invalidating on success only
+ * would leave the stale tab offering the very button it was just refused. */
+export function useTransitionTournament(tournamentId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (to: TournamentStatus): Promise<TournamentRead> =>
+      unwrap(
+        'move the tournament',
+        await api.POST('/v1/tournaments/{tournament_id}/transitions', {
+          params: { path: { tournament_id: tournamentId } },
+          body: { to },
+        }),
+      ),
+    // Reconcile on BOTH paths — the 409 IS the stale-view signal.
+    onSettled: () => invalidateTournament(qc, tournamentId),
+    // The verb is the edge the user asked for, so the toast names their click.
+    onError: (error, to) => notifyError(TRANSITION_VERB[to])(error),
   })
 }
 

@@ -30,6 +30,17 @@ const scoped = (container: Container) => ({
   querySaveButton() {
     return container.queryByRole('button', { name: /Save changes/ })
   },
+  /** The Status row, which no longer exists in either branch: status is not a
+   * field of this form (ADR-0017). Matches the label whether it were rendered as
+   * a control or as a read-only value. */
+  queryStatusField() {
+    return container.queryByText('Status')
+  },
+  /** Every `radio` in the tab — what a `ToggleGroupItem` renders as (NOT a
+   * `button`). The status toggle was the only one; this is what proves it gone. */
+  queryAllRadios() {
+    return container.queryAllByRole('radio')
+  },
   getRevertButton() {
     return container.getByRole('button', { name: /Revert/ })
   },

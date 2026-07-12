@@ -207,12 +207,20 @@ describe('draftToCreateBody', () => {
     expect(body).toEqual({
       name: 'Autumn Cup',
       description: 'A new draft.',
-      status: 'draft',
       start_date: '2026-09-01',
       end_date: '2026-09-02',
       address: draft.address,
       table_catalogue: [],
     })
+  })
+
+  // ADR-0017: a tournament is born `draft` because the SERVER says so. The
+  // create body carries no status at all — not even the right one — so there is
+  // no status for a client to forge (the API 422s an extra key).
+  it('sends NO status — the server decides a new tournament is a draft', () => {
+    const body = draftToCreateBody({ ...draft, status: 'live' })
+
+    expect('status' in body).toBe(false)
   })
 })
 
@@ -225,6 +233,17 @@ describe('tournamentToUpdateBody', () => {
     expect(body.start_date).toBe('2026-09-01')
     expect(body.end_date).toBe('2026-09-02')
     expect('events' in body).toBe(false)
+  })
+
+  // ADR-0017: editing a tournament cannot move its lifecycle. The status the
+  // read model carries stays on the read model — it is never echoed back into
+  // the patch, so renaming a `live` tournament can't rewind it to `draft`, and
+  // a patch can't sneak it forward either. Transitions are their own endpoint.
+  it('sends NO status — an edit cannot move the lifecycle', () => {
+    const tournament: Tournament = { ...draft, id: 't-1', status: 'live' }
+    const body = tournamentToUpdateBody(tournament, [])
+
+    expect('status' in body).toBe(false)
   })
 
   it('sends the catalogue verbatim (it IS the editable table set)', () => {

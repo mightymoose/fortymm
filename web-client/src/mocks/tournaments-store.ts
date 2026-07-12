@@ -16,6 +16,7 @@ import type { components } from '@/api/schema'
 
 type TournamentDetailRead = components['schemas']['TournamentDetailRead']
 type TournamentRead = components['schemas']['TournamentRead']
+type TournamentStatus = components['schemas']['TournamentStatus']
 type TournamentEventRead = components['schemas']['TournamentEventRead']
 type TournamentCreate = components['schemas']['TournamentCreate']
 type TournamentUpdate = components['schemas']['TournamentUpdate']
@@ -301,7 +302,10 @@ function slugId(name: string): string {
 }
 
 /** Create a bare tournament owned by the dev user (so it's editable). Returns
- * the `TournamentRead` (no events — create makes a bare tournament). */
+ * the `TournamentRead` (no events — create makes a bare tournament).
+ *
+ * It is born `draft`, unconditionally: `TournamentCreate` has no `status` to ask
+ * for one (ADR-0017), so this mirrors the server's column default. */
 export function createTournament(body: TournamentCreate): TournamentRead {
   const now = new Date().toISOString()
   const id = slugId(body.name)
@@ -309,7 +313,7 @@ export function createTournament(body: TournamentCreate): TournamentRead {
     id,
     name: body.name,
     description: body.description ?? null,
-    status: body.status ?? 'draft',
+    status: 'draft',
     start_date: body.start_date ?? null,
     end_date: body.end_date ?? null,
     address: body.address,
@@ -360,7 +364,10 @@ function replace(next: StoredTournament) {
 }
 
 /** Patch a tournament's top-level fields. Non-owned rows (`can_edit: false`)
- * return 403; a missing id returns 404 — mirroring the real API's gating. */
+ * return 403; a missing id returns 404 — mirroring the real API's gating.
+ *
+ * `status` is untouched by design: `TournamentUpdate` has no such field
+ * (ADR-0017), so an edit cannot move the lifecycle — only a transition can. */
 export function updateTournament(
   id: string,
   patch: TournamentUpdate,
@@ -373,7 +380,7 @@ export function updateTournament(
     name: patch.name ?? existing.name,
     description:
       patch.description === undefined ? existing.description : patch.description,
-    status: patch.status ?? existing.status,
+    status: existing.status,
     start_date:
       patch.start_date === undefined ? existing.start_date : patch.start_date,
     end_date: patch.end_date === undefined ? existing.end_date : patch.end_date,
@@ -382,6 +389,60 @@ export function updateTournament(
       patch.table_catalogue === undefined || patch.table_catalogue === null
         ? existing.table_catalogue
         : patch.table_catalogue,
+    updated_at: new Date().toISOString(),
+  }
+  replace(next)
+  return { ok: true, tournament: readOf(next) }
+}
+
+// The tournament lifecycle, in full (ADR-0017):
+//
+//     draft ──publish──▶ published ──go live──▶ live ──archive──▶ archived
+//
+// The server's `LEGAL_TRANSITIONS` table, mirrored here as ONE table — legality
+// is a property of the (from, to) EDGE, not of the target. Every pair absent
+// from it is a 409: backwards, skipping a stage, out of the terminal `archived`,
+// and re-asserting the status the tournament already holds (a stale tab must not
+// silently succeed). A mock that permitted an illegal edge would let a broken UI
+// look fine in dev and in vitest.
+const LEGAL_TRANSITIONS: ReadonlySet<string> = new Set([
+  'draft>published',
+  'published>live',
+  'live>archived',
+])
+
+/** A transition can fail three ways, in the API's order: 404 (no such
+ * tournament), 403 (not the owner), 409 (not a legal edge). The 409 carries the
+ * server's `detail` verbatim, because the copy is what a stale tab is told. */
+export type TransitionResult =
+  | { ok: true; tournament: TournamentRead }
+  | { ok: false; status: 403 | 404 }
+  | { ok: false; status: 409; detail: string }
+
+/** `POST /v1/tournaments/{id}/transitions` — move a tournament along its
+ * lifecycle. Owner-only, like every other tournament mutation, and the ONLY way
+ * a status changes: `updateTournament` above leaves `status` alone by design. */
+export function transitionTournament(
+  id: string,
+  to: TournamentStatus,
+): TransitionResult {
+  const existing = tournaments.find((t) => t.id === id)
+  // Load (404), then ownership (403), and only then judge the edge (409) — the
+  // API's ordering, so a stranger never learns what status a tournament they
+  // cannot touch is in.
+  if (!existing) return { ok: false, status: 404 }
+  if (!existing.can_edit) return { ok: false, status: 403 }
+  if (!LEGAL_TRANSITIONS.has(`${existing.status}>${to}`)) {
+    return {
+      ok: false,
+      status: 409,
+      // The server's wording, verbatim (`api/app/tournaments.py`).
+      detail: `This tournament is ${existing.status}; it cannot be moved to ${to}.`,
+    }
+  }
+  const next: StoredTournament = {
+    ...existing,
+    status: to,
     updated_at: new Date().toISOString(),
   }
   replace(next)

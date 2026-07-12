@@ -13,6 +13,7 @@ from app.models import (
     TournamentEntry,
     TournamentEntryStatus,
     TournamentEvent,
+    TournamentStatus,
     User,
 )
 from app.rbac import require_permission
@@ -24,6 +25,7 @@ from app.schemas.tournament import (
     TournamentEventRead,
     TournamentEventUpdate,
     TournamentRead,
+    TournamentTransitionCreate,
     TournamentUpdate,
 )
 from app.sessions import get_current_user
@@ -49,6 +51,30 @@ require_create = require_permission(TOURNAMENT_CREATE)
 # Returns the signed-in user, so the enter route gets its gate and its caller
 # from one dependency — and cannot enter anyone other than that caller.
 require_enter = require_permission(TOURNAMENT_ENTER)
+
+# The tournament lifecycle, in full (ADR-0017):
+#
+#     draft ──publish──▶ published ──go live──▶ live ──archive──▶ archived
+#
+# Legality is a property of the EDGE, not of the target — "may I be published?"
+# has no answer without knowing where you are now — so the rule is a set of
+# ordered (from, to) pairs, and this set is the whole rule. Every pair absent
+# from it is a 409: backwards (published → draft), skipping a stage (draft →
+# live), out of the terminal ``archived``, and re-asserting the status a
+# tournament already holds (published → published is a *conflict*, not an
+# idempotent no-op: the only caller that sends it is a stale one, and answering
+# 200 would tell it that it did something when somebody else did).
+#
+# One table, at one dispatch point, is also where slice B (#785) hangs the
+# go-live precondition ("requires a generated draw") — a per-target rule that
+# would otherwise have to be remembered in a route of its own.
+LEGAL_TRANSITIONS: frozenset[tuple[TournamentStatus, TournamentStatus]] = frozenset(
+    {
+        (TournamentStatus.draft, TournamentStatus.published),
+        (TournamentStatus.published, TournamentStatus.live),
+        (TournamentStatus.live, TournamentStatus.archived),
+    }
+)
 
 router = APIRouter(prefix="/v1")
 
@@ -281,10 +307,14 @@ async def create_tournament(
 ) -> TournamentRead:
     # Persist the value-objects as plain JSONB; the dicts produced by
     # ``model_dump`` don't propagate beyond this write boundary.
+    #
+    # No ``status``: it isn't on the create schema (ADR-0017), so it isn't set
+    # here either. A tournament is born ``draft`` from the column's server
+    # default — one source for the starting status, rather than a schema default
+    # that a request could override — and the ``refresh`` below reads it back.
     tournament = Tournament(
         name=payload.name,
         description=payload.description,
-        status=payload.status,
         start_date=payload.start_date,
         end_date=payload.end_date,
         address=payload.address.model_dump(),
@@ -390,6 +420,64 @@ async def delete_tournament(
     await db.delete(tournament)
     await db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# ----- lifecycle routes ----------------------------------------------------
+
+
+@router.post(
+    "/tournaments/{tournament_id}/transitions",
+    response_model=TournamentRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_tournament_transition(
+    tournament_id: uuid.UUID,
+    payload: TournamentTransitionCreate,
+    db: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+) -> TournamentRead:
+    """Move a tournament along its lifecycle, and answer with the moved tournament.
+
+    The lifecycle runs forward only, and exactly three transitions exist:
+    `draft` → `published` (publish), `published` → `live` (go live), and
+    `live` → `archived` (archive). Anything else is a `409`, including walking
+    backwards, skipping a stage, moving out of the terminal `archived`, and
+    re-asserting the status the tournament already holds — a request to publish
+    an already-published tournament is a stale client, not a no-op.
+
+    Owner-only, like every other tournament mutation.
+    """
+    # Load first (404), then ownership (403), and only then judge the edge (409)
+    # — the ordering the owner-only routes above already keep. It is the ordering
+    # that makes each code mean one thing: a stranger poking at someone else's
+    # tournament gets the same 403 whichever edge they ask for, so the response
+    # never leaks what status a tournament they cannot touch is in.
+    tournament = await _get_tournament_or_404(db, tournament_id)
+    _require_owner(tournament, current_user)
+
+    if (tournament.status, payload.to) not in LEGAL_TRANSITIONS:
+        # The pair, not the target: the same ``to`` that is legal from one status
+        # is a conflict from another. The detail names both ends of the edge the
+        # caller asked for, because that is what a stale tab needs to be told —
+        # and it says nothing a user shouldn't read.
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"This tournament is {tournament.status.value}; "
+                f"it cannot be moved to {payload.to.value}."
+            ),
+        )
+
+    tournament.status = payload.to
+    await db.commit()
+    await db.refresh(tournament)
+    # The owner is the current user (``_require_owner`` just said so), so the
+    # creator's username and can_edit are both known without another query.
+    return _serialize(
+        tournament,
+        created_by_username=current_user.username,
+        current_user_id=current_user.id,
+    )
 
 
 # ----- event routes --------------------------------------------------------

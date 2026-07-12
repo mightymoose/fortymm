@@ -9,9 +9,14 @@ import {
   enterEvent,
   findTournament,
   resetTournamentsStore,
+  transitionTournament,
   updateEvent,
+  updateTournament,
   withdrawEntry,
 } from './tournaments-store'
+import type { components } from '@/api/schema'
+
+type TournamentStatus = components['schemas']['TournamentStatus']
 
 const TOURNAMENT = 'bay-area-open-2026'
 const EMPTY_SINGLES = 'ev-u1500' // seeded with no entrants
@@ -157,5 +162,92 @@ describe('the rest of the event surface still holds', () => {
     expect(result.event.name).toBe('Renamed')
     expect(result.event.entered).toBe(1)
     expect(event(EMPTY_SINGLES).entrants).toHaveLength(1)
+  })
+})
+
+// The lifecycle (ADR-0017). The store enforces the SERVER's edge table, not a
+// looser one: a mock that permitted an illegal edge would let a broken UI look
+// fine in dev and in vitest, which is the entire point of mirroring it.
+describe('transitionTournament', () => {
+  const DRAFT = 'summer-slam-2026' // seeded `draft`, owned
+  const PUBLISHED = 'bay-area-open-2026' // seeded `published`, owned
+  const NOT_MINE = 'club-champs-2026' // seeded `live`, can_edit: false
+
+  const STATUSES: TournamentStatus[] = ['draft', 'published', 'live', 'archived']
+  const LEGAL: [TournamentStatus, TournamentStatus][] = [
+    ['draft', 'published'],
+    ['published', 'live'],
+    ['live', 'archived'],
+  ]
+
+  /** Walk the owned draft forward to `status` along legal edges only, so each
+   * case starts from a tournament genuinely IN that status. */
+  function at(status: TournamentStatus): string {
+    const path: TournamentStatus[] = ['published', 'live', 'archived']
+    for (const step of path.slice(0, path.indexOf(status) + 1)) {
+      const result = transitionTournament(DRAFT, step)
+      if (!result.ok) throw new Error(`setup failed: could not reach ${status}`)
+    }
+    return DRAFT
+  }
+
+  it.each(LEGAL)('moves %s → %s', (from, to) => {
+    const id = at(from)
+
+    const result = transitionTournament(id, to)
+
+    expect(result.ok).toBe(true)
+    expect(findTournament(id)!.status).toBe(to)
+  })
+
+  // Every pair that is NOT one of the three legal edges — 13 of the 16, including
+  // the four self-transitions (`published → published` is a stale client, not a
+  // no-op) and every edge out of the terminal `archived`.
+  const ILLEGAL = STATUSES.flatMap((from) =>
+    STATUSES.filter(
+      (to) => !LEGAL.some(([f, t]) => f === from && t === to),
+    ).map((to) => [from, to] as const),
+  )
+
+  it.each(ILLEGAL)('409s %s → %s, and does not move', (from, to) => {
+    const id = at(from)
+
+    const result = transitionTournament(id, to)
+
+    expect(result).toEqual({
+      ok: false,
+      status: 409,
+      // The server's wording, verbatim — a stale tab is shown this, so the copy
+      // is part of the contract.
+      detail: `This tournament is ${from}; it cannot be moved to ${to}.`,
+    })
+    expect(findTournament(id)!.status).toBe(from)
+  })
+
+  it('403s a tournament the caller does not own, whatever the edge', () => {
+    expect(transitionTournament(NOT_MINE, 'archived')).toEqual({
+      ok: false,
+      status: 403,
+    })
+    expect(findTournament(NOT_MINE)!.status).toBe('live')
+  })
+
+  it('404s an unknown tournament — missing beats not-yours beats illegal', () => {
+    expect(transitionTournament('nope', 'published')).toEqual({
+      ok: false,
+      status: 404,
+    })
+  })
+
+  // The load-bearing half of ADR-0017: with `status` gone from `TournamentUpdate`,
+  // editing a tournament's fields cannot move its lifecycle. The transitions
+  // resource is the only door.
+  it('is the ONLY way a status changes — a field edit leaves it where it was', () => {
+    const result = updateTournament(PUBLISHED, { name: 'Renamed Open' })
+    if (!result.ok) throw new Error('update failed')
+
+    expect(result.tournament.name).toBe('Renamed Open')
+    expect(result.tournament.status).toBe('published')
+    expect(findTournament(PUBLISHED)!.status).toBe('published')
   })
 })
