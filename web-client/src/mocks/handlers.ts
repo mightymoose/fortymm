@@ -34,6 +34,7 @@ import {
   validateScore,
   type SeedMatch,
 } from './match-store'
+import { mockUuid } from './mock-uuid'
 import { notificationHandlers } from './notifications-store'
 import { createRbacState, dispatchRbac, type RbacState } from './rbac-engine'
 import { DEMO_SEED } from './rbac-store'
@@ -689,7 +690,7 @@ function playerRatingHistory(
   const anchor = {
     at: isoDaysAgo(days + 4 + (seed % 25)),
     rating: anchorRating,
-    match_id: `m-anchor-${summary.id}`,
+    match_id: mockUuid(`match:anchor:${summary.id}`),
   }
   const points = Array.from({ length: count }, (_, i) => {
     const progress = (i + 1) / count
@@ -702,7 +703,7 @@ function playerRatingHistory(
           ? rating
           : Math.round(anchorRating + net * progress + wobble),
       at: isoDaysAgo(Math.max(1, days * (1 - progress))),
-      match_id: `m-${summary.id}-${i}`,
+      match_id: mockUuid(`match:rating-point:${summary.id}:${i}`),
     }
   })
   const peak = points.reduce((best, point) =>
