@@ -57,6 +57,16 @@ export const PaginationFooter = ({
   const atFirst = safePage <= 1
   const atLast = safePage >= totalPages
 
+  // No results means there is no page to go to, so the pager is suppressed
+  // entirely and the footer is just its "Showing 0–0 of 0 {noun}" readout
+  // (#889). The guard has to live here rather than in `paginationRange`: every
+  // caller clamps its page count with `Math.max(1, …)`, so the range helper is
+  // handed `totalPages: 1` and never sees the zero. `total` — the true result
+  // count, the one the readout prints — is the only thing that tells "no
+  // results" apart from a legitimate single-page list, which still gets its
+  // page-1 token.
+  const isEmpty = total === 0
+
   return (
     <div className="footer">
       <div className="footer-info">
@@ -64,74 +74,76 @@ export const PaginationFooter = ({
         <span className="mono">{total}</span> {noun}
       </div>
       <div className="footer-spacer" />
-      <Pagination className="mx-0 w-auto justify-end">
-        <PaginationContent>
-          <PaginationItem>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              disabled={atFirst}
-              onClick={() => setPage(1)}
-              aria-label="First page"
-            >
-              <ChevronsLeft size={14} strokeWidth={2.4} />
-            </Button>
-          </PaginationItem>
-          <PaginationItem>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              disabled={atFirst}
-              onClick={() => setPage(safePage - 1)}
-              aria-label="Previous page"
-            >
-              <ChevronLeft size={14} strokeWidth={2.4} />
-            </Button>
-          </PaginationItem>
-          {tokens.map((t, i) =>
-            t === 'ellipsis' ? (
-              <PaginationItem key={i}>
-                <PaginationEllipsis />
-              </PaginationItem>
-            ) : (
-              <PaginationItem key={i}>
-                <PaginationLink
-                  href="#"
-                  isActive={t === safePage}
-                  onClick={(e) => {
-                    e.preventDefault()
-                    setPage(t)
-                  }}
-                >
-                  {t}
-                </PaginationLink>
-              </PaginationItem>
-            ),
-          )}
-          <PaginationItem>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              disabled={atLast}
-              onClick={() => setPage(safePage + 1)}
-              aria-label="Next page"
-            >
-              <ChevronRight size={14} strokeWidth={2.4} />
-            </Button>
-          </PaginationItem>
-          <PaginationItem>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              disabled={atLast}
-              onClick={() => setPage(totalPages)}
-              aria-label="Last page"
-            >
-              <ChevronsRight size={14} strokeWidth={2.4} />
-            </Button>
-          </PaginationItem>
-        </PaginationContent>
-      </Pagination>
+      {!isEmpty && (
+        <Pagination className="mx-0 w-auto justify-end">
+          <PaginationContent>
+            <PaginationItem>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                disabled={atFirst}
+                onClick={() => setPage(1)}
+                aria-label="First page"
+              >
+                <ChevronsLeft size={14} strokeWidth={2.4} />
+              </Button>
+            </PaginationItem>
+            <PaginationItem>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                disabled={atFirst}
+                onClick={() => setPage(safePage - 1)}
+                aria-label="Previous page"
+              >
+                <ChevronLeft size={14} strokeWidth={2.4} />
+              </Button>
+            </PaginationItem>
+            {tokens.map((t, i) =>
+              t === 'ellipsis' ? (
+                <PaginationItem key={i}>
+                  <PaginationEllipsis />
+                </PaginationItem>
+              ) : (
+                <PaginationItem key={i}>
+                  <PaginationLink
+                    href="#"
+                    isActive={t === safePage}
+                    onClick={(e) => {
+                      e.preventDefault()
+                      setPage(t)
+                    }}
+                  >
+                    {t}
+                  </PaginationLink>
+                </PaginationItem>
+              ),
+            )}
+            <PaginationItem>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                disabled={atLast}
+                onClick={() => setPage(safePage + 1)}
+                aria-label="Next page"
+              >
+                <ChevronRight size={14} strokeWidth={2.4} />
+              </Button>
+            </PaginationItem>
+            <PaginationItem>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                disabled={atLast}
+                onClick={() => setPage(totalPages)}
+                aria-label="Last page"
+              >
+                <ChevronsRight size={14} strokeWidth={2.4} />
+              </Button>
+            </PaginationItem>
+          </PaginationContent>
+        </Pagination>
+      )}
     </div>
   )
 }

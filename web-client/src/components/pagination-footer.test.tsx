@@ -48,6 +48,35 @@ describe('PaginationFooter', () => {
     )
   })
 
+  it('offers no page link when there are no matches', () => {
+    // Callers clamp their page count with `Math.max(1, …)`, so an empty list
+    // arrives here as `totalPages: 1` — and used to render a live page-`1`
+    // anchor beside "of 0 matches", pointing at a page that does not exist
+    // (#889). Zero results, zero pages to click.
+    paginationFooterPage.render({ page: 1, total: 0, pageSize: 25, totalPages: 1 })
+
+    expect(paginationFooterPage.queryPageLink(1)).not.toBeInTheDocument()
+    expect(paginationFooterPage.queryPageLinks()).toHaveLength(0)
+  })
+
+  it('hides the pager entirely when there are no matches', () => {
+    paginationFooterPage.render({ page: 1, total: 0, pageSize: 25, totalPages: 1 })
+
+    expect(paginationFooterPage.queryPager()).not.toBeInTheDocument()
+  })
+
+  it('still shows the page token for a single page of results', () => {
+    // The guard keys off "no results", not "one page" — a 3-player list is a
+    // legitimate single-page list and keeps its (active) page-1 token.
+    paginationFooterPage.render({ page: 1, total: 3, pageSize: 25, totalPages: 1 })
+
+    expect(paginationFooterPage.getPageLink(1)).toBeInTheDocument()
+    expect(paginationFooterPage.getPageLink(1)).toHaveAttribute(
+      'aria-current',
+      'page',
+    )
+  })
+
   it('disables First and Previous on page 1', () => {
     paginationFooterPage.render({ page: 1, totalPages: 3 })
 

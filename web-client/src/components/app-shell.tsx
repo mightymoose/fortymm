@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
-import { Link, useRouterState } from '@tanstack/react-router'
+import { Link, useLinkProps, useRouterState } from '@tanstack/react-router'
 import {
   Bell,
   ChevronDown,
@@ -12,6 +12,7 @@ import {
   TriangleAlert,
   Trophy,
   Users,
+  X,
 } from 'lucide-react'
 import { useSession } from '@/api/session'
 import { Wordmark } from '@/components/wordmark'
@@ -20,8 +21,10 @@ import { PERM } from '@/lib/permissions'
 import { NotificationBell } from './notifications/notification-bell'
 import { UserMenu } from './user-menu'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import {
   Popover,
+  PopoverClose,
   PopoverContent,
   PopoverDescription,
   PopoverHeader,
@@ -186,6 +189,87 @@ function isUnder(pathname: string, to: string) {
   return pathname === to || pathname.startsWith(`${to}/`)
 }
 
+/**
+ * What the *screen reader* hears — deliberately narrower than what the eye sees.
+ *
+ * A TanStack `<Link>` stamps `aria-current="page"` on every link whose `to` is a
+ * *prefix* of the location (`activeOptions.exact` defaults to `false`). Left at
+ * that default, `/notifications/settings` announced THREE current pages at once
+ * — Notifications, Inbox and Preferences — so a screen-reader user was told they
+ * were in the inbox while looking at the preferences page (#930). ARIA has
+ * exactly one current page; the leaf is it. A section ancestor announces
+ * nothing at all, not even `aria-current="true"`.
+ *
+ * This is the *semantic* layer only. The visual highlight — a parent staying lit
+ * over its whole subtree — is computed by `isUnder()` above and applied as
+ * `is-active` / `is-parent-active`; no CSS reads `aria-current` or
+ * `data-status`, so tightening this cannot dim anything.
+ *
+ * `includeSearch: false` because these links carry no search of their own: with
+ * the router's default the exact match would compare search params *fully*, and
+ * `/matches?page=2` would announce no current page at all — trading three lies
+ * for a silence.
+ */
+const EXACT_LINK_ONLY: { exact: true; includeSearch: false } = {
+  exact: true,
+  includeSearch: false,
+}
+
+/**
+ * A top-level nav link. Renders exactly what `<Link>` renders — `<Link>` *is*
+ * `useLinkProps()` plus an `<a>` — with one attribute under the shell's control
+ * instead of the router's: `aria-current`.
+ *
+ * We have to reach for the hook because `exact` alone cannot finish the job.
+ * A section parent and its index child point at the **same URL** (Notifications
+ * and Inbox are both `/notifications`; Administration and Overview are both
+ * `/admin`), so on the index route an exact match fires for both and two links
+ * announce themselves as the current page. No comparison of URLs can separate
+ * them — they *are* the same URL. What separates them is that one is an ancestor
+ * and the other the leaf, which only the shell knows. And the router hard-codes
+ * `aria-current="page"` onto every link it considers active, spread in after
+ * `activeProps`, so a prop cannot take it back off.
+ *
+ * So: a section parent drops the attribute; a childless item is itself the leaf
+ * and keeps whatever the router computed. Everything else here — the href, the
+ * preloading, the click handling, `data-status` — is still the router's, and
+ * none of it touches the visual state, which is the `is-*` classes below.
+ */
+function TopLevelNavLink({
+  item,
+  isActive,
+  closeOnMobile,
+}: {
+  item: NavItem
+  isActive: boolean
+  closeOnMobile: () => void
+}) {
+  const { 'aria-current': routerAriaCurrent, ...linkProps } = useLinkProps({
+    to: item.to,
+    activeOptions: EXACT_LINK_ONLY,
+    className: cn(
+      'app-shell__nav-link',
+      // A parent defers the full treatment to its children and keeps only
+      // the icon tint.
+      isActive && !item.children && 'is-active',
+      isActive && item.children && 'is-parent-active',
+    ),
+    onClick: closeOnMobile,
+  })
+
+  return (
+    <a
+      {...linkProps}
+      // A section ancestor announces nothing — not even `aria-current="true"`.
+      // ARIA has exactly one current page, and it is the leaf (#930).
+      aria-current={item.children ? undefined : routerAriaCurrent}
+    >
+      <span className="app-shell__nav-icon">{item.icon}</span>
+      {item.label}
+    </a>
+  )
+}
+
 function renderNavItem(item: NavItem, pathname: string, closeOnMobile: () => void) {
   // One notion of "you are in this section", used for all three decisions
   // below. Deriving the parent tint from an exhaustive child match instead
@@ -194,26 +278,22 @@ function renderNavItem(item: NavItem, pathname: string, closeOnMobile: () => voi
   const isActive = isUnder(pathname, item.to)
   return (
     <li key={item.label}>
-      <Link
-        to={item.to}
-        className={cn(
-          'app-shell__nav-link',
-          // A parent defers the full treatment to its children and keeps only
-          // the icon tint.
-          isActive && !item.children && 'is-active',
-          isActive && item.children && 'is-parent-active',
-        )}
-        onClick={closeOnMobile}
-      >
-        <span className="app-shell__nav-icon">{item.icon}</span>
-        {item.label}
-      </Link>
+      <TopLevelNavLink
+        item={item}
+        isActive={isActive}
+        closeOnMobile={closeOnMobile}
+      />
       {item.children && isActive ? (
         <ul className="app-shell__sub-nav-list">
           {item.children.map((child) => (
             <li key={child.label}>
               <Link
                 to={child.to}
+                // The children are leaves, so they announce themselves — but
+                // only on their own route. Without `exact`, Inbox
+                // (`/notifications`) also claimed to be the current page on
+                // `/notifications/settings`, which sits beneath it (#930).
+                activeOptions={EXACT_LINK_ONLY}
                 className={cn(
                   'app-shell__sub-nav-link',
                   pathname === child.to && 'is-active',
@@ -282,6 +362,10 @@ export function AppShell({ children }: AppShellProps) {
   return (
     <div className="app-shell dark fortymm-theme">
       <aside
+        // The id the topbar hamburger's `aria-controls` points at. Without it
+        // that reference dangled, so AT was told the button controlled a region
+        // that did not exist (#887).
+        id="app-shell-sidebar"
         className={`app-shell__sidebar${sidebarOpen ? ' is-open' : ''}`}
         aria-label="Main navigation"
       >
@@ -384,6 +468,24 @@ export function AppShell({ children }: AppShellProps) {
                       FortyMM is under active development — expect rough edges.
                     </PopoverDescription>
                   </span>
+                  {/*
+                    #891: the notice had no visible way out. It is a non-modal
+                    popover, so Escape and an outside click already dismissed it
+                    — but neither is an affordance you can *see*, and on a 375px
+                    viewport this panel covers most of the page. Same shape as
+                    the dialog's close (ghost icon button, X), named the way the
+                    sidebar's is ("Close navigation").
+                  */}
+                  <PopoverClose asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      className="-mt-1 -mr-1 ml-auto shrink-0 text-muted-foreground hover:text-foreground"
+                      aria-label="Close alpha notice"
+                    >
+                      <X />
+                    </Button>
+                  </PopoverClose>
                 </PopoverHeader>
                 <ul className="list-disc space-y-1.5 py-3.5 pr-3.5 pl-8 text-xs leading-relaxed text-muted-foreground">
                   <li>Features may change or break without warning.</li>

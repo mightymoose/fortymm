@@ -36,6 +36,14 @@ export interface OpponentTypeaheadProps {
  * `role="option"` rows, with `aria-activedescendant` tracking the
  * keyboard-highlighted option. Supports Arrow / Home / End / Enter / Escape
  * (#97/#100) and never steals focus on a remount (#131).
+ *
+ * **Highlight is not selection (#894).** `activeIdx` is `null` until the user
+ * arrows to a row or moves the cursor over one — merely *matching* a search is
+ * not a choice, so no row is pre-highlighted when results land (and the
+ * highlight is dropped again on the next keystroke). The highlight reaches
+ * assistive tech only as this combobox's `aria-activedescendant`; the options
+ * themselves stay `aria-selected="false"`, because nothing here is selected
+ * until a pick is committed to the card above.
  */
 export const OpponentTypeahead = ({
   query,
@@ -46,7 +54,10 @@ export const OpponentTypeahead = ({
   // Open on mount: the typeahead is only mounted once the user has chosen to
   // search, so the dropdown (hint, then results) should show straight away.
   const [open, setOpen] = useState(true)
-  const [activeIdx, setActiveIdx] = useState(0)
+  // `null` = no option highlighted. The two cases are mutually exclusive, and a
+  // sentinel index (0, or -1) is what let the old picker announce row 1 as
+  // chosen the instant results arrived (#894).
+  const [activeIdx, setActiveIdx] = useState<number | null>(null)
   const wrapRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const listboxId = useId()
@@ -77,48 +88,70 @@ export const OpponentTypeahead = ({
 
   function changeQuery(value: string) {
     onQueryChange(value)
-    setActiveIdx(0)
+    // Still hunting: drop the highlight rather than re-arm it onto whoever the
+    // next result set happens to put in that slot (#894).
+    setActiveIdx(null)
     setOpen(true)
   }
 
   function onKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
     // ArrowDown reopens a listbox that Escape dismissed without clearing the
-    // query (#97) — so the input is never a dead end.
+    // query (#97) — so the input is never a dead end. Arrowing *is* intent, so
+    // it enters the list at the top rather than reopening to no highlight.
     if (e.key === 'ArrowDown' && !open) {
       e.preventDefault()
       setOpen(true)
-      setActiveIdx(0)
+      setActiveIdx(results.length > 0 ? 0 : null)
       return
     }
     if (!open) return
 
     const last = results.length - 1
+    const hasResults = results.length > 0
     switch (e.key) {
       case 'ArrowDown':
         e.preventDefault()
-        setActiveIdx((i) => Math.min(last, i + 1))
+        // Entering the list from no highlight lands on the first option.
+        if (hasResults) {
+          setActiveIdx((i) => (i === null ? 0 : Math.min(last, i + 1)))
+        }
         break
       case 'ArrowUp':
         e.preventDefault()
-        setActiveIdx((i) => Math.max(0, i - 1))
+        // …and from no highlight, ArrowUp enters it from the bottom.
+        if (hasResults) {
+          setActiveIdx((i) => (i === null ? last : Math.max(0, i - 1)))
+        }
         break
       case 'Home':
         // Jump to the first option (#100).
-        if (results.length > 0) {
+        if (hasResults) {
           e.preventDefault()
           setActiveIdx(0)
         }
         break
       case 'End':
         // Jump to the last option (#100).
-        if (results.length > 0) {
+        if (hasResults) {
           e.preventDefault()
           setActiveIdx(last)
         }
         break
       case 'Enter': {
         e.preventDefault()
-        const picked = results[activeIdx]
+        // Enter commits the highlighted option. With none highlighted it must
+        // not quietly pick whoever happens to be first (#894) — but neither
+        // should it do *nothing*: typing a name you already know and pressing
+        // Enter is the ordinary keyboard path, and swallowing that key is a
+        // dead end with no feedback. So when the search has narrowed to a
+        // single candidate there is nothing to disambiguate, and Enter takes
+        // it. Two or more, and the user has to say which.
+        const picked =
+          activeIdx !== null
+            ? results[activeIdx]
+            : results.length === 1
+              ? results[0]
+              : undefined
         if (picked) onPick(picked)
         break
       }
@@ -135,8 +168,12 @@ export const OpponentTypeahead = ({
   // while the next term loads, so this only fires on the very first search.
   const loadingFirstResults = isFetching && results.length === 0
   const optionId = (i: number) => `${listboxId}-opt-${i}`
+  // Only ever points at a row the user actually highlighted, and only at one
+  // that is still on screen (a stale index can outlive its result set).
   const activeDescendant =
-    open && results.length > 0 ? optionId(activeIdx) : undefined
+    open && activeIdx !== null && results[activeIdx]
+      ? optionId(activeIdx)
+      : undefined
 
   function renderBody() {
     if (!term) {

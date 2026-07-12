@@ -20,6 +20,19 @@ const scoped = (container: Container) => ({
   querySearchAll() {
     return container.queryByRole('button', { name: /search all players/i })
   },
+  /**
+   * The "Back to recent opponents" affordance — the visible exit from search
+   * mode (#895). Only rendered for a caller that *has* a recent grid to go back
+   * to, so this is `null` on the `defaultToSearch` entry.
+   */
+  queryBackToRecent() {
+    return container.queryByRole('button', {
+      name: /back to recent opponents/i,
+    })
+  },
+  findBackToRecent() {
+    return container.findByRole('button', { name: /back to recent opponents/i })
+  },
   /** The search combobox, present only once the search view is open. */
   queryCombobox() {
     return container.queryByRole('combobox')

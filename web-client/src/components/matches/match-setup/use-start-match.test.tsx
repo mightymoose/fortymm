@@ -79,7 +79,7 @@ describe('useStartMatch', () => {
     const hook = renderStartMatch()
     const { submit } = await hook.ready()
 
-    await act(() => submit({ opponent: null, bestOf: 5, rated: false }))
+    await act(() => submit({ selection: { kind: 'none' }, bestOf: 5, rated: false }))
 
     expect(hook.router.state.location.pathname).toMatch(
       /^\/matches\/.+\/games\/1\/scores\/new$/,
@@ -112,8 +112,8 @@ describe('useStartMatch', () => {
     const { submit } = await hook.ready()
 
     await act(async () => {
-      submit({ opponent: null, bestOf: 5, rated: false })
-      submit({ opponent: null, bestOf: 5, rated: false })
+      submit({ selection: { kind: 'none' }, bestOf: 5, rated: false })
+      submit({ selection: { kind: 'none' }, bestOf: 5, rated: false })
       await new Promise((r) => setTimeout(r, 0))
     })
 
@@ -148,7 +148,7 @@ describe('useStartMatch', () => {
     // away (unmounting the Probe/hook) before the create resolves.
     let submitPromise: unknown
     act(() => {
-      submitPromise = submit({ opponent: null, bestOf: 5, rated: false })
+      submitPromise = submit({ selection: { kind: 'none' }, bestOf: 5, rated: false })
     })
     await act(async () => {
       await hook.router.navigate({
@@ -199,7 +199,7 @@ describe('useStartMatch', () => {
     const { submit: submit1 } = await hook1.ready()
     let submit1Promise: unknown
     act(() => {
-      submit1Promise = submit1({ opponent: null, bestOf: 5, rated: false })
+      submit1Promise = submit1({ selection: { kind: 'none' }, bestOf: 5, rated: false })
     })
     await act(async () => {
       await hook1.router.navigate({
@@ -216,7 +216,7 @@ describe('useStartMatch', () => {
     // not latched by anything the spent instance 1 left behind.
     const hook2 = renderStartMatch()
     const { submit: submit2 } = await hook2.ready()
-    await act(() => submit2({ opponent: null, bestOf: 5, rated: false }))
+    await act(() => submit2({ selection: { kind: 'none' }, bestOf: 5, rated: false }))
     expect(hook2.router.state.location.pathname).toMatch(
       /^\/matches\/.+\/games\/1\/scores\/new$/,
     )
@@ -254,10 +254,72 @@ describe('useStartMatch', () => {
     const { submit } = await hook.ready()
 
     await act(() =>
-      submit({ opponent: buildOpponent(), bestOf: 5, rated: true }),
+      submit({
+        selection: { kind: 'picked', opponent: buildOpponent() },
+        bestOf: 5,
+        rated: true,
+      }),
     )
 
     const result = await hook.ready()
     expect(result.apiError).toBe('Could not start the match right now.')
+  })
+
+  it('sends a seeking selection as a solo, unrated match — an uncommitted query is not an opponent (#893)', async () => {
+    // The send-time coercion is one of the places that has to agree on what a
+    // half-typed search means: nothing. It coerces exactly like `none` — no
+    // opponent id invented from the query, no rating.
+    let captured: unknown = null
+    server.use(
+      http.post('*/v1/matches', async ({ request }) => {
+        captured = await request.json()
+        const seed = newMatchSeed({ bestOf: 5, rated: false, opponent: null })
+        return HttpResponse.json(projectMatchDetails(seed), { status: 201 })
+      }),
+    )
+    const hook = renderStartMatch()
+    const { submit } = await hook.ready()
+
+    await act(() =>
+      submit({
+        selection: { kind: 'seeking' },
+        bestOf: 5,
+        rated: false,
+      }),
+    )
+
+    expect(captured).toEqual({
+      opponent_user_id: null,
+      best_of: 5,
+      rated: false,
+    })
+  })
+
+  it('refuses to create a rated match from a seeking selection, exactly as from none (#893)', async () => {
+    // Defense in depth, and the schema's half of "a seeking match is unrated":
+    // if a stale `rated: true` ever reached submit while the user was still
+    // searching, the refinement rejects it inline rather than POSTing a rated
+    // match with no opponent.
+    let posts = 0
+    server.use(
+      http.post('*/v1/matches', () => {
+        posts += 1
+        return HttpResponse.json({}, { status: 201 })
+      }),
+    )
+    const hook = renderStartMatch()
+    const { submit } = await hook.ready()
+
+    await act(() =>
+      submit({
+        selection: { kind: 'seeking' },
+        bestOf: 5,
+        rated: true,
+      }),
+    )
+
+    const result = await hook.ready()
+    expect(result.apiError).toMatch(/rated match needs an opponent/i)
+    expect(posts).toBe(0)
   })
 })
