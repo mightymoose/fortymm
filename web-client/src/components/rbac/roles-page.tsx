@@ -52,7 +52,7 @@ import {
 } from './queries'
 import { Avatar, EmptyState, Field, Stat } from './primitives'
 import { colorFor, fmtDate, fmtDateRel, groupPermissions } from './helpers'
-import { notifyError } from '@/lib/notify-error'
+import { applyServerFieldError, notifyError } from '@/lib/notify-error'
 
 // The default role is held by every user on the platform, so the API refuses to
 // delete it (that would cascade the grant away from everyone) or rename it (the
@@ -902,16 +902,7 @@ function NewRoleModal({
         templateId: templateId || undefined,
       })
     } catch (err) {
-      if (err instanceof ApiError && (err.status === 409 || err.status === 422)) {
-        form.setError('name', {
-          type: 'server',
-          message: err.detail ?? 'Server rejected this name.',
-        })
-        return
-      }
-      toast.error("Couldn't create the role", {
-        description: err instanceof Error ? err.message : String(err),
-      })
+      applyServerFieldError(form, 'name', err, 'create the role', 'Server rejected this name.')
     }
   })
 

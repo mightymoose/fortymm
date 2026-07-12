@@ -1,10 +1,9 @@
 import { useEffect, useState } from 'react'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useForm, useWatch } from 'react-hook-form'
-import { toast } from 'sonner'
 import { Check, Trash2 } from 'lucide-react'
 
-import { ApiError } from '@/api/client'
+import { applyServerFieldError } from '@/lib/notify-error'
 import { Button } from '@/components/ui/button'
 import {
   Sheet,
@@ -135,19 +134,16 @@ export const EventEditor = ({
         // through — surface it on the name field (the constrained field an
         // organizer edits) and keep the panel open so nothing is lost (#934).
         if (
-          err instanceof ApiError &&
-          (err.status === 422 || err.status === 409)
+          applyServerFieldError(
+            form,
+            'name',
+            err,
+            'save the event',
+            'The server rejected this event.',
+          )
         ) {
-          form.setError('name', {
-            type: 'server',
-            message: err.detail ?? 'The server rejected this event.',
-          })
           setSection('basics')
-          return
         }
-        toast.error("Couldn't save the event", {
-          description: err instanceof Error ? err.message : String(err),
-        })
       }
     },
     // On a client-side validation failure, jump to Basics so the rejected field

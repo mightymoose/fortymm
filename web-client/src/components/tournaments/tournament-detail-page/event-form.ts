@@ -102,7 +102,7 @@ export const eventSchema = z.object({
 // check that the mirror holds.
 export type EventFormValues = z.infer<typeof eventSchema>
 
-export const EMPTY_FORM_VALUES: EventFormValues = {
+const EMPTY_FORM_VALUES: EventFormValues = {
   name: '',
   format: 'singles',
   drawType: 'single-elim',
