@@ -18,6 +18,13 @@ export class NewMatchPage {
   readonly heading: Locator
   readonly youName: Locator
   readonly startButton: Locator
+  /**
+   * What the same submit control calls itself while the user is mid-search with
+   * nothing committed (#893). Its own locator, not a variant of `startButton`:
+   * "Start solo match" deliberately does NOT match `/start match/i`, so a spec
+   * asserting `startButton` is absent is asserting the honest relabel happened.
+   */
+  readonly soloStartButton: Locator
   readonly cancelButton: Locator
   readonly error: Locator
   readonly ratedSwitch: Locator
@@ -36,6 +43,8 @@ export class NewMatchPage {
   /** "No one matches …" message in the typeahead dropdown. */
   readonly searchNoMatch: Locator
   readonly searchAllButton: Locator
+  /** The visible exit from search mode, back to the recent grid (#895). */
+  readonly backToRecentButton: Locator
 
   static async open(
     page: Page,
@@ -56,6 +65,9 @@ export class NewMatchPage {
     this.heading = page.getByRole('heading', { level: 1, name: /new match/i })
     this.youName = page.locator('.nm-you-strip .name')
     this.startButton = page.getByRole('button', { name: /start match/i })
+    this.soloStartButton = page.getByRole('button', {
+      name: /start solo match/i,
+    })
     this.cancelButton = page.getByRole('button', { name: /^cancel$/i })
     this.error = page.locator('.nm-error')
     this.ratedSwitch = page.getByRole('switch', { name: /rated match/i })
@@ -70,6 +82,9 @@ export class NewMatchPage {
     this.searchNoMatch = page.getByText(/no one matches/i)
     this.searchAllButton = page.getByRole('button', {
       name: /search all players/i,
+    })
+    this.backToRecentButton = page.getByRole('button', {
+      name: /back to recent opponents/i,
     })
   }
 
@@ -93,6 +108,10 @@ export class NewMatchPage {
 
   async openSearch(): Promise<void> {
     await this.searchAllButton.click()
+  }
+
+  async backToRecent(): Promise<void> {
+    await this.backToRecentButton.click()
   }
 
   async search(term: string): Promise<void> {

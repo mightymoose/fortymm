@@ -1070,6 +1070,198 @@ describe('NewMatchPage — opponent search', () => {
   })
 })
 
+describe('NewMatchPage — searching for an opponent (#893)', () => {
+  // A user hunting for an opponent must never be told the match is "Ready", nor
+  // walked into a solo match by a button that still says "Start match". The card
+  // models the opponent slot as none | seeking | picked, and a non-empty,
+  // uncommitted query is `seeking`: unresolved, not solo-by-choice.
+  function recentWithOne() {
+    return http.get('*/v1/players/recent', () =>
+      HttpResponse.json([{ id: 'pl-1', username: 'ada.lovelace' }]),
+    )
+  }
+  function searchFinds(...players: { id: string; username: string }[]) {
+    return http.get('*/v1/players/search', () => HttpResponse.json(players))
+  }
+
+  /** The primary submit control, whatever it currently calls itself. */
+  function startButton() {
+    return screen.getByRole('button', { name: /start (solo )?match/i })
+  }
+  function summaryTop(container: HTMLElement) {
+    return container.querySelector('.nm-summary .top')!
+  }
+
+  async function openSearch(user: ReturnType<typeof userEvent.setup>) {
+    await user.click(
+      await screen.findByRole('button', { name: /search all players/i }),
+    )
+    return screen.getByPlaceholderText(/search by username/i)
+  }
+
+  it('reads as unresolved — not "Ready … solo match" — when the typed name matches nobody', async () => {
+    const user = userEvent.setup()
+    server.use(recentWithOne(), searchFinds())
+    const { container } = renderNewMatch()
+
+    await user.type(await openSearch(user), 'zzzzzz')
+    expect(await screen.findByText(/no one matches/i)).toBeInTheDocument()
+
+    // The summary tells the truth: nobody is selected. It does NOT claim the
+    // match is ready to go against nobody.
+    expect(summaryTop(container)).toHaveTextContent(/no opponent selected/i)
+    expect(summaryTop(container)).toHaveTextContent(/this will be a solo match/i)
+    expect(summaryTop(container)).not.toHaveTextContent(/ready/i)
+
+    // And the button says what pressing it would actually do. It stays enabled
+    // (house rule: never gate submit on validity) — this is honesty, not a lock.
+    expect(startButton()).toHaveAccessibleName('Start solo match')
+    expect(startButton()).toBeEnabled()
+    expect(
+      screen.queryByRole('button', { name: /^start match$/i }),
+    ).not.toBeInTheDocument()
+  })
+
+  it('leaves an empty search box alone: opening the search does not relabel the button or nag', async () => {
+    const user = userEvent.setup()
+    server.use(recentWithOne(), searchFinds())
+    const { container } = renderNewMatch()
+
+    await openSearch(user)
+
+    // Nothing typed — solo is still the honest default, so the card reads
+    // exactly as it did before the search opened.
+    expect(screen.getByText(/start typing to search/i)).toBeInTheDocument()
+    expect(startButton()).toHaveAccessibleName('Start match')
+    expect(summaryTop(container)).toHaveTextContent(/ready/i)
+    expect(summaryTop(container)).toHaveTextContent(/solo match/i)
+    expect(summaryTop(container)).not.toHaveTextContent(/no opponent selected/i)
+  })
+
+  it('goes back to a plain solo match when the unmatched query is cleared', async () => {
+    const user = userEvent.setup()
+    server.use(recentWithOne(), searchFinds())
+    const { container } = renderNewMatch()
+
+    await user.type(await openSearch(user), 'zzzzzz')
+    expect(await screen.findByText(/no one matches/i)).toBeInTheDocument()
+    expect(startButton()).toHaveAccessibleName('Start solo match')
+
+    // Clearing the box returns the slot to `none` — an empty search is not a
+    // hunt in progress.
+    await user.click(screen.getByRole('button', { name: /clear search/i }))
+    expect(startButton()).toHaveAccessibleName('Start match')
+    expect(summaryTop(container)).not.toHaveTextContent(/no opponent selected/i)
+  })
+
+  it('restores "Start match" and unlocks Rated once a searched player is picked', async () => {
+    const user = userEvent.setup()
+    server.use(
+      recentWithOne(),
+      searchFinds({ id: 'pl-9', username: 'barbara.liskov' }),
+    )
+    const { container } = renderNewMatch()
+
+    await user.type(await openSearch(user), 'liskov')
+    // Mid-search, before the pick: unresolved, and Rated is unavailable.
+    expect(await screen.findByRole('option', { name: /barbara\.liskov/i }))
+      .toBeInTheDocument()
+    expect(startButton()).toHaveAccessibleName('Start solo match')
+    expect(screen.getByRole('switch', { name: /rated match/i })).toBeDisabled()
+
+    await user.click(screen.getByRole('option', { name: /barbara\.liskov/i }))
+
+    // Committing to someone resolves the slot: the leftover query is
+    // irrelevant, the summary names the opponent, and Rated is live again.
+    expect(startButton()).toHaveAccessibleName('Start match')
+    expect(summaryTop(container)).toHaveTextContent(/ready/i)
+    expect(summaryTop(container)).toHaveTextContent(/barbara\.liskov/i)
+    expect(screen.getByRole('switch', { name: /rated match/i })).toBeEnabled()
+  })
+
+  it('does not strand the card in "seeking" after a searched-for opponent is changed', async () => {
+    const user = userEvent.setup()
+    server.use(
+      recentWithOne(),
+      searchFinds({ id: 'pl-9', username: 'barbara.liskov' }),
+    )
+    renderNewMatch()
+
+    await user.type(await openSearch(user), 'liskov')
+    await user.click(
+      await screen.findByRole('option', { name: /barbara\.liskov/i }),
+    )
+    expect(startButton()).toHaveAccessibleName('Start match')
+
+    // "Change" unmounts the picker and brings it back with an empty search box.
+    // The card's mirrored copy of the query has to die with it — otherwise the
+    // stale 'liskov' would leave the button saying "Start solo match" over a
+    // recent-opponents grid nobody is searching.
+    await user.click(screen.getByRole('button', { name: /^change$/i }))
+    expect(
+      await screen.findByRole('button', { name: /ada\.lovelace/i }),
+    ).toBeInTheDocument()
+    expect(startButton()).toHaveAccessibleName('Start match')
+  })
+
+  it('leaves "seeking" behind when the user backs out of search to the recent grid (#895)', async () => {
+    const user = userEvent.setup()
+    server.use(recentWithOne(), searchFinds())
+    const { container } = renderNewMatch()
+
+    await user.type(await openSearch(user), 'zzzzzz')
+    expect(await screen.findByText(/no one matches/i)).toBeInTheDocument()
+    expect(startButton()).toHaveAccessibleName('Start solo match')
+
+    // Backing out of search abandons the hunt: the recent grid comes back, and
+    // with it the card's `none` reading. A stale mirrored query would leave the
+    // button saying "Start solo match" over a grid nobody is searching.
+    await user.click(
+      screen.getByRole('button', { name: /back to recent opponents/i }),
+    )
+
+    expect(
+      await screen.findByRole('button', { name: /ada\.lovelace/i }),
+    ).toBeInTheDocument()
+    expect(startButton()).toHaveAccessibleName('Start match')
+    expect(summaryTop(container)).toHaveTextContent(/ready/i)
+    expect(summaryTop(container)).not.toHaveTextContent(/no opponent selected/i)
+  })
+
+  it('still creates a solo, unrated match when the seeking user presses the button anyway', async () => {
+    const user = userEvent.setup()
+    let captured: unknown = null
+    server.use(
+      recentWithOne(),
+      searchFinds(),
+      http.post('*/v1/matches', async ({ request }) => {
+        captured = await request.json()
+        return HttpResponse.json(pendingMatch(), { status: 201 })
+      }),
+    )
+    renderNewMatch()
+
+    await user.type(await openSearch(user), 'zzzzzz')
+    expect(await screen.findByText(/no one matches/i)).toBeInTheDocument()
+
+    // The control is not disabled — a solo match is a legitimate thing to want,
+    // and the label now says that is what you'd get. Pressing it does exactly
+    // that: no opponent invented from the query, no rating.
+    await user.click(screen.getByRole('button', { name: /start solo match/i }))
+
+    await waitFor(() =>
+      expect(
+        screen.getByText('Scoring route m-test game 1'),
+      ).toBeInTheDocument(),
+    )
+    expect(captured).toEqual({
+      opponent_user_id: null,
+      best_of: 5,
+      rated: false,
+    })
+  })
+})
+
 describe('NewMatchPage — mobile label layout (#388)', () => {
   // These guard the DOM contract the responsive CSS in new.css relies on to
   // keep labels and captions from crowding on a 375px screen. jsdom doesn't

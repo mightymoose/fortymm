@@ -16,6 +16,11 @@ import {
   opponentFromPlayer,
   type Opponent,
 } from '@/components/matches/match-setup/opponent'
+import {
+  opponentSelection,
+  selectedOpponent,
+  type OpponentSelection,
+} from '@/components/matches/match-setup/opponent-selection'
 import { usePreselectedOpponent } from '@/components/matches/match-setup/use-preselected-opponent'
 import { useStartMatch } from '@/components/matches/match-setup/use-start-match'
 import { DiscardMatchSetupDialog } from '@/components/matches/match-setup/discard-match-setup-dialog'
@@ -88,6 +93,19 @@ function MatchCard() {
   // solo match (`null`) — overrides it from then on.
   const [pick, setPick] = useState<Opponent | null | undefined>(undefined)
   const opponent = pick === undefined ? preselected.opponent : pick
+
+  // The picker's uncommitted search text, mirrored up here via its
+  // `onQueryChange` channel. Deliberately its own state and NOT folded into the
+  // `pick` tri-state above: `pick`'s `undefined` carries a different, load-bearing
+  // meaning ("untouched → the URL preseed stands"), and it is what the discard
+  // dialog's dirty check keys off (#75). Half-typing a name is not a touch of the
+  // opponent slot — nothing is configured yet — so it must not arm that dialog.
+  const [searchQuery, setSearchQuery] = useState('')
+
+  // The two observations above, resolved into the one thing the rest of the card
+  // reads: none | seeking | picked (#893). Everything downstream — the rated
+  // field, the summary, the submit payload — is a function of this.
+  const selection = opponentSelection(opponent, searchQuery)
 
   const [bestOf, setBestOf] =
     useState<BestOfFieldProps['bestOf']>(DEFAULT_BEST_OF)
@@ -163,14 +181,24 @@ function MatchCard() {
             // rated-needs-opponent refinement with a disabled toggle the user
             // can't switch off, or (b) silently re-engage rating when a new
             // opponent is picked.
+            //
+            // It also clears the mirrored query: the picker unmounted when the
+            // opponent was picked, so it comes back with an empty search box —
+            // a stale mirror would leave the card in `seeking` while showing
+            // the recent grid.
             onChange={() => {
               setPick(null)
               setRated(false)
+              setSearchQuery('')
             }}
           />
         ) : (
           <OpponentPicker
-            onPick={(player) => setPick(opponentFromPlayer(player))}
+            onPick={(player) => {
+              setPick(opponentFromPlayer(player))
+              setSearchQuery('')
+            }}
+            onQueryChange={setSearchQuery}
           />
         )}
       </div>
@@ -180,18 +208,20 @@ function MatchCard() {
         <RatedField
           rated={rated}
           setRated={setRated}
-          opponent={opponent}
+          // `seeking` is not an opponent, so the toggle stays unavailable while
+          // the user is still hunting — same as `none`.
+          opponent={selectedOpponent(selection)}
           isGuest={isGuest}
         />
       </div>
 
       <SubmitRow
-        opponent={opponent}
+        selection={selection}
         bestOf={bestOf}
         rated={rated}
         error={submitted ? apiError : null}
         submitting={submitting}
-        onSubmit={() => submit({ opponent, bestOf, rated })}
+        onSubmit={() => submit({ selection, bestOf, rated })}
         onCancel={() => navigate({ to: '/dashboard' })}
       />
 
@@ -226,8 +256,37 @@ function OpponentSkeleton() {
 /*  Submit row                                                        */
 /* ------------------------------------------------------------------ */
 
+/**
+ * The summary's headline. Each arm of the selection gets its own sentence —
+ * in particular `seeking`, which used to be indistinguishable from `none` and
+ * so was told "Ready: You · solo match" while the user was still searching
+ * (#893). It is not ready, and saying so is the whole fix.
+ */
+function summaryHeadline(selection: OpponentSelection) {
+  switch (selection.kind) {
+    case 'picked':
+      return (
+        <>
+          Ready: <b>You</b> vs <b>{selection.opponent.name}</b>
+        </>
+      )
+    case 'seeking':
+      return (
+        <span className="opp-tbd">
+          No opponent selected · this will be a solo match
+        </span>
+      )
+    case 'none':
+      return (
+        <>
+          Ready: <b>You</b> <span className="opp-tbd">· solo match</span>
+        </>
+      )
+  }
+}
+
 function SubmitRow({
-  opponent,
+  selection,
   bestOf,
   rated,
   error,
@@ -235,7 +294,7 @@ function SubmitRow({
   onSubmit,
   onCancel,
 }: {
-  opponent: Opponent | null
+  selection: OpponentSelection
   bestOf: number
   rated: boolean
   error: string | null
@@ -243,25 +302,22 @@ function SubmitRow({
   onSubmit: () => void
   onCancel: () => void
 }) {
+  const opponent = selectedOpponent(selection)
   const effectivelyRated = rated && opponent !== null
   const gamesToWin = Math.ceil(bestOf / 2)
   const lengthCopy =
     bestOf === 1 ? 'Single game' : `Best of ${bestOf} · first to ${gamesToWin}`
+  // Honesty, not a lock: the button stays enabled (house rule — never gate
+  // submit on validity), but while the user is mid-search it says exactly what
+  // pressing it would do. Starting a solo match is a legitimate choice; being
+  // walked into one is not.
+  const startLabel =
+    selection.kind === 'seeking' ? 'Start solo match' : 'Start match'
 
   return (
     <div className="nm-summary">
       <div className="read">
-        <div className="top">
-          {opponent ? (
-            <>
-              Ready: <b>You</b> vs <b>{opponent.name}</b>
-            </>
-          ) : (
-            <>
-              Ready: <b>You</b> <span className="opp-tbd">· solo match</span>
-            </>
-          )}
-        </div>
+        <div className="top">{summaryHeadline(selection)}</div>
         <div className="sub">
           {lengthCopy}{' '}
           <span className="dot">·</span>{' '}
@@ -298,7 +354,7 @@ function SubmitRow({
           {submitting && (
             <Loader2 className="fmm-icon-spin" size={16} strokeWidth={2.5} />
           )}
-          {submitting ? 'Starting…' : 'Start match'}
+          {submitting ? 'Starting…' : startLabel}
           {!submitting && <ArrowRight size={16} strokeWidth={2.5} />}
         </button>
       </div>

@@ -83,6 +83,22 @@ describe('FirstMatchCard', () => {
     ).toBeInTheDocument()
   })
 
+  it('offers no "back to recent opponents" escape — there is no grid to go back to (#895)', async () => {
+    renderFirstMatchCard()
+
+    await screen.findByRole('combobox')
+
+    // /matches/new gets a visible way out of search mode back to its recent
+    // grid. This hero *starts* in search and has no recents framing, so the
+    // same control here would dump the user somewhere they have never been.
+    expect(
+      screen.queryByRole('button', { name: /back to recent opponents/i }),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: /search all players/i }),
+    ).not.toBeInTheDocument()
+  })
+
   it('reveals the format fields and a rated summary once an opponent is picked', async () => {
     renderFirstMatchCard()
 

@@ -18,15 +18,19 @@ describe('OpponentOption', () => {
     expect(option).toHaveAccessibleName('grace.hopper, RATING 1500')
   })
 
-  it('reflects the active state via aria-selected and the active class (#94)', () => {
+  it('shows the active highlight without announcing itself as selected (#894)', () => {
+    // The keyboard/hover highlight is *not* a selection: it reaches assistive
+    // tech as the combobox's aria-activedescendant, and an option that merely
+    // has the cursor on it must keep saying it is unselected — otherwise the
+    // typeahead announces an opponent the match has not been given.
     opponentOptionPage.render({
       player: buildPlayer({ username: 'grace.hopper' }),
       active: true,
     })
 
     const option = opponentOptionPage.getOption(/grace\.hopper/)
-    expect(option).toHaveAttribute('aria-selected', 'true')
     expect(option).toHaveClass('active')
+    expect(option).toHaveAttribute('aria-selected', 'false')
   })
 
   it('marks itself unselected and unhighlighted when inactive', () => {

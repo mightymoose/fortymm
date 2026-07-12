@@ -11,6 +11,7 @@ import {
   opponentFromPlayer,
   type Opponent,
 } from '@/components/matches/match-setup/opponent'
+import { opponentSelection } from '@/components/matches/match-setup/opponent-selection'
 import { useStartMatch } from '@/components/matches/match-setup/use-start-match'
 import { Card } from '@/components/dashboard/your-game-row/card'
 import { C, MONO, UI } from '@/components/dashboard/dashboard-tokens'
@@ -153,7 +154,13 @@ export const FirstMatchCard = () => {
           className="nm-btn nm-btn-primary"
           disabled={!opponent || submitting}
           aria-busy={submitting}
-          onClick={() => submit({ opponent, bestOf, rated })}
+          // No `seeking` arm to model here: this hero *requires* an opponent
+          // (the button above is gated on one), so it can never walk the user
+          // into an unintended solo match the way /matches/new could (#893) —
+          // its selection is only ever `picked` or `none`.
+          onClick={() =>
+            submit({ selection: opponentSelection(opponent, ''), bestOf, rated })
+          }
         >
           {submitting ? 'Starting…' : 'Start scoring'}
           {!submitting && <ArrowRight size={16} strokeWidth={2.5} />}
