@@ -46,21 +46,71 @@ export async function expectAxeClean(
   context: string,
   options: AxeOptions = {},
 ) {
+  await expectAxeCleanExcept(page, context, [], options)
+}
+
+/**
+ * One (rule, node) pair a scan is allowed to keep reporting — a **pre-existing**
+ * WCAG failure in code the change under test does not own.
+ *
+ * This is debt, spelled out, not an exception granted: the pair is exempted
+ * node-by-node, so the scan still fails on any violation that is not on the list
+ * — including a *new* node of an already-listed rule. Delete an entry when the
+ * bug is fixed. Never add one to turn a red run green: a violation your change
+ * introduced is a bug in your change.
+ *
+ * Distinct from `AxeOptions.exclude`, which removes a *subtree* from the scan
+ * altogether: this one keeps scanning the node and merely tolerates the named
+ * rule on it, so any *other* rule failing there still fails the run.
+ */
+export interface KnownAxeViolation {
+  /** The axe rule id, e.g. `color-contrast`. */
+  rule: string
+  /** The selector axe reports for the offending node. */
+  node: string
+  /** Where the bug lives, and why it isn't being fixed right here. */
+  owner: string
+}
+
+/**
+ * Assert the page has no WCAG A/AA violations **other than** the known,
+ * enumerated ones.
+ *
+ * Prefer `expectAxeClean` (an empty list). Reach for this only when a state you
+ * are newly covering sits inside chrome that was already failing — the honest
+ * alternatives being to leave the state uncovered (which is how the bugs got
+ * there) or to fix unrelated production code inside an unrelated change.
+ */
+export async function expectAxeCleanExcept(
+  page: Page,
+  context: string,
+  known: KnownAxeViolation[],
+  options: AxeOptions = {},
+) {
   let builder = new AxeBuilder({ page }).withTags(WCAG_A_AA)
   for (const selector of options.exclude ?? []) {
     builder = builder.exclude(selector)
   }
   const { violations } = await builder.analyze()
 
-  // Compare on a readable projection rather than `violations.length === 0`: a
-  // failure then names the rule, its impact, and the offending selector inline,
-  // instead of dumping axe's whole node graph or, worse, just a number.
-  const summary = violations.map((v) => ({
-    rule: v.id,
-    impact: v.impact,
-    help: v.help,
-    nodes: v.nodes.map((n) => n.target.join(' ')),
-  }))
+  const exempt = new Set(known.map((k) => `${k.rule} @ ${k.node}`))
 
-  expect(summary, `axe violations — ${context}`).toEqual([])
+  // Flatten to (rule, node) pairs rather than filtering whole violations: a rule
+  // already failing on one node must still fail loudly on a *second*, new one.
+  //
+  // The projection is readable on purpose — a failure names the rule, its impact
+  // and the offending selector inline, instead of dumping axe's whole node graph
+  // or, worse, just a number.
+  const found = violations.flatMap((v) =>
+    v.nodes.map((n) => ({
+      rule: v.id,
+      impact: v.impact,
+      help: v.help,
+      node: n.target.join(' '),
+    })),
+  )
+
+  const unexpected = found.filter((v) => !exempt.has(`${v.rule} @ ${v.node}`))
+
+  expect(unexpected, `axe violations — ${context}`).toEqual([])
 }

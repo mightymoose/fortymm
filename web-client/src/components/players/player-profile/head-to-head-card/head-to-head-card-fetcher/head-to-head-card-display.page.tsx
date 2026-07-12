@@ -12,6 +12,11 @@ import { buildHeadToHeadCardDisplayProps } from './head-to-head-card-display.fac
  * typed `<Link>` resolves. */
 export const NEW_MATCH_ROUTE = '/matches/new'
 
+/** The route every frequent-opponent name links to — that opponent's own profile
+ * (chore 2b). Registered as a stub in the harness so the typed `<Link>`s
+ * resolve. */
+export const PLAYER_PROFILE_ROUTE = '/players/$userId'
+
 const scoped = (container: Container) => ({
   /**
    * The card. Found by *either* heading, on purpose: this is one component that
@@ -87,6 +92,19 @@ const scoped = (container: Container) => ({
       '.head-to-head__frequent-title',
     )
   },
+  /**
+   * The frequent-opponents **block** — the sub-heading and whatever sits under it
+   * (the rows, or the empty line).
+   *
+   * Worth reaching for over its pieces when what is being asserted is *where* a
+   * line lives, not merely that it exists: the empty state used to render outside
+   * this block, which is exactly why the empty line appeared unlabelled under the
+   * card heading. `toContainElement` against this is the check that catches a
+   * regression back to that.
+   */
+  queryFrequentBlock() {
+    return this.getHeadToHeadCard().querySelector('.head-to-head__frequent')
+  },
   /** One row per frequent opponent. */
   getFrequentRows(): HTMLElement[] {
     return Array.from(
@@ -100,6 +118,33 @@ const scoped = (container: Container) => ({
     return this.getFrequentRows().map(
       (row) =>
         row.querySelector('.head-to-head__opponent')?.textContent ?? '',
+    )
+  },
+  /**
+   * One opponent's name **as a link**, found by role — so this only resolves for
+   * a real `<a href>`, never for the bare `<span>` the row used to render.
+   */
+  getFrequentOpponentLink(username: string): HTMLElement {
+    return within(this.getHeadToHeadCard()).getByRole('link', {
+      name: username,
+    })
+  },
+  /**
+   * Where that name goes. The assertion worth making is on the **href** — a link
+   * that exists but points at the wrong player (say, the profiled player rather
+   * than the opponent named in the row) is the bug this accessor is here to
+   * catch, and "a link exists" cannot see it.
+   */
+  getFrequentOpponentHref(username: string): string {
+    return this.getFrequentOpponentLink(username).getAttribute('href') ?? ''
+  },
+  /** Every frequent-opponent name that is a link, in row order. */
+  getFrequentOpponentHrefs(): string[] {
+    return this.getFrequentRows().map(
+      (row) =>
+        row
+          .querySelector('a.head-to-head__opponent')
+          ?.getAttribute('href') ?? '',
     )
   },
   /** One frequent opponent's record, by name — the **player's** wins first. */
@@ -142,7 +187,7 @@ export const headToHeadCardDisplayPage = {
   render(overrides: Partial<HeadToHeadCardDisplayProps> = {}) {
     renderWithRoutes(
       <HeadToHeadCardDisplay {...buildHeadToHeadCardDisplayProps(overrides)} />,
-      { linkTargets: [NEW_MATCH_ROUTE] },
+      { linkTargets: [NEW_MATCH_ROUTE, PLAYER_PROFILE_ROUTE] },
     )
   },
 

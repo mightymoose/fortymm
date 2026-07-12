@@ -19,13 +19,30 @@ export type TournamentStatus = TournamentDetailRead['status']
 type UnreadCountResponse = components['schemas']['UnreadCountResponse']
 
 /** Every status a tournament can be in, in lifecycle order — so a spec that
- * sweeps "each of the four" cannot quietly sweep three. */
+ * sweeps "each of the four" cannot quietly sweep three. This is the sweep for an
+ * OWNER, who can reach all four of their own. */
 export const STATUSES: readonly TournamentStatus[] = [
   'draft',
   'published',
   'live',
   'archived',
 ]
+
+/** The statuses in which a tournament has been ANNOUNCED — the only statuses a
+ * NON-OWNER can ever have on screen: a draft is owner-only to read, so a stranger's
+ * GET of one is a 404 and the detail page never renders at all.
+ *
+ * The viewer sweeps run over this list rather than over `STATUSES`, because a
+ * viewer + `draft` fixture would be a world the server cannot produce — the spec
+ * would be stubbing a response the API refuses to give, and asserting the UI is
+ * well-behaved in a state it can never be in.
+ *
+ * Re-exported from the mock store, NOT re-typed here: there it is derived from the
+ * exhaustiveness-checked `Record<TournamentStatus, boolean>` that mirrors the API's
+ * `ANNOUNCED_STATUSES` (#967), so a new status is a compile error at the source
+ * instead of a sweep that silently shrinks. (The store imports only types, so
+ * pulling it into the Playwright process is inert — no MSW comes with it.) */
+export { ANNOUNCED_STATUSES } from '../../../src/mocks/tournaments-store'
 
 /** The app shell's notification bell polls this on every page, tournaments
  * included. It is nothing to do with entries — but with MSW off, an unanswered

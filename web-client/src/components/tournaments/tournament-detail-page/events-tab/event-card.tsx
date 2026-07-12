@@ -52,15 +52,20 @@ export const EventCard = ({
   onOpen,
   action,
 }: EventCardProps) => {
-  // What the EVENT has left — read off the two numbers, never off `entryState`.
+  // What the EVENT has left — read off the numbers, never off `entryState`.
   // `entryState` is the server's judgement about *this caller* (an ineligible one
   // reads `rating_ineligible` on an event that is also full, ADR-0783), so it can
   // neither count the free places nor be relied on to admit a full event is full.
   // The capacity line is a fact about the event; the entry control beside it is the
   // fact about the caller. See `../../data/capacity`.
+  //
+  // An **uncapped** event (`maxPlayers === null`, ADR-0935) is its own arm of that
+  // reading, not a big number: it has no denominator, so it gets no fill bar — and it
+  // can never be full, however many have entered.
   const capacity = eventCapacity(ev)
   const fillPct = capacityFillPercent(ev)
   const isFull = capacity.state === 'full'
+  const uncapped = capacity.state === 'uncapped'
   // Falling back to the stored key, not to `null`: a card must never blank out a
   // row, so an unknown key shows *something* (cf. the read-only `Field`s, which
   // pass `null` and let the em-dash say "unset").
@@ -147,27 +152,36 @@ export const EventCard = ({
                 {ev.entered}
               </span>
               <span className="font-mono text-[13px] text-[color:var(--fg-3)]">
-                / {ev.maxPlayers}
+                {uncapped ? 'entered' : `/ ${ev.maxPlayers}`}
               </span>
             </div>
             <span className="sr-only">{enteredSummary(ev)}</span>
-            <div
-              aria-hidden="true"
-              className="mt-1.5 h-1 overflow-hidden rounded-full bg-[color:var(--bg-panel)]"
-            >
+            {/* No fill bar for an uncapped event — there is no denominator to fill
+                against (ADR-0935), so `capacityFillPercent` returns `null` and there
+                is no width to draw. A `0%` rail would look like an empty event and a
+                `100%` one like a full one; it is neither. */}
+            {fillPct !== null && (
               <div
-                className={cn(
-                  'h-full',
-                  isFull ? 'bg-[color:var(--warn)]' : 'bg-[color:var(--ball-500)]',
-                )}
-                style={{ width: `${fillPct}%` }}
-              />
-            </div>
+                data-testid="capacity-bar"
+                aria-hidden="true"
+                className="mt-1.5 h-1 overflow-hidden rounded-full bg-[color:var(--bg-panel)]"
+              >
+                <div
+                  className={cn(
+                    'h-full',
+                    isFull ? 'bg-[color:var(--warn)]' : 'bg-[color:var(--ball-500)]',
+                  )}
+                  style={{ width: `${fillPct}%` }}
+                />
+              </div>
+            )}
             {/* What the numeral leaves the reader to work out: how many places are
-                left — or, once there are none, that there are none. A full event
-                reads FULL; it never counts down to "0 places left", and an
-                over-full one (a cap lowered under a field that has already formed)
-                never counts *past* it into a negative. */}
+                left — or, once there are none, that there are none, or that there was
+                never a limit at all. A full event reads FULL; it never counts down to
+                "0 places left", and an over-full one (a cap lowered under a field that
+                has already formed) never counts *past* it into a negative. An uncapped
+                one says so, rather than leaving the one blank line on a wall of cards
+                that all state a fact. */}
             <p
               data-testid="capacity-remaining"
               className={cn(

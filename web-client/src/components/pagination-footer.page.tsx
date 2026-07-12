@@ -4,7 +4,7 @@ import { PaginationFooter, type PaginationFooterProps } from './pagination-foote
 import { buildPaginationFooterProps } from './pagination-footer.factory'
 
 const scoped = (container: Container) => ({
-  /** The "Showing {first}–{last} of {total} matches" range line. */
+  /** The "Showing {first}–{last} of {total} {noun}" range line. */
   getInfo() {
     return container.getByText(/showing/i)
   },
@@ -33,6 +33,17 @@ const scoped = (container: Container) => ({
   },
   queryPageLink(n: number) {
     return container.queryByRole('link', { name: String(n) })
+  },
+  /**
+   * Every clickable page token, whatever its number. Use this to assert the
+   * *absence* of a pager: an empty list must offer no page to click (#889).
+   */
+  queryPageLinks() {
+    return container.queryAllByRole('link')
+  },
+  /** The pager itself — `Pagination` renders `<nav aria-label="pagination">`. */
+  queryPager() {
+    return container.queryByRole('navigation', { name: /pagination/i })
   },
 })
 

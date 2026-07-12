@@ -72,7 +72,7 @@ async def _make_event(
     db_session: AsyncSession,
     format: EventFormat = EventFormat.singles,
     status: TournamentStatus = TournamentStatus.published,
-    max_players: int = 64,
+    max_players: int | None = 64,
     predicates: list[dict[str, Any]] | None = None,
     league: League | None = None,
 ) -> TournamentEvent:
@@ -97,7 +97,9 @@ async def _make_event(
 
     ``max_players`` defaults to a field nobody in this file is going to fill, so the
     capacity guard (ADR-0783) stays out of the way of every test that is about
-    something else; the capacity tests pass the small number they mean.
+    something else; the capacity tests pass the small number they mean. ``None`` is a
+    legal value and does not mean "unset": it is the **uncapped** event of ADR-0935,
+    which the capacity tests below use to prove the guard steps aside entirely.
 
     ``predicates`` defaults to **no rules at all**, for the same reason: an event with
     no eligibility rules admits everybody, so the rating guard (ADR-0783) stays out of
@@ -1310,6 +1312,69 @@ async def test_a_withdrawn_entry_does_not_occupy_a_slot(
     assert response.status_code == 201, response.text
     active = await _active_entries(db_session, event.id)
     assert [e.user_id for e in active] == [user.id]
+
+
+async def test_an_uncapped_event_never_refuses_with_event_full(
+    entrant_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """An event with **no cap** (``max_players IS NULL``, ADR-0935) admits everybody,
+    however many are already in it — the ``event_full`` refusal is unreachable for it.
+
+    The field is seeded well past every cap this file uses, so the assertion is not
+    "one more fits" but "the limit does not exist": against the pre-ADR-0935 guard
+    (``entered >= max_players`` over a NULL) this is a ``TypeError`` and a 500, and
+    against the tempting repair (``max_players or 0``) it is a 409 on an *empty* event
+    — the uncapped event, the one that admits everybody, being the only one nobody can
+    enter. Both failures land here, and neither can hide behind a green capped test.
+    """
+    client, user = entrant_client
+    event = await _make_event(db_session, max_players=None)
+    for index in range(5):
+        await _seed_entry(
+            db_session, event, await make_user(db_session, f"crowd-{index}")
+        )
+
+    response = await client.post(_entries_url(event))
+
+    assert response.status_code == 201, response.text
+    active = await _active_entries(db_session, event.id)
+    assert len(active) == 6
+    assert user.id in {entry.user_id for entry in active}
+
+
+async def test_an_uncapped_event_takes_no_capacity_count(
+    db_session: AsyncSession,
+    engine: AsyncEngine,
+    player: User,
+) -> None:
+    """No cap, no count: the guard steps aside *before* the ``COUNT(*)``, rather than
+    counting the field and then ignoring the number.
+
+    The count is not free — it is a scan of the entries of an event that, being
+    uncapped, is likely to be the biggest one there is — and its answer could not change
+    the outcome, because there is nothing to compare it against. A query whose result is
+    discarded is a query that should not have been issued; this is the tripwire that
+    says so, and it is the reason the ``None`` check sits above the count and not below
+    it.
+    """
+    event = await _make_event(db_session, max_players=None)
+    tournament_id, event_id, player_id = event.tournament_id, event.id, player.id
+
+    async with counted_statements(engine) as (session, statements):
+        entrant = (
+            await session.execute(select(User).where(User.id == player_id))
+        ).scalar_one()
+        await enter_event(tournament_id, event_id, session, entrant)
+
+    assert not any(
+        "count(" in statement.lower() and "tournament_entries" in statement
+        for statement in statements
+    ), statements
+    # The lock is still taken, though: an uncapped event is not an unlocked one. The
+    # tournament's status is still judged and then written against (registration window,
+    # ADR-0017), and dropping the capacity count must not drop the lock with it.
+    assert any("FOR UPDATE" in statement for statement in statements), statements
 
 
 async def test_the_capacity_count_is_taken_under_the_tournament_row_lock(

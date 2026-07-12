@@ -44,10 +44,17 @@ const scoped = (container: Container) => ({
     return container.queryAllByRole('button')
   },
 
-  /** The capacity caption under the fill bar: how many places are left, or that
-   * the event is full (#783). */
+  /** The capacity caption under the fill bar: how many places are left, that the
+   * event is full, or that it has no limit at all (#783, ADR-0935). */
   queryCapacityNote() {
     return container.queryByTestId('capacity-remaining')
+  },
+
+  /** The capacity fill bar. Rendered only for a CAPPED event; an uncapped event
+   * (ADR-0935) has no denominator to fill against, so this is absent — which is the
+   * assertion, since a bar drawn at 0% or 100% would be a fabricated one. */
+  queryCapacityBar() {
+    return container.queryByTestId('capacity-bar')
   },
 
   /** The count as a screen reader hears it — the sentence behind the `12 / 64`

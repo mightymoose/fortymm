@@ -4,6 +4,7 @@
 // that callers tweak via overrides.
 
 import type {
+  Address,
   Entrant,
   EventEntryState,
   Pool,
@@ -12,6 +13,22 @@ import type {
   TournamentEvent,
   TournamentTable,
 } from './types'
+
+/** The seeded venue address. Every part is optional in the domain (blank =
+ * `''`), so the partial and wholly-blank cases are expressed by overriding
+ * parts to `''` — `buildAddress({ venue: '', city: '', region: '' })` — rather
+ * than by hand-rolling a second literal at each call site. */
+export function buildAddress(overrides: Partial<Address> = {}): Address {
+  return {
+    venue: 'Berkeley TT Club',
+    street: '2727 Milvia St',
+    city: 'Berkeley',
+    region: 'CA',
+    postal: '94703',
+    country: 'USA',
+    ...overrides,
+  }
+}
 
 /** A single physical table, `T1` on court 1. */
 export function buildTable(
@@ -112,12 +129,35 @@ export function buildEvent(
     pools: [buildPool()],
     ...overrides,
   } satisfies Omit<TournamentEvent, 'entered'>
+  // An **uncapped** event (`maxPlayers: null`, ADR-0935) is never `event_full` —
+  // the server guarantees it, and so does the fixture. The null check is the whole
+  // point of writing it this way round: `entrants.length >= null` coerces the cap
+  // to `0`, which makes *every* uncapped fixture full the moment it has one
+  // entrant, and a card test seeded from it would then be asserting the bug.
   const entryState: EventEntryState =
     overrides.entryState ??
-    (event.entrants.length >= event.maxPlayers
+    (event.maxPlayers !== null && event.entrants.length >= event.maxPlayers
       ? { state: 'event_full' }
       : { state: 'open' })
   return { ...event, entryState, entered: event.entrants.length }
+}
+
+/** An event with **no entrant cap** (`max_players: null`, ADR-0935): open to
+ * everyone, however many have entered. The roster is deliberately *large* — a
+ * fixture of two entrants would render identically whether the card handled the
+ * null cap or quietly read it as a big number, so it could not tell the fix from
+ * the bug. It carries `entryState: open`, because an uncapped event cannot be
+ * `event_full` (the default above derives exactly that). */
+export function buildUncappedEvent(
+  overrides: Partial<Omit<TournamentEvent, 'entered'>> = {},
+): TournamentEvent {
+  return buildEvent({
+    id: 'ev-club-night',
+    name: 'Club Night',
+    maxPlayers: null,
+    entrants: buildEntrants(23),
+    ...overrides,
+  })
 }
 
 /** An event nobody else can get into: at `max_players`, so the server judges it
@@ -188,14 +228,7 @@ export function buildTournament(
     startDate: '2026-06-13',
     endDate: '2026-06-14',
     description: 'Two-day open. USATT-sanctioned, ratings-eligible.',
-    address: {
-      venue: 'Berkeley TT Club',
-      street: '2727 Milvia St',
-      city: 'Berkeley',
-      region: 'CA',
-      postal: '94703',
-      country: 'USA',
-    },
+    address: buildAddress(),
     tableIds: ['t1', 't2', 't3', 't4', 't5', 't6', 't7', 't8'],
     events: [buildEvent()],
     ...overrides,

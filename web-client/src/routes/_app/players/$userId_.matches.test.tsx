@@ -1,4 +1,5 @@
-import { act, render, screen, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import {
   RouterProvider,
   createMemoryHistory,
@@ -10,18 +11,34 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { http, HttpResponse } from 'msw'
 import { describe, expect, it } from 'vitest'
 
+import { playerNotFoundPage } from '@/components/players/player-not-found.page'
 import { server } from '@/mocks/server'
 import { sessionResponse } from '@/test/factories'
 import { Route } from './$userId_.matches'
 
 const MatchHistoryRoute = Route.options.component!
+const MatchHistoryError = Route.options.errorComponent!
+/** The SHIPPED not-found boundary. This sub-route reads the same profile bundle
+ * as the profile route, so it 404s the same way — and it does **not** inherit the
+ * profile route's boundary (it is a sibling, not a child). A route that forgets
+ * its own renders TanStack's generic "Something went wrong!" instead, which is
+ * the half of ADR-1001 most likely to be missed. */
+const MatchHistoryNotFound = Route.options.notFoundComponent
+
+/**
+ * A distinct, well-formed match id. Match ids are **UUIDs** on the wire, and the
+ * `$matchId` route guard (`src/lib/match-id.ts`) rejects anything else — so the
+ * rows every row-link assertion is made against have to carry real ones.
+ */
+const matchId = (n: number) =>
+  `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
 
 /** A page worth of opponent rows — only the fields the history table reads. */
 function matchRows(count: number, page: number, pageSize: number) {
   const start = (page - 1) * pageSize
   return Array.from({ length: Math.max(0, Math.min(pageSize, count - start)) })
     .map((_, i) => ({
-      id: `m-${start + i}`,
+      id: matchId(start + i),
       opponent: { id: `opp-${start + i}`, username: `opp.${start + i}` },
       games: [{ mine: 11, theirs: 7 }],
       result: 'W' as const,
@@ -65,14 +82,36 @@ function renderHistory(initialEntry: string) {
     path: '/players/$userId',
     component: () => null,
   })
+  // The not-found state's one recovery action is a typed <Link to="/players">.
+  const playersListRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/players',
+    component: () => <div>players list</div>,
+  })
   const historyRoute = createRoute({
     getParentRoute: () => rootRoute,
     path: '/players/$userId/matches',
     component: MatchHistoryRoute,
+    // Both of the shipped boundaries — read off the real route, so a route that
+    // drops one is caught here rather than in a browser.
+    errorComponent: MatchHistoryError,
+    notFoundComponent: MatchHistoryNotFound,
     validateSearch: Route.options.validateSearch,
   })
+  // Every row is a typed <Link> to its match (#989), so the detail route must be
+  // in the tree for those links to resolve.
+  const matchDetailRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/matches/$matchId',
+    component: () => <div>match detail</div>,
+  })
   const router = createRouter({
-    routeTree: rootRoute.addChildren([profileRoute, historyRoute]),
+    routeTree: rootRoute.addChildren([
+      playersListRoute,
+      profileRoute,
+      historyRoute,
+      matchDetailRoute,
+    ]),
     history: createMemoryHistory({ initialEntries: [initialEntry] }),
   })
   render(
@@ -90,7 +129,7 @@ describe('player match history', () => {
     // all belong here. 26 total → 25 on page 1, so the page is full.
     const rows = [
       {
-        id: 'm-live',
+        id: matchId(101),
         opponent: { id: 'opp-l', username: 'opp.live' },
         games: [],
         result: null,
@@ -99,7 +138,7 @@ describe('player match history', () => {
         awaiting_acceptance: false,
       },
       {
-        id: 'm-solo',
+        id: matchId(102),
         // The solo sentinel side: no opponent id, no username.
         opponent: { id: null, username: null },
         games: [{ mine: 11, theirs: 4 }],
@@ -109,7 +148,7 @@ describe('player match history', () => {
         awaiting_acceptance: false,
       },
       {
-        id: 'm-voided',
+        id: matchId(103),
         opponent: { id: 'opp-v', username: 'opp.voided' },
         games: [],
         result: null,
@@ -118,7 +157,7 @@ describe('player match history', () => {
         awaiting_acceptance: false,
       },
       {
-        id: 'm-pending',
+        id: matchId(104),
         opponent: { id: 'opp-p', username: 'opp.pending' },
         games: [],
         result: null,
@@ -267,12 +306,91 @@ describe('player match history', () => {
     expect(screen.queryByText(/no matches yet/i)).not.toBeInTheDocument()
   })
 
+  it('links every row through to its match, and every opponent to their profile (#989, #1005)', async () => {
+    // The issue: the history rows weren't clickable at all. They are now — and
+    // through a genuine `<a href="/matches/<uuid>">`, not a `role="link"` `<tr>`
+    // with an onClick, which cannot be cmd-clicked, middle-clicked or opened in
+    // a new tab. So the assertion is the URL, per row, not "a link exists".
+    //
+    // A row holds TWO links, and this is where that is worth checking end-to-end,
+    // against the real route tree: the date cell opens the match (#989) and the
+    // opponent's name opens that player (#1005). Two destinations, two names.
+    // Neither promises what the other delivers, which is why the row's anchor is
+    // NOT wrapped around the opponent's name.
+    const rows = [
+      ...matchRows(2, 1, 25),
+      {
+        id: matchId(102),
+        opponent: { id: null, username: null },
+        games: [{ mine: 11, theirs: 4 }],
+        result: 'W' as const,
+        status: 'completed' as const,
+        created_at: '2026-06-04T12:00:00Z',
+        awaiting_acceptance: false,
+      },
+    ]
+    server.use(
+      http.get('*/v1/session', () => HttpResponse.json(sessionResponse())),
+      http.get('*/v1/players/:playerId', () =>
+        HttpResponse.json(profileBundle(rows.length)),
+      ),
+      http.get('*/v1/players/:playerId/matches', () =>
+        HttpResponse.json({
+          items: rows,
+          page: 1,
+          page_size: 25,
+          total: rows.length,
+        }),
+      ),
+    )
+
+    renderHistory('/players/p-1/matches')
+
+    // The match link lives in the DATE cell (the first) — scoped there rather
+    // than row-wide, because the row's other cell holds a link to the opponent.
+    const firstRow = (await screen.findByText('opp.0')).closest('tr')!
+    const dateCell = (row: HTMLElement) =>
+      within(row).getAllByRole('cell')[0] as HTMLElement
+    const firstLink = within(dateCell(firstRow)).getByRole('link')
+    expect(firstLink).toHaveAttribute('href', `/matches/${matchId(0)}`)
+
+    // Each row points at its OWN match — a hardcoded target would pass above.
+    const secondRow = screen.getByText('opp.1').closest('tr')!
+    expect(within(dateCell(secondRow)).getByRole('link')).toHaveAttribute(
+      'href',
+      `/matches/${matchId(1)}`,
+    )
+
+    // Two anchors per row, and no more: the match link is stretched across the
+    // row with a `::after` — a screen reader hears it ONCE, not once per cell —
+    // and the opponent's name is the second, going somewhere else entirely. Each
+    // is named for its own destination.
+    const firstRowLinks = within(firstRow).getAllByRole('link')
+    expect(firstRowLinks).toHaveLength(2)
+    expect(firstLink.getAttribute('aria-label')).toMatch(
+      /^Match against opp\.0, /,
+    )
+    expect(
+      within(firstRow).getByRole('link', { name: 'opp.0' }),
+    ).toHaveAttribute('href', '/players/opp-0')
+
+    // The solo sentinel row (ADR-0008) is a real match too — it opens, and it is
+    // not announced as a match "against No opponent". It has nobody to link to,
+    // so its Opponent cell is plain text: one anchor, the match's.
+    const soloRow = screen.getByText('No opponent').closest('tr')!
+    const soloLink = within(dateCell(soloRow)).getByRole('link')
+    expect(soloLink).toHaveAttribute('href', `/matches/${matchId(102)}`)
+    expect(soloLink.getAttribute('aria-label')).toMatch(/^Solo match, /)
+    expect(within(soloRow).getAllByRole('link')).toHaveLength(1)
+    expect(soloRow.innerHTML).not.toContain('/players/')
+  })
+
   it('labels an awaiting-confirmation match "AWAITING", not "LIVE" (#364)', async () => {
     // Two in_progress rows: one genuinely live (no signature), one with a
     // posted-but-unconfirmed result. They must render distinct chips.
     const rows = [
       {
-        id: 'm-awaiting',
+        id: matchId(105),
         opponent: { id: 'opp-a', username: 'opp.awaiting' },
         games: [{ mine: 11, theirs: 9 }],
         result: null,
@@ -281,7 +399,7 @@ describe('player match history', () => {
         awaiting_acceptance: true,
       },
       {
-        id: 'm-live',
+        id: matchId(101),
         opponent: { id: 'opp-l', username: 'opp.live' },
         games: [],
         result: null,
@@ -315,6 +433,92 @@ describe('player match history', () => {
   })
 })
 
+/**
+ * The error taxonomy on the **sub-route** (ADR-1001) — the half most likely to be
+ * forgotten. It is a sibling of `/players/$userId`, not a child, so it inherits
+ * nothing: it reads the same 404-converting profile bundle and therefore needs a
+ * `notFoundComponent` of its very own.
+ */
+describe('player match history — a missing player is a not-found, not an error', () => {
+  const notFoundPage = playerNotFoundPage.within(screen)
+
+  /** The player 404s. The matches list is stubbed too: the page mounts (the
+   * heading query is still pending) before the not-found lands, so it *will* ask
+   * — and MSW's `onUnhandledRequest: 'error'` would fail the test on the way past
+   * the thing we're actually asserting. */
+  function mockMissingPlayer() {
+    server.use(
+      http.get('*/v1/session', () => HttpResponse.json(sessionResponse())),
+      http.get('*/v1/players/:playerId', () =>
+        HttpResponse.json({ detail: 'Player not found.' }, { status: 404 }),
+      ),
+      http.get('*/v1/players/:playerId/matches', () =>
+        HttpResponse.json({ items: [], page: 1, page_size: 25, total: 0 }),
+      ),
+    )
+  }
+
+  it('renders the designed not-found page for an unknown player id', async () => {
+    mockMissingPlayer()
+
+    renderHistory('/players/00000000-0000-0000-0000-000000000000/matches')
+
+    expect(await notFoundPage.findHeadline()).toHaveTextContent(
+      'Player not found.',
+    )
+    // Not the error boundary, and not TanStack's generic "Something went wrong!"
+    // — which is what this route rendered before it declared its own boundary.
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(screen.queryByText(/something went wrong!/i)).not.toBeInTheDocument()
+    // …and no orphaned match-history furniture behind it.
+    expect(screen.queryByText(/match history/i)).not.toBeInTheDocument()
+    expect(document.querySelector('table.matches')).toBeNull()
+  })
+
+  it('is not a dead end here either — Back to players works', async () => {
+    const user = userEvent.setup()
+    mockMissingPlayer()
+
+    const { router } = renderHistory('/players/nobody/matches')
+    await notFoundPage.findHeadline()
+
+    const actions = notFoundPage.getActions()
+    expect(actions).toHaveLength(1)
+    expect(actions[0]).toHaveAccessibleName('Back to players')
+
+    await user.click(actions[0])
+
+    expect(await screen.findByText('players list')).toBeInTheDocument()
+    expect(router.state.location.pathname).toBe('/players')
+  })
+
+  it('still sends a 5xx here to the error boundary, with its Try again', async () => {
+    // Same regression guard as on the profile: a broken server is not a missing
+    // player, and it must stay retryable.
+    server.use(
+      http.get('*/v1/session', () => HttpResponse.json(sessionResponse())),
+      http.get(
+        '*/v1/players/:playerId',
+        () => new HttpResponse(null, { status: 500 }),
+      ),
+      http.get('*/v1/players/:playerId/matches', () =>
+        HttpResponse.json({ items: [], page: 1, page_size: 25, total: 0 }),
+      ),
+    )
+
+    renderHistory('/players/p-1/matches')
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('Couldn’t load this player.')
+    expect(
+      screen.getByRole('button', { name: 'Try again' }),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole('heading', { level: 1, name: 'Player not found.' }),
+    ).not.toBeInTheDocument()
+  })
+})
+
 /** The per-game score chips a row renders, in order, from the player's own
  * perspective (`mine` on top, `theirs` beneath). */
 function gameChips() {
@@ -334,7 +538,7 @@ describe('player match history per-game score chips', () => {
     // opponent's side of one) can't accidentally pass.
     const rows = [
       {
-        id: 'm-scored',
+        id: matchId(106),
         opponent: { id: 'opp-s', username: 'opp.scored' },
         games: [
           { mine: 11, theirs: 7 },
@@ -347,7 +551,7 @@ describe('player match history per-game score chips', () => {
         awaiting_acceptance: false,
       },
       {
-        id: 'm-unscored',
+        id: matchId(107),
         opponent: { id: 'opp-u', username: 'opp.unscored' },
         games: [],
         result: null,

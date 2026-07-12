@@ -2,7 +2,7 @@ import uuid
 from typing import Any, Literal, assert_never
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
-from sqlalchemy import select
+from sqlalchemy import ColumnElement, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -165,6 +165,14 @@ def _entry_state(
     refuses the entry cannot come to two different answers (ADR-0783). This is only
     the translation into the wire's sum type.
 
+    That sharing is what keeps an **uncapped** event (``max_players IS NULL``,
+    ADR-0935) out of the ``event_full`` arm: ``event_is_full`` answers ``False`` for a
+    null cap however many entrants there are, so this function cannot report as full an
+    event the entry route would happily admit the reader to. Had the capacity question
+    been re-asked here — with a ``>=`` over a nullable column — it would have been a
+    ``TypeError`` on the detail page of the first uncapped event, or (worse, had it
+    been written defensively as ``max_players or 0``) a permanently, silently full one.
+
     **The ORDER mirrors the entry route's**, and it has to: eligibility first, then
     capacity. An ineligible player looking at a full event is told about their
     *rating*, which is exactly what ``POST …/entries`` would tell them
@@ -267,14 +275,31 @@ def _serialize_detail(
     )
 
 
-async def _get_tournament_or_404(
-    db: AsyncSession, tournament_id: uuid.UUID
+async def _get_owned_tournament_or_404(
+    db: AsyncSession, tournament_id: uuid.UUID, current_user: User
 ) -> Tournament:
+    """Load a tournament the caller OWNS, or refuse: 404 if absent, 403 if not theirs.
+
+    Load first, THEN check ownership — the ordering is intentional, and preserved
+    from the call sites this replaces: a permitted non-creator learns the
+    tournament exists.
+
+    The loading and the owner check are welded together on purpose. Every loader in
+    this module now NAMES THE SCOPE IT LOADS UNDER — owner-scoped (this one, for the
+    owner-only writes), for-update (the concurrency-sensitive writes), visibility-
+    scoped (``_visible_to``, in the read routes' WHERE) — and there is deliberately
+    no bare "just fetch the row" loader left. A bare one is a trap: it 404s, it
+    reads correctly, and it is right there, so the next read route added to this
+    module would reach for it and silently serve other people's drafts. The guard
+    against that has to be structural — a leaky loader that doesn't exist cannot be
+    picked by accident — not a reviewer remembering to ask.
+    """
     tournament = (
         await db.execute(select(Tournament).where(Tournament.id == tournament_id))
     ).scalar_one_or_none()
     if tournament is None:
         raise HTTPException(status_code=404, detail="Tournament not found.")
+    _require_owner(tournament, current_user)
     return tournament
 
 
@@ -309,8 +334,18 @@ async def _get_tournament_for_update_or_404(
     payload carries a ``league_id``: one loader per route is simpler than a
     branch, and a name-only edit that queues behind a publish is harmless.)
 
-    Read routes deliberately keep ``_get_tournament_or_404``: a reader has nothing
-    to serialize against, and no business making writers queue behind it.
+    The read routes deliberately take no lock: they select through ``_visible_to``
+    and never come through here, because a reader has nothing to serialize against
+    and no business making writers queue behind it.
+
+    Unscoped by ownership, and legitimately so — entering and withdrawing are
+    *player* actions on somebody else's tournament, so there is no owner to check.
+    The owner-only writes that do NOT judge a status load through
+    ``_get_owned_tournament_or_404`` instead, which welds the 403 to the load but
+    takes no lock. The two routes that need *both* — the transition and the PATCH —
+    take this lock and then call ``_require_owner`` themselves, because a loader
+    that locked and owner-checked would be a third loader saying what these two
+    lines already say.
     """
     tournament = (
         await db.execute(
@@ -401,6 +436,52 @@ def _enforce_league_editable(t: Tournament) -> None:
     )
 
 
+# The statuses in which a tournament has been ANNOUNCED to the world. Publishing
+# is the act that makes a tournament public (ADR-0017), and nothing walks
+# backwards out of it, so everything from ``published`` onward is announced and
+# ``draft`` is not.
+#
+# An allow-list, deliberately, rather than "anything but draft": a status added
+# to the enum tomorrow is invisible to non-owners until somebody puts it in this
+# set on purpose. The inverse spelling would silently publish a future
+# pre-publish status (a ``pending_review``, a ``scheduled``) the moment it was
+# added, which is exactly the leak this predicate exists to close.
+ANNOUNCED_STATUSES: frozenset[TournamentStatus] = frozenset(
+    {
+        TournamentStatus.published,
+        TournamentStatus.live,
+        TournamentStatus.archived,
+    }
+)
+
+
+def _visible_to(user_id: uuid.UUID) -> ColumnElement[bool]:
+    """Which tournaments ``user_id`` may see at all: the announced ones, plus
+    their own — whatever status their own is in.
+
+    A draft is not announced, so it is owner-only. The read routes push this into
+    the WHERE clause rather than filtering after the fact, so a hidden draft is
+    *not selected* and the detail route's existing "Tournament not found." 404
+    answers for it. 404 and not 403: a 403 would confirm that a tournament with
+    that id exists, which is precisely what an unannounced tournament must not
+    admit. A draft the caller cannot see is indistinguishable from one that was
+    never created.
+
+    ``tournament.view`` is a separate question, and it is asked first — it is a
+    route dependency, so a caller without the permission is refused (403) before
+    this predicate is ever built. Permission says "may you read tournaments at
+    all"; this says "which ones are there for you to read".
+
+    One predicate, used by both the list and the detail route, because two copies
+    of this rule would eventually disagree — and the way they disagree is that the
+    list hides a draft the detail route still serves.
+    """
+    return or_(
+        Tournament.status.in_(ANNOUNCED_STATUSES),
+        Tournament.created_by_user_id == user_id,
+    )
+
+
 # ----- tournament routes ---------------------------------------------------
 
 
@@ -423,10 +504,17 @@ async def list_tournaments(
     # per-event entry count or a per-tournament rating would be the N+1 this shape
     # exists to avoid, and a statement-count tripwire in tests/test_tournaments.py
     # fails if one comes back.
+    #
+    # Scoped by ``_visible_to``: somebody else's draft is not the caller's to see,
+    # so it never enters the result set — and, because the filter is a WHERE clause
+    # on the first of the four queries, the events and entrants queries are keyed
+    # off the surviving ids and cannot leak a hidden tournament's contents either.
+    # A predicate costs no extra statement, so the tripwire above still reads 4.
     rows = (
         await db.execute(
             select(Tournament, User.username)
             .join(User, User.id == Tournament.created_by_user_id)
+            .where(_visible_to(current_user.id))
             .order_by(Tournament.created_at.desc())
         )
     ).all()
@@ -535,11 +623,14 @@ async def get_tournament(
     # Fetch the row and creator username in one joined query. The inner join
     # can't drop the row (RESTRICT FK guarantees the creator exists), so a
     # missing row means the tournament itself is absent.
+    #
+    # ``_visible_to`` rides in the same WHERE as the id lookup, so a hidden
+    # tournament leaves by the same 404 as an absent one (see _visible_to).
     row = (
         await db.execute(
             select(Tournament, User.username)
             .join(User, User.id == Tournament.created_by_user_id)
-            .where(Tournament.id == tournament_id)
+            .where(Tournament.id == tournament_id, _visible_to(current_user.id))
         )
     ).one_or_none()
     if row is None:
@@ -583,17 +674,21 @@ async def update_tournament(
     db: AsyncSession = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> TournamentRead:
-    # Load first (404 if missing), THEN check ownership (403). The ordering is
-    # intentional: a permitted non-creator learns the tournament exists.
+    # The locked loader plus an explicit ``_require_owner`` — the same pair
+    # ``create_tournament_transition`` takes, and for the same reason — rather than
+    # ``_get_owned_tournament_or_404``, which does not lock. This route now *judges
+    # the status and then writes*: the league guard below reads ``status``, and an
+    # unlocked read answers from its own statement's snapshot (READ COMMITTED). A
+    # league change could pass the ``draft`` check, the owner's publish could
+    # commit, and the UPDATE could then land behind it — moving the ladder under a
+    # tournament whose registration is already open, which is the one thing the
+    # guard exists to prevent. Same lock, on the same row, taken first, as the
+    # transition and entry routes: one lock in one order, so no pair of them can
+    # deadlock.
     #
-    # Locked, because this route now *judges the status and then writes*: the
-    # league guard below reads ``status``, and an unlocked read answers from its
-    # own statement's snapshot (READ COMMITTED). A league change could pass the
-    # ``draft`` check, the owner's publish could commit, and the UPDATE could then
-    # land behind it — moving the ladder under a tournament whose registration is
-    # already open, which is the one thing the guard exists to prevent. Same lock,
-    # on the same row, taken first, as the transition and entry routes: one lock in
-    # one order, so no pair of them can deadlock.
+    # Load first (404 if missing), THEN check ownership (403). The ordering is
+    # intentional, and is the one the owner-scoped loader bakes in: a permitted
+    # non-creator learns the tournament exists.
     tournament = await _get_tournament_for_update_or_404(db, tournament_id)
     _require_owner(tournament, current_user)
     fields = payload.model_dump(exclude_unset=True)
@@ -636,8 +731,7 @@ async def delete_tournament(
     db: AsyncSession = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> Response:
-    tournament = await _get_tournament_or_404(db, tournament_id)
-    _require_owner(tournament, current_user)
+    tournament = await _get_owned_tournament_or_404(db, tournament_id, current_user)
     await db.delete(tournament)
     await db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -734,8 +828,7 @@ async def create_event(
     db: AsyncSession = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> TournamentEventRead:
-    tournament = await _get_tournament_or_404(db, tournament_id)
-    _require_owner(tournament, current_user)
+    tournament = await _get_owned_tournament_or_404(db, tournament_id, current_user)
     event = TournamentEvent(
         tournament_id=tournament.id,
         name=payload.name,
@@ -774,8 +867,12 @@ async def update_event(
     db: AsyncSession = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> TournamentEventRead:
-    tournament = await _get_tournament_or_404(db, tournament_id)
-    _require_owner(tournament, current_user)
+    # The owner-scoped load is the guard (404 then 403) — the event, not the
+    # tournament, is the row this route edits. But the tournament is kept, not
+    # discarded: its ``league_id`` is the ladder the event's refreshed ``entry_state``
+    # is judged on (ADR-0783), and it is already loaded, so re-fetching it would be a
+    # second query for a row we are holding.
+    tournament = await _get_owned_tournament_or_404(db, tournament_id, current_user)
     event = await _get_event_or_404(db, tournament_id, event_id)
     # As in update_tournament: model_dump(exclude_unset=True) serializes the
     # nested value-objects (slot/match_settings/predicates/pools) to plain
@@ -805,8 +902,9 @@ async def delete_event(
     db: AsyncSession = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> Response:
-    tournament = await _get_tournament_or_404(db, tournament_id)
-    _require_owner(tournament, current_user)
+    # As in update_event: the owner-scoped load is the guard (404 then 403); the
+    # row this route deletes is the event.
+    await _get_owned_tournament_or_404(db, tournament_id, current_user)
     event = await _get_event_or_404(db, tournament_id, event_id)
     await db.delete(event)
     await db.commit()
@@ -993,18 +1091,30 @@ async def _enforce_event_has_room(db: AsyncSession, event: TournamentEvent) -> N
     is genuinely free again.
 
     *What* full means — ``>=``, not ``==``, so an event whose ``max_players`` was
-    lowered under an already-larger field is full — is ``event_is_full``, shared with
-    the detail read's ``entry_state``: the page that reports an event as full and the
-    guard that refuses entry to it must not be able to disagree about the word. What
-    this function owns is the *count* (fresh, under the lock) and the refusal.
+    lowered under an already-larger field is full; and an event with **no cap at all**
+    is never full — is ``event_is_full``, shared with the detail read's
+    ``entry_state``: the page that reports an event as full and the guard that refuses
+    entry to it must not be able to disagree about the word. What this function owns is
+    the *count* (fresh, under the lock) and the refusal.
+
+    An **uncapped** event (``max_players IS NULL``, ADR-0935) leaves by the first line,
+    before the count: there is no limit for a count to be compared against, so the
+    ``COUNT(*)`` would be a query whose answer could not change the outcome, and the
+    ``event_full`` refusal below is unreachable for such an event — as it must be. The
+    early return is the same rule ``event_is_full`` states for the read path, taken
+    early enough to skip the query; it is not a second opinion about what full means,
+    and the assertion that the two agree is a test, not a comment
+    (``test_an_uncapped_event_never_refuses_with_event_full``).
     """
+    max_players = event.max_players
+    if max_players is None:
+        return
     entered = await active_entry_count(db, event.id)
-    if not event_is_full(entered=entered, max_players=event.max_players):
+    if not event_is_full(entered=entered, max_players=max_players):
         return
     raise entry_refused(
         EntryRefusal.event_full,
-        f"This event is full — it has reached its limit of "
-        f"{event.max_players} players.",
+        f"This event is full — it has reached its limit of {max_players} players.",
     )
 
 

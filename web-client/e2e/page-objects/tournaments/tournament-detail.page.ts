@@ -246,10 +246,12 @@ export class TournamentDetailPage {
     return this.eventEditor.getByText(message)
   }
 
-  /** The event's player-limit box (Basics). Clearing it authors `max_players: 0` —
-   * `Number('')` is `0` — which the server refuses. Typing `9999999999` into it used to
-   * author a value the `Integer` column cannot hold, which the server answered with a
-   * **500**. */
+  /** The event's player-limit box (Basics). **Clearing it authors `max_players: null` —
+   * an uncapped event** (ADR-0935), which is a valid save; it used to author
+   * `max_players: 0` (`Number('')` is `0`), an event admitting nobody, which the server
+   * refused with a 422 the editor threw away. Typing `9999999999` into it authors a
+   * value the `Integer` column cannot hold, which the server answered with a **500** —
+   * both bounds now live in the form's schema. */
   get playerLimitInput(): Locator {
     return this.page.getByLabel(/Player limit/)
   }
@@ -323,9 +325,10 @@ export class TournamentDetailPage {
     )
   }
 
-  /** The capacity caption under one card's fill bar (#783): how many places the
-   * event has left, or that it is full. The numeral above it says what is *in* the
-   * event; this says what is left of it. */
+  /** The capacity caption under one card's fill bar (#783): how many places the event
+   * has left, that it is full, or — for an uncapped event (ADR-0935) — that it has no
+   * limit at all. The numeral above it says what is *in* the event; this says what is
+   * left of it. */
   capacityNote(eventName: string): Locator {
     return this.eventCard(eventName).getByTestId('capacity-remaining')
   }

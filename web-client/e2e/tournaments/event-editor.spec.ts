@@ -43,9 +43,14 @@ const SAY = {
   range: 'Rating must be 0–3000.',
   nameRequired: 'Name is required.',
   nameTooLong: 'Name must be 255 characters or fewer.',
-  playerLimit: 'The player limit must be at least 1.',
+  /** The cap the organizer **typed** — `0` admits nobody, and the message points at the
+   * answer they probably meant (ADR-0935). A *blank* cap is not this: it is an uncapped
+   * event, and it is not an error at all. */
+  playerLimitZero: 'The player limit must be at least 1, or blank for no cap.',
   /** The bound the `Integer` column has and the form did not (#783 QA, round three). */
   playerLimitTooBig: 'The player limit must be 512 or fewer.',
+  /** What an uncapped event's card says where a capped one counts down its places. */
+  noCap: 'No entry limit',
   /** The banner, when the server refuses a save. Ours — see `PYDANTIC` below. */
   refusedName: 'The Event name was rejected. Check that field and try again.',
   /** The banner, when the server FAULTS. Note what it does not say: anything about a
@@ -257,7 +262,22 @@ test.describe('Tournaments · the event’s own fields', () => {
     expect(store.unhandled).toEqual([])
   })
 
-  test('a CLEARED player limit is refused — `Number("")` is 0, and 0 players is a 422', async ({
+  /**
+   * ⚠️ **A BLANK player limit is an UNCAPPED event — not a zero, and not an error**
+   * (ADR-0935).
+   *
+   * This is the one that used to go wrong in both directions. `Number('')` is `0`, so
+   * clearing the box authored an event of *zero players*, which the server refused
+   * (`gt=0`) with a 422 the sheet then swallowed — and the obvious fix (make the field
+   * required) would have quietly un-shipped the uncapped event instead, by making the
+   * only way to express "no limit" un-submittable.
+   *
+   * So the assertion runs the whole loop, and only a browser can: the PATCH really goes
+   * (`countOf('PATCH')`), the sheet really closes, and — after the refetch — the card
+   * reads as **uncapped**. That last part is where a `0` would give itself away: it
+   * would come back as a cap of zero, and the card would say the event was **full**.
+   */
+  test('a BLANK player limit saves as NO CAP — the card reads uncapped, never full', async ({
     page,
   }) => {
     const { pom, store } = await TournamentDetailPage.navigateTo(page)
@@ -265,11 +285,43 @@ test.describe('Tournaments · the event’s own fields', () => {
     await pom.openEditorOverlay(EVENT.JOURNEY).click()
     await pom.playerLimitInput.fill('')
 
+    // Nothing is wrong, so nothing is red — before the save and after it.
+    await expect(pom.playerLimitInput).toHaveAttribute('aria-invalid', 'false')
+
     await pom.saveEventButton.click()
 
-    await expect(pom.basicsError(SAY.playerLimit)).toBeVisible()
+    // It SAVED: the request went, and the editor closed itself over the answer.
+    await expect(pom.eventEditor).toBeHidden()
+    expect(store.countOf('PATCH')).toBe(1)
+
+    // …and the event now reads as uncapped. A `0` cap — the old coercion — would have
+    // failed every one of these: it would print "/ 0", draw a full bar, and say "Full".
+    const card = pom.eventCard(EVENT.JOURNEY)
+    await expect(pom.capacityNote(EVENT.JOURNEY)).toHaveText(SAY.noCap)
+    await expect(card).not.toContainText('Full')
+    await expect(card).not.toContainText('/')
+    await expect(pom.toasts).toHaveCount(0)
+    expect(store.unhandled).toEqual([])
+  })
+
+  /** The other half of the pair, and the reason the blank case above is not simply
+   * "anything goes": a cap the organizer *typed* as `0` is an event admitting nobody,
+   * and it is refused in the form. The two are one keystroke apart and mean opposite
+   * things — which is exactly why one coercion used to collapse them. */
+  test('a player limit typed as ZERO is refused in the form, and sends nothing', async ({
+    page,
+  }) => {
+    const { pom, store } = await TournamentDetailPage.navigateTo(page)
+
+    await pom.openEditorOverlay(EVENT.JOURNEY).click()
+    await pom.playerLimitInput.fill('0')
+
+    await pom.saveEventButton.click()
+
+    await expect(pom.basicsError(SAY.playerLimitZero)).toBeVisible()
     await expect(pom.playerLimitInput).toHaveAttribute('aria-invalid', 'true')
     expect(store.countOf('PATCH')).toBe(0)
+    await expect(pom.eventEditor).toBeVisible()
   })
 
   /**

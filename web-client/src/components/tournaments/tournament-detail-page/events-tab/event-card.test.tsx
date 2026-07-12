@@ -24,12 +24,67 @@ describe('EventCard', () => {
     expect(document.body).toHaveTextContent('Rating < 1500')
   })
 
-  it('shows entries out of the player cap', () => {
-    eventCardPage.render({
-      event: buildEvent({ entrants: buildEntrants(52), maxPlayers: 64 }),
+  describe('the entries capacity', () => {
+    it('shows entries out of the player cap, with a fill bar and the places left', () => {
+      eventCardPage.render({
+        event: buildEvent({ entrants: buildEntrants(52), maxPlayers: 64 }),
+      })
+      expect(document.body).toHaveTextContent('52')
+      expect(document.body).toHaveTextContent('/ 64')
+      expect(eventCardPage.queryCapacityBar()).toBeInTheDocument()
+      expect(eventCardPage.queryCapacityNote()).toHaveTextContent('12 places left')
+      // The numeral is punctuation to a screen reader ("52 slash 64"), so the a11y
+      // tree gets the sentence instead.
+      expect(eventCardPage.queryEnteredSummary('52 of 64 entered')).toBeInTheDocument()
     })
-    expect(document.body).toHaveTextContent('52')
-    expect(document.body).toHaveTextContent('/ 64')
+
+    it('marks a capped event full once it reaches its cap — not "0 places left"', () => {
+      eventCardPage.render({
+        event: buildEvent({ entrants: buildEntrants(64), maxPlayers: 64 }),
+      })
+      expect(document.body).toHaveTextContent('/ 64')
+      expect(eventCardPage.queryCapacityBar()).toBeInTheDocument()
+      expect(eventCardPage.queryCapacityNote()).toHaveTextContent('Full')
+      expect(eventCardPage.queryCapacityNote()).not.toHaveTextContent('0 places')
+      // The "full" numeral and fill both flip to the warn tint at capacity.
+      expect(
+        document.querySelectorAll('.text-\\[color\\:var\\(--warn\\)\\]').length,
+      ).toBeGreaterThan(0)
+    })
+
+    /**
+     * ⚠️ **The uncapped card** (ADR-0935: `maxPlayers === null`). It has no ceiling to
+     * count against, so every number the card would ordinarily print is a number it must
+     * not invent: no denominator ("200 of null", "200 of 0"), no fill bar (a rail drawn
+     * at 0% reads as empty and at 100% as full — it is neither), and above all **never
+     * full**, however many have entered. The 200-entrant roster is deliberate: a fixture
+     * of two would render the same whether the card handled the null cap or quietly read
+     * it as a big number, so it could not tell the fix from the bug.
+     */
+    it('shows an uncapped event as a bare entered count with no denominator or bar, never full', () => {
+      eventCardPage.render({
+        event: buildEvent({ entrants: buildEntrants(200), maxPlayers: null }),
+      })
+      // The numeral and "entered" label are sibling spans laid out with a CSS
+      // gap, so the DOM text runs together: "200entered".
+      expect(document.body).toHaveTextContent('200entered')
+      // No "/ max" denominator, and no "/ " with a blank max either.
+      expect(document.body).not.toHaveTextContent('/')
+      // No capacity fill bar.
+      expect(eventCardPage.queryCapacityBar()).toBeNull()
+      // The caption states the fact rather than leaving the one blank line on a wall
+      // of cards that all state one — and it is emphatically not "Full".
+      expect(eventCardPage.queryCapacityNote()).toHaveTextContent('No entry limit')
+      expect(eventCardPage.queryCapacityNote()).not.toHaveTextContent('Full')
+      // …and a screen reader is told the same thing, with no invented denominator.
+      expect(
+        eventCardPage.queryEnteredSummary('200 entered, no entry limit'),
+      ).toBeInTheDocument()
+      // Never full, however many are in: no warn-tinted numeral/fill.
+      expect(
+        document.querySelectorAll('.text-\\[color\\:var\\(--warn\\)\\]').length,
+      ).toBe(0)
+    })
   })
 
   /**

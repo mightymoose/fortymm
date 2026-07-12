@@ -158,7 +158,10 @@ export interface TournamentEvent {
   name: string
   format: EventFormat
   drawType: DrawType
-  maxPlayers: number
+  /** The entrant cap, or `null` for an uncapped event. `null` means "no cap",
+   * never zero (ADR-0935): a blank player-limit field submits `null`, and every
+   * reader must handle the no-cap branch rather than dividing by it. */
+  maxPlayers: number | null
   entryFee: number
   /** The registration count. Server-derived from the active entries — it is
    * `entrants.length`, never a stored counter, so the count and the list it

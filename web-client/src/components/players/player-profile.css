@@ -1,8 +1,30 @@
-/* Player-profile surface — Bebas hero + dense match list (no tabs).
+/* Player-profile surface — a hero card over a column of cards (no tabs).
  * Mirrors the broadcast/arena tonal scheme used elsewhere
- * (match-list-page, dashboard) so it sits naturally inside the AppShell. */
+ * (match-list-page, dashboard) so it sits naturally inside the AppShell.
+ * The hero's name used to be set in the Bebas display face; it is the UI face
+ * now, and nothing in the hero uses `--font-display` any more. */
 
 .player-profile {
+  /* The radius/shadow scale is declared per *surface* in this codebase — the
+   * shared `.fortymm-theme` block (index.css) carries the colour ramps and
+   * `--shadow-lg`/`--shadow-glow`, but not these. `.match-details`,
+   * `.fortymm-landing`, `.simulator` and the settings page each declare the same
+   * scale over themselves; the profile is the surface that was consuming
+   * `var(--r-lg)` and `var(--shadow-sm)` without ever declaring them, so every
+   * card below computed to `radius: 0` and inherited Tailwind's much weaker
+   * `--shadow-sm` instead of the house one. (Worth hoisting all five copies into
+   * `.fortymm-theme` one day — the login and RBAC surfaces have the same latent
+   * hole — but that restyles pages this branch has no business touching.) */
+  --r-sm: 6px;
+  --r-md: 10px;
+  --r-lg: 14px;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+
+  /* The specular highlight on the hero ball — a tint above `--ball-400` that the
+   * shared ramp has no token for. Declared here so the hero's gradient and its
+   * glow spell it once (`profile-hero-display.tsx` reads it from this scope). */
+  --ball-highlight: #ffb57a;
+
   display: flex;
   flex-direction: column;
   background: var(--bg-app);
@@ -16,24 +38,30 @@
    * `.player-profile--pane` (player-match-history.css). */
 }
 
+/* ============ The overview's content column ============ */
+/* The profile is centred and capped as a whole — hero included. It used to be a
+ * full-bleed banner over a centred body, which is why the hero's tone had to
+ * carry the page on its own (a dot-grid and an orange wash); as a card in the
+ * column it is one surface among six and needs none of that. */
+.player-profile--overview {
+  width: 100%;
+  box-sizing: border-box;
+  max-width: 1240px;
+  margin: 0 auto;
+  padding: 28px clamp(16px, 4vw, 40px) 56px;
+}
+
 /* ============ Hero ============ */
+/* A card, like everything else on the page — no gradient, no dot-grid, no
+ * full-bleed rule under it. */
 .player-profile__hero {
   position: relative;
-  padding: 40px clamp(20px, 5vw, 40px) 32px;
-  border-bottom: 1px solid var(--border-subtle);
-  overflow: hidden;
-  background:
-    radial-gradient(
-      circle at 18% 40%,
-      rgba(255, 122, 26, 0.16) 0%,
-      rgba(255, 122, 26, 0) 45%
-    ),
-    radial-gradient(
-      circle at center,
-      rgba(255, 122, 26, 0.12) 1.5px,
-      transparent 2px
-    );
-  background-size: auto, 40px 40px;
+  padding: 24px 28px;
+  margin-bottom: 20px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-lg);
+  background: var(--bg-card);
+  box-shadow: var(--shadow-sm);
 }
 
 /* Identity on the left, standing on the right. Each half is its own
@@ -55,21 +83,8 @@
 .player-profile__identity {
   display: flex;
   align-items: center;
-  gap: clamp(16px, 3vw, 24px);
+  gap: 22px;
   min-width: 0;
-}
-
-.player-profile__avatar-ring {
-  position: relative;
-  flex: none;
-}
-
-.player-profile__avatar-dashed {
-  position: absolute;
-  inset: -6px;
-  border-radius: 50%;
-  border: 1px dashed rgba(255, 122, 26, 0.4);
-  pointer-events: none;
 }
 
 .player-profile__name-wrap {
@@ -87,76 +102,146 @@
   margin-bottom: 6px;
 }
 
+/* The name is set in the UI face, not the Bebas display one: at 40px next to a
+ * mono rating it is a *name*, not a scoreboard moment, and shouting a username
+ * in caps mangles the ones that carry their own casing. */
 .player-profile__name {
-  font-family: var(--font-display);
-  font-size: clamp(40px, 7vw, 64px);
+  font-family: var(--font-ui);
+  font-size: clamp(28px, 3.4vw, 40px);
+  font-weight: 700;
   line-height: 1;
-  letter-spacing: 0.02em;
+  letter-spacing: -0.02em;
   color: var(--fg-1);
-  text-transform: uppercase;
   margin: 0;
-  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .player-profile__name-dot {
   color: var(--ball-500);
 }
 
+/* "Player · Member since Mar 2024" — the line that used to be an overline above
+ * the name and a lone member-since line below it. */
+.player-profile__meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 9px;
+  margin: 11px 0 0;
+  font-size: 13px;
+  color: var(--fg-3);
+}
+
+.player-profile__meta-sep {
+  color: var(--ink-500);
+}
+
+/* Wrapped, the row leaves its separator dangling at the end of the first line
+ * ("Player ·"). Narrow enough to wrap is narrow enough to stack, and a stack
+ * needs no separators. */
+@media (max-width: 480px) {
+  .player-profile__meta {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+  }
+
+  .player-profile__meta-sep {
+    display: none;
+  }
+}
+
 /* ============ Standing (rating · Δ · rank · peak · form) ============ */
+/* The right-hand half of the hero card, fenced off by a hairline rather than by
+ * distance — it is a second subject (where they *stand*), not a continuation of
+ * the first (who they *are*). */
 .player-profile__standing {
   display: flex;
   flex-direction: column;
-  align-items: flex-end;
-  gap: 10px;
+  align-items: flex-start;
+  gap: 0;
+  min-width: 224px;
+  padding-left: 28px;
+  border-left: 1px solid var(--border-subtle);
 }
 
+/* The divider is the seam between two grid columns; with one column there is no
+ * seam, and a rule up the left of the block would just be a stray line. */
 @media (max-width: 720px) {
   .player-profile__standing {
-    align-items: flex-start;
+    padding-left: 0;
+    padding-top: 20px;
+    border-left: none;
+    border-top: 1px solid var(--border-subtle);
   }
 }
 
 .player-profile__standing > .player-profile__overline {
   margin-bottom: 0;
+  font-size: 11px;
 }
 
+/* Baseline-ish: the Δ pill sits on the rating's baseline rather than centred on
+ * a 56px number, which would float it halfway up the digits. */
 .player-profile__rating-row {
   display: flex;
-  align-items: center;
-  gap: 10px;
+  align-items: flex-end;
+  gap: 12px;
+  margin-top: 4px;
 }
 
 /* The Δ from the player's most recent rated match. Rendered only when there IS
- * one — a player with no rating history gets no chip, never a "+0". */
+ * one — a player with no rating history gets no chip, never a "+0".
+ *
+ * The base class is the *figure*: a mono, tabular, win/loss-coloured number, which
+ * is all the Recent-matches column wants. The hero's pill chrome is added below. */
 .player-profile__delta {
+  display: inline-flex;
+  align-items: center;
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   font-size: 13px;
-  font-weight: 700;
+  font-weight: 600;
   letter-spacing: 0.02em;
-  padding: 4px 10px;
-  border-radius: 999px;
-  border: 1px solid transparent;
 }
 
 .player-profile__delta--win {
   color: var(--serve-500);
-  background: rgba(0, 226, 154, 0.12);
-  border-color: rgba(0, 226, 154, 0.4);
 }
 
 .player-profile__delta--loss {
   color: var(--loss);
-  background: rgba(255, 77, 109, 0.1);
-  border-color: rgba(255, 77, 109, 0.4);
 }
 
-/* Rank ("#3 of 42"), peak, percentile. Only the lines the player actually has. */
+/* The pill chrome belongs to the *hero's* Δ alone. It used to live on the base
+ * class, which meant the Recent-matches column — the class's only other use —
+ * had to unset five declarations to get its figure back; a run of tinted pills
+ * down a dense column reads as stripes, and the row already says won/lost on its
+ * status dot. Styling the one place that wants the pill beats styling both and
+ * undoing one. */
+.player-profile__rating-row .player-profile__delta {
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 999px;
+  margin-bottom: 7px;
+}
+
+.player-profile__rating-row .player-profile__delta--win {
+  background: color-mix(in srgb, var(--win) 14%, transparent);
+}
+
+.player-profile__rating-row .player-profile__delta--loss {
+  background: color-mix(in srgb, var(--loss) 14%, transparent);
+}
+
+/* Rank ("#3 of 42"), peak, percentile. Only the lines the player actually has —
+ * one quiet 12px line under the rating, not a row of stat blocks competing with
+ * it. */
 .player-profile__stats {
   display: flex;
   align-items: baseline;
-  gap: 18px;
-  margin: 0;
+  gap: 14px;
+  margin: 8px 0 0;
   flex-wrap: wrap;
 }
 
@@ -167,11 +252,11 @@
 }
 
 .player-profile__stat-k {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
   color: var(--fg-3);
 }
 
@@ -179,16 +264,34 @@
   margin: 0;
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
   color: var(--fg-1);
+}
+
+/* The caption sits beside the chips, not over them: at ten chips the run is
+ * wider than it is tall, and a label above it would read as a section heading. */
+.player-profile__form-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.player-profile__form-label {
+  flex: none;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--fg-3);
 }
 
 /* Ten results, newest first. (The /players roster shows five of the same wire
  * field — that slice lives there.) */
 .player-profile__form {
   display: inline-flex;
-  gap: 4px;
+  gap: 5px;
   flex-wrap: wrap;
 }
 
@@ -200,71 +303,59 @@
   height: 20px;
   border-radius: 5px;
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
-  border: 1px solid transparent;
 }
 
 .player-profile__form-chip--w {
   color: var(--serve-500);
-  background: rgba(0, 226, 154, 0.12);
-  border-color: rgba(0, 226, 154, 0.35);
+  background: color-mix(in srgb, var(--win) 14%, transparent);
 }
 
 .player-profile__form-chip--l {
   color: var(--loss);
-  background: rgba(255, 77, 109, 0.1);
-  border-color: rgba(255, 77, 109, 0.3);
+  background: color-mix(in srgb, var(--loss) 14%, transparent);
 }
 
+/* The rating is the largest thing on the page and needs no chrome to say so.
+ * It reads in chalk, not ball-orange: orange is the page's *accent* (the name's
+ * dot, the chart's line, the selected league) and a 56px orange slab drowns
+ * every one of them. */
 .player-profile__hero-rating-chip {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
-  font-size: clamp(32px, 5vw, 48px);
+  font-size: clamp(40px, 5vw, 56px);
   font-weight: 700;
-  color: var(--ball-500);
-  line-height: 1;
-  letter-spacing: 0.02em;
-  padding: 8px 22px 10px;
-  border-radius: 12px;
-  border: 1.5px solid var(--ball-500);
-  background: rgba(255, 122, 26, 0.06);
+  color: var(--fg-1);
+  line-height: 0.9;
+  letter-spacing: -0.01em;
 }
 
 /* A player who has never finished a rated match reads "Unrated" in the same
- * slot — a word, not a number, so it wears the muted tone rather than the
- * ball-orange rating chrome. */
+ * slot — a word, not a number, so it drops to the muted tone and a text size. */
 .player-profile__hero-rating-chip--unrated {
   font-family: var(--font-ui);
-  font-size: clamp(18px, 2.5vw, 24px);
+  font-size: clamp(20px, 2.5vw, 26px);
   font-weight: 600;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.02em;
+  line-height: 1.2;
   color: var(--fg-3);
-  border-color: var(--border-subtle);
-  background: transparent;
-}
-
-.player-profile__member-since {
-  margin: 10px 0 0;
-  font-family: var(--font-ui);
-  font-size: 14px;
-  font-weight: 500;
-  color: var(--fg-2);
 }
 
 /* ----- Hero skeletons (loading state) ----- */
 .player-profile__hero-avatar-skeleton {
   display: block;
-  width: 120px;
-  height: 120px;
+  flex: none;
+  width: 82px;
+  height: 82px;
   border-radius: 50%;
   background: var(--bg-raised);
   animation: player-profile-shimmer 1.4s ease-in-out infinite;
 }
 
 .player-profile__hero-name-skeleton {
-  width: clamp(220px, 45vw, 420px);
-  height: clamp(40px, 7vw, 64px);
+  width: clamp(200px, 32vw, 300px);
+  height: clamp(28px, 3.4vw, 40px);
   border-radius: 6px;
   background: var(--bg-raised);
   animation: player-profile-shimmer 1.4s ease-in-out infinite;
@@ -272,18 +363,18 @@
 
 .player-profile__hero-sub-skeleton {
   width: 180px;
-  height: 14px;
+  height: 13px;
   border-radius: 4px;
-  margin-top: 14px;
+  margin-top: 13px;
   background: var(--bg-raised);
   animation: player-profile-shimmer 1.4s ease-in-out infinite;
 }
 
 .player-profile__hero-rating-chip--skeleton {
-  width: 96px;
-  height: 56px;
+  width: 112px;
+  height: 48px;
+  border-radius: 8px;
   background: var(--bg-raised);
-  border-color: var(--bg-raised);
   animation: player-profile-shimmer 1.4s ease-in-out infinite;
 }
 
@@ -298,7 +389,6 @@
 
 .player-profile__form-chip--skeleton {
   background: var(--bg-raised);
-  border-color: var(--bg-raised);
   animation: player-profile-shimmer 1.4s ease-in-out infinite;
 }
 
@@ -383,7 +473,14 @@
  * on row 2 — the price of sharing row 1 with career, and the reason the two
  * columns start on the same line at all.
  *
- * The hero above stays full-bleed; it is the body that is centred and capped. */
+ * The hero is a card in this same column now — `--overview` centres and caps the
+ * whole page, hero included — so the body no longer does the centring alone. */
+/* Stacked (phone): the cards are separate surfaces now, so they are separated by
+ * a gap rather than by a rule under each. */
+.player-profile--overview .player-profile__body {
+  gap: 20px;
+}
+
 @media (min-width: 960px) {
   .player-profile__body {
     display: grid;
@@ -395,12 +492,6 @@
     grid-template-rows: repeat(4, auto);
     gap: 20px;
     align-items: start;
-    /* `box-sizing: border-box` is inherited from the base rule and must stay: the
-     * body is `width: 100%`, so a content-box here would add the page padding on
-     * top of that 100% and push the narrow column off the right edge. */
-    max-width: 1240px;
-    margin: 0 auto;
-    padding: 24px clamp(20px, 4vw, 40px) 48px;
   }
 
   /* A grid item is not a flex item: the `flex: 1` / `flex: 0 0 auto` the cards
@@ -408,15 +499,6 @@
    * content. */
   .player-profile__body > .player-profile__section {
     min-width: 0;
-  }
-
-  /* The stacked layout separates the cards with a rule under each. In a gapped
-   * grid that rule reads as a line floating in whitespace, so the cards are
-   * separated by the gap alone — including the bottom one, which the stacked
-   * layout special-cases. */
-  .player-profile__body > .player-profile__section,
-  .player-profile__body > .recent-matches {
-    border-bottom: none;
   }
 
   /* ----- The wide, primary column ----- */
@@ -457,12 +539,75 @@
   }
 }
 
+/* ============ Card chrome (the overview only) ============ */
+/* Every section on the overview is a card. Two tiers, and the difference is the
+ * whole information hierarchy of the page:
+ *
+ * - **Primary** (rating chart, recent matches, career) — raised on `--bg-card`
+ *   with a shadow. They are what the page is *for*.
+ * - **Tertiary** (confidence, leagues, head-to-head) — recessed to `--bg-panel`,
+ *   a tighter radius and no shadow, so they read as supporting context sitting
+ *   *below* the surface rather than on it.
+ *
+ * Scoped to `--overview` because `.player-profile__section` is shared with the
+ * full-history route, whose one section is a full-bleed scrolling pane and must
+ * not become a card. Everything that was a rule *between* sections (each card's
+ * `border-bottom`, the `:last-child` exception) is gone with it: separate
+ * surfaces are separated by the gap. */
+.player-profile--overview .player-profile__section {
+  /* The gutter the card's inner blocks read (`--card-pad`). Tertiary cards
+   * override it below; the blocks themselves never spell a number. */
+  --card-pad: 26px;
+
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-sm);
+  padding-bottom: 22px;
+}
+
+.player-profile--overview .confidence-card,
+.player-profile--overview .leagues-card,
+.player-profile--overview .head-to-head {
+  --card-pad: 20px;
+
+  background: var(--bg-panel);
+  border-radius: var(--r-md);
+  box-shadow: none;
+  padding-bottom: 20px;
+}
+
 .player-profile__section-header {
   display: flex;
   align-items: baseline;
   gap: 12px;
   padding: 20px clamp(20px, 5vw, 40px) 12px;
   flex: 0 0 auto;
+}
+
+.player-profile--overview .player-profile__section-header {
+  padding: 22px 26px 16px;
+}
+
+.player-profile--overview .confidence-card .player-profile__section-header,
+.player-profile--overview .leagues-card .player-profile__section-header,
+.player-profile--overview .head-to-head .player-profile__section-header {
+  padding: 18px 20px 14px;
+}
+
+/* The two primary cards are *titled*; the rest are *labelled*. A card carrying a
+ * chart or a table earns a real 18px heading — the tertiary cards keep the
+ * mono overline, which is what says "supporting stat" at a glance. Career is the
+ * hinge: primary in weight, but an overline, because its heading sits on a row
+ * with its own count. */
+.player-profile--overview .rating-chart .player-profile__section-title,
+.player-profile--overview .recent-matches .player-profile__section-title {
+  font-family: var(--font-ui);
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  text-transform: none;
+  color: var(--fg-1);
 }
 
 /* Scrolls vertically inside the fixed-height .player-profile so the hero
@@ -533,24 +678,24 @@
   gap: 6px;
 }
 
+/* Softer than they were: inside a card, six outlined boxes per row across six
+ * rows is a wall of chrome, and the Score column is not the loudest thing on the
+ * card — the opponent is. Tint only, no outline. */
 .player-profile__game {
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 4px 8px;
-  border-radius: 6px;
-  border: 1px solid transparent;
-  min-width: 34px;
+  padding: 3px 7px;
+  border-radius: 5px;
+  min-width: 30px;
 }
 
 .player-profile__game--won {
   background: rgba(0, 226, 154, 0.1);
-  border-color: rgba(0, 226, 154, 0.25);
 }
 
 .player-profile__game--lost {
-  background: rgba(255, 77, 109, 0.06);
-  border-color: rgba(255, 77, 109, 0.2);
+  background: rgba(255, 77, 109, 0.07);
 }
 
 .player-profile__game-mine {
@@ -740,7 +885,6 @@
  * the full-history route's scrolling pane is built on it.) */
 .recent-matches {
   flex: 0 0 auto;
-  border-bottom: 1px solid var(--border-subtle);
   /* Lets the card be NARROWER than the table inside it. A flex item's automatic
    * minimum size is its content's — `min-width: auto` — so without this the card
    * refuses to shrink below the table's min-content width, the scroll container
@@ -748,12 +892,6 @@
    * the page scrolls sideways instead of the table. This is the usual reason an
    * overflow wrapper "does nothing". */
   min-width: 0;
-}
-
-/* Whichever card the viewer-dependent order happens to leave at the bottom, the
- * page must not end on a rule hanging under the last one. */
-.player-profile__body > .player-profile__section:last-child {
-  border-bottom: none;
 }
 
 /* The table's own scroll container. Four `white-space: nowrap` columns are wider
@@ -790,14 +928,14 @@
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--fg-3);
-  padding: 12px clamp(20px, 5vw, 40px);
+  padding: 12px 10px;
   border-bottom: 1px solid var(--border-subtle);
   white-space: nowrap;
   user-select: none;
 }
 
 .recent-matches__table tbody td {
-  padding: 12px clamp(20px, 5vw, 40px);
+  padding: 12px 10px;
   border-bottom: 1px solid var(--border-subtle);
   font-size: 14px;
   color: var(--fg-1);
@@ -882,32 +1020,95 @@
   color: var(--fg-3);
 }
 
+/* The opponent's name, as a link to their profile. It reads as a name, not as a
+ * link — the underline arrives on hover, so a table of six of them isn't a wall
+ * of blue — but it is a real <a href>, so it is tabbable, and it announces and
+ * focuses as one. */
+.recent-matches__opponent-link {
+  color: var(--fg-1);
+  text-decoration: none;
+  border-radius: var(--r-sm);
+  transition: color 120ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.recent-matches__opponent-link:hover {
+  color: var(--ball-500);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.recent-matches__opponent-link:focus-visible {
+  outline: 2px solid var(--ball-500);
+  outline-offset: 2px;
+}
+
+/* A solo match has nobody on the other side, so this one is NOT a link (the row
+ * has no id to link to). Ghost-toned, to say so. */
 .recent-matches__opponent--solo {
   color: var(--fg-3);
   font-style: italic;
 }
 
+/* The card's one action, and it reads as one: a full-width outlined button under
+ * the rows rather than a mono link tucked into the corner. */
 .recent-matches__view-all {
-  display: inline-flex;
+  display: flex;
   align-items: center;
+  justify-content: center;
   gap: 6px;
-  align-self: flex-start;
-  margin: 14px clamp(20px, 5vw, 40px);
-  font-family: var(--font-mono);
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
+  height: 38px;
+  margin: 16px 26px 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  font-weight: 500;
   color: var(--fg-2);
   text-decoration: none;
-  transition: color 120ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  transition:
+    color 120ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    background 120ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
 .recent-matches__view-all:hover {
-  color: var(--ball-500);
+  background: var(--bg-hover);
+  color: var(--fg-1);
+}
+
+/* It reads as a button now, so it needs a button's focus ring — as a bare text
+ * link the browser's default outline was enough. Matches `.leagues-card__row`. */
+.recent-matches__view-all:focus-visible {
+  outline: 2px solid var(--ball-500);
+  outline-offset: 2px;
+}
+
+/* ----- The table, inside a card -----
+ * The cells used to carry the page gutter (up to 40px a side) because the table
+ * was full-bleed. Inside a card they carry a column gutter instead, and only the
+ * outer edges reach for the card's own padding — so the four columns sit as a
+ * table rather than drifting apart across a 1fr column.
+ *
+ * Opponent leads; Score, Δ and When are figures and are read up their right-hand
+ * edge, so they are right-aligned and the eye can run down them. */
+.recent-matches__table :is(th, td):first-child {
+  padding-left: var(--card-pad);
+}
+
+.recent-matches__table :is(th, td):last-child {
+  padding-right: var(--card-pad);
+}
+
+.recent-matches__table :is(th, td):not(:first-child) {
+  text-align: right;
+}
+
+/* The card's border is the line under the last row. */
+.recent-matches__table tbody tr:last-child td {
+  border-bottom: none;
 }
 
 .recent-matches__empty {
-  padding: 40px clamp(20px, 5vw, 40px);
+  padding: 40px var(--card-pad);
   text-align: center;
   font-size: 14px;
   font-weight: 600;
@@ -918,7 +1119,7 @@
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding: 0 clamp(20px, 5vw, 40px);
+  padding: 0 var(--card-pad);
 }
 
 .recent-matches__skeleton-row {
@@ -946,19 +1147,22 @@
   /* Unlike the matches section, the card is content-sized — it must not stretch
    * to eat the page's spare height. */
   flex: 0 0 auto;
-  border-bottom: 1px solid var(--border-subtle);
-  padding-bottom: 24px;
 }
 
 .career-card__total {
   color: var(--fg-3);
 }
 
+/* The ring and the figures share a row; the tiles take the full width beneath
+ * it. */
 .career-card__body {
+  padding: 0 var(--card-pad);
+}
+
+.career-card__headline {
   display: flex;
   align-items: center;
-  gap: clamp(20px, 4vw, 36px);
-  padding: 0 clamp(20px, 5vw, 40px);
+  gap: 20px;
   flex-wrap: wrap;
 }
 
@@ -966,8 +1170,8 @@
 .career-card__ring {
   position: relative;
   flex: 0 0 auto;
-  width: 116px;
-  height: 116px;
+  width: 96px;
+  height: 96px;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -1002,11 +1206,13 @@
 /* The figure in the middle: "68.6%" — or "—" for a player who has decided
  * nothing. Never a "0%": that would say they lose every match they play. */
 .career-card__ring-figure {
-  font-family: var(--font-display);
-  font-size: 26px;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 21px;
+  font-weight: 700;
   line-height: 1;
   color: var(--fg-1);
-  letter-spacing: 0.01em;
+  letter-spacing: -0.01em;
 }
 
 .career-card__ring-caption {
@@ -1034,12 +1240,16 @@
   flex: 1;
 }
 
+/* "31 W · 16 L" — a record is a pair of figures, so it is set in mono beside the
+ * ring rather than shouted in Bebas. The ring is the card's display moment. */
 .career-card__record {
-  font-family: var(--font-display);
-  font-size: 28px;
-  line-height: 1;
-  color: var(--fg-1);
-  letter-spacing: 0.02em;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.2;
+  color: var(--fg-2);
+  letter-spacing: 0;
   margin: 0;
 }
 
@@ -1073,11 +1283,14 @@
   color: var(--fg-3);
 }
 
+/* Two tiles, two equal columns — under the ring row rather than beside the
+ * record, so they span the card instead of taking whatever width the record left
+ * over (which in the narrow column was not enough for two). */
 .career-card__tiles {
-  display: flex;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
   gap: 10px;
-  flex-wrap: wrap;
-  margin-top: 4px;
+  margin-top: 18px;
 }
 
 .career-card__tile {
@@ -1134,8 +1347,6 @@
  * 0–100 anything — because that number does not exist. Don't add one. */
 .confidence-card {
   flex: 0 0 auto;
-  border-bottom: 1px solid var(--border-subtle);
-  padding-bottom: 24px;
 }
 
 .confidence-card__body {
@@ -1143,17 +1354,22 @@
   flex-direction: column;
   align-items: flex-start;
   gap: 10px;
-  padding: 0 clamp(20px, 5vw, 40px);
+  padding: 0 var(--card-pad);
 }
 
 /* The status dot + the level, in words. */
+/* "Settled" / "Firming up" / "Provisional" — a word about the reader's rating,
+ * not a scoreboard, so it is set in the UI face. In Bebas it came out as a
+ * shouted PROVISIONAL, which reads like a warning banner. */
 .confidence-card__level {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-family: var(--font-display);
-  font-size: 20px;
-  line-height: 1;
+  gap: 10px;
+  font-family: var(--font-ui);
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.2;
+  margin: 0;
   color: var(--fg-1);
 }
 
@@ -1204,18 +1420,21 @@
 /* The Glicko-2 internals, collapsed: they are the machinery BEHIND confidence,
  * not names for it. */
 .confidence-card__drawer {
-  margin-top: 2px;
+  align-self: stretch;
+  margin-top: 6px;
+  padding-top: 14px;
+  border-top: 1px solid var(--ink-700);
   font-size: 12px;
   color: var(--fg-3);
 }
 
 .confidence-card__drawer-summary {
   cursor: pointer;
-  font-family: var(--font-mono);
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
   color: var(--fg-3);
 }
 
@@ -1276,15 +1495,12 @@
   /* Content-sized, like the Career card — it must not stretch to eat the page's
    * spare height. */
   flex: 0 0 auto;
-  border-bottom: 1px solid var(--border-subtle);
-  padding-bottom: 24px;
 }
 
 .leagues-card__rows {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 0 clamp(20px, 5vw, 40px);
+  padding: 0 var(--card-pad);
   margin: 0;
   list-style: none;
 }
@@ -1293,25 +1509,30 @@
   display: block;
 }
 
+/* Rows, not boxes. Inside a recessed card a stack of outlined tiles is chrome on
+ * chrome — a hairline between them is enough to separate two leagues, and it
+ * leaves the *selected* row the only filled thing in the card. */
 .leagues-card__row {
   display: flex;
   align-items: center;
-  gap: 12px;
-  width: 100%;
-  padding: 12px 16px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 10px;
-  background: var(--bg-raised);
+  gap: 10px;
+  /* Bleed the hover/selected tint into the card's padding so the row reads as a
+   * full-width band, not an inset chip. */
+  padding: 10px 8px;
+  margin: 0 -8px;
+  border-radius: var(--r-sm);
   color: var(--fg-1);
   text-decoration: none;
-  transition:
-    border-color 120ms ease,
-    background 120ms ease;
+  transition: background 120ms ease;
+}
+
+.leagues-card__row-item:not(:last-child) .leagues-card__row {
+  border-bottom: 1px solid var(--ink-700);
+  border-radius: var(--r-sm) var(--r-sm) 0 0;
 }
 
 .leagues-card__row:hover {
-  border-color: color-mix(in srgb, var(--ball-500) 45%, transparent);
-  background: color-mix(in srgb, var(--ball-500) 6%, var(--bg-raised));
+  background: var(--bg-hover);
 }
 
 .leagues-card__row:focus-visible {
@@ -1320,10 +1541,13 @@
 }
 
 /* The selected ladder — the one every rating on this page is about. Tinted AND
- * outlined, so it doesn't rely on a single cue. */
+ * dotted in ball-orange, so it never rests on a single cue. */
 .leagues-card__row--selected {
-  border-color: var(--ball-500);
-  background: color-mix(in srgb, var(--ball-500) 12%, var(--bg-raised));
+  background: color-mix(in srgb, var(--ball-500) 10%, transparent);
+}
+
+.leagues-card__row--selected:hover {
+  background: color-mix(in srgb, var(--ball-500) 14%, transparent);
 }
 
 .leagues-card__dot {
@@ -1376,10 +1600,15 @@
   padding-left: 4px;
 }
 
+/* The skeleton row used to borrow its fill from `.leagues-card__row`'s
+ * `background`, which went away when the rows were flattened into hairlines —
+ * leaving a shimmer over nothing. It carries its own fill now, and is sized to
+ * the real row (37px) rather than to the boxed one it used to stand in for. */
 .leagues-card__row--skeleton {
   display: block;
-  height: 45px;
-  border-color: transparent;
+  height: 37px;
+  background: var(--bg-raised);
+  border-radius: var(--r-sm);
   animation: player-profile-shimmer 1.4s ease-in-out infinite;
 }
 
@@ -1391,15 +1620,13 @@
  * is no record and no CTA (you cannot play yourself), so only the list remains. */
 .head-to-head {
   flex: 0 0 auto;
-  border-bottom: 1px solid var(--border-subtle);
-  padding-bottom: 24px;
 }
 
 .head-to-head__body {
   display: flex;
   flex-direction: column;
   gap: 16px;
-  padding: 0 clamp(20px, 5vw, 40px);
+  padding: 0 var(--card-pad);
 }
 
 /* ----- You vs them: the lead ----- */
@@ -1413,9 +1640,10 @@
  * chose, which on a phone can be longer than the line. `anywhere` lets it break
  * mid-token rather than run off the side of the card. */
 .head-to-head__versus-line {
-  font-family: var(--font-display);
-  font-size: 20px;
-  line-height: 1.3;
+  font-family: var(--font-ui);
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.35;
   color: var(--fg-1);
   overflow-wrap: anywhere;
 }
@@ -1506,63 +1734,98 @@
 .head-to-head__rows {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 14px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
 }
 
+/* The name and the record share a line; the bar is drawn *under* them, full
+ * width. Inline — name | bar | record — the bar was squeezed to whatever the
+ * narrow column had spare, which for a long name was nothing, and three rows of
+ * stub bars compare nothing to anything. Placed explicitly rather than by DOM
+ * order, so the markup keeps reading name → bar → record. */
 .head-to-head__row {
-  display: flex;
+  display: grid;
+  grid-template-columns: 1fr auto auto;
   align-items: center;
-  gap: 12px;
-  padding: 8px 0;
+  column-gap: 8px;
+  row-gap: 7px;
+  padding: 0;
 }
 
-/* `flex: 0 1 auto`, not `0 0 auto`: a name is user-supplied and can be far longer
- * than the phone is wide, and a row that refuses to shrink around it pushes the
- * whole page sideways (the same class of bug as the un-wrapped matches table
- * above). It shrinks to the 120px floor — which still lines the bars up for the
- * ordinary short name — and the name itself ellipsises rather than the profile
- * scrolling. */
+/* A name is user-supplied and can be far longer than the phone is wide. It
+ * shrinks to the 120px floor — which still lines the bars up for the ordinary
+ * short name — and ellipsises rather than pushing the profile sideways (the same
+ * class of bug as the un-wrapped matches table above).
+ *
+ * It is an <a> to that opponent's profile, styled to read as a *name*: no
+ * standing underline, so three of them stacked aren't a wall of blue. The
+ * underline and the accent arrive on hover, and focus-visible gets a real ring —
+ * the link is tabbable and announces as one either way. */
 .head-to-head__opponent {
+  grid-column: 1;
+  grid-row: 1;
   font-size: 14px;
   font-weight: 600;
   color: var(--fg-1);
-  flex: 0 1 auto;
   min-width: 120px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  text-decoration: none;
+  border-radius: var(--r-sm);
+  transition: color 120ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.head-to-head__opponent:hover {
+  color: var(--ball-500);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.head-to-head__opponent:focus-visible {
+  outline: 2px solid var(--ball-500);
+  outline-offset: 2px;
 }
 
 /* The record said again, geometrically: how much of this rivalry the player has
  * won. Decorative — the record beside it is what a screen reader reads. */
 .head-to-head__bar {
-  flex: 1 1 auto;
-  height: 6px;
-  min-width: 40px;
+  grid-column: 1 / -1;
+  grid-row: 2;
+  height: 4px;
   border-radius: 999px;
-  background: var(--bg-raised);
+  background: var(--ink-700);
   overflow: hidden;
 }
 
+/* Green, not ball-orange: the bar is a *share of wins*, and win is the one thing
+ * this app already says in serve-green everywhere else on the page (the form
+ * chips, the Δ, the win-rate ring). */
 .head-to-head__bar-fill {
   display: block;
   height: 100%;
   border-radius: 999px;
-  background: var(--ball-500);
+  background: color-mix(in srgb, var(--serve-500) 55%, transparent);
 }
 
 .head-to-head__record {
+  grid-column: 2;
+  grid-row: 1;
   font-family: var(--font-mono);
-  font-size: 14px;
-  color: var(--fg-1);
-  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+  color: var(--fg-2);
+  white-space: nowrap;
 }
 
 .head-to-head__meetings {
+  grid-column: 3;
+  grid-row: 1;
   font-size: 12px;
   color: var(--fg-3);
-  flex: 0 0 auto;
-  min-width: 78px;
+  white-space: nowrap;
   text-align: right;
 }
 
@@ -1593,8 +1856,6 @@
  * survives a 390px phone. */
 .rating-chart {
   flex: 0 0 auto;
-  border-bottom: 1px solid var(--border-subtle);
-  padding-bottom: 20px;
 }
 
 /* The heading, the change chip and the range tabs share one row — until they
@@ -1629,45 +1890,50 @@
   background: color-mix(in srgb, var(--loss) 14%, transparent);
 }
 
-/* The range tabs sit at the right-hand end of the header row, and wrap under it
- * on a narrow viewport rather than squeezing the heading out. */
+/* One segmented control, not three loose pills: the ranges are mutually
+ * exclusive, and a group with a single filled segment says that on sight. It
+ * sits at the right-hand end of the header row and drops below it on a narrow
+ * viewport rather than squeezing the heading out. */
 .rating-chart__tabs {
-  display: flex;
-  gap: 4px;
+  display: inline-flex;
+  gap: 2px;
   margin-left: auto;
-  flex-wrap: wrap;
+  padding: 3px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
 }
 
 .rating-chart__tab {
+  display: inline-flex;
+  align-items: center;
+  height: 26px;
+  padding: 0 12px;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  letter-spacing: 0.02em;
   color: var(--fg-3);
-  padding: 4px 10px;
-  border-radius: 999px;
-  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-sm);
   text-decoration: none;
   transition:
     color 120ms ease,
-    background 120ms ease,
-    border-color 120ms ease;
+    background 120ms ease;
 }
 
 .rating-chart__tab:hover {
   color: var(--fg-1);
-  border-color: var(--ball-500);
+  background: var(--bg-hover);
 }
 
-.rating-chart__tab--selected {
-  color: var(--bg-app);
+.rating-chart__tab--selected,
+.rating-chart__tab--selected:hover {
+  color: var(--ink-950);
   background: var(--ball-500);
-  border-color: var(--ball-500);
 }
 
 .rating-chart__summary {
-  padding: 0 clamp(20px, 5vw, 40px);
+  padding: 0 var(--card-pad);
   margin: 0 0 10px;
   font-size: 13px;
   line-height: 1.5;
@@ -1676,7 +1942,7 @@
 }
 
 .rating-chart__plot {
-  padding: 0 clamp(20px, 5vw, 40px);
+  padding: 0 var(--card-pad);
 }
 
 .rating-chart__canvas {
@@ -1791,7 +2057,7 @@
 /* No rating, no chart (CONTEXT.md, "Rating"): the slot says what would end that,
  * rather than drawing an axis with nothing on it. */
 .rating-chart__unrated {
-  padding: 8px clamp(20px, 5vw, 40px) 4px;
+  padding: 8px var(--card-pad) 4px;
 }
 
 /* No `…__unrated-title` rule, and no element for one: the panel is deliberately a

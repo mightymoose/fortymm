@@ -52,7 +52,11 @@ class EntryRefusal(StrEnum):
     """The event holds ``max_players`` *active* entries already. Transient, like
     ``already_entered``: somebody withdrawing frees the slot (withdrawn entries are
     not entrants, ADR-0016), so the caller may be told something different a minute
-    from now — which is exactly why it is a 409 and not a 403."""
+    from now — which is exactly why it is a 409 and not a 403.
+
+    Unreachable for an **uncapped** event (``max_players`` is NULL, ADR-0935): with no
+    limit there is nothing for the field to reach, so no number of entrants can produce
+    this refusal."""
 
     rating_ineligible = "rating_ineligible"
     """The player's rating on the tournament's ladder fails one of the event's

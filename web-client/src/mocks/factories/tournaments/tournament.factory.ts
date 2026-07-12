@@ -57,6 +57,14 @@ export function buildTournamentEntrantReads(
  * server derives the half of it that is derivable: an event holding `max_players`
  * active entrants is `event_full`, and anything else is `open`.
  *
+ * ⚠️ **An UNCAPPED event (`max_players: null`, ADR-0935) is never full** — the API
+ * guarantees it, and so does the mock, because a mock that disagrees with the server
+ * about a designed state is a mock that will green-light the bug. Written as an
+ * explicit null check rather than left to the comparison: `entrants.length >= null`
+ * coerces the cap to `0`, so an uncapped event would come back `event_full` the
+ * moment anyone entered it — and the card under test would be reading a payload the
+ * real API cannot send.
+ *
  * `rating_ineligible` is NOT derivable from an event alone — it is a judgement
  * about a player's rating on the tournament's ladder, which no mock payload
  * carries — so a fixture that wants it passes it explicitly. What this function
@@ -66,6 +74,7 @@ export function buildTournamentEntrantReads(
 export function entryStateFor(
   event: Pick<TournamentEventRead, 'entrants' | 'max_players'>,
 ): TournamentEventRead['entry_state'] {
+  if (event.max_players === null) return { state: 'open' }
   return event.entrants.length >= event.max_players
     ? { state: 'event_full' }
     : { state: 'open' }

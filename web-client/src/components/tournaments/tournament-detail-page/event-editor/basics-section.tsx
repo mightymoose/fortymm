@@ -1,10 +1,6 @@
 import { Input } from '@/components/ui/input'
 
-import {
-  ENTRY_FEE_MAX,
-  PLAYERS_MAX,
-  type BasicsIssues,
-} from '../../data/event-validation'
+import { ENTRY_FEE_MAX, PLAYERS_MAX } from '../../data/event-validation'
 import { fmtDate } from '../../data/helpers'
 import { DRAW_TYPE_OPTIONS, FORMAT_OPTIONS, labelFor } from '../../data/options'
 import type { DrawType, EventFormat, TournamentEvent } from '../../data/types'
@@ -12,26 +8,41 @@ import { Field } from '../../field'
 import { SectionHeader } from '../section-header'
 import { OptionSelect } from './option-select'
 
+/** Inline validation messages for the scalar fields this section owns, mapped
+ * from the editor's React-Hook-Form state. Present only for a field the resolver
+ * (or the server) rejected; absent otherwise. Never shown to a viewer — `Field`
+ * drops the hint slot in its read-only branch (ADR 0015). */
+export interface BasicsFieldErrors {
+  name?: string
+  maxPlayers?: string
+  entryFee?: string
+}
+
 export interface BasicsSectionProps {
   event: TournamentEvent
   /** When false (a non-creator), the section renders values instead of
    * controls — a viewer gets a rendering of the data, never a disabled form
    * (ADR 0015). */
   canEdit: boolean
-  /** What is wrong on this tab, per field (`eventIssues`, `data/event-validation`)
-   * — or `undefined` while the editor is not yet showing errors. The section does
-   * not *decide* this: the editor validates the whole draft on submit and hands each
-   * tab its share, so "may I save?" and "what does this field say in red?" are one
-   * answer, computed once (exactly as the rule rows already work). */
-  issues?: BasicsIssues
+  /** Inline errors for the name / player-limit / entry-fee fields, surfaced below
+   * the control in red (`CLAUDE.md`, `## Forms`). The section does not *decide*
+   * these: the editor resolves the whole form on submit and hands each tab its
+   * share, so "may I save?" and "what does this field say in red?" are one answer,
+   * computed once — exactly as the rule rows already work. */
+  errors?: BasicsFieldErrors
   onChange: (next: TournamentEvent) => void
 }
 
-/** The numeric fields are edited through `Number(e.target.value)`, so clearing
- * one leaves `NaN` on the draft. To a reader that is an *unset* field — an
- * em-dash — not the literal string "NaN" (what `ReadOnlyValue` would print) and
- * not `0` (a real, different answer: free to enter). */
-const numericValue = (n: number): number | null => (Number.isNaN(n) ? null : n)
+/** The two numeric fields are **unset** in two different ways, and a reader is owed
+ * an em-dash for either — never the literal string "NaN" (what `ReadOnlyValue` would
+ * print for a cleared fee) and never `0` (a real, different answer: an event that is
+ * free to enter).
+ *
+ * The player limit reaches a reader as `null` when the event is uncapped (ADR-0935);
+ * the entry fee, whose blank box is a *missing* value rather than a state of the
+ * event, reaches it as `NaN`. Both mean "nothing here". */
+const numericValue = (n: number | null): number | null =>
+  n === null || Number.isNaN(n) ? null : n
 
 /** The event editor's "Basics" tab: name, format, draw type, caps, and the
  * time-slot window. Each row declares its control *and* the value it holds;
@@ -39,8 +50,8 @@ const numericValue = (n: number): number | null => (Number.isNaN(n) ? null : n)
  * editor's and neither can drift (ADR 0015).
  *
  * That single flag also drops the form's furniture (the required asterisks and
- * the "Hard cap…" hint): the rows still declare `required` and `hint`
- * unconditionally, and `Field` suppresses them for a viewer.
+ * the hints): the rows still declare `required` and `hint` unconditionally, and
+ * `Field` suppresses them for a viewer.
  *
  * The read-only `value` is what a *reader* needs, not what the control needs: an
  * option's label rather than the enum key it is stored under, and a formatted
@@ -48,7 +59,7 @@ const numericValue = (n: number): number | null => (Number.isNaN(n) ? null : n)
 export const BasicsSection = ({
   event,
   canEdit,
-  issues,
+  errors = {},
   onChange,
 }: BasicsSectionProps) => {
   const set = (patch: Partial<TournamentEvent>) => onChange({ ...event, ...patch })
@@ -77,15 +88,15 @@ export const BasicsSection = ({
         required
         readOnly={readOnly}
         value={event.name}
-        error={!!issues?.name}
-        hint={issues?.name}
+        error={!!errors.name}
+        hint={errors.name}
       >
         {(id) => (
           <Input
             id={id}
             autoFocus
-            aria-invalid={!!issues?.name}
             value={event.name}
+            aria-invalid={!!errors.name}
             placeholder="Open Singles"
             onChange={(e) => set({ name: e.target.value })}
           />
@@ -128,23 +139,30 @@ export const BasicsSection = ({
         </Field>
       </div>
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        {/* Clearing either number box leaves `NaN` on the draft, which goes on the
-            wire as `null` — a 422 the organizer used to meet only after the request.
-            The error takes the hint's place while it is there: one line under the
-            control, and the thing that is wrong outranks the thing that is merely
-            worth knowing.
+      {/* ⚠️ **Neither box may coerce a blank into a number** — and they blank to two
+          different things, because they *mean* two different things (ADR-0935).
+          `Number('')` is `0`, and that one coercion told two separate lies: a player
+          limit of zero (an event admitting nobody, which the server 422s) and an entry
+          fee of zero (a free event — a price the organizer never named). So a blank cap
+          is `null` (no cap: valid, and it saves) and a blank fee is `NaN` (missing: an
+          inline required error). Neither is ever `0`.
 
-            The `max` attributes are advisory and always were: an `<input type=number
-            max>` steers a spinner and stops nothing that is typed or pasted. The bound
-            that BINDS is the schema's (`PLAYERS_MAX` / `ENTRY_FEE_MAX`,
-            `data/event-validation`) — 9999999999 sailed through this attribute and
-            landed on an `Integer` column, which is a **500**. They are set from the same
-            constants so the hint and the rule cannot say different numbers. */}
+          The `max` attributes are advisory and always were: an `<input type=number max>`
+          steers a spinner and stops nothing that is typed or pasted. The bound that BINDS
+          is the schema's (`PLAYERS_MAX` / `ENTRY_FEE_MAX`, `data/event-validation`) —
+          9999999999 sailed through this attribute and landed on an `Integer` column,
+          which is a **500**. They are set from the same constants, so the spinner and the
+          rule cannot say different numbers. */}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <Field
           label="Player limit"
-          hint={issues?.maxPlayers ?? 'Hard cap. Waitlist opens past this.'}
-          error={!!issues?.maxPlayers}
+          // No required asterisk: a blank field is a real, valid state — an event with
+          // no cap — and the hint says so out loud, so an organizer who wants one does
+          // not have to guess that emptying the box is allowed. The error, when there is
+          // one, takes the hint's place: the thing that is wrong outranks the thing that
+          // is merely worth knowing.
+          error={!!errors.maxPlayers}
+          hint={errors.maxPlayers ?? 'Blank = no cap. Waitlist opens past this.'}
           readOnly={readOnly}
           value={numericValue(event.maxPlayers)}
         >
@@ -152,20 +170,27 @@ export const BasicsSection = ({
             <Input
               id={id}
               type="number"
-              min={2}
+              min={1}
               max={PLAYERS_MAX}
-              aria-invalid={!!issues?.maxPlayers}
-              value={event.maxPlayers}
-              onChange={(e) => set({ maxPlayers: Number(e.target.value) })}
+              aria-invalid={!!errors.maxPlayers}
+              // Hold empty as empty and submit `null`.
+              value={event.maxPlayers ?? ''}
+              onChange={(e) =>
+                set({
+                  maxPlayers:
+                    e.target.value === '' ? null : Number(e.target.value),
+                })
+              }
             />
           )}
         </Field>
         <Field
           label="Entry fee"
+          required
+          error={!!errors.entryFee}
+          hint={errors.entryFee}
           readOnly={readOnly}
           value={numericValue(event.entryFee)}
-          error={!!issues?.entryFee}
-          hint={issues?.entryFee}
         >
           {(id) => (
             <Input
@@ -173,9 +198,15 @@ export const BasicsSection = ({
               type="number"
               min={0}
               max={ENTRY_FEE_MAX}
-              aria-invalid={!!issues?.entryFee}
-              value={event.entryFee}
-              onChange={(e) => set({ entryFee: Number(e.target.value) })}
+              aria-invalid={!!errors.entryFee}
+              // Blank is `NaN` — *missing* — while a typed `0` is a legitimate free
+              // event and saves.
+              value={Number.isNaN(event.entryFee) ? '' : event.entryFee}
+              onChange={(e) =>
+                set({
+                  entryFee: e.target.value === '' ? NaN : Number(e.target.value),
+                })
+              }
             />
           )}
         </Field>

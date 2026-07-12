@@ -19,6 +19,34 @@
   --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.55);
 }
 
+/* --- Picker shell: the search-mode header holding the way back (#895) --- */
+.nm-search-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: flex-start;
+  margin-bottom: 12px;
+}
+.nm-back-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  margin-left: -6px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  font: 600 11px var(--font-ui);
+  color: var(--ball-500);
+  cursor: pointer;
+}
+.nm-back-btn:hover {
+  text-decoration: underline;
+}
+.nm-back-btn:focus-visible {
+  outline: 2px solid var(--ball-500);
+  outline-offset: 2px;
+}
+
 /* --- Typeahead picker --- */
 .nm-search {
   position: relative;

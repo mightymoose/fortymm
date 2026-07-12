@@ -3,7 +3,7 @@ import { MapPin, Trash2 } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { cn } from '@/lib/utils'
 
-import { effectiveDateRange, fmtDateRange } from './data/helpers'
+import { effectiveDateRange, fmtDateRange, fmtVenueLine } from './data/helpers'
 import type { Tournament } from './data/types'
 import { StatusBadge } from './status-badge'
 
@@ -38,6 +38,10 @@ export const TournamentCard = ({
 }: TournamentCardProps) => {
   const range = effectiveDateRange(t)
   const entries = t.events.reduce((sum, e) => sum + (e.entered || 0), 0)
+  // Empty when the tournament has no venue, city, or region — and then the
+  // whole line goes, pin and all. A row holding only its own punctuation is not
+  // information (#994).
+  const venue = fmtVenueLine(t.address)
 
   return (
     <div className="group/tcard relative">
@@ -58,10 +62,15 @@ export const TournamentCard = ({
           <div className="text-[20px] leading-tight font-bold tracking-[-0.01em] text-[color:var(--fg-1)]">
             {t.name}
           </div>
-          <div className="mt-1 flex items-center gap-1 text-[13px] text-[color:var(--fg-3)]">
-            <MapPin size={12} />
-            {t.address.venue} · {t.address.city}, {t.address.region}
-          </div>
+          {venue && (
+            <div
+              data-testid="tournament-venue-line"
+              className="mt-1 flex items-center gap-1 text-[13px] text-[color:var(--fg-3)]"
+            >
+              <MapPin size={12} />
+              {venue}
+            </div>
+          )}
         </div>
 
         <div className="mt-1 grid grid-cols-3 gap-2.5 border-t border-[color:var(--border-subtle)] pt-3">

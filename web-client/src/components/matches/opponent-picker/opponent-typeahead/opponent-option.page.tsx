@@ -15,8 +15,9 @@ const scoped = (container: Container) => ({
 
 /**
  * Test page-object for `OpponentOption` — a single listbox option. Covers the
- * combobox-option semantics (role, `aria-selected`), the decorative-avatar
- * accessible name, and the graceful fallback for degenerate usernames.
+ * combobox-option semantics (role; highlight via the `active` class, never
+ * `aria-selected` — #894), the decorative-avatar accessible name, and the
+ * graceful fallback for degenerate usernames.
  */
 export const opponentOptionPage = {
   render(overrides: Partial<OpponentOptionProps> = {}) {

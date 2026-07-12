@@ -23,16 +23,17 @@ const scoped = (container: Container) => ({
    * Queried by its TEXT because that is what the organizer reads; a test that asked
    * for "the hint node" would pass on a message rendered in the wrong colour under
    * the wrong control. */
-  queryFieldError(message: string) {
+  queryFieldError(message: string | RegExp) {
     return container.queryByText(message)
   },
   getFormatTrigger() {
     return container.getByRole('combobox', { name: 'Format' })
   },
-  /** The "Hard cap…" helper text under Player limit — form furniture, and so
-   * absent from the read-only view (ADR 0015). */
+  /** The player-limit helper text — form furniture, and so absent from the
+   * read-only view (ADR 0015). It is also the one place the editor says out loud
+   * that leaving the box empty is *allowed* (ADR-0935). */
   queryPlayerLimitHint() {
-    return container.queryByText(/Hard cap\. Waitlist opens past this\./)
+    return container.queryByText(/Blank = no cap\. Waitlist opens past this\./)
   },
   /** Every interactive control in the section, swept by role. Supplement only —
    * `getFormElements()` is the guarantee. */

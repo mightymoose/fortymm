@@ -4,6 +4,7 @@ from datetime import date, datetime
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import (
+    CheckConstraint,
     Date,
     DateTime,
     Enum,
@@ -134,6 +135,16 @@ class TournamentEvent(Base):
             "tournament_id",
             text("created_at DESC"),
         ),
+        # Mirrors the CHECKs in migration 0010 so ``Base.metadata.create_all``
+        # (how pytest builds its schema) carries them too. A NULL max_players is
+        # the "no cap" sentinel (ADR-0935) and passes the CHECK; a present cap
+        # must be positive, and an entry fee must be non-negative.
+        CheckConstraint(
+            "max_players > 0", name="ck_tournament_events_max_players_positive"
+        ),
+        CheckConstraint(
+            "entry_fee >= 0", name="ck_tournament_events_entry_fee_non_negative"
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -163,7 +174,8 @@ class TournamentEvent(Base):
         ),
         nullable=False,
     )
-    max_players: Mapped[int] = mapped_column(Integer, nullable=False)
+    # NULL means "no cap" (ADR-0935). A present cap is positive by CHECK.
+    max_players: Mapped[int | None] = mapped_column(Integer, nullable=True)
     entry_fee: Mapped[float] = mapped_column(Numeric(8, 2), nullable=False)
     # There is deliberately no ``entered`` column. The registration count is
     # derived from the live ``entries`` below (ADR-0016) — a stored counter is a

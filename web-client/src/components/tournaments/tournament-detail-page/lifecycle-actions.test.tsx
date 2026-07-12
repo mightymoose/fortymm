@@ -79,9 +79,15 @@ describe('LifecycleActions', () => {
 
   // Hidden, never disabled (ADR 0015): transitions are owner-only server-side, so
   // a viewer is offered no lifecycle affordance at all.
+  //
+  // The non-owner's tournament is `published`, because that is the only kind of
+  // tournament a non-owner can be looking at: a draft is owner-only to READ now, and
+  // a stranger's GET of one is a 404 (#967), so this component never renders for a
+  // draft it does not own. `published` is a status with a live edge out of it ("Start
+  // tournament"), so there is a button here for the gate to actually withhold.
   it('renders nothing for a non-owner', () => {
     lifecycleActionsPage.render({
-      tournament: buildTournament({ status: 'draft', canEdit: false }),
+      tournament: buildTournament({ status: 'published', canEdit: false }),
     })
     expect(lifecycleActionsPage.queryAllButtons()).toHaveLength(0)
   })

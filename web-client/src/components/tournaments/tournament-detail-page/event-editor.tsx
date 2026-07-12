@@ -1,4 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { zodResolver } from '@hookform/resolvers/zod'
+import { useForm, useWatch } from 'react-hook-form'
 import { Check, Trash2, TriangleAlert } from 'lucide-react'
 
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -13,22 +15,24 @@ import {
 } from '@/components/ui/sheet'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 
+import { eligibilityIssues } from '../data/predicate-validation'
 import {
   EVENT_SAVE_TARGET,
   saveFailure as classifySaveFailure,
   saveFailureMessage,
   type SaveFailure,
 } from '../data/save-failure'
-import {
-  eventIssues,
-  firstInvalidSection,
-  type EventIssues,
-} from '../data/event-validation'
 import type { TournamentEvent, TournamentTable } from '../data/types'
 import { BasicsSection } from './event-editor/basics-section'
 import { EligibilitySection } from './event-editor/eligibility-section'
 import { MatchSection } from './event-editor/match-section'
 import { PoolsSection } from './event-editor/pools-section'
+import {
+  eventSchema,
+  eventToFormValues,
+  firstInvalidSection,
+  type EventFormValues,
+} from './event-form'
 
 export interface EventEditorProps {
   open: boolean
@@ -40,13 +44,13 @@ export interface EventEditorProps {
   /** When false (a non-creator), the Save and Delete actions are hidden and the
    * editor becomes a read-only view of the event. */
   canEdit: boolean
-  /** Persist the draft. **May be async — and the editor awaits it**: it closes
-   * itself only when the promise RESOLVES, and a rejection keeps the sheet open,
-   * with the draft intact and the failure on screen. A caller that fires the
+  /** Persist the edited event. **May be async — and the editor awaits it**: it
+   * closes itself only when the promise RESOLVES, and a rejection keeps the sheet
+   * open, with the work intact and the failure on screen. A caller that fires the
    * mutation and closes regardless turns every server refusal into a silently
-   * discarded event (the #614 rule, learned again here from a `between` rule with
-   * no bounds: a 422 came back, the sheet shut, and everything the organizer had
-   * typed went with it). */
+   * discarded event (the #614 rule, learned again in #933 / #934, and once more here
+   * from a `between` rule with no bounds: a 422 came back, the sheet shut, and
+   * everything the organizer had typed went with it). */
   onSave: (event: TournamentEvent) => void | Promise<void>
   onDelete: (id: string) => void
 }
@@ -59,29 +63,33 @@ const SECTIONS = [
 ]
 
 /** The slide-in event editor — a side sheet with four sections (Basics,
- * Eligibility, Match settings, Table pools) over a working draft that only
- * commits on save.
+ * Eligibility, Match settings, Table pools) over ONE React-Hook-Form draft. The form
+ * is the single source of truth: the scalar Basics/Match fields write back through
+ * `applyChange`, the nested-array sections drive the same form through
+ * `useFieldArray`, and every field of it is resolved against `eventSchema`.
  *
- * **A save is a request, and a request can be refused.** The two ways the editor
+ * **A save is a request, and a request can be refused.** The two ways this editor
  * takes that seriously:
  *
- * - It *checks the draft first* (`eventIssues`, `data/event-validation`) and refuses
- *   to send one the server would 422 — a blank or 256-character name, a cleared
- *   player limit, a negative fee, a rule with no value, a `between` with one bound or
- *   an inverted pair — pointing the organizer at the offending field instead. That is
- *   a Zod schema mirroring the server's constraints, which is the house rule for a
- *   form (`CLAUDE.md`, `## Forms`), and the same thing `NewTournamentModal` does for
- *   the tournament's own name.
+ * - It *checks the draft first* (`eventSchema`, `./event-form`) and refuses to send
+ *   one the server would 422 — a blank or 256-character name, a cap of `0` or of ten
+ *   billion, a missing entry fee, a rule with no value, a `between` with one bound or
+ *   an inverted pair — pointing the organizer at the tab holding the offending field
+ *   instead. That is a Zod schema mirroring the server's constraints, which is the
+ *   house rule for a form (`CLAUDE.md`, `## Forms`).
+ *
+ *   What it does **not** refuse is a *blank player limit*: that is an uncapped event
+ *   (ADR-0935), it is a real answer, and it saves as `null`.
  * - And when a request is refused *anyway* — an unknown 422, a 5xx, an outage — it
- *   **keeps the sheet open**, keeps the draft, and shows what happened **in our own
- *   words** (`data/save-failure`). Client-side validation only ever prevents
- *   the refusals we already know about; this is what stops the next unknown one from
+ *   **keeps the sheet open**, keeps the work, and says what happened **in our own
+ *   words** (`data/save-failure`). Client-side validation only ever prevents the
+ *   refusals we already know about; this is what stops the next unknown one from
  *   eating somebody's work — without reading Pydantic's prose out to them.
  *
- * Neither the Save button nor the tabs are gated on validity: a disabled Save with
- * no explanation is the dead end ADR-0015 is about (and the repo's Forms convention
- * says the same of `disabled={!isValid}`). Save is live, and pressing it is what
- * produces the red. */
+ * Neither the Save button nor the tabs are gated on validity: a disabled Save with no
+ * explanation is the dead end ADR-0015 is about (and the repo's Forms convention says
+ * the same of `disabled={!isValid}`). Save is live, and pressing it is what produces
+ * the red. */
 export const EventEditor = ({
   open,
   onOpenChange,
@@ -91,71 +99,111 @@ export const EventEditor = ({
   onSave,
   onDelete,
 }: EventEditorProps) => {
-  const [draft, setDraft] = useState<TournamentEvent | null>(event)
   const [section, setSection] = useState('basics')
   const [seenEvent, setSeenEvent] = useState(event)
-  /** Has the organizer *tried* to save? Errors appear on submit, not while a rule
-   * is still being typed — a value box that has not been filled in yet is not yet
-   * wrong. Once it is true, the messages track the draft live, so fixing a rule
-   * clears its message without a second click. */
-  const [submitted, setSubmitted] = useState(false)
   /** How the last save was refused, or `null`. A classified failure — never a raw
    * server string (see `data/save-failure`). Never a reason to close. */
   const [failure, setFailure] = useState<SaveFailure | null>(null)
-  const [isSaving, setIsSaving] = useState(false)
 
-  // Re-seed the working draft and reset to the first section whenever the
-  // editor is (re)opened on a different event — adjusting state during render
-  // rather than in an effect (https://react.dev/learn/you-might-not-need-an-effect).
+  const form = useForm<EventFormValues>({
+    resolver: zodResolver(eventSchema),
+    defaultValues: eventToFormValues(event),
+  })
+
+  // Jump back to the first section whenever the editor is (re)opened on a
+  // different event — adjusting state during render rather than in an effect
+  // (https://react.dev/learn/you-might-not-need-an-effect).
   if (event !== seenEvent) {
     setSeenEvent(event)
-    setDraft(event)
     setSection('basics')
     // A fresh event starts clean: last time's red belongs to last time's draft.
-    setSubmitted(false)
     setFailure(null)
   }
+
+  // Re-seed the form to the new event's values (and clear any prior errors). The
+  // sheet stays mounted, so without this a second open would show the last
+  // attempt. `form.reset` writes RHF's own store, so it belongs in an effect.
+  useEffect(() => {
+    form.reset(eventToFormValues(event))
+  }, [event, form])
 
   const isNew = !event || event.id.startsWith('new')
 
-  // The verdict on the whole draft — computed every render, so a fixed field stops
-  // complaining the moment it is fixed. Shown only once `submitted`.
-  const issues: EventIssues = draft
-    ? eventIssues(draft)
-    : { basics: {}, rules: {} }
-  const invalidSection = firstInvalidSection(issues)
+  // The bridged draft the scalar sections read from: the non-editable fields off
+  // the event, with every editable field taken from live form state. Editing a
+  // scalar section writes back through `applyChange`, so the form stays
+  // authoritative. `useWatch` (not `form.watch()`) subscribes reactively and is
+  // memoizable. The nested-array sections (Eligibility, Table pools) instead drive
+  // the same form directly via `useFieldArray` off `form.control` — their
+  // add/edit/remove is form state, not a bridged draft (chore 1e).
+  const values = useWatch({ control: form.control })
+  const draft: TournamentEvent | null = event
+    ? { ...event, ...(values as Partial<TournamentEvent>) }
+    : null
 
-  const save = async () => {
-    if (!draft) return
+  const {
+    formState: { errors, isSubmitting, isSubmitted },
+  } = form
 
-    if (invalidSection) {
-      // Refused HERE, so nothing is sent and nothing can be lost. Take them to the
-      // tab holding the offending field: a save that failed on a tab you cannot see
-      // is indistinguishable from a save that did nothing.
-      setSubmitted(true)
-      setSection(invalidSection)
-      setFailure(null)
-      return
-    }
+  // What is wrong with the RULES, row by row. The resolver's own verdict on
+  // `predicates` is deliberately a single "this list is not sendable" issue
+  // (`eventSchema`), because a zod path cannot address `between`'s two bounds inside
+  // one `value` tuple — so the row-level red comes from the very validator the
+  // resolver calls (`eligibilityIssues`), keyed by predicate id. One rule, two readers
+  // of it; never two rules.
+  //
+  // Computed every render, so a fixed rule stops complaining the moment it is fixed —
+  // and shown only once the organizer has *tried* to save: a value box they have not
+  // filled in yet is not yet wrong.
+  const watchedPredicates = useWatch({ control: form.control, name: 'predicates' })
+  const ruleIssues = eligibilityIssues(watchedPredicates ?? [])
 
-    setSubmitted(true)
-    setFailure(null)
-    setIsSaving(true)
-    try {
-      await onSave(draft)
-      // The parent closes the sheet on success. It is the ONLY thing that closes it:
-      // a rejection lands in the catch below, with the draft untouched.
-    } catch (error) {
-      setFailure(classifySaveFailure(error))
-    } finally {
-      setIsSaving(false)
-    }
+  const applyChange = (next: TournamentEvent) => {
+    // Don't validate until the user has tried to save once — otherwise a new
+    // event (whose name starts empty) would flash "required" on the first
+    // keystroke in any field. After a rejected submit, re-validate live so the
+    // inline errors clear as they're fixed.
+    const opts = { shouldDirty: true, shouldValidate: isSubmitted }
+    form.setValue('name', next.name, opts)
+    form.setValue('format', next.format, opts)
+    form.setValue('drawType', next.drawType, opts)
+    form.setValue('maxPlayers', next.maxPlayers, opts)
+    form.setValue('entryFee', next.entryFee, opts)
+    form.setValue('slot', next.slot, opts)
+    form.setValue('match', next.match, opts)
   }
+
+  const submit = form.handleSubmit(
+    async (formValues) => {
+      if (!event) return
+      const saved: TournamentEvent = { ...event, ...formValues }
+      setFailure(null)
+      try {
+        await onSave(saved)
+        // The editor closes itself, and this is the ONLY thing that closes it: a
+        // rejection lands in the catch below, with the sheet — and the work in it —
+        // untouched.
+        onOpenChange(false)
+      } catch (error) {
+        setFailure(classifySaveFailure(error))
+      }
+    },
+    // Refused HERE, so nothing was sent and nothing can be lost. Take them to the tab
+    // holding the offending field: a save that failed on a tab you cannot see is
+    // indistinguishable from a button that does nothing.
+    (formErrors) => setSection(firstInvalidSection(formErrors) ?? 'basics'),
+  )
 
   // "Edit event" is an imperative addressed to the person in control. A viewer
   // is not one — the panel is a rendering of the event, so it says so
   // (ADR 0015, rule 5).
   const overline = !canEdit ? 'Event' : isNew ? 'New event' : 'Edit event'
+
+  const basicsErrors = {
+    name: errors.name?.message,
+    maxPlayers: errors.maxPlayers?.message,
+    entryFee: errors.entryFee?.message,
+  }
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -199,31 +247,29 @@ export const EventEditor = ({
                 <BasicsSection
                   event={draft}
                   canEdit={canEdit}
-                  issues={submitted ? issues.basics : undefined}
-                  onChange={setDraft}
+                  errors={basicsErrors}
+                  onChange={applyChange}
                 />
               </TabsContent>
               <TabsContent value="eligibility">
                 <EligibilitySection
-                  event={draft}
+                  control={form.control}
                   canEdit={canEdit}
-                  issues={submitted ? issues.rules : undefined}
-                  onChange={setDraft}
+                  issues={isSubmitted ? ruleIssues : undefined}
                 />
               </TabsContent>
               <TabsContent value="match">
                 <MatchSection
                   event={draft}
                   canEdit={canEdit}
-                  onChange={setDraft}
+                  onChange={applyChange}
                 />
               </TabsContent>
               <TabsContent value="pools">
                 <PoolsSection
-                  event={draft}
+                  control={form.control}
                   tables={tables}
                   canEdit={canEdit}
-                  onChange={setDraft}
                 />
               </TabsContent>
             </Tabs>
@@ -284,7 +330,7 @@ export const EventEditor = ({
             // Disabled only while the save is in the air — never on validity
             // (`CLAUDE.md`, `## Forms`): pressing it is how the organizer finds out
             // what is wrong, and a dead button explains nothing.
-            <Button disabled={!draft || isSaving} onClick={save}>
+            <Button disabled={!draft || isSubmitting} onClick={submit}>
               <Check size={16} />
               {isNew ? 'Create event' : 'Save changes'}
             </Button>
