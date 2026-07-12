@@ -191,31 +191,44 @@
 /* The Δ from the player's most recent rated match. Rendered only when there IS
  * one — a player with no rating history gets no chip, never a "+0".
  *
- * A soft-tinted pill, no outline — it rides beside the rating, and a hard border
- * at this size competes with the number it is annotating. Recent-matches rows
- * reuse the class for their Δ column and strip the pill back off (below): in a
- * dense table a run of pills is stripes, not data. */
+ * The base class is the *figure*: a mono, tabular, win/loss-coloured number, which
+ * is all the Recent-matches column wants. The hero's pill chrome is added below. */
 .player-profile__delta {
   display: inline-flex;
   align-items: center;
-  height: 26px;
-  padding: 0 10px;
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   font-size: 13px;
   font-weight: 600;
   letter-spacing: 0.02em;
-  border-radius: 999px;
-  margin-bottom: 7px;
 }
 
 .player-profile__delta--win {
   color: var(--serve-500);
-  background: color-mix(in srgb, var(--win) 14%, transparent);
 }
 
 .player-profile__delta--loss {
   color: var(--loss);
+}
+
+/* The pill chrome belongs to the *hero's* Δ alone. It used to live on the base
+ * class, which meant the Recent-matches column — the class's only other use —
+ * had to unset five declarations to get its figure back; a run of tinted pills
+ * down a dense column reads as stripes, and the row already says won/lost on its
+ * status dot. Styling the one place that wants the pill beats styling both and
+ * undoing one. */
+.player-profile__rating-row .player-profile__delta {
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 999px;
+  margin-bottom: 7px;
+}
+
+.player-profile__rating-row .player-profile__delta--win {
+  background: color-mix(in srgb, var(--win) 14%, transparent);
+}
+
+.player-profile__rating-row .player-profile__delta--loss {
   background: color-mix(in srgb, var(--loss) 14%, transparent);
 }
 
@@ -374,7 +387,6 @@
 
 .player-profile__form-chip--skeleton {
   background: var(--bg-raised);
-  border-color: var(--bg-raised);
   animation: player-profile-shimmer 1.4s ease-in-out infinite;
 }
 
@@ -459,7 +471,8 @@
  * on row 2 — the price of sharing row 1 with career, and the reason the two
  * columns start on the same line at all.
  *
- * The hero above stays full-bleed; it is the body that is centred and capped. */
+ * The hero is a card in this same column now — `--overview` centres and caps the
+ * whole page, hero included — so the body no longer does the centring alone. */
 /* Stacked (phone): the cards are separate surfaces now, so they are separated by
  * a gap rather than by a rule under each. */
 .player-profile--overview .player-profile__body {
@@ -477,15 +490,6 @@
     grid-template-rows: repeat(4, auto);
     gap: 20px;
     align-items: start;
-  }
-
-  /* The overview centres and pads itself at the root (`--overview`, above), so
-   * the body must not do it a second time. The full-history route has no such
-   * root rule and still wants the column here. */
-  .player-profile:not(.player-profile--overview) .player-profile__body {
-    max-width: 1240px;
-    margin: 0 auto;
-    padding: 24px clamp(20px, 4vw, 40px) 48px;
   }
 
   /* A grid item is not a flex item: the `flex: 1` / `flex: 0 0 auto` the cards
@@ -549,6 +553,10 @@
  * `border-bottom`, the `:last-child` exception) is gone with it: separate
  * surfaces are separated by the gap. */
 .player-profile--overview .player-profile__section {
+  /* The gutter the card's inner blocks read (`--card-pad`). Tertiary cards
+   * override it below; the blocks themselves never spell a number. */
+  --card-pad: 26px;
+
   background: var(--bg-card);
   border: 1px solid var(--border-subtle);
   border-radius: var(--r-lg);
@@ -559,31 +567,12 @@
 .player-profile--overview .confidence-card,
 .player-profile--overview .leagues-card,
 .player-profile--overview .head-to-head {
+  --card-pad: 20px;
+
   background: var(--bg-panel);
   border-radius: var(--r-md);
   box-shadow: none;
   padding-bottom: 20px;
-}
-
-/* The cards supply their own padding now, so the inner blocks that used to hold
- * the page gutter (`clamp(20px, 5vw, 40px)`, which on a desktop was 40px *inside
- * a 1fr card*) shed it. */
-.player-profile--overview .career-card__body,
-.player-profile--overview .rating-chart__summary,
-.player-profile--overview .rating-chart__plot,
-.player-profile--overview .rating-chart__unrated,
-.player-profile--overview .rating-chart__error,
-.player-profile--overview .recent-matches__empty,
-.player-profile--overview .recent-matches__skeleton {
-  padding-left: 26px;
-  padding-right: 26px;
-}
-
-.player-profile--overview .confidence-card__body,
-.player-profile--overview .head-to-head__body,
-.player-profile--overview .leagues-card__rows {
-  padding-left: 20px;
-  padding-right: 20px;
 }
 
 .player-profile__section-header {
@@ -937,14 +926,14 @@
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--fg-3);
-  padding: 12px clamp(20px, 5vw, 40px);
+  padding: 12px 10px;
   border-bottom: 1px solid var(--border-subtle);
   white-space: nowrap;
   user-select: none;
 }
 
 .recent-matches__table tbody td {
-  padding: 12px clamp(20px, 5vw, 40px);
+  padding: 12px 10px;
   border-bottom: 1px solid var(--border-subtle);
   font-size: 14px;
   color: var(--fg-1);
@@ -1075,43 +1064,25 @@
  *
  * Opponent leads; Score, Δ and When are figures and are read up their right-hand
  * edge, so they are right-aligned and the eye can run down them. */
-.player-profile--overview .recent-matches__table thead th,
-.player-profile--overview .recent-matches__table tbody td {
-  padding: 12px 10px;
+.recent-matches__table :is(th, td):first-child {
+  padding-left: var(--card-pad);
 }
 
-.player-profile--overview .recent-matches__table thead th:first-child,
-.player-profile--overview .recent-matches__table tbody td:first-child {
-  padding-left: 26px;
+.recent-matches__table :is(th, td):last-child {
+  padding-right: var(--card-pad);
 }
 
-.player-profile--overview .recent-matches__table thead th:last-child,
-.player-profile--overview .recent-matches__table tbody td:last-child {
-  padding-right: 26px;
-}
-
-.player-profile--overview .recent-matches__table thead th:not(:first-child),
-.player-profile--overview .recent-matches__table tbody td:not(:first-child) {
+.recent-matches__table :is(th, td):not(:first-child) {
   text-align: right;
 }
 
-/* A run of tinted pills down a dense column reads as stripes; the row already
- * says won/lost on its status dot, so the Δ is left as a coloured figure. */
-.player-profile--overview .recent-matches__row .player-profile__delta {
-  height: auto;
-  padding: 0;
-  margin-bottom: 0;
-  background: none;
-  border-radius: 0;
-}
-
 /* The card's border is the line under the last row. */
-.player-profile--overview .recent-matches__table tbody tr:last-child td {
+.recent-matches__table tbody tr:last-child td {
   border-bottom: none;
 }
 
 .recent-matches__empty {
-  padding: 40px clamp(20px, 5vw, 40px);
+  padding: 40px var(--card-pad);
   text-align: center;
   font-size: 14px;
   font-weight: 600;
@@ -1122,7 +1093,7 @@
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding: 0 clamp(20px, 5vw, 40px);
+  padding: 0 var(--card-pad);
 }
 
 .recent-matches__skeleton-row {
@@ -1159,7 +1130,7 @@
 /* The ring and the figures share a row; the tiles take the full width beneath
  * it. */
 .career-card__body {
-  padding: 0 clamp(20px, 5vw, 40px);
+  padding: 0 var(--card-pad);
 }
 
 .career-card__headline {
@@ -1357,7 +1328,7 @@
   flex-direction: column;
   align-items: flex-start;
   gap: 10px;
-  padding: 0 clamp(20px, 5vw, 40px);
+  padding: 0 var(--card-pad);
 }
 
 /* The status dot + the level, in words. */
@@ -1503,7 +1474,7 @@
 .leagues-card__rows {
   display: flex;
   flex-direction: column;
-  padding: 0 clamp(20px, 5vw, 40px);
+  padding: 0 var(--card-pad);
   margin: 0;
   list-style: none;
 }
@@ -1523,7 +1494,6 @@
    * full-width band, not an inset chip. */
   padding: 10px 8px;
   margin: 0 -8px;
-  width: calc(100% + 16px);
   border-radius: var(--r-sm);
   color: var(--fg-1);
   text-decoration: none;
@@ -1604,10 +1574,15 @@
   padding-left: 4px;
 }
 
+/* The skeleton row used to borrow its fill from `.leagues-card__row`'s
+ * `background`, which went away when the rows were flattened into hairlines —
+ * leaving a shimmer over nothing. It carries its own fill now, and is sized to
+ * the real row (37px) rather than to the boxed one it used to stand in for. */
 .leagues-card__row--skeleton {
   display: block;
-  height: 45px;
-  border-color: transparent;
+  height: 37px;
+  background: var(--bg-raised);
+  border-radius: var(--r-sm);
   animation: player-profile-shimmer 1.4s ease-in-out infinite;
 }
 
@@ -1625,7 +1600,7 @@
   display: flex;
   flex-direction: column;
   gap: 16px;
-  padding: 0 clamp(20px, 5vw, 40px);
+  padding: 0 var(--card-pad);
 }
 
 /* ----- You vs them: the lead ----- */
@@ -1753,37 +1728,16 @@
   padding: 0;
 }
 
+/* A name is user-supplied and can be far longer than the phone is wide. It
+ * shrinks to the 120px floor — which still lines the bars up for the ordinary
+ * short name — and ellipsises rather than pushing the profile sideways (the same
+ * class of bug as the un-wrapped matches table above). */
 .head-to-head__opponent {
   grid-column: 1;
   grid-row: 1;
-}
-
-.head-to-head__record {
-  grid-column: 2;
-  grid-row: 1;
-}
-
-.head-to-head__meetings {
-  grid-column: 3;
-  grid-row: 1;
-}
-
-.head-to-head__bar {
-  grid-column: 1 / -1;
-  grid-row: 2;
-}
-
-/* `flex: 0 1 auto`, not `0 0 auto`: a name is user-supplied and can be far longer
- * than the phone is wide, and a row that refuses to shrink around it pushes the
- * whole page sideways (the same class of bug as the un-wrapped matches table
- * above). It shrinks to the 120px floor — which still lines the bars up for the
- * ordinary short name — and the name itself ellipsises rather than the profile
- * scrolling. */
-.head-to-head__opponent {
   font-size: 14px;
   font-weight: 600;
   color: var(--fg-1);
-  flex: 0 1 auto;
   min-width: 120px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1793,6 +1747,8 @@
 /* The record said again, geometrically: how much of this rivalry the player has
  * won. Decorative — the record beside it is what a screen reader reads. */
 .head-to-head__bar {
+  grid-column: 1 / -1;
+  grid-row: 2;
   height: 4px;
   border-radius: 999px;
   background: var(--ink-700);
@@ -1810,6 +1766,8 @@
 }
 
 .head-to-head__record {
+  grid-column: 2;
+  grid-row: 1;
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   font-size: 13px;
@@ -1818,6 +1776,8 @@
 }
 
 .head-to-head__meetings {
+  grid-column: 3;
+  grid-row: 1;
   font-size: 12px;
   color: var(--fg-3);
   white-space: nowrap;
@@ -1928,7 +1888,7 @@
 }
 
 .rating-chart__summary {
-  padding: 0 clamp(20px, 5vw, 40px);
+  padding: 0 var(--card-pad);
   margin: 0 0 10px;
   font-size: 13px;
   line-height: 1.5;
@@ -1937,7 +1897,7 @@
 }
 
 .rating-chart__plot {
-  padding: 0 clamp(20px, 5vw, 40px);
+  padding: 0 var(--card-pad);
 }
 
 .rating-chart__canvas {
@@ -2052,7 +2012,7 @@
 /* No rating, no chart (CONTEXT.md, "Rating"): the slot says what would end that,
  * rather than drawing an axis with nothing on it. */
 .rating-chart__unrated {
-  padding: 8px clamp(20px, 5vw, 40px) 4px;
+  padding: 8px var(--card-pad) 4px;
 }
 
 /* No `…__unrated-title` rule, and no element for one: the panel is deliberately a

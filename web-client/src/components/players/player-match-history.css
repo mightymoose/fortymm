@@ -13,6 +13,21 @@
   overflow: hidden;
 }
 
+/* The content column. The profile centres and pads itself at its root (see
+ * `.player-profile--overview`, player-profile.css), so the shared
+ * `.player-profile__body` no longer carries the column for both surfaces — the
+ * pane asks for it here, by its own name. Stated positively and in its own
+ * stylesheet on purpose: as a `:not(--overview)` over in the profile's file, this
+ * page's gutter would be defined by the *absence* of another page's modifier,
+ * and renaming that modifier would silently send this page edge-to-edge. */
+@media (min-width: 960px) {
+  .player-profile--pane .player-profile__body {
+    max-width: 1240px;
+    margin: 0 auto;
+    padding: 24px clamp(20px, 4vw, 40px) 48px;
+  }
+}
+
 .player-history__header {
   display: flex;
   flex-direction: column;
