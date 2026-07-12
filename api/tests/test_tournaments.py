@@ -33,8 +33,8 @@ from app.schemas.tournament import TournamentTransitionCreate
 from app.tournaments import (
     TOURNAMENT_CREATE,
     TOURNAMENT_VIEW,
+    _get_owned_tournament_or_404,
     _get_tournament_for_update_or_404,
-    _get_tournament_or_404,
     create_tournament_transition,
     list_tournaments,
 )
@@ -840,9 +840,16 @@ async def test_view_permission_alone_reads_but_cannot_create(
 ):
     """``tournament.view`` is its own grant, separate from create: a viewer can
     list and read tournaments but POST /v1/tournaments is 403 without
-    ``tournament.create``."""
+    ``tournament.create``.
+
+    The target is **published** first. What this test is about is the *permission*
+    axis — read is granted, create is not — and a draft would answer 404 on the
+    detail read for a reason that has nothing to do with permissions (#967: drafts
+    are owner-only), quietly turning a permission test into a visibility one.
+    """
     owner_client, _ = authed_client
     target = (await owner_client.post("/v1/tournaments", json=_create_payload())).json()
+    await _set_status(db_session, target["id"], TournamentStatus.published)
 
     async with make_client() as viewer_client:
         viewer = await start_session(viewer_client, db_session)
@@ -864,9 +871,18 @@ async def test_non_creator_with_permission_can_read_but_not_modify(
     db_session: AsyncSession,
     authed_client: tuple[AsyncClient, User],
 ):
-    """A SECOND user who HAS view+create but did not create the tournament:
-    GET detail -> 200 with can_edit False; PATCH/DELETE and all event mutations
-    -> 403 (owner-only)."""
+    """A SECOND user who HAS view+create but did not create the **published**
+    tournament: GET detail -> 200 with can_edit False; PATCH/DELETE and all event
+    mutations -> 403 (owner-only).
+
+    Permission grants the read; ownership grants the write — and the two are
+    genuinely different answers for the same user on the same tournament, which is
+    what this pins. The target is published first, because that read is only the
+    non-owner's to have once the tournament has been *announced*: a draft is
+    owner-only and answers 404 (#967, and the tests below), so leaving the target
+    in draft would make this test agree with a router that had no ownership check
+    in it at all — the 404 would fire before anything here was exercised.
+    """
     owner_client, _ = authed_client
     target = (await owner_client.post("/v1/tournaments", json=_create_payload())).json()
     target_event = (
@@ -874,6 +890,7 @@ async def test_non_creator_with_permission_can_read_but_not_modify(
             f"/v1/tournaments/{target['id']}/events", json=_event_payload()
         )
     ).json()
+    await _set_status(db_session, target["id"], TournamentStatus.published)
 
     async with make_client() as other_client:
         other = await start_session(other_client, db_session)
@@ -907,6 +924,153 @@ async def test_non_creator_with_permission_can_read_but_not_modify(
                 f"/v1/tournaments/{target['id']}/events/{target_event['id']}"
             )
         ).status_code == 403
+
+
+# ----- draft visibility (#967) ---------------------------------------------
+#
+# A draft has not been announced, so it is owner-only: absent from everyone else's
+# list, and a 404 — not a 403 — on everyone else's detail read. The 404 is the
+# point of the whole thing. A 403 would confirm that a tournament with that id
+# exists, and the existence of an unannounced tournament is itself the secret; a
+# draft nobody may see must be indistinguishable from one that was never created.
+#
+# ``tournament.view`` is the other axis and it is *unaffected*: the permission gate
+# is a route dependency, so it still answers first, and a user without the grant is
+# refused before visibility is ever consulted. The last test in this section is what
+# holds those two apart.
+
+
+async def _list_ids(client: AsyncClient) -> list[str]:
+    """The ids in ``GET /v1/tournaments``, as the caller sees them.
+
+    Every list assertion below is about *membership*, not about the status code: a
+    predicate that filtered nothing, and one that filtered everything, both answer
+    200 with a well-formed body. Only the ids say which one shipped.
+    """
+    response = await client.get("/v1/tournaments")
+    assert response.status_code == 200, response.text
+    return [t["id"] for t in response.json()]
+
+
+async def test_another_users_draft_detail_is_a_404(
+    db_session: AsyncSession,
+    authed_client: tuple[AsyncClient, User],
+):
+    """A permitted non-owner reading someone else's DRAFT gets 404, not 403.
+
+    The caller holds ``tournament.view`` — they are allowed to read tournaments —
+    and the tournament plainly exists. It is still a 404, because the answer they
+    are owed is the one they would get for an id that was never issued: the draft's
+    existence is not theirs to learn. Assert on the *detail* string too, so a 404
+    arriving for some unrelated reason (a mistyped route, say) can't pass this.
+    """
+    owner_client, _ = authed_client
+    target = (await owner_client.post("/v1/tournaments", json=_create_payload())).json()
+    assert target["status"] == TournamentStatus.draft.value
+
+    async with make_client() as other_client:
+        other = await start_session(other_client, db_session)
+        await _grant_tournament_perms(db_session, other)
+
+        response = await other_client.get(f"/v1/tournaments/{target['id']}")
+
+    assert response.status_code == 404, response.text
+    assert response.json()["detail"] == "Tournament not found."
+
+
+async def test_another_users_draft_is_absent_from_the_list(
+    db_session: AsyncSession,
+    authed_client: tuple[AsyncClient, User],
+):
+    """The list is the other half of the same rule: a draft the caller doesn't own
+    is not in it.
+
+    Hiding the draft on the detail route alone would be worthless — the list is the
+    surface that *announces* a tournament, and a card the caller can see but cannot
+    open is a leak with a 404 stapled to it.
+    """
+    owner_client, _ = authed_client
+    target = (await owner_client.post("/v1/tournaments", json=_create_payload())).json()
+
+    async with make_client() as other_client:
+        other = await start_session(other_client, db_session)
+        await _grant_tournament_perms(db_session, other)
+
+        assert target["id"] not in await _list_ids(other_client)
+
+
+async def test_the_owner_still_sees_and_reads_their_own_draft(
+    authed_client: tuple[AsyncClient, User],
+):
+    """The fix must not hide a draft from the person who is building it.
+
+    The owner is the one caller a draft exists *for*: it is in their list, its
+    detail reads back, and ``can_edit`` is true — the draft is still theirs to
+    finish and publish. A predicate that hid every draft (rather than every draft
+    that isn't yours) would pass both tests above and break the actual feature; this
+    is the test that catches it.
+    """
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    assert created["status"] == TournamentStatus.draft.value
+
+    assert created["id"] in await _list_ids(client)
+
+    detail = await client.get(f"/v1/tournaments/{created['id']}")
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["can_edit"] is True
+
+
+async def test_a_published_tournament_is_visible_to_a_non_owner(
+    db_session: AsyncSession,
+    authed_client: tuple[AsyncClient, User],
+):
+    """The guard against over-filtering: publishing is what makes a tournament
+    public, so once it is published a permitted non-owner sees it in their list.
+
+    Both draft tests above are satisfied by a predicate that returns nothing at all.
+    This one is not: it fails the moment the filter starts hiding tournaments that
+    *have* been announced — which is the way this fix breaks in production, silently
+    and only for other people's tournaments.
+    """
+    owner_client, _ = authed_client
+    target = (await owner_client.post("/v1/tournaments", json=_create_payload())).json()
+    await _set_status(db_session, target["id"], TournamentStatus.published)
+
+    async with make_client() as other_client:
+        other = await start_session(other_client, db_session)
+        await _grant_tournament_perms(db_session, other)
+
+        assert target["id"] in await _list_ids(other_client)
+        assert (
+            await other_client.get(f"/v1/tournaments/{target['id']}")
+        ).status_code == 200
+
+
+async def test_missing_permission_is_403_on_a_draft_even_though_it_is_invisible(
+    db_session: AsyncSession,
+    authed_client: tuple[AsyncClient, User],
+):
+    """The gate still fires FIRST: no ``tournament.view`` means 403, not the 404 the
+    draft's invisibility would otherwise produce.
+
+    The two refusals answer different questions and must not be collapsed. 403 says
+    "you may not read tournaments"; 404 says "there is no such tournament for you".
+    A user with no grant at all learns nothing either way — which is why the
+    ordering is safe — but if visibility ever ran *before* the permission gate, a
+    permission-less caller poking at ids would start getting 404s for drafts and
+    403s for published tournaments, and could sit there enumerating which ids exist
+    in which state. The gate is a route dependency precisely so it cannot get out of
+    order.
+    """
+    owner_client, _ = authed_client
+    target = (await owner_client.post("/v1/tournaments", json=_create_payload())).json()
+
+    async with make_client() as client:
+        await start_session(client, db_session)  # a session, but no permissions
+
+        assert (await client.get(f"/v1/tournaments/{target['id']}")).status_code == 403
+        assert (await client.get("/v1/tournaments")).status_code == 403
 
 
 # ----- lifecycle transitions ------------------------------------------------
@@ -1179,15 +1343,18 @@ async def test_only_the_mutating_loader_takes_the_row_lock(
     engine: AsyncEngine,
     authed_client: tuple[AsyncClient, User],
 ):
-    """``_get_tournament_for_update_or_404`` emits ``SELECT … FOR UPDATE``;
-    ``_get_tournament_or_404`` — the loader the read routes use — does not.
+    """Of the module's two loaders, only one locks:
+    ``_get_tournament_for_update_or_404`` emits ``SELECT … FOR UPDATE``, and
+    ``_get_owned_tournament_or_404`` — the loader behind the owner-only writes —
+    does not.
 
     Both halves are load-bearing. A locking loader that quietly stopped locking
-    would reopen the entry-after-go-live race in silence; and a lock added to the
-    *read* loader would make every page view queue behind (and hold up) writers,
-    for a reader that has nothing to serialize against.
+    would reopen the entry-after-go-live race in silence; and a lock spreading to
+    the *other* loader would make PATCH/DELETE (and, were a read route ever to
+    reach for it, every page view) queue behind writers they have nothing to
+    serialize against.
     """
-    client, _ = authed_client
+    client, owner = authed_client
     created = (await client.post("/v1/tournaments", json=_create_payload())).json()
     tournament_id = uuid.UUID(created["id"])
 
@@ -1196,7 +1363,7 @@ async def test_only_the_mutating_loader_takes_the_row_lock(
     assert any("FOR UPDATE" in s for s in statements), statements
 
     async with counted_statements(engine) as (session, statements):
-        await _get_tournament_or_404(session, tournament_id)
+        await _get_owned_tournament_or_404(session, tournament_id, owner)
     assert not any("FOR UPDATE" in s for s in statements), statements
 
 

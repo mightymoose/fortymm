@@ -8,6 +8,7 @@ import {
   createEvent,
   enterEvent,
   findTournament,
+  listTournaments,
   resetTournamentsStore,
   transitionTournament,
   updateEvent,
@@ -508,5 +509,66 @@ describe('transitionTournament', () => {
     expect(result.tournament.name).toBe('Renamed Open')
     expect(result.tournament.status).toBe('published')
     expect(findTournament(PUBLISHED)!.status).toBe('published')
+  })
+})
+
+// Visibility (#967): a draft is owner-only. The store holds a foreign draft — the
+// database really does — and the two READS are what keep it off the wire, so these
+// are the tests that make the predicate real. Without them (and without that seeded
+// row) the filter is dead code that could be deleted and stay green.
+describe('draft visibility', () => {
+  const FOREIGN_DRAFT = 'league-office-draft-2027' // seeded `draft`, u-office
+  const FOREIGN_PUBLISHED = 'club-champs-2026' // seeded `published`, u-office
+  const OWN_DRAFT = 'summer-slam-2026' // seeded `draft`, the dev user's
+
+  const listedIds = () => listTournaments().map((t) => t.id)
+
+  it("omits another organiser's draft from the list", () => {
+    expect(listedIds()).not.toContain(FOREIGN_DRAFT)
+  })
+
+  // The row IS in the store — so the assertion above is about the predicate, not
+  // about an absent fixture. A `not.toContain` against a row that was never seeded
+  // would pass for the wrong reason, and would keep passing if the filter were
+  // deleted; this is what stops that.
+  //
+  // The proof runs through a WRITE, because the reads (rightly) cannot see it: the
+  // transitions route has no visibility predicate on the server either, so it loads
+  // the row and refuses it as **not yours** (403). A tournament that did not exist
+  // would be a 404. Same call, two different refusals — the row is there.
+  it('holds the hidden draft: a write against it is 403 (not yours), not 404', () => {
+    expect(transitionTournament(FOREIGN_DRAFT, 'published')).toEqual({
+      ok: false,
+      status: 403,
+    })
+    expect(transitionTournament('no-such-tournament-at-all', 'published')).toEqual(
+      { ok: false, status: 404 },
+    )
+  })
+
+  // A 404, NOT a 403 — the whole point. `findTournament` returning `undefined` is
+  // what the handler turns into "Tournament not found.", the same answer a
+  // nonexistent id gets, so a stranger cannot tell a hidden draft from one that was
+  // never created. A 403 would confirm the tournament exists.
+  it("answers a GET of another organiser's draft as if it did not exist", () => {
+    expect(findTournament(FOREIGN_DRAFT)).toBeUndefined()
+    expect(findTournament('no-such-tournament-at-all')).toBeUndefined()
+  })
+
+  // The other half of the predicate, and the half a `status !== 'draft'` filter or a
+  // blanket "hide what I can't edit" would break: MY draft is still mine to see.
+  it('still lists and serves the dev user’s OWN draft', () => {
+    expect(listedIds()).toContain(OWN_DRAFT)
+    expect(findTournament(OWN_DRAFT)!.status).toBe('draft')
+  })
+
+  // The only row on which the ANNOUNCED allow-list is load-bearing is a row the dev
+  // user does NOT own — on an owned one the ownership clause short-circuits true in
+  // every status, so a sweep over the dev user's own tournament would go green even
+  // if the allow-list were all-false. This is that row, and the allow-list's
+  // per-status behaviour is pinned properly on the API side.
+  it("still serves another organiser's ANNOUNCED tournament, read-only", () => {
+    expect(listedIds()).toContain(FOREIGN_PUBLISHED)
+    expect(findTournament(FOREIGN_PUBLISHED)!.can_edit).toBe(false)
   })
 })

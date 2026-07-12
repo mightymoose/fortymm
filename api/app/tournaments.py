@@ -2,7 +2,7 @@ import uuid
 from typing import Any, Literal, assert_never
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
-from sqlalchemy import select
+from sqlalchemy import ColumnElement, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -178,14 +178,31 @@ def _serialize_detail(
     )
 
 
-async def _get_tournament_or_404(
-    db: AsyncSession, tournament_id: uuid.UUID
+async def _get_owned_tournament_or_404(
+    db: AsyncSession, tournament_id: uuid.UUID, current_user: User
 ) -> Tournament:
+    """Load a tournament the caller OWNS, or refuse: 404 if absent, 403 if not theirs.
+
+    Load first, THEN check ownership — the ordering is intentional, and preserved
+    from the call sites this replaces: a permitted non-creator learns the
+    tournament exists.
+
+    The loading and the owner check are welded together on purpose. Every loader in
+    this module now NAMES THE SCOPE IT LOADS UNDER — owner-scoped (this one, for the
+    owner-only writes), for-update (the concurrency-sensitive writes), visibility-
+    scoped (``_visible_to``, in the read routes' WHERE) — and there is deliberately
+    no bare "just fetch the row" loader left. A bare one is a trap: it 404s, it
+    reads correctly, and it is right there, so the next read route added to this
+    module would reach for it and silently serve other people's drafts. The guard
+    against that has to be structural — a leaky loader that doesn't exist cannot be
+    picked by accident — not a reviewer remembering to ask.
+    """
     tournament = (
         await db.execute(select(Tournament).where(Tournament.id == tournament_id))
     ).scalar_one_or_none()
     if tournament is None:
         raise HTTPException(status_code=404, detail="Tournament not found.")
+    _require_owner(tournament, current_user)
     return tournament
 
 
@@ -214,8 +231,15 @@ async def _get_tournament_for_update_or_404(
     routes take this lock, on the TOURNAMENT row, before any other — one lock, one
     order, so they queue behind each other and no pair of them can deadlock.
 
-    Read routes deliberately keep ``_get_tournament_or_404``: a reader has nothing
-    to serialize against, and no business making writers queue behind it.
+    The read routes deliberately take no lock: they select through ``_visible_to``
+    and never come through here, because a reader has nothing to serialize against
+    and no business making writers queue behind it.
+
+    Unscoped by ownership, and legitimately so — entering and withdrawing are
+    *player* actions on somebody else's tournament, so there is no owner to check.
+    The routes that do own their row load through ``_get_owned_tournament_or_404``
+    instead; ``create_tournament_transition`` needs both, so it takes this lock and
+    then calls ``_require_owner`` itself.
     """
     tournament = (
         await db.execute(
@@ -273,6 +297,52 @@ def _require_owner(t: Tournament, current_user: User) -> None:
         )
 
 
+# The statuses in which a tournament has been ANNOUNCED to the world. Publishing
+# is the act that makes a tournament public (ADR-0017), and nothing walks
+# backwards out of it, so everything from ``published`` onward is announced and
+# ``draft`` is not.
+#
+# An allow-list, deliberately, rather than "anything but draft": a status added
+# to the enum tomorrow is invisible to non-owners until somebody puts it in this
+# set on purpose. The inverse spelling would silently publish a future
+# pre-publish status (a ``pending_review``, a ``scheduled``) the moment it was
+# added, which is exactly the leak this predicate exists to close.
+ANNOUNCED_STATUSES: frozenset[TournamentStatus] = frozenset(
+    {
+        TournamentStatus.published,
+        TournamentStatus.live,
+        TournamentStatus.archived,
+    }
+)
+
+
+def _visible_to(user_id: uuid.UUID) -> ColumnElement[bool]:
+    """Which tournaments ``user_id`` may see at all: the announced ones, plus
+    their own — whatever status their own is in.
+
+    A draft is not announced, so it is owner-only. The read routes push this into
+    the WHERE clause rather than filtering after the fact, so a hidden draft is
+    *not selected* and the detail route's existing "Tournament not found." 404
+    answers for it. 404 and not 403: a 403 would confirm that a tournament with
+    that id exists, which is precisely what an unannounced tournament must not
+    admit. A draft the caller cannot see is indistinguishable from one that was
+    never created.
+
+    ``tournament.view`` is a separate question, and it is asked first — it is a
+    route dependency, so a caller without the permission is refused (403) before
+    this predicate is ever built. Permission says "may you read tournaments at
+    all"; this says "which ones are there for you to read".
+
+    One predicate, used by both the list and the detail route, because two copies
+    of this rule would eventually disagree — and the way they disagree is that the
+    list hides a draft the detail route still serves.
+    """
+    return or_(
+        Tournament.status.in_(ANNOUNCED_STATUSES),
+        Tournament.created_by_user_id == user_id,
+    )
+
+
 # ----- tournament routes ---------------------------------------------------
 
 
@@ -293,10 +363,17 @@ async def list_tournaments(
     # batch. A per-event entry count would be the N+1 this shape exists to avoid,
     # and a statement-count tripwire in tests/test_tournaments.py fails if one
     # comes back.
+    #
+    # Scoped by ``_visible_to``: somebody else's draft is not the caller's to see,
+    # so it never enters the result set — and, because the filter is a WHERE clause
+    # on the first of the three queries, the events and entrants queries are keyed
+    # off the surviving ids and cannot leak a hidden tournament's contents either.
+    # A predicate costs no extra statement, so the tripwire above still reads 3.
     rows = (
         await db.execute(
             select(Tournament, User.username)
             .join(User, User.id == Tournament.created_by_user_id)
+            .where(_visible_to(current_user.id))
             .order_by(Tournament.created_at.desc())
         )
     ).all()
@@ -382,11 +459,14 @@ async def get_tournament(
     # Fetch the row and creator username in one joined query. The inner join
     # can't drop the row (RESTRICT FK guarantees the creator exists), so a
     # missing row means the tournament itself is absent.
+    #
+    # ``_visible_to`` rides in the same WHERE as the id lookup, so a hidden
+    # tournament leaves by the same 404 as an absent one (see _visible_to).
     row = (
         await db.execute(
             select(Tournament, User.username)
             .join(User, User.id == Tournament.created_by_user_id)
-            .where(Tournament.id == tournament_id)
+            .where(Tournament.id == tournament_id, _visible_to(current_user.id))
         )
     ).one_or_none()
     if row is None:
@@ -423,10 +503,7 @@ async def update_tournament(
     db: AsyncSession = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> TournamentRead:
-    # Load first (404 if missing), THEN check ownership (403). The ordering is
-    # intentional: a permitted non-creator learns the tournament exists.
-    tournament = await _get_tournament_or_404(db, tournament_id)
-    _require_owner(tournament, current_user)
+    tournament = await _get_owned_tournament_or_404(db, tournament_id, current_user)
     # model_dump(exclude_unset=True) already recursively serializes the nested
     # value-objects (address/table_catalogue) to plain dicts/lists, so a single
     # setattr loop covers the JSONB columns and the scalar fields alike. Absent
@@ -453,8 +530,7 @@ async def delete_tournament(
     db: AsyncSession = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> Response:
-    tournament = await _get_tournament_or_404(db, tournament_id)
-    _require_owner(tournament, current_user)
+    tournament = await _get_owned_tournament_or_404(db, tournament_id, current_user)
     await db.delete(tournament)
     await db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -551,8 +627,7 @@ async def create_event(
     db: AsyncSession = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> TournamentEventRead:
-    tournament = await _get_tournament_or_404(db, tournament_id)
-    _require_owner(tournament, current_user)
+    tournament = await _get_owned_tournament_or_404(db, tournament_id, current_user)
     event = TournamentEvent(
         tournament_id=tournament.id,
         name=payload.name,
@@ -584,8 +659,9 @@ async def update_event(
     db: AsyncSession = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> TournamentEventRead:
-    tournament = await _get_tournament_or_404(db, tournament_id)
-    _require_owner(tournament, current_user)
+    # Loaded for the guard alone — the event, not the tournament, is what this
+    # route edits, so the owner-scoped load is here to 404/403 and nothing else.
+    await _get_owned_tournament_or_404(db, tournament_id, current_user)
     event = await _get_event_or_404(db, tournament_id, event_id)
     # As in update_tournament: model_dump(exclude_unset=True) serializes the
     # nested value-objects (slot/match_settings/predicates/pools) to plain
@@ -611,8 +687,9 @@ async def delete_event(
     db: AsyncSession = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> Response:
-    tournament = await _get_tournament_or_404(db, tournament_id)
-    _require_owner(tournament, current_user)
+    # As in update_event: the owner-scoped load is the guard (404 then 403); the
+    # row this route deletes is the event.
+    await _get_owned_tournament_or_404(db, tournament_id, current_user)
     event = await _get_event_or_404(db, tournament_id, event_id)
     await db.delete(event)
     await db.commit()
