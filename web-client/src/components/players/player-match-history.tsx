@@ -172,9 +172,12 @@ function PlayerMatchesSection({
 
   return (
     <section className="player-profile__section">
+      {/* No count chip beside the title: the footer's "Showing 1–2 of 2
+       * matches" readout is the page's single count (#1006). Two of them meant
+       * the same number twice, and neither sibling list (the players list, the
+       * matches list) carries one. */}
       <div className="player-profile__section-header">
         <span className="player-profile__section-title">Matches</span>
-        {data && <span className="player-profile__section-count">{total}</span>}
       </div>
       <div className="player-profile__table-wrap">
         {isError ? (
@@ -208,7 +211,19 @@ function PlayerMatchesSection({
           </table>
         )}
       </div>
-      {total > PAGE_SIZE && (
+      {/* Shown at every *non-zero* row count. This used to be gated on
+       * `total > PAGE_SIZE` — a history of a page or less rendered no count and
+       * no pager at all, so a two-match history was a bare table with nothing
+       * under it (#1006). That guard is gone for good: the footer self-clamps
+       * (`safePage`, `first = total === 0 ? 0 : …`) and disables its own buttons
+       * at a single page, so a short history needs no guard from us.
+       *
+       * `total > 0` is a different claim, not that guard coming back. At zero,
+       * `MatchesEmpty` above already says "No matches yet"; a footer reading
+       * "Showing 0–0 of 0 matches" over four dead buttons would only restate it
+       * and offer a pager with nothing to page. An empty history is a designed
+       * data state — the empty state is the whole of it. */}
+      {total > 0 && (
         <PaginationFooter
           page={page}
           setPage={onPageChange}
