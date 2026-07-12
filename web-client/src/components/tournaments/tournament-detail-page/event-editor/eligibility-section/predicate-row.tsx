@@ -2,9 +2,13 @@ import { Trash2 } from 'lucide-react'
 
 import { Input } from '@/components/ui/input'
 
-import { BOOL_PREDICATE_VALUE, predicateSentence } from '../../../data/helpers'
-import { PRED_FIELDS, PRED_OPS_BY_TYPE } from '../../../data/options'
-import type { Predicate, PredicateValue } from '../../../data/types'
+import { predicateSentence } from '../../../data/helpers'
+import {
+  PRED_FIELDS,
+  PRED_OPS_BY_TYPE,
+  parsePredicateOp,
+} from '../../../data/options'
+import type { Predicate } from '../../../data/types'
 import { OptionSelect } from '../option-select'
 
 export interface PredicateRowProps {
@@ -32,9 +36,14 @@ function numberOrNull(raw: string): number | null {
 }
 
 /** One ANDed eligibility rule. For the creator: a field picker, an operator
- * picker, a type-appropriate value control, and a remove button — switching the
- * field resets the operator and value to that field-type's defaults. For a
- * viewer: the same rule, read back as a sentence. */
+ * picker, a value control, and a remove button — switching the field resets the
+ * operator and clears the value, so a rule is never left holding the previous
+ * field's answer. For a viewer: the same rule, read back as a sentence.
+ *
+ * The field picker offers exactly one field today — `Rating`, the only fact we
+ * hold about a player that a rule can be evaluated against (ADR-0783). It stays a
+ * picker rather than collapsing into a caption because the vocabulary is a list
+ * that grows (`PRED_FIELDS`), and a one-item list is still that list. */
 export const PredicateRow = ({
   predicate,
   canEdit,
@@ -46,18 +55,24 @@ export const PredicateRow = ({
 
   const setField = (field: string) => {
     const next = PRED_FIELDS[field]
-    const value: PredicateValue =
-      next.type === 'enum'
-        ? (next.options?.[0]?.value ?? null)
-        : next.type === 'bool'
-          ? true
-          : null
+    if (!next) return
     onChange({
       ...predicate,
       field: field as Predicate['field'],
       op: PRED_OPS_BY_TYPE[next.type][0].value,
-      value,
+      value: null,
     })
+  }
+
+  /** `OptionSelect` hands back the raw `string` the listbox emitted; a
+   * `Predicate` holds a `PredicateOp`. `parsePredicateOp` (`data/options.ts`)
+   * narrows the one to the other against the very table these options were
+   * rendered from — so an operator the builder never offered cannot enter a
+   * rule, and no cast is needed to say so. */
+  const setOp = (raw: string) => {
+    const op = schema ? parsePredicateOp(schema.type, raw) : null
+    if (op === null) return
+    onChange({ ...predicate, op })
   }
 
   const between = Array.isArray(predicate.value)
@@ -90,7 +105,7 @@ export const PredicateRow = ({
         ariaLabel="Operator"
         value={predicate.op}
         options={ops}
-        onChange={(op) => onChange({ ...predicate, op })}
+        onChange={setOp}
       />
 
       <div>
@@ -131,19 +146,6 @@ export const PredicateRow = ({
               onChange({ ...predicate, value: numberOrNull(e.target.value) })
             }
           />
-        )}
-        {schema?.type === 'enum' && (
-          <OptionSelect
-            ariaLabel="Value"
-            value={String(predicate.value)}
-            options={schema.options ?? []}
-            onChange={(value) => onChange({ ...predicate, value })}
-          />
-        )}
-        {schema?.type === 'bool' && (
-          <div className="py-2.5 text-[13px] text-[color:var(--fg-3)]">
-            {BOOL_PREDICATE_VALUE}
-          </div>
         )}
       </div>
 

@@ -180,6 +180,59 @@ The one league every player is joined to on sign-up, and the league a surface
 falls back to when the caller names none. Exactly one exists.
 _Avoid_: home league, main league, global league.
 
+## Tournament entry
+
+**Entry**:
+A player's place in one tournament **event**. Soft-deleted on withdrawal, so a
+player may re-enter (ADR-0016).
+_Avoid_: registration, signup, ticket (an entry is the row; *registration* is the
+window it may be created in).
+
+**Entrant**:
+A player holding an **active** entry — `status = entered`. The count of entrants is
+always **derived from the rows**, never stored (ADR-0016): there is no `entered`
+column, because a counter is a second copy of a truth that can drift from the rows
+it counts.
+
+**Registration window**:
+The span in which entries may be created, which is exactly the tournament being
+`published` (ADR-0017). A `draft` has not opened, a `live` one has locked, an
+`archived` one has ended. Entering *and* withdrawing both obey it.
+_Avoid_: open, deadline (there is no date; the window is a function of the status).
+
+**Eligibility**:
+Whether a given player may enter a given event, decided **server-side, for that
+caller**, by the event's `predicates` plus its `max_players`. It is computed in
+exactly one place and shared by the guard that refuses the entry and the page that
+explains why the Enter control is not offered — the client never re-derives it from
+the raw rules (ADR-0783).
+
+**Predicate**:
+One eligibility rule: a `field`, an `op` and a `value`, ANDed with its siblings. A
+predicate may only name a fact we actually hold about a player, so today the only
+field is **rating** (ADR-0783). Age, gender and club were authorable and were never
+enforceable; they are removed until a player has a date of birth, a gender and a
+club to be compared against.
+_Avoid_: filter, restriction, requirement (a predicate is the stored rule; the
+*decision* it contributes to is the eligibility).
+
+**Unrated entrant**:
+An entrant holding no rating in the tournament's league — they have never finished a
+rated match on that ladder. Note this is **not** "their `rating_value` is null": a new
+player is seeded 1500 on sign-up, so unratedness is `is_rated_member()`, the same
+predicate the profile and the roster read. They **pass every rating rule** (ADR-0783), because the
+alternative bars a beginner from the beginners' event. This makes a rating cap
+opt-out, so an unrated entrant is *marked as such* in the entrants list: the director
+is the one who can act on it, and they can only act on what they can see.
+_Avoid_: unranked, provisional (they hold no rating at all, not a soft one).
+
+**Refusal code**:
+The machine-readable reason an entry was refused — `already_entered`,
+`registration_closed`, `event_full`, `rating_ineligible` — carried on a `409` as
+`detail: {code, message}` (ADR-0968). The client switches on the **code** and owns
+the copy; the server's `message` is a fallback, never a contract.
+_Avoid_: error string, detail (matching on the prose is the bug this replaced).
+
 ## Player profile
 
 **Career**:

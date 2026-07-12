@@ -6,6 +6,7 @@ import {
   buildTournamentDetailRead,
   buildTournamentEventRead,
   buildTournamentEntrantRead,
+  entryStateFor,
 } from '../../../src/mocks/factories/tournaments/tournament.factory'
 import { sessionResponse } from '../../../src/test/factories'
 
@@ -66,12 +67,50 @@ export const EVENT = {
    * Opt-in (`crowded: true`), so the default seed's counts stay the ones the
    * other specs narrate. */
   CROWDED: 'Veterans Singles',
+  /** Singles, FULL of strangers (`gated: true`) — the event that explains itself
+   * instead of offering an Enter that could only 409 (#783). */
+  FULL: 'Masters Singles',
+  /** Singles, full **including me** (`gated: true` + `enteredIn`) — the trap: an
+   * entrant in a full event must still be able to WITHDRAW. */
+  FULL_WITH_ME: 'Legends Singles',
+  /** Singles whose one rating rule refuses me (`gated: true`) — the other event
+   * that explains itself rather than offering a doomed button (#783). */
+  INELIGIBLE: 'U1200 Singles',
+  /** Singles in which **every** entrant is unrated (`unrated: true`) — a brand-new
+   * club's first beginners' event, where nobody has finished a rated match yet. The
+   * degenerate roster: every chip marked, and the list must still render (ADR-0783
+   * §3). */
+  ALL_UNRATED: 'Beginners Singles',
 } as const
 
 /** How many people are already in the crowded event before I enter it. Comfortably
  * past the card's 8-chip cut-off, so my own entry — appended LAST, the server lists
  * entrants oldest-entry-first — is truncated away unless the roster pins it (#781). */
 const CROWD_SIZE = 12
+
+/** The cap on the two full events. Small on purpose: "full" is `entrants.length >=
+ * max_players`, and a four-seat event reaches it with a roster a human can still
+ * read in a failure screenshot. */
+const SMALL_CAP = 4
+
+/** The rule the `INELIGIBLE` event is gated on, and the rating the server judged me
+ * on. The client reads the rule back out of the event's own `predicates` by id, so
+ * the two must be the same object — a refusal pointing at a rule the event does not
+ * carry is a payload the server cannot send. */
+const U1200_RULE = { id: 'pr-u1200', field: 'rating', op: '<', value: 1200 } as const
+const MY_RATING = 1650
+
+/** The rule on the all-unrated event (`unrated: true`). The same cap as `U1200_RULE`
+ * — but its entrants hold no rating at all, so every one of them *passed* it, while
+ * it refuses me at 1650. That is the ADR-0783 §3 bargain in a single card, and it is
+ * why the mark on those three chips is the only thing standing between the director
+ * and an invisible loophole. */
+const BEGINNERS_RULE = {
+  id: 'pr-beg',
+  field: 'rating',
+  op: '<',
+  value: 1200,
+} as const
 
 /**
  * ⚠️ The join key. The session payload carries a username and **no user id**, so
@@ -84,20 +123,37 @@ const CROWD_SIZE = 12
 export const ME = { username: 'rita.kovac', userId: 'u-me' } as const
 
 /** Entrants that are *not* me — so the journey event starts with a real count to
- * increment, and the roster has something to show before I join it. */
+ * increment, and the roster has something to show before I join it.
+ *
+ * **`player.2` is UNRATED** (`rating: null` — they hold no rating on the
+ * tournament's ladder, ADR-0783 §3), which makes the default seed's roster a
+ * *mixed* one. That is deliberate: the mark is the mitigation for a rating cap
+ * being opt-out, and a mark that only ever appeared under an opt-in flag would be
+ * scanned by no spec that did not go looking for it — including the axe pass over
+ * the ordinary events tab. */
 const OTHERS: TournamentEntrantRead[] = [
   buildTournamentEntrantRead({ id: 'entry-1', user_id: 'u-1', username: 'player.1' }),
-  buildTournamentEntrantRead({ id: 'entry-2', user_id: 'u-2', username: 'player.2' }),
+  buildTournamentEntrantRead({
+    id: 'entry-2',
+    user_id: 'u-2',
+    username: 'player.2',
+    rating: null,
+  }),
 ]
 
 /** A crowd of strangers, `player.1` … `player.N`, in entry order — the roster a
- * late entrant lands behind. */
-function crowd(size: number): TournamentEntrantRead[] {
+ * late entrant lands behind. Rated, unless `overrides` say otherwise (which is how
+ * the all-unrated event is built). */
+function crowd(
+  size: number,
+  overrides: Partial<TournamentEntrantRead> = {},
+): TournamentEntrantRead[] {
   return Array.from({ length: size }, (_, i) =>
     buildTournamentEntrantRead({
       id: `entry-crowd-${i + 1}`,
       user_id: `u-crowd-${i + 1}`,
       username: `player.${i + 1}`,
+      ...overrides,
     }),
   )
 }
@@ -151,8 +207,78 @@ function seed(options: TournamentsStoreOptions): TournamentDetailRead {
             }),
           ]
         : []),
+      ...(options.unrated ?? false
+        ? [
+            buildTournamentEventRead({
+              id: 'ev-beginners',
+              name: EVENT.ALL_UNRATED,
+              format: 'singles',
+              max_players: 32,
+              // Every one of them holds no rating on the tournament's ladder — so
+              // every one of them PASSED this event's `rating < 1200` rule, which is
+              // exactly the opt-out ADR-0783 accepts and this roster exists to
+              // expose. Meanwhile the same rule refuses *me*, at a rating of 1650:
+              // the whole decision, on one card. Three players the rules could not
+              // judge are in; the one player they could judge is out.
+              entrants: crowd(3, { rating: null }),
+              predicates: [{ ...BEGINNERS_RULE }],
+              entry_state: {
+                state: 'rating_ineligible',
+                predicate_id: BEGINNERS_RULE.id,
+                rating: MY_RATING,
+              },
+              pools: [],
+            }),
+          ]
+        : []),
+      ...(options.gated ?? false ? gatedEvents() : []),
     ],
   })
+}
+
+/** The two events the *event itself* refuses the caller from (#783) — full, and
+ * rating-ineligible. Opt-in (`gated: true`) for the same reason `crowded` is: their
+ * entrants would move the tournament-level Entries total the journey spec narrates.
+ *
+ * `entry_state` on the full pair is **derived** by the factory from the entrants
+ * (and re-derived on every read — see `read`), so entering or withdrawing really
+ * does flip it; the ineligible one is stated, because no mock payload carries a
+ * rating ladder to judge it from. */
+function gatedEvents(): TournamentEventRead[] {
+  return [
+    buildTournamentEventRead({
+      id: 'ev-masters',
+      name: EVENT.FULL,
+      format: 'singles',
+      max_players: SMALL_CAP,
+      entrants: crowd(SMALL_CAP),
+      pools: [],
+    }),
+    buildTournamentEventRead({
+      id: 'ev-legends',
+      name: EVENT.FULL_WITH_ME,
+      format: 'singles',
+      max_players: SMALL_CAP,
+      // One seat short of full — the spec fills it with ME (`enteredIn`), which is
+      // the only honest way to reach "an entrant inside a FULL event".
+      entrants: crowd(SMALL_CAP - 1),
+      pools: [],
+    }),
+    buildTournamentEventRead({
+      id: 'ev-u1200',
+      name: EVENT.INELIGIBLE,
+      format: 'singles',
+      max_players: 24,
+      entrants: crowd(2),
+      predicates: [{ ...U1200_RULE }],
+      entry_state: {
+        state: 'rating_ineligible',
+        predicate_id: U1200_RULE.id,
+        rating: MY_RATING,
+      },
+      pools: [],
+    }),
+  ]
 }
 
 export interface TournamentsStoreOptions {
@@ -162,6 +288,15 @@ export interface TournamentsStoreOptions {
   /** Add `EVENT.CROWDED` — a singles event already holding more entrants than a
    * card can list, so entering it puts me past the truncation cut-off. */
   crowded?: boolean
+  /** Add the three events the *event itself* gates (#783): `EVENT.FULL`,
+   * `EVENT.FULL_WITH_ME` and `EVENT.INELIGIBLE`. Opt-in, so their entrants stay out
+   * of the counts the journey spec narrates. */
+  gated?: boolean
+  /** Add `EVENT.ALL_UNRATED` — a capped event whose entrants are *every one* of
+   * them unrated (ADR-0783 §3). Opt-in for the same reason `crowded` is: its
+   * entrants would move the tournament-level Entries total. (The *mixed* roster
+   * needs no flag — `player.2` of the default seed is unrated.) */
+  unrated?: boolean
   /** The status the tournament is in when the page loads. Defaults to
    * `published` — the one status whose registration window is OPEN, and the one
    * every enter/withdraw spec is written against (ADR-0017). */
@@ -251,9 +386,22 @@ export class TournamentsStore {
   /** The event as the *server* would report it: the `entered` count derived from
    * the live entrants, never stored (ADR-0016). A stub that carried its own
    * counter could drift from its own roster and hide exactly the bug the derived
-   * count exists to prevent. */
+   * count exists to prevent.
+   *
+   * `entry_state`'s **capacity** arm is re-derived here for exactly the same reason
+   * (ADR-0783 §4): entering the last free place must make the event report itself
+   * `event_full` on the very next read, and withdrawing must free it again. A tag
+   * frozen at seed time would let a stub keep saying `open` while its roster was at
+   * `max_players` — precisely the state the card is supposed to explain.
+   *
+   * A **stated** `rating_ineligible` survives untouched: it is a fact about the
+   * caller's rating, not about the roster, and nothing on the wire can derive it. */
   private read(event: TournamentEventRead): TournamentEventRead {
-    return { ...event, entered: event.entrants.length }
+    const entry_state =
+      event.entry_state.state === 'rating_ineligible'
+        ? event.entry_state
+        : entryStateFor(event)
+    return { ...event, entered: event.entrants.length, entry_state }
   }
 
   private readDetail(): TournamentDetailRead {
@@ -304,6 +452,10 @@ export class TournamentsStore {
       id: `entry-me-${this.entryCounter}`,
       user_id: ME.userId,
       username: ME.username,
+      // I am RATED — the same 1650 the ineligible event judged me on. So my own
+      // chip is never the unrated one, and a spec asserting "the unrated mark is on
+      // player.2" cannot pass by landing on me instead.
+      rating: MY_RATING,
     })
     this.mutateEvent(eventId, (e) => ({ ...e, entrants: [...e.entrants, entrant] }))
     return entrant
@@ -441,7 +593,15 @@ export class TournamentsStore {
    * the entrant. Mirrors the API's refusals so the spec cannot pass against a
    * stub more permissive than the server (400 non-singles, 409 window shut, 409
    * duplicate) — in the API's order: the permanent refusal first, then the
-   * "not now" ones. */
+   * "not now" ones.
+   *
+   * ⚠️ **Every refusal is a CODED 409** (ADR-0968):
+   * `{"detail": {"code": …, "message": …}}`. The client switches on the `code` and
+   * owns the copy it shows; the `message` is what it falls back on for a code it
+   * does not know. This suite runs with **MSW off** and nothing type-checks these
+   * stub bodies — a stub still answering the pre-ADR `{"detail": "<sentence>"}`
+   * would take the client's unknown-refusal path and the spec would fail on the
+   * toast, which is the only place the mismatch could show. */
   private async enter(route: Route, eventId: string) {
     const event = this.detail.events.find((e) => e.id === eventId)
     if (!event) return json(route, 404, { detail: 'event not found' })
@@ -449,12 +609,40 @@ export class TournamentsStore {
       return json(route, 400, { detail: 'only singles events can be entered' })
     }
     const closed = this.registrationClosed()
-    if (closed) return json(route, 409, { detail: closed })
+    if (closed) {
+      return json(route, 409, {
+        detail: { code: 'registration_closed', message: closed },
+      })
+    }
     if (event.entrants.some((e) => e.user_id === ME.userId)) {
       // The server's partial unique index, in miniature: at most one *active*
-      // entry per player per event. The API's wording, verbatim — a stale tab
-      // gets told this, so the copy is part of the contract under test.
-      return json(route, 409, { detail: 'You have already entered this event.' })
+      // entry per player per event. Asked BEFORE the event's own refusals below, so
+      // an entrant in a full event is told "you are already in" — never "it's full".
+      return json(route, 409, {
+        detail: {
+          code: 'already_entered',
+          message: 'You have already entered this event.',
+        },
+      })
+    }
+    // The event's own refusals (#783), in the server's precedence — eligibility,
+    // then capacity. The UI is supposed to render these as copy and offer no button
+    // at all, so a spec should never reach them; they are here because a stub that
+    // 201'd a full event would be more permissive than the server, and a regression
+    // that kept offering Enter would then look perfect.
+    const state = this.read(event).entry_state
+    if (state.state === 'rating_ineligible') {
+      return json(route, 409, {
+        detail: {
+          code: 'rating_ineligible',
+          message: 'Your rating does not meet this event’s eligibility rules.',
+        },
+      })
+    }
+    if (state.state === 'event_full') {
+      return json(route, 409, {
+        detail: { code: 'event_full', message: 'This event is full.' },
+      })
     }
 
     return json(route, 201, this.addEntry(eventId))
@@ -489,9 +677,12 @@ export class TournamentsStore {
     return noContent(route)
   }
 
-  /** The refusal a *state change* to an entry earns right now, or `null` while
-   * the window is open. Only `published` is open — the status IS the state of the
-   * registration window (ADR-0017). */
+  /** The server's SENTENCE for why a *state change* to an entry is refused right
+   * now, or `null` while the window is open. Only `published` is open — the status
+   * IS the state of the registration window (ADR-0017).
+   *
+   * Entering wraps this in the `registration_closed` CODE (ADR-0968); withdrawing
+   * still sends it bare, because the withdraw route's 409 is still prose. */
   private registrationClosed(): string | null {
     const status = this.detail.status
     return status === 'published' ? null : REGISTRATION_CLOSED_DETAIL[status]

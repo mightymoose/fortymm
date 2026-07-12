@@ -241,10 +241,14 @@ test.describe('Tournaments · the registration window', () => {
     // in. Not "You were already entered in this event".
     await expect(pom.toasts).toHaveCount(1)
     await expect(pom.toasts).toContainText('Entries are closed for this event')
-    // The REASON is the server's sentence (`_registration_closed_detail`), not the
-    // card's — it is the only side that knows *which* closed status this is, and
-    // "already under way" is different news from "has ended".
-    await expect(pom.toasts).toContainText('already under way')
+    // Both lines are the CLIENT's copy, keyed off the refusal's `code` (ADR-0968).
+    // The server's sentence ("This tournament is already under way, so its entries
+    // are locked.") is a fallback the client never has to reach for here — raw API
+    // detail strings do not reach the UI — and the reconciled card below is what
+    // names the status the tournament is actually in now.
+    await expect(pom.toasts).toContainText(
+      "This tournament's registration window is shut",
+    )
     await expect(pom.toasts).not.toContainText('already entered')
 
     // …and it was a 409 from the entries route, not an accident of an unmocked

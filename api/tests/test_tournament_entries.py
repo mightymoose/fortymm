@@ -24,8 +24,9 @@ requests carry the double-submit CSRF token via the client fixtures' event hooks
 
 import asyncio
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from decimal import Decimal
+from typing import Any
 
 import pytest
 import pytest_asyncio
@@ -35,15 +36,19 @@ from sqlalchemy import delete, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+from app.leagues import get_default_league
 from app.models import (
     DrawType,
     EventFormat,
+    League,
+    LeagueVisibility,
     Tournament,
     TournamentEntry,
     TournamentEntryStatus,
     TournamentEvent,
     TournamentStatus,
     User,
+    UserLeagueRating,
 )
 from app.tournaments import (
     TOURNAMENT_ENTER,
@@ -51,7 +56,14 @@ from app.tournaments import (
     enter_event,
     withdraw_from_event,
 )
-from tests._helpers import grant_permissions, make_client, make_user, start_session
+from tests._helpers import (
+    counted_statements,
+    grant_permissions,
+    make_client,
+    make_user,
+    rate_player,
+    start_session,
+)
 
 ACTIVE_ENTRY_INDEX = "uq_tournament_entries_event_id_user_id_active"
 
@@ -60,6 +72,9 @@ async def _make_event(
     db_session: AsyncSession,
     format: EventFormat = EventFormat.singles,
     status: TournamentStatus = TournamentStatus.published,
+    max_players: int = 64,
+    predicates: list[dict[str, Any]] | None = None,
+    league: League | None = None,
 ) -> TournamentEvent:
     """An event of ``format`` under a tournament in ``status``, owned by its own
     throwaway director. Written straight to the database rather than through the
@@ -79,8 +94,24 @@ async def _make_event(
     read path validates them into ``Address``/``Slot``/``MatchSettings`` on the way
     out, so a partial one would 500 any test that reads this tournament back
     through ``GET /v1/tournaments/{id}`` (as the withdrawal-count test does).
+
+    ``max_players`` defaults to a field nobody in this file is going to fill, so the
+    capacity guard (ADR-0783) stays out of the way of every test that is about
+    something else; the capacity tests pass the small number they mean.
+
+    ``predicates`` defaults to **no rules at all**, for the same reason: an event with
+    no eligibility rules admits everybody, so the rating guard (ADR-0783) stays out of
+    the way of every test that is about something else. The eligibility tests pass the
+    rule they mean, and ``league`` lets them say which ladder it is judged on.
     """
     director = await make_user(db_session, f"director-{uuid.uuid4().hex[:8]}")
+    # Every tournament names the ladder its eligibility is judged on (ADR-0783);
+    # the column is NOT NULL. Most tests here don't turn on *which* league, so it is
+    # the default one the autouse fixture seeds — the eligibility tests that do care
+    # pass their own.
+    if league is None:
+        league = await get_default_league(db_session)
+    assert league is not None, "the autouse default_league fixture seeds this"
     tournament = Tournament(
         name="Spring Open",
         status=status,
@@ -92,6 +123,7 @@ async def _make_event(
             "postal": "94704",
             "country": "USA",
         },
+        league_id=league.id,
         created_by_user_id=director.id,
     )
     db_session.add(tournament)
@@ -102,10 +134,11 @@ async def _make_event(
         name="Open Singles",
         format=format,
         draw_type=DrawType.single_elim,
-        max_players=64,
+        max_players=max_players,
         entry_fee=Decimal("20.00"),
         slot={"date": "2026-08-01", "start": "09:00", "end": "17:00"},
         match_settings={"rated": True, "length_games": 5},
+        predicates=predicates if predicates is not None else [],
     )
     db_session.add(event)
     await db_session.commit()
@@ -370,7 +403,14 @@ async def test_entering_the_same_event_twice_is_a_409(
     db_session: AsyncSession,
     event: TournamentEvent,
 ) -> None:
-    """Not a 500 (an uncaught IntegrityError), and not a second row."""
+    """Not a 500 (an uncaught IntegrityError), and not a second row.
+
+    The refusal carries the machine-readable ``already_entered`` code (ADR-0968).
+    That code, not the sentence beside it, is the contract: the client switches on it
+    and writes its own copy. Nothing here asserts on the English — a test that pinned
+    the prose would only move the client's byte-matching into the suite, and would
+    make the ADR's promise ("rewording a message is now safe") false.
+    """
     client, _ = entrant_client
     # The 409 path rolls the shared session back, which expires the ORM instances
     # — read the ids out as plain values first.
@@ -381,7 +421,7 @@ async def test_entering_the_same_event_twice_is_a_409(
     duplicate = await client.post(url)
 
     assert duplicate.status_code == 409, duplicate.text
-    assert duplicate.json()["detail"] == "You have already entered this event."
+    assert duplicate.json()["detail"]["code"] == "already_entered"
     assert len(await _active_entries(db_session, event_id)) == 1
 
 
@@ -536,29 +576,64 @@ async def test_entering_is_a_409_when_the_tournament_status_is_not_published(
 
 
 @pytest.mark.parametrize(
-    ("tournament_status", "phrase"),
-    [
-        (TournamentStatus.draft, "not been published yet"),
-        (TournamentStatus.live, "already under way"),
-        (TournamentStatus.archived, "has ended"),
-    ],
+    "tournament_status",
+    [TournamentStatus.draft, TournamentStatus.live, TournamentStatus.archived],
 )
-async def test_the_status_refusal_says_which_wrong_state_it_refused(
+async def test_the_status_refusal_carries_the_registration_closed_code(
     entrant_client: tuple[AsyncClient, User],
     db_session: AsyncSession,
     tournament_status: TournamentStatus,
-    phrase: str,
 ) -> None:
-    """The detail is prose a player could be shown, and each closed status gets its
-    own: "not yet" and "too late" are different things to be told, and a single
-    "you cannot enter this" would leave a client unable to say which."""
+    """All three closed statuses refuse with the **same** code (ADR-0968).
+
+    ``registration_closed`` is what the client switches on — "the window is shut" is
+    the fact it must act on, and it acts on it identically whether the tournament has
+    not opened yet or is already over. Which of the three it was survives in the
+    *message*, and nowhere else, because nothing branches on it.
+
+    This test used to assert a phrase from each sentence ("already under way"), which
+    was the client's byte-matching wearing a test's clothes: it made the copy a
+    contract, so rewording it for clarity was a breaking change. It asserts the code
+    now, and deliberately says nothing about the English — which is what makes the
+    reword safe. That the three sentences stay *distinct* is the part still worth
+    holding, and ``test_each_closed_status_gets_its_own_refusal_message`` holds it
+    without naming any of them.
+    """
     client, _ = entrant_client
     event = await _make_event(db_session, status=tournament_status)
 
     response = await client.post(_entries_url(event))
 
     assert response.status_code == 409, response.text
-    assert phrase in response.json()["detail"]
+    assert response.json()["detail"]["code"] == "registration_closed"
+
+
+async def test_each_closed_status_gets_its_own_refusal_message(
+    entrant_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """One code, three sentences — and the sentences really are three.
+
+    The message is the fallback a client shows for a code it does not recognise, and
+    the prose a human reads; "not yet" and "too late" are different things to be told,
+    so collapsing the three statuses onto one generic sentence would lose information
+    the server has and the reader wants. Asserted as **distinctness**, never as bytes:
+    what must hold is that the three refusals are told apart, not that any of them is
+    spelled a particular way. Reword all you like — just don't say the same thing
+    three times.
+    """
+    client, _ = entrant_client
+    closed = [TournamentStatus.draft, TournamentStatus.live, TournamentStatus.archived]
+
+    messages = []
+    for tournament_status in closed:
+        event = await _make_event(db_session, status=tournament_status)
+        response = await client.post(_entries_url(event))
+        assert response.status_code == 409, response.text
+        messages.append(response.json()["detail"]["message"])
+
+    assert len(set(messages)) == len(closed), messages
+    assert all(messages), "a refusal with no words to fall back on"
 
 
 async def test_the_doubles_400_outranks_the_status_409(
@@ -984,7 +1059,11 @@ async def test_a_closed_window_refuses_even_when_the_status_is_published(
     withdrawing = await client.delete(_entry_url(to_withdraw, entry_id))
 
     assert entering.status_code == 409, entering.text
-    assert entering.json()["detail"] == "Registration for this tournament is closed."
+    # The same ``registration_closed`` code as a draft/live/archived refusal: the
+    # window is shut, and the client acts on that regardless of *what* shut it. The
+    # generic sentence rides along in the message, where a status that is not the
+    # reason cannot be misreported as one.
+    assert entering.json()["detail"]["code"] == "registration_closed"
     assert withdrawing.status_code == 409, withdrawing.text
     # And neither refusal wrote: no entry row at all in the event that was entered,
     # and the withdrawn-from one's entry still active — re-read from the database,
@@ -1130,3 +1209,506 @@ async def test_an_active_entry_cannot_be_withdrawn_after_the_tournament_goes_liv
 
     assert outcome == 409, outcome
     assert (await _reread(db_session, entry_id)).status is TournamentEntryStatus.entered
+
+
+# ----- capacity (ADR-0783, §4) -----------------------------------------------
+#
+# ``max_players`` is a column on the EVENT; the field is rows in
+# ``tournament_entries``. "The event is full" is therefore a COUNT compared against a
+# column on another table — which no database constraint can express. That is the
+# whole difficulty, and it is what makes this guard unlike the duplicate-entry one
+# beside it: there, the *partial unique index* is the enforcement and the route
+# merely translates the IntegrityError, so a race is impossible however the code is
+# written. Here nothing underneath us says no. The tournament's row lock is the only
+# mechanism, so the count must happen inside it — and the test that proves it must be
+# a race (``test_two_entrants_racing_for_the_last_slot_yield_exactly_one_entry``),
+# because every sequential test below passes just as happily against a count taken
+# outside the lock.
+
+
+def _statement_index(
+    statements: list[str], matches: Callable[[str], bool], *, label: str
+) -> int:
+    """Where ``label``'s statement appears in the emitted SQL — and a legible failure
+    when it does not appear at all.
+
+    Deliberately not a bare ``next(i for i, s in ...)``: inside a coroutine, the
+    ``StopIteration`` a missing statement raises is re-raised by the event loop as
+    ``RuntimeError: coroutine raised StopIteration`` — which is what a *dropped lock*
+    looks like, i.e. the exact bug this test exists to name, reported as a plumbing
+    error with no mention of SQL.
+    """
+    for index, statement in enumerate(statements):
+        if matches(statement):
+            return index
+    raise AssertionError(f"no statement emitted for {label}: {statements}")
+
+
+async def test_the_last_slot_is_enterable(
+    entrant_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    player: User,
+) -> None:
+    """The **Nth** entrant is admitted: the event is full *at* ``max_players``, not
+    one short of it. An off-by-one in the other direction would quietly shrink every
+    event on the platform by a player."""
+    client, user = entrant_client
+    event = await _make_event(db_session, max_players=2)
+    await _seed_entry(db_session, event, player)
+
+    response = await client.post(_entries_url(event))
+
+    assert response.status_code == 201, response.text
+    assert len(await _active_entries(db_session, event.id)) == 2
+
+
+async def test_entering_a_full_event_is_a_409_with_the_event_full_code(
+    entrant_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    player: User,
+) -> None:
+    """The **N+1th** entrant is refused, with the machine-readable ``event_full`` code
+    (ADR-0968) — and no row is written.
+
+    ``_all_entries``, not ``_active_entries``: a handler that inserted the entry and
+    only *then* noticed the event was full would leave a row behind that the active
+    filter might hide, and this test would pass against the bug it exists to catch.
+    """
+    client, _ = entrant_client
+    event = await _make_event(db_session, max_players=1)
+    event_id = event.id
+    await _seed_entry(db_session, event, player)
+
+    response = await client.post(_entries_url(event))
+
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"]["code"] == "event_full"
+    assert response.json()["detail"]["message"], (
+        "a refusal with no words to fall back on"
+    )
+    assert len(await _all_entries(db_session, event_id)) == 1
+
+
+async def test_a_withdrawn_entry_does_not_occupy_a_slot(
+    entrant_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    player: User,
+) -> None:
+    """Capacity counts **active** entries only (ADR-0016).
+
+    A withdrawn entry's row survives the withdrawal, so a ``COUNT(*)`` that forgot the
+    ``status = 'entered'`` filter would seal a one-player event that in truth has
+    nobody in it — and would seal it *permanently*, since withdrawing is the one thing
+    that is supposed to free the slot back up.
+    """
+    client, user = entrant_client
+    event = await _make_event(db_session, max_players=1)
+    await _seed_entry(db_session, event, player, status=TournamentEntryStatus.withdrawn)
+
+    response = await client.post(_entries_url(event))
+
+    assert response.status_code == 201, response.text
+    active = await _active_entries(db_session, event.id)
+    assert [e.user_id for e in active] == [user.id]
+
+
+async def test_the_capacity_count_is_taken_under_the_tournament_row_lock(
+    db_session: AsyncSession,
+    engine: AsyncEngine,
+    event: TournamentEvent,
+    player: User,
+) -> None:
+    """A statement-order tripwire on the thing the race below actually depends on: the
+    ``SELECT count(*)`` is emitted **after** the ``FOR UPDATE``, and **before** the
+    ``INSERT``.
+
+    The race test is the proof; this is the message. When someone hoists the count for
+    tidiness — say, into a helper that runs before the tournament is loaded — the race
+    goes red with a timing-flavoured failure that reads like flake, while this one goes
+    red saying precisely what broke.
+    """
+    tournament_id, event_id, player_id = event.tournament_id, event.id, player.id
+
+    async with counted_statements(engine) as (session, statements):
+        entrant = (
+            await session.execute(select(User).where(User.id == player_id))
+        ).scalar_one()
+        await enter_event(tournament_id, event_id, session, entrant)
+
+    lock = _statement_index(
+        statements, lambda s: "FOR UPDATE" in s, label="the tournament row lock"
+    )
+    count = _statement_index(
+        statements,
+        lambda s: "count(" in s.lower() and "tournament_entries" in s,
+        label="the capacity COUNT over tournament_entries",
+    )
+    insert = _statement_index(
+        statements,
+        lambda s: s.lstrip().upper().startswith("INSERT INTO TOURNAMENT_ENTRIES"),
+        label="the entry INSERT",
+    )
+    assert lock < count < insert, statements
+    assert len(await _active_entries(db_session, event_id)) == 1
+
+
+async def test_two_entrants_racing_for_the_last_slot_yield_exactly_one_entry(
+    db_session: AsyncSession,
+    engine: AsyncEngine,
+    player: User,
+) -> None:
+    """**The test this whole chore exists for.** Two players, one slot, both requests
+    in flight at once: one 201, one ``event_full`` 409, and exactly one row.
+
+    Capacity cannot be a database constraint — it is a count on one table compared
+    against a column on another — so unlike the duplicate-entry guard beside it there
+    is no unique index to catch a loser that slipped through. The count-then-INSERT is
+    safe only because it happens *inside* the tournament's row lock, which every entry
+    to every event of that tournament takes, first and in the same order.
+
+    **The race is staged, not hoped for.** A gatekeeper session holds the tournament's
+    row lock — exactly as an in-flight entry (or a go-live) would — and both entrants
+    are launched into the handler while it is held. Two things are then true by
+    construction rather than by scheduler luck:
+
+    * Both entrants must **block**, before deciding anything, on the same lock. An
+      implementation that reads the tournament unlocked never waits, runs both counts
+      against its own snapshot ("0 of 1 taken"), and answers both — which
+      ``entering.done()`` catches here with a message, and which two ``asyncio.gather``
+      -ed tasks would only catch when the scheduler happened to interleave them the
+      damning way.
+    * Both entrants' counts happen *after* the lock is released — so a count hoisted
+      **above** the lock (the tidying refactor that quietly reintroduces the bug) has
+      both of them reading zero while parked, and both insert. Two entrants in an event
+      with room for one.
+
+    Verified against both of those broken shapes: each turns this test red. With the
+    count under the lock, the loser blocks, re-reads the field the winner *committed*,
+    and is refused.
+    """
+    event = await _make_event(db_session, max_players=1)
+    tournament_id, event_id = event.tournament_id, event.id
+    rival = await make_user(db_session, f"rival-{uuid.uuid4().hex[:8]}")
+    contenders = [player.id, rival.id]
+    make_session = async_sessionmaker(engine, expire_on_commit=False)
+
+    async def enter(user_id: uuid.UUID) -> str:
+        async with make_session() as session:
+            entrant = (
+                await session.execute(select(User).where(User.id == user_id))
+            ).scalar_one()
+            try:
+                await enter_event(tournament_id, event_id, session, entrant)
+                return "entered"
+            except HTTPException as exc:
+                # The refusal's *code*, not just its status: a 409 that came from
+                # somewhere else (a duplicate entry, a closed window) would otherwise
+                # read as a pass for the capacity guard.
+                assert isinstance(exc.detail, dict), exc.detail
+                return f"{exc.status_code} {exc.detail['code']}"
+
+    async with make_session() as gatekeeper:
+        # The tournament's row lock, held and uncommitted — the same lock, on the same
+        # row, that the entry route takes first. Nothing is modified: this stands in
+        # for a *concurrent entry* that has the lock right now, which is precisely the
+        # instant the last slot is contested in.
+        await gatekeeper.execute(
+            select(Tournament).where(Tournament.id == tournament_id).with_for_update()
+        )
+        racing = [asyncio.create_task(enter(user_id)) for user_id in contenders]
+        # Every chance to finish — and neither may, because both are parked on that
+        # lock, inside the handler, before either has counted anything.
+        await asyncio.sleep(0.25)
+        ran_ahead = [task for task in racing if task.done()]
+        if ran_ahead:
+            for task in racing:
+                task.cancel()
+            pytest.fail(
+                "an entry did not block on the tournament's row lock: it decided "
+                "capacity against its own snapshot while another transaction held "
+                f"the row ({[task.result() for task in ran_ahead]!r}) — the count is "
+                "not under the lock, and two entrants can take the same last slot"
+            )
+        await gatekeeper.rollback()
+        outcomes = await asyncio.gather(*racing)
+
+    assert sorted(outcomes) == ["409 event_full", "entered"], outcomes
+    # And the field itself: one entrant, in an event with room for one. Re-read on a
+    # session of its own — the loser's transaction rolled back, and a count taken from
+    # the winner's would only be answering about its own snapshot.
+    async with make_session() as verify:
+        assert len(await _active_entries(verify, event_id)) == 1
+
+
+# ----- eligibility: the event's rating rules (ADR-0783) ----------------------
+#
+# The *decision* is unit-tested where it lives: ``tests/test_tournament_eligibility.py``
+# runs every operator at, above and below its boundary, with no database at all. What is
+# tested HERE is the wiring those unit tests cannot see: that the route reads the rating
+# on the **tournament's** league, refuses with the ``rating_ineligible`` code, writes no
+# row when it refuses, and answers the eligibility refusal *before* the capacity one.
+#
+# And the one rule that has to be pinned on both sides, because it is the one somebody
+# will "fix": **an unrated player enters a capped event** (ADR-0783 §3).
+
+CAP_UNDER_1500: list[dict[str, Any]] = [
+    {"id": "pr-cap", "field": "rating", "op": "<", "value": 1500}
+]
+
+
+# The rating helper lives in ``tests/_helpers.py`` (``rate_player``): the detail
+# read's ``entry_state`` tests need the very same "actually rated, not merely seeded"
+# setup, and a second copy of it is exactly how one side of ADR-0783 ends up testing
+# nothing.
+_rate = rate_player
+
+
+async def test_a_player_over_the_events_rating_cap_is_refused_as_rating_ineligible(
+    entrant_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """A 1650-rated player, an "Under 1500" event: 409 ``rating_ineligible``, no row.
+
+    ``_all_entries``, not ``_active_entries``: a handler that inserted the entry and
+    only then judged the rating would leave a row behind that the active filter might
+    hide, and this test would pass against the bug it exists to catch.
+    """
+    client, user = entrant_client
+    await _rate(db_session, user, default_league, 1650.0)
+    event = await _make_event(db_session, predicates=CAP_UNDER_1500)
+    event_id = event.id
+
+    response = await client.post(_entries_url(event))
+
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"]["code"] == "rating_ineligible"
+    # The message is a fallback, not the contract (ADR-0968) — but a refusal with no
+    # words at all leaves a client that doesn't know the code with nothing to say.
+    assert response.json()["detail"]["message"], (
+        "a refusal with no words to fall back on"
+    )
+    assert await _all_entries(db_session, event_id) == []
+
+
+async def test_a_player_under_the_events_rating_cap_enters(
+    entrant_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """The other half of the same rule, and the one that proves the guard is not simply
+    refusing everybody: 1400 is under the 1500 cap, so the entry lands."""
+    client, user = entrant_client
+    await _rate(db_session, user, default_league, 1400.0)
+    event = await _make_event(db_session, predicates=CAP_UNDER_1500)
+
+    response = await client.post(_entries_url(event))
+
+    assert response.status_code == 201, response.text
+    assert [e.user_id for e in await _active_entries(db_session, event.id)] == [user.id]
+
+
+async def test_an_unrated_player_enters_a_capped_event(
+    entrant_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """**A player with NO rating enters the "Under 1500" event.** 201, not 409.
+
+    This is the counterintuitive rule of ADR-0783 §3, and it is deliberate. A player
+    holds no rating on a league until they finish a rated match there, so the brand-new
+    player — the one the beginners' event exists *for* — has nothing to compare against
+    the cap. Refusing them would lock them out of the only event they belong in, and it
+    would do so on the strength of a fact we do not have.
+
+    The known cost, accepted rather than overlooked: this makes a rating cap **opt-out**
+    (a sandbagger can stay unrated forever). It is mitigated by *marking* unrated
+    entrants in the entrants list, where a director can act on it — not by guessing a
+    rating.
+
+    **This entrant is the production shape of "unrated", which is the part with teeth.**
+    No ``_rate`` call — but they are *not* a player with no rating row: minting their
+    session joined them to the default league, which seeded a ``user_league_ratings``
+    row at **1500** and an ``initial`` rating-history event, before they had played
+    anything (``app.ratings.rated``). A guard that read ``rating_value`` off that row
+    would compare 1500 against ``rating < 1500``, refuse them, and lock every beginner
+    on the platform out of the beginners' event — the exact harm §3 forbids, arriving by
+    the back door. It passes only because eligibility asks ``is_rated_member``: has
+    anything real MOVED this rating? Nothing has. They are Unrated, and they enter.
+    """
+    client, user = entrant_client
+    event = await _make_event(db_session, predicates=CAP_UNDER_1500)
+    # The seed is really there — the assertion below is not about an empty table.
+    seeded = (
+        await db_session.execute(
+            select(UserLeagueRating.rating_value).where(
+                UserLeagueRating.user_id == user.id
+            )
+        )
+    ).scalar_one()
+    assert seeded == 1500.0, "the session mint seeds a 1500 prior; that is the trap"
+
+    response = await client.post(_entries_url(event))
+
+    assert response.status_code == 201, response.text
+    assert [e.user_id for e in await _active_entries(db_session, event.id)] == [user.id]
+    # And the entrant it answers with says so: ``rating: null``, NOT the 1500 asserted
+    # above. The entry the director sees in the list and the entry the player's own POST
+    # returned are the same shape, marked the same way (ADR-0783 §3).
+    assert response.json()["rating"] is None
+
+
+async def test_the_created_entrant_carries_the_rating_it_was_judged_on(
+    entrant_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """A rated player's 201 carries their rating on the tournament's ladder — the very
+    number the eligibility guard just compared against the event's rules.
+
+    It is read ONCE, by that guard, and handed to the response: a second read after the
+    INSERT would be an extra query for a number already in hand, and could answer
+    differently from the one that admitted them.
+    """
+    client, user = entrant_client
+    await _rate(db_session, user, default_league, 1432.0)
+    event = await _make_event(db_session, predicates=CAP_UNDER_1500)
+
+    response = await client.post(_entries_url(event))
+
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["rating"] == 1432.0
+    assert body["user_id"] == str(user.id)
+
+
+async def test_a_player_with_a_null_rating_on_the_ladder_enters_a_capped_event(
+    entrant_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """The *other* way to be unrated: a NULL ``rating_value`` — a manual ladder the
+    player is on, whose rating has not been imported yet.
+
+    Deliberately the awkward one: this player has real *provenance* (a non-``initial``
+    rating-history row, so they pass the "something moved it" half of
+    ``is_rated_member`` outright) and no number. A guard that took provenance as proof
+    of a rating would hand ``None`` to the evaluator as if it were one, and either 500
+    comparing ``None`` to 1500 or read it as a zero and admit them for entirely the
+    wrong reason. They enter because they are Unrated — the same reason as everybody
+    else here.
+    """
+    client, user = entrant_client
+    await _rate(db_session, user, default_league, 1650.0)
+    rating = (
+        await db_session.execute(
+            select(UserLeagueRating).where(
+                UserLeagueRating.league_id == default_league.id,
+                UserLeagueRating.user_id == user.id,
+            )
+        )
+    ).scalar_one()
+    rating.rating_value = None
+    await db_session.commit()
+    event = await _make_event(db_session, predicates=CAP_UNDER_1500)
+
+    response = await client.post(_entries_url(event))
+
+    assert response.status_code == 201, response.text
+    assert len(await _active_entries(db_session, event.id)) == 1
+
+
+async def test_eligibility_is_judged_on_the_tournaments_league_not_any_other(
+    entrant_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """The rating that decides an entry is the player's rating on the **tournament's**
+    ladder (ADR-0783 §2) — the league the tournament named when it was created.
+
+    The player is 1650 on the *default* league and unrated on the league this tournament
+    is actually run on, so they enter: an evaluator that grabbed "the player's rating"
+    from whatever row it found first would refuse them, and this is the test that tells
+    the two apart.
+    """
+    client, user = entrant_client
+    await _rate(db_session, user, default_league, 1650.0)
+    other = League(
+        name="Club Ladder",
+        description="Not the default — and this tournament's ladder.",
+        visibility=LeagueVisibility.private,
+        rating_strategy_id=default_league.rating_strategy_id,
+    )
+    db_session.add(other)
+    await db_session.commit()
+    await db_session.refresh(other)
+    event = await _make_event(db_session, predicates=CAP_UNDER_1500, league=other)
+
+    response = await client.post(_entries_url(event))
+
+    assert response.status_code == 201, response.text
+    assert len(await _active_entries(db_session, event.id)) == 1
+
+
+async def test_every_rule_must_be_satisfied_not_merely_one_of_them(
+    entrant_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """Rules are ANDed. The player clears the 1200 floor and fails the 1500 cap, and is
+    refused — an evaluator that ORed them would admit them on the strength of the rule
+    they happen to pass."""
+    client, user = entrant_client
+    await _rate(db_session, user, default_league, 1650.0)
+    event = await _make_event(
+        db_session,
+        predicates=[
+            {"id": "pr-floor", "field": "rating", "op": ">=", "value": 1200},
+            {"id": "pr-cap", "field": "rating", "op": "<", "value": 1500},
+        ],
+    )
+
+    response = await client.post(_entries_url(event))
+
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"]["code"] == "rating_ineligible"
+
+
+async def test_an_event_with_no_rules_admits_a_rated_player(
+    entrant_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """The open event: no predicates, so no rule to fail. The guard must not have grown
+    an opinion of its own about who may enter an unrestricted event."""
+    client, user = entrant_client
+    await _rate(db_session, user, default_league, 2400.0)
+    event = await _make_event(db_session)
+
+    response = await client.post(_entries_url(event))
+
+    assert response.status_code == 201, response.text
+
+
+async def test_the_rating_refusal_outranks_the_event_full_refusal(
+    entrant_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    player: User,
+    default_league: League,
+) -> None:
+    """An ineligible player entering a *full* event is told about their **rating**, not
+    about the capacity.
+
+    Same rule the doubles 400 follows ahead of the status 409: answer with the fact that
+    will not change on a retry. "The event is full" invites the player back the moment
+    somebody withdraws — and they would be refused again, this time for the reason they
+    should have been given now.
+    """
+    client, user = entrant_client
+    await _rate(db_session, user, default_league, 1650.0)
+    event = await _make_event(db_session, max_players=1, predicates=CAP_UNDER_1500)
+    await _seed_entry(db_session, event, player)
+
+    response = await client.post(_entries_url(event))
+
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"]["code"] == "rating_ineligible"

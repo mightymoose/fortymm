@@ -43,6 +43,19 @@ const scoped = (container: Container) => ({
   queryAllButtons() {
     return container.queryAllByRole('button')
   },
+
+  /** The capacity caption under the fill bar: how many places are left, or that
+   * the event is full (#783). */
+  queryCapacityNote() {
+    return container.queryByTestId('capacity-remaining')
+  },
+
+  /** The count as a screen reader hears it — the sentence behind the `12 / 64`
+   * numeral, which is hidden from the accessibility tree. Queried by text
+   * because that IS the assertion: `sr-only` is still in the a11y tree. */
+  queryEnteredSummary(summary: string) {
+    return container.queryByText(summary)
+  },
 })
 
 /**

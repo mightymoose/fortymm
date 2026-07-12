@@ -1,7 +1,7 @@
 import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
 
-import { myEntrant } from '../../data/helpers'
+import { isUnrated, myEntrant } from '../../data/helpers'
 import { FORMAT_OPTIONS } from '../../data/options'
 import type { Entrant, TournamentEvent } from '../../data/types'
 import { LeadReason } from './lead-reason'
@@ -24,6 +24,30 @@ import { LeadReason } from './lead-reason'
  * same overlay.
  */
 const MAX_VISIBLE = 8
+
+/**
+ * The mark on an entrant who holds **no rating on the tournament's ladder**
+ * (`isUnrated`, `../../data/helpers`) — the visible half of ADR-0783 §3.
+ *
+ * It is there because an unrated player **passes every rating rule**: `rating <
+ * 1500` admits someone who holds no rating at all, since the alternative locks a
+ * beginner out of the beginners' event. The accepted cost is that a rating cap
+ * becomes **opt-out** — a sandbagger's best move is to never play a rated match and
+ * stay eligible for every capped event — and this mark is the whole mitigation. The
+ * only person who can act on a ringer is the director (they may withdraw them,
+ * #784), and they can only act on what they can see. So the loophole is made
+ * visible rather than guessed at.
+ *
+ * It is a **word**, not a hue, on purpose. A colour-only difference is no
+ * difference at all to a director who cannot see it — and the accessible name of a
+ * tinted chip is just the username. The word is in the DOM, so a screen reader
+ * reads "player.4, Unrated"; the dashed border is a second, redundant channel
+ * (shape), and the colour is a third. Any one of the three, alone, would be a bug.
+ *
+ * "Unrated", not "unranked" and not "provisional": they hold no rating at all, not
+ * a soft one (CONTEXT.md, *Unrated entrant*).
+ */
+const UNRATED_LABEL = 'Unrated'
 
 /**
  * What the roster has to say — as a sum type, because "no entrants" is not one
@@ -131,6 +155,21 @@ export interface EntrantsListProps {
  *
  * Seeds (`Entrant.seed`) are not shown: nothing assigns them until draw
  * generation (#785), so today they are uniformly `null`.
+ *
+ * Neither is a **rated** entrant's rating NUMBER, though the payload now carries
+ * one. Only its *absence* is shown (`UNRATED_LABEL`), and deliberately:
+ *
+ * - The number is not actionable. Eligibility is decided server-side, in one place
+ *   (ADR-0783), and a rated entrant in a capped event was judged against that cap
+ *   when they entered. There is no ringer for the director to find among them; the
+ *   ringer is the person the rules could *not* judge.
+ * - A number on every chip would bury the one that matters. Eight names with one
+ *   `Unrated` among them reads at a glance; eight name+number pairs is a table, and
+ *   the mark is one column of it. The mitigation has to be legible to be a
+ *   mitigation.
+ * - This is a *summary* row — the first eight of up to `max_players` — so it could
+ *   not be audited by eye anyway. A full, sortable roster is the draw sheet's job
+ *   (#785); this list's job is to make one accepted loophole visible.
  */
 export const EntrantsList = ({ event, username }: EntrantsListProps) => {
   const state = rosterState(event, username)
@@ -164,6 +203,7 @@ const RosterBody = ({
         >
           {state.visible.map((entrant) => {
             const isMe = entrant.id === state.myEntryId
+            const unrated = isUnrated(entrant)
             return (
               <Badge
                 key={entrant.id}
@@ -176,15 +216,33 @@ const RosterBody = ({
                   // to say why it jumped the queue.
                   isMe &&
                     'border-[color:rgba(255,122,26,0.3)] bg-[color:var(--bg-accent-soft)] text-[color:var(--ball-500)]',
+                  // An unrated entrant's chip is drawn with a DASHED edge: the
+                  // shape channel of the same fact its `Unrated` tag states in
+                  // words. It stacks with the accent above rather than replacing
+                  // it — an unrated entrant who is also *me* is both, and one rule
+                  // must not silently cancel the other.
+                  unrated && 'border-dashed',
                 )}
               >
                 {/* Rendered as the <li> itself (`asChild`), so the list stays a
                     list: <ul> may only parent <li>. The username is its own
-                    element, so the "(you)" tag reads as a separate word to a
-                    screen reader instead of fusing into the name. */}
+                    element, so the "(you)" and "Unrated" tags read as separate
+                    words to a screen reader instead of fusing into the name — and
+                    so the roster's name assertions can still read the name alone
+                    off the chip's first child. */}
                 <li>
                   <span>{entrant.username}</span>
                   {isMe && <span className="opacity-80">(you)</span>}
+                  {unrated && (
+                    // `border-current` and no colour of its own: the tag inherits
+                    // the chip's text colour, which already meets contrast wherever
+                    // the chip does (including inside the accented "(you)" chip) —
+                    // so the mark cannot introduce a contrast failure of its own,
+                    // and cannot be *reduced* to a colour by a theme change.
+                    <span className="rounded-[3px] border border-dashed border-current px-1 text-[9px] leading-[1.5] font-semibold tracking-[0.06em] uppercase">
+                      {UNRATED_LABEL}
+                    </span>
+                  )}
                 </li>
               </Badge>
             )

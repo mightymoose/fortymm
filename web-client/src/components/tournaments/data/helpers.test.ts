@@ -6,6 +6,7 @@ import {
   formatPredicate,
   predicateSentence,
   findPoolConflicts,
+  isUnrated,
   myEntrant,
 } from './helpers'
 import {
@@ -49,6 +50,30 @@ describe('myEntrant', () => {
 
     expect(myEntrant(event, undefined)).toBeUndefined()
     expect(myEntrant(event, null)).toBeUndefined()
+  })
+})
+
+describe('isUnrated', () => {
+  it('is true when the server sent no rating — the entrant holds none on this ladder', () => {
+    expect(isUnrated(buildEntrant({ rating: null }))).toBe(true)
+  })
+
+  it('is false for a rated entrant', () => {
+    expect(isUnrated(buildEntrant({ rating: 1450 }))).toBe(false)
+  })
+
+  it('reads the SERVER’s verdict — a 1500 is a rating, not the "unrated" default', () => {
+    // ⚠️ ADR-0783's trap, pinned. A brand-new player is *seeded* 1500 at sign-up,
+    // so "unrated" is emphatically not "rating_value is null" and not "rating ===
+    // 1500". The server resolves it (`is_rated_member()`) and sends `null`; this
+    // predicate reads that answer and nothing else. Re-deriving it here from the
+    // number would refuse every beginner from the beginners' event — the exact harm
+    // the decision exists to prevent.
+    expect(isUnrated(buildEntrant({ rating: 1500 }))).toBe(false)
+  })
+
+  it('treats a rating of 0 as a rating — a bad one, not an absent one', () => {
+    expect(isUnrated(buildEntrant({ rating: 0 }))).toBe(false)
   })
 })
 
@@ -120,29 +145,46 @@ describe('effectiveDateRange', () => {
 })
 
 describe('formatPredicate', () => {
-  it('labels a numeric less-than rule', () => {
+  it('labels a numeric comparison rule', () => {
     const p: Predicate = { id: 'p', field: 'rating', op: '<', value: 1500 }
-    expect(formatPredicate(p)).toBe('USATT rating < 1500')
+    expect(formatPredicate(p)).toBe('Rating < 1500')
   })
 
-  it('labels an enum equality rule with the option label', () => {
-    const p: Predicate = { id: 'p', field: 'gender', op: 'is', value: 'F' }
-    expect(formatPredicate(p)).toBe('Gender = Female')
+  // The rating is a Glicko-2 league rating, not a USATT number (ADR-0783): the
+  // chip must not name a ladder we do not hold.
+  it('names the rating field "Rating", never "USATT rating"', () => {
+    const p: Predicate = { id: 'p', field: 'rating', op: '>=', value: 1200 }
+    expect(formatPredicate(p)).not.toContain('USATT')
+    expect(predicateSentence(p)).not.toContain('USATT')
   })
 
   it('labels a between rule with the range', () => {
-    const p: Predicate = { id: 'p', field: 'age', op: 'between', value: [13, 17] }
-    expect(formatPredicate(p)).toBe('Age in [13–17]')
+    const p: Predicate = {
+      id: 'p',
+      field: 'rating',
+      op: 'between',
+      value: [1200, 2400],
+    }
+    expect(formatPredicate(p)).toBe('Rating in [1200–2400]')
   })
 
   // The chip and the sentence share one vocabulary, so they must agree on the
-  // unset case too: an unfinished enum rule reads as the em-dash both use, never
-  // as the string "null" that `String(p.value)` used to leak onto the card.
-  it('renders an unfinished enum rule as an em-dash, not "null"', () => {
-    const p: Predicate = { id: 'p', field: 'gender', op: 'is', value: null }
-    expect(formatPredicate(p)).toBe('Gender = —')
+  // unset case too: an unfinished rule reads as the em-dash both use, never as
+  // the string "null" that `String(p.value)` used to leak onto the card.
+  it('renders an unfinished rule without leaking "null"', () => {
+    const p: Predicate = { id: 'p', field: 'rating', op: '<', value: null }
+    expect(formatPredicate(p)).toBe('Rating < ?')
     expect(formatPredicate(p)).not.toContain('null')
-    expect(predicateSentence(p)).toBe('Gender is —')
+    expect(predicateSentence(p)).toBe('Rating is less than —')
+  })
+
+  // A field the vocabulary does not know (a payload from a schema that is not
+  // ours — the three fields ADR-0783 removed would land here) renders as the
+  // em-dash rather than `undefined.label`.
+  it('renders an unknown field as an em-dash', () => {
+    const p = { id: 'p', field: 'gender', op: 'is', value: 'F' } as unknown as Predicate
+    expect(formatPredicate(p)).toBe('—')
+    expect(predicateSentence(p)).toBe('—')
   })
 })
 

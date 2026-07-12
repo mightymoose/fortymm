@@ -21,7 +21,7 @@ describe('EventCard', () => {
     const card = eventCardPage.getOpenButton('U1500 Singles')
     expect(card).toBeInTheDocument()
     expect(document.body).toHaveTextContent('Bo3')
-    expect(document.body).toHaveTextContent('USATT rating < 1500')
+    expect(document.body).toHaveTextContent('Rating < 1500')
   })
 
   it('shows entries out of the player cap', () => {
@@ -30,6 +30,117 @@ describe('EventCard', () => {
     })
     expect(document.body).toHaveTextContent('52')
     expect(document.body).toHaveTextContent('/ 64')
+  })
+
+  /**
+   * How much room is left (#783). The card already showed `entered / max` — a
+   * numeral that leaves the reader to do the subtraction, and that has no way to
+   * say the one thing an entrant most needs to hear: that there is no room at all.
+   *
+   * The line is read off the **numbers**, never off `entryState`: `entryState` is
+   * the server's judgement about *this caller* (ADR-0783), and it is not a count.
+   * The last test in here is the one that pins that apart — see its comment.
+   */
+  describe('the places it has left', () => {
+    it('says how many places are left in an event with room', () => {
+      eventCardPage.render({
+        event: buildEvent({ entrants: buildEntrants(6), maxPlayers: 16 }),
+      })
+
+      expect(eventCardPage.queryCapacityNote()).toHaveTextContent('10 places left')
+    })
+
+    it('says "1 place left" for the last free place', () => {
+      eventCardPage.render({
+        event: buildEvent({ entrants: buildEntrants(15), maxPlayers: 16 }),
+      })
+
+      expect(eventCardPage.queryCapacityNote()).toHaveTextContent('1 place left')
+    })
+
+    // THE BOUNDARY: exactly full. "0 places left" is arithmetic, not news — the
+    // card must say the event is FULL.
+    it('reads an exactly-full event as full, not as "0 places left"', () => {
+      eventCardPage.render({
+        event: buildEvent({ entrants: buildEntrants(16), maxPlayers: 16 }),
+      })
+
+      const note = eventCardPage.queryCapacityNote()
+      expect(note).toHaveTextContent('Full')
+      expect(note).not.toHaveTextContent('0 places left')
+    })
+
+    // THE OTHER BOUNDARY, and a representable one: a director can lower
+    // `max_players` under a field that has already formed (the server's capacity
+    // guard is `>=` and evicts nobody), so `entered > maxPlayers` really does
+    // arrive on the wire. The naive `max - entered` renders it "-3 places left".
+    it('reads an OVER-full event as full — never as a negative number of places', () => {
+      eventCardPage.render({
+        event: buildEvent({ entrants: buildEntrants(19), maxPlayers: 16 }),
+      })
+
+      const note = eventCardPage.queryCapacityNote()
+      expect(note).toHaveTextContent('Full')
+      expect(note).not.toHaveTextContent('-3')
+      expect(note?.textContent).not.toContain('-')
+    })
+
+    /**
+     * ⚠️ THE ONE THAT PINS THE SOURCE. A full event, seen by a caller the event
+     * ALSO refuses on rating: the server judges eligibility before capacity, so
+     * `entryState` reads `rating_ineligible` and the `event_full` arm never
+     * reaches this caller at all.
+     *
+     * The card must still say **Full** — because the capacity line is a fact about
+     * the *event* (16 people are in it; there is no 17th place), not about who is
+     * looking. Re-key it off `entryState` and every other test here still passes
+     * while this one goes red on the state a real ineligible player actually sees.
+     */
+    it('still reads FULL when the caller is refused for their RATING instead', () => {
+      eventCardPage.render({
+        event: buildEvent({
+          entrants: buildEntrants(16),
+          maxPlayers: 16,
+          predicates: [buildPredicate({ id: 'pr-u1500' })],
+          entryState: {
+            state: 'rating_ineligible',
+            predicateId: 'pr-u1500',
+            rating: 1650,
+          },
+        }),
+      })
+
+      expect(eventCardPage.queryCapacityNote()).toHaveTextContent('Full')
+    })
+
+    // An event with room refused on rating is the mirror image: the places really
+    // are there — this caller just cannot take one. Both facts, honestly.
+    it('still counts the places left when the caller is refused for their rating', () => {
+      eventCardPage.render({
+        event: buildEvent({
+          entrants: buildEntrants(9),
+          maxPlayers: 24,
+          predicates: [buildPredicate({ id: 'pr-u1200' })],
+          entryState: {
+            state: 'rating_ineligible',
+            predicateId: 'pr-u1200',
+            rating: 1650,
+          },
+        }),
+      })
+
+      expect(eventCardPage.queryCapacityNote()).toHaveTextContent('15 places left')
+    })
+
+    // The `6 / 16` numeral is typography: read aloud it is "6 slash 16". The card
+    // hides it from the accessibility tree and offers the sentence instead.
+    it('gives a screen reader the count as a sentence, not as a numeral', () => {
+      eventCardPage.render({
+        event: buildEvent({ entrants: buildEntrants(6), maxPlayers: 16 }),
+      })
+
+      expect(eventCardPage.queryEnteredSummary('6 of 16 entered')).toBeInTheDocument()
+    })
   })
 
   it('shows the time slot as a window', () => {

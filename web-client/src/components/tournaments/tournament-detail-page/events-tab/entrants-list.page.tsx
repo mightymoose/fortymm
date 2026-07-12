@@ -24,6 +24,14 @@ export const ENTRY_CLOSED_COPY = {
  * imported, for the same reason as the copy above. */
 export const YOU_TAG = '(you)'
 
+/** The mark on an entrant who holds no rating on the tournament's ladder
+ * (ADR-0783 §3). Spelled out here, not imported: a test that asserted the
+ * component's own constant against itself would pass whatever the mark became —
+ * including nothing at all, which is precisely the regression this word exists to
+ * prevent. It is the word "Unrated" that has to be there, because a director who
+ * cannot see colour has only the word. */
+export const UNRATED_TAG = 'Unrated'
+
 /** The `+N more` tail's shape. Anchored, so `+4 more` cannot satisfy an
  * assertion about `+44 more`. */
 const TAIL_PATTERN = /^\+\d+ more$/
@@ -70,6 +78,22 @@ const scoped = (container: Container) => {
      * viewer is signed out or is not in this event. */
     queryYouTag(eventName: string) {
       return within(getEntrantsList(eventName)).queryByText(YOU_TAG)
+    },
+    /** Every `Unrated` mark in the roster. Its LENGTH is the count of marked
+     * chips — but a count alone would pass with the mark on the wrong people, so
+     * prefer `getUnratedNames` below when *who* is marked is the claim. */
+    getUnratedTags(eventName: string) {
+      return within(getEntrantsList(eventName)).queryAllByText(UNRATED_TAG)
+    },
+    /** The usernames of the entrants the roster MARKS as unrated, in the order it
+     * shows them. Read off the chips themselves (the tag's own list item), so the
+     * assertion is "this player is marked", not merely "something on this card says
+     * Unrated" — a word rendered on the wrong chip, or floating loose in the
+     * section, would satisfy the latter. */
+    getUnratedNames(eventName: string): string[] {
+      return within(getEntrantsList(eventName))
+        .queryAllByText(UNRATED_TAG)
+        .map((tag) => tag.closest('li')?.firstElementChild?.textContent ?? '')
     },
     /** The `+N more` tail shown when the roster is longer than the card lists. */
     queryTruncationTail(eventName: string) {

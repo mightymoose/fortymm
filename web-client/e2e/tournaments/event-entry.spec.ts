@@ -48,6 +48,8 @@ test.describe('Tournaments · entering an event', () => {
     await expect(pom.entrantsList(EVENT.JOURNEY)).not.toContainText(ME.username)
     await pom.expectEntryCount(EVENT.JOURNEY, 2, 64)
     await expect(pom.heroEntries).toContainText('2')
+    // …and the card says what is LEFT, not just what is in (#783).
+    await expect(pom.capacityNote(EVENT.JOURNEY)).toHaveText('62 places left')
     await expect(pom.enterButton(EVENT.JOURNEY)).toBeVisible()
 
     // --- enter ---------------------------------------------------------------
@@ -60,6 +62,9 @@ test.describe('Tournaments · entering an event', () => {
     await expect(pom.entrantsList(EVENT.JOURNEY)).toContainText(ME.username)
     await pom.expectEntryCount(EVENT.JOURNEY, 3, 64)
     await expect(pom.heroEntries).toContainText('3')
+    // The place I just took is a place nobody else can: the remainder moves with
+    // the roster, because both are read off the same derived count.
+    await expect(pom.capacityNote(EVENT.JOURNEY)).toHaveText('61 places left')
 
     // --- withdraw ------------------------------------------------------------
     await pom.withdrawButton(EVENT.JOURNEY).click()
@@ -324,6 +329,197 @@ test.describe('Tournaments · entering an event', () => {
   })
 })
 
+/**
+ * What the EVENT itself refuses (#783, ADR-0783) — and what it shows instead.
+ *
+ * Issue #783's own text asked for a *disabled* Enter button. These specs are what
+ * says we did not build one: the assertion is not "the button is disabled", it is
+ * "**the card offers no button at all**" (ADR-0015 — a disabled control is an
+ * unexplained dead end; hide the affordance and explain).
+ *
+ * Only a browser can prove the last one honestly: `cardButtons()` sweeps every
+ * button *inside* the card, so a dead control that was renamed, unlabelled or
+ * merely greyed out cannot hide behind an accessible-name query.
+ */
+test.describe('Tournaments · what the event refuses (#783)', () => {
+  test('a FULL event explains itself and offers no button to press — not even a disabled one', async ({
+    page,
+  }) => {
+    const { pom } = await TournamentDetailPage.navigateTo(page, { gated: true })
+    const card = pom.eventCard(EVENT.FULL)
+
+    // Positive first: the card is genuinely rendered, and genuinely full — so the
+    // absence below is an absence of the control, not of the page.
+    await expect(card).toBeVisible()
+    await pom.expectEntryCount(EVENT.FULL, 4, 4)
+    // Its capacity line reads FULL — not the "0 places left" that the arithmetic
+    // would give, and not a negative one (#783).
+    await expect(pom.capacityNote(EVENT.FULL)).toHaveText('Full')
+    await expect(card).not.toContainText('places left')
+    // …while an event with room counts the places it has left, on the same page.
+    await expect(pom.capacityNote(EVENT.JOURNEY)).toHaveText('62 places left')
+
+    await expect(pom.fullNotice(EVENT.FULL)).toContainText('Event full')
+    await expect(pom.fullNotice(EVENT.FULL)).toContainText(
+      'Every place in this event has been taken.',
+    )
+    // No Enter. And nothing else button-shaped inside the card either — the
+    // stretched "open the editor" overlay is a sibling of the card, not a child.
+    await expect(pom.enterButton(EVENT.FULL)).toHaveCount(0)
+    await expect(pom.withdrawButton(EVENT.FULL)).toHaveCount(0)
+    await expect(pom.cardButtons(EVENT.FULL)).toHaveCount(0)
+
+    // …while an event with room still offers a working Enter, on the same page.
+    await expect(pom.enterButton(EVENT.JOURNEY)).toBeEnabled()
+  })
+
+  test('a RATING-INELIGIBLE event names the rule that refused me, and the rating it judged', async ({
+    page,
+  }) => {
+    const { pom } = await TournamentDetailPage.navigateTo(page, { gated: true })
+
+    const notice = pom.ineligibleNotice(EVENT.INELIGIBLE)
+    await expect(notice).toContainText('Not eligible')
+    // Specific enough to act on: the event's own rule, read back by id, and my
+    // rating on the tournament's ladder. Not "you are not eligible", full stop.
+    await expect(notice).toContainText('Rating is less than 1200. Your rating is 1650.')
+
+    await expect(pom.enterButton(EVENT.INELIGIBLE)).toHaveCount(0)
+    await expect(pom.cardButtons(EVENT.INELIGIBLE)).toHaveCount(0)
+
+    // …and the capacity line still counts the event's free places (2 of 24 in),
+    // because it is read off the numbers, not off `entry_state` — which, for this
+    // caller, says `rating_ineligible` and nothing whatever about room. The event
+    // has 22 places; this player simply cannot take one of them. Both facts,
+    // honestly, side by side (#783).
+    await expect(pom.capacityNote(EVENT.INELIGIBLE)).toHaveText('22 places left')
+  })
+
+  // ⚠️ THE TRAP. A player already inside a full event must still be able to LEAVE.
+  // If capacity outranked membership, every entrant in a popular event would find
+  // their Withdraw button replaced by "Event full" — locked in by the very success
+  // they signed up for, with no way out and nothing to click.
+  test('a player already entered in a FULL event can still WITHDRAW from it', async ({
+    page,
+  }) => {
+    const { pom, store } = await TournamentDetailPage.navigateTo(page, {
+      gated: true,
+      // I hold one of the four places — which is what makes the event full.
+      enteredIn: [EVENT.FULL_WITH_ME],
+    })
+
+    await pom.expectEntryCount(EVENT.FULL_WITH_ME, 4, 4)
+    await expect(pom.entrantsList(EVENT.FULL_WITH_ME)).toContainText(ME.username)
+    // The event IS full — the capacity line says so even to the one person it has
+    // nothing to explain, because "no places left" is a fact about the event, not
+    // about who is reading it.
+    await expect(pom.capacityNote(EVENT.FULL_WITH_ME)).toHaveText('Full')
+    // The card explains nothing at me — it offers me the door out.
+    await expect(pom.fullNotice(EVENT.FULL_WITH_ME)).toHaveCount(0)
+    await expect(pom.withdrawButton(EVENT.FULL_WITH_ME)).toBeVisible()
+
+    await pom.withdrawButton(EVENT.FULL_WITH_ME).click()
+
+    // The withdrawal really landed: the server's own roster lost me, the count
+    // dropped, and the place I freed is offered back to me — and it is ONE place,
+    // singular, not "1 places left".
+    await expect(pom.enterButton(EVENT.FULL_WITH_ME)).toBeVisible()
+    await pom.expectEntryCount(EVENT.FULL_WITH_ME, 3, 4)
+    await expect(pom.capacityNote(EVENT.FULL_WITH_ME)).toHaveText('1 place left')
+    expect(store.entrantsOf(EVENT.FULL_WITH_ME).map((e) => e.username)).not.toContain(
+      ME.username,
+    )
+    await expect(pom.toasts).toHaveCount(0)
+  })
+})
+
+/**
+ * The **visible loophole** (ADR-0783 §3).
+ *
+ * An unrated player passes every rating rule — `rating < 1200` admits someone who
+ * holds no rating at all — because the alternative bars a beginner from the
+ * beginners' event. The accepted cost: a rating cap is **opt-out**. Never play a
+ * rated match, stay unrated, stay eligible for every capped event.
+ *
+ * The whole mitigation is that the entrants list *says so*. The director is the only
+ * person who can act on a ringer (they may withdraw them, #784), and they can only
+ * act on what they can see — so these specs assert the mark is on the right chips,
+ * in a **word** (not a hue: a colour-only mark is invisible to a director who cannot
+ * see it, and to a screen reader entirely), and that a roster of nothing but unrated
+ * entrants still renders.
+ */
+test.describe('Tournaments · the unrated entrant (#783)', () => {
+  test('marks the entrant who holds no rating — and leaves the rated one unmarked', async ({
+    page,
+  }) => {
+    const { pom } = await TournamentDetailPage.navigateTo(page)
+
+    // Both are in the roster: the mark is an annotation on a roster, not a filter
+    // over one.
+    await expect(pom.entrantsList(EVENT.JOURNEY)).toContainText('player.1')
+    await expect(pom.entrantsList(EVENT.JOURNEY)).toContainText('player.2')
+
+    // Exactly one of them is marked, and it is the one who holds no rating.
+    await expect(pom.unratedEntrantItems(EVENT.JOURNEY)).toHaveCount(1)
+    await expect(pom.unratedEntrantItems(EVENT.JOURNEY)).toContainText('player.2')
+
+    // THE assertion, and the reason this is a browser spec: the mark is a WORD in
+    // the accessibility tree. A tinted chip would look right in a screenshot, pass
+    // every DOM-count test written against it, and tell a colour-blind director —
+    // and every screen-reader user — precisely nothing.
+    await expect(pom.unratedTags(EVENT.JOURNEY)).toHaveCount(1)
+    await expect(pom.unratedTags(EVENT.JOURNEY)).toBeVisible()
+
+    // …and a rated entrant's rating NUMBER is not printed. Only the absence of a
+    // rating is shown: the server judged every rated entrant against this event's
+    // rules when they entered (eligibility lives in one place, ADR-0783), so their
+    // number is noise — and eight numbers would bury the one chip that matters.
+    await expect(pom.entrantsList(EVENT.JOURNEY)).not.toContainText('1450')
+  })
+
+  test('entering it myself adds a RATED chip — the mark follows the fact, not the newcomer', async ({
+    page,
+  }) => {
+    const { pom } = await TournamentDetailPage.navigateTo(page)
+
+    await pom.enterButton(EVENT.JOURNEY).click()
+    await expect(pom.withdrawButton(EVENT.JOURNEY)).toBeVisible()
+
+    // I am rated (1650), so my pinned chip is marked `(you)` and NOT `Unrated` —
+    // while player.2's mark survives the refetch untouched. A mark keyed on
+    // anything but the rating (recency, position, "not me") would swap here.
+    await expect(pom.entrantItems(EVENT.JOURNEY).first()).toContainText(ME.username)
+    await expect(pom.entrantItems(EVENT.JOURNEY).first()).toContainText('(you)')
+    await expect(pom.entrantItems(EVENT.JOURNEY).first()).not.toContainText('Unrated')
+    await expect(pom.unratedEntrantItems(EVENT.JOURNEY)).toHaveCount(1)
+    await expect(pom.unratedEntrantItems(EVENT.JOURNEY)).toContainText('player.2')
+  })
+
+  test('an event in which EVERY entrant is unrated still renders its roster', async ({
+    page,
+  }) => {
+    // The degenerate case, and the loophole at full stretch: a `rating < 1200` event
+    // whose three entrants hold no rating at all — so all three passed the cap, and
+    // the card marks all three. Meanwhile the same rule refuses ME, at 1650. Three
+    // players the rules could not judge are in; the one they could judge is out.
+    const { pom } = await TournamentDetailPage.navigateTo(page, { unrated: true })
+
+    await expect(pom.entrantsList(EVENT.ALL_UNRATED)).toBeVisible()
+    await expect(pom.entrantItems(EVENT.ALL_UNRATED)).toHaveCount(3)
+    await expect(pom.unratedEntrantItems(EVENT.ALL_UNRATED)).toHaveCount(3)
+    await pom.expectEntryCount(EVENT.ALL_UNRATED, 3, 32)
+
+    // The roster is a roster, not an error or an empty state — every chip carries
+    // the mark and the list renders exactly as it does with one.
+    await expect(pom.eventCard(EVENT.ALL_UNRATED)).not.toContainText(COPY.emptyLead)
+
+    // And it stays INERT: the mark is display, not a control. Withdrawing a ringer
+    // is the director's action and it belongs to #991/#784 — not to this list, which
+    // sits under the card's stretched open-target overlay.
+    await expect(pom.cardButtons(EVENT.ALL_UNRATED)).toHaveCount(0)
+  })
+})
+
 test.describe('Tournaments · entering an event · accessibility', () => {
   test('is axe-clean before entering — with a listed, an empty and an entry-closed roster on screen', async ({
     page,
@@ -338,8 +534,24 @@ test.describe('Tournaments · entering an event · accessibility', () => {
     await expect(pom.eventCard(EVENT.EMPTY)).toContainText(COPY.emptyLead) // empty
     await expect(pom.eventCard(EVENT.DOUBLES)).toContainText(COPY.closedLead) // entry-closed
     await expect(pom.enterButton(EVENT.JOURNEY)).toBeVisible()
+    // …and the listed roster is a MIXED one (player.2 holds no rating), so the
+    // unrated mark — new markup, and a contrast risk of its own — is inside this
+    // scan rather than only inside an opt-in one.
+    await expect(pom.unratedTags(EVENT.JOURNEY)).toBeVisible()
 
     await expectAxeClean(page, 'events tab before entering')
+  })
+
+  test('is axe-clean when EVERY entrant is unrated — a roster of nothing but marks', async ({
+    page,
+  }) => {
+    // The mark's own worst case: every chip carries it. It is text inside a chip
+    // inside a list item, tinted by the chip it sits in — so a contrast failure or a
+    // broken list structure would be here, three chips over, and nowhere else.
+    const { pom } = await TournamentDetailPage.navigateTo(page, { unrated: true })
+    await expect(pom.unratedEntrantItems(EVENT.ALL_UNRATED)).toHaveCount(3)
+
+    await expectAxeClean(page, 'events tab with an all-unrated roster')
   })
 
   test('is axe-clean after entering — roster populated, Withdraw offered', async ({
@@ -351,6 +563,19 @@ test.describe('Tournaments · entering an event · accessibility', () => {
     await expect(pom.entrantsList(EVENT.JOURNEY)).toContainText(ME.username)
 
     await expectAxeClean(page, 'events tab after entering')
+  })
+
+  test('is axe-clean with the two REFUSED states on screen — full, and rating-ineligible', async ({
+    page,
+  }) => {
+    // #783's two designed states: muted explanatory copy where a control used to
+    // be. Assert both are really rendered before scanning — an axe pass over a page
+    // that is missing the states it claims to cover is a green that means nothing.
+    const { pom } = await TournamentDetailPage.navigateTo(page, { gated: true })
+    await expect(pom.fullNotice(EVENT.FULL)).toBeVisible()
+    await expect(pom.ineligibleNotice(EVENT.INELIGIBLE)).toBeVisible()
+
+    await expectAxeClean(page, 'events tab with full and ineligible events')
   })
 
   test('is axe-clean with a TRUNCATED roster — my pinned chip and the "+N more" tail', async ({

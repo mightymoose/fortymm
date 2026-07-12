@@ -14,7 +14,17 @@ from sqlalchemy import event, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from app.main import app as fastapi_app
-from app.models import Permission, Role, RolePermission, User, UserRole
+from app.models import (
+    League,
+    Permission,
+    RatingHistory,
+    RatingHistorySource,
+    Role,
+    RolePermission,
+    User,
+    UserLeagueRating,
+    UserRole,
+)
 from app.notifications.apns import Environment, SendOutcome, SendResult
 from app.notifications.dependencies import get_push_sender
 from app.notifications.jobs import DELIVER_NOTIFICATION_JOB
@@ -110,6 +120,65 @@ async def grant_permissions(
             await db_session.flush()
         db_session.add(RolePermission(role_id=role.id, permission_id=permission.id))
     db_session.add(UserRole(user_id=user.id, role_id=role.id))
+    await db_session.commit()
+
+
+async def rate_player(
+    db_session: AsyncSession, user: User, league: League, value: float
+) -> None:
+    """Put ``user`` on ``league``'s ladder at ``value`` — **actually rated**, not merely
+    holding a rating row.
+
+    The two are different, and the difference is what keeps the Unrated tests from
+    being vacuous. Minting a session JOINS the default league, which SEEDS a
+    ``user_league_ratings`` row at 1500 plus an ``initial`` rating-history event
+    (``app.ratings.rated``): every player in the suite already has a rating *row* on
+    the default league before they do anything. So a rating is made here in the two
+    moves that ``app.ratings.rated.is_rated_member`` actually asks about:
+
+    1. the seeded row's value is MOVED to ``value`` (inserted, if this is a league the
+       player never joined), and
+    2. a NON-``initial`` ``rating_history`` row is written — the thing that says
+       something real moved it.
+
+    Write only (1) and the player is still Unrated by every read on the platform, and
+    an "over the cap is refused" test goes green against a guard that refuses nobody.
+
+    Shared by the eligibility tests on BOTH sides of ADR-0783 — the entry route's
+    refusal (``test_tournament_entries``) and the detail read's ``entry_state``
+    (``test_tournaments``) — precisely because a second, subtly weaker copy of it in
+    one of them would let that side pass while testing nothing.
+    """
+    rating = (
+        await db_session.execute(
+            select(UserLeagueRating).where(
+                UserLeagueRating.league_id == league.id,
+                UserLeagueRating.user_id == user.id,
+            )
+        )
+    ).scalar_one_or_none()
+    if rating is None:
+        rating = UserLeagueRating(
+            league_id=league.id,
+            user_id=user.id,
+            rating_strategy_id=league.rating_strategy_id,
+        )
+        db_session.add(rating)
+    rating.rating_value = value
+    db_session.add(
+        RatingHistory(
+            league_id=league.id,
+            user_id=user.id,
+            match_id=None,
+            rating_strategy_id=league.rating_strategy_id,
+            rating_value=value,
+            rating_state={"rating": value, "rd": 200.0, "volatility": 0.06},
+            previous_rating_value=None,
+            # ``manual``, not ``initial``: an ``initial`` row is the seed every member
+            # joins with, and it makes nobody rated.
+            source=RatingHistorySource.manual,
+        )
+    )
     await db_session.commit()
 
 
@@ -210,6 +279,14 @@ async def counted_statements(
     **Why the batching callers cite three ids.** A reintroduced per-user loop
     emits one statement per user, so three ids fail loudly against a pin of one —
     where a two-id list could still be read off as a coincidence.
+
+    ``expire_on_commit=False``, as everywhere else in the suite (the ``db_session``
+    fixture, the lock-race tests' sessionmakers): a caller counting the statements a
+    *handler* emits — rather than a bare loader — would otherwise have every ORM
+    instance expired by that handler's ``commit()``, and the next attribute read
+    would try to refresh it from inside sync code (``MissingGreenlet``). It also
+    keeps the count honest: an expiry-triggered reload is a statement the code under
+    test never asked for.
     """
     statements: list[str] = []
 
@@ -218,7 +295,7 @@ async def counted_statements(
 
     event.listen(engine.sync_engine, "before_cursor_execute", before)
     try:
-        async with async_sessionmaker(engine)() as session:
+        async with async_sessionmaker(engine, expire_on_commit=False)() as session:
             yield session, statements
     finally:
         event.remove(engine.sync_engine, "before_cursor_execute", before)

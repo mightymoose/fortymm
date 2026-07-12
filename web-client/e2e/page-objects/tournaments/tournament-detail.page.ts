@@ -100,6 +100,28 @@ export class TournamentDetailPage {
     return this.eventCard(eventName).getByTestId('registration-notice')
   }
 
+  /** The full-event notice on one card (#783) — what an event at `max_players`
+   * renders where its Enter button would have been. */
+  fullNotice(eventName: string): Locator {
+    return this.eventCard(eventName).getByTestId('event-full-notice')
+  }
+
+  /** The rating-ineligible notice on one card (#783): the rule that refused this
+   * player, and the rating it judged them on. */
+  ineligibleNotice(eventName: string): Locator {
+    return this.eventCard(eventName).getByTestId('ineligible-notice')
+  }
+
+  /** EVERY button inside one event card — the locator the "no *disabled* Enter"
+   * claim actually needs. `enterButton()` is keyed on the accessible name, so it
+   * proves only that a button *called* "Enter X" is absent; this proves the card
+   * offers no control at all beyond its own open-target overlay (which is a sibling
+   * of the card, not inside it — see `eventCard`). ADR-0015: hide the affordance,
+   * never disable it. */
+  cardButtons(eventName: string): Locator {
+    return this.eventCard(eventName).getByRole('button')
+  }
+
   withdrawButton(eventName: string): Locator {
     return this.page.getByRole('button', { name: `Withdraw from ${eventName}` })
   }
@@ -122,6 +144,22 @@ export class TournamentDetailPage {
    * a control: the card's stretched overlay owns the only click here. */
   truncationTail(eventName: string): Locator {
     return this.entrantsList(eventName).getByText(/^\+\d+ more$/)
+  }
+
+  /** Every `Unrated` mark in one roster — the entrants who hold no rating on the
+   * tournament's ladder (ADR-0783 §3), and therefore passed every rating rule to
+   * get in. The locator is the **word**, not a class or a colour, on purpose: that
+   * is the only channel a colour-blind director, a greyscale screen and a screen
+   * reader all share, so it is the one worth failing over. */
+  unratedTags(eventName: string): Locator {
+    return this.entrantsList(eventName).getByText('Unrated', { exact: true })
+  }
+
+  /** The chips of one roster that carry the `Unrated` mark — so a spec can assert
+   * *who* is marked, not merely how many. `getByText` alone would be satisfied by
+   * the word landing on the wrong player. */
+  unratedEntrantItems(eventName: string): Locator {
+    return this.entrantItems(eventName).filter({ hasText: 'Unrated' })
   }
 
   /** The full-card overlay that opens the editor. Its accessible name is
@@ -158,5 +196,12 @@ export class TournamentDetailPage {
     await expect(this.eventCard(eventName)).toContainText(
       new RegExp(`${entered}\\s*/\\s*${max}`),
     )
+  }
+
+  /** The capacity caption under one card's fill bar (#783): how many places the
+   * event has left, or that it is full. The numeral above it says what is *in* the
+   * event; this says what is left of it. */
+  capacityNote(eventName: string): Locator {
+    return this.eventCard(eventName).getByTestId('capacity-remaining')
   }
 }

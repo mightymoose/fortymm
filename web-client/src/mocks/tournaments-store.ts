@@ -13,6 +13,8 @@
 // again afterwards (the server's partial unique index; here, simply a fresh row).
 
 import type { components } from '@/api/schema'
+import { FORTYMM_LEAGUE_ID } from '@/mocks/factories/players/player-league.factory'
+import { entryStateFor } from '@/mocks/factories/tournaments/tournament.factory'
 
 type TournamentDetailRead = components['schemas']['TournamentDetailRead']
 type TournamentRead = components['schemas']['TournamentRead']
@@ -26,10 +28,21 @@ type TournamentTable = components['schemas']['TournamentTable']
 type TournamentEntrantRead = components['schemas']['TournamentEntrantRead']
 
 /** What the store actually holds for an event: everything the wire shape has
- * *except* the derived `entered` count. Deriving it on read (rather than storing
- * a number) makes "the counter says 52, the list has 51" unrepresentable — the
- * same reason the API dropped the column. */
-type StoredEvent = Omit<TournamentEventRead, 'entered'>
+ * *except* the two fields the server DERIVES at read time — the `entered` count
+ * and the caller-aware `entry_state`. Deriving them on read (rather than storing
+ * them) makes "the counter says 52, the list has 51" — and its twin, "the event
+ * says `open` while holding all 64 of its 64 entrants" — unrepresentable. It is
+ * the same reason the API has no `entered` column.
+ *
+ * The one thing the store DOES hold is `ineligible`: whether the dev user's rating
+ * fails one of this event's rules is a fact about a player's rating on the
+ * tournament's ladder (ADR-0783), and no mock payload carries a ladder — so it is
+ * seeded rather than computed, and `readEvent` turns it into the wire's
+ * `rating_ineligible`. */
+type StoredEvent = Omit<TournamentEventRead, 'entered' | 'entry_state'> & {
+  /** Seeded: the dev user is refused by this rule, at this rating. */
+  ineligible?: { predicate_id: string; rating: number }
+}
 type StoredTournament = Omit<TournamentDetailRead, 'events'> & {
   events: StoredEvent[]
 }
@@ -40,6 +53,18 @@ type StoredTournament = Omit<TournamentDetailRead, 'events'> & {
 // user id).
 const DEV_USER_ID = 'u-me'
 const DEV_USERNAME = 'rita.kovac'
+/** The dev user's rating on the tournaments' ladder — the one the `ev-u1200`
+ * seed's rating refusal judges them on, and the one their own entry chip carries.
+ * They are RATED: the unrated marker is a thing they see about *other* people, and
+ * a dev user who was themselves unrated would make `(you)` the demo of it. */
+const DEV_USER_RATING = 1650
+
+// The ladder a mock tournament's eligibility rules are judged against (ADR-0783).
+// Every seeded row is run on the **default** league — the one the server resolves
+// an omitted `league_id` to at create — and `createTournament` below does the
+// same. No surface renders it yet; it is carried so the mock sends the shape the
+// wire really sends.
+const DEFAULT_LEAGUE_ID = FORTYMM_LEAGUE_ID
 
 function tables(count: number): TournamentTable[] {
   return Array.from({ length: count }, (_, i) => ({
@@ -51,13 +76,21 @@ function tables(count: number): TournamentTable[] {
 
 /** `count` other players already entered in an event — enough to make the fill
  * bars and the "Entries" hero stat meaningful in `npm run dev`. Deliberately
- * never the dev user, so the Enter control is offered on every seeded event. */
+ * never the dev user, so the Enter control is offered on every seeded event.
+ *
+ * **Every fourth one is UNRATED** (`rating: null`) — they hold no rating on the
+ * tournament's ladder, so they pass every rating rule (ADR-0783 §3) and the roster
+ * marks them. Seeded into the first eight, i.e. into the chips a card actually
+ * shows, so `npm run dev` shows a *mixed* roster: without an unrated entrant in the
+ * seed, the one mitigation this whole decision rests on would be invisible in the
+ * only place a director looks at it. The rest carry a spread of real ratings. */
 function otherEntrants(eventId: string, count: number): TournamentEntrantRead[] {
   return Array.from({ length: count }, (_, i) => ({
     id: `entry-${eventId}-${i + 1}`,
     user_id: `u-other-${i + 1}`,
     username: `player.${i + 1}`,
     seed: i < 8 ? i + 1 : null,
+    rating: (i + 1) % 4 === 0 ? null : 1150 + ((i * 137) % 750),
   }))
 }
 
@@ -70,6 +103,7 @@ function seed(): StoredTournament[] {
       status: 'published',
       start_date: '2026-06-13',
       end_date: '2026-06-14',
+      league_id: DEFAULT_LEAGUE_ID,
       address: {
         venue: 'Berkeley TT Club',
         street: '2727 Milvia St',
@@ -133,6 +167,48 @@ function seed(): StoredTournament[] {
           updated_at: '2026-06-09T12:00:00Z',
         },
         {
+          // FULL: 16 entrants in 16 places, so `entryState` reads `event_full` off
+          // the entrants themselves. The card offers no Enter button at all — it
+          // says why instead (ADR-0015; #783). Seeded so `npm run dev` can show the
+          // state without anyone having to click Enter sixteen times.
+          id: 'ev-champ-singles',
+          tournament_id: 'bay-area-open-2026',
+          name: 'Championship Singles',
+          format: 'singles',
+          draw_type: 'single-elim',
+          max_players: 16,
+          entry_fee: 60,
+          entrants: otherEntrants('ev-champ-singles', 16),
+          slot: { date: '2026-06-14', start: '13:00', end: '18:00' },
+          match_settings: { rated: true, length_games: 7 },
+          predicates: [],
+          pools: [],
+          created_at: '2026-06-01T09:06:30Z',
+          updated_at: '2026-06-09T12:00:00Z',
+        },
+        {
+          // RATING-INELIGIBLE: the dev user is rated 1650 on the tournament's
+          // ladder and this event admits only players under 1200, so the server
+          // refuses them — naming the rule that did it (`predicate_id`), which the
+          // card reads back out of the event's own `predicates`. Not derivable from
+          // the event alone (there is no ladder in a mock), so it is seeded.
+          id: 'ev-u1200',
+          tournament_id: 'bay-area-open-2026',
+          name: 'U1200 Singles',
+          format: 'singles',
+          draw_type: 'round-robin',
+          max_players: 24,
+          entry_fee: 20,
+          entrants: otherEntrants('ev-u1200', 9),
+          slot: { date: '2026-06-14', start: '09:00', end: '12:00' },
+          match_settings: { rated: true, length_games: 3 },
+          predicates: [{ id: 'pr-u1200', field: 'rating', op: '<', value: 1200 }],
+          ineligible: { predicate_id: 'pr-u1200', rating: DEV_USER_RATING },
+          pools: [],
+          created_at: '2026-06-01T09:06:45Z',
+          updated_at: '2026-06-09T12:00:00Z',
+        },
+        {
           // A doubles event: entry is a singles-only affair (one row per user
           // cannot express a pairing — ADR-0016), so the API 400s here and the
           // UI offers no Enter control. Seeded so that case is visible in dev.
@@ -160,6 +236,7 @@ function seed(): StoredTournament[] {
       status: 'draft',
       start_date: '2026-08-22',
       end_date: '2026-08-23',
+      league_id: DEFAULT_LEAGUE_ID,
       address: {
         venue: 'Palo Alto Community Center',
         street: '1313 Newell Rd',
@@ -189,6 +266,7 @@ function seed(): StoredTournament[] {
       status: 'published',
       start_date: '2026-07-01',
       end_date: '2026-07-01',
+      league_id: DEFAULT_LEAGUE_ID,
       address: {
         venue: 'San Jose Sports Hall',
         street: '1500 Senter Rd',
@@ -219,17 +297,18 @@ function seed(): StoredTournament[] {
           slot: { date: '2026-07-01', start: '17:00', end: '21:00' },
           match_settings: { rated: true, length_games: 5 },
           // The only non-owned row in the seed, so it is the only place the
-          // read-only event panel can be seen in `npm run dev`. These rules
-          // deliberately cover every branch of the read-only prose: a bool
-          // ("Must be a club member"), a plain numeric comparison ("Age is at
-          // least 16"), a `between` (a two-element value array — "USATT rating
-          // is between 1200 and 2400"), and an enum (renders its option label,
-          // "Gender is Female", not the stored `F`).
+          // read-only event panel can be seen in `npm run dev`. The two rules
+          // cover both branches of the read-only prose: a plain numeric
+          // comparison ("Rating is at least 1200") and a `between` (a
+          // two-element value array — "Rating is between 1200 and 2400").
+          //
+          // `rating` is the whole vocabulary now (ADR-0783): the club / age /
+          // gender rules that used to seed the bool and enum branches named
+          // player attributes that exist nowhere in the system, and the API
+          // 422s them.
           predicates: [
-            { id: 'pr-cc-1', field: 'club', op: 'true', value: true },
-            { id: 'pr-cc-2', field: 'age', op: '>=', value: 16 },
+            { id: 'pr-cc-2', field: 'rating', op: '>=', value: 1200 },
             { id: 'pr-cc-3', field: 'rating', op: 'between', value: [1200, 2400] },
-            { id: 'pr-cc-4', field: 'gender', op: 'is', value: 'F' },
           ],
           // Two group-stage pools on disjoint tables, then a knockout that
           // reuses the show tables once the groups are done. No pair both
@@ -265,10 +344,33 @@ function seed(): StoredTournament[] {
 
 let tournaments: StoredTournament[] = seed()
 
+/** What this event has to say about the DEV USER entering it (ADR-0783), in the
+ * server's own precedence: **eligibility before capacity**. A player whose rating
+ * fails a rule is told so even when the event is also full — being told "it's
+ * full" would invite them back when a place frees up, and no place that frees up
+ * will ever be theirs.
+ *
+ * The capacity arm is derived from the entrants (`entryStateFor`), so entering the
+ * last free place flips the event to `event_full` on the very next read — a stored
+ * tag could not, and the dev demo would keep offering Enter on a full event. */
+function entryState(event: StoredEvent): TournamentEventRead['entry_state'] {
+  if (event.ineligible) {
+    return {
+      state: 'rating_ineligible',
+      predicate_id: event.ineligible.predicate_id,
+      rating: event.ineligible.rating,
+    }
+  }
+  return entryStateFor(event)
+}
+
 /** Project a stored event onto the wire shape, deriving the `entered` count from
- * the entrants — the one place the count comes from. */
+ * the entrants — the one place the count comes from — and the caller-aware
+ * `entry_state` from the entrants and the seeded rating verdict. */
 function readEvent(event: StoredEvent): TournamentEventRead {
-  return { ...event, entered: event.entrants.length }
+  const { ineligible, ...wire } = event
+  void ineligible
+  return { ...wire, entered: event.entrants.length, entry_state: entryState(event) }
 }
 
 function readDetail(t: StoredTournament): TournamentDetailRead {
@@ -323,6 +425,11 @@ export function createTournament(body: TournamentCreate): TournamentRead {
     status: 'draft',
     start_date: body.start_date ?? null,
     end_date: body.end_date ?? null,
+    // An omitted `league_id` resolves to the default league, exactly as on the
+    // server (ADR-0783): the column is NOT NULL, so a created tournament always
+    // names the ladder it will be judged on — the caller only says which when it
+    // is not the default. No client surface sends one yet.
+    league_id: body.league_id ?? DEFAULT_LEAGUE_ID,
     address: body.address,
     table_catalogue: body.table_catalogue ?? [],
     created_by_user_id: DEV_USER_ID,
@@ -346,21 +453,46 @@ export type EventResult =
 
 export type DeleteResult = { ok: true } | { ok: false; status: 403 | 404 }
 
-/** Entering can fail four ways, mirroring the API: 404 (no such tournament or
- * event), 400 (not a singles event), 409 (registration is closed, or already
- * actively entered). Both 409s carry the server's `detail` verbatim, because the
- * copy is what the player is shown. A 403 for a missing `tournament.enter`
- * permission is the session's business, not the store's — the dev session always
- * holds it. */
+/** A refused entry, in the API's own vocabulary (ADR-0968,
+ * `api/app/tournament_entry_refusals.py`): a machine-readable `code` the client
+ * switches on, and a `message` it falls back to only for a code it does not know.
+ * The mock speaks the same two-part refusal so a test that drives an entry 409
+ * exercises the client's *code* path, not a string it will never meet. */
+export type EntryRefusalCode =
+  | 'already_entered'
+  | 'registration_closed'
+  // #783's two: the event has no room left, and the caller's rating fails one of
+  // its rules. A mock that answered these with a 201 would be MORE permissive than
+  // the server it stands in for — and a UI that still offered Enter on a full event
+  // would look perfect in `npm run dev`.
+  | 'event_full'
+  | 'rating_ineligible'
+
+export interface EntryRefusal {
+  code: EntryRefusalCode
+  message: string
+}
+
+/** Entering can fail six ways, mirroring the API: 404 (no such tournament or
+ * event), 400 (not a singles event), and a 409 for each of the four refusals —
+ * registration closed, already entered, rating-ineligible, event full. Every 409
+ * is a coded `EntryRefusal` (ADR-0968) — the shape the route really sends. A 403
+ * for a missing `tournament.enter` permission is the session's business, not the
+ * store's — the dev session always holds it. */
 export type EnterResult =
   | { ok: true; entrant: TournamentEntrantRead }
   | { ok: false; status: 400 | 404 }
-  | { ok: false; status: 409; detail: string }
+  | { ok: false; status: 409; refusal: EntryRefusal }
 
 /** Withdrawing fails with a 403 when the entry is someone else's, and a 409 when
  * the tournament's registration window is shut and the entry is still active.
  * Withdrawing an entry that is already gone is idempotent (`ok`) — in *every*
- * status — as on the server. */
+ * status — as on the server.
+ *
+ * Its 409 stays a bare `detail` STRING, unlike `enterEvent`'s: ADR-0968 converted
+ * the *entry* endpoint's refusals to codes and left the withdraw route's prose
+ * alone (#968 stays open against it). The mock is not allowed to be tidier than
+ * the server it stands in for. */
 export type WithdrawResult =
   | { ok: true }
   | { ok: false; status: 403 | 404 }
@@ -647,15 +779,51 @@ export function enterEvent(
   // with the fact that will not change.
   const closed = registrationClosedDetail(existing)
   // 409, not 403 (ADR-0017): the caller is permitted and the entry would be their
-  // own — the *tournament* is in the wrong state. "Not now", never "not you".
-  if (closed !== null) return { ok: false, status: 409, detail: closed }
+  // own — the *tournament* is in the wrong state. "Not now", never "not you". The
+  // code is what the client reads; the per-status sentence rides along as the
+  // message, exactly as the server sends it (ADR-0968).
+  if (closed !== null) {
+    return {
+      ok: false,
+      status: 409,
+      refusal: { code: 'registration_closed', message: closed },
+    }
+  }
   // The server's partial unique index, in miniature: at most one *active* entry
-  // per player per event. A second one is a 409, never a second row.
+  // per player per event. A second one is a 409, never a second row. It is asked
+  // BEFORE the event's own refusals below, exactly as the client's
+  // `entryControlState` asks it: a player who is already in a full event is
+  // already in — telling them the event is full would be true and useless.
   if (event.entrants.some((e) => e.user_id === DEV_USER_ID)) {
     return {
       ok: false,
       status: 409,
-      detail: 'You have already entered this event.',
+      refusal: {
+        code: 'already_entered',
+        message: 'You have already entered this event.',
+      },
+    }
+  }
+  // Eligibility BEFORE capacity (ADR-0783): an ineligible player looking at a full
+  // event is told they are ineligible, because "it's full" would invite them back
+  // for a place that will never be theirs. The wording is the server's fallback
+  // sentence; the CODE is what the client actually reads (ADR-0968).
+  const refusal = readEvent(event).entry_state
+  if (refusal.state === 'rating_ineligible') {
+    return {
+      ok: false,
+      status: 409,
+      refusal: {
+        code: 'rating_ineligible',
+        message: 'Your rating does not meet this event’s eligibility rules.',
+      },
+    }
+  }
+  if (refusal.state === 'event_full') {
+    return {
+      ok: false,
+      status: 409,
+      refusal: { code: 'event_full', message: 'This event is full.' },
     }
   }
   entryCounter += 1
@@ -664,6 +832,7 @@ export function enterEvent(
     user_id: DEV_USER_ID,
     username: DEV_USERNAME,
     seed: null,
+    rating: DEV_USER_RATING,
   }
   const next: StoredEvent = { ...event, entrants: [...event.entrants, entrant] }
   replace({

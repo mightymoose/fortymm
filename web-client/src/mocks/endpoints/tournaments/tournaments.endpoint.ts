@@ -3,7 +3,7 @@ import { type HttpResponseResolver, http } from 'msw'
 import type { components } from '@/api/schema'
 import type { server } from '../../server'
 import type { worker } from '../../browser'
-import type { ErrorBody, ValidationErrorBody } from '../error-body'
+import type { CodedErrorBody, ErrorBody, ValidationErrorBody } from '../error-body'
 
 type Backend = typeof server | typeof worker
 type TournamentDetailRead = components['schemas']['TournamentDetailRead']
@@ -155,13 +155,19 @@ export const mockEventDeleteEndpoint = (
   )
 
 /** Resolver for the enter-event endpoint — the created `TournamentEntrantRead`
- * (201), or an error envelope: 409 (already entered), 400 (not a singles event),
- * 403 (no `tournament.enter` permission). The request has **no body**: the caller
- * is the entrant. */
+ * (201), or an error envelope: a **coded** 409 for every refusal (ADR-0968:
+ * `already_entered`, `registration_closed`, …), a plain 400 (not a singles event)
+ * / 403 (no `tournament.enter` permission) / 404. The request has **no body**: the
+ * caller is the entrant.
+ *
+ * The refusal 409 is a `CodedErrorBody`, so a test that drives one has to send the
+ * `{code, message}` the route really sends — a bare-string 409 no longer type-checks
+ * here, which is what stops a stub from re-introducing the copy-matching the client
+ * just stopped doing. */
 export type EventEnterResolver = HttpResponseResolver<
   { tournamentId: string; eventId: string },
   never,
-  components['schemas']['TournamentEntrantRead'] | ErrorBody
+  components['schemas']['TournamentEntrantRead'] | ErrorBody | CodedErrorBody
 >
 
 /** POST /v1/tournaments/{id}/events/{eventId}/entries — enter the event. */

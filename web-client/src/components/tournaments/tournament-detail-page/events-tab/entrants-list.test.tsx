@@ -3,6 +3,7 @@ import {
   ENTRY_CLOSED_COPY,
   entrantsListPage as page,
   NO_ENTRANTS_COPY,
+  UNRATED_TAG,
 } from './entrants-list.page'
 
 const EVENT = 'Open Singles'
@@ -272,6 +273,142 @@ describe('EntrantsList', () => {
       expect(page.getEntrantNames(EVENT)[0]).toBe('player.1')
       expect(page.queryTruncationTail(EVENT)).toHaveTextContent('+44 more')
       expect(page.queryYouTag(EVENT)).toBeNull()
+    })
+  })
+
+  /**
+   * ADR-0783 §3, the visible half.
+   *
+   * An unrated player **passes every rating rule** — `rating < 1500` admits someone
+   * who holds no rating at all — because the alternative bars a beginner from the
+   * beginners' event. The accepted cost is that a rating cap becomes **opt-out**:
+   * never play a rated match, stay unrated, stay eligible for every capped event.
+   *
+   * The mitigation is *this list*. The director is the only person who can act on a
+   * ringer (they may withdraw them, #784), and they can only act on what they can
+   * see. So an unrated entrant is marked — and marked in a **word**, because a
+   * colour-only mark is no mark at all to a director who cannot see it, and a
+   * screen reader reads the DOM, not the hue.
+   */
+  describe('an unrated entrant — the visible loophole', () => {
+    /** A roster the director must be able to read the loophole off: one rated
+     * player, one who holds no rating on the tournament's ladder. */
+    const mixedRoster = () =>
+      buildEvent({
+        name: EVENT,
+        entrants: [
+          buildEntrant({ id: 'e-1', username: 'rita.kovac', rating: 1720 }),
+          buildEntrant({ id: 'e-2', username: 'sam.oduya', rating: null }),
+        ],
+      })
+
+    it('marks the entrant who holds no rating, and only them', () => {
+      page.render({ event: mixedRoster() })
+
+      // WHO is marked is the assertion — a count alone would pass with the mark on
+      // the wrong chip, which is the same lie as no mark at all.
+      expect(page.getUnratedNames(EVENT)).toEqual(['sam.oduya'])
+    })
+
+    it('states it in a WORD, so the mark is not a colour a director cannot see', () => {
+      page.render({ event: mixedRoster() })
+
+      // The text is in the DOM, inside the chip it belongs to: that is what a
+      // screen reader announces ("sam.oduya, Unrated") and what survives a
+      // greyscale monitor, a colour-blind reader and a high-contrast theme. A
+      // tint would satisfy none of the three, and no test could tell.
+      const [tag] = page.getUnratedTags(EVENT)
+      expect(tag).toHaveTextContent(UNRATED_TAG)
+      expect(tag.closest('li')).toHaveTextContent('sam.oduya')
+    })
+
+    it('leaves a rated entrant unmarked and unadorned', () => {
+      page.render({ event: mixedRoster() })
+
+      // Both chips are still there — the mark is an addition to a roster, not a
+      // filter over it.
+      expect(page.getEntrantNames(EVENT)).toEqual(['rita.kovac', 'sam.oduya'])
+      expect(page.getUnratedTags(EVENT)).toHaveLength(1)
+    })
+
+    it("does not print a rated entrant's rating number", () => {
+      // A DECISION, pinned: only the *absence* of a rating is shown. The server
+      // already judged every rated entrant against the event's rules when they
+      // entered (ADR-0783 — eligibility is computed in exactly one place), so their
+      // number is not actionable; printing eight of them would bury the one chip
+      // that is. The audit view is the draw sheet's (#785).
+      page.render({ event: mixedRoster() })
+
+      expect(page.getEntrantsList(EVENT)).not.toHaveTextContent('1720')
+    })
+
+    it('marks nobody when the whole roster is rated', () => {
+      page.render({ event: buildEvent({ name: EVENT, entrants: buildEntrants(3) }) })
+
+      expect(page.getUnratedTags(EVENT)).toHaveLength(0)
+    })
+
+    it('renders normally when EVERY entrant is unrated', () => {
+      // The degenerate roster: a brand-new club's first beginners' event, where
+      // nobody has finished a rated match yet. Every chip is marked, the list is
+      // still a list, and it is still inert.
+      page.render({
+        event: buildEvent({
+          name: EVENT,
+          entrants: buildEntrants(4, { rating: null }),
+        }),
+      })
+
+      expect(page.getEntrantItems(EVENT)).toHaveLength(4)
+      expect(page.getUnratedNames(EVENT)).toEqual([
+        'player.1',
+        'player.2',
+        'player.3',
+        'player.4',
+      ])
+      expect(page.queryEmptyCopy()).toBeNull()
+      expect(page.queryAllButtons()).toHaveLength(0)
+    })
+
+    it('marks the signed-in player when it is THEY who are unrated', () => {
+      // The mark follows the fact, not the stranger: my own chip is pinned and
+      // accented *and* marked. A rule that only ever marked other people would hide
+      // the opt-out from the one person taking it.
+      const me = buildEntrant({
+        id: 'entry-me',
+        userId: 'u-me',
+        username: 'rita.kovac',
+        rating: null,
+      })
+      page.render({
+        event: buildEvent({
+          name: EVENT,
+          entrants: [buildEntrant({ id: 'e-1', username: 'player.1' }), me],
+        }),
+        username: 'rita.kovac',
+      })
+
+      expect(page.getUnratedNames(EVENT)).toEqual(['rita.kovac'])
+      expect(page.queryYouTag(EVENT)).toBeInTheDocument()
+    })
+
+    it('marks an unrated entrant hoisted into a truncated roster', () => {
+      // The two rules compose: the pin REORDERS, the mark ANNOTATES, and neither
+      // consumes the other. 52 rated strangers plus unrated me, shown 8-at-a-time.
+      const me = buildEntrant({
+        id: 'entry-me',
+        userId: 'u-me',
+        username: 'rita.kovac',
+        rating: null,
+      })
+      page.render({
+        event: buildEvent({ name: EVENT, entrants: [...buildEntrants(52), me] }),
+        username: 'rita.kovac',
+      })
+
+      expect(page.getEntrantNames(EVENT)[0]).toBe('rita.kovac')
+      expect(page.getUnratedNames(EVENT)).toEqual(['rita.kovac'])
+      expect(page.queryTruncationTail(EVENT)).toHaveTextContent('+45 more')
     })
   })
 

@@ -14,6 +14,15 @@ const scoped = (container: Container) => ({
   queryValueInput() {
     return container.queryByLabelText('Value')
   },
+  /** The `between` operator's two value controls — it is the one rule whose
+   * value is a `[min, max]` tuple rather than a scalar, so it has two inputs
+   * where every other operator has the single `Value` one. */
+  getLowerBoundInput() {
+    return container.getByLabelText('Lower bound')
+  },
+  getUpperBoundInput() {
+    return container.getByLabelText('Upper bound')
+  },
   getRemoveButton() {
     return container.getByRole('button', { name: 'Remove rule' })
   },

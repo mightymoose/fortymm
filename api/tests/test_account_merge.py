@@ -375,6 +375,14 @@ async def test_merge_skips_membership_when_target_already_a_member(
     assert user_ids == [verified.id]
 
 
+async def _default_league_id(db: AsyncSession) -> uuid.UUID:
+    """The default league's id — ``tournaments.league_id`` is NOT NULL (ADR-0783)
+    and nothing in this file turns on *which* ladder a tournament is run on."""
+    league = await get_default_league(db)
+    assert league is not None, "the autouse default_league fixture seeds this"
+    return league.id
+
+
 async def test_merge_repoints_tournament_ownership(db_session: AsyncSession):
     """``tournaments.created_by_user_id`` is RESTRICT on delete; the merge
     re-points it to the verified user so the final tombstone delete isn't
@@ -384,6 +392,7 @@ async def test_merge_repoints_tournament_ownership(db_session: AsyncSession):
 
     tournament = Tournament(
         name="Guest Cup",
+        league_id=await _default_league_id(db_session),
         created_by_user_id=ephemeral.id,
         address={
             "venue": "Berkeley TT Club",
@@ -441,6 +450,7 @@ async def _make_event(db: AsyncSession, owner: User) -> TournamentEvent:
     counter to set: the count is derived from the entries themselves."""
     tournament = Tournament(
         name="Guest Cup",
+        league_id=await _default_league_id(db),
         created_by_user_id=owner.id,
         address={
             "venue": "Berkeley TT Club",

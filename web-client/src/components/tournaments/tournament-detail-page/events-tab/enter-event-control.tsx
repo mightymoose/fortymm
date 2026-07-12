@@ -33,13 +33,19 @@ export interface EnterEventControlProps {
  *   caller* that nothing on this page will change. There is no state to report.
  * - It renders a **designed state** — muted copy, still not a disabled button —
  *   when the tournament is `draft` (registration has not opened), `live` or
- *   `archived` (entries are locked). Those are facts about *the tournament*, and
- *   they change: publishing opens the window, going live shuts it. Rendering
- *   nothing would tell a player the event has no entry at all; rendering Enter
- *   would offer a button whose only possible outcome is a 409.
+ *   `archived` (entries are locked), when the event is **full**, and when the
+ *   player's rating makes them **ineligible** for it. Those are facts about *the
+ *   tournament* and *the event*, and they change: publishing opens the window,
+ *   going live shuts it, a withdrawal frees a place. Rendering nothing would tell
+ *   a player the event has no entry at all; rendering Enter would offer a button
+ *   whose only possible outcome is a 409.
  *
- * Nothing here is a *capacity* gate: a full event still offers Enter, because
- * capacity is enforced (and refused) server-side later (#783).
+ * Issue #783 asked for the Enter button to be *disabled* on a full or ineligible
+ * event. It is not: ADR-0015 is the house rule, and a disabled button is an
+ * unexplained dead end — the affordance is hidden and the reason takes its place,
+ * which is the path the closed window already took. The words come from the entry
+ * refusal table (`data/entry-refusal.ts`) — the same words the 409 on Enter would
+ * have produced, because it is the same refusal, learned earlier.
  *
  * The entry count on the card is derived from the same `entrants` this reads, and
  * both mutations invalidate the tournament — so the count and the control refresh
@@ -85,6 +91,33 @@ export const EnterEventControl = ({
         />
       )
 
+    // The event's own refusals (#783), told the same way and for the same reason:
+    // there is no button, because there is no request this page could make that
+    // would succeed — only a reason, in the words the refusal table owns. They get
+    // test ids of their own because they are different *states*, and a test that
+    // could not tell "full" from "ineligible" could not prove either.
+    case 'full':
+      return (
+        <LeadReason
+          testId="event-full-notice"
+          layout="stacked"
+          lead={state.lead}
+          reason={state.reason}
+          className="max-w-[190px] text-right"
+        />
+      )
+
+    case 'ineligible':
+      return (
+        <LeadReason
+          testId="ineligible-notice"
+          layout="stacked"
+          lead={state.lead}
+          reason={state.reason}
+          className="max-w-[190px] text-right"
+        />
+      )
+
     case 'withdraw':
       return (
         <Button
@@ -115,7 +148,7 @@ export const EnterEventControl = ({
       )
 
     default: {
-      // A fifth state without a branch is a TYPE error here, not a card that
+      // A new state without a branch is a TYPE error here, not a card that
       // silently renders nothing — the failure mode this whole component exists
       // to avoid.
       const exhaustive: never = state

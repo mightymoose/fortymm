@@ -79,8 +79,8 @@ describe('EligibilitySection', () => {
       })
 
       const [first, second] = eligibilitySectionPage.queryRows()
-      expect(first).toHaveTextContent('USATT rating is less than 1500')
-      expect(second).toHaveTextContent('USATT rating is between 1200 and 1500')
+      expect(first).toHaveTextContent('Rating is less than 1500')
+      expect(second).toHaveTextContent('Rating is between 1200 and 1500')
     })
 
     // Column headers label controls. With no controls they label nothing.

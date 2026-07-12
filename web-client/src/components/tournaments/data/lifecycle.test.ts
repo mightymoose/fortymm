@@ -6,7 +6,14 @@ import {
   LIFECYCLE_EDGE,
   REGISTRATION_WINDOW,
 } from './lifecycle'
-import { buildEntrant, buildEvent, buildTournament } from './seed.factory'
+import {
+  buildEntrant,
+  buildEntrants,
+  buildEvent,
+  buildFullEvent,
+  buildIneligibleEvent,
+  buildTournament,
+} from './seed.factory'
 import type { TournamentStatus } from './types'
 
 describe('LIFECYCLE_EDGE', () => {
@@ -157,6 +164,85 @@ describe('entryControlState', () => {
       kind: 'closed',
       lead: 'Not open yet',
     })
+  })
+
+  // ----- what the EVENT itself says (#783, ADR-0783) ------------------------
+
+  // A full event explains itself. It does NOT offer Enter — #783's own text asked
+  // for a *disabled* button and we are deliberately not giving it one: ADR-0015
+  // hides the affordance and puts the reason where it was.
+  it('reports a FULL event instead of offering an Enter that could only 409', () => {
+    expect(state({ event: buildFullEvent() })).toEqual({
+      kind: 'full',
+      lead: 'Event full',
+      reason: 'Every place in this event has been taken.',
+    })
+  })
+
+  // ⚠️ THE TRAP. An entrant in a full event must still be able to LEAVE it —
+  // membership is judged before the event's refusals. Get this backwards and the
+  // full event (the normal end state of a popular one) locks in everyone already
+  // inside it, silently, with a notice where their Withdraw button used to be.
+  it('still offers WITHDRAW to a player who already holds an entry in a FULL event', () => {
+    const fullWithMe = buildFullEvent({
+      maxPlayers: 4,
+      entrants: [...buildEntrants(3), myEntry],
+    })
+
+    // Full by the server's own reckoning — 4 of 4 — and yet:
+    expect(fullWithMe.entryState).toEqual({ state: 'event_full' })
+    expect(state({ event: fullWithMe })).toEqual({
+      kind: 'withdraw',
+      entryId: 'entry-me',
+    })
+  })
+
+  // The rules are the server's to judge (ADR-0783 — the client never re-derives
+  // them from the raw `predicates` JSON), but the WORDS are the client's, and they
+  // are specific: the rule that refused you, read back out of the event's own
+  // predicates by id, and the rating you were judged on. "Not eligible" alone is a
+  // fact nobody can act on.
+  it('names the rule that refused an INELIGIBLE player, and the rating it judged', () => {
+    expect(state({ event: buildIneligibleEvent() })).toEqual({
+      kind: 'ineligible',
+      lead: 'Not eligible',
+      reason: 'Rating is less than 1500. Your rating is 1650.',
+    })
+  })
+
+  // The rule the refusal points at was edited away under a stale page. Falling back
+  // to the generic copy is the honest degrade; half a sentence ("Rating is . Your
+  // rating is 1650.") would not be.
+  it('falls back to generic copy when the refusing rule is not on the event', () => {
+    const stale = buildIneligibleEvent({ predicates: [] })
+
+    expect(state({ event: stale })).toEqual({
+      kind: 'ineligible',
+      lead: 'Not eligible',
+      reason: "Your rating doesn't meet this event's eligibility rules.",
+    })
+  })
+
+  // Both refusals are facts about the EVENT + the caller — they say nothing about
+  // the window, which is judged first. A shut tournament is still shut, and that is
+  // the reason a player is shown, because it is the one that will change first.
+  it.each([
+    { kind: 'full', event: buildFullEvent() },
+    { kind: 'ineligible', event: buildIneligibleEvent() },
+  ] as const)(
+    'reports the shut WINDOW ahead of $kind — the tournament outranks the event',
+    ({ event }) => {
+      expect(state({ status: 'draft', event })).toMatchObject({ kind: 'closed' })
+    },
+  )
+
+  // …and the caller-level facts still outrank everything: a viewer without
+  // `tournament.enter` is told nothing about a full event they could never enter.
+  it.each([
+    { kind: 'full', event: buildFullEvent() },
+    { kind: 'ineligible', event: buildIneligibleEvent() },
+  ] as const)('stays hidden for an unpermitted viewer of a $kind event', ({ event }) => {
+    expect(state({ event, canEnter: false })).toEqual({ kind: 'hidden' })
   })
 })
 
