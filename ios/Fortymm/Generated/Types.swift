@@ -5303,7 +5303,30 @@ internal enum Components {
                 ])
             }
         }
-        /// A user's rating delta on a single completed match.
+        /// What one completed match did to a player's rating — and there are two kinds
+        /// of that, not one.
+        ///
+        /// A player who was already rated MOVED: ``1338 → 1503``, ``delta`` ``+165``.
+        ///
+        /// A player whose FIRST rated match this is was **ESTABLISHED** by it: they were
+        /// Unrated going in (CONTEXT.md, "Rating": a player who has never finished a rated
+        /// match has no rating), and they came out at 1268. They did not *lose* 232 points
+        /// of the 1500 their league-join seeded them with — they never held it. So
+        /// ``before`` is ``None`` and there is NO delta: nothing moved, a rating came into
+        /// existence. `Unrated → 1268`.
+        ///
+        /// The seeded 1500 is real in the WRITE side and stays there: the Glicko-2 update
+        /// genuinely starts from the strategy's initial state, and ``previous_rating_value``
+        /// records it faithfully. This model is where the read side declines to narrate
+        /// that prior as a rating the player fell from — the same refusal
+        /// ``app.ratings.rated`` makes for rating / rank / peak / confidence. The caller
+        /// supplies the one fact the row cannot know on its own (``had_rating_before``, an
+        /// earlier change exists), because "was I rated?" is a question about the player's
+        /// history, not about this row.
+        ///
+        /// ``delta`` is COMPUTED, never stored beside its own inputs (api/CLAUDE.md): a
+        /// ``RatingChange(before=None, delta=-232.0)`` — precisely the phantom of #952 — is
+        /// not constructible.
         ///
         /// - Remark: Generated from `#/components/schemas/RatingChange`.
         internal struct RatingChange: Codable, Hashable, Sendable {
@@ -5311,18 +5334,27 @@ internal enum Components {
             internal var before: Swift.Double?
             /// - Remark: Generated from `#/components/schemas/RatingChange/after`.
             internal var after: Swift.Double
+            /// How far the rating MOVED, or ``None`` when it was established rather than
+            /// moved.
+            ///
+            /// Two distinct nulls reach a client and they mean different things: a null
+            /// *``RatingChange``* is "this match moved no rating at all" (unrated, undecided
+            /// or voided); a null ``delta`` INSIDE a present change is "this is the rating
+            /// you got, and there was nothing before it to measure from". A ``0.0`` here
+            /// would claim a rated match moved a rating by nothing.
+            ///
             /// - Remark: Generated from `#/components/schemas/RatingChange/delta`.
-            internal var delta: Swift.Double
+            internal var delta: Swift.Double?
             /// Creates a new `RatingChange`.
             ///
             /// - Parameters:
             ///   - before:
             ///   - after:
-            ///   - delta:
+            ///   - delta: How far the rating MOVED, or ``None`` when it was established rather than
             internal init(
                 before: Swift.Double? = nil,
                 after: Swift.Double,
-                delta: Swift.Double
+                delta: Swift.Double? = nil
             ) {
                 self.before = before
                 self.after = after

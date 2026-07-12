@@ -36,10 +36,12 @@ export type RatingPanelView = {
   /** The rounded league rating, or `null` for a player who has never finished a
    * rated match — the display reads "Unrated". */
   rating: number | null
-  /** `null` when there is no rated match to have moved the rating. The chip is
-   * then suppressed *entirely*: a player with no rating history has not held
-   * steady at "+0", they simply have no delta (`RatingChange | None` on the
-   * wire — never a zero). */
+  /** `null` when no rated match has *moved* the rating — either because there is
+   * none, or because the only one there is *established* the rating (a null
+   * `delta` inside a present `rating_change`). The chip is then suppressed
+   * *entirely*: a player has not held steady at "+0" and has certainly not
+   * fallen from the 1500 their league-join seeded — they simply have no delta
+   * (#952). */
   delta: RatingDeltaView | null
   /** Rank, peak and percentile, in that order — each present only when the
    * player has it. An unrated player has none of them: no rating, no rank
@@ -72,7 +74,16 @@ const selectForm = (form: string): FormChipsView | null => {
 const selectDelta = (
   ratingDelta: PlayerDetail['rating_delta'],
 ): RatingDeltaView | null => {
+  // Two nulls reach us here and both suppress the chip, for two different
+  // reasons:
+  //   - no `rating_delta` at all → no rated match has moved this rating;
+  //   - a `rating_delta` whose `delta` is null → the player's most recent rated
+  //     match was their FIRST, so it *established* the rating rather than moving
+  //     it. They did not gain or lose anything — there was nothing to gain from
+  //     (#952). The hero already says the rating; a chip would have to invent a
+  //     direction for it.
   if (ratingDelta == null) return null
+  if (ratingDelta.delta === null) return null
   return {
     label: formatRatingDelta(ratingDelta.delta),
     ariaLabel: formatRatingDeltaAria(ratingDelta.delta),

@@ -30,7 +30,7 @@ from app.models import (
     UserLeagueRating,
 )
 from app.ratings import RatingStrategyKey, parse_strategy_key
-from app.ratings.rated import is_rated_member, is_rating_change
+from app.ratings.rated import had_rating_before, is_rated_member, is_rating_change
 from app.ratings.stats import (
     current_streak_for_user,
     league_peak_rating,
@@ -178,24 +178,28 @@ async def _load_my_rating_changes(
     user_id: uuid.UUID,
     match_ids: Sequence[uuid.UUID],
 ) -> dict[uuid.UUID, RatingChange]:
+    """``match_id -> RatingChange`` for this user's rows on the given matches, in one
+    round trip.
+
+    ``had_rating_before()`` rides with each row so the Δ column can tell a MOVE from
+    an ESTABLISHMENT: the user's first rated match has no delta to show — it gave
+    them the rating rather than changing one (#952)."""
     if not match_ids:
         return {}
     rows = (
-        (
-            await db.execute(
-                select(RatingHistory).where(
-                    RatingHistory.match_id.in_(match_ids),
-                    RatingHistory.user_id == user_id,
-                )
+        await db.execute(
+            select(RatingHistory, had_rating_before().label("had_rating_before")).where(
+                RatingHistory.match_id.in_(match_ids),
+                RatingHistory.user_id == user_id,
             )
         )
-        .scalars()
-        .all()
-    )
+    ).all()
     changes: dict[uuid.UUID, RatingChange] = {}
-    for row in rows:
+    for row, was_rated in rows:
         assert row.match_id is not None  # IN-filtered to non-null match_ids
-        changes[row.match_id] = RatingChange.from_history(row)
+        changes[row.match_id] = RatingChange.from_history(
+            row, had_rating_before=was_rated
+        )
     return changes
 
 

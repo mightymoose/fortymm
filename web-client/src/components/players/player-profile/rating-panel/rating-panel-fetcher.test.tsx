@@ -1,6 +1,7 @@
 import { HttpResponse } from 'msw'
 
 import {
+  buildJustRatedPlayerDetail,
   buildPlayerDetail,
   buildUnratedPlayerDetail,
 } from '@/mocks/factories/players/player-detail.factory'
@@ -39,6 +40,25 @@ describe('RatingPanelFetcher', () => {
     await waitForElementToBeRemoved(ratingPanelFetcherPage.queryLoading())
     expect(ratingPanelFetcherPage.getRating()).toHaveTextContent('Unrated')
     expect(ratingPanelFetcherPage.queryStat('Rank')).toBeNull()
+    expect(ratingPanelFetcherPage.queryDelta()).not.toBeInTheDocument()
+  })
+
+  it('shows a just-rated player their new rating and NO delta chip', async () => {
+    // Their first rated match ESTABLISHED this rating (a present `rating_delta`
+    // whose `delta` is null) — it did not move one. So the hero prints the
+    // number, and the chip is suppressed: they did not gain 1268 and they
+    // certainly did not lose 232 off the 1500 their league-join seeded (#952).
+    ratingPanelFetcherPage.mockEndpoint(() =>
+      HttpResponse.json(buildJustRatedPlayerDetail()),
+    )
+
+    ratingPanelFetcherPage.render()
+
+    await waitForElementToBeRemoved(ratingPanelFetcherPage.queryLoading())
+    // Unlike the unrated player above, this one HAS a rating — the two null
+    // deltas must not collapse into one "no rating" state.
+    expect(ratingPanelFetcherPage.getRating()).toHaveTextContent('1268')
+    expect(ratingPanelFetcherPage.getRating()).not.toHaveTextContent('Unrated')
     expect(ratingPanelFetcherPage.queryDelta()).not.toBeInTheDocument()
   })
 

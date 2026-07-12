@@ -2,6 +2,7 @@ import { HttpResponse } from 'msw'
 
 import { playerByIdQueryOptions } from '@/api/players'
 import {
+  buildEstablishedRatingChange,
   buildPlayerDetail,
   buildRatingChange,
   buildUnratedPlayerDetail,
@@ -63,7 +64,7 @@ describe('ratingPanelQuery', () => {
 
   it('signs the rating delta from the most recent rated match', async () => {
     const view = await selectFrom({
-      rating_delta: buildRatingChange({ before: 1675, after: 1687, delta: 12 }),
+      rating_delta: buildRatingChange({ before: 1675, after: 1687 }),
     })
 
     expect(view.delta).toEqual({
@@ -75,7 +76,7 @@ describe('ratingPanelQuery', () => {
 
   it('tones a losing delta as a loss', async () => {
     const view = await selectFrom({
-      rating_delta: buildRatingChange({ before: 1695, after: 1687, delta: -8 }),
+      rating_delta: buildRatingChange({ before: 1695, after: 1687 }),
     })
 
     expect(view.delta?.label).toBe('-8')
@@ -86,6 +87,38 @@ describe('ratingPanelQuery', () => {
     const view = await selectFrom({ rating_delta: null })
 
     expect(view.delta).toBeNull()
+  })
+
+  it('has NO chip when the rating was ESTABLISHED rather than moved', async () => {
+    // The second null, and it is a different fact from the first: the change is
+    // PRESENT (they are rated now, at 1268) but its `delta` is null, because
+    // their first rated match gave them a rating rather than moving one. They
+    // did not gain and did not lose — so no chip, and above all not a "−232"
+    // measured off the 1500 their league-join seeded (#952).
+    const view = await selectFrom({
+      rating: 1268,
+      rating_delta: buildEstablishedRatingChange({ after: 1268 }),
+    })
+
+    expect(view.delta).toBeNull()
+    expect(view.rating).toBe(1268)
+  })
+
+  it('keeps the two nulls apart — an established rating still renders the rating itself', async () => {
+    // A guard against re-collapsing the cases: a player with no rating at all
+    // shows "Unrated" (a null rating); a just-established one shows their number.
+    // Both show no chip, and that shared silence must not be mistaken for
+    // sameness.
+    const unrated = await selectFrom({ rating: null, rating_delta: null })
+    const established = await selectFrom({
+      rating: 1268,
+      rating_delta: buildEstablishedRatingChange({ after: 1268 }),
+    })
+
+    expect(unrated.rating).toBeNull()
+    expect(unrated.delta).toBeNull()
+    expect(established.rating).toBe(1268)
+    expect(established.delta).toBeNull()
   })
 
   it('projects all ten form results, newest first', async () => {

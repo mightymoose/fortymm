@@ -1020,10 +1020,18 @@ async def test_get_player_match_row_carries_the_rating_the_match_moved(
 ):
     """A decided, rated row carries the rating THAT match moved for THIS player
     — the row's Δ column — read from the match's ``rating_history`` row and
-    flipped to the headline player (the winner gained what the loser lost)."""
+    flipped to the headline player (the winner gained what the loser lost).
+
+    Both players HOLD a rating before this match (``_earn_rating``), which is what
+    makes it a MOVE and gives the row a ``before`` and a delta to report. A player's
+    first rated match is the other case entirely — it establishes their rating rather
+    than moving it, and reports neither (#952,
+    ``test_get_player_first_rated_match_establishes_the_rating_it_reports``)."""
     await start_session(api_client, db_session)
     winner = await make_user(db_session, "delta.winner")
     loser = await make_user(db_session, "delta.loser")
+    await _earn_rating(db_session, winner, 1500.0)
+    await _earn_rating(db_session, loser, 1500.0)
     match = await _record_match_with_winner(
         db_session, winner, loser, created_at=BASE_TIME, affects_rating=True
     )
@@ -1055,10 +1063,16 @@ async def test_get_player_rating_change_is_null_when_undecided_or_unrated(
 
     Covers all three shapes on one profile: a rated decided win (a real delta),
     an unrated decided win (no delta — an unrated match moves no rating), and a
-    rated match still in play (no delta yet)."""
+    rated match still in play (no delta yet).
+
+    ``target`` already HOLDS a rating (``_earn_rating``), so the rated win below moves
+    it and has a delta to report. Their first rated match would not — it would
+    establish the rating instead (#952) — and that is a third kind of null, on the
+    ``delta`` INSIDE a present change rather than on the change itself."""
     await start_session(api_client, db_session)
     target = await make_user(db_session, "null.target")
     rival = await make_user(db_session, "null.rival")
+    await _earn_rating(db_session, target, 1500.0)
 
     rated = await _record_match_with_winner(
         db_session, target, rival, created_at=BASE_TIME, affects_rating=True
@@ -1371,8 +1385,14 @@ async def test_get_player_standing_is_scoped_to_the_requested_league(
     await db_session.commit()
     await db_session.refresh(side_league)
 
-    # On the default ladder: one rated win, 1500 → 1520.
+    # On the default ladder: they already HOLD 1500 (a manual override gave it to
+    # them — the cheapest production shape that carries provenance), then a rated win
+    # MOVES it: 1500 → 1520. Without the earlier row this match would be their first,
+    # which establishes a rating rather than moving one and so reports no delta at all
+    # (#952) — a different case, and not this test's subject.
     await _rate(db_session, target, 1520.0)
+    db_session.add(_provenance(target, home_league, 1500.0))
+    await db_session.commit()
     home = await _record_match_with_winner(
         db_session, target, rival, created_at=BASE_TIME, affects_rating=True
     )
@@ -4104,10 +4124,13 @@ async def test_get_player_one_completed_rated_match_makes_them_rated(
     assert body["rank"] == 1
     assert body["rank_of"] == 2
     assert body["peak"] == body["rating"]
-    # The Δ their last rated match moved them, from the seed they started at.
-    assert body["rating_delta"]["before"] == 1500.0
+    # Their last rated match is also their FIRST, so it ESTABLISHED this rating — it
+    # did not move them UP from the 1500 prior they were seeded with, because they
+    # never held that (#952). No `before`, no delta: the hero shows the rating and
+    # suppresses the Δ chip. You didn't gain anything; you got rated.
+    assert body["rating_delta"]["before"] is None
+    assert body["rating_delta"]["delta"] is None
     assert body["rating_delta"]["after"] == body["rating"]
-    assert body["rating_delta"]["delta"] > 0
     # The confidence card renders now — and is talking about a rating that exists.
     assert body["confidence"] is not None
     assert body["confidence"]["deviation"] < 350.0
@@ -4118,6 +4141,44 @@ async def test_get_player_one_completed_rated_match_makes_them_rated(
     assert history["anchor"] is None
     # The Leagues card carries the same rating the hero does.
     assert [row["rating"] for row in body["leagues"]] == [body["rating"]]
+
+
+async def test_get_player_first_rated_match_establishes_the_rating_it_reports(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """The Recent-matches Δ column, for the LOSER of a first rated match — the exact
+    shape QA caught on the match page (#952).
+
+    They are a session-minted guest, so they carry the production seed: a 1500
+    ``UserLeagueRating`` and an ``initial`` history row (asserted, not assumed). They
+    then LOSE their first rated match, and Glicko-2 — starting, correctly, from that
+    1500 prior — lands them somewhere near 1340.
+
+    What the row must NOT say is "1500 → 1340, −160". They never held 1500. They were
+    Unrated going in, by the same definition every other surface on this page uses,
+    and this match is what gave them a rating. So: no ``before``, no ``delta``, and an
+    ``after`` they can be told about honestly.
+
+    The seed is what makes this discriminating: a fix that merely asked "is there an
+    earlier rating-history row?" would find the ``initial`` one and report the phantom
+    1500 all over again.
+    """
+    await start_session(api_client, db_session)
+    target_client, target = await _guest(db_session, "first.timer")
+    await _assert_carries_the_production_seed(db_session, target)
+    async with opponent_session(db_session, "first.rival") as (rival_client, rival):
+        await _play(target_client, rival_client, rival.id, rated=True, i_win=False)
+
+    body = (await api_client.get(f"/v1/players/{target.id}")).json()
+    await target_client.aclose()
+
+    change = body["matches"]["items"][0]["rating_change"]
+    assert change is not None
+    assert change["before"] is None
+    assert change["delta"] is None
+    # Established BELOW the seed — the fall that never happened.
+    assert change["after"] < 1500.0
+    assert change["after"] == body["rating"]
 
 
 async def test_list_players_does_not_rank_a_guest_who_has_never_played(

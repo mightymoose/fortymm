@@ -41,6 +41,7 @@ from app.models import (
     MatchStatus,
     RatingHistory,
 )
+from app.ratings.rated import had_rating_before
 from app.result_chain import standing_result
 from app.schemas.player import (
     PlayerMatchGame,
@@ -83,28 +84,31 @@ async def _load_match_rating_changes(
 
     Only rated, completed matches have a history row (voiding deletes them), and
     ``(match_id, user_id)`` is unique among non-null ``match_id`` rows, so a
-    match maps to at most one change for a player."""
+    match maps to at most one change for a player.
+
+    ``had_rating_before()`` rides with each row — whether the player already held an
+    earned rating when it landed. Their FIRST rated match established the rating
+    rather than moving one, so it reports no delta at all rather than a fall from the
+    1500 their league-join seeded (#952)."""
     ids = list(match_ids)
     if not ids:
         return {}
     rows = (
-        (
-            await db.execute(
-                select(RatingHistory).where(
-                    RatingHistory.match_id.in_(ids),
-                    RatingHistory.user_id == player_id,
-                )
+        await db.execute(
+            select(RatingHistory, had_rating_before().label("had_rating_before")).where(
+                RatingHistory.match_id.in_(ids),
+                RatingHistory.user_id == player_id,
             )
         )
-        .scalars()
-        .all()
-    )
+    ).all()
     changes: dict[uuid.UUID, RatingChange] = {}
-    for row in rows:
+    for row, was_rated in rows:
         # IN-filtered to non-null match ids, so this narrowing is total.
         if row.match_id is None:
             continue
-        changes[row.match_id] = RatingChange.from_history(row)
+        changes[row.match_id] = RatingChange.from_history(
+            row, had_rating_before=was_rated
+        )
     return changes
 
 

@@ -47,8 +47,9 @@ export type RecentMatchScoreView =
   | { kind: 'games'; games: RecentMatchGameView[] }
   | { kind: 'text'; text: string }
 
-/** The Δ cell's contents. `null` — rendered as `—` — for any row that is
- * undecided *or* unrated. */
+/** The Δ cell's contents. `null` — rendered as `—` — for any row whose rating
+ * did not *move*: undecided, unrated, or the player's first rated match (which
+ * established the rating instead). */
 export type RecentMatchDeltaView = {
   /** The terse signed figure, e.g. "+12" / "-14". */
   label: string
@@ -148,6 +149,12 @@ const selectDelta = (
   // Keyed on the field alone, never on the status: a *completed, decided* win in
   // an unrated match moved no rating either, and it must read `—` too.
   if (ratingChange == null) return null
+  // And a present change with a null `delta` is the player's FIRST rated match:
+  // it *established* their rating rather than moving it. The Δ column measures
+  // movement, and nothing moved — so `—`, not a signed number off the seeded
+  // 1500 they never held (#952). The row still shows its result and score; the
+  // match-detail page is where the new rating is spelled out (`Unrated → X`).
+  if (ratingChange.delta === null) return null
   return {
     label: formatRatingDelta(ratingChange.delta),
     ariaLabel: formatRatingDeltaAria(ratingChange.delta),

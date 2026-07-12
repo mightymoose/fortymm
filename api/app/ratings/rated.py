@@ -37,19 +37,64 @@ declines to present that prior as an achievement.
 """
 
 from sqlalchemy import ColumnElement, and_, select
+from sqlalchemy.orm import aliased
 
 from app.models import RatingHistory, RatingHistorySource, User, UserLeagueRating
 
 
-def is_rating_change() -> ColumnElement[bool]:
+def is_rating_change(row: type[RatingHistory] = RatingHistory) -> ColumnElement[bool]:
     """A ``rating_history`` row that records a real rating CHANGE, rather than the
     prior a member is seeded with when they join.
 
     Filters ``initial`` rows out of any read of the table: they are the strategy's
     starting point, not a rating the player ever held (they were Unrated), so a
     chart must not plot one as a point and a peak must not report one as a high.
+
+    ``row`` takes an ``aliased(RatingHistory)`` when the table appears twice in one
+    statement (``had_rating_before`` compares a row against the player's earlier
+    ones), so both copies are filtered by THE SAME definition of "a change".
     """
-    return RatingHistory.source != RatingHistorySource.initial
+    return row.source != RatingHistorySource.initial
+
+
+def had_rating_before() -> ColumnElement[bool]:
+    """Was the player ALREADY RATED when this ``rating_history`` row landed? — the
+    point-in-time form of ``is_rated_member``, correlated to the row itself.
+
+    This is what a rating change needs in order to be reported honestly. A row's
+    stored ``previous_rating_value`` is the state the Glicko-2 computation started
+    from, and for a player's FIRST rated match that state is the 1500 the league
+    seeded them with on joining. The number is not wrong — the maths genuinely
+    starts there — but presenting it as a ``before`` is: "1500 → 1268, −232" tells a
+    player they lost 232 points of a rating they never held, one widget away from
+    the pre-match snapshot correctly calling them **Unrated** (#952). A first rated
+    match does not move you. It ESTABLISHES you (see ``RatingChange``).
+
+    "Already rated" is therefore the same question ``app.ratings.rated`` asks
+    everywhere else — has anything real MOVED this rating? — asked as of this row:
+    an earlier non-``initial`` row for the same ``(user, league)``. Not merely "an
+    earlier row": the seed IS an earlier row, and counting it would reintroduce the
+    phantom 1500 this predicate exists to remove.
+
+    EARLIER means ``created_at`` on the audit row, which for a match row IS the
+    match's ``completed_at`` (ADR-0012: the live path writes it in the same
+    transaction as ``mark_completed``, and the recompute stamps it explicitly). So
+    this reads the same completion order the ratings were COMPUTED in — the order
+    ``previous_rating_value`` itself came from — and survives a recompute rewriting
+    the rows.
+    """
+    prior = aliased(RatingHistory)
+    return (
+        select(prior.id)
+        .where(
+            prior.user_id == RatingHistory.user_id,
+            prior.league_id == RatingHistory.league_id,
+            prior.created_at < RatingHistory.created_at,
+            is_rating_change(prior),
+        )
+        .correlate(RatingHistory)
+        .exists()
+    )
 
 
 def is_rated_member() -> ColumnElement[bool]:

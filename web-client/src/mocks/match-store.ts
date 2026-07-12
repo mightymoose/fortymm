@@ -21,23 +21,90 @@ type DashboardRating = components['schemas']['DashboardRating']
 type DashboardStreak = components['schemas']['DashboardStreak']
 type RatingChange = components['schemas']['RatingChange']
 
+/** The strategy's **prior** — where Glicko-2 starts a player who has never played.
+ * It is not a rating anyone holds, and it must never reach a screen as one: the
+ * player's *first* rated match is reported as `Unrated → X`, not `1500 → X`
+ * (#952). It survives here only as the seed of the arithmetic, exactly as it does
+ * on the write side of the API. */
 const MOCK_BASE_RATING = 1500
 const MOCK_RATING_DELTA = 8
+/** Where a mock *opponent* sits before a match. Deliberately not 1500 — the
+ * opponents in the seed set are established players, and a fixture that started
+ * everyone at the prior is how "1500 → …" came to look normal. */
+const MOCK_OPPONENT_BASE_RATING = 1544
 const RECENT_FORM_LIMIT = 5
 const H2H_LIMIT = 5
 
-function ratingChangeFor(seedId: string, won: boolean): RatingChange {
-  // Deterministic so re-renders are stable.
+/** A deterministic, non-zero move for one match — stable across re-renders. */
+function ratingMagnitude(seedId: string): number {
   let h = 0
   for (let i = 0; i < seedId.length; i += 1) h = (h * 31 + seedId.charCodeAt(i)) | 0
-  const jitter = Math.abs(h) % 7
-  const magnitude = MOCK_RATING_DELTA + jitter
-  const signed = won ? magnitude : -magnitude
-  return {
-    before: MOCK_BASE_RATING,
-    after: MOCK_BASE_RATING + signed,
-    delta: signed,
+  return MOCK_RATING_DELTA + (Math.abs(h) % 7)
+}
+
+function signedMove(seedId: string, won: boolean): number {
+  const magnitude = ratingMagnitude(seedId)
+  return won ? magnitude : -magnitude
+}
+
+/**
+ * The current user's rating **match by match**, in the order they were played.
+ *
+ * Two kinds of entry come out of this walk, and the mock has to be able to
+ * produce both or it cannot catch the bug it exists to catch (#952):
+ *
+ * - the **first** rated match ESTABLISHES the rating — `before: null`,
+ *   `delta: null`. The Glicko update genuinely starts from `MOCK_BASE_RATING`,
+ *   but that prior is not a rating the player held, so the read side does not
+ *   narrate it: `Unrated → 1492`, no chip;
+ * - every later one MOVES it, from wherever the previous match left it — not from
+ *   a fixed 1500, which is what this mock used to hand every single match.
+ */
+function myRatingTimeline(): Map<string, RatingChange> {
+  const timeline = new Map<string, RatingChange>()
+  const completed = mockMatches
+    .filter(
+      (m): m is SeedMatch & { completed_at: string } =>
+        m.status === 'completed' &&
+        m.completed_at !== null &&
+        m.opponent !== null &&
+        m.affects_rating,
+    )
+    .sort((a, b) => a.completed_at.localeCompare(b.completed_at))
+
+  let current: number | null = null
+  for (const seed of completed) {
+    const { side1, side2 } = sideWinCounts(seed)
+    const signed = signedMove(seed.id, side1 > side2)
+    // The rating they held going in — `null` on their first rated match. The
+    // Glicko update still starts from the prior (hence the `??`), which is
+    // exactly the point: the arithmetic uses the 1500, and the *report* does not.
+    const before: number | null = current
+    const after: number = (before ?? MOCK_BASE_RATING) + signed
+    timeline.set(
+      seed.id,
+      before === null
+        ? // First rated match: a rating comes into existence. No before, no delta.
+          { before: null, after, delta: null }
+        : { before, after, delta: signed },
+    )
+    current = after
   }
+  return timeline
+}
+
+/** The current user's change on `seedId`, or `null` if that match moved no rating
+ * of theirs. */
+function myRatingChangeFor(seedId: string): RatingChange | null {
+  return myRatingTimeline().get(seedId) ?? null
+}
+
+/** The *opponent's* change — always a move, never an establishment: the seed
+ * roster's opponents are established players with histories of their own. */
+function opponentRatingChangeFor(seedId: string, won: boolean): RatingChange {
+  const signed = signedMove(seedId, won)
+  const before = MOCK_OPPONENT_BASE_RATING
+  return { before, after: before + signed, delta: signed }
 }
 
 // The mock-session user — handlers project every seed match as if this user
@@ -378,7 +445,10 @@ function projectSides(seed: SeedMatch): {
     games_won: side1,
     won: decided ? myWon : null,
     is_current_user_side: true,
-    rating_change: showRatingChange ? ratingChangeFor(seed.id, myWon) : null,
+    // The current user's own change comes off their rating *timeline*, so their
+    // earliest rated match reads `Unrated → X` on the match-detail card and every
+    // later one moves from where the last one left them.
+    rating_change: showRatingChange ? myRatingChangeFor(seed.id) : null,
   }
   const opponentSide: MatchDetailsSide = {
     side_number: 2,
@@ -395,7 +465,9 @@ function projectSides(seed: SeedMatch): {
     games_won: side2,
     won: decided ? !myWon : null,
     is_current_user_side: false,
-    rating_change: showRatingChange ? ratingChangeFor(seed.id, !myWon) : null,
+    rating_change: showRatingChange
+      ? opponentRatingChangeFor(seed.id, !myWon)
+      : null,
   }
   return { mySide, opponentSide }
 }
@@ -772,7 +844,11 @@ export function projectRecentResult(seed: SeedMatch): DashboardRecentResult | nu
     my_games_won: side1,
     opponent_games_won: side2,
     completed_at: seed.completed_at ?? seed.created_at,
-    my_rating_change: seed.affects_rating ? ratingChangeFor(seed.id, won) : null,
+    // Same timeline the match-detail card reads: the user's first rated match
+    // carries a change with a **null delta** (it established the rating), so the
+    // dashboard's Δ column shows `—` for it rather than a signed move off a 1500
+    // they never held (#952).
+    my_rating_change: seed.affects_rating ? myRatingChangeFor(seed.id) : null,
   }
 }
 
@@ -805,17 +881,25 @@ export function projectRating(seeds: SeedMatch[]): DashboardRating | null {
   // not a card seeded at the strategy's prior.
   if (completed.length === 0) return null
 
+  // The same timeline every other surface reads, so the dashboard card, the
+  // dashboard's Δ column and the match-detail card cannot disagree about what a
+  // match did. `delta` is null on the first (establishing) match — the card's
+  // headline Δ is then 0 only in the sense that nothing moved; `current` starts at
+  // that match's `after`, never at the prior.
+  const timeline = myRatingTimeline()
   let current = MOCK_BASE_RATING
-  let peak = MOCK_BASE_RATING
+  // Peak starts *unset*, not at the prior: a player whose every rating has been
+  // below 1500 has never peaked at 1500 — they have peaked at the best rating they
+  // actually held.
+  let peak: number | null = null
   let lastDelta = 0
   const sparkData: number[] = []
   for (const seed of completed) {
-    const { side1, side2 } = sideWinCounts(seed)
-    const won = side1 > side2
-    const change = ratingChangeFor(seed.id, won)
-    current += change.delta
-    lastDelta = change.delta
-    peak = Math.max(peak, current)
+    const change = timeline.get(seed.id)
+    if (!change) continue
+    current = change.after
+    lastDelta = change.delta ?? 0
+    peak = peak === null ? current : Math.max(peak, current)
     sparkData.push(current)
   }
   // Glicko-2-ish gloss: RD tightens with games played, volatility holds.
@@ -827,7 +911,7 @@ export function projectRating(seeds: SeedMatch[]): DashboardRating | null {
     strategy_key: 'glicko2',
     current,
     delta: lastDelta,
-    peak,
+    peak: peak ?? current,
     // Unconditional now: the zero-match case returned above, and a rated player
     // has a ladder position. (This ternary used to be the one place that noticed
     // an unplayed player had no business holding a percentile — #382 — while the

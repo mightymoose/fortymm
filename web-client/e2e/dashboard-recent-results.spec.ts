@@ -33,7 +33,7 @@ const DASHBOARD = {
   attention_total_count: 0,
   waiting_count: 0,
   rating: null,
-  completed_match_count: 2,
+  completed_match_count: 3,
   recent_results: [
     {
       match_id: '11111111-1111-4111-8111-111111111111',
@@ -42,7 +42,7 @@ const DASHBOARD = {
       my_games_won: 3,
       opponent_games_won: 1,
       completed_at: '2026-05-12T09:00:00Z',
-      my_rating_change: { before: 1500, after: 1512, delta: 12 },
+      my_rating_change: { before: 1524, after: 1536, delta: 12 },
     },
     {
       match_id: '22222222-2222-4222-8222-222222222222',
@@ -51,10 +51,28 @@ const DASHBOARD = {
       my_games_won: 1,
       opponent_games_won: 3,
       completed_at: '2026-05-10T09:00:00Z',
-      my_rating_change: { before: 1512, after: 1504, delta: -8 },
+      my_rating_change: { before: 1532, after: 1524, delta: -8 },
+    },
+    // The oldest one is the player's FIRST rated match: it *established* their
+    // rating (1268) rather than moving it, so `before` and `delta` are both null.
+    // The Δ column must read `—`. Before #952 this row rendered a signed figure
+    // measured off the 1500 their league-join seeded — and since this suite runs
+    // MSW-off, this stub is the only place the browser ever sees that shape.
+    {
+      match_id: '33333333-3333-4333-8333-333333333333',
+      opponent_username: 'ada.lovelace',
+      is_win: false,
+      my_games_won: 0,
+      opponent_games_won: 3,
+      completed_at: '2026-05-08T09:00:00Z',
+      my_rating_change: { before: null, after: 1268, delta: null },
     },
   ],
 } satisfies components['schemas']['DashboardResponse']
+
+/** The index of the established-rating row in `recent_results` (and so in the
+ * rendered `tbody`), so the assertions below can't drift off it. */
+const ESTABLISHED_ROW = 2
 
 async function installDashboardMock(page: Page) {
   await page.route('**/api/v1/**', (route: Route) => {
@@ -165,5 +183,29 @@ test.describe('Dashboard recent-results card (#844)', () => {
     expect(m.scoreText, 'short row score cell').toBe('1-3')
     expect(m.deltaText, 'short row rating-delta cell').toBe('-8')
     expect(m.whenText, 'short row when cell').not.toBe('')
+  })
+
+  // #952: the row whose `my_rating_change` is present but whose `delta` is null.
+  // That match ESTABLISHED the rating; it did not move it. `null >= 0` is `true`
+  // in JS, so the pre-fix column painted it as a *gain*.
+  test('the match that established the rating shows an em dash, not a signed number', async ({
+    page,
+  }) => {
+    await installDashboardMock(page)
+    await page.goto('/dashboard')
+    await page.locator('[data-testid="dashboard-recent-results"]').waitFor()
+
+    const rows = page.locator('table tbody tr')
+    await expect(rows).toHaveCount(DASHBOARD.recent_results.length)
+
+    const established = rows.nth(ESTABLISHED_ROW)
+    // Sanity: we are on the right row (it's the one against ada.lovelace).
+    await expect(established).toContainText('ada.lovelace')
+
+    const deltaCell = established.locator('td').nth(2)
+    await expect(deltaCell).toHaveText('—')
+    // Not "+0", not "-232", not a 1500 — nothing signed at all.
+    await expect(deltaCell).not.toContainText(/[+-]\d/)
+    await expect(established).not.toContainText('1500')
   })
 })

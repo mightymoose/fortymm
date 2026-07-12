@@ -12,6 +12,10 @@ import {
   USATT_LEAGUE_ID,
 } from './factories/players/player-league.factory'
 import {
+  buildEstablishedRatingChange,
+  buildRatingChange,
+} from './factories/players/rating-change.factory'
+import {
   acceptSeed,
   proposeSeed,
   findMatch,
@@ -379,7 +383,7 @@ function playerConfidence(
   }
 }
 
-function playerStanding(summary: PlayerSummary) {
+function playerStanding(summary: PlayerSummary, rows: PlayerMatchRow[]) {
   const ratedPopulation = rosterRankById().size
   if (summary.rating == null || summary.rank == null) {
     // No rating means nothing to be confident *about* — the profile's confidence
@@ -393,9 +397,6 @@ function playerStanding(summary: PlayerSummary) {
     }
   }
   const seed = djb2(summary.username)
-  // Deterministic, non-zero move from the player's most recent rated match, so
-  // the Δ chip is stable across reloads and never renders as "+0".
-  const delta = ((seed % 19) - 9 || 8) as number
   return {
     peak: summary.rating + (seed % 40),
     rank_of: ratedPopulation,
@@ -408,11 +409,14 @@ function playerStanding(summary: PlayerSummary) {
             Math.round((summary.rank / ratedPopulation) * 100),
           )
         : null,
-    rating_delta: {
-      before: summary.rating - delta,
-      after: summary.rating,
-      delta,
-    },
+    // Read straight off the player's own rows (newest first), not synthesized
+    // beside them: the hero's Δ chip and the top row of the Recent-matches card
+    // are two views of the SAME match, and a mock that made them up separately
+    // could show a chip for a match whose Δ column says `—`. When that most-recent
+    // rated match was the player's *first*, this is an ESTABLISHED change (null
+    // `delta`) and the chip is suppressed entirely — they got rated, they did not
+    // gain or lose (#952).
+    rating_delta: rows.find((r) => r.rating_change !== null)?.rating_change ?? null,
     confidence: playerConfidence(summary.rating, seed),
   }
 }
@@ -738,7 +742,7 @@ function playerDetail(
     member_since: new Date(
       Date.UTC(2023 + (seed % 3), seed % 12, 1 + (seed % 27)),
     ).toISOString(),
-    ...playerStanding(summary),
+    ...playerStanding(summary, rows),
     // Cross-league, so it reads off the player's *unscoped* record — ask for this
     // player in either league and the career block comes back identical.
     career: playerCareer(summarizePlayer(p)),
@@ -792,10 +796,10 @@ function projectPlayerMatches(player: {
     ? mockMatches
     : mockMatches.filter((m) => m.opponent?.id === player.id)
 
-  return myMatches
+  const projected = myMatches
     .slice()
     .sort((a, b) => b.created_at.localeCompare(a.created_at))
-    .map((m): PlayerMatchRow => {
+    .map((m) => {
       // The "perspective" player is on side 1 if they're the current user,
       // side 2 otherwise (since mocks always put rita on side 1).
       const onSide1 = isMe
@@ -825,28 +829,44 @@ function projectPlayerMatches(player: {
         if (gamesWonByMe >= target) result = 'W'
         else if (gamesWonByThem >= target) result = 'L'
       }
-      // The rating this match moved, for the Recent-matches card's Δ column.
-      // `null` — never a zero-delta object — for anything undecided (live, up
-      // next, awaiting, voided) or unrated, so the dev view exercises the em-dash
-      // path the way the real API does.
-      const ratingBefore = 1600 + (djb2(m.id) % 120)
-      const moved = 6 + (djb2(m.id) % 13)
-      const delta = result === 'W' ? moved : -moved
-      const rating_change =
-        result === null
-          ? null
-          : { before: ratingBefore, after: ratingBefore + delta, delta }
-      return {
-        id: m.id,
-        status: m.status,
-        created_at: m.created_at,
-        opponent: { id: opponentId, username: opponentUsername },
-        games,
-        result,
-        awaiting_acceptance: false,
-        rating_change,
-      }
+      return { m, games, result, opponentId, opponentUsername }
     })
+
+  // The player's **first** decided match — the rows are newest-first, so it is
+  // the last of them. That match ESTABLISHED their rating; it did not move one
+  // (#952). Modelling it is the whole reason this mock can catch the bug: a mock
+  // that only ever emits moves is a mock that cannot.
+  const firstDecidedId =
+    [...projected].reverse().find((p) => p.result !== null)?.m.id ?? null
+
+  return projected.map(({ m, games, result, opponentId, opponentUsername }): PlayerMatchRow => {
+    // The rating this match moved, for the Recent-matches card's Δ column.
+    // `null` — never a zero-delta object — for anything undecided (live, up
+    // next, awaiting, voided) or unrated, so the dev view exercises the em-dash
+    // path the way the real API does.
+    const ratingBefore = 1600 + (djb2(m.id) % 120)
+    const moved = 6 + (djb2(m.id) % 13)
+    const delta = result === 'W' ? moved : -moved
+    const after = ratingBefore + delta
+    const rating_change =
+      result === null
+        ? null
+        : m.id === firstDecidedId
+          ? // Their first: `before` and `delta` are both null. The Δ column reads
+            // `—`, and the match page reads `Unrated → {after}`.
+            buildEstablishedRatingChange({ after })
+          : buildRatingChange({ before: ratingBefore, after })
+    return {
+      id: m.id,
+      status: m.status,
+      created_at: m.created_at,
+      opponent: { id: opponentId, username: opponentUsername },
+      games,
+      result,
+      awaiting_acceptance: false,
+      rating_change,
+    }
+  })
 }
 
 async function readJson(request: Request): Promise<unknown> {

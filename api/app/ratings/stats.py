@@ -41,7 +41,7 @@ from app.models import (
     UserLeagueRating,
 )
 from app.ratings.confidence import rating_interval
-from app.ratings.rated import is_rated_member, is_rating_change
+from app.ratings.rated import had_rating_before, is_rated_member, is_rating_change
 from app.ratings.state import Glicko2State, parse_rating_state
 from app.schemas.player import PlayerSummary
 from app.schemas.rating import RatingChange, RatingConfidence, RatingInterval
@@ -141,12 +141,18 @@ async def league_rated_population(db: AsyncSession, league_id: uuid.UUID) -> int
 
 async def latest_rated_match_change(
     db: AsyncSession, user_id: uuid.UUID, league_id: uuid.UUID
-) -> RatingHistory | None:
-    """The user's rating-history row for their MOST RECENT RATED MATCH in this
+) -> RatingChange | None:
+    """The user's rating change from their MOST RECENT RATED MATCH in this
     league — the hero's headline "the last one moved you +12" chip.
 
     ``None``, never a zero change, for a player who has never finished a rated
     match: a zero would claim a rated match moved their rating by nothing.
+
+    When that most recent match is also their FIRST, the change carries no delta at
+    all (``RatingChange``): it established their rating rather than moving it, so
+    ``had_rating_before()`` rides along with the row and the chip has nothing to
+    report. That is why this reads a ``(row, was-already-rated)`` pair rather than
+    the row alone.
 
     Reading from ``rating_history`` and INNER JOINing ``matches`` is what makes
     this "most recent *rated* match" rather than "most recent match": only a
@@ -161,9 +167,9 @@ async def latest_rated_match_change(
     which a recompute rewrites — so this is the same row the newest rated match
     in the profile's Recent-matches card shows in its own Δ column.
     """
-    return (
+    row = (
         await db.execute(
-            select(RatingHistory)
+            select(RatingHistory, had_rating_before().label("had_rating_before"))
             .join(Match, Match.id == RatingHistory.match_id)
             .where(
                 RatingHistory.user_id == user_id,
@@ -172,7 +178,11 @@ async def latest_rated_match_change(
             .order_by(Match.created_at.desc(), RatingHistory.created_at.desc())
             .limit(1)
         )
-    ).scalar_one_or_none()
+    ).first()
+    if row is None:
+        return None
+    history, had_rating_before_this = row
+    return RatingChange.from_history(history, had_rating_before=had_rating_before_this)
 
 
 async def league_percentile(
@@ -329,7 +339,7 @@ async def player_standing(
     """
     rating = summary.rating
     population = await league_rated_population(db, league_id)
-    history = await latest_rated_match_change(db, user_id, league_id)
+    rating_delta = await latest_rated_match_change(db, user_id, league_id)
     peak = (
         None
         if rating is None
@@ -345,7 +355,7 @@ async def player_standing(
         # None exactly when `rank` is None — no rank, no ladder to stand on.
         rank_of=None if summary.rank is None else population,
         percentile=percentile,
-        rating_delta=None if history is None else RatingChange.from_history(history),
+        rating_delta=rating_delta,
     )
 
 

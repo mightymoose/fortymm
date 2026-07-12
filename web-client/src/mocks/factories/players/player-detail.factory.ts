@@ -16,6 +16,7 @@ import {
 } from './head-to-head.factory'
 import {
   buildAwaitingMatchRow,
+  buildFirstRatedMatchRow,
   buildLiveMatchRow,
   buildLossMatchRow,
   buildPlayerMatchList,
@@ -32,7 +33,10 @@ import {
   buildSecondLeague,
   buildUnratedLeague,
 } from './player-league.factory'
-import { buildRatingChange } from './rating-change.factory'
+import {
+  buildEstablishedRatingChange,
+  buildRatingChange,
+} from './rating-change.factory'
 import {
   buildFirmingUpConfidence,
   buildProvisionalConfidence,
@@ -54,6 +58,7 @@ type PlayerDetail = components['schemas']['PlayerDetail']
 // career, confidence and leagues blocks are only ever built to sit on a bundle.
 export {
   buildRatingChange,
+  buildEstablishedRatingChange,
   buildPlayerCareer,
   buildEmptyCareer,
   buildPlayerStreak,
@@ -247,6 +252,90 @@ export function buildUnratedPlayerDetail(
       games_won_pct: 0.6,
       current_streak: buildPlayerStreak({ kind: 'W', n: 1 }),
       best_streak: buildPlayerStreak({ kind: 'W', n: 1 }),
+      league_count: 1,
+    }),
+    ...overrides,
+  })
+}
+
+/**
+ * The player one match *past* unrated: their **first rated match** has just been
+ * accepted, and it **established** them at 1268 rather than moving them.
+ *
+ * This is the fixture the #952 bug had nowhere to be caught. On the wire it is
+ * the second of the two nulls: `rating_delta` is **present** and its `delta` is
+ * **null** (as is `before`). The three things it pins, all of which were wrong:
+ *
+ * - the hero shows the rating (1268) and **no Δ chip** — they gained nothing and
+ *   lost nothing, they *got rated*;
+ * - the Recent-matches Δ column reads `—`, not "−232";
+ * - and on the match-detail page that match reads `Unrated → 1268`, never
+ *   `1500 → 1268`. The 1500 their league-join seeded is the strategy's prior, not
+ *   a rating they ever held (`CONTEXT.md` § *Rating*).
+ *
+ * Everything else follows from having exactly one rated match: the rating is at
+ * its own **peak** (there is no other), the confidence is **provisional** (one
+ * match settles nothing), and the chart holds a single point with **no anchor** —
+ * nothing carried in, so `change` is `null`, never a "+0".
+ */
+export function buildJustRatedPlayerDetail(
+  overrides: Partial<PlayerDetail> = {},
+): PlayerDetail {
+  return buildPlayerDetail({
+    id: 'p-3',
+    username: 'invisible-sloth',
+    rating: 1268,
+    rank: 12,
+    rank_of: 12,
+    peak: 1268,
+    percentile: null,
+    wins: 0,
+    losses: 1,
+    form: 'L',
+    rating_delta: buildEstablishedRatingChange({ after: 1268 }),
+    confidence: buildProvisionalConfidence(),
+    rating_history: buildUnratedRatingWindow({
+      points: [
+        buildRatingPoint({
+          at: daysAgo(2),
+          rating: 1268,
+          match_id: 'm-first-rated',
+        }),
+      ],
+      // Their only rating is also their best one. `change` stays null (inherited
+      // from the unrated window): there was nothing to change *from*.
+      peak: buildRatingPoint({
+        at: daysAgo(2),
+        rating: 1268,
+        match_id: 'm-first-rated',
+      }),
+    }),
+    leagues: [buildDefaultLeague({ rating: 1268 })],
+    head_to_head: buildPlayerHeadToHead({
+      versus_viewer: buildNeverMetHeadToHead({
+        opponent: buildHeadToHeadOpponent({
+          id: 'p-3',
+          username: 'invisible-sloth',
+        }),
+      }),
+      frequent_opponents: [
+        buildHeadToHeadRecord({
+          opponent: buildHeadToHeadOpponent({ id: 'p-9', username: 'ada.lovelace' }),
+          wins: 0,
+          losses: 1,
+        }),
+      ],
+    }),
+    matches: buildPlayerMatchList([buildFirstRatedMatchRow()]),
+    match_total: 1,
+    career: buildPlayerCareer({
+      decided: 1,
+      wins: 0,
+      losses: 1,
+      win_rate: 0,
+      games_won_pct: 0.4,
+      current_streak: buildPlayerStreak({ kind: 'L', n: 1 }),
+      best_streak: buildPlayerStreak({ kind: 'L', n: 1 }),
       league_count: 1,
     }),
     ...overrides,

@@ -1,6 +1,9 @@
 import type { components } from '@/api/schema'
 
-import { buildRatingChange } from './rating-change.factory'
+import {
+  buildEstablishedRatingChange,
+  buildRatingChange,
+} from './rating-change.factory'
 
 type PlayerMatchRow = components['schemas']['PlayerMatchRow']
 type PlayerMatchGame = components['schemas']['PlayerMatchGame']
@@ -36,7 +39,7 @@ export function buildPlayerMatchRow(
     ],
     result: 'W',
     awaiting_acceptance: false,
-    rating_change: buildRatingChange({ before: 1675, after: 1687, delta: 12 }),
+    rating_change: buildRatingChange({ before: 1675, after: 1687 }),
     ...overrides,
   }
 }
@@ -52,7 +55,32 @@ export function buildLossMatchRow(
       buildPlayerMatchGame({ mine: 6, theirs: 11 }),
     ],
     result: 'L',
-    rating_change: buildRatingChange({ before: 1701, after: 1687, delta: -14 }),
+    rating_change: buildRatingChange({ before: 1701, after: 1687 }),
+    ...overrides,
+  })
+}
+
+/**
+ * The player's **first rated match** — the one that *established* their rating
+ * rather than moving it. They went in Unrated (their league-join seeded a 1500,
+ * but a seed is not a rating they held) and came out at 1268.
+ *
+ * On the wire that is a *present* `rating_change` whose `delta` is `null` — a
+ * different null from `rating_change: null` above, and the one that produced
+ * "1500 → 1268 (−232)" beside the word "Unrated" (#952). Its Δ column reads `—`:
+ * nothing moved.
+ */
+export function buildFirstRatedMatchRow(
+  overrides: Partial<PlayerMatchRow> = {},
+): PlayerMatchRow {
+  return buildPlayerMatchRow({
+    id: 'm-first-rated',
+    games: [
+      buildPlayerMatchGame({ mine: 8, theirs: 11 }),
+      buildPlayerMatchGame({ mine: 6, theirs: 11 }),
+    ],
+    result: 'L',
+    rating_change: buildEstablishedRatingChange({ after: 1268 }),
     ...overrides,
   })
 }

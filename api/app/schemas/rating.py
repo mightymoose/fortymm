@@ -22,17 +22,69 @@ DEFAULT_RATING_WINDOW: RatingWindow = "90d"
 
 
 class RatingChange(BaseModel):
-    """A user's rating delta on a single completed match."""
+    """What one completed match did to a player's rating — and there are two kinds
+    of that, not one.
 
+    A player who was already rated MOVED: ``1338 → 1503``, ``delta`` ``+165``.
+
+    A player whose FIRST rated match this is was **ESTABLISHED** by it: they were
+    Unrated going in (CONTEXT.md, "Rating": a player who has never finished a rated
+    match has no rating), and they came out at 1268. They did not *lose* 232 points
+    of the 1500 their league-join seeded them with — they never held it. So
+    ``before`` is ``None`` and there is NO delta: nothing moved, a rating came into
+    existence. `Unrated → 1268`.
+
+    The seeded 1500 is real in the WRITE side and stays there: the Glicko-2 update
+    genuinely starts from the strategy's initial state, and ``previous_rating_value``
+    records it faithfully. This model is where the read side declines to narrate
+    that prior as a rating the player fell from — the same refusal
+    ``app.ratings.rated`` makes for rating / rank / peak / confidence. The caller
+    supplies the one fact the row cannot know on its own (``had_rating_before``, an
+    earlier change exists), because "was I rated?" is a question about the player's
+    history, not about this row.
+
+    ``delta`` is COMPUTED, never stored beside its own inputs (api/CLAUDE.md): a
+    ``RatingChange(before=None, delta=-232.0)`` — precisely the phantom of #952 — is
+    not constructible.
+    """
+
+    # ``None`` == UNRATED going in. Not "unknown", and not zero: the player held no
+    # rating at that instant, and this match is what gave them one. Required (no
+    # default) so the key is always PRESENT on the wire and a client reads the null
+    # rather than an absent field.
     before: float | None
     after: float
-    delta: float
+
+    @computed_field  # type: ignore[prop-decorator]  # pydantic: decorate the property, not its getter
+    @property
+    def delta(self) -> float | None:
+        """How far the rating MOVED, or ``None`` when it was established rather than
+        moved.
+
+        Two distinct nulls reach a client and they mean different things: a null
+        *``RatingChange``* is "this match moved no rating at all" (unrated, undecided
+        or voided); a null ``delta`` INSIDE a present change is "this is the rating
+        you got, and there was nothing before it to measure from". A ``0.0`` here
+        would claim a rated match moved a rating by nothing.
+        """
+        return None if self.before is None else self.after - self.before
 
     @classmethod
-    def from_history(cls, row: RatingHistory) -> RatingChange:
-        prev = row.previous_rating_value
-        delta = row.rating_value - prev if prev is not None else 0.0
-        return cls(before=prev, after=row.rating_value, delta=delta)
+    def from_history(
+        cls, row: RatingHistory, *, had_rating_before: bool
+    ) -> RatingChange:
+        """Project an audit row into the change it should be REPORTED as.
+
+        ``had_rating_before`` is ``app.ratings.rated.had_rating_before()`` read
+        alongside the row (an earlier non-``initial`` change for this user + league).
+        It is keyword-only and has no default deliberately: every caller must answer
+        it, because defaulting it either way silently mis-narrates one of the two
+        cases — and the wrong default is exactly the bug (#952).
+        """
+        return cls(
+            before=row.previous_rating_value if had_rating_before else None,
+            after=row.rating_value,
+        )
 
 
 class RatingInterval(BaseModel):

@@ -4,6 +4,7 @@ import { playerByIdQueryOptions, type PlayerMatchRow } from '@/api/players'
 import { buildPlayerDetail } from '@/mocks/factories/players/player-detail.factory'
 import {
   buildAwaitingMatchRow,
+  buildFirstRatedMatchRow,
   buildLiveMatchRow,
   buildLossMatchRow,
   buildPlayerMatchList,
@@ -114,6 +115,37 @@ describe('recentMatchesQuery', () => {
     expect(row.status.tone).toBe('lost')
     expect(row.delta?.label).toBe('-14')
     expect(row.delta?.tone).toBe('loss')
+  })
+
+  it('shows an em dash for the match that ESTABLISHED the rating', async () => {
+    // A *present* rating change whose `delta` is null: the player's first rated
+    // match. It gave them a rating (1268); it did not move one. The Δ column
+    // measures movement, so it reads `—` — never a "−232" off the 1500 their
+    // league-join seeded, and never a "+0" (#952). The row still reports its
+    // result and its score: the match was decided, it just moved no rating.
+    const row = await selectRow(buildFirstRatedMatchRow())
+
+    expect(row.delta).toBeNull()
+    expect(row.status).toEqual({ tone: 'lost', label: 'Lost' })
+    expect(row.score.kind).toBe('games')
+  })
+
+  it('keeps the two nulls apart — an unrated match and a first rated one both read "—" but are not the same row', async () => {
+    // If someone collapsed `rating_change === null` and `delta === null` into one
+    // branch, this pair would still pass on the Δ column alone — so it also pins
+    // what distinguishes them: the established row *carries* a change, and its
+    // `after` is the rating the player now holds.
+    const unrated = buildUnratedWinMatchRow()
+    const established = buildFirstRatedMatchRow()
+
+    expect(unrated.rating_change).toBeNull()
+    expect(established.rating_change).not.toBeNull()
+    expect(established.rating_change?.delta).toBeNull()
+    expect(established.rating_change?.before).toBeNull()
+    expect(established.rating_change?.after).toBe(1268)
+
+    expect((await selectRow(unrated)).delta).toBeNull()
+    expect((await selectRow(established)).delta).toBeNull()
   })
 
   it('reports a live match as Live — no score, no delta', async () => {

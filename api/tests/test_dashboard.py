@@ -189,9 +189,13 @@ async def test_dashboard_returns_recent_results_for_completed_matches(
     assert result["opponent_games_won"] == 0
     change = result["my_rating_change"]
     assert change is not None
-    assert change["before"] == 1500.0
+    # This is their FIRST rated match, so it ESTABLISHED their rating rather than
+    # moving one (#952): they were Unrated going in — the 1500 the league seeded them
+    # with on signup is the Glicko-2 prior, not a rating they held — so there is no
+    # `before` to measure from and no delta. The Δ column shows the rating they got.
+    assert change["before"] is None
+    assert change["delta"] is None
     assert change["after"] > 1500.0
-    assert change["delta"] > 0
 
 
 async def test_dashboard_scoped_to_current_user(

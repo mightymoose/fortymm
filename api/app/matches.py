@@ -50,7 +50,7 @@ from app.notifications.service import NotificationService
 from app.notifications.taxonomy import NotificationCategory
 from app.players import escape_like
 from app.rate_limiting import RedisRateLimiter
-from app.ratings.rated import is_rating_change
+from app.ratings.rated import had_rating_before, is_rating_change
 from app.result_acceptance import (
     PostedGamesNotDecisiveError,
     StandingResultConflictError,
@@ -1295,19 +1295,27 @@ async def _load_rating_changes(
 ) -> dict[uuid.UUID, RatingChange]:
     """Returns ``user_id -> RatingChange`` for every rating row this match
     produced. Empty for matches that didn't move ratings — including, always,
-    a non-completed match, since no rating rows can exist before completion."""
+    a non-completed match, since no rating rows can exist before completion.
+
+    Each row rides with ``had_rating_before()``: whether the player already held an
+    earned rating when it landed. Without it, a player whose FIRST rated match this
+    is would be reported as falling from the 1500 their league-join seeded — "1500 →
+    1268, −232" — inches from the pre-match snapshot on the same page correctly
+    calling them Unrated (#952). They were established at 1268, not knocked down to
+    it."""
     if match.status != MatchStatus.completed:
         return {}
     rows = (
-        (
-            await db.execute(
-                select(RatingHistory).where(RatingHistory.match_id == match.id)
+        await db.execute(
+            select(RatingHistory, had_rating_before().label("had_rating_before")).where(
+                RatingHistory.match_id == match.id
             )
         )
-        .scalars()
-        .all()
-    )
-    return {row.user_id: RatingChange.from_history(row) for row in rows}
+    ).all()
+    return {
+        row.user_id: RatingChange.from_history(row, had_rating_before=was_rated)
+        for row, was_rated in rows
+    }
 
 
 def _singles_user_ids(match: Match) -> list[uuid.UUID]:
