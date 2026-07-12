@@ -374,6 +374,14 @@ function RatingCell({ rating }: { rating: number | null | undefined }) {
   return <span className="players-rating">{Math.round(rating)}</span>
 }
 
+/** How many of the wire's results this column shows. `form` is a *shared*
+ * field — it rides on `PlayerSummary`, which the profile bundle also
+ * serializes — and the API sends TEN results, because the profile is where a
+ * player is studied in depth (`FORM_WINDOW`, api/app/players.py). The roster's
+ * column is a glance, not a study: it shows the five most recent (they arrive
+ * newest-first) and the header reads "Form · L5". Widen the wire, slice here. */
+const ROSTER_FORM_DOTS = 5
+
 function FormDots({ form }: { form: string }) {
   // Players with no completed matches yet get an empty form string; the
   // column reads as a dash rather than a row of empty boxes.
@@ -387,12 +395,15 @@ function FormDots({ form }: { form: string }) {
       </span>
     )
   }
+  const shown = form.slice(0, ROSTER_FORM_DOTS)
   return (
     <span
       className="players-form"
-      aria-label={`Last 5: ${form.split('').join(' ')}`}
+      // Name what is actually on screen: a player with three decided matches
+      // shows three dots, so the label must say "Last 3", not "Last 5".
+      aria-label={`Last ${shown.length}: ${shown.split('').join(' ')}`}
     >
-      {form.split('').map((c, i) => (
+      {shown.split('').map((c, i) => (
         <span
           key={i}
           className={

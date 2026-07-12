@@ -1,4 +1,7 @@
+import { cleanup } from "@/test/utilities";
+
 import {
+  buildEstablishedRatingRowChangeView,
   buildRatingRowChangeView,
   buildRatingRowView,
 } from "./rating-row.factory";
@@ -31,15 +34,72 @@ describe("RatingRow", () => {
     expect(ratingRowPage.queryTo("rita.kovac")).toHaveTextContent(/^1624$/);
   });
 
-  it("omits the before number when the player entered unrated", () => {
+  it("reads a first rated match as 'Unrated → 1268' — the rating was established, not moved", () => {
     ratingRowPage.render({
       row: buildRatingRowView({
-        change: buildRatingRowChangeView({ from: null, to: 1500 }),
+        change: buildEstablishedRatingRowChangeView({ to: 1268 }),
       }),
     });
 
-    expect(ratingRowPage.queryFrom("rita.kovac")).toBeNull();
-    expect(ratingRowPage.queryTo("rita.kovac")).toHaveTextContent(/^1500$/);
+    // The word, not a number: the 1500 their league-join seeded is a prior, not
+    // a rating they held, so there is nothing to have fallen from (#952).
+    expect(ratingRowPage.queryFrom("rita.kovac")).toHaveTextContent(
+      /^Unrated$/,
+    );
+    expect(ratingRowPage.queryTo("rita.kovac")).toHaveTextContent(/^1268$/);
+    expect(ratingRowPage.getNumbers("rita.kovac")).not.toHaveTextContent(
+      "1500",
+    );
+  });
+
+  it("shows no delta chip and no trend line for an established rating", () => {
+    ratingRowPage.render({
+      row: buildRatingRowView({
+        change: buildEstablishedRatingRowChangeView(),
+      }),
+    });
+
+    // Not a "+0", not a "−232", not a signed anything: nothing moved.
+    expect(ratingRowPage.queryDelta("rita.kovac")).toBeNull();
+    expect(ratingRowPage.sparkline("rita.kovac").querySparkline()).toBeNull();
+    expect(ratingRowPage.getRow("rita.kovac")).not.toHaveTextContent(
+      /[+−-]\s*\d/,
+    );
+  });
+
+  it("names the established line for a screen reader, since the chevron is decorative", () => {
+    ratingRowPage.render({
+      row: buildRatingRowView({
+        change: buildEstablishedRatingRowChangeView({
+          to: 1268,
+          ariaLabel: "Unrated before this match, now rated 1268",
+        }),
+      }),
+    });
+
+    expect(ratingRowPage.getNumbers("rita.kovac")).toHaveAccessibleName(
+      "Unrated before this match, now rated 1268",
+    );
+  });
+
+  it("keeps an established rating and no-rating-at-all visibly apart", () => {
+    // Two different facts, two different renders — if a later 'simplification'
+    // folded them together, one of these two assertions breaks.
+    ratingRowPage.render({
+      row: buildRatingRowView({
+        change: buildEstablishedRatingRowChangeView({ to: 1268 }),
+      }),
+    });
+    expect(ratingRowPage.getNumbers("rita.kovac")).toHaveTextContent(
+      /^Unrated1268$/,
+    );
+
+    cleanup();
+
+    ratingRowPage.render({ row: buildRatingRowView({ change: null }) });
+    expect(ratingRowPage.getNumbers("rita.kovac")).toHaveTextContent(
+      /^Unrated player$/,
+    );
   });
 
   it("tones a positive delta up and shows its label", () => {

@@ -66,6 +66,21 @@ export default defineConfig({
     },
     setupFiles: ['./src/test/setup.ts'],
     css: true,
+    // Dates render in the reader's LOCAL zone (a match is played on a local day),
+    // so an unpinned runner would date the same fixture differently on a laptop in
+    // Chicago and on a CI box in UTC. Pin the suite to one zone — the one CI
+    // already runs in — so a test that asserts a literal day label ("May 9") is
+    // reading a fixture, not the machine.
+    //
+    // Do NOT reach for `vi.stubEnv('TZ', …)` to write a test that is *about* the
+    // local/UTC split. A mid-test `process.env.TZ` override takes under plain vitest
+    // but NOT under Stryker's vitest runner, so such a test passes here and fails the
+    // mutation job's initial dry run — which is a red build for a green app. **Inject
+    // the zone instead**: the projection takes an optional `timeZone` (production
+    // omits it, which is what `Intl` reads as "the reader's zone"), and the test names
+    // one explicitly. See `selectWhen` in recent-matches-query.ts and its test, which
+    // reads one instant from two zones and so depends on no ambient state at all.
+    env: { TZ: 'UTC' },
     // Unit tests live under src/; Playwright specs under e2e/ are a separate
     // suite. Scope include explicitly so runners that don't honor `exclude`
     // (e.g. Stryker's sandboxed vitest) never try to run the .spec.ts e2e files.

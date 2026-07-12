@@ -1,6 +1,8 @@
 """Coverage for the rating system: strategies, calculator math, validation,
 and the match-completion hook."""
 
+import ast
+import pathlib
 import uuid
 
 import jsonschema
@@ -470,22 +472,157 @@ async def test_ratings_only_apply_on_confirmation_not_results(
         assert len(rows_after_confirm) == 2
 
 
-async def test_match_details_response_carries_rating_change(
+def _changes(body: dict) -> tuple[dict, dict]:
+    """``(mine, theirs)`` rating changes off a MatchDetails body, both asserted
+    present — the caller is about to make claims about their contents."""
+    mine = next(s for s in body["sides"] if s["is_current_user_side"])["rating_change"]
+    theirs = next(s for s in body["sides"] if not s["is_current_user_side"])[
+        "rating_change"
+    ]
+    assert mine is not None
+    assert theirs is not None
+    return mine, theirs
+
+
+def test_previous_rating_value_is_read_in_exactly_one_place():
+    """``RatingHistory.previous_rating_value`` may be READ in ONE module, and this
+    test is the fence around it.
+
+    The phantom 1500 (#952) came back four times because it is not a bug in one
+    widget — it is a bug that any reader of this column re-derives on its own. The
+    column holds the state the Glicko-2 update STARTED FROM, which for a player's
+    first rated match is the prior their league-join seeded them with. Subtract it
+    and you have just told a brand-new player they lost 232 points of a rating they
+    never held. Four surfaces did exactly that, one at a time: the match-details
+    chip, the profile's Δ column, the dashboard's Recent-matches Δ, and finally the
+    dashboard hero — each fixed in turn while the next one sat there re-deriving it,
+    because nothing stopped a reader from reaching for the raw column.
+
+    So the read side has exactly ONE door: ``app.ratings.rated`` — whose
+    ``reported_rating_before(row, *, had_rating_before)`` demands the flag
+    (keyword-only, no default — the question cannot be skipped) and resolves the
+    seeded prior to ``None``. Everything a surface can then do with the result
+    derives itself: ``RatingChange.delta`` is a computed field / property over
+    ``before`` and ``after`` (``app.domain.rating.rating_delta``), so a change that
+    reports a fall from a rating the player never held is not constructible.
+
+    THE DOOR MOVED, AND THE FENCE MOVED WITH IT. It used to be
+    ``schemas.rating.RatingChange.from_history`` — the wire model — which worked
+    only while the wire model was the sole path to a rating change. It no longer is:
+    the match-details extras now load through ``MatchDetailsRepository`` (ADR-0015)
+    and build the *domain* ``RatingChange``, which is not the pydantic one and
+    cannot be reached through it. Two column readers would have been two chances to
+    re-derive the phantom — so the read was extracted DOWN into ``ratings/rated.py``,
+    next to the ``had_rating_before()`` predicate that feeds it, and both surfaces
+    (wire schema and repository) now come through that one function. One reader,
+    relocated — not one reader per surface.
+
+    This asserts the door is the only one. An ``ast.Attribute`` load of the name —
+    ``row.previous_rating_value``, ``select(RatingHistory.previous_rating_value)``,
+    the two shapes every one of those four bugs took — is allowed in
+    ``app/ratings/rated.py`` and nowhere else. The WRITE side is untouched and
+    deliberately invisible here: it passes the value as a keyword argument
+    (``previous_rating_value=...``), which is an ``ast.keyword``, not an attribute
+    load. ``result_acceptance``, ``recompute`` and ``leagues`` go on recording the
+    truth; only the reading of it is fenced.
+
+    If you are here because this test failed: you do not want the raw column. You
+    want ``reported_rating_before(row, had_rating_before=...)``, with
+    ``app.ratings.rated.had_rating_before()`` selected alongside your row — that is
+    what both read-side surfaces do.
+    """
+    app_dir = pathlib.Path(__file__).resolve().parent.parent / "app"
+    readers = {
+        path.relative_to(app_dir).as_posix()
+        for path in app_dir.rglob("*.py")
+        for node in ast.walk(ast.parse(path.read_text()))
+        if isinstance(node, ast.Attribute)
+        and node.attr == "previous_rating_value"
+        and isinstance(node.ctx, ast.Load)
+    }
+    assert readers == {"ratings/rated.py"}
+
+
+async def test_match_details_first_rated_match_establishes_a_rating_not_a_fall(
     api_client: AsyncClient, db_session: AsyncSession
 ):
+    """A player's FIRST rated match ESTABLISHES their rating — it does not drop them
+    from the 1500 their league-join seeded (#952).
+
+    Both players here are session-minted, so they carry the real thing: a
+    ``UserLeagueRating`` at 1500 and an ``initial`` history row, exactly as
+    production writes at signup. The Glicko-2 update genuinely starts from that seed
+    and ``previous_rating_value`` records it — the assertions on ``rating_value``
+    below only make sense because it does. What must not happen is the READ side
+    narrating it: "1500 → 1268, −232" told the loser they lost 232 points of a
+    rating they never held, inches from the pre-match snapshot on the same page
+    correctly calling them Unrated.
+
+    So: no ``before``, no ``delta``. Just the rating they came out with.
+
+    The seed is what gives this test its teeth. A fix that merely looked for "an
+    earlier rating-history row" would find the ``initial`` one and go right on
+    reporting 1500 → the predicate has to know that the seed is not a rating.
+    """
     await start_session(api_client, db_session)
     async with opponent_session(db_session, "rival") as (opp_client, opp):
         body = await _score_to_completion(api_client, opp_client, opp.id)
 
-    my_side = next(s for s in body["sides"] if s["is_current_user_side"])
-    opp_side = next(s for s in body["sides"] if not s["is_current_user_side"])
-    my_change = my_side["rating_change"]
-    opp_change = opp_side["rating_change"]
-    assert my_change is not None
-    assert opp_change is not None
-    assert my_change["before"] == 1500.0
+    my_change, opp_change = _changes(body)
+
+    # Unrated → 1524. Not 1500 → 1524.
+    assert my_change["before"] is None
+    assert my_change["delta"] is None
     assert my_change["after"] > 1500.0
-    assert my_change["delta"] == pytest.approx(my_change["after"] - 1500.0)
+
+    # And the loser — the shape QA caught — is established, not knocked down.
+    assert opp_change["before"] is None
+    assert opp_change["delta"] is None
+    assert opp_change["after"] < 1500.0
+
+    # The WRITE side is untouched: the maths still starts from the seed, which is
+    # what makes the two `after` values above land either side of 1500.
+    rows = (
+        (
+            await db_session.execute(
+                select(RatingHistory).where(
+                    RatingHistory.match_id == uuid.UUID(body["id"])
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert {row.previous_rating_value for row in rows} == {1500.0}
+
+
+async def test_match_details_second_rated_match_reports_the_real_move(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """Once a player HAS a rating, a rated match MOVES it — and that move is reported
+    in full.
+
+    The counterweight to the test above: suppressing every ``before``/``delta``
+    would satisfy that one and be just as wrong. Here the second match's ``before``
+    is the rating the FIRST one established — an earned number, not a seeded one —
+    so a real delta is exactly what the widget must show.
+    """
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "rival") as (opp_client, opp):
+        first = await _score_to_completion(api_client, opp_client, opp.id)
+        second = await _score_to_completion(api_client, opp_client, opp.id)
+
+    first_change, _ = _changes(first)
+    my_change, opp_change = _changes(second)
+
+    # Their first match gave them a rating; this one moves it.
+    assert my_change["before"] == first_change["after"]
+    assert my_change["before"] != 1500.0
+    assert my_change["delta"] == pytest.approx(my_change["after"] - my_change["before"])
+    assert my_change["delta"] > 0
+
+    assert opp_change["before"] is not None
+    assert opp_change["delta"] is not None
     assert opp_change["delta"] < 0
 
 

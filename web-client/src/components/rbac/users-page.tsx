@@ -361,9 +361,11 @@ function UserDrawerBody({
   onClose: () => void
 }) {
   // Guard against removing your own account — that could lock the workspace
-  // out (e.g. the last admin deleting themselves).
+  // out (e.g. the last admin deleting themselves). Compare ids, not usernames:
+  // the session now carries the caller's own id, so a rename can't slip past
+  // the guard (and two users can't collide on a display name).
   const { data: session } = useSession()
-  const isSelf = user.username === session?.data?.user?.username
+  const isSelf = user.id === session?.data?.user?.id
   const [selected, setSelected] = useState<Set<string>>(() => new Set(user.role_ids))
   const dirty = useMemo(() => {
     if (selected.size !== user.role_ids.length) return true

@@ -2,7 +2,13 @@ import { test, expect, Page } from '@playwright/test';
 import { matchDetails, sessionResponse } from '../../src/test/factories';
 import type { components } from '../../src/api/schema';
 
-type MatchDetails = components['schemas']['MatchDetails'];
+// The generated schema namespaces this one (two pydantic models share the name),
+// so `components['schemas']['MatchDetails']` does not exist — it silently
+// resolved to an error type, and since nothing type-checks `e2e/` (tsc -b covers
+// `src` only), these stubs were never actually held to the wire shape. Named
+// properly, `rating_change` below is checked against the real `RatingChange`.
+type MatchDetails =
+    components['schemas']['app__schemas__match__MatchDetails'];
 
 const gameScore = (
     gameNumber: number,
@@ -98,6 +104,54 @@ const decidedMatch = (id: string): MatchDetails =>
         can_score: false,
     });
 
+/**
+ * A decided, **rated** match — and the two kinds of rating change in one payload:
+ *
+ * - side 1 (rita.kovac, the viewer) was already rated and **MOVED**: 1612 → 1624,
+ *   `+12`;
+ * - side 2 (invisible-sloth) was **ESTABLISHED** by this match: `before` and
+ *   `delta` are both null, and they came out at 1268. The card must read
+ *   `Unrated → 1268` with no delta — never `1500 → 1268 (−232)` (#952).
+ *
+ * The stub is written out longhand rather than through the vitest factories on
+ * purpose: this suite runs with **MSW off**, so these `page.route` bodies are the
+ * only contract the browser ever sees, and a schema drift here is invisible to
+ * vitest (web-client/CLAUDE.md).
+ */
+const establishedRatingMatch = (id: string): MatchDetails => ({
+    ...decidedMatch(id),
+    affects_rating: true,
+    sides: [
+        {
+            side_number: 1,
+            players: [
+                { user_id: 'u-me', username: 'rita.kovac', is_current_user: true },
+            ],
+            games_won: 3,
+            won: true,
+            is_current_user_side: true,
+            rating_change: { before: 1612, after: 1624, delta: 12 },
+        },
+        {
+            side_number: 2,
+            players: [
+                {
+                    user_id: 'pl-sloth',
+                    username: 'invisible-sloth',
+                    is_current_user: false,
+                },
+            ],
+            games_won: 1,
+            won: false,
+            is_current_user_side: false,
+            // The null that means "established, not moved". `before` is null for
+            // the same reason: there was no rating to move from.
+            rating_change: { before: null, after: 1268, delta: null },
+        },
+    ],
+    recent_form: [],
+});
+
 class MatchDetailsPage {
     constructor(private readonly page: Page) {}
 
@@ -171,6 +225,56 @@ test.describe('Match Details', () => {
             // And the editable row must match the opponent (non-link) row.
             expect(await color('scoreboard-game-grid-cell-right-2')).toBe(winColor);
             expect(await color('scoreboard-game-grid-cell-right-1')).toBe(myLossColor);
+        });
+    });
+
+    // #952: the card told a player "Unrated" in one panel and "1500 → 1268
+    // (−232)" in another, inches apart. A first rated match does not *lose* you
+    // 232 points — it *establishes* you at 1268. Proven here, in a real browser,
+    // because this suite is the one that runs MSW-off against the real wire shape.
+    test.describe('the Result · rating change card', () => {
+        const ratingRow = (page: Page, username: string) =>
+            page
+                .locator('.md-rating-row')
+                .filter({ has: page.locator('.md-rating-row__name', { hasText: username }) });
+
+        test('reads a first rated match as "Unrated → 1268", with no delta', async ({ page }) => {
+            await matchDetailsPage.mock(establishedRatingMatch(COMPLETED_WIN_ID));
+            await matchDetailsPage.goTo(COMPLETED_WIN_ID);
+
+            const row = ratingRow(page, 'invisible-sloth');
+            const numbers = row.locator('.md-rating-row__numbers');
+            await expect(numbers).toBeVisible();
+
+            // The word, then the new rating. Not the seeded 1500 they never held.
+            await expect(numbers).toHaveText('Unrated1268');
+            await expect(numbers).not.toContainText('1500');
+
+            // No chip at all: they did not gain, did not lose — they got rated.
+            await expect(row.locator('.md-rating-row__delta-num')).toHaveCount(0);
+            await expect(row).not.toContainText('−232');
+            await expect(row).not.toContainText('-232');
+            await expect(row).not.toContainText('+0');
+
+            // And it is *named* honestly for a screen reader, since the chevron is
+            // decorative — the old chip would have announced "Lost 232 rating".
+            await expect(numbers).toHaveAttribute(
+                'aria-label',
+                'Unrated before this match, now rated 1268',
+            );
+        });
+
+        test('still shows an already-rated player their signed delta', async ({ page }) => {
+            // The other half of the guard: the fix must not silence a real move.
+            await matchDetailsPage.mock(establishedRatingMatch(COMPLETED_WIN_ID));
+            await matchDetailsPage.goTo(COMPLETED_WIN_ID);
+
+            const row = ratingRow(page, 'rita.kovac');
+            await expect(row.locator('.md-rating-row__numbers')).toHaveText('16121624');
+
+            const delta = row.locator('.md-rating-row__delta-num');
+            await expect(delta).toHaveText('+12');
+            await expect(delta).toHaveAttribute('aria-label', 'Gained 12 rating');
         });
     });
 });

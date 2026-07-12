@@ -1,10 +1,10 @@
 import type { DashboardRating } from '@/api/dashboard'
 import { Overline } from '@/components/overline'
-import { formatRatingDelta } from '@/lib/rating'
 import { C, MONO, UI } from '@/components/dashboard/dashboard-tokens'
 
 import { Card } from './card'
 import { Mono } from './mono'
+import { DeltaPill } from './rating-card/delta-pill'
 import { Pill } from './rating-card/pill'
 import { Sparkline } from './rating-card/sparkline'
 import { Stat } from './rating-card/stat'
@@ -53,9 +53,17 @@ export const RatingCard = ({ rating }: RatingCardProps) => {
           {Math.round(current)}
         </Mono>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
-          <Pill tone={delta >= 0 ? 'win' : 'loss'} mono>
-            {formatRatingDelta(delta)} last match
-          </Pill>
+          {/* No delta ⇒ NO CHIP. A `null` delta means the player's last rated
+              match ESTABLISHED this rating instead of moving it (their first),
+              so there is no "last match" movement to report: the big number
+              above already says everything that happened. Rendering a chip here
+              would have to invent a direction, and the seeded 1500 a league-join
+              hands out is not a rating anyone held to fall from — "−232 last
+              match" under a 1268 was exactly that phantom (#952).
+
+              `delta !== null` narrows to `number` for `DeltaPill`, which takes
+              nothing else: the toned chip is *unwritable* without a real move. */}
+          {delta !== null && <DeltaPill delta={delta} />}
           {percentile !== null ? (
             <span style={{ font: `400 11px ${UI}`, color: C.chalk500 }}>
               Top{' '}

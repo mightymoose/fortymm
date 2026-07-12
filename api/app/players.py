@@ -1,33 +1,41 @@
 import uuid
 from collections.abc import Iterable, Mapping
-from typing import Any, Literal
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import Select, and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import aliased, selectinload
-from sqlalchemy.sql.base import ExecutableOption
+from sqlalchemy.orm import aliased
 
+from app.career import player_career
 from app.db import get_session
-from app.leagues import resolve_league
+from app.head_to_head import player_head_to_head
+from app.leagues import player_leagues, resolve_league, resolve_league_or_default
 from app.models import (
     Match,
-    MatchGame,
-    MatchSide,
     MatchSidePlayer,
-    MatchStatus,
     User,
     UserLeagueRating,
 )
+from app.player_matches import paginated_player_matches
+from app.player_summary import (
+    load_player_ratings,
+    summarize_one_player,
+    summarize_players,
+)
+from app.ratings.history import player_rating_history
+from app.ratings.rated import is_rated_member
+from app.ratings.stats import player_confidence, player_standing
 from app.schemas.player import (
     PlayerDetail,
     PlayerListResponse,
     PlayerMatchListResponse,
-    PlayerMatchOpponent,
-    PlayerMatchRow,
-    PlayerMatchSet,
     PlayerRead,
-    PlayerSummary,
+)
+from app.schemas.rating import (
+    DEFAULT_RATING_WINDOW,
+    RatingHistoryWindow,
+    RatingWindow,
 )
 from app.sessions import get_current_user
 from app.sql import escape_like
@@ -46,9 +54,11 @@ MAX_LIMIT = 50
 LIST_DEFAULT_PAGE_SIZE = 25
 LIST_MAX_PAGE_SIZE = 100
 
-# How many recent W/L results to surface as the "form" string on
-# PlayerSummary. Matches the FE's FormDots component (5 chips).
-FORM_WINDOW = 5
+# How many matches the profile bundle embeds. The profile is an *overview*: it
+# renders a "Recent matches" card of the last six and links to the full
+# paginated history at its own route (ADR-0915), which is served by
+# `/v1/players/{id}/matches` — that endpoint keeps its 25-per-page default.
+PROFILE_RECENT_MATCHES = 6
 
 
 def _serialize(
@@ -60,68 +70,6 @@ def _serialize(
         PlayerRead(id=user.id, username=user.username, rating=ratings.get(user.id))
         for user in users
     ]
-
-
-async def _load_player_ratings(
-    db: AsyncSession, league_id: uuid.UUID, user_ids: Iterable[uuid.UUID]
-) -> dict[uuid.UUID, float | None]:
-    ids = list(user_ids)
-    if not ids:
-        return {}
-    rows = (
-        await db.execute(
-            select(UserLeagueRating.user_id, UserLeagueRating.rating_value).where(
-                UserLeagueRating.league_id == league_id,
-                UserLeagueRating.user_id.in_(ids),
-            )
-        )
-    ).all()
-    return {user_id: rating for user_id, rating in rows}
-
-
-async def _load_player_ranks(
-    db: AsyncSession, league_id: uuid.UUID, user_ids: Iterable[uuid.UUID]
-) -> dict[uuid.UUID, int]:
-    """One round trip: returns ``user_id -> rank`` for the requested users.
-
-    ``rank`` is a player's GLOBAL position on the league's rating ladder by
-    STANDARD COMPETITION RANKING — ``rank = 1 + (# of players rated strictly
-    higher)``, so equal ratings share a rank and the next rank skips
-    (…, 7, 7, 9, …), exactly what SQL ``RANK()`` computes.
-
-    The window is evaluated over the ENTIRE non-merged, rated league population
-    and only THEN filtered to ``user_ids`` — never over ``user_ids`` alone — so
-    a player's rank is a global fact, invariant under the roster's search or
-    pagination (the #841 regression). Tombstoned (merged-away) users are
-    excluded from the population so a ghost never inflates a real rank.
-
-    Users with no rating in the league are absent from the result (so
-    ``.get()`` yields ``None``): no rating, no rank.
-    """
-    ids = list(user_ids)
-    if not ids:
-        return {}
-    ranked = (
-        select(
-            UserLeagueRating.user_id.label("user_id"),
-            func.rank()
-            .over(order_by=UserLeagueRating.rating_value.desc())
-            .label("rank"),
-        )
-        .join(User, User.id == UserLeagueRating.user_id)
-        .where(
-            UserLeagueRating.league_id == league_id,
-            User.merged_into_user_id.is_(None),
-            UserLeagueRating.rating_value.is_not(None),
-        )
-    ).subquery()
-
-    rows = (
-        await db.execute(
-            select(ranked.c.user_id, ranked.c.rank).where(ranked.c.user_id.in_(ids))
-        )
-    ).all()
-    return {user_id: int(rank) for user_id, rank in rows}
 
 
 @router.get("/players/recent", response_model=list[PlayerRead])
@@ -172,7 +120,7 @@ async def list_recent_opponents(
     )
 
     league = await resolve_league(db, league_id)
-    ratings = await _load_player_ratings(db, league.id, (user.id for user in opponents))
+    ratings = await load_player_ratings(db, league.id, (user.id for user in opponents))
     return _serialize(opponents, ratings)
 
 
@@ -208,7 +156,7 @@ async def search_players(
     )
     users = result.scalars().all()
     league = await resolve_league(db, league_id)
-    ratings = await _load_player_ratings(db, league.id, (user.id for user in users))
+    ratings = await load_player_ratings(db, league.id, (user.id for user in users))
     return _serialize(users, ratings)
 
 
@@ -218,6 +166,12 @@ async def search_players(
 # BFF endpoints — each returns exactly what its consumer page needs (rating,
 # W-L, form, per-set scores), so the FE doesn't join sides + games + flip
 # perspective. See `web-client/CLAUDE.md` BFF section.
+#
+# The domain work each of them needs lives OUTSIDE this router (api/CLAUDE.md:
+# a route parses, calls a query/domain function, and shapes the response): the
+# summary hydration in `app.player_summary`, the perspective flip in
+# `app.player_matches`, the rating reads in `app.ratings.stats`, and the
+# cross-league blocks in `app.career` / `app.head_to_head`.
 # ---------------------------------------------------------------------------
 
 
@@ -228,112 +182,6 @@ def _username_substring_filter[SelectT: Select[Any]](query: SelectT, q: str) -> 
     and the count query (returns int)."""
     pattern = f"%{escape_like(q.strip())}%"
     return query.where(User.username.ilike(pattern, escape="\\"))
-
-
-async def _load_wl_counts(
-    db: AsyncSession, user_ids: list[uuid.UUID]
-) -> dict[uuid.UUID, tuple[int, int]]:
-    """One round trip: returns ``user_id -> (wins, losses)`` across all of
-    that user's completed matches. Drives the W-L column.
-
-    Explicitly gates on ``Match.status == completed`` even though
-    ``MatchSide.won`` is only set non-null today when a match completes —
-    so a future void flow that nulls ``won`` doesn't silently
-    leak into career W-L. Matches the gate used by ``_load_form``.
-    """
-    if not user_ids:
-        return {}
-    rows = (
-        await db.execute(
-            select(
-                MatchSidePlayer.user_id,
-                func.count().filter(MatchSide.won.is_(True)).label("wins"),
-                func.count().filter(MatchSide.won.is_(False)).label("losses"),
-            )
-            .join(MatchSide, MatchSide.id == MatchSidePlayer.match_side_id)
-            .join(Match, Match.id == MatchSide.match_id)
-            .where(
-                MatchSidePlayer.user_id.in_(user_ids),
-                Match.status == MatchStatus.completed,
-            )
-            .group_by(MatchSidePlayer.user_id)
-        )
-    ).all()
-    return {row[0]: (int(row[1]), int(row[2])) for row in rows}
-
-
-async def _load_form(
-    db: AsyncSession, user_ids: list[uuid.UUID]
-) -> dict[uuid.UUID, str]:
-    """One round trip via a window function: returns ``user_id -> "WLWWL"``
-    of up to FORM_WINDOW newest-first completed-match outcomes. Drives the
-    form-dots column."""
-    if not user_ids:
-        return {}
-    ranked = (
-        select(
-            MatchSidePlayer.user_id.label("user_id"),
-            MatchSide.won.label("won"),
-            func.row_number()
-            .over(
-                partition_by=MatchSidePlayer.user_id,
-                # `created_at` (not `updated_at`) so the form-dots column
-                # is ordered the same way `list_player_matches` orders the
-                # matches table — the top 5 dots match the visible top of
-                # the list.
-                order_by=Match.created_at.desc(),
-            )
-            .label("rn"),
-        )
-        .join(MatchSide, MatchSide.id == MatchSidePlayer.match_side_id)
-        .join(Match, Match.id == MatchSide.match_id)
-        .where(
-            MatchSidePlayer.user_id.in_(user_ids),
-            Match.status == MatchStatus.completed,
-            MatchSide.won.is_not(None),
-        )
-    ).subquery()
-
-    rows = (
-        await db.execute(
-            select(ranked.c.user_id, ranked.c.won)
-            .where(ranked.c.rn <= FORM_WINDOW)
-            .order_by(ranked.c.user_id, ranked.c.rn)
-        )
-    ).all()
-
-    form: dict[uuid.UUID, str] = {}
-    for user_id, won in rows:
-        form.setdefault(user_id, "")
-        form[user_id] += "W" if won else "L"
-    return form
-
-
-async def _summarize_players(
-    db: AsyncSession, users: list[User], league_id: uuid.UUID
-) -> list[PlayerSummary]:
-    """Hydrate a list of ``User``s into the ``PlayerSummary`` shape the
-    `/players` list + profile-page hero render. Four round trips total
-    (ratings, W-L, form, ranks) regardless of page size."""
-    if not users:
-        return []
-    user_ids = [user.id for user in users]
-    ratings = await _load_player_ratings(db, league_id, user_ids)
-    wl = await _load_wl_counts(db, user_ids)
-    form = await _load_form(db, user_ids)
-    ranks = await _load_player_ranks(db, league_id, user_ids)
-    return [
-        PlayerSummary(
-            id=user.id,
-            username=user.username,
-            rating=ratings.get(user.id),
-            wins=wl.get(user.id, (0, 0))[0],
-            losses=wl.get(user.id, (0, 0))[1],
-            form=form.get(user.id, ""),
-            rank=ranks.get(user.id),
-        )
-        for user in users
-    ]
 
 
 @router.get("/players", response_model=PlayerListResponse)
@@ -362,6 +210,14 @@ async def list_players(
             and_(
                 UserLeagueRating.user_id == User.id,
                 UserLeagueRating.league_id == league.id,
+                # The SORT KEY must be the rating the row is going to RENDER
+                # (`summarize_players` reads it through the same gate), or the
+                # roster sorts an Unrated guest into the ladder at the 1500 the
+                # league seeded them with — above every real player rated below
+                # it, holding a blank rating cell and no rank. An unrated member
+                # fails the ON clause, joins to NULL, and sorts last, which is
+                # what `nulls_last()` was always meant to be catching.
+                is_rated_member(),
             ),
         )
         .order_by(
@@ -388,7 +244,7 @@ async def list_players(
         .all()
     )
 
-    items = await _summarize_players(db, users, league.id)
+    items = await summarize_players(db, users, league.id)
     return PlayerListResponse(items=items, page=page, page_size=page_size, total=total)
 
 
@@ -403,177 +259,194 @@ async def _load_player_by_id(db: AsyncSession, player_id: uuid.UUID) -> User | N
     ).scalar_one_or_none()
 
 
-async def _summarize_one_player(
-    db: AsyncSession, user: User, league_id: uuid.UUID
-) -> PlayerSummary:
-    summaries = await _summarize_players(db, [user], league_id)
-    return summaries[0]
-
-
 async def _player_detail(
-    db: AsyncSession, user: User, league_id: uuid.UUID
+    db: AsyncSession,
+    user: User,
+    league_id: uuid.UUID,
+    viewer_id: uuid.UUID,
+    window: RatingWindow,
 ) -> PlayerDetail:
-    """Body for `/v1/players/{id}` — bundles the hero summary with the first
-    page of matches so the profile page paints in one round trip. The FE
-    seeds the matches-query cache from the embedded ``matches`` field;
-    page 2+ falls through to `/v1/players/{id}/matches`."""
-    summary = await _summarize_one_player(db, user, league_id)
-    matches = await _paginated_player_matches(
-        db, user.id, page=1, page_size=LIST_DEFAULT_PAGE_SIZE
+    """Body for `/v1/players/{id}` — bundles the hero summary with the player's
+    six most recent matches so the profile overview paints in one round trip.
+
+    ``match_total`` is the *all-inclusive* history count that backs the "View
+    all N matches" link — the same population the embedded window is drawn from
+    (any status, rated or not, solo matches and matches in play included), so it
+    is exactly ``matches.total``. It is deliberately larger than the hero's
+    ``wins + losses`` whenever a match is undecided; see ADR-0915.
+
+    THE LEAGUE SPLIT (ADR-0915), stated in one place because every field here
+    sits on one side of it or the other:
+
+    * LEAGUE-SCOPED — everything about where this player stands on a *ladder*:
+      ``rating`` and ``rank`` (via ``summarize_one_player``), ``form`` (same),
+      ``peak`` / ``rank_of`` / ``percentile`` / ``rating_delta`` (via
+      ``player_standing``) and ``confidence``. Ask for the same player in two
+      leagues and every one of them can differ.
+    * CROSS-LEAGUE — ``career``, a fact about the *person*: decided matches, W-L,
+      win rate, games-won share, streaks. Passing ``league_id`` into
+      ``player_career`` would be the bug, not an improvement. The summary's own
+      ``wins``/``losses`` are the same career W-L and are cross-league for the
+      same reason. ``matches`` / ``match_total`` are cross-league too: the
+      history is all-inclusive (ADR-0008).
+    * NEITHER — ``leagues`` is the switcher itself, so it is the same list on
+      every request for this player; each row carries that row's OWN rating. The
+      client derives which row is selected (falling back to ``is_default``).
+
+    THE VIEWER SPLIT (ADR-0915) is the other axis, and ``head_to_head`` is the
+    only field on it: this response now varies by WHO IS ASKING. ``viewer_id`` is
+    therefore a real argument and not the ``_current_user`` this endpoint used to
+    bind and throw away — the caller's own record against this player is the one
+    thing on the page that is about the caller. Everything above is a fact about
+    the player alone and is byte-identical for every viewer.
+
+    ``rating_history`` embeds the chart's ``window``-worth of data so first paint
+    costs one request; the standalone endpoint below serves the same shape when
+    the user flips range. It is league-scoped like the rest of the rating half.
+    """
+    summary = await summarize_one_player(db, user, league_id)
+    matches = await paginated_player_matches(
+        db, user.id, page=1, page_size=PROFILE_RECENT_MATCHES
     )
-    return PlayerDetail(**summary.model_dump(), matches=matches)
+    standing = await player_standing(db, user.id, league_id, summary)
+    return PlayerDetail(
+        **summary.model_dump(),
+        matches=matches,
+        match_total=matches.total,
+        member_since=user.created_at,
+        peak=standing.peak,
+        rank_of=standing.rank_of,
+        percentile=standing.percentile,
+        rating_delta=standing.rating_delta,
+        confidence=await player_confidence(db, user.id, league_id),
+        career=await player_career(db, user.id),
+        leagues=await player_leagues(db, user.id),
+        head_to_head=await player_head_to_head(db, user, viewer_id),
+        rating_history=await player_rating_history(db, user.id, league_id, window),
+    )
 
 
 @router.get("/players/{player_id}", response_model=PlayerDetail)
 async def get_player(
     player_id: uuid.UUID,
     league_id: uuid.UUID | None = Query(default=None),
-    _current_user: User = Depends(get_current_user),
+    window: RatingWindow = Query(default=DEFAULT_RATING_WINDOW, alias="range"),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_session),
 ) -> PlayerDetail:
-    """Authed profile bundle for `/players/$userId` — hero + first page of
-    matches in one response."""
+    """Authed profile bundle for `/players/$userId` — the overview in one
+    response: hero + the six most recent matches + the all-inclusive
+    `match_total` behind the "View all N matches" link. The full paginated
+    history is served by `/v1/players/{id}/matches`.
+
+    `league_id` selects the ladder the RATING HALF of the page is about,
+    defaulting to the default league when it is omitted — and also when it names
+    a league that does not exist. The league is a LENS on this player, not the
+    resource being addressed (ADR-0915): a stale bookmark to a deleted ladder
+    degrades to the default one rather than 404ing a player who is perfectly
+    fine. `player_id` is the resource, and an unknown one is still a 404.
+    Everything about where this player stands follows the league: `rating` and
+    `rank` out of `rank_of` (so it reads "#3 of 42", never a naked "#3"), their
+    all-time `peak`, the `rating_delta` their most recent rated match moved, their
+    recent `form`, a `percentile` (only once the league is large enough for it to
+    mean anything), and `confidence`. An unrated player has none of them.
+
+    `confidence` says how settled that rating is on this ladder: a `level`
+    (`provisional` / `firming_up` / `settled`), the 95% `interval` around the
+    rating ("somewhere between 1551 and 1823"), and the Glicko-2 `deviation` and
+    `volatility` behind them. It is `null` — the card does not render — for an
+    unrated player, and for one whose rating was supplied externally by a manual
+    strategy, which carries no deviation to be confident about.
+
+    `leagues` lists every league this player belongs to with their rating on each
+    — the Leagues card, which is the page's league *switcher*. It is the same
+    list whichever league was asked for; the client marks the selected row (and
+    falls back to the one flagged `is_default` when no `league_id` was named).
+
+    `career` is the exception: it is CROSS-LEAGUE and ignores `league_id`
+    entirely. Rating, rank, peak, form and percentile are facts about a *ladder*;
+    a player's lifetime record — decided matches, W-L, win rate, games-won share,
+    current and best streak — is a fact about the *person* (ADR-0915). Ask for
+    the same player in two different leagues and only the rating half changes.
+    `career.decided` counts decided matches alone, so it is smaller than
+    `match_total` whenever one of their matches is still in play.
+
+    `head_to_head` is VIEWER-AWARE — the one block here that depends on who is
+    asking (ADR-0915), so two callers get different bytes for the same profile
+    and no cache in front of this endpoint may share them. `versus_viewer` is the
+    CALLER's own record against this player, written from the caller's side ("you
+    are 1-4 against them", not "they are 4-1 against you"): `null` when the caller
+    *is* this player, and present with zero meetings — never `null`, never an
+    error — when they have simply never played, which is what a brand-new guest
+    always sees. `frequent_opponents` is this player's most-met opponents, read
+    from *their* side. A meeting is a *decided* match between two named players,
+    rated or not, in any league: a match still in play is not a record, and a solo
+    "No opponent" match can never be one.
+
+    `rating_history` is the rating chart's data for the calendar window named by
+    `range` (`30d` / `90d` / `1y`, defaulting to `90d`) — the same shape
+    `GET /v1/players/{id}/rating-history` returns, embedded so the profile paints
+    its chart without a second request. The client seeds that endpoint's cache from
+    this block and calls it only when the user changes range (ADR-0915). Note the
+    `anchor` inside it is a point from OUTSIDE the window, on purpose."""
     user = await _load_player_by_id(db, player_id)
     if user is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Player not found."
         )
-    league = await resolve_league(db, league_id)
-    return await _player_detail(db, user, league.id)
+    league = await resolve_league_or_default(db, league_id)
+    return await _player_detail(db, user, league.id, current_user.id, window)
 
 
-def _player_matches_eager() -> tuple[ExecutableOption, ...]:
-    """Eager-load sides + side players + per-game scores. Matches the
-    structure matches.py uses for its detail view but skips match_settings
-    + league/rating_strategy since the per-player row doesn't render those."""
-    return (
-        selectinload(Match.sides)
-        .selectinload(MatchSide.players)
-        .selectinload(MatchSidePlayer.user),
-        selectinload(Match.games).selectinload(MatchGame.score),
-        # Needed to derive the "Awaiting acceptance" boolean (#364): an
-        # ``in_progress`` match with a posted-but-unaccepted result carries
-        # a standing ``MatchResult``.
-        selectinload(Match.results),
-    )
-
-
-def _serialize_player_match(match: Match, player_id: uuid.UUID) -> PlayerMatchRow:
-    """Project a hydrated ``Match`` into the player's perspective: sets
-    ordered + scored from the player's side, opponent flattened, result
-    derived from ``MatchSide.won``."""
-    sides_sorted = sorted(match.sides, key=lambda s: s.side_number)
-    mine = next(
-        (s for s in sides_sorted if any(p.user_id == player_id for p in s.players)),
-        None,
-    )
-    if mine is None:
-        # The participant filter on the list query guarantees membership;
-        # this branch is a defensive fallback.
-        raise HTTPException(
-            status_code=500, detail="Match listed without the player on a side."
-        )
-    opp_side = next(
-        (s for s in sides_sorted if s.side_number != mine.side_number), None
-    )
-    opp_user = (
-        opp_side.players[0].user if opp_side is not None and opp_side.players else None
-    )
-    opponent = PlayerMatchOpponent(
-        id=opp_user.id if opp_user else None,
-        username=opp_user.username if opp_user else None,
-    )
-
-    games_sorted = sorted(match.games, key=lambda g: g.game_number)
-    sets: list[PlayerMatchSet] = []
-    for game in games_sorted:
-        if game.score is None:
-            continue
-        if mine.side_number == 1:
-            sets.append(
-                PlayerMatchSet(
-                    mine=game.score.side_1_points,
-                    theirs=game.score.side_2_points,
-                )
-            )
-        else:
-            sets.append(
-                PlayerMatchSet(
-                    mine=game.score.side_2_points,
-                    theirs=game.score.side_1_points,
-                )
-            )
-
-    # ``mine.won`` is only stamped when a match completes — immediately at
-    # /results for solo/unrated matches, at /results/{id}/acceptance for rated
-    # ones (issue #485). A rated match awaiting acceptance therefore carries
-    # ``result: null`` here: the opponent hasn't accepted the claim, so the
-    # profile must not show a W/L yet. The per-game scores stay public.
-    result: Literal["W", "L"] | None = None
-    if mine.won is True:
-        result = "W"
-    elif mine.won is False:
-        result = "L"
-
-    # A result has been proposed but the opponent hasn't accepted it yet. This
-    # mirrors matches.py's ``_status_label`` ("Awaiting acceptance") bucket
-    # — computed inline here so players.py doesn't import the matches router's
-    # internals (api/CLAUDE.md: routers must not depend on each other). The FE
-    # uses this to render a distinct chip instead of the green "LIVE" one a
-    # genuinely-live ``in_progress`` match gets (#364).
-    awaiting_acceptance = (
-        match.status == MatchStatus.in_progress and len(match.results) > 0
-    )
-
-    return PlayerMatchRow(
-        id=match.id,
-        status=match.status,
-        created_at=match.created_at,
-        opponent=opponent,
-        sets=sets,
-        result=result,
-        awaiting_acceptance=awaiting_acceptance,
-    )
-
-
-async def _paginated_player_matches(
-    db: AsyncSession,
+@router.get("/players/{player_id}/rating-history", response_model=RatingHistoryWindow)
+async def get_player_rating_history(
     player_id: uuid.UUID,
-    page: int,
-    page_size: int,
-) -> PlayerMatchListResponse:
-    """Per-player matches list backing `/v1/players/{id}/matches`: list
-    shape, newest-first ordering, and the perspective flip onto the
-    headline player's side."""
-    participant = (
-        select(MatchSidePlayer.id)
-        .where(
-            MatchSidePlayer.match_id == Match.id,
-            MatchSidePlayer.user_id == player_id,
+    league_id: uuid.UUID | None = Query(default=None),
+    window: RatingWindow = Query(default=DEFAULT_RATING_WINDOW, alias="range"),
+    _current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+) -> RatingHistoryWindow:
+    """The player's rating over a CALENDAR window — the profile's rating chart
+    (ADR-0915). `range` is `30d`, `90d` (the default) or `1y`; `league_id` names
+    the ladder, defaulting to the default league, because a rating is a fact about
+    one ladder and never about a player "in general". As on the profile bundle it
+    is a lens and not the resource, so a `league_id` naming no league degrades to
+    the default ladder rather than 404ing; an unknown `player_id` is still a 404.
+
+    The chart is drawn from three things:
+
+    * `anchor` — the player's rating **as of the window start**, read from their
+      last rating change *at or before* it. It is therefore A POINT FROM OUTSIDE
+      THE REQUESTED WINDOW, with an `at` older than the window's left edge, and
+      that is deliberate: rating history exists only where matches completed, so
+      the window's left edge is almost never a match. Without it, a player whose
+      first match in the window landed on day forty would be told their ninety-day
+      change was only the movement since day forty. `null` when they held no rating
+      at that instant — there is nothing to carry in — and the line then starts at
+      the first in-window point.
+    * `points` — every rating change inside the window, oldest first. A **voided**
+      match is absent, not zeroed: voiding deletes its rating-history rows, so it
+      leaves the rating timeline entirely (CONTEXT.md, "Voided match") and the
+      chart can change shape retroactively. An EMPTY list is a first-class answer,
+      never an error: a rated player with nothing in the last ninety days gets
+      their anchor and no points, and the chart draws a flat line at their current
+      rating.
+    * `change` — the net movement across the window, measured from the `anchor`
+      (or, with no anchor, from the first in-window point) to the latest one.
+      `null`, never `+0`, for an empty window: nothing was played, so there is no
+      delta to report.
+
+    `peak` is the highest point WITHIN THE WINDOW, and is a different number from
+    the profile's `peak`, which is the player's all-time high on the ladder. Do not
+    read either for the other.
+    """
+    user = await _load_player_by_id(db, player_id)
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Player not found."
         )
-        .exists()
-    )
-    total = (
-        await db.execute(select(func.count()).select_from(Match).where(participant))
-    ).scalar_one()
-    matches = list(
-        (
-            await db.execute(
-                select(Match)
-                .where(participant)
-                .options(*_player_matches_eager())
-                .order_by(Match.created_at.desc())
-                .offset((page - 1) * page_size)
-                .limit(page_size)
-            )
-        )
-        .scalars()
-        .all()
-    )
-    items = [_serialize_player_match(match, player_id) for match in matches]
-    return PlayerMatchListResponse(
-        items=items, page=page, page_size=page_size, total=total
-    )
+    league = await resolve_league_or_default(db, league_id)
+    return await player_rating_history(db, user.id, league.id, window)
 
 
 @router.get("/players/{player_id}/matches", response_model=PlayerMatchListResponse)
@@ -584,15 +457,19 @@ async def list_player_matches(
     _current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_session),
 ) -> PlayerMatchListResponse:
-    """Paginated per-player match history backing page 2+ of the authed
-    profile page (`/players/$userId`); page 1 ships inline in the
-    `/v1/players/{id}` bundle. Newest-first by ``created_at``. Sets are
-    projected from the player's perspective so the FE renders them without
-    flipping sides.
+    """Paginated per-player match history backing the full-history route
+    (`/players/$userId/matches`), 25 to a page. The profile overview embeds only
+    the six most recent inline (`GET /v1/players/{id}`) and links here for the
+    rest.
+
+    The history is all-inclusive (ADR-0008): every match the player is a side
+    of, any status, rated or not, solo "No opponent" matches included.
+    Newest-first by ``created_at``. Games are projected from the player's
+    perspective so the FE renders them without flipping sides.
     """
     user = await _load_player_by_id(db, player_id)
     if user is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Player not found."
         )
-    return await _paginated_player_matches(db, player_id, page, page_size)
+    return await paginated_player_matches(db, player_id, page, page_size)

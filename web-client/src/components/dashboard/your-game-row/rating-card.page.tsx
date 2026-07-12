@@ -1,17 +1,28 @@
 import { render, screen, type Container } from '@/test/utilities'
 
 import { RatingCard, type RatingCardProps } from './rating-card'
-import { buildRatingCardProps } from './rating-card.factory'
+import {
+  buildEstablishedRatingCardProps,
+  buildRatingCardProps,
+} from './rating-card.factory'
+import { deltaPillPage } from './rating-card/delta-pill.page'
 import { sparklinePage } from './rating-card/sparkline.page'
 
 const scoped = (container: Container) => ({
-  /** The big current-rating number (rounded for display). */
+  /** The big current-rating number (rounded for display).
+   *
+   * Resolved by the hero's 56px face, not by text alone: a player one rated
+   * match old peaks *at* their current rating, so the same digits also appear in
+   * the Peak tile. Matching the hero specifically keeps "the card shows their
+   * rating" from passing on the strength of the Peak tile. */
   getCurrentRating(value: number | string) {
-    return container.getByText(String(value))
-  },
-  /** The "+24 last match" delta pill text. */
-  getDeltaPill(text: string | RegExp) {
-    return container.getByText(text)
+    const hero = (container.getAllByText(String(value)) as HTMLElement[]).find(
+      (el) => el.style.font.includes('56px'),
+    )
+    if (!hero) {
+      throw new Error(`no hero rating "${value}" (56px mono) on the card`)
+    }
+    return hero
   },
   /** The win/loss streak pill (e.g. "W3"), or null when there's no streak. */
   queryStreak(text: string | RegExp) {
@@ -30,6 +41,10 @@ const scoped = (container: Container) => ({
   queryText(text: string | RegExp) {
     return container.queryByText(text)
   },
+  // The "+24 last match" chip is owned by the delta-pill quartet — `getDeltaPill`
+  // / `queryDeltaPill` come from there, so "no chip at all" (an *established*
+  // rating) is asserted through the same accessor everywhere.
+  ...deltaPillPage.within(container),
   // The decorative trend line is owned and pinned by the sparkline quartet;
   // expose its queries so owners can confirm it was wired in.
   ...sparklinePage.within(container),
@@ -44,6 +59,12 @@ const scoped = (container: Container) => ({
 export const ratingCardPage = {
   render(overrides: Partial<RatingCardProps> = {}) {
     render(<RatingCard {...buildRatingCardProps(overrides)} />)
+  },
+
+  /** Render the card as a player whose ONE rated match established their rating
+   * (`delta: null`) — the state that must show the number and no chip (#952). */
+  renderEstablished(overrides: Partial<RatingCardProps> = {}) {
+    render(<RatingCard {...buildEstablishedRatingCardProps(overrides)} />)
   },
 
   within(container: Container = screen) {

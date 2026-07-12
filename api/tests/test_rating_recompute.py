@@ -25,6 +25,7 @@ from app.models import (
     User,
     UserLeagueRating,
 )
+from app.player_matches import _load_match_rating_changes
 from app.ratings import RatingStrategyMismatchError
 from app.ratings import jobs as ratings_jobs
 from app.ratings.base import state_rating_value
@@ -206,6 +207,58 @@ async def test_recompute_cascade_propagates_through_shared_matches(
     ).scalar_one()
     assert a_rating.rating_value > 1500.0
     assert d_rating.rating_value < 1500.0
+
+
+async def test_recompute_keeps_the_first_change_first(
+    db_session: AsyncSession,
+    rating_strategies: dict[str, RatingStrategy],
+):
+    """A RECOMPUTE must not turn every rated match back into a "first" one.
+
+    The read side decides whether a change ESTABLISHED a rating or MOVED one by
+    asking whether an earlier rating change exists (``had_rating_before``, #952), and
+    it orders that question on ``RatingHistory.created_at``. A recompute rewrites
+    EVERY affected row in a SINGLE transaction — so if it stamped them with
+    ``func.now()``, all of them would share one instant, no row would be earlier than
+    any other, and every match in the league would suddenly report itself as the
+    player's first: no ``before``, no delta, platform-wide.
+
+    It doesn't: it stamps ``created_at = match.completed_at`` (asserted directly
+    above), which is the same axis the live path writes on and the order the replay
+    actually computed ``previous_rating_value`` in. This test pins that from the READ
+    side, through the loader the profile's Δ column uses — the only place the
+    consequence is visible. Every other rating test seeds its rows in separate
+    commits and would stay green either way.
+    """
+    league = await get_default_league(db_session)
+    strategy = rating_strategies["glicko2"]
+    me = await make_user(db_session, "recomputed")
+    opp = await make_user(db_session, "sparring")
+    for user in (me, opp):
+        await _seed_rating(db_session, league, user.id, strategy)
+
+    base = datetime(2026, 5, 1, tzinfo=UTC)
+    first = await _build_completed_match(db_session, league, me, opp, base)
+    second = await _build_completed_match(
+        db_session, league, me, opp, base + timedelta(hours=1)
+    )
+
+    await recompute_league_ratings(db_session, league.id, {me.id})
+    await db_session.commit()
+
+    changes = await _load_match_rating_changes(db_session, me.id, [first.id, second.id])
+
+    # Their first rated match established the rating; it did not move one.
+    assert changes[first.id].before is None
+    assert changes[first.id].delta is None
+
+    # And the second still MOVED the rating the first established — a real before,
+    # a real delta. This is the assertion a same-instant stamp would break.
+    assert changes[second.id].before == changes[first.id].after
+    assert changes[second.id].delta == pytest.approx(
+        changes[second.id].after - changes[first.id].after
+    )
+    assert changes[second.id].delta != 0
 
 
 async def test_recompute_leaves_unrelated_matches_alone(

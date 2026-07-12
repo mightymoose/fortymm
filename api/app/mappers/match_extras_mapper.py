@@ -46,7 +46,12 @@ class MatchDetailsExtras:
 
 
 def _rating_change(change: RatingChangeModel) -> RatingChange:
-    return RatingChange(before=change.before, after=change.after, delta=change.delta)
+    # ``delta`` is not passed: on the wire model it is a ``@computed_field`` over
+    # ``before``/``after`` (as it is a ``@property`` on the domain model), and both
+    # derive it from ``app.domain.rating.rating_delta``. Copying it across would be
+    # copying a value the target recomputes anyway — and would be the one way the
+    # two could disagree.
+    return RatingChange(before=change.before, after=change.after)
 
 
 def _player_form(form: PlayerFormModel) -> MatchDetailsPlayerForm:

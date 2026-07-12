@@ -1,0 +1,73 @@
+/* Full match-history surface (`/players/$userId/matches`). It wears the same
+ * `.player-profile` root class as the profile — which is what supplies the
+ * table, chip and pagination-footer styles — and swaps the profile's tall
+ * Bebas hero for this compact header. */
+
+/* The fixed-height pane. This page — a long table under a pinned pagination
+ * footer — is the surface that actually wants it, so it now asks for it by name
+ * instead of inheriting it from `.player-profile`. (The profile shed the pane
+ * when it became an overview of stacked cards: it is a normal scrolling
+ * document.) The 64px fallback matches the value AppShell sets. */
+.player-profile--pane {
+  height: calc(100vh - var(--topbar-h, 64px));
+  overflow: hidden;
+}
+
+.player-history__header {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 24px clamp(20px, 5vw, 40px) 20px;
+  border-bottom: 1px solid var(--border-subtle);
+  flex: 0 0 auto;
+}
+
+.player-history__back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+  text-decoration: none;
+  transition: color 120ms ease;
+}
+
+.player-history__back:hover {
+  color: var(--fg-1);
+}
+
+.player-history__title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.player-history__title-name {
+  color: var(--fg-1);
+}
+
+.player-history__title-sep {
+  color: var(--fg-3);
+}
+
+.player-history__title-label {
+  color: var(--fg-3);
+  font-weight: 500;
+}
+
+.player-history__title-skeleton {
+  width: 240px;
+  height: 24px;
+  border-radius: 6px;
+  background: var(--bg-2, rgba(255, 255, 255, 0.06));
+}

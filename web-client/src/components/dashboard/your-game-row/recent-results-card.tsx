@@ -92,6 +92,12 @@ export const RecentResultsCard = ({ rows }: RecentResultsCardProps) => {
               const opponent = r.opponent_username
               const opponentLabel = opponent ?? NO_OPPONENT_LABEL
               const score = `${r.my_games_won}-${r.opponent_games_won}`
+              // Two nulls, one em dash. `my_rating_change` is null when the match
+              // moved no rating at all; a *present* change with a null `delta` is
+              // the player's FIRST rated match — it established their rating
+              // rather than moving it, so there is no movement to report here
+              // either. Never a signed figure off the seeded 1500 (#952).
+              const delta = r.my_rating_change?.delta ?? null
               return (
                 <tr
                   key={r.match_id}
@@ -140,18 +146,14 @@ export const RecentResultsCard = ({ rows }: RecentResultsCardProps) => {
                     </Mono>
                   </td>
                   <td style={{ padding: '11px 8px', textAlign: 'right' }}>
-                    {r.my_rating_change ? (
+                    {delta !== null ? (
                       <Mono
                         size={12}
                         weight={500}
-                        ariaLabel={formatRatingDeltaAria(r.my_rating_change.delta)}
-                        color={
-                          r.my_rating_change.delta >= 0
-                            ? C.serve500
-                            : C.loss
-                        }
+                        ariaLabel={formatRatingDeltaAria(delta)}
+                        color={delta >= 0 ? C.serve500 : C.loss}
                       >
-                        {formatRatingDelta(r.my_rating_change.delta)}
+                        {formatRatingDelta(delta)}
                       </Mono>
                     ) : (
                       <Mono size={12} color={C.chalk500}>

@@ -41,11 +41,17 @@ function renderWithClient(ui: React.ReactElement) {
     path: '/settings',
     component: () => <div>Settings page</div>,
   })
+  const playerRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/players/$userId',
+    component: () => <div>Player profile page</div>,
+  })
   const router = createRouter({
     routeTree: rootRoute.addChildren([
       homeRoute,
       dashboardRoute,
       settingsRoute,
+      playerRoute,
     ]),
     history: createMemoryHistory({ initialEntries: ['/dashboard'] }),
   })
@@ -93,7 +99,13 @@ describe('UserMenu', () => {
 
   it('renders avatar initials derived from the username', async () => {
     const typed: SessionResponse = {
-      data: { user: { username: 'maria.rossi', permissions: [] } },
+      data: {
+        user: {
+          id: '6f1c3d2a-6a4f-4f18-9a2f-1f0a5b4c7d81',
+          username: 'maria.rossi',
+          permissions: [],
+        },
+      },
     }
     server.use(
       http.get('*/v1/session', () => HttpResponse.json(typed)),
@@ -108,7 +120,13 @@ describe('UserMenu', () => {
   it('truncates very long usernames via class and exposes full name as a tooltip', async () => {
     const longName = 'a-really-extraordinarily-long-username-that-should-truncate'
     const typed: SessionResponse = {
-      data: { user: { username: longName, permissions: [] } },
+      data: {
+        user: {
+          id: '2b9e4c17-8d3a-45c6-9f0b-77c1e5a3d902',
+          username: longName,
+          permissions: [],
+        },
+      },
     }
     server.use(
       http.get('*/v1/session', () => HttpResponse.json(typed)),
@@ -131,6 +149,49 @@ describe('UserMenu', () => {
     expect(settings).toHaveAttribute('href', '/settings')
   })
 
+  // `mockSession` is a *guest* (no email), so this also pins the scope: the
+  // profile link is offered to guests, who are real users with real profiles.
+  it("links Your profile at the session user's own id, and opens it", async () => {
+    renderWithClient(<UserMenu />)
+
+    await userEvent.click(await screen.findByTestId('user-menu'))
+
+    const { id, username } = mockSession.data.user
+    const profile = await screen.findByRole('menuitem', {
+      name: /^your profile$/i,
+    })
+    // Derived from the fixture, so a link wired to a hardcoded id, to a
+    // different user, or to the username would fail here.
+    expect(profile).toHaveAttribute('href', `/players/${id}`)
+    expect(profile.getAttribute('href')).not.toContain(username)
+
+    await userEvent.click(profile)
+    expect(await screen.findByText('Player profile page')).toBeInTheDocument()
+  })
+
+  it('points Your profile at a different id for a different session user', async () => {
+    const other: SessionResponse = {
+      data: {
+        user: {
+          id: 'a1e7b904-2c63-4d58-8f11-0c4b6d92e735',
+          username: 'other.player',
+          permissions: [],
+          email: 'other@kovac.club',
+          confirmed_at: '2026-05-01T00:00:00Z',
+        },
+      },
+    }
+    server.use(http.get('*/v1/session', () => HttpResponse.json(other)))
+
+    renderWithClient(<UserMenu />)
+
+    await userEvent.click(await screen.findByTestId('user-menu'))
+
+    expect(
+      await screen.findByRole('menuitem', { name: /^your profile$/i }),
+    ).toHaveAttribute('href', `/players/${other.data.user.id}`)
+  })
+
   it('shows the pulsing guest dot and Claim account item when the user has no email', async () => {
     renderWithClient(<UserMenu />)
 
@@ -148,6 +209,7 @@ describe('UserMenu', () => {
     const pending: SessionResponse = {
       data: {
         user: {
+          id: 'c4a0f6e8-1b52-4f7d-8e93-30b6a2c5d417',
           username: 'rita.kovac',
           permissions: [],
           email: null,
@@ -173,6 +235,7 @@ describe('UserMenu', () => {
     const verified: SessionResponse = {
       data: {
         user: {
+          id: '9d5b7a10-4c8e-4a31-b6f2-58e0c9d1a3b4',
           username: 'rita.kovac',
           permissions: [],
           email: 'rita@kovac.club',
