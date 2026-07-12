@@ -176,7 +176,17 @@ export const EventEditor = ({
         </SheetHeader>
 
         {draft && (
-          <div className="flex-1 overflow-y-auto px-6 py-5">
+          // The editor's scroll container. It scrolls VERTICALLY — that is the design,
+          // and a long form on a short phone has to. What it must never do is scroll
+          // *sideways*: `overflow-y: auto` computes `overflow-x: auto` too, so a field
+          // laid out past the right-hand edge does not clip, it hides behind a
+          // horizontal scrollbar nothing advertises. The testid is how the phone spec
+          // measures that (`expectNoHorizontalScroll`) rather than taking a screenshot's
+          // word for it.
+          <div
+            data-testid="event-editor-body"
+            className="flex-1 overflow-y-auto px-6 py-5"
+          >
             <Tabs value={section} onValueChange={setSection}>
               <TabsList className="mb-6 w-full">
                 {SECTIONS.map((s) => (
@@ -229,31 +239,43 @@ export const EventEditor = ({
             Every word of it is ours (`saveFailureMessage`): a 422's `detail` is
             Pydantic's own prose ("String should have at most 255 characters") and
             never reaches this markup. */}
+        {/* ⚠️ The inset is a PADDED WRAPPER, not `mx-6` on the Alert. `Alert` is
+            `w-full` (`components/ui/alert.tsx`), and `width: 100%` plus a 24px margin
+            either side is `100% + 48px` — so the banner ran 24px past the right-hand edge
+            of the sheet at every width, phone and desktop alike. The one place a failure
+            is reported is not a place that may itself be half off the screen. */}
         {failure && (
-          <Alert
-            variant="destructive"
-            data-testid="event-editor-error"
-            className="mx-6 mb-1"
-          >
-            <TriangleAlert size={16} />
-            <AlertTitle>
-              {isNew ? "Couldn't create this event" : "Couldn't save your changes"}
-            </AlertTitle>
-            <AlertDescription>
-              {saveFailureMessage(failure, EVENT_SAVE_TARGET)} Nothing was saved
-              — your changes are still here.
-            </AlertDescription>
-          </Alert>
+          <div className="px-6 pb-1">
+            <Alert variant="destructive" data-testid="event-editor-error">
+              <TriangleAlert size={16} />
+              <AlertTitle>
+                {isNew ? "Couldn't create this event" : "Couldn't save your changes"}
+              </AlertTitle>
+              <AlertDescription>
+                {saveFailureMessage(failure, EVENT_SAVE_TARGET)} Nothing was saved
+                — your changes are still here.
+              </AlertDescription>
+            </Alert>
+          </div>
         )}
 
-        <SheetFooter className="flex-row items-center border-t border-[color:var(--border-subtle)]">
+        {/* **A row above `sm`, a stack below it.** Three buttons in a `flex-row` that
+            cannot wrap need ~390px, and on a 375px phone the last of them — "Save
+            changes", the primary action, the whole reason the sheet is open — was CLIPPED
+            at the right-hand edge (x=244..393). A CTA you cannot press is a form you
+            cannot submit, and it hid behind `toBeVisible()` exactly as the rule row did.
+
+            Stacked, they are full-width and in DOM order, so Save is the bottom one: the
+            last thing read and the nearest thing to a thumb. The `flex-1` spacer that
+            pushes Cancel/Save right is a *row* device, so it exists only in the row. */}
+        <SheetFooter className="flex-col items-stretch gap-2 border-t border-[color:var(--border-subtle)] px-6 py-4 sm:flex-row sm:items-center">
           {canEdit && !isNew && draft && (
             <Button variant="destructive" onClick={() => onDelete(draft.id)}>
               <Trash2 size={16} />
               Delete event
             </Button>
           )}
-          <span className="flex-1" />
+          <span className="hidden sm:block sm:flex-1" />
           {/* A non-creator can only dismiss the read-only view. */}
           <Button variant="ghost" onClick={() => onOpenChange(false)}>
             {canEdit ? 'Cancel' : 'Done'}

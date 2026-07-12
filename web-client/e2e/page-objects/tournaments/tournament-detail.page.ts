@@ -247,9 +247,37 @@ export class TournamentDetailPage {
   }
 
   /** The event's player-limit box (Basics). Clearing it authors `max_players: 0` —
-   * `Number('')` is `0` — which the server refuses. */
+   * `Number('')` is `0` — which the server refuses. Typing `9999999999` into it used to
+   * author a value the `Integer` column cannot hold, which the server answered with a
+   * **500**. */
   get playerLimitInput(): Locator {
     return this.page.getByLabel(/Player limit/)
+  }
+
+  get entryFeeInput(): Locator {
+    return this.page.getByLabel(/Entry fee/)
+  }
+
+  /** The Basics tab's time-slot row — the three boxes that were still laid out in three
+   * fixed columns after the rule row had been fixed, and so still ran off the right-hand
+   * edge of a phone (the End time rendered at `x=339..467` on a 375px screen). */
+  get slotDateInput(): Locator {
+    return this.eventEditor.getByLabel('Date')
+  }
+
+  get slotStartInput(): Locator {
+    return this.eventEditor.getByLabel('Start')
+  }
+
+  get slotEndInput(): Locator {
+    return this.eventEditor.getByLabel('End')
+  }
+
+  /** The editor's scrolling body. A phone spec scrolls it VERTICALLY to reach the foot
+   * of the form (that is the design) and asserts it never scrolls SIDEWAYS (that is the
+   * bug) — see `expectNoHorizontalScroll`. */
+  get editorBody(): Locator {
+    return this.page.getByTestId('event-editor-body')
   }
 
   /** The editor's report of a REFUSED SAVE: the alert that keeps the failure beside

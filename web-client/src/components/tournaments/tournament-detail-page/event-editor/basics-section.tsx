@@ -1,6 +1,10 @@
 import { Input } from '@/components/ui/input'
 
-import type { BasicsIssues } from '../../data/event-validation'
+import {
+  ENTRY_FEE_MAX,
+  PLAYERS_MAX,
+  type BasicsIssues,
+} from '../../data/event-validation'
 import { fmtDate } from '../../data/helpers'
 import { DRAW_TYPE_OPTIONS, FORMAT_OPTIONS, labelFor } from '../../data/options'
 import type { DrawType, EventFormat, TournamentEvent } from '../../data/types'
@@ -88,7 +92,11 @@ export const BasicsSection = ({
         )}
       </Field>
 
-      <div className="grid grid-cols-2 gap-4">
+      {/* **Stacked below `sm`, side by side above it** — the same breakpoint the sheet
+          itself switches on (`w-full sm:w-[820px]`), and the same rule the rule builder
+          learned one tab over: a grid column cannot be narrower than the widest thing
+          in it, so on a phone these rows do not get columns, they get lines. */}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <Field
           label="Format"
           required
@@ -120,12 +128,19 @@ export const BasicsSection = ({
         </Field>
       </div>
 
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         {/* Clearing either number box leaves `NaN` on the draft, which goes on the
             wire as `null` — a 422 the organizer used to meet only after the request.
             The error takes the hint's place while it is there: one line under the
             control, and the thing that is wrong outranks the thing that is merely
-            worth knowing. */}
+            worth knowing.
+
+            The `max` attributes are advisory and always were: an `<input type=number
+            max>` steers a spinner and stops nothing that is typed or pasted. The bound
+            that BINDS is the schema's (`PLAYERS_MAX` / `ENTRY_FEE_MAX`,
+            `data/event-validation`) — 9999999999 sailed through this attribute and
+            landed on an `Integer` column, which is a **500**. They are set from the same
+            constants so the hint and the rule cannot say different numbers. */}
         <Field
           label="Player limit"
           hint={issues?.maxPlayers ?? 'Hard cap. Waitlist opens past this.'}
@@ -138,7 +153,7 @@ export const BasicsSection = ({
               id={id}
               type="number"
               min={2}
-              max={512}
+              max={PLAYERS_MAX}
               aria-invalid={!!issues?.maxPlayers}
               value={event.maxPlayers}
               onChange={(e) => set({ maxPlayers: Number(e.target.value) })}
@@ -157,6 +172,7 @@ export const BasicsSection = ({
               id={id}
               type="number"
               min={0}
+              max={ENTRY_FEE_MAX}
               aria-invalid={!!issues?.entryFee}
               value={event.entryFee}
               onChange={(e) => set({ entryFee: Number(e.target.value) })}
@@ -172,7 +188,17 @@ export const BasicsSection = ({
         <span className="h-px flex-1 bg-[color:var(--border-subtle)]" />
       </div>
 
-      <div className="grid grid-cols-[1.4fr_1fr_1fr] gap-4">
+      {/* The row that was still off the screen after round three's responsive pass fixed
+          the rule row one tab over — the identical bug, in the identical shape, on the
+          tab the editor OPENS on (#783 QA, round four).
+
+          `1.4fr 1fr 1fr` looks fluid and is not: a grid item's `min-width` is `auto`, so
+          no column may be narrower than its content, and a date input plus two time
+          inputs have a min-content width of ~350px before the gaps. On a 375px phone the
+          End time therefore rendered at **x=339..467** — a hundred pixels past the edge
+          of the world, reachable only by a sideways scroll of the sheet that nothing
+          advertises. Three columns become three lines where there is room for one. */}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-[1.4fr_1fr_1fr]">
         {/* The editor's value is the raw `YYYY-MM-DD` an `<input type="date">`
             takes; a reader gets the same date in the words the event card uses
             ("Jun 13, 2026"), never the wire format. */}

@@ -28,7 +28,11 @@ import { expect, test } from '@playwright/test'
 import { TournamentDetailPage } from '../page-objects/tournaments/tournament-detail.page'
 import { EVENT } from '../page-objects/tournaments/tournaments-store'
 import { expectAxeClean } from '../support/axe'
-import { expectOnScreen } from '../support/viewport'
+import {
+  expectNoHorizontalScroll,
+  expectOnScreen,
+  scrollVerticallyIntoView,
+} from '../support/viewport'
 
 /** The form's messages, hard-coded test-side (as the lifecycle spec's notices are):
  * importing them from `data/predicate-validation` would make every assertion below
@@ -40,8 +44,16 @@ const SAY = {
   nameRequired: 'Name is required.',
   nameTooLong: 'Name must be 255 characters or fewer.',
   playerLimit: 'The player limit must be at least 1.',
+  /** The bound the `Integer` column has and the form did not (#783 QA, round three). */
+  playerLimitTooBig: 'The player limit must be 512 or fewer.',
   /** The banner, when the server refuses a save. Ours — see `PYDANTIC` below. */
   refusedName: 'The Event name was rejected. Check that field and try again.',
+  /** The banner, when the server FAULTS. Note what it does not say: anything about a
+   * connection. The server answered — that is what a 500 is. */
+  serverFault: 'Something went wrong on our end.',
+  /** …and the banner when there was no answer at all. The only failure entitled to
+   * mention the network. */
+  offline: "The server couldn't be reached. Check your connection and try again.",
 } as const
 
 /**
@@ -259,6 +271,44 @@ test.describe('Tournaments · the event’s own fields', () => {
     await expect(pom.playerLimitInput).toHaveAttribute('aria-invalid', 'true')
     expect(store.countOf('PATCH')).toBe(0)
   })
+
+  /**
+   * ⚠️ **The value that DETONATED THE SERVER** (#783 QA, round three). `9999999999`
+   * passes every rule Pydantic states (`int`, `gt=0`), and then meets the `Integer`
+   * column it has to be stored in — which cannot hold it, so the API answers **500**.
+   *
+   * The form bounded the low end and left the high end open. The `max={512}` on the input
+   * was never a bound at all: an `<input type=number max>` steers a spinner and stops
+   * nothing that is typed or pasted — which is precisely why this has to be asserted in a
+   * BROWSER. A jsdom test cannot tell an attribute that constrains from one that decorates.
+   */
+  test('a player limit the server cannot STORE is refused in the form, not by a 500', async ({
+    page,
+  }) => {
+    const { pom, store } = await TournamentDetailPage.navigateTo(page)
+
+    await pom.openEditorOverlay(EVENT.JOURNEY).click()
+    await pom.playerLimitInput.fill('9999999999')
+    // The `max` attribute is *advertising* the bound, and letting the value through.
+    await expect(pom.playerLimitInput).toHaveValue('9999999999')
+
+    await pom.saveEventButton.click()
+
+    await expect(pom.basicsError(SAY.playerLimitTooBig)).toBeVisible()
+    await expect(pom.playerLimitInput).toHaveAttribute('aria-invalid', 'true')
+
+    // THE assertion: it never left the browser, so the server never got the chance to
+    // 500 on it.
+    expect(store.countOf('PATCH')).toBe(0)
+    await expect(pom.eventEditor).toBeVisible()
+
+    // The positive control — the bound itself is a real answer, and a 512-draw saves.
+    await pom.playerLimitInput.fill('512')
+    await pom.saveEventButton.click()
+
+    await expect(pom.eventEditor).toBeHidden()
+    expect(store.countOf('PATCH')).toBe(1)
+  })
 })
 
 test.describe('Tournaments · a save the server refuses', () => {
@@ -304,6 +354,71 @@ test.describe('Tournaments · a save the server refuses', () => {
     await expect(pom.eventEditor).toBeHidden()
     expect(store.countOf('PATCH')).toBe(2)
     await expect(pom.eventCard('Open Singles B')).toBeVisible()
+  })
+
+  /**
+   * ⚠️ **A 500 is not an outage** (#783 QA, round three). The editor answered a real HTTP
+   * 500 with *"The server couldn't be reached. Check your connection and try again."* —
+   * and the organizer, whose connection had just carried a request to the server and a
+   * 500 back from it, was sent off to debug their wifi over a fault in our own process.
+   *
+   * `DEFINITION_OF_COMPLETE.md` lists **5xx** and **network-down** as distinct designed
+   * states. This is the pair of specs that keeps them apart, and it takes a browser to
+   * write the second one honestly: a *real* rejected fetch (`route.abort`), not a mocked
+   * `TypeError`.
+   */
+  test('a 500 says the SERVER faulted — never that the connection did', async ({
+    page,
+  }) => {
+    const { pom, store } = await TournamentDetailPage.navigateTo(page)
+    const stopFaulting = store.faultEventWrites()
+
+    await pom.openEditorOverlay(EVENT.JOURNEY).click()
+    await pom.eventNameInput.fill('Open Singles B')
+
+    await pom.saveEventButton.click()
+
+    await expect(pom.saveFailure).toBeVisible()
+    expect(store.countOf('PATCH')).toBe(1)
+
+    // Ours, and honest about whose fault it is…
+    await expect(pom.saveFailure).toContainText(SAY.serverFault)
+    // …and it does NOT tell them to go and look at their connection.
+    await expect(pom.saveFailure).not.toContainText(/connection|couldn't be reached/)
+    // …nor read FastAPI's own 500 prose out to them.
+    await expect(pom.eventEditor).not.toContainText('Internal Server Error')
+
+    // Same contract as every other refusal: open, and still holding the work.
+    await expect(pom.eventEditor).toBeVisible()
+    await expect(pom.eventNameInput).toHaveValue('Open Singles B')
+
+    // Recoverable: when our end stops faulting, the same button saves.
+    stopFaulting()
+    await pom.saveEventButton.click()
+    await expect(pom.eventEditor).toBeHidden()
+    expect(store.countOf('PATCH')).toBe(2)
+  })
+
+  test('a request that gets NO ANSWER is the one that blames the connection', async ({
+    page,
+  }) => {
+    const { pom } = await TournamentDetailPage.navigateTo(page)
+    // A genuine no-response failure — the fetch itself rejects. openapi-fetch re-throws
+    // it, so it reaches the editor as the platform's raw `TypeError` and never as an
+    // `ApiError` with a status to read (`src/api/client.ts`). This is the ONLY state in
+    // which "check your connection" is true, and it is the state that sentence belongs to.
+    await page.route('**/api/v1/tournaments/*/events/*', (route) =>
+      route.request().method() === 'PATCH' ? route.abort('failed') : route.fallback(),
+    )
+
+    await pom.openEditorOverlay(EVENT.JOURNEY).click()
+    await pom.eventNameInput.fill('Open Singles B')
+
+    await pom.saveEventButton.click()
+
+    await expect(pom.saveFailure).toContainText(SAY.offline)
+    await expect(pom.eventEditor).toBeVisible()
+    await expect(pom.eventNameInput).toHaveValue('Open Singles B')
   })
 
   test('a refused CREATE keeps the new event on screen rather than binning it', async ({
@@ -405,6 +520,105 @@ test.describe('Tournaments · the rule builder on a phone (375×667)', () => {
     await pom.saveEventButton.click()
 
     await expectOnScreen(page, pom.basicsError(SAY.nameRequired), 'the name error')
+  })
+
+  /**
+   * **The half of the phone that round three did not finish.** The rule row was fixed and
+   * the tab next door was not even looked at — so the editor's *opening* tab still had a
+   * row of three fixed columns in it, and at 375px the End time input rendered at
+   * `x=339..467`: a hundred pixels past the edge of the world. The dialog scrolled
+   * sideways to "reveal" it, which is not a thing a user knows to do.
+   *
+   * And the footer was worse, because the thing clipped there was the **primary action**:
+   * "Save changes" at `x=244..393`. A form whose submit button is off the screen is a
+   * form that cannot be submitted at all.
+   *
+   * Both hid behind the same false green: `toBeVisible()` passes for an element at
+   * x=381. Every assertion here is `expectOnScreen` — coordinates, measured where the
+   * element actually renders.
+   */
+  test('every BASICS field is on screen — the tab the editor opens on', async ({
+    page,
+  }) => {
+    const { pom } = await TournamentDetailPage.navigateTo(page)
+
+    await pom.openEditorOverlay(EVENT.JOURNEY).click()
+    await expect(pom.eventEditor).toBeVisible()
+
+    // The top of the form, where the editor lands.
+    await expectOnScreen(page, pom.eventNameInput, 'the Event name input')
+
+    // The rest of the form is below the fold, so reaching it takes a scroll — a
+    // **vertical** one, which is the design (a form taller than a phone is a form). The
+    // helper writes `scrollTop` and nothing else: a `scrollIntoView()` would scroll the
+    // sheet SIDEWAYS to "reveal" an off-screen field, and every assertion after it would
+    // then pass against the very layout that shipped the bug.
+    for (const [field, what] of [
+      [pom.playerLimitInput, 'the Player limit input'],
+      [pom.entryFeeInput, 'the Entry fee input'],
+      [pom.slotDateInput, 'the slot Date input'],
+      [pom.slotStartInput, 'the slot Start input'],
+      // ⚠️ THE one QA measured at x=339..467 — a hundred pixels past the right edge.
+      [pom.slotEndInput, 'the slot End input'],
+    ] as const) {
+      await scrollVerticallyIntoView(pom.editorBody, field)
+      await expectOnScreen(page, field, what)
+    }
+
+    // …and the mechanism itself: there is nowhere sideways for anything to hide. The
+    // scrolling above cannot have manufactured this — it never touches `scrollLeft`.
+    await expectNoHorizontalScroll(pom.editorBody, 'the editor body')
+  })
+
+  test('the SAVE button is wholly on screen — the primary action was clipped', async ({
+    page,
+  }) => {
+    const { pom, store } = await TournamentDetailPage.navigateTo(page)
+
+    await pom.openEditorOverlay(EVENT.JOURNEY).click()
+
+    // ⚠️ THE one QA measured at x=244..393 — 18px of the CTA past the right-hand edge.
+    await expectOnScreen(page, pom.saveEventButton, 'the Save button')
+    // Its neighbours in the same row, which is what pushed it off: a footer that cannot
+    // wrap needs ~390px for three buttons.
+    await expectOnScreen(
+      page,
+      pom.eventEditor.getByRole('button', { name: 'Cancel' }),
+      'the Cancel button',
+    )
+    await expectOnScreen(
+      page,
+      pom.eventEditor.getByRole('button', { name: 'Delete event' }),
+      'the Delete event button',
+    )
+
+    // On screen AND operable: a button whose geometry is right but which cannot be
+    // clicked is the same dead end by another route.
+    await pom.eventNameInput.fill('Twilight Singles')
+    await pom.saveEventButton.click()
+
+    await expect(pom.eventEditor).toBeHidden()
+    expect(store.countOf('PATCH')).toBe(1)
+    await expect(pom.eventCard('Twilight Singles')).toBeVisible()
+  })
+
+  test('the refusal BANNER is on screen — a failure nobody can read is a silent one', async ({
+    page,
+  }) => {
+    // The banner sits between the form and the footer, in the narrowest part of the
+    // sheet. It is the thing that reports every failure now (a 5xx included), so it being
+    // on a phone's screen is load-bearing rather than cosmetic.
+    const { pom, store } = await TournamentDetailPage.navigateTo(page)
+    store.faultEventWrites()
+
+    await pom.openEditorOverlay(EVENT.JOURNEY).click()
+    await pom.saveEventButton.click()
+
+    await expect(pom.saveFailure).toContainText(SAY.serverFault)
+    await expectOnScreen(page, pom.saveFailure, 'the refusal banner')
+    // The button that produced it is still on screen too — the state is recoverable
+    // without a horizontal scroll to find the way out of it.
+    await expectOnScreen(page, pom.saveEventButton, 'the Save button')
   })
 })
 

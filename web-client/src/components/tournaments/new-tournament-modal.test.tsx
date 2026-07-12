@@ -166,9 +166,18 @@ describe('NewTournamentModal', () => {
     )
   })
 
-  it('toasts a 5xx in the client’s own words, and keeps the entry', async () => {
-    // `ApiError.message` IS the server's `detail` — which is how the raw string used
-    // to escape through the toast as well as through the field.
+  /**
+   * ⚠️ **THE round-three regression: a 5xx was a SILENT NO-OP.** QA injected a 500 on
+   * `POST /v1/tournaments` and got *no inline error, no toast, no alert* — the Create
+   * button went back to idle and the app simply did nothing. The 422 path had been
+   * fixed; the 5xx path was never wired to the classifier at all, and its only channel
+   * was a toast (a portal, elsewhere on the page, gone in four seconds).
+   *
+   * So the assertion is not "it toasts". It is the contract every failure of this dialog
+   * now shares with the 422: **it says something, it stays open, and it keeps the
+   * work.**
+   */
+  it('a 5xx SAYS SOMETHING — it is never a click that did nothing', async () => {
     const onCreate = vi
       .fn()
       .mockRejectedValue(
@@ -182,13 +191,68 @@ describe('NewTournamentModal', () => {
     await userEvent.type(newTournamentModalPage.getNameInput(), 'Spring Open')
     await userEvent.click(newTournamentModalPage.getCreateButton())
 
-    expect(toast.error).toHaveBeenCalledWith("Couldn't create the tournament", {
-      description:
-        "The server couldn't be reached. Check your connection and try again.",
-    })
+    // Said — on the banner, beside the work, not in a portal that leaves.
+    const banner = await newTournamentModalPage.findErrorBanner()
+    expect(banner).toHaveTextContent(
+      'Something went wrong on our end. Nothing you did caused it',
+    )
+    // …and it does NOT send them to go and check their wifi over our fault (BUG 1).
+    expect(banner).not.toHaveTextContent(/connection|reached/)
+    // …nor read the server's own 500 prose out to them.
+    expect(banner).not.toHaveTextContent('Internal Server Error')
+
+    // Open, and still holding every character they typed.
     expect(newTournamentModalPage.queryDialog()).not.toBeNull()
     expect(newTournamentModalPage.getNameInput()).toHaveValue('Spring Open')
     expect(onOpenChange).not.toHaveBeenCalledWith(false)
+  })
+
+  it('an OUTAGE says the connection failed — the one failure that may say so', async () => {
+    // A genuine no-response failure: `fetch` rejects and openapi-fetch re-throws, so it
+    // reaches the dialog as a raw `TypeError`, not an `ApiError` (`src/api/client.ts`).
+    const onCreate = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'))
+    newTournamentModalPage.render({ onCreate })
+
+    await userEvent.type(newTournamentModalPage.getNameInput(), 'Spring Open')
+    await userEvent.click(newTournamentModalPage.getCreateButton())
+
+    expect(await newTournamentModalPage.findErrorBanner()).toHaveTextContent(
+      "The server couldn't be reached. Check your connection and try again.",
+    )
+    expect(newTournamentModalPage.getNameInput()).toHaveValue('Spring Open')
+  })
+
+  it('even a failure it cannot classify at all still says something', async () => {
+    // The last hole through which silence could get out: a rejection that is not an
+    // `ApiError` and not a fetch failure either — a bug of ours. It is still not allowed
+    // to end in a dialog that just sits there.
+    const onCreate = vi.fn().mockRejectedValue(new Error('boom'))
+    const onOpenChange = vi.fn()
+    newTournamentModalPage.render({ onCreate, onOpenChange })
+
+    await userEvent.type(newTournamentModalPage.getNameInput(), 'Spring Open')
+    await userEvent.click(newTournamentModalPage.getCreateButton())
+
+    expect(await newTournamentModalPage.findErrorBanner()).toHaveTextContent(
+      'Something went wrong. Try again.',
+    )
+    expect(newTournamentModalPage.queryDialog()).not.toBeNull()
+    expect(onOpenChange).not.toHaveBeenCalledWith(false)
+  })
+
+  it('raises NO toast for any of it — the banner is the channel (Forms convention)', async () => {
+    // A form owns its errors inline; a toast on top would double up, and a toast *on its
+    // own* was how the 5xx managed to say nothing at all.
+    const onCreate = vi
+      .fn()
+      .mockRejectedValue(new ApiError(500, null, 'create tournament'))
+    newTournamentModalPage.render({ onCreate })
+
+    await userEvent.type(newTournamentModalPage.getNameInput(), 'Spring Open')
+    await userEvent.click(newTournamentModalPage.getCreateButton())
+
+    expect(await newTournamentModalPage.findErrorBanner()).toBeVisible()
+    expect(toast.error).not.toHaveBeenCalled()
   })
 
   it('clears the banner on the next attempt', async () => {

@@ -1,7 +1,6 @@
 import { useEffect } from 'react'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useForm } from 'react-hook-form'
-import { toast } from 'sonner'
 import { z } from 'zod'
 import { Check, TriangleAlert } from 'lucide-react'
 
@@ -100,7 +99,12 @@ function refusedFormField(failure: SaveFailure): keyof FormValues | null {
  * A 422 that gets through is therefore a rule the client did not know to mirror — and
  * it is answered **in the client's own words** (`data/save-failure`, the same
  * classifier and copy table the event editor uses), never by reading Pydantic's prose
- * back to the organizer. The dialog stays open over their entry either way. */
+ * back to the organizer. The dialog stays open over their entry either way.
+ *
+ * And **every** way this can fail says something. Not just the 422: a 403, a 409, a
+ * 5xx, a dead network and an unclassifiable bug all land on the same banner, beside
+ * the entry they preserved. A failure the UI does not report is a click that did
+ * nothing. */
 export const NewTournamentModal = ({
   open,
   onOpenChange,
@@ -158,17 +162,19 @@ export const NewTournamentModal = ({
         form.setError(field, { type: 'server', message })
         return
       }
-      if (failure.kind === 'invalid' || failure.kind === 'refused') {
-        // A 4xx we cannot pin to one box (a nested address field, a 403, a 409):
-        // inline on the dialog, which stays open over the organizer's entry.
-        form.setError('root', { type: 'server', message })
-        return
-      }
-      // A 5xx or a dead connection — nothing they typed. Toast it (per the Forms
-      // convention) and keep the dialog open so the entry isn't lost. In OUR words:
-      // an `ApiError`'s `message` is the server's `detail`, which is how the raw
-      // string used to get out this way too.
-      toast.error("Couldn't create the tournament", { description: message })
+      // EVERY other failure — a nested-address 422, a 403, a 409, a **5xx**, an
+      // outage, a bug of ours — lands on the dialog's own banner. There is no arm
+      // left that can end in silence, and that is the point (#783 QA, round three).
+      //
+      // It used to end in one. The 5xx branch alone was a toast, and a toast is not
+      // guaranteed to be anything: it is a portal somewhere else on the page, it
+      // leaves after four seconds, and QA watched a real 500 produce **no inline
+      // error, no toast, no alert** — the Create button simply went back to idle and
+      // the app did nothing. "The user clicked and nothing happened" is never an
+      // acceptable end state, and the fix is not a better toast: it is to report the
+      // failure *where the unsaved work is*, which is the same contract the 422 has
+      // had since round two. One channel, every failure, beside the entry it kept.
+      form.setError('root', { type: 'server', message })
     }
   })
 

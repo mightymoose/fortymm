@@ -371,6 +371,8 @@ export class TournamentsStore {
   private gate: Promise<void> | null = null
   private refusingWrites = false
   private refusingTournamentCreate = false
+  private faultingWrites = false
+  private faultingTournamentCreate = false
 
   /** Every intercepted request, for tallies like "exactly one POST landed". */
   readonly requests: RecordedRequest[] = []
@@ -520,6 +522,41 @@ export class TournamentsStore {
     this.refusingTournamentCreate = true
     return () => {
       this.refusingTournamentCreate = false
+    }
+  }
+
+  /**
+   * Answer every event write with a **500** — a fault of the SERVER's, not a refusal of
+   * the request (#783 QA, round three).
+   *
+   * It is a separate switch from `refuseEventWrites` (the 422) because they are separate
+   * *states*, and the editor got them wrong by treating them as one: a 5xx used to be
+   * classified `unreachable` and read out as "the server couldn't be reached — check
+   * your connection", which is false twice over (the server was reached; their
+   * connection is fine) and sends an organizer to go and restart their router over our
+   * crash. `DEFINITION_OF_COMPLETE.md` lists 5xx and network-down as distinct designed
+   * states, so the suite has to be able to produce each of them.
+   *
+   * The body is FastAPI's real one for an unhandled exception — a plain `detail` string,
+   * which is machinery, and which must therefore appear nowhere on screen either.
+   */
+  faultEventWrites(): () => void {
+    this.faultingWrites = true
+    return () => {
+      this.faultingWrites = false
+    }
+  }
+
+  /**
+   * The same 500, for `POST /v1/tournaments` — the failure QA injected and got **nothing
+   * at all** back from: no inline error, no toast, no alert. The dialog's 5xx branch was
+   * never wired to the classifier, so the Create button went back to idle and the app
+   * silently did not create a tournament.
+   */
+  faultTournamentCreate(): () => void {
+    this.faultingTournamentCreate = true
+    return () => {
+      this.faultingTournamentCreate = false
     }
   }
 
@@ -731,6 +768,7 @@ export class TournamentsStore {
    * somewhere real.
    */
   private async createTournament(route: Route, body: unknown) {
+    if (this.faultingTournamentCreate) return serverFault(route)
     if (this.refusingTournamentCreate) return this.unprocessableName(route)
 
     const fields = body as { name?: string }
@@ -752,6 +790,7 @@ export class TournamentsStore {
    * real one — and would prove nothing about the form.
    */
   private async createEvent(route: Route, body: unknown) {
+    if (this.faultingWrites) return serverFault(route)
     if (this.refusingWrites || nameTooLong(body)) return this.unprocessableName(route)
 
     // The wire body (`TournamentEventCreate`) is the read shape minus the fields the
@@ -770,6 +809,7 @@ export class TournamentsStore {
   private async updateEvent(route: Route, eventId: string, body: unknown) {
     const event = this.detail.events.find((e) => e.id === eventId)
     if (!event) return json(route, 404, { detail: 'event not found' })
+    if (this.faultingWrites) return serverFault(route)
     if (this.refusingWrites || nameTooLong(body)) return this.unprocessableName(route)
 
     const fields = body as Partial<Omit<TournamentEventRead, 'entered'>>
@@ -858,6 +898,15 @@ export class TournamentsStore {
 function nameTooLong(body: unknown): boolean {
   const name = (body as { name?: unknown } | null)?.name
   return typeof name === 'string' && name.length > EVENT_NAME_MAX
+}
+
+/** FastAPI's 500 for an unhandled exception, verbatim: a plain-string `detail`. Which
+ * is the trap — a plain-string `detail` is normally *our* copy and may be shown, so a
+ * classifier reading the body instead of the STATUS would print "Internal Server Error"
+ * to an organizer. It must appear nowhere on screen; what the user is told is the
+ * client's own sentence, and it is not about their connection. */
+function serverFault(route: Route) {
+  return json(route, 500, { detail: 'Internal Server Error' })
 }
 
 function json(route: Route, status: number, body: unknown) {

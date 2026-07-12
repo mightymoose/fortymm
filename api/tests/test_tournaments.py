@@ -11,8 +11,10 @@ carry the double-submit CSRF token via ``CSRF_EVENT_HOOKS`` (baked into both the
 """
 
 import asyncio
+import json
 import uuid
 from collections.abc import AsyncIterator, Sequence
+from decimal import Decimal
 from typing import Any
 
 import pytest
@@ -760,6 +762,243 @@ async def test_patch_event_rejects_server_managed_entered(
         json={"entered": 99},
     )
     assert response.status_code == 422
+
+
+# ----- the column is a constraint too (#783 QA, round three) ----------------
+#
+# An event's two numbers are bounded by their COLUMNS whether the schema says so or
+# not, and for a while only the columns said so: ``max_players`` was ``int, gt=0``
+# over an ``Integer``, ``entry_fee`` was ``float, ge=0`` over a ``Numeric(8, 2)``.
+# QA typed ``9999999999`` into the player limit; it satisfied every rule Pydantic
+# stated, sailed through the boundary, and blew up in the driver — Postgres refused
+# the out-of-range value and the API answered **500**. A 500 on ordinary user input
+# is a server fault we were choosing to have.
+#
+# Every case below is therefore asserted twice: the status code, *and* the row. A 422
+# is only a boundary if nothing was written; a 500 is not one at all.
+
+PLAYER_LIMITS_THE_COLUMN_CANNOT_HOLD = [
+    pytest.param(9_999_999_999, id="the-number-qa-typed"),
+    pytest.param(2**31, id="one-past-the-Integer-column"),
+    pytest.param(513, id="one-past-the-agreed-512"),
+]
+
+FEES_THE_COLUMN_CANNOT_HOLD = [
+    pytest.param(9_999_999, id="a-seventh-digit-past-Numeric-8-2s-precision"),
+    pytest.param(1_000_000, id="one-dollar-past-the-largest-storable-fee"),
+    # Under a million, and still unstorable: it rounds *up* to 1000000.00, which
+    # overflows the precision. This is the case that makes the bound `le=999_999.99`
+    # (the largest storable fee, exactly) rather than a `< 1_000_000` that looks
+    # equivalent and would have let this one through to the driver.
+    pytest.param(999_999.999, id="a-fee-under-a-million-that-rounds-UP-into-overflow"),
+    # Storable, and stored WRONG: Postgres does not refuse a third decimal, it rounds
+    # it away. Measured against the old schema: 201, and the column held 45.01 — a
+    # cent the organizer never typed, on a price.
+    pytest.param(45.005, id="a-third-decimal-place-the-column-would-silently-round"),
+]
+
+
+@pytest.mark.parametrize("max_players", PLAYER_LIMITS_THE_COLUMN_CANNOT_HOLD)
+async def test_create_event_with_an_unstorable_player_limit_is_422_and_writes_nothing(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    max_players: int,
+) -> None:
+    """A player limit the ``Integer`` column cannot hold is refused at the boundary.
+
+    ``9999999999`` is the number that produced the 500. It is a 422 now, and 512 is
+    the ceiling — the same number the web client's form enforces, so the two layers
+    refuse the same events for the same reason rather than one crashing on what the
+    other allowed.
+    """
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+
+    response = await client.post(
+        f"/v1/tournaments/{created['id']}/events",
+        json=_event_payload(max_players=max_players),
+    )
+
+    assert response.status_code == 422, response.text
+    count = (
+        await db_session.execute(select(func.count()).select_from(TournamentEvent))
+    ).scalar_one()
+    assert count == 0
+
+
+@pytest.mark.parametrize("max_players", PLAYER_LIMITS_THE_COLUMN_CANNOT_HOLD)
+async def test_patch_event_with_an_unstorable_player_limit_is_422_and_stores_nothing(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    max_players: int,
+) -> None:
+    """The patch path holds the same bound — otherwise it *is* the hole.
+
+    An event born with a sane limit and then edited to ``9999999999`` reaches exactly
+    the same DataError from exactly the same user input; a bound that only create
+    keeps is a bound the API does not have. The stored limit is re-read rather than
+    the status code trusted: a handler that wrote the value and only then failed
+    would answer 422 and still be broken.
+    """
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    event = (
+        await client.post(
+            f"/v1/tournaments/{created['id']}/events", json=_event_payload()
+        )
+    ).json()
+
+    response = await client.patch(
+        f"/v1/tournaments/{created['id']}/events/{event['id']}",
+        json={"max_players": max_players},
+    )
+
+    assert response.status_code == 422, response.text
+    row = (
+        await db_session.execute(
+            select(TournamentEvent).where(TournamentEvent.id == uuid.UUID(event["id"]))
+        )
+    ).scalar_one()
+    assert row.max_players == 64
+
+
+@pytest.mark.parametrize("entry_fee", FEES_THE_COLUMN_CANNOT_HOLD)
+async def test_create_event_with_an_unstorable_entry_fee_is_422_and_writes_nothing(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    entry_fee: float,
+) -> None:
+    """A fee the ``Numeric(8, 2)`` column cannot hold is refused at the boundary.
+
+    Two ways it cannot hold one, and both are here: **magnitude** (a seventh digit
+    overflows the precision — the 500) and **scale** (a third decimal place, which
+    Postgres does not refuse but silently *rounds away*). The rounding is refused too:
+    a price is exact, and a boundary that quietly stores a number the organizer did
+    not type is the same fault speaking softly. The two meet at ``999_999.999``, which
+    is under a million *and* rounds up through the precision — which is why the bound
+    is the largest storable fee itself, not a round number just above it.
+    """
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+
+    response = await client.post(
+        f"/v1/tournaments/{created['id']}/events",
+        json=_event_payload(entry_fee=entry_fee),
+    )
+
+    assert response.status_code == 422, response.text
+    count = (
+        await db_session.execute(select(func.count()).select_from(TournamentEvent))
+    ).scalar_one()
+    assert count == 0
+
+
+@pytest.mark.parametrize("entry_fee", FEES_THE_COLUMN_CANNOT_HOLD)
+async def test_patch_event_with_an_unstorable_entry_fee_is_422_and_stores_nothing(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    entry_fee: float,
+) -> None:
+    """The fee's bounds are the *same* bounds on the patch path — one alias, two
+    schemas — so an event cannot be edited into a fee it could not have been created
+    with. The stored fee is still the one it was created with."""
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    event = (
+        await client.post(
+            f"/v1/tournaments/{created['id']}/events", json=_event_payload()
+        )
+    ).json()
+
+    response = await client.patch(
+        f"/v1/tournaments/{created['id']}/events/{event['id']}",
+        json={"entry_fee": entry_fee},
+    )
+
+    assert response.status_code == 422, response.text
+    row = (
+        await db_session.execute(
+            select(TournamentEvent).where(TournamentEvent.id == uuid.UUID(event["id"]))
+        )
+    ).scalar_one()
+    assert Decimal(str(row.entry_fee)) == Decimal("45.00")
+
+
+@pytest.mark.parametrize(
+    "entry_fee",
+    [
+        pytest.param(float("inf"), id="Infinity"),
+        pytest.param(float("-inf"), id="-Infinity"),
+        pytest.param(float("nan"), id="NaN"),
+    ],
+)
+async def test_create_event_with_a_non_finite_entry_fee_is_422(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    entry_fee: float,
+) -> None:
+    """``Infinity`` is not a fee — and it is on the wire whether JSON admits it or not.
+
+    Python's ``json.loads``, which Starlette parses the request body with, reads the
+    bare tokens ``Infinity`` and ``NaN`` even though the JSON grammar has no such
+    literals. A browser cannot author them (``JSON.stringify`` emits ``null``), and
+    neither can httpx — which is why the body here is **hand-written**, exactly as curl
+    or a native client could write it. An infinite fee passes ``ge=0``, so without
+    ``allow_inf_nan=False`` it reaches a column that cannot hold it.
+
+    This case also found the 422 handler's own bug: the refusal echoes the offending
+    ``input`` back, and ``inf`` cannot be serialized by ``json.dumps(allow_nan=False)``
+    — so the 422 was itself dying as a 500 (see ``validation_error_handler``,
+    ``app/main.py``). Both halves are proved here: a refusal that cannot be *delivered*
+    is not a refusal.
+    """
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+
+    response = await client.post(
+        f"/v1/tournaments/{created['id']}/events",
+        content=json.dumps(_event_payload(entry_fee=entry_fee)).encode(),
+        headers={"content-type": "application/json"},
+    )
+
+    assert response.status_code == 422, response.text
+    count = (
+        await db_session.execute(select(func.count()).select_from(TournamentEvent))
+    ).scalar_one()
+    assert count == 0
+
+
+async def test_create_event_at_the_very_edge_of_what_the_columns_hold_is_stored(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """The bounds are inclusive, and the values they admit really do land.
+
+    The 422s above prove nothing on their own — a schema of ``le=0`` would pass every
+    one of them and refuse every real event. So the extremes the columns *can* hold —
+    a 512-player draw and a fee of 999,999.99 — are created and read back out of the
+    database, which is the half of the boundary that says it is a bound and not a
+    wall.
+    """
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+
+    response = await client.post(
+        f"/v1/tournaments/{created['id']}/events",
+        json=_event_payload(max_players=512, entry_fee=999_999.99),
+    )
+
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["max_players"] == 512
+    assert body["entry_fee"] == 999_999.99
+    row = (
+        await db_session.execute(
+            select(TournamentEvent).where(TournamentEvent.id == uuid.UUID(body["id"]))
+        )
+    ).scalar_one()
+    assert row.max_players == 512
+    assert Decimal(str(row.entry_fee)) == Decimal("999999.99")
 
 
 async def test_delete_event_by_creator_returns_204(

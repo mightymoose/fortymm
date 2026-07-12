@@ -1,8 +1,10 @@
 import uuid
 from datetime import date, datetime
+from decimal import ROUND_DOWN, Decimal
 from typing import Annotated, Any, Literal
 
 from pydantic import (
+    AfterValidator,
     BaseModel,
     ConfigDict,
     Field,
@@ -12,6 +14,92 @@ from pydantic import (
 )
 
 from app.models.tournament import DrawType, EventFormat, TournamentStatus
+
+# ----- bounded numerics (the column is a constraint too) ---------------------
+
+# An event's two numbers are bounded by the COLUMN whether the schema says so or
+# not, and for a while only the column said so: ``max_players`` was ``int, gt=0``
+# over an ``Integer`` column, ``entry_fee`` was ``float, ge=0`` over a
+# ``Numeric(8, 2)``. A player limit of ``9999999999`` satisfies every rule Pydantic
+# stated, sailed through the boundary, and detonated in the driver — Postgres
+# refused the out-of-range value and the API answered **500**. An organizer typed a
+# number into a box and got a server fault.
+#
+# A boundary that admits what the interior cannot hold is not a boundary. These two
+# aliases are the bounds, declared once and shared by the create and the patch
+# schemas, because "the patch path is the hole" is the same bug wearing a different
+# verb: a value that cannot be created must not be reachable by editing either.
+# Sharing the alias is what makes them impossible to drift apart.
+
+MAX_EVENT_PLAYERS = 512
+"""The ceiling on an event's player limit — the same 512 the web client's form
+enforces (`web-client/src/components/tournaments/data/event-validation.ts`), and the
+same number its Basics tab has always *shown* (`<Input type="number" max={512}>`).
+
+512 is a bound with a reason: a 512-player draw is nine rounds of single elimination,
+more entrants than the largest table-tennis open in the country, and comfortably
+inside the column. It is deliberately **not** the column's own limit (2,147,483,647):
+a number only a database could love is not a limit — it is the absence of one, and it
+would still let an organizer author an event of two billion players. The two layers
+name the same number on purpose; a client-side bound the server did not share would
+be a rule the API never made, and a server bound the client did not know would be a
+422 landing in a banner instead of under the field."""
+
+EventMaxPlayers = Annotated[int, Field(gt=0, le=MAX_EVENT_PLAYERS)]
+"""An event's player limit: a whole number the ``Integer`` column can actually hold,
+from 1 (an event of nobody is not an event) to ``MAX_EVENT_PLAYERS``."""
+
+MAX_ENTRY_FEE = 999_999.99
+"""The largest fee the ``entry_fee Numeric(8, 2)`` column can hold: six digits before
+the point, two after. One cent more is a ``numeric field overflow`` from Postgres —
+the same 500 the player limit was."""
+
+_CENTS = Decimal("0.01")
+
+
+def _fits_the_fee_column(value: float) -> float:
+    """Refuse a fee with more than two decimal places, rather than let it round.
+
+    ``Numeric(8, 2)`` holds cents, and Postgres does not complain about a third
+    decimal — it silently **rounds** it. So a fee of ``45.005`` is stored as a number
+    the organizer never typed (measured: the old schema answered ``201`` and put
+    ``45.01`` in the column), read back as that other number, and charged as that
+    other number, with nothing anywhere reporting the change. That is not a crash, so
+    it is not what the 500 was about — it is the quieter half of the same fault: a
+    boundary that rewrites its input is worse than one that refuses it, because the
+    caller cannot see what it now holds. A fee is a price and a price is exact, so
+    this is a 422 and the organizer gets to say which number they meant.
+
+    The scale is also why the magnitude bound is ``le=999_999.99`` — the largest
+    storable fee, exactly — rather than an exclusive ``< 1_000_000`` that looks
+    equivalent and is not: ``999999.999`` is under a million, and rounds *up* to
+    ``1000000.00``, which overflows the column's precision. Together, ``ge=0`` +
+    ``le=MAX_ENTRY_FEE`` + this validator admit exactly the values the column stores
+    exactly.
+
+    The float is read through ``str`` (its shortest round-trip repr) so that what is
+    judged is the number the client actually wrote — ``45.10`` is two places, not the
+    binary tail of 10.1.
+    """
+    fee = Decimal(str(value))
+    if fee != fee.quantize(_CENTS, rounding=ROUND_DOWN):
+        raise ValueError(
+            f"An entry fee is in whole cents: at most 2 decimal places (got {value})."
+        )
+    return value
+
+
+EventEntryFee = Annotated[
+    float,
+    # ``allow_inf_nan=False``: JSON is not the only thing on the wire — Python's
+    # ``json.loads`` (which Starlette parses the body with) happily reads the bare
+    # tokens ``Infinity`` and ``NaN``, and an infinite fee passes ``ge=0``. It is not
+    # a number the column can hold, so it is refused here rather than in the driver.
+    Field(ge=0, le=MAX_ENTRY_FEE, allow_inf_nan=False),
+    AfterValidator(_fits_the_fee_column),
+]
+"""An event's entry fee: a non-negative amount in whole cents that the
+``Numeric(8, 2)`` column can hold. ``0`` is a real answer — a free event."""
 
 # ----- value-objects (typed JSONB) -----------------------------------------
 
@@ -423,13 +511,18 @@ class TournamentTransitionCreate(BaseModel):
 
 
 class TournamentEventCreate(BaseModel):
+    """A new event. Its two numbers are bounded by what their columns can hold —
+    ``EventMaxPlayers`` and ``EventEntryFee``, shared verbatim with
+    ``TournamentEventUpdate`` — so a value that would overflow ``Integer`` or
+    ``Numeric(8, 2)`` is a 422 here and never reaches the driver as a 500."""
+
     model_config = ConfigDict(extra="forbid")
 
     name: str = Field(min_length=1, max_length=255)
     format: EventFormat
     draw_type: DrawType
-    max_players: int = Field(gt=0)
-    entry_fee: float = Field(ge=0)
+    max_players: EventMaxPlayers
+    entry_fee: EventEntryFee
     slot: Slot
     match_settings: MatchSettings
     predicates: list[Predicate] = Field(default_factory=list)
@@ -443,15 +536,21 @@ class TournamentEventUpdate(BaseModel):
     NULL, so an explicit ``null`` on any of them is rejected (422);
     ``predicates``/``pools`` replace wholesale when present. ``entered`` is not
     updatable — it is derived from the event's active entries, not stored — so
-    sending it is a 422 via ``extra="forbid"``."""
+    sending it is a 422 via ``extra="forbid"``.
+
+    ``max_players`` and ``entry_fee`` carry the **same** bounds create does — the
+    ``EventMaxPlayers``/``EventEntryFee`` aliases, not a second copy of the numbers.
+    A patch that could smuggle in a value create refuses would defeat create's
+    boundary entirely: the event would simply be born small and then edited into the
+    500."""
 
     model_config = ConfigDict(extra="forbid")
 
     name: str | None = Field(default=None, min_length=1, max_length=255)
     format: EventFormat | None = None
     draw_type: DrawType | None = None
-    max_players: int | None = Field(default=None, gt=0)
-    entry_fee: float | None = Field(default=None, ge=0)
+    max_players: EventMaxPlayers | None = None
+    entry_fee: EventEntryFee | None = None
     slot: Slot | None = None
     match_settings: MatchSettings | None = None
     predicates: list[Predicate] | None = None

@@ -13,12 +13,25 @@
 // (web-client `CLAUDE.md`, `## Forms`), and the sibling `NewTournamentModal` already
 // does exactly this for the *tournament's* name, down to the copy:
 //
-//   | field         | server                        | here                        |
-//   | ------------- | ----------------------------- | --------------------------- |
-//   | `name`        | `min_length=1, max_length=255`| required, ≤ 255             |
-//   | `max_players` | `int, gt=0`                   | a whole number, at least 1  |
-//   | `entry_fee`   | `float, ge=0`                 | a number, not negative      |
-//   | `predicates`  | (permissive — see below)      | `predicate-validation.ts`   |
+//   | field         | server                        | here                            |
+//   | ------------- | ----------------------------- | ------------------------------- |
+//   | `name`        | `min_length=1, max_length=255`| required, ≤ 255                 |
+//   | `max_players` | `int, gt=0` + `Integer` COLUMN| a whole number, 1 … 512         |
+//   | `entry_fee`   | `float, ge=0` + `Numeric(8,2)`| a number, 0 … 999,999.99        |
+//   | `predicates`  | (permissive — see below)      | `predicate-validation.ts`       |
+//
+// ⚠️ **The column is a constraint too, and it is the one nobody mirrors** (#783 QA,
+// round three). A player limit of `9999999999` satisfies every rule Pydantic states
+// (`int`, `gt=0`) — and then the INSERT hits `max_players Mapped[int] = Integer`,
+// PostgreSQL refuses the out-of-range value, and the API answers **500**. The organizer
+// typed a number into a box and got a server crash.
+//
+// A client that can send a value the server cannot store is a client with a missing
+// bound, so the bounds are here — and they are *both* upper bounds, because the sibling
+// field has exactly the same hole: `entry_fee` is `Numeric(8, 2)`, i.e. six digits and
+// two decimals, and a fee of 9,999,999 overflows it the same way. (The server should
+// answer either of those with a 422 rather than a 500; that is an API bug, and it is
+// filed separately. It is not a reason for this form to keep firing detonators at it.)
 //
 // The empty cases are not hypothetical, and the number ones are worse than they look:
 // `maxPlayers`/`entryFee` are edited through `Number(e.target.value)`, and
@@ -51,6 +64,25 @@ export const NAME_MAX = 255
  * would be a refusal nothing on the server would ever have made. */
 const PLAYERS_MIN = 1
 
+/** The ceiling on an event's player limit — **the number the form has always shown**
+ * (`<Input type="number" max={512}>` on the Basics tab), now actually enforced rather
+ * than merely advertised. An `<input max>` is a hint to a spinner and to nothing else:
+ * it does not stop a typed or pasted value, and `9999999999` went straight through it
+ * to the server, which 500'd on the `Integer` column.
+ *
+ * 512 is a bound with a reason: it is a 512-player draw — nine rounds of single
+ * elimination, more entrants than the largest table-tennis open in the country, and
+ * comfortably inside the column. It is not the column's own limit (2,147,483,647),
+ * because a number that only a database could love is not a *limit* — it is the absence
+ * of one, and it would still let an organizer author an event of two billion players.
+ * The bound the form already claimed is the bound the form now keeps. */
+export const PLAYERS_MAX = 512
+
+/** The ceiling on an entry fee: `entry_fee` is `Numeric(8, 2)` — six digits before the
+ * point, two after — so this is the largest fee the column can hold, and one cent more
+ * is the same 500 the player limit was. */
+export const ENTRY_FEE_MAX = 999_999.99
+
 const nameSchema = z
   .string()
   .trim()
@@ -76,10 +108,16 @@ const maxPlayersSchema = z
   .number({ error: 'Enter a player limit.' })
   .int({ error: 'The player limit must be a whole number.' })
   .min(PLAYERS_MIN, { error: `The player limit must be at least ${PLAYERS_MIN}.` })
+  // Phrased like the name's ceiling ("Name must be 255 characters or fewer."), because
+  // it is the same kind of news: a bound, stated, in the words of the thing bounded.
+  .max(PLAYERS_MAX, { error: `The player limit must be ${PLAYERS_MAX} or fewer.` })
 
 const entryFeeSchema = z
   .number({ error: 'Enter an entry fee (0 for a free event).' })
   .min(0, { error: 'The entry fee cannot be negative.' })
+  .max(ENTRY_FEE_MAX, {
+    error: `The entry fee must be ${ENTRY_FEE_MAX.toLocaleString('en-US')} or less.`,
+  })
 
 /** What is wrong on the **Basics** tab, keyed by the control that holds it — so the
  * message lands under the input the organizer has to fix (`CLAUDE.md`, `## Forms`),

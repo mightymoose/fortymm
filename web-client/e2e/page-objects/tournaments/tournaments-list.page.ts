@@ -73,6 +73,20 @@ export class TournamentsListPage {
     return this.dialog.getByText(message)
   }
 
+  /** Toasts. Here to prove a NEGATIVE that matters: a 500 used to have the toast as its
+   * only channel, and QA saw no toast — so the failure said nothing at all. The banner is
+   * the channel now, and the spec asserts both halves (the banner is there, and nothing
+   * is hiding in a portal). */
+  get toasts(): Locator {
+    return this.page.locator('[data-sonner-toast]')
+  }
+
+  /** EVERY error message anywhere on the page — banner, field hint, toast. What "the app
+   * said something" actually means, as opposed to "one locator I chose was populated". */
+  get anyErrorText(): Locator {
+    return this.page.getByText(/rejected|went wrong|couldn't|cannot|failed/i)
+  }
+
   /** Open the dialog and type a name — the two steps every case below shares. */
   async openWithName(name: string) {
     await this.newTournamentButton.click()

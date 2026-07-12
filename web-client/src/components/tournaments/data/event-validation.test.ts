@@ -1,4 +1,11 @@
-import { eventIssues, firstInvalidSection, isSaveable, NAME_MAX } from './event-validation'
+import {
+  ENTRY_FEE_MAX,
+  eventIssues,
+  firstInvalidSection,
+  isSaveable,
+  NAME_MAX,
+  PLAYERS_MAX,
+} from './event-validation'
 import { buildEvent, buildPredicate } from './seed.factory'
 
 /** Longer than `tournament_events.name` (`VARCHAR(255)`) — the 422 the organizer used
@@ -71,6 +78,31 @@ describe('eventIssues', () => {
         eventIssues(buildEvent({ maxPlayers: NOT_A_NUMBER })).basics.maxPlayers,
       ).toBe('Enter a player limit.')
     })
+
+    /**
+     * ⚠️ **The value that DETONATED THE SERVER** (#783 QA, round three). `9999999999`
+     * satisfies every rule Pydantic states (`int`, `gt=0`) — and then meets an `Integer`
+     * column, which cannot hold it, and the API answers **500**. The form bounded the low
+     * end and left the high end open, so the only thing standing between a typed number
+     * and a server crash was the `max={512}` attribute on the input, which stops nothing
+     * that is typed or pasted.
+     */
+    it('refuses a limit no database column could hold — the 500, caught in the form', () => {
+      expect(
+        eventIssues(buildEvent({ maxPlayers: 9_999_999_999 })).basics.maxPlayers,
+      ).toBe('The player limit must be 512 or fewer.')
+    })
+
+    it('refuses one player past the bound, and accepts the bound itself', () => {
+      expect(
+        eventIssues(buildEvent({ maxPlayers: PLAYERS_MAX + 1 })).basics.maxPlayers,
+      ).toBe('The player limit must be 512 or fewer.')
+      // The boundary is a real answer: a 512-player draw is nine rounds of single
+      // elimination, and an event that big must still save.
+      expect(
+        eventIssues(buildEvent({ maxPlayers: PLAYERS_MAX })).basics.maxPlayers,
+      ).toBeUndefined()
+    })
   })
 
   describe('the entry fee (`entry_fee: float = Field(ge=0)`)', () => {
@@ -91,6 +123,18 @@ describe('eventIssues', () => {
       // accepts it, and a free event is a thing organizers run.
       expect(eventIssues(buildEvent({ entryFee: CLEARED })).basics.entryFee).toBeUndefined()
       expect(eventIssues(buildEvent({ entryFee: 12.5 })).basics.entryFee).toBeUndefined()
+    })
+
+    it('refuses a fee no column could hold — the player limit’s bug, in its sibling', () => {
+      // `entry_fee` is `Numeric(8, 2)`: six digits and two decimals. A fee past that
+      // overflows it and 500s, exactly as `9999999999` did on the `Integer` limit — the
+      // same hole, one field over, found by looking rather than by waiting for QA.
+      expect(
+        eventIssues(buildEvent({ entryFee: 9_999_999_999 })).basics.entryFee,
+      ).toBe('The entry fee must be 999,999.99 or less.')
+      expect(
+        eventIssues(buildEvent({ entryFee: ENTRY_FEE_MAX })).basics.entryFee,
+      ).toBeUndefined()
     })
   })
 

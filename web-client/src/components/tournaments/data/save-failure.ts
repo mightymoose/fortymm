@@ -14,11 +14,16 @@
 // not the UI.**
 //
 // So the error is classified first and worded second. The classification is a sum
-// type, because the four cases are opposite *news* — one is about a field the
-// organizer can fix, one is about a refusal the server explained in a sentence *we*
-// wrote (a 403, a 409), one is about the network, one is about nothing we can name —
-// and a `string | null` cannot tell them apart, which is precisely how Pydantic's
-// prose ended up on screen.
+// type, because the cases are opposite *news* — one is about a field the organizer can
+// fix, one is about a refusal the server explained in a sentence *we* wrote (a 403, a
+// 409), one is a fault of OURS that the server reported (a 5xx), one is a request that
+// never arrived anywhere (the network), one is nothing we can name — and a
+// `string | null` cannot tell them apart, which is precisely how Pydantic's prose
+// ended up on screen.
+//
+// (The 5xx and the network failure were themselves one arm for exactly one round of
+// QA, and in that round a 500 told the organizer to check their wifi. See `SaveFailure`
+// below: they are different news, so they are different arms.)
 //
 // **One classifier, one copy table, both dialogs.** The event sheet and the
 // new-tournament dialog fail the same way against the same API, so neither owns a
@@ -38,6 +43,28 @@ import { validationFields, ApiError, extractDetail } from '@/api/client'
  * not merely by the status: that array is the one error body whose message is
  * machine prose, so it is the one whose message we never show. What we keep from it
  * is the thing we could not have guessed: which fields it named.
+ *
+ * **`faulted` and `offline` are two failures, not one** (#783 QA, round three). They
+ * were one arm — `unreachable` — and so a real HTTP 500 told the organizer *"the
+ * server couldn't be reached. Check your connection."* That is a lie with a cost: it
+ * sends someone to go and debug their wifi over a fault that is ours, on a request
+ * that plainly arrived (the server answered it — with a 500). `DEFINITION_OF_COMPLETE.md`
+ * names 403 / 401 / **5xx** / **network-down** as *distinct designed states*; collapsing
+ * two of them is how the wrong one gets spoken.
+ *
+ * The line between them is not a guess, it is what `src/api/client.ts` actually
+ * produces:
+ *
+ * - **A response came back.** `openapi-fetch` returns `{ error, response }` for any
+ *   non-2xx, and `unwrap` turns that into an `ApiError` carrying the STATUS. A 5xx is
+ *   therefore an `ApiError` with `status >= 500` — the server was reached, and it
+ *   faulted.
+ * - **No response came back.** `fetch` itself rejects (offline, DNS, connection
+ *   refused, CORS), openapi-fetch RE-THROWS that rejection (`throw errorAfterMiddleware`,
+ *   `dist/index.mjs`) and it never reaches `unwrap` — so it arrives here as the raw
+ *   `TypeError` the platform threw ("Failed to fetch"), not as an `ApiError` at all.
+ *   `ApiError.status === 0` is the other spelling of the same thing (`unwrap`'s
+ *   documented "no response at all").
  */
 export type SaveFailure =
   /** A 422: the request carried something the server would not accept. `fields` are
@@ -49,9 +76,15 @@ export type SaveFailure =
    * the client cannot name, report the server's own words rather than invent a
    * headline. */
   | { kind: 'refused'; message: string }
-  /** A 5xx, or no response at all. Nothing to do with what they typed. */
-  | { kind: 'unreachable' }
-  /** Not an `ApiError` — a bug on our side of the fetch. */
+  /** A **5xx**: the server was reached, and it broke. Their request was fine, their
+   * connection is fine, and there is nothing for them to fix — which is the opposite
+   * of what `offline` says, and why it is not that. */
+  | { kind: 'faulted'; status: number }
+  /** **No HTTP response at all** — the fetch itself failed. This is the only failure
+   * that may blame the connection, because it is the only one that has any evidence
+   * about it. */
+  | { kind: 'offline' }
+  /** Not an `ApiError`, and not a fetch failure either — a bug on our side. */
   | { kind: 'unknown' }
 
 /**
@@ -112,9 +145,42 @@ export const TOURNAMENT_SAVE_TARGET: SaveTarget = {
   },
 }
 
+/**
+ * The messages a rejected `fetch` throws when **no response ever arrived** — the
+ * platform's own, one per engine (and one per runtime): Chromium, Firefox, Safari,
+ * and undici (Node, which is what jsdom's fetch is).
+ *
+ * Matched on the message rather than on `instanceof TypeError` alone, deliberately.
+ * A `TypeError` is *also* what a bug of ours throws ("Cannot read properties of
+ * undefined"), and reporting one of those as an outage would be the very sin this
+ * whole split exists to undo: it would blame the user's connection for our defect.
+ * A message we do not recognise therefore stays `unknown` — which says "something
+ * went wrong", makes no claim about the network, and is honest about both.
+ */
+const FETCH_FAILED = [
+  /failed to fetch/i, // Chromium
+  /networkerror when attempting to fetch/i, // Firefox
+  /load failed/i, // Safari
+  /network request failed/i, // React Native / older polyfills
+  /fetch failed/i, // undici (Node)
+] as const
+
+/** True when the request never got an answer: the fetch rejected (offline, DNS,
+ * connection refused), or `unwrap` built its no-response `ApiError` (`status === 0`).
+ * Deliberately NOT true of a 5xx — a 5xx *is* an answer. */
+function isNoResponse(error: unknown): boolean {
+  if (error instanceof ApiError) return error.status === 0
+  if (!(error instanceof Error)) return false
+  return FETCH_FAILED.some((pattern) => pattern.test(error.message))
+}
+
 /** Classify a rejected save. Nothing here reads a server *message* except the one
  * arm that is allowed to (`refused`). */
 export function saveFailure(error: unknown): SaveFailure {
+  // Asked FIRST, and asked of the raw error rather than of an `ApiError`: a genuine
+  // network failure is re-thrown by openapi-fetch and never becomes one.
+  if (isNoResponse(error)) return { kind: 'offline' }
+
   if (!(error instanceof ApiError)) return { kind: 'unknown' }
 
   // Pydantic's array body — whatever status it arrives under. Its `msg` is
@@ -127,7 +193,10 @@ export function saveFailure(error: unknown): SaveFailure {
   // owns the wording for "we sent something the server won't take".
   if (error.status === 422) return { kind: 'invalid', fields: [] }
 
-  if (error.status === 0 || error.status >= 500) return { kind: 'unreachable' }
+  // The server answered, and what it answered with was a fault of its own. Its
+  // `detail` here is machinery too ("Internal Server Error", a stack, an nginx HTML
+  // page) — so, like the 422's, it is classified and never quoted.
+  if (error.status >= 500) return { kind: 'faulted', status: error.status }
 
   const message = extractDetail(error.body)
   return message ? { kind: 'refused', message } : { kind: 'unknown' }
@@ -175,7 +244,15 @@ export function saveFailureMessage(
     }
     case 'refused':
       return failure.message
-    case 'unreachable':
+    case 'faulted':
+      // The server ANSWERED — it just answered badly. So this says whose fault it is
+      // (ours), and says nothing whatever about their connection: a 500 is not
+      // evidence about the network, and the one thing a person cannot do about it is
+      // check their wifi.
+      return 'Something went wrong on our end. Nothing you did caused it — try again in a moment.'
+    case 'offline':
+      // The ONLY arm that may blame the connection: no response arrived at all, so
+      // the connection is the one thing there is evidence about.
       return "The server couldn't be reached. Check your connection and try again."
     case 'unknown':
       return 'Something went wrong. Try again.'

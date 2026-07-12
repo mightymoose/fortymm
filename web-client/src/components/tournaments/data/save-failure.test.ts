@@ -46,18 +46,56 @@ describe('saveFailure', () => {
     })
   })
 
-  it('classifies a 5xx and a dead connection as unreachable', () => {
+  /**
+   * THE round-three regression. A 5xx and a dead connection were ONE arm
+   * (`unreachable`), so a real HTTP 500 told the organizer *"the server couldn't be
+   * reached — check your connection"*. The server had been reached. It answered. The
+   * two are opposite news and they are now opposite arms.
+   */
+  it('classifies a 5xx as a SERVER FAULT — not as a connection that failed', () => {
     expect(saveFailure(new ApiError(500, null, 'x'))).toEqual<SaveFailure>({
-      kind: 'unreachable',
+      kind: 'faulted',
+      status: 500,
     })
-    // status 0 is `unwrap`'s "no response at all".
-    expect(saveFailure(new ApiError(0, null, 'x'))).toEqual<SaveFailure>({
-      kind: 'unreachable',
+    // A 502/503/504 — a proxy or a restart — is the same news, from the same evidence:
+    // an answer came back.
+    expect(saveFailure(new ApiError(503, null, 'x'))).toEqual<SaveFailure>({
+      kind: 'faulted',
+      status: 503,
     })
   })
 
-  it('classifies anything that is not an ApiError as unknown', () => {
-    expect(saveFailure(new TypeError('boom'))).toEqual<SaveFailure>({ kind: 'unknown' })
+  it('classifies a fetch that never got an answer as offline', () => {
+    // What a genuine network failure actually IS, per `src/api/client.ts`: `fetch`
+    // rejects, openapi-fetch RE-THROWS that rejection, and `unwrap` never runs — so it
+    // arrives as the platform's own `TypeError`, and never as an `ApiError` at all. A
+    // classifier that only ever looked at `ApiError.status` could not see this case,
+    // which is exactly why the 500 was wearing its copy.
+    expect(saveFailure(new TypeError('Failed to fetch'))).toEqual<SaveFailure>({
+      kind: 'offline',
+    })
+    // The same failure, in each engine's words.
+    expect(saveFailure(new TypeError('Load failed'))).toEqual<SaveFailure>({
+      kind: 'offline',
+    })
+    expect(
+      saveFailure(new TypeError('NetworkError when attempting to fetch resource.')),
+    ).toEqual<SaveFailure>({ kind: 'offline' })
+    // …and `unwrap`'s own spelling of "no response at all".
+    expect(saveFailure(new ApiError(0, null, 'x'))).toEqual<SaveFailure>({
+      kind: 'offline',
+    })
+  })
+
+  it('does NOT read one of our own bugs as an outage', () => {
+    // A `TypeError` is also what a defect of ours throws. Blaming the user's connection
+    // for it would be the same lie the 500 was telling, one layer down — so an error
+    // whose message is not a fetch failure stays `unknown`, which claims nothing about
+    // the network.
+    expect(
+      saveFailure(new TypeError("Cannot read properties of undefined (reading 'id')")),
+    ).toEqual<SaveFailure>({ kind: 'unknown' })
+    expect(saveFailure('a string')).toEqual<SaveFailure>({ kind: 'unknown' })
   })
 })
 
@@ -122,10 +160,32 @@ describe('saveFailureMessage', () => {
     expect(say(error)).toBe('You can only modify tournaments you created.')
   })
 
-  it('speaks plainly about a failure that is not about the event', () => {
-    expect(say(new ApiError(500, null, 'x'))).toBe(
+  /**
+   * The copy half of the same regression, and the one QA actually read off the screen:
+   * *"The server couldn't be reached. Check your connection and try again."* — on a 500.
+   * It is false, and it is expensively false: it sends someone to go and look at their
+   * router over a fault in our own process.
+   */
+  it('never blames the CONNECTION for a fault the server reported', () => {
+    const message = say(new ApiError(500, 'Internal Server Error', 'x'))
+
+    expect(message).not.toContain('connection')
+    expect(message).not.toContain('reached')
+    // Ours, and honest about whose fault it is.
+    expect(message).toBe(
+      'Something went wrong on our end. Nothing you did caused it — try again in a moment.',
+    )
+    // …and the server's own 500 prose ("Internal Server Error") is not copy either.
+    expect(message).not.toContain('Internal Server Error')
+  })
+
+  it('blames the connection ONLY when no response ever arrived', () => {
+    expect(say(new TypeError('Failed to fetch'))).toBe(
       "The server couldn't be reached. Check your connection and try again.",
     )
+  })
+
+  it('says something plain — never nothing — for a failure it cannot classify', () => {
     expect(say(new TypeError('boom'))).toBe('Something went wrong. Try again.')
   })
 })

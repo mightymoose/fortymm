@@ -108,6 +108,71 @@ test.describe('Tournaments · the "New tournament" dialog', () => {
     })
   })
 
+  /**
+   * ⚠️ **THE round-three bug: the 500 was a SILENT NO-OP.** QA injected a 500 on
+   * `POST /v1/tournaments` and the app said *nothing* — no inline error, no toast, no
+   * alert. The Create button returned to idle and no tournament appeared. The 5xx branch
+   * was never wired to the classifier the 422 had been given; its only channel was a
+   * toast, and a toast that does not fire is a click that did nothing.
+   *
+   * Only a browser can prove the absence: a component test asserts what one locator says,
+   * while this asserts what the *whole document* now says and what no portal is hiding.
+   */
+  test('a 500 SAYS SOMETHING — it is never a click that silently does nothing', async ({
+    page,
+  }) => {
+    const { pom, store } = await TournamentsListPage.navigateTo(page)
+    store.faultTournamentCreate()
+
+    await pom.openWithName('Spring Open 2026')
+    await pom.postalInput.fill('94703')
+    await pom.createButton.click()
+
+    // The request really did go and really did 500 — this is not the form guarding.
+    await expect(pom.errorBanner).toBeVisible()
+    expect(store.countOf('POST')).toBe(1)
+
+    // Said, in our words — and NOT in the words the old arm used, which blamed a
+    // connection that is plainly working: the server answered this request (BUG 1).
+    await expect(pom.errorBanner).toContainText('Something went wrong on our end')
+    await expect(pom.errorBanner).not.toContainText(/connection|couldn't be reached/)
+    // …nor is FastAPI's own 500 prose on screen anywhere.
+    await expect(page.getByText('Internal Server Error')).toHaveCount(0)
+
+    // Open, and holding everything that was typed into it — the same contract the 422
+    // has, because a 5xx destroys a draft just as thoroughly as a 422 does.
+    await expect(pom.dialog).toBeVisible()
+    await expect(pom.nameInput).toHaveValue('Spring Open 2026')
+    await expect(pom.postalInput).toHaveValue('94703')
+    await expect(page).toHaveURL(/\/tournaments\/?$/)
+
+    // New red markup, in a portalled dialog, whose contrast jsdom cannot see.
+    await expectAxeClean(page, 'new tournament — the server faulted', {
+      exclude: KNOWN_DESTRUCTIVE_BUTTON_CONTRAST,
+    })
+  })
+
+  test('a network OUTAGE is the one failure that may blame the connection', async ({
+    page,
+  }) => {
+    // The other designed state. `route.abort()` is a real no-response failure: `fetch`
+    // rejects, openapi-fetch re-throws, and the dialog meets a raw `TypeError` — which is
+    // exactly what an offline phone produces, and exactly what the 500 is NOT.
+    const { pom } = await TournamentsListPage.navigateTo(page)
+    await page.route('**/api/v1/tournaments', (route) =>
+      route.request().method() === 'POST' ? route.abort('failed') : route.fallback(),
+    )
+
+    await pom.openWithName('Spring Open 2026')
+    await pom.createButton.click()
+
+    await expect(pom.errorBanner).toContainText(
+      "The server couldn't be reached. Check your connection and try again.",
+    )
+    await expect(pom.dialog).toBeVisible()
+    await expect(pom.nameInput).toHaveValue('Spring Open 2026')
+  })
+
   test('creates a tournament and closes on success', async ({ page }) => {
     // The happy path, so the spec above is a claim about a *refusal* and not about a
     // dialog that never worked.

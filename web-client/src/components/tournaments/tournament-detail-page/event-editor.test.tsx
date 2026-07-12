@@ -307,9 +307,11 @@ describe('EventEditor', () => {
       expect(eventEditorPage.queryFailure()).not.toHaveTextContent('Input should be')
     })
 
-    it('speaks plainly about a failure that is not about the event', async () => {
-      // A 5xx / an outage is about the request, not about anything the organizer
-      // typed — so it does not get a server sentence they cannot act on.
+    it('says a 5xx is OUR fault — and never blames the organizer’s connection', async () => {
+      // THE round-three regression, on this side of the pair: a 500 read out "The server
+      // couldn't be reached. Check your connection and try again." The server WAS
+      // reached — it answered, with a fault of ours — and that sentence sends the
+      // organizer off to debug their wifi over it.
       const onSave = rejectWith(new ApiError(500, null, 'update event'))
       eventEditorPage.render({ event: buildEvent({ id: 'ev-1' }), onSave })
 
@@ -322,8 +324,30 @@ describe('EventEditor', () => {
         "Couldn't save your changes",
       )
       expect(eventEditorPage.queryFailure()).toHaveTextContent(
-        "The server couldn't be reached",
+        'Something went wrong on our end. Nothing you did caused it',
       )
+      expect(eventEditorPage.queryFailure()).not.toHaveTextContent(
+        /connection|couldn't be reached/,
+      )
+    })
+
+    it('blames the connection only for a request that got NO answer', async () => {
+      // The other designed state (`DEFINITION_OF_COMPLETE.md`: 5xx and network-down are
+      // distinct). A rejected `fetch` is re-thrown by openapi-fetch, so it lands here as
+      // a raw `TypeError` — never as an `ApiError` with a status to read.
+      const onSave = rejectWith(new TypeError('Failed to fetch'))
+      eventEditorPage.render({ event: buildEvent({ id: 'ev-1' }), onSave })
+
+      await userEvent.click(eventEditorPage.getSaveButton())
+
+      await waitFor(() =>
+        expect(eventEditorPage.queryFailure()).toBeInTheDocument(),
+      )
+      expect(eventEditorPage.queryFailure()).toHaveTextContent(
+        "The server couldn't be reached. Check your connection and try again.",
+      )
+      // The work is still here either way — that is the contract, whatever went wrong.
+      expect(eventEditorPage.getNameInput()).toHaveValue('Open Singles')
     })
 
     it('passes on a sentence the server wrote for a HUMAN (ADR-0968 fallback)', async () => {
